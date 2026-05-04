@@ -4,7 +4,7 @@
 //! to reconstruct the state of a fact (or the entire memory) as it was
 //! at that moment. Useful for debugging, auditing, and undo operations.
 //!
-//! The traveler delegates to [`EventProjector::fold_events_to_fact`] for
+//! The traveler delegates to [`EventProjector::fold_events_to_note`] for
 //! the actual state reconstruction, and provides higher-level query
 //! methods for timeline and explanation use cases.
 
@@ -46,7 +46,7 @@ impl MemoryTimeTraveler {
         at: i64,
     ) -> Result<Option<crate::memory::context::MemoryFact>, AlephError> {
         let events = self.db.get_memory_events_until(fact_id, at).await?;
-        EventProjector::fold_events_to_fact(&events)
+        EventProjector::fold_events_to_note(&events)
     }
 
     /// Get the complete event timeline for a fact, ordered by sequence.
@@ -100,19 +100,19 @@ impl MemoryTimeTraveler {
 
             // Track audit metadata
             match &env.event {
-                MemoryEvent::FactCreated { source, .. } => {
+                MemoryEvent::NoteCreated { source, .. } => {
                     creation_source = Some(format!("{:?}", source));
                 }
-                MemoryEvent::FactMigrated { .. } => {
+                MemoryEvent::NoteMigrated { .. } => {
                     creation_source = Some("migration".to_string());
                 }
-                MemoryEvent::FactAccessed { .. } => {
+                MemoryEvent::NoteAccessed { .. } => {
                     access_count += 1;
                 }
-                MemoryEvent::FactInvalidated { reason, .. } => {
+                MemoryEvent::NoteInvalidated { reason, .. } => {
                     invalidation_reason = Some(reason.clone());
                 }
-                MemoryEvent::FactRestored { .. } => {
+                MemoryEvent::NoteRestored { .. } => {
                     // Restoration clears invalidation
                     invalidation_reason = None;
                 }
@@ -121,7 +121,7 @@ impl MemoryTimeTraveler {
         }
 
         // Reconstruct current state via projector
-        let current_fact = EventProjector::fold_events_to_fact(&events)?;
+        let current_fact = EventProjector::fold_events_to_note(&events)?;
 
         let (content, is_valid) = match &current_fact {
             Some(f) => (Some(f.content.clone()), f.is_valid),
@@ -143,13 +143,13 @@ impl MemoryTimeTraveler {
 /// Generate a human-readable description for an event envelope.
 fn describe_event(env: &MemoryEventEnvelope) -> String {
     match &env.event {
-        MemoryEvent::FactCreated { content, .. } => {
+        MemoryEvent::NoteCreated { content, .. } => {
             format!("Fact created: \"{}\"", truncate(content, 50))
         }
-        MemoryEvent::FactContentUpdated { reason, .. } => {
+        MemoryEvent::NoteContentUpdated { reason, .. } => {
             format!("Content updated: {}", reason)
         }
-        MemoryEvent::FactMetadataUpdated {
+        MemoryEvent::NoteMetadataUpdated {
             field,
             old_value,
             new_value,
@@ -160,7 +160,7 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
                 field, old_value, new_value
             )
         }
-        MemoryEvent::FactAccessed {
+        MemoryEvent::NoteAccessed {
             query,
             used_in_response,
             new_access_count,
@@ -171,19 +171,22 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
                 new_access_count, used_in_response, query
             )
         }
-        MemoryEvent::FactInvalidated { reason, actor, .. } => {
+        MemoryEvent::NoteInvalidated { reason, actor, .. } => {
             format!("Invalidated by {}: {}", actor, reason)
         }
-        MemoryEvent::FactRestored { .. } => "Restored".to_string(),
-        MemoryEvent::FactDeleted { reason, .. } => {
+        MemoryEvent::NoteRestored { .. } => "Restored".to_string(),
+        MemoryEvent::NoteDeleted { reason, .. } => {
             format!("Permanently deleted: {}", reason)
         }
-        MemoryEvent::FactConsolidated {
-            source_fact_ids, ..
+        MemoryEvent::NoteConsolidated {
+            source_note_paths, ..
         } => {
-            format!("Consolidated from {} source facts", source_fact_ids.len())
+            format!(
+                "Consolidated from {} source notes",
+                source_note_paths.len()
+            )
         }
-        MemoryEvent::FactMigrated { .. } => "Migrated from legacy CRUD store".to_string(),
+        MemoryEvent::NoteMigrated { .. } => "Migrated from legacy CRUD store".to_string(),
     }
 }
 
@@ -217,8 +220,8 @@ mod tests {
         let mut env = MemoryEventEnvelope::new(
             fact_id.into(),
             seq,
-            MemoryEvent::FactCreated {
-                fact_id: fact_id.into(),
+            MemoryEvent::NoteCreated {
+                note_path: fact_id.into(),
                 content: "User prefers Rust".into(),
                 note_type: NoteType::Preference,
                 path: "aleph://user/preferences/language".into(),
@@ -244,8 +247,8 @@ mod tests {
         let mut env = MemoryEventEnvelope::new(
             fact_id.into(),
             seq,
-            MemoryEvent::FactContentUpdated {
-                fact_id: fact_id.into(),
+            MemoryEvent::NoteContentUpdated {
+                note_path: fact_id.into(),
                 old_content: "User prefers Rust".into(),
                 new_content: new_content.into(),
                 reason: "correction".into(),
@@ -262,8 +265,8 @@ mod tests {
         let mut env = MemoryEventEnvelope::new(
             fact_id.into(),
             seq,
-            MemoryEvent::FactInvalidated {
-                fact_id: fact_id.into(),
+            MemoryEvent::NoteInvalidated {
+                note_path: fact_id.into(),
                 reason: "outdated".into(),
                 actor: EventActor::System,
             },
@@ -279,8 +282,8 @@ mod tests {
         let mut env = MemoryEventEnvelope::new(
             fact_id.into(),
             seq,
-            MemoryEvent::FactAccessed {
-                fact_id: fact_id.into(),
+            MemoryEvent::NoteAccessed {
+                note_path: fact_id.into(),
                 query: Some("rust preference".into()),
                 relevance_score: Some(0.95),
                 used_in_response: true,
@@ -376,9 +379,9 @@ mod tests {
         assert_eq!(timeline[0].seq, 1);
         assert_eq!(timeline[1].seq, 2);
         assert_eq!(timeline[2].seq, 3);
-        assert_eq!(timeline[0].event.event_type_tag(), "FactCreated");
-        assert_eq!(timeline[1].event.event_type_tag(), "FactAccessed");
-        assert_eq!(timeline[2].event.event_type_tag(), "FactContentUpdated");
+        assert_eq!(timeline[0].event.event_type_tag(), "NoteCreated");
+        assert_eq!(timeline[1].event.event_type_tag(), "NoteAccessed");
+        assert_eq!(timeline[2].event.event_type_tag(), "NoteContentUpdated");
     }
 
     #[tokio::test]
@@ -461,9 +464,9 @@ mod tests {
         assert_eq!(explanation.access_count, 0);
 
         // Check event descriptions
-        assert!(explanation.events[0].action.contains("FactCreated"));
-        assert!(explanation.events[1].action.contains("FactContentUpdated"));
-        assert!(explanation.events[2].action.contains("FactInvalidated"));
+        assert!(explanation.events[0].action.contains("NoteCreated"));
+        assert!(explanation.events[1].action.contains("NoteContentUpdated"));
+        assert!(explanation.events[2].action.contains("NoteInvalidated"));
     }
 
     #[tokio::test]
@@ -497,8 +500,8 @@ mod tests {
         let mut del_env = MemoryEventEnvelope::new(
             "fact-ex-3".into(),
             2,
-            MemoryEvent::FactDeleted {
-                fact_id: "fact-ex-3".into(),
+            MemoryEvent::NoteDeleted {
+                note_path: "fact-ex-3".into(),
                 reason: "user requested".into(),
             },
             EventActor::User,
@@ -539,8 +542,8 @@ mod tests {
         let mut restore_env = MemoryEventEnvelope::new(
             "fact-ex-4".into(),
             3,
-            MemoryEvent::FactRestored {
-                fact_id: "fact-ex-4".into(),
+            MemoryEvent::NoteRestored {
+                note_path: "fact-ex-4".into(),
             },
             EventActor::User,
             None,

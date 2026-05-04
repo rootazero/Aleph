@@ -2,7 +2,7 @@
 //!
 //! One-shot migration from the legacy CRUD-based SQLite store to the
 //! event-sourced model. For each existing [`crate::memory::context::MemoryFact`],
-//! emits a [`super::MemoryEvent::FactMigrated`] event containing the full
+//! emits a [`super::MemoryEvent::NoteMigrated`] event containing the full
 //! fact serialized as a JSON snapshot, establishing the initial event history.
 //!
 //! The migration is idempotent: running it twice will skip already-migrated
@@ -93,8 +93,8 @@ impl EventSourcingMigration {
             let snapshot = serde_json::to_value(fact)
                 .map_err(|e| AlephError::other(format!("Failed to serialize fact: {e}")))?;
 
-            let event = MemoryEvent::FactMigrated {
-                fact_id: fact.id.clone(),
+            let event = MemoryEvent::NoteMigrated {
+                note_path: fact.id.clone(),
                 snapshot,
             };
 
@@ -194,7 +194,7 @@ mod tests {
         // Verify events were stored
         let events = db.get_memory_events_for_fact("f1").await.unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event.event_type_tag(), "FactMigrated");
+        assert_eq!(events[0].event.event_type_tag(), "NoteMigrated");
         assert_eq!(events[0].timestamp, 1000); // preserved original
     }
 
@@ -227,7 +227,7 @@ mod tests {
 
         // Verify the snapshot preserves is_valid = false
         let events = db.get_memory_events_for_fact("inv1").await.unwrap();
-        if let MemoryEvent::FactMigrated { snapshot, .. } = &events[0].event {
+        if let MemoryEvent::NoteMigrated { snapshot, .. } = &events[0].event {
             assert_eq!(snapshot["is_valid"], false);
         } else {
             panic!("Expected FactMigrated");
@@ -259,7 +259,7 @@ mod tests {
         migration.migrate_facts(&[original.clone()]).await.unwrap();
 
         let events = db.get_memory_events_for_fact("rt1").await.unwrap();
-        let rebuilt = super::super::projector::EventProjector::fold_events_to_fact(&events)
+        let rebuilt = super::super::projector::EventProjector::fold_events_to_note(&events)
             .unwrap()
             .unwrap();
         assert_eq!(rebuilt.id, "rt1");

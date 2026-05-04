@@ -6,8 +6,8 @@
 use crate::memory::context::{FactSource, NoteType};
 use crate::memory::events::EventActor;
 
-/// Create a new memory fact.
-pub struct CreateFactCommand {
+/// Create a new memory note.
+pub struct CreateNoteCommand {
     pub content: String,
     pub note_type: NoteType,
     pub path: String,
@@ -19,49 +19,49 @@ pub struct CreateFactCommand {
     pub correlation_id: Option<String>,
 }
 
-/// Update the textual content of an existing fact.
+/// Update the textual content of an existing note.
 pub struct UpdateContentCommand {
-    pub fact_id: String,
+    pub note_path: String,
     pub new_content: String,
     pub reason: String,
     pub actor: EventActor,
     pub correlation_id: Option<String>,
 }
 
-/// Soft-delete (invalidate) a fact.
-pub struct InvalidateFactCommand {
-    pub fact_id: String,
+/// Soft-delete (invalidate) a note.
+pub struct InvalidateNoteCommand {
+    pub note_path: String,
     pub reason: String,
     pub actor: EventActor,
     pub correlation_id: Option<String>,
 }
 
-/// Restore a previously invalidated fact.
-pub struct RestoreFactCommand {
-    pub fact_id: String,
+/// Restore a previously invalidated note.
+pub struct RestoreNoteCommand {
+    pub note_path: String,
     pub correlation_id: Option<String>,
 }
 
-/// Record a fact access/retrieval (Pulse event).
-pub struct RecordAccessCommand {
-    pub fact_id: String,
+/// Record a note access/retrieval (Pulse event).
+pub struct RecordNoteAccessCommand {
+    pub note_path: String,
     pub query: Option<String>,
     pub relevance_score: Option<f32>,
     pub used_in_response: bool,
     pub correlation_id: Option<String>,
 }
 
-/// Consolidate multiple facts into one.
+/// Consolidate multiple notes into one.
 pub struct ConsolidateCommand {
-    pub source_fact_ids: Vec<String>,
+    pub source_note_paths: Vec<String>,
     pub consolidated_content: String,
     pub actor: EventActor,
     pub correlation_id: Option<String>,
 }
 
-/// Permanently delete a fact.
-pub struct DeleteFactCommand {
-    pub fact_id: String,
+/// Permanently delete a note.
+pub struct DeleteNoteCommand {
+    pub note_path: String,
     pub reason: String,
     pub actor: EventActor,
     pub correlation_id: Option<String>,

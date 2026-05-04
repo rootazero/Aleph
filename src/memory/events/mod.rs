@@ -7,10 +7,10 @@
 //!
 //! Events follow the Skeleton/Pulse classification from the resilience layer:
 //! - **Skeleton** — structural mutations that must be persisted immediately
-//!   (FactCreated, FactContentUpdated, FactMetadataUpdated,
-//!   FactInvalidated, FactRestored, FactDeleted, FactConsolidated, FactMigrated)
+//!   (NoteCreated, NoteContentUpdated, NoteMetadataUpdated,
+//!   NoteInvalidated, NoteRestored, NoteDeleted, NoteConsolidated, NoteMigrated)
 //! - **Pulse** — high-frequency observations that may be buffered before persist
-//!   (FactAccessed)
+//!   (NoteAccessed)
 //!
 //! ## Submodules
 //!
@@ -91,15 +91,25 @@ impl std::str::FromStr for EventActor {
 ///
 /// Field definitions match the design doc at
 /// `docs/plans/2026-02-26-memory-event-sourcing-design.md`.
+///
+/// ## R2.2 rename — Note* variants with Fact* aliases
+///
+/// As of phase R2.2, variants are named `Note*` (matching the note-layer
+/// terminology). Each variant carries `#[serde(alias = "Fact...")]` so legacy
+/// on-disk events still deserialize. Likewise, the payload field
+/// `note_path` carries `#[serde(alias = "fact_id")]` and `source_note_paths`
+/// carries `#[serde(alias = "source_fact_ids")]` for backward compatibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum MemoryEvent {
     // ------------------------------------------------------------------
     // Skeleton events (immediate persist)
     // ------------------------------------------------------------------
-    /// A new fact was created
-    FactCreated {
-        fact_id: String,
+    /// A new note was created
+    #[serde(alias = "FactCreated")]
+    NoteCreated {
+        #[serde(alias = "fact_id")]
+        note_path: String,
         content: String,
         note_type: NoteType,
         path: String,
@@ -109,17 +119,21 @@ pub enum MemoryEvent {
         source_memory_ids: Vec<String>,
     },
 
-    /// The textual content of a fact was updated
-    FactContentUpdated {
-        fact_id: String,
+    /// The textual content of a note was updated
+    #[serde(alias = "FactContentUpdated")]
+    NoteContentUpdated {
+        #[serde(alias = "fact_id")]
+        note_path: String,
         old_content: String,
         new_content: String,
         reason: String,
     },
 
     /// A single metadata field was updated
-    FactMetadataUpdated {
-        fact_id: String,
+    #[serde(alias = "FactMetadataUpdated")]
+    NoteMetadataUpdated {
+        #[serde(alias = "fact_id")]
+        note_path: String,
         field: String,
         old_value: String,
         new_value: String,
@@ -128,9 +142,11 @@ pub enum MemoryEvent {
     // ------------------------------------------------------------------
     // Pulse events (buffered persist)
     // ------------------------------------------------------------------
-    /// The fact was accessed / retrieved
-    FactAccessed {
-        fact_id: String,
+    /// The note was accessed / retrieved
+    #[serde(alias = "FactAccessed")]
+    NoteAccessed {
+        #[serde(alias = "fact_id")]
+        note_path: String,
         query: Option<String>,
         relevance_score: Option<f32>,
         used_in_response: bool,
@@ -140,46 +156,62 @@ pub enum MemoryEvent {
     // ------------------------------------------------------------------
     // Skeleton events (continued)
     // ------------------------------------------------------------------
-    /// The fact was soft-deleted (invalidated)
-    FactInvalidated {
-        fact_id: String,
+    /// The note was soft-deleted (invalidated)
+    #[serde(alias = "FactInvalidated")]
+    NoteInvalidated {
+        #[serde(alias = "fact_id")]
+        note_path: String,
         reason: String,
         actor: EventActor,
     },
 
-    /// The fact was restored from the recycle bin
-    FactRestored { fact_id: String },
+    /// The note was restored from the recycle bin
+    #[serde(alias = "FactRestored")]
+    NoteRestored {
+        #[serde(alias = "fact_id")]
+        note_path: String,
+    },
 
-    /// The fact was permanently deleted
-    FactDeleted { fact_id: String, reason: String },
+    /// The note was permanently deleted
+    #[serde(alias = "FactDeleted")]
+    NoteDeleted {
+        #[serde(alias = "fact_id")]
+        note_path: String,
+        reason: String,
+    },
 
-    /// Multiple facts were consolidated into this one
-    FactConsolidated {
-        fact_id: String,
-        source_fact_ids: Vec<String>,
+    /// Multiple notes were consolidated into this one
+    #[serde(alias = "FactConsolidated")]
+    NoteConsolidated {
+        #[serde(alias = "fact_id")]
+        note_path: String,
+        #[serde(alias = "source_fact_ids")]
+        source_note_paths: Vec<String>,
         consolidated_content: String,
     },
 
-    /// The fact was migrated from the legacy CRUD store
-    FactMigrated {
-        fact_id: String,
+    /// The note was migrated from the legacy CRUD store
+    #[serde(alias = "FactMigrated")]
+    NoteMigrated {
+        #[serde(alias = "fact_id")]
+        note_path: String,
         snapshot: serde_json::Value,
     },
 }
 
 impl MemoryEvent {
-    /// Extract the fact_id from any event variant.
+    /// Extract the note_path (legacy: fact_id) from any event variant.
     pub fn fact_id(&self) -> &str {
         match self {
-            MemoryEvent::FactCreated { fact_id, .. }
-            | MemoryEvent::FactContentUpdated { fact_id, .. }
-            | MemoryEvent::FactMetadataUpdated { fact_id, .. }
-            | MemoryEvent::FactAccessed { fact_id, .. }
-            | MemoryEvent::FactInvalidated { fact_id, .. }
-            | MemoryEvent::FactRestored { fact_id, .. }
-            | MemoryEvent::FactDeleted { fact_id, .. }
-            | MemoryEvent::FactConsolidated { fact_id, .. }
-            | MemoryEvent::FactMigrated { fact_id, .. } => fact_id,
+            MemoryEvent::NoteCreated { note_path, .. }
+            | MemoryEvent::NoteContentUpdated { note_path, .. }
+            | MemoryEvent::NoteMetadataUpdated { note_path, .. }
+            | MemoryEvent::NoteAccessed { note_path, .. }
+            | MemoryEvent::NoteInvalidated { note_path, .. }
+            | MemoryEvent::NoteRestored { note_path, .. }
+            | MemoryEvent::NoteDeleted { note_path, .. }
+            | MemoryEvent::NoteConsolidated { note_path, .. }
+            | MemoryEvent::NoteMigrated { note_path, .. } => note_path,
         }
     }
 
@@ -189,24 +221,24 @@ impl MemoryEvent {
     /// filter events by type without deserializing the full payload.
     pub fn event_type_tag(&self) -> &'static str {
         match self {
-            MemoryEvent::FactCreated { .. } => "FactCreated",
-            MemoryEvent::FactContentUpdated { .. } => "FactContentUpdated",
-            MemoryEvent::FactMetadataUpdated { .. } => "FactMetadataUpdated",
-            MemoryEvent::FactAccessed { .. } => "FactAccessed",
-            MemoryEvent::FactInvalidated { .. } => "FactInvalidated",
-            MemoryEvent::FactRestored { .. } => "FactRestored",
-            MemoryEvent::FactDeleted { .. } => "FactDeleted",
-            MemoryEvent::FactConsolidated { .. } => "FactConsolidated",
-            MemoryEvent::FactMigrated { .. } => "FactMigrated",
+            MemoryEvent::NoteCreated { .. } => "NoteCreated",
+            MemoryEvent::NoteContentUpdated { .. } => "NoteContentUpdated",
+            MemoryEvent::NoteMetadataUpdated { .. } => "NoteMetadataUpdated",
+            MemoryEvent::NoteAccessed { .. } => "NoteAccessed",
+            MemoryEvent::NoteInvalidated { .. } => "NoteInvalidated",
+            MemoryEvent::NoteRestored { .. } => "NoteRestored",
+            MemoryEvent::NoteDeleted { .. } => "NoteDeleted",
+            MemoryEvent::NoteConsolidated { .. } => "NoteConsolidated",
+            MemoryEvent::NoteMigrated { .. } => "NoteMigrated",
         }
     }
 
     /// Whether this event is a Skeleton event (must be persisted immediately).
     ///
-    /// Only `FactAccessed` is Pulse (buffered).
+    /// Only `NoteAccessed` is Pulse (buffered).
     /// All other variants are Skeleton.
     pub fn is_skeleton(&self) -> bool {
-        !matches!(self, MemoryEvent::FactAccessed { .. })
+        !matches!(self, MemoryEvent::NoteAccessed { .. })
     }
 }
 
@@ -337,8 +369,8 @@ mod tests {
     #[test]
     fn test_fact_id_all_variants() {
         let events: Vec<MemoryEvent> = vec![
-            MemoryEvent::FactCreated {
-                fact_id: "a".into(),
+            MemoryEvent::NoteCreated {
+                note_path: "a".into(),
                 content: "c".into(),
                 note_type: NoteType::Other,
                 path: "p".into(),
@@ -347,44 +379,44 @@ mod tests {
                 source: FactSource::Manual,
                 source_memory_ids: vec![],
             },
-            MemoryEvent::FactContentUpdated {
-                fact_id: "b".into(),
+            MemoryEvent::NoteContentUpdated {
+                note_path: "b".into(),
                 old_content: "o".into(),
                 new_content: "n".into(),
                 reason: "r".into(),
             },
-            MemoryEvent::FactMetadataUpdated {
-                fact_id: "c".into(),
+            MemoryEvent::NoteMetadataUpdated {
+                note_path: "c".into(),
                 field: "tier".into(),
                 old_value: "ShortTerm".into(),
                 new_value: "LongTerm".into(),
             },
-            MemoryEvent::FactAccessed {
-                fact_id: "e".into(),
+            MemoryEvent::NoteAccessed {
+                note_path: "e".into(),
                 query: None,
                 relevance_score: None,
                 used_in_response: false,
                 new_access_count: 0,
             },
-            MemoryEvent::FactInvalidated {
-                fact_id: "g".into(),
+            MemoryEvent::NoteInvalidated {
+                note_path: "g".into(),
                 reason: "r".into(),
                 actor: EventActor::Decay,
             },
-            MemoryEvent::FactRestored {
-                fact_id: "h".into(),
+            MemoryEvent::NoteRestored {
+                note_path: "h".into(),
             },
-            MemoryEvent::FactDeleted {
-                fact_id: "i".into(),
+            MemoryEvent::NoteDeleted {
+                note_path: "i".into(),
                 reason: "r".into(),
             },
-            MemoryEvent::FactConsolidated {
-                fact_id: "j".into(),
-                source_fact_ids: vec![],
+            MemoryEvent::NoteConsolidated {
+                note_path: "j".into(),
+                source_note_paths: vec![],
                 consolidated_content: "c".into(),
             },
-            MemoryEvent::FactMigrated {
-                fact_id: "k".into(),
+            MemoryEvent::NoteMigrated {
+                note_path: "k".into(),
                 snapshot: serde_json::json!({}),
             },
         ];
@@ -400,8 +432,8 @@ mod tests {
     fn test_event_type_tag_all_variants() {
         let cases: Vec<(MemoryEvent, &str)> = vec![
             (
-                MemoryEvent::FactCreated {
-                    fact_id: "f".into(),
+                MemoryEvent::NoteCreated {
+                    note_path: "f".into(),
                     content: String::new(),
                     note_type: NoteType::Other,
                     source: FactSource::Extracted,
@@ -410,71 +442,71 @@ mod tests {
                     agent: "default".into(),
                     source_memory_ids: vec![],
                 },
-                "FactCreated",
+                "NoteCreated",
             ),
             (
-                MemoryEvent::FactContentUpdated {
-                    fact_id: "f".into(),
+                MemoryEvent::NoteContentUpdated {
+                    note_path: "f".into(),
                     old_content: String::new(),
                     new_content: String::new(),
                     reason: String::new(),
                 },
-                "FactContentUpdated",
+                "NoteContentUpdated",
             ),
             (
-                MemoryEvent::FactMetadataUpdated {
-                    fact_id: "f".into(),
+                MemoryEvent::NoteMetadataUpdated {
+                    note_path: "f".into(),
                     field: "tier".into(),
                     old_value: "a".into(),
                     new_value: "b".into(),
                 },
-                "FactMetadataUpdated",
+                "NoteMetadataUpdated",
             ),
             (
-                MemoryEvent::FactAccessed {
-                    fact_id: "f".into(),
+                MemoryEvent::NoteAccessed {
+                    note_path: "f".into(),
                     query: None,
                     relevance_score: None,
                     used_in_response: false,
                     new_access_count: 0,
                 },
-                "FactAccessed",
+                "NoteAccessed",
             ),
             (
-                MemoryEvent::FactInvalidated {
-                    fact_id: "f".into(),
+                MemoryEvent::NoteInvalidated {
+                    note_path: "f".into(),
                     reason: String::new(),
                     actor: EventActor::System,
                 },
-                "FactInvalidated",
+                "NoteInvalidated",
             ),
             (
-                MemoryEvent::FactRestored {
-                    fact_id: "f".into(),
+                MemoryEvent::NoteRestored {
+                    note_path: "f".into(),
                 },
-                "FactRestored",
+                "NoteRestored",
             ),
             (
-                MemoryEvent::FactDeleted {
-                    fact_id: "f".into(),
+                MemoryEvent::NoteDeleted {
+                    note_path: "f".into(),
                     reason: String::new(),
                 },
-                "FactDeleted",
+                "NoteDeleted",
             ),
             (
-                MemoryEvent::FactConsolidated {
-                    fact_id: "f".into(),
-                    source_fact_ids: vec![],
+                MemoryEvent::NoteConsolidated {
+                    note_path: "f".into(),
+                    source_note_paths: vec![],
                     consolidated_content: String::new(),
                 },
-                "FactConsolidated",
+                "NoteConsolidated",
             ),
             (
-                MemoryEvent::FactMigrated {
-                    fact_id: "f".into(),
+                MemoryEvent::NoteMigrated {
+                    note_path: "f".into(),
                     snapshot: serde_json::json!({}),
                 },
-                "FactMigrated",
+                "NoteMigrated",
             ),
         ];
 
@@ -489,8 +521,8 @@ mod tests {
     #[test]
     fn test_is_skeleton_classification() {
         // Pulse events
-        assert!(!MemoryEvent::FactAccessed {
-            fact_id: "f".into(),
+        assert!(!MemoryEvent::NoteAccessed {
+            note_path: "f".into(),
             query: None,
             relevance_score: None,
             used_in_response: false,
@@ -498,8 +530,8 @@ mod tests {
         }
         .is_skeleton());
         // Skeleton events
-        assert!(MemoryEvent::FactCreated {
-            fact_id: "f".into(),
+        assert!(MemoryEvent::NoteCreated {
+            note_path: "f".into(),
             content: "c".into(),
             note_type: NoteType::Other,
             path: "p".into(),
@@ -509,13 +541,13 @@ mod tests {
             source_memory_ids: vec![],
         }
         .is_skeleton());
-        assert!(MemoryEvent::FactDeleted {
-            fact_id: "f".into(),
+        assert!(MemoryEvent::NoteDeleted {
+            note_path: "f".into(),
             reason: "r".into()
         }
         .is_skeleton());
-        assert!(MemoryEvent::FactMigrated {
-            fact_id: "f".into(),
+        assert!(MemoryEvent::NoteMigrated {
+            note_path: "f".into(),
             snapshot: serde_json::json!({})
         }
         .is_skeleton());
@@ -525,8 +557,8 @@ mod tests {
 
     #[test]
     fn test_event_serde_roundtrip_fact_created() {
-        let event = MemoryEvent::FactCreated {
-            fact_id: "fact-001".into(),
+        let event = MemoryEvent::NoteCreated {
+            note_path: "fact-001".into(),
             content: "User prefers Rust".into(),
             note_type: NoteType::Preference,
             path: "aleph://user/preferences/language".into(),
@@ -537,7 +569,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"FactCreated\""));
+        assert!(json.contains("\"type\":\"NoteCreated\""));
         assert!(json.contains("User prefers Rust"));
         assert!(json.contains("aleph://user/preferences/language"));
 
@@ -553,14 +585,14 @@ mod tests {
             "id": "old-fact",
             "content": "test"
         });
-        let event = MemoryEvent::FactMigrated {
-            fact_id: "old-fact".into(),
+        let event = MemoryEvent::NoteMigrated {
+            note_path: "old-fact".into(),
             snapshot: snapshot.clone(),
         };
 
         let json = serde_json::to_string(&event).unwrap();
         let parsed: MemoryEvent = serde_json::from_str(&json).unwrap();
-        if let MemoryEvent::FactMigrated { snapshot: s, .. } = parsed {
+        if let MemoryEvent::NoteMigrated { snapshot: s, .. } = parsed {
             assert_eq!(s["type"].as_str(), Some("old_event_type"));
         } else {
             panic!("Wrong variant");
@@ -574,14 +606,14 @@ mod tests {
             "content": "test",
             "is_valid": true
         });
-        let event = MemoryEvent::FactMigrated {
-            fact_id: "old-fact".into(),
+        let event = MemoryEvent::NoteMigrated {
+            note_path: "old-fact".into(),
             snapshot: snapshot.clone(),
         };
 
         let json = serde_json::to_string(&event).unwrap();
         let parsed: MemoryEvent = serde_json::from_str(&json).unwrap();
-        if let MemoryEvent::FactMigrated { snapshot: s, .. } = parsed {
+        if let MemoryEvent::NoteMigrated { snapshot: s, .. } = parsed {
             assert_eq!(s, snapshot);
         } else {
             panic!("Wrong variant");
@@ -591,8 +623,8 @@ mod tests {
     #[test]
     fn test_event_serde_roundtrip_all_variants() {
         let events = vec![
-            MemoryEvent::FactCreated {
-                fact_id: "f".into(),
+            MemoryEvent::NoteCreated {
+                note_path: "f".into(),
                 content: "c".into(),
                 note_type: NoteType::Learning,
                 source: FactSource::Manual,
@@ -601,44 +633,44 @@ mod tests {
                 agent: "w".into(),
                 source_memory_ids: vec![],
             },
-            MemoryEvent::FactContentUpdated {
-                fact_id: "f".into(),
+            MemoryEvent::NoteContentUpdated {
+                note_path: "f".into(),
                 old_content: "a".into(),
                 new_content: "b".into(),
                 reason: "correction".into(),
             },
-            MemoryEvent::FactMetadataUpdated {
-                fact_id: "f".into(),
+            MemoryEvent::NoteMetadataUpdated {
+                note_path: "f".into(),
                 field: "scope".into(),
                 old_value: "global".into(),
                 new_value: "persona".into(),
             },
-            MemoryEvent::FactAccessed {
-                fact_id: "f".into(),
+            MemoryEvent::NoteAccessed {
+                note_path: "f".into(),
                 query: Some("q".into()),
                 relevance_score: Some(0.5),
                 used_in_response: true,
                 new_access_count: 3,
             },
-            MemoryEvent::FactInvalidated {
-                fact_id: "f".into(),
+            MemoryEvent::NoteInvalidated {
+                note_path: "f".into(),
                 reason: "outdated".into(),
                 actor: EventActor::Decay,
             },
-            MemoryEvent::FactRestored {
-                fact_id: "f".into(),
+            MemoryEvent::NoteRestored {
+                note_path: "f".into(),
             },
-            MemoryEvent::FactDeleted {
-                fact_id: "f".into(),
+            MemoryEvent::NoteDeleted {
+                note_path: "f".into(),
                 reason: "user request".into(),
             },
-            MemoryEvent::FactConsolidated {
-                fact_id: "f".into(),
-                source_fact_ids: vec!["x".into()],
+            MemoryEvent::NoteConsolidated {
+                note_path: "f".into(),
+                source_note_paths: vec!["x".into()],
                 consolidated_content: "merged".into(),
             },
-            MemoryEvent::FactMigrated {
-                fact_id: "f".into(),
+            MemoryEvent::NoteMigrated {
+                note_path: "f".into(),
                 snapshot: serde_json::json!({"id": "old"}),
             },
         ];
@@ -655,8 +687,8 @@ mod tests {
 
     #[test]
     fn test_envelope_new() {
-        let event = MemoryEvent::FactCreated {
-            fact_id: "fact-abc".into(),
+        let event = MemoryEvent::NoteCreated {
+            note_path: "fact-abc".into(),
             content: "Test fact".into(),
             note_type: NoteType::Other,
             source: FactSource::Extracted,
@@ -678,7 +710,7 @@ mod tests {
         assert_eq!(envelope.seq, 1);
         assert_eq!(envelope.actor, EventActor::Agent);
         assert_eq!(envelope.correlation_id.as_deref(), Some("corr-123"));
-        assert_eq!(envelope.event_type_tag(), "FactCreated");
+        assert_eq!(envelope.event_type_tag(), "NoteCreated");
         assert!(envelope.is_skeleton());
         assert!(envelope.timestamp > 0);
         assert_eq!(envelope.id, 0); // Not yet assigned by DB
@@ -689,8 +721,8 @@ mod tests {
         let envelope = MemoryEventEnvelope::new(
             "fact-xyz".into(),
             5,
-            MemoryEvent::FactAccessed {
-                fact_id: "fact-xyz".into(),
+            MemoryEvent::NoteAccessed {
+                note_path: "fact-xyz".into(),
                 query: None,
                 relevance_score: None,
                 used_in_response: false,
@@ -709,8 +741,8 @@ mod tests {
         let envelope = MemoryEventEnvelope::new(
             "fact-001".into(),
             3,
-            MemoryEvent::FactContentUpdated {
-                fact_id: "fact-001".into(),
+            MemoryEvent::NoteContentUpdated {
+                note_path: "fact-001".into(),
                 old_content: "old".into(),
                 new_content: "new".into(),
                 reason: "user correction".into(),
@@ -727,6 +759,80 @@ mod tests {
         assert_eq!(parsed.actor, envelope.actor);
         assert_eq!(parsed.timestamp, envelope.timestamp);
         assert_eq!(parsed.correlation_id, envelope.correlation_id);
-        assert_eq!(parsed.event.event_type_tag(), "FactContentUpdated");
+        assert_eq!(parsed.event.event_type_tag(), "NoteContentUpdated");
+    }
+
+    // --- R2.2: legacy event aliases -----------------------------------------
+
+    #[test]
+    fn legacy_envelope_with_fact_created_deserializes_via_alias() {
+        // Legacy on-disk events used the "Fact*" variant tag. After the
+        // R2.2 rename to "Note*", the alias must still let old payloads through.
+        // Note: enum is internally tagged via #[serde(tag = "type")].
+        let json = r#"{
+            "type": "FactCreated",
+            "fact_id": "reference/rust",
+            "content": "hello",
+            "note_type": "other",
+            "path": "p",
+            "namespace": "owner",
+            "agent": "default",
+            "source": "manual",
+            "source_memory_ids": []
+        }"#;
+        let parsed: MemoryEvent =
+            serde_json::from_str(json).expect("alias must let old name through");
+        match parsed {
+            MemoryEvent::NoteCreated {
+                note_path, content, ..
+            } => {
+                assert_eq!(note_path, "reference/rust");
+                assert_eq!(content, "hello");
+            }
+            _ => panic!("expected NoteCreated via alias"),
+        }
+    }
+
+    #[test]
+    fn writes_only_note_created_name() {
+        let ev = MemoryEvent::NoteCreated {
+            note_path: "x".into(),
+            content: "y".into(),
+            note_type: NoteType::Other,
+            path: "p".into(),
+            namespace: "owner".into(),
+            agent: "default".into(),
+            source: FactSource::Manual,
+            source_memory_ids: vec![],
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("NoteCreated"));
+        assert!(!json.contains("FactCreated"));
+        assert!(json.contains("note_path"));
+        assert!(!json.contains("fact_id"));
+    }
+
+    #[test]
+    fn legacy_field_alias_source_fact_ids_works() {
+        // Legacy payloads used "source_fact_ids"; new format uses "source_note_paths".
+        let json = r#"{
+            "type": "NoteConsolidated",
+            "note_path": "j",
+            "source_fact_ids": ["a", "b"],
+            "consolidated_content": "merged"
+        }"#;
+        let parsed: MemoryEvent =
+            serde_json::from_str(json).expect("source_fact_ids alias must work");
+        match parsed {
+            MemoryEvent::NoteConsolidated {
+                source_note_paths,
+                consolidated_content,
+                ..
+            } => {
+                assert_eq!(source_note_paths, vec!["a", "b"]);
+                assert_eq!(consolidated_content, "merged");
+            }
+            _ => panic!("expected NoteConsolidated"),
+        }
     }
 }

@@ -104,7 +104,7 @@ mod event_sourcing {
 
         // 1. Create a fact
         let fact_id = handler
-            .create_fact(CreateFactCommand {
+            .create_fact(CreateNoteCommand {
                 content: "User prefers Rust for systems programming".into(),
                 note_type: NoteType::Preference,
                 path: "/user/preferences/language".into(),
@@ -126,7 +126,7 @@ mod event_sourcing {
         assert_eq!(events[0].seq, 1);
 
         // Rebuild from events
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .unwrap();
         assert_eq!(fact.content, "User prefers Rust for systems programming");
@@ -134,7 +134,7 @@ mod event_sourcing {
         // 2. Update content
         handler
             .update_content(UpdateContentCommand {
-                fact_id: fact_id.clone(),
+                note_path: fact_id.clone(),
                 new_content: "User strongly prefers Rust for all programming".into(),
                 reason: "User reinforced preference".into(),
                 actor: EventActor::Agent,
@@ -149,8 +149,8 @@ mod event_sourcing {
 
         // 3. Record access (Pulse)
         handler
-            .record_access(RecordAccessCommand {
-                fact_id: fact_id.clone(),
+            .record_access(RecordNoteAccessCommand {
+                note_path: fact_id.clone(),
                 query: Some("What language does the user prefer?".into()),
                 relevance_score: Some(0.95),
                 used_in_response: true,
@@ -165,8 +165,8 @@ mod event_sourcing {
 
         // 4. Invalidate
         handler
-            .invalidate_fact(InvalidateFactCommand {
-                fact_id: fact_id.clone(),
+            .invalidate_fact(InvalidateNoteCommand {
+                note_path: fact_id.clone(),
                 reason: "Contradicted by newer information".into(),
                 actor: EventActor::System,
                 correlation_id: None,
@@ -176,8 +176,8 @@ mod event_sourcing {
 
         // 5. Restore
         handler
-            .restore_fact(RestoreFactCommand {
-                fact_id: fact_id.clone(),
+            .restore_fact(RestoreNoteCommand {
+                note_path: fact_id.clone(),
                 correlation_id: None,
             })
             .await
@@ -188,7 +188,7 @@ mod event_sourcing {
         assert_eq!(events.len(), 5);
 
         // 6. Verify final state via projector
-        let final_fact = EventProjector::fold_events_to_fact(&events)
+        let final_fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -211,8 +211,8 @@ mod event_sourcing {
 
         // 9. Delete
         handler
-            .delete_fact(DeleteFactCommand {
-                fact_id: fact_id.clone(),
+            .delete_fact(DeleteNoteCommand {
+                note_path: fact_id.clone(),
                 reason: "User requested removal".into(),
                 actor: EventActor::User,
                 correlation_id: None,
@@ -222,7 +222,7 @@ mod event_sourcing {
 
         let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
         assert_eq!(events.len(), 6);
-        let deleted = EventProjector::fold_events_to_fact(&events).unwrap();
+        let deleted = EventProjector::fold_events_to_note(&events).unwrap();
         assert!(deleted.is_none()); // Fact deleted
     }
 }

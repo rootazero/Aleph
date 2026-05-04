@@ -22,7 +22,7 @@ use crate::resilience::database::StateDatabase;
 ///
 /// ## Pure fold
 ///
-/// [`EventProjector::fold_events_to_fact`] is a **pure function** — no I/O,
+/// [`EventProjector::fold_events_to_note`] is a **pure function** — no I/O,
 /// no side effects. This makes it trivially testable and deterministic.
 ///
 /// ## Projection from store
@@ -43,13 +43,13 @@ impl EventProjector {
     ///
     /// Returns `Ok(None)` if:
     /// - The event list is empty
-    /// - The fact was permanently deleted (`FactDeleted`)
+    /// - The fact was permanently deleted (`NoteDeleted`)
     ///
     /// Events must be ordered by sequence number (ascending).
-    /// A `FactCreated` or `FactMigrated` event must appear before any
+    /// A `NoteCreated` or `NoteMigrated` event must appear before any
     /// mutation events; if a mutation arrives before initialization,
     /// it is silently skipped.
-    pub fn fold_events_to_fact(
+    pub fn fold_events_to_note(
         events: &[MemoryEventEnvelope],
     ) -> Result<Option<MemoryFact>, AlephError> {
         if events.is_empty() {
@@ -63,8 +63,8 @@ impl EventProjector {
                 // --------------------------------------------------------
                 // Initialization events
                 // --------------------------------------------------------
-                MemoryEvent::FactCreated {
-                    fact_id,
+                MemoryEvent::NoteCreated {
+                    note_path,
                     content,
                     note_type,
                     path,
@@ -77,7 +77,7 @@ impl EventProjector {
                     let category = note_type.default_category();
 
                     fact = Some(MemoryFact {
-                        id: fact_id.clone(),
+                        id: note_path.clone(),
                         content: content.clone(),
                         note_type: note_type.clone(),
                         embedding: None,
@@ -107,12 +107,12 @@ impl EventProjector {
                     });
                 }
 
-                MemoryEvent::FactMigrated { snapshot, .. } => {
+                MemoryEvent::NoteMigrated { snapshot, .. } => {
                     let migrated: MemoryFact =
                         serde_json::from_value(snapshot.clone()).map_err(|e| {
                             AlephError::Other {
                                 message: format!(
-                                    "Failed to deserialize FactMigrated snapshot: {e}"
+                                    "Failed to deserialize NoteMigrated snapshot: {e}"
                                 ),
                                 suggestion: None,
                             }
@@ -123,7 +123,7 @@ impl EventProjector {
                 // --------------------------------------------------------
                 // Mutation events (require an initialized fact)
                 // --------------------------------------------------------
-                MemoryEvent::FactContentUpdated { new_content, .. } => {
+                MemoryEvent::NoteContentUpdated { new_content, .. } => {
                     if let Some(ref mut f) = fact {
                         f.content = new_content.clone();
                         f.content_hash = String::new(); // recomputed at projection time
@@ -131,7 +131,7 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::FactMetadataUpdated {
+                MemoryEvent::NoteMetadataUpdated {
                     field, new_value, ..
                 } => {
                     if let Some(ref mut f) = fact {
@@ -154,7 +154,7 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::FactAccessed {
+                MemoryEvent::NoteAccessed {
                     new_access_count, ..
                 } => {
                     if let Some(ref mut f) = fact {
@@ -163,7 +163,7 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::FactInvalidated { reason, actor, .. } => {
+                MemoryEvent::NoteInvalidated { reason, actor, .. } => {
                     if let Some(ref mut f) = fact {
                         f.is_valid = false;
                         f.invalidation_reason = Some(reason.clone());
@@ -173,7 +173,7 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::FactRestored { .. } => {
+                MemoryEvent::NoteRestored { .. } => {
                     if let Some(ref mut f) = fact {
                         f.is_valid = true;
                         f.invalidation_reason = None;
@@ -181,11 +181,11 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::FactDeleted { .. } => {
+                MemoryEvent::NoteDeleted { .. } => {
                     return Ok(None);
                 }
 
-                MemoryEvent::FactConsolidated {
+                MemoryEvent::NoteConsolidated {
                     consolidated_content,
                     ..
                 } => {
@@ -203,7 +203,7 @@ impl EventProjector {
     /// Rebuild a fact by loading all events from the store and folding them.
     pub async fn rebuild_fact(&self, fact_id: &str) -> Result<Option<MemoryFact>, AlephError> {
         let events = self.db.get_memory_events_for_fact(fact_id).await?;
-        Self::fold_events_to_fact(&events)
+        Self::fold_events_to_note(&events)
     }
 
     /// Rebuild a fact at a specific point in time.
@@ -215,7 +215,7 @@ impl EventProjector {
         at: i64,
     ) -> Result<Option<MemoryFact>, AlephError> {
         let events = self.db.get_memory_events_until(fact_id, at).await?;
-        Self::fold_events_to_fact(&events)
+        Self::fold_events_to_note(&events)
     }
 }
 
@@ -235,8 +235,8 @@ mod tests {
             id: 0,
             fact_id: fact_id.to_string(),
             seq,
-            event: MemoryEvent::FactCreated {
-                fact_id: fact_id.to_string(),
+            event: MemoryEvent::NoteCreated {
+                note_path: fact_id.to_string(),
                 content: "User prefers Rust".to_string(),
                 note_type: NoteType::Preference,
                 path: "aleph://user/preferences/".to_string(),
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_fold_empty_events() {
-        let result = EventProjector::fold_events_to_fact(&[]).unwrap();
+        let result = EventProjector::fold_events_to_note(&[]).unwrap();
         assert!(result.is_none());
     }
 
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn test_fold_single_created() {
         let env = make_created_envelope("fact-001", 1, 1000);
-        let fact = EventProjector::fold_events_to_fact(&[env])
+        let fact = EventProjector::fold_events_to_note(&[env])
             .unwrap()
             .expect("should produce a fact");
 
@@ -335,8 +335,8 @@ mod tests {
                 "fact-002",
                 2,
                 2000,
-                MemoryEvent::FactContentUpdated {
-                    fact_id: "fact-002".to_string(),
+                MemoryEvent::NoteContentUpdated {
+                    note_path: "fact-002".to_string(),
                     old_content: "User prefers Rust".to_string(),
                     new_content: "User prefers Rust and Go".to_string(),
                     reason: "correction".to_string(),
@@ -344,7 +344,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 
@@ -363,8 +363,8 @@ mod tests {
                 "fact-003",
                 2,
                 3000,
-                MemoryEvent::FactInvalidated {
-                    fact_id: "fact-003".to_string(),
+                MemoryEvent::NoteInvalidated {
+                    note_path: "fact-003".to_string(),
                     reason: "outdated information".to_string(),
                     actor: EventActor::User,
                 },
@@ -372,7 +372,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce an invalidated fact");
 
@@ -393,8 +393,8 @@ mod tests {
                 "fact-003d",
                 2,
                 3000,
-                MemoryEvent::FactInvalidated {
-                    fact_id: "fact-003d".to_string(),
+                MemoryEvent::NoteInvalidated {
+                    note_path: "fact-003d".to_string(),
                     reason: "strength below threshold".to_string(),
                     actor: EventActor::Decay,
                 },
@@ -402,7 +402,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce an invalidated fact");
 
@@ -420,14 +420,14 @@ mod tests {
                 "fact-004",
                 2,
                 4000,
-                MemoryEvent::FactDeleted {
-                    fact_id: "fact-004".to_string(),
+                MemoryEvent::NoteDeleted {
+                    note_path: "fact-004".to_string(),
                     reason: "user requested permanent removal".to_string(),
                 },
             ),
         ];
 
-        let result = EventProjector::fold_events_to_fact(&events).unwrap();
+        let result = EventProjector::fold_events_to_note(&events).unwrap();
         assert!(result.is_none());
     }
 
@@ -441,8 +441,8 @@ mod tests {
                 "fact-005",
                 2,
                 5000,
-                MemoryEvent::FactAccessed {
-                    fact_id: "fact-005".to_string(),
+                MemoryEvent::NoteAccessed {
+                    note_path: "fact-005".to_string(),
                     query: Some("what language?".to_string()),
                     relevance_score: Some(0.95),
                     used_in_response: true,
@@ -453,8 +453,8 @@ mod tests {
                 "fact-005",
                 3,
                 6000,
-                MemoryEvent::FactAccessed {
-                    fact_id: "fact-005".to_string(),
+                MemoryEvent::NoteAccessed {
+                    note_path: "fact-005".to_string(),
                     query: None,
                     relevance_score: None,
                     used_in_response: false,
@@ -463,7 +463,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 
@@ -481,8 +481,8 @@ mod tests {
                 "fact-007",
                 2,
                 2000,
-                MemoryEvent::FactInvalidated {
-                    fact_id: "fact-007".to_string(),
+                MemoryEvent::NoteInvalidated {
+                    note_path: "fact-007".to_string(),
                     reason: "decay below threshold".to_string(),
                     actor: EventActor::Decay,
                 },
@@ -492,13 +492,13 @@ mod tests {
                 "fact-007",
                 3,
                 3000,
-                MemoryEvent::FactRestored {
-                    fact_id: "fact-007".to_string(),
+                MemoryEvent::NoteRestored {
+                    note_path: "fact-007".to_string(),
                 },
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a restored fact");
 
@@ -542,13 +542,13 @@ mod tests {
             "migrated-001",
             1,
             10000,
-            MemoryEvent::FactMigrated {
-                fact_id: "migrated-001".to_string(),
+            MemoryEvent::NoteMigrated {
+                note_path: "migrated-001".to_string(),
                 snapshot,
             },
         )];
 
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a migrated fact");
 
@@ -569,16 +569,16 @@ mod tests {
                 "fact-009",
                 2,
                 9000,
-                MemoryEvent::FactConsolidated {
-                    fact_id: "fact-009".to_string(),
-                    source_fact_ids: vec!["fact-a".to_string(), "fact-b".to_string()],
+                MemoryEvent::NoteConsolidated {
+                    note_path: "fact-009".to_string(),
+                    source_note_paths: vec!["fact-a".to_string(), "fact-b".to_string()],
                     consolidated_content: "User prefers Rust, especially for systems programming"
                         .to_string(),
                 },
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a consolidated fact");
 
@@ -599,8 +599,8 @@ mod tests {
                 "fact-010",
                 2,
                 2000,
-                MemoryEvent::FactMetadataUpdated {
-                    fact_id: "fact-010".to_string(),
+                MemoryEvent::NoteMetadataUpdated {
+                    note_path: "fact-010".to_string(),
                     field: "namespace".to_string(),
                     old_value: "owner".to_string(),
                     new_value: "guest".to_string(),
@@ -608,7 +608,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 
@@ -624,8 +624,8 @@ mod tests {
                 "fact-011",
                 2,
                 2000,
-                MemoryEvent::FactMetadataUpdated {
-                    fact_id: "fact-011".to_string(),
+                MemoryEvent::NoteMetadataUpdated {
+                    note_path: "fact-011".to_string(),
                     field: "path".to_string(),
                     old_value: "aleph://user/preferences/".to_string(),
                     new_value: "aleph://user/personal/identity/".to_string(),
@@ -633,7 +633,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 
@@ -649,8 +649,8 @@ mod tests {
                 "fact-012",
                 2,
                 2000,
-                MemoryEvent::FactMetadataUpdated {
-                    fact_id: "fact-012".to_string(),
+                MemoryEvent::NoteMetadataUpdated {
+                    note_path: "fact-012".to_string(),
                     field: "nonexistent_field".to_string(),
                     old_value: "a".to_string(),
                     new_value: "b".to_string(),
@@ -659,7 +659,7 @@ mod tests {
         ];
 
         // Should not fail — unknown fields are silently skipped
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 
@@ -676,15 +676,15 @@ mod tests {
             "fact-orphan",
             1,
             1000,
-            MemoryEvent::FactContentUpdated {
-                fact_id: "fact-orphan".to_string(),
+            MemoryEvent::NoteContentUpdated {
+                note_path: "fact-orphan".to_string(),
                 old_content: String::new(),
                 new_content: "orphan update".to_string(),
                 reason: "test".to_string(),
             },
         )];
 
-        let result = EventProjector::fold_events_to_fact(&events).unwrap();
+        let result = EventProjector::fold_events_to_note(&events).unwrap();
         assert!(result.is_none());
     }
 
@@ -698,8 +698,8 @@ mod tests {
                 "fact-complex",
                 2,
                 2000,
-                MemoryEvent::FactAccessed {
-                    fact_id: "fact-complex".to_string(),
+                MemoryEvent::NoteAccessed {
+                    note_path: "fact-complex".to_string(),
                     query: Some("rust?".to_string()),
                     relevance_score: Some(0.9),
                     used_in_response: true,
@@ -710,8 +710,8 @@ mod tests {
                 "fact-complex",
                 5,
                 5000,
-                MemoryEvent::FactContentUpdated {
-                    fact_id: "fact-complex".to_string(),
+                MemoryEvent::NoteContentUpdated {
+                    note_path: "fact-complex".to_string(),
                     old_content: "User prefers Rust".to_string(),
                     new_content: "User strongly prefers Rust for systems programming".to_string(),
                     reason: "refined understanding".to_string(),
@@ -719,7 +719,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 

@@ -86,8 +86,8 @@ pub use embedding_provider::{
 };
 pub use events::{
     commands::{
-        ConsolidateCommand, CreateFactCommand, DeleteFactCommand, InvalidateFactCommand,
-        RecordAccessCommand, RestoreFactCommand, UpdateContentCommand,
+        ConsolidateCommand, CreateNoteCommand, DeleteNoteCommand, InvalidateNoteCommand,
+        RecordNoteAccessCommand, RestoreNoteCommand, UpdateContentCommand,
     },
     handler::MemoryCommandHandler,
     migration::{EventSourcingMigration, MigrationReport},

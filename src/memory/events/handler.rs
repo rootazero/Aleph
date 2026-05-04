@@ -55,7 +55,7 @@ impl MemoryCommandHandler {
         };
 
         let events = self.db.get_memory_events_for_fact(fact_id).await?;
-        let projected = super::projector::EventProjector::fold_events_to_fact(&events)?;
+        let projected = super::projector::EventProjector::fold_events_to_note(&events)?;
 
         match projected {
             Some(fact) => {
@@ -138,12 +138,12 @@ impl MemoryCommandHandler {
     }
 
     /// Create a new fact. Returns the generated fact_id.
-    pub async fn create_fact(&self, cmd: CreateFactCommand) -> Result<String, AlephError> {
+    pub async fn create_fact(&self, cmd: CreateNoteCommand) -> Result<String, AlephError> {
         let fact_id = Uuid::new_v4().to_string();
         let seq = self.db.get_memory_event_latest_seq(&fact_id).await? + 1;
 
-        let event = MemoryEvent::FactCreated {
-            fact_id: fact_id.clone(),
+        let event = MemoryEvent::NoteCreated {
+            note_path: fact_id.clone(),
             content: cmd.content,
             note_type: cmd.note_type,
             path: cmd.path,
@@ -163,25 +163,25 @@ impl MemoryCommandHandler {
 
     /// Update the content of an existing fact.
     pub async fn update_content(&self, cmd: UpdateContentCommand) -> Result<(), AlephError> {
-        let seq = self.db.get_memory_event_latest_seq(&cmd.fact_id).await? + 1;
+        let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         // Rebuild from events to get the current content.
-        let events = self.db.get_memory_events_for_fact(&cmd.fact_id).await?;
-        let current_fact = super::projector::EventProjector::fold_events_to_fact(&events)?
+        let events = self.db.get_memory_events_for_fact(&cmd.note_path).await?;
+        let current_fact = super::projector::EventProjector::fold_events_to_note(&events)?
             .ok_or_else(|| {
-                AlephError::other(format!("Fact {} not found or deleted", cmd.fact_id))
+                AlephError::other(format!("Fact {} not found or deleted", cmd.note_path))
             })?;
 
-        let event = MemoryEvent::FactContentUpdated {
-            fact_id: cmd.fact_id.clone(),
+        let event = MemoryEvent::NoteContentUpdated {
+            note_path: cmd.note_path.clone(),
             old_content: current_fact.content,
             new_content: cmd.new_content,
             reason: cmd.reason,
         };
 
-        let fact_id_ref = cmd.fact_id.clone();
+        let fact_id_ref = cmd.note_path.clone();
         let envelope =
-            MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
+            MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_notes(&fact_id_ref).await?;
@@ -189,18 +189,18 @@ impl MemoryCommandHandler {
     }
 
     /// Invalidate (soft-delete) a fact.
-    pub async fn invalidate_fact(&self, cmd: InvalidateFactCommand) -> Result<(), AlephError> {
-        let seq = self.db.get_memory_event_latest_seq(&cmd.fact_id).await? + 1;
+    pub async fn invalidate_fact(&self, cmd: InvalidateNoteCommand) -> Result<(), AlephError> {
+        let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
-        let event = MemoryEvent::FactInvalidated {
-            fact_id: cmd.fact_id.clone(),
+        let event = MemoryEvent::NoteInvalidated {
+            note_path: cmd.note_path.clone(),
             reason: cmd.reason,
             actor: cmd.actor.clone(),
         };
 
-        let fact_id_ref = cmd.fact_id.clone();
+        let fact_id_ref = cmd.note_path.clone();
         let envelope =
-            MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
+            MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_notes(&fact_id_ref).await?;
@@ -208,16 +208,16 @@ impl MemoryCommandHandler {
     }
 
     /// Restore a previously invalidated fact.
-    pub async fn restore_fact(&self, cmd: RestoreFactCommand) -> Result<(), AlephError> {
-        let seq = self.db.get_memory_event_latest_seq(&cmd.fact_id).await? + 1;
+    pub async fn restore_fact(&self, cmd: RestoreNoteCommand) -> Result<(), AlephError> {
+        let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
-        let event = MemoryEvent::FactRestored {
-            fact_id: cmd.fact_id.clone(),
+        let event = MemoryEvent::NoteRestored {
+            note_path: cmd.note_path.clone(),
         };
 
-        let fact_id_ref = cmd.fact_id.clone();
+        let fact_id_ref = cmd.note_path.clone();
         let envelope = MemoryEventEnvelope::new(
-            cmd.fact_id,
+            cmd.note_path,
             seq,
             event,
             EventActor::User,
@@ -230,25 +230,25 @@ impl MemoryCommandHandler {
     }
 
     /// Record a fact access (Pulse event).
-    pub async fn record_access(&self, cmd: RecordAccessCommand) -> Result<(), AlephError> {
-        let seq = self.db.get_memory_event_latest_seq(&cmd.fact_id).await? + 1;
+    pub async fn record_access(&self, cmd: RecordNoteAccessCommand) -> Result<(), AlephError> {
+        let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         // Get current access count from event history
-        let events = self.db.get_memory_events_for_fact(&cmd.fact_id).await?;
-        let current_fact = super::projector::EventProjector::fold_events_to_fact(&events)?;
+        let events = self.db.get_memory_events_for_fact(&cmd.note_path).await?;
+        let current_fact = super::projector::EventProjector::fold_events_to_note(&events)?;
         let current_access_count = current_fact.map(|f| f.access_count).unwrap_or(0);
 
-        let event = MemoryEvent::FactAccessed {
-            fact_id: cmd.fact_id.clone(),
+        let event = MemoryEvent::NoteAccessed {
+            note_path: cmd.note_path.clone(),
             query: cmd.query,
             relevance_score: cmd.relevance_score,
             used_in_response: cmd.used_in_response,
             new_access_count: current_access_count + 1,
         };
 
-        let fact_id_ref = cmd.fact_id.clone();
+        let fact_id_ref = cmd.note_path.clone();
         let envelope = MemoryEventEnvelope::new(
-            cmd.fact_id,
+            cmd.note_path,
             seq,
             event,
             EventActor::Agent,
@@ -265,9 +265,9 @@ impl MemoryCommandHandler {
         let fact_id = Uuid::new_v4().to_string();
         let seq = 1u64; // New fact, starts at seq 1
 
-        let event = MemoryEvent::FactConsolidated {
-            fact_id: fact_id.clone(),
-            source_fact_ids: cmd.source_fact_ids,
+        let event = MemoryEvent::NoteConsolidated {
+            note_path: fact_id.clone(),
+            source_note_paths: cmd.source_note_paths,
             consolidated_content: cmd.consolidated_content,
         };
 
@@ -280,17 +280,17 @@ impl MemoryCommandHandler {
     }
 
     /// Permanently delete a fact.
-    pub async fn delete_fact(&self, cmd: DeleteFactCommand) -> Result<(), AlephError> {
-        let seq = self.db.get_memory_event_latest_seq(&cmd.fact_id).await? + 1;
+    pub async fn delete_fact(&self, cmd: DeleteNoteCommand) -> Result<(), AlephError> {
+        let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
-        let event = MemoryEvent::FactDeleted {
-            fact_id: cmd.fact_id.clone(),
+        let event = MemoryEvent::NoteDeleted {
+            note_path: cmd.note_path.clone(),
             reason: cmd.reason,
         };
 
-        let fact_id_ref = cmd.fact_id.clone();
+        let fact_id_ref = cmd.note_path.clone();
         let envelope =
-            MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
+            MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_notes(&fact_id_ref).await?;
@@ -313,7 +313,7 @@ mod tests {
     async fn make_handler_with_fact() -> (MemoryCommandHandler, String) {
         let handler = make_handler();
         let fact_id = handler
-            .create_fact(CreateFactCommand {
+            .create_fact(CreateNoteCommand {
                 content: "User prefers Rust".into(),
                 note_type: NoteType::Preference,
                 path: "/user/preferences".into(),
@@ -333,7 +333,7 @@ mod tests {
     async fn test_create_fact() {
         let handler = make_handler();
         let fact_id = handler
-            .create_fact(CreateFactCommand {
+            .create_fact(CreateNoteCommand {
                 content: "User prefers Rust".into(),
                 note_type: NoteType::Preference,
                 path: "/user/preferences".into(),
@@ -356,12 +356,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event.event_type_tag(), "FactCreated");
+        assert_eq!(events[0].event.event_type_tag(), "NoteCreated");
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[0].actor, EventActor::Agent);
 
         // Verify fact can be projected
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
         assert_eq!(fact.id, fact_id);
@@ -375,7 +375,7 @@ mod tests {
 
         handler
             .update_content(UpdateContentCommand {
-                fact_id: fact_id.clone(),
+                note_path: fact_id.clone(),
                 new_content: "User prefers Rust and Go".into(),
                 reason: "correction".into(),
                 actor: EventActor::User,
@@ -391,11 +391,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 2);
-        assert_eq!(events[1].event.event_type_tag(), "FactContentUpdated");
+        assert_eq!(events[1].event.event_type_tag(), "NoteContentUpdated");
         assert_eq!(events[1].seq, 2);
 
         // Verify the old_content was captured correctly
-        if let MemoryEvent::FactContentUpdated {
+        if let MemoryEvent::NoteContentUpdated {
             old_content,
             new_content,
             reason,
@@ -406,11 +406,11 @@ mod tests {
             assert_eq!(new_content, "User prefers Rust and Go");
             assert_eq!(reason, "correction");
         } else {
-            panic!("Expected FactContentUpdated event");
+            panic!("Expected NoteContentUpdated event");
         }
 
         // Verify projection
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
         assert_eq!(fact.content, "User prefers Rust and Go");
@@ -421,7 +421,7 @@ mod tests {
         let handler = make_handler();
         let result = handler
             .update_content(UpdateContentCommand {
-                fact_id: "nonexistent".into(),
+                note_path: "nonexistent".into(),
                 new_content: "new content".into(),
                 reason: "test".into(),
                 actor: EventActor::User,
@@ -437,8 +437,8 @@ mod tests {
 
         // Invalidate
         handler
-            .invalidate_fact(InvalidateFactCommand {
-                fact_id: fact_id.clone(),
+            .invalidate_fact(InvalidateNoteCommand {
+                note_path: fact_id.clone(),
                 reason: "outdated information".into(),
                 actor: EventActor::User,
                 correlation_id: None,
@@ -452,7 +452,7 @@ mod tests {
             .get_memory_events_for_fact(&fact_id)
             .await
             .unwrap();
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
         assert!(!fact.is_valid);
@@ -463,8 +463,8 @@ mod tests {
 
         // Restore
         handler
-            .restore_fact(RestoreFactCommand {
-                fact_id: fact_id.clone(),
+            .restore_fact(RestoreNoteCommand {
+                note_path: fact_id.clone(),
                 correlation_id: None,
             })
             .await
@@ -477,7 +477,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 3); // Created + Invalidated + Restored
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
         assert!(fact.is_valid);
@@ -490,8 +490,8 @@ mod tests {
 
         // First access
         handler
-            .record_access(RecordAccessCommand {
-                fact_id: fact_id.clone(),
+            .record_access(RecordNoteAccessCommand {
+                note_path: fact_id.clone(),
                 query: Some("what language?".into()),
                 relevance_score: Some(0.95),
                 used_in_response: true,
@@ -502,8 +502,8 @@ mod tests {
 
         // Second access
         handler
-            .record_access(RecordAccessCommand {
-                fact_id: fact_id.clone(),
+            .record_access(RecordNoteAccessCommand {
+                note_path: fact_id.clone(),
                 query: None,
                 relevance_score: None,
                 used_in_response: false,
@@ -519,7 +519,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 3); // Created + 2 Accessed
-        let fact = EventProjector::fold_events_to_fact(&events)
+        let fact = EventProjector::fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
         assert_eq!(fact.access_count, 2);
@@ -531,8 +531,8 @@ mod tests {
         let (handler, fact_id) = make_handler_with_fact().await;
 
         handler
-            .delete_fact(DeleteFactCommand {
-                fact_id: fact_id.clone(),
+            .delete_fact(DeleteNoteCommand {
+                note_path: fact_id.clone(),
                 reason: "user requested removal".into(),
                 actor: EventActor::User,
                 correlation_id: None,
@@ -547,10 +547,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 2); // Created + Deleted
-        assert_eq!(events[1].event.event_type_tag(), "FactDeleted");
+        assert_eq!(events[1].event.event_type_tag(), "NoteDeleted");
 
         // Verify projection returns None (deleted fact)
-        let fact = EventProjector::fold_events_to_fact(&events).unwrap();
+        let fact = EventProjector::fold_events_to_note(&events).unwrap();
         assert!(fact.is_none());
     }
 
@@ -560,7 +560,7 @@ mod tests {
 
         // Create two source facts
         let fid1 = handler
-            .create_fact(CreateFactCommand {
+            .create_fact(CreateNoteCommand {
                 content: "User likes Rust".into(),
                 note_type: NoteType::Preference,
                 path: "/user/preferences/lang1".into(),
@@ -575,7 +575,7 @@ mod tests {
             .unwrap();
 
         let fid2 = handler
-            .create_fact(CreateFactCommand {
+            .create_fact(CreateNoteCommand {
                 content: "User likes Go".into(),
                 note_type: NoteType::Preference,
                 path: "/user/preferences/lang2".into(),
@@ -592,7 +592,7 @@ mod tests {
         // Consolidate
         let consolidated_id = handler
             .consolidate_facts(ConsolidateCommand {
-                source_fact_ids: vec![fid1.clone(), fid2.clone()],
+                source_note_paths: vec![fid1.clone(), fid2.clone()],
                 consolidated_content: "User likes both Rust and Go".into(),
                 actor: EventActor::System,
                 correlation_id: Some("consolidation-1".into()),
@@ -611,22 +611,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event.event_type_tag(), "FactConsolidated");
+        assert_eq!(events[0].event.event_type_tag(), "NoteConsolidated");
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[0].actor, EventActor::System);
 
-        if let MemoryEvent::FactConsolidated {
-            source_fact_ids,
+        if let MemoryEvent::NoteConsolidated {
+            source_note_paths,
             consolidated_content,
             ..
         } = &events[0].event
         {
-            assert_eq!(source_fact_ids.len(), 2);
-            assert!(source_fact_ids.contains(&fid1));
-            assert!(source_fact_ids.contains(&fid2));
+            assert_eq!(source_note_paths.len(), 2);
+            assert!(source_note_paths.contains(&fid1));
+            assert!(source_note_paths.contains(&fid2));
             assert_eq!(consolidated_content, "User likes both Rust and Go");
         } else {
-            panic!("Expected FactConsolidated event");
+            panic!("Expected NoteConsolidated event");
         }
     }
 
@@ -636,8 +636,8 @@ mod tests {
 
         // Perform multiple operations on the same fact
         handler
-            .record_access(RecordAccessCommand {
-                fact_id: fact_id.clone(),
+            .record_access(RecordNoteAccessCommand {
+                note_path: fact_id.clone(),
                 query: None,
                 relevance_score: None,
                 used_in_response: false,
@@ -648,7 +648,7 @@ mod tests {
 
         handler
             .update_content(UpdateContentCommand {
-                fact_id: fact_id.clone(),
+                note_path: fact_id.clone(),
                 new_content: "Updated content".into(),
                 reason: "test".into(),
                 actor: EventActor::User,

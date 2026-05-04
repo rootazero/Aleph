@@ -244,10 +244,14 @@ impl StateDatabase {
         Ok(result.unwrap_or(0) as u64)
     }
 
-    /// Check if any FactMigrated events exist (indicates migration has been run).
+    /// Check if any migration events exist (indicates migration has been run).
+    ///
+    /// Recognizes both the new `NoteMigrated` tag and the legacy `FactMigrated`
+    /// tag for backward compatibility with pre-R2.2 event stores.
     pub async fn has_migration_events(&self) -> Result<bool, AlephError> {
-        let count = self.count_memory_events(Some("FactMigrated")).await?;
-        Ok(count > 0)
+        let new_count = self.count_memory_events(Some("NoteMigrated")).await?;
+        let legacy_count = self.count_memory_events(Some("FactMigrated")).await?;
+        Ok(new_count + legacy_count > 0)
     }
 
     /// Count total memory events, optionally filtered by event type.
@@ -358,8 +362,8 @@ mod tests {
     }
 
     fn make_created_event(fact_id: &str) -> MemoryEvent {
-        MemoryEvent::FactCreated {
-            fact_id: fact_id.into(),
+        MemoryEvent::NoteCreated {
+            note_path: fact_id.into(),
             content: "User prefers Rust".into(),
             note_type: NoteType::Preference,
             path: "aleph://user/preferences/language".into(),
@@ -395,8 +399,8 @@ mod tests {
                 MemoryEventEnvelope::new(
                     "fact-002".into(),
                     i,
-                    MemoryEvent::FactAccessed {
-                        fact_id: "fact-002".into(),
+                    MemoryEvent::NoteAccessed {
+                        note_path: "fact-002".into(),
                         query: Some(format!("query-{i}")),
                         relevance_score: Some(0.9),
                         used_in_response: true,
@@ -451,8 +455,8 @@ mod tests {
         let mut e2 = MemoryEventEnvelope::new(
             "fact-004".into(),
             2,
-            MemoryEvent::FactContentUpdated {
-                fact_id: "fact-004".into(),
+            MemoryEvent::NoteContentUpdated {
+                note_path: "fact-004".into(),
                 old_content: "old".into(),
                 new_content: "new".into(),
                 reason: "correction".into(),
@@ -530,8 +534,8 @@ mod tests {
         let e2 = MemoryEventEnvelope::new(
             "f2".into(),
             1,
-            MemoryEvent::FactAccessed {
-                fact_id: "f2".into(),
+            MemoryEvent::NoteAccessed {
+                note_path: "f2".into(),
                 query: None,
                 relevance_score: None,
                 used_in_response: false,
@@ -545,11 +549,11 @@ mod tests {
 
         assert_eq!(db.count_memory_events(None).await.unwrap(), 2);
         assert_eq!(
-            db.count_memory_events(Some("FactCreated")).await.unwrap(),
+            db.count_memory_events(Some("NoteCreated")).await.unwrap(),
             1
         );
         assert_eq!(
-            db.count_memory_events(Some("FactAccessed")).await.unwrap(),
+            db.count_memory_events(Some("NoteAccessed")).await.unwrap(),
             1
         );
     }
