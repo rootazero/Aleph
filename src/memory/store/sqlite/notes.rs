@@ -87,42 +87,78 @@ impl NoteStore for SqliteMemoryBackend {
         )
         .map_err(|e| AlephError::config(format!("index_note insert: {e}")))?;
 
-        // Replace links: delete old, insert new with resolved to_note.
-        conn.execute(
-            "DELETE FROM notes_links WHERE from_note = ?1 AND agent_id = ?2",
-            params![path, agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("index_note delete links: {e}")))?;
-
-        for raw_target in &note.links {
-            // Resolve raw_target: full paths (containing '/') are trusted as-is;
-            // bare filenames are looked up; ambiguous matches fall back to the raw form.
-            let resolved = if raw_target.contains('/') {
-                raw_target.clone()
-            } else {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT path FROM notes_index WHERE agent_id = ?1 AND filename = ?2 LIMIT 2",
-                    )
-                    .map_err(|e| AlephError::config(format!("resolve filename prep: {e}")))?;
-                let paths: Vec<String> = stmt
-                    .query_map(params![agent_id, raw_target], |r| r.get::<_, String>(0))
-                    .map_err(|e| AlephError::config(format!("resolve filename query: {e}")))?
-                    .filter_map(|r| r.ok())
-                    .collect();
-                if paths.len() == 1 {
-                    paths[0].clone()
-                } else {
+        // Set-diff upsert for notes_links: only INSERT added pairs and DELETE
+        // removed pairs; the intersection stays untouched. This eliminates the
+        // per-reindex write storm where every link row was deleted + re-inserted
+        // even when nothing changed.
+        //
+        // Build the new (to_raw, to_note) pair set after wikilink resolution.
+        let new_pairs: HashSet<(String, String)> = {
+            let mut set = HashSet::with_capacity(note.links.len());
+            for raw_target in &note.links {
+                // Full paths (containing '/') are trusted as-is; bare filenames
+                // are looked up; ambiguous matches fall back to the raw form.
+                let resolved = if raw_target.contains('/') {
                     raw_target.clone()
-                }
-            };
+                } else {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT path FROM notes_index WHERE agent_id = ?1 AND filename = ?2 LIMIT 2",
+                        )
+                        .map_err(|e| AlephError::config(format!("resolve filename prep: {e}")))?;
+                    let paths: Vec<String> = stmt
+                        .query_map(params![agent_id, raw_target], |r| r.get::<_, String>(0))
+                        .map_err(|e| AlephError::config(format!("resolve filename query: {e}")))?
+                        .filter_map(|r| r.ok())
+                        .collect();
+                    if paths.len() == 1 {
+                        paths[0].clone()
+                    } else {
+                        raw_target.clone()
+                    }
+                };
+                set.insert((raw_target.clone(), resolved));
+            }
+            set
+        };
 
+        // Read existing (to_raw, to_note) pairs for this from_note.
+        let existing: HashSet<(String, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT to_raw, to_note FROM notes_links \
+                     WHERE agent_id = ?1 AND from_note = ?2",
+                )
+                .map_err(|e| AlephError::config(format!("set_diff prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id, path], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(|e| AlephError::config(format!("set_diff scan: {e}")))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        // DELETE rows no longer present. Match on the full composite
+        // (agent_id, from_note, to_raw, to_note) so that distinct raw forms
+        // resolving to the same to_note do not accidentally remove each other.
+        for (to_raw, to_note) in existing.difference(&new_pairs) {
+            conn.execute(
+                "DELETE FROM notes_links \
+                 WHERE agent_id = ?1 AND from_note = ?2 AND to_raw = ?3 AND to_note = ?4",
+                params![agent_id, path, to_raw, to_note],
+            )
+            .map_err(|e| AlephError::config(format!("set_diff delete: {e}")))?;
+        }
+        // INSERT rows newly added. The schema's UNIQUE(agent_id, from_note, to_note)
+        // makes INSERT OR IGNORE a safe no-op when two distinct raw forms resolve
+        // to the same target (matching the prior behaviour of the bulk path).
+        for (to_raw, to_note) in new_pairs.difference(&existing) {
             conn.execute(
                 "INSERT OR IGNORE INTO notes_links (agent_id, from_note, to_note, to_raw) \
-                    VALUES (?1, ?2, ?3, ?4)",
-                params![agent_id, path, resolved, raw_target],
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![agent_id, path, to_note, to_raw],
             )
-            .map_err(|e| AlephError::config(format!("index_note insert link: {e}")))?;
+            .map_err(|e| AlephError::config(format!("set_diff insert: {e}")))?;
         }
 
         // Replace FTS content
@@ -1014,6 +1050,93 @@ mod tests {
             incoming,
             vec!["preference/a".to_string(), "preference/b".to_string()],
             "both A and B should link to reference/rust"
+        );
+    }
+
+    #[tokio::test]
+    async fn reindex_unchanged_links_no_writes() {
+        // Re-indexing a note whose link set has not changed must not produce
+        // any writes against `notes_links`. We assert this by snapshotting the
+        // row identities (id, agent_id, from_note, to_note, to_raw) before and
+        // after the second index_note: every row must be byte-identical and
+        // keep the same auto-increment id (a delete+insert would produce new
+        // ids even if the column values matched).
+        //
+        // Note on `total_changes()`: SQLite's counter includes FTS5 shadow
+        // table writes (notes_fts DELETE+INSERT cascades to ~14 internal rows),
+        // so it cannot cleanly isolate the notes_links contribution. The
+        // row-identity check is the precise B1.2 contract.
+        let temp = std::env::temp_dir().join(format!("aleph_diff_{}", uuid::Uuid::new_v4()));
+        let db = SqliteMemoryBackend::new(&temp).unwrap();
+
+        let note = KnowledgeNote {
+            title: "x".into(),
+            category: "preference".into(),
+            facts: vec!["body".into()],
+            links: vec!["a".into(), "b".into(), "c".into()],
+            content_hash: "h0".into(),
+            ..Default::default()
+        };
+
+        db.index_note(&note, "default", "preference").await.unwrap();
+
+        let snapshot_before: Vec<(i64, String, String, String, String)> = {
+            let conn = db.conn().lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, agent_id, from_note, to_note, to_raw \
+                     FROM notes_links \
+                     WHERE agent_id = 'default' AND from_note = 'preference/x' \
+                     ORDER BY id",
+                )
+                .unwrap();
+            stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+        };
+
+        // Sanity: 3 link rows persisted from the initial index.
+        assert_eq!(snapshot_before.len(), 3);
+
+        db.index_note(&note, "default", "preference").await.unwrap();
+
+        let snapshot_after: Vec<(i64, String, String, String, String)> = {
+            let conn = db.conn().lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, agent_id, from_note, to_note, to_raw \
+                     FROM notes_links \
+                     WHERE agent_id = 'default' AND from_note = 'preference/x' \
+                     ORDER BY id",
+                )
+                .unwrap();
+            stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+        };
+
+        // Identical id sequence proves no row was deleted+reinserted.
+        assert_eq!(
+            snapshot_before, snapshot_after,
+            "set-diff upsert must leave unchanged links untouched (same ids, same values)"
         );
     }
 }

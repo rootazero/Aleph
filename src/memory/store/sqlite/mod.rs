@@ -82,6 +82,14 @@ impl SqliteMemoryBackend {
         })
     }
 
+    /// Test-only accessor for the underlying connection mutex. Used by
+    /// write-amplification regression tests that need to read SQLite's
+    /// `total_changes()` counter directly.
+    #[cfg(test)]
+    pub(crate) fn conn(&self) -> &Mutex<Connection> {
+        &self.conn
+    }
+
     /// Create an in-memory `SqliteMemoryBackend` for testing.
     #[cfg(test)]
     pub fn in_memory() -> Result<Self, AlephError> {
