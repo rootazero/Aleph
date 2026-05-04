@@ -44,6 +44,45 @@ pub struct IndexStats {
     pub errors: usize,
 }
 
+/// Per-file outcome from `index_one_file`. Mirrors the `bool` returned by
+/// `NoteIndexer::index_file` but is named for clarity in the parallel path.
+enum IndexOutcome {
+    Indexed,
+    Skipped,
+}
+
+/// Index a single markdown file, hashing its contents and skipping the write
+/// if the existing index entry already has the same hash.
+///
+/// Free function (rather than a method on `NoteIndexer`) so it can be cheaply
+/// called from inside spawned `tokio` tasks that own only an `Arc<S>` clone of
+/// the store — avoids forcing `&self` capture into `'static` futures.
+async fn index_one_file<S: NoteStore + Send + Sync + 'static>(
+    path: &Path,
+    agent_id: &str,
+    category: &str,
+    store: Arc<S>,
+) -> Result<IndexOutcome, AlephError> {
+    let content = fs::read_to_string(path)
+        .await
+        .map_err(|e| AlephError::config(format!("index_one_file read {:?}: {e}", path)))?;
+    let title = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| AlephError::config(format!("invalid filename {:?}", path)))?;
+    let hash = sha2_hash(&content);
+    let key_path = format!("{category}/{title}");
+
+    if let Some(existing) = store.get_note_index(&key_path, agent_id).await? {
+        if existing.content_hash == hash {
+            return Ok(IndexOutcome::Skipped);
+        }
+    }
+    let note = KnowledgeNote::from_markdown(title, &content)?;
+    store.index_note(&note, agent_id, category).await?;
+    Ok(IndexOutcome::Indexed)
+}
+
 /// Indexes markdown note files into a `NoteStore`.
 ///
 /// Generic over `S: NoteStore` so tests can swap in any backend.
@@ -113,34 +152,83 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// parse, and index.
     ///
     /// Skips files whose `content_hash` matches the existing index entry.
-    pub async fn full_rebuild(&self, agent_id: &str) -> Result<IndexStats, AlephError> {
+    ///
+    /// Phase B B3: each category is scanned in its own `tokio` task so the
+    /// directory walks and SQLite reads/writes overlap. Concurrency is bounded
+    /// by `std::thread::available_parallelism()` (falling back to 1 on probing
+    /// failure) — a runtime probe that avoids pulling in `num_cpus`.
+    pub async fn full_rebuild(&self, agent_id: &str) -> Result<IndexStats, AlephError>
+    where
+        S: 'static,
+    {
         self.ensure_dirs(agent_id).await?;
-        let mut stats = IndexStats::default();
-        let agent_dir = self.memory_dir.join(agent_id);
+
+        let parallelism = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .max(1);
+        let sem = Arc::new(tokio::sync::Semaphore::new(parallelism));
+        let mut set: tokio::task::JoinSet<Result<IndexStats, AlephError>> =
+            tokio::task::JoinSet::new();
 
         for category in CATEGORY_DIRS {
-            let cat_dir = agent_dir.join(category);
-            let mut entries = match fs::read_dir(&cat_dir).await {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                    continue;
-                }
-                match self.index_file(agent_id, category, &path).await {
-                    Ok(true) => stats.indexed += 1,
-                    Ok(false) => stats.skipped += 1,
-                    Err(e) => {
-                        tracing::warn!(path = %path.display(), error = %e, "Failed to index");
-                        stats.errors += 1;
+            let agent_id = agent_id.to_string();
+            let category = (*category).to_string();
+            let memory_dir = self.memory_dir.clone();
+            let store = self.store.clone();
+            let sem = sem.clone();
+
+            set.spawn(async move {
+                let _permit = sem
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| AlephError::config(format!("full_rebuild semaphore: {e}")))?;
+                let dir = memory_dir.join(&agent_id).join(&category);
+                let mut local = IndexStats::default();
+
+                let mut entries = match fs::read_dir(&dir).await {
+                    Ok(rd) => rd,
+                    Err(_) => return Ok(local),
+                };
+
+                while let Some(entry) = entries
+                    .next_entry()
+                    .await
+                    .map_err(|e| AlephError::config(format!("full_rebuild read_dir: {e}")))?
+                {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                        continue;
+                    }
+                    match index_one_file(&path, &agent_id, &category, store.clone()).await {
+                        Ok(IndexOutcome::Indexed) => local.indexed += 1,
+                        Ok(IndexOutcome::Skipped) => local.skipped += 1,
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %e,
+                                "full_rebuild: file failed"
+                            );
+                            local.errors += 1;
+                        }
                     }
                 }
-            }
+                Ok(local)
+            });
         }
 
-        Ok(stats)
+        let mut total = IndexStats::default();
+        while let Some(joined) = set.join_next().await {
+            match joined.map_err(|e| AlephError::config(format!("full_rebuild join: {e}")))? {
+                Ok(s) => {
+                    total.indexed += s.indexed;
+                    total.skipped += s.skipped;
+                    total.errors += s.errors;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(total)
     }
 
     /// Index a single file.
@@ -888,6 +976,39 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(entry.category, "other");
+    }
+
+    #[tokio::test]
+    async fn full_rebuild_parallel_matches_serial_results() {
+        // Phase B B3 parity contract: parallel full_rebuild must produce the
+        // same (indexed + skipped) total and the same set of indexed rows as
+        // the prior serial implementation.
+        let dir = TempDir::new().unwrap();
+        let memory_dir = dir.path().to_path_buf();
+        let db = create_test_db();
+        let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+        indexer.ensure_dirs(AGENT).await.unwrap();
+
+        // 50 notes spread across 5 categories.
+        for cat in &["preference", "skill", "reference", "plan", "learning"] {
+            for i in 0..10 {
+                let note = KnowledgeNote {
+                    title: format!("n-{cat}-{i}"),
+                    category: (*cat).into(),
+                    facts: vec![format!("fact {i}")],
+                    content_hash: String::new(),
+                    ..Default::default()
+                };
+                indexer.write_note(AGENT, cat, &note).await.unwrap();
+            }
+        }
+
+        let stats = indexer.full_rebuild(AGENT).await.unwrap();
+        assert_eq!(stats.indexed + stats.skipped, 50);
+        assert_eq!(stats.errors, 0);
+
+        let listed = db.list_notes(AGENT).await.unwrap();
+        assert_eq!(listed.len(), 50);
     }
 
     #[tokio::test]

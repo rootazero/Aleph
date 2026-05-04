@@ -297,6 +297,10 @@ harness = false
 name = "notes_index_writes"
 harness = false
 
+[[bench]]
+name = "full_rebuild_1000_notes"
+harness = false
+
 [[test]]
 name = "cron_probe"
 required-features = ["test-helpers"]
