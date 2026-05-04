@@ -270,6 +270,60 @@ CREATE TABLE IF NOT EXISTS notes_fts_meta (
 "#;
 
 // ---------------------------------------------------------------------------
+// Phase C2 governance tables: per-fact provenance + async LLM review queue
+// + decisions archive. Read by notes/governance/gate.rs and the new
+// dreaming/stages/note_review.rs stage.
+// ---------------------------------------------------------------------------
+
+const NOTES_PROVENANCE_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_provenance (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id    TEXT NOT NULL,
+    note_path   TEXT NOT NULL,
+    fact_idx    INTEGER NOT NULL,
+    origin      TEXT NOT NULL,
+    source_kind TEXT,
+    source_id   TEXT,
+    inferred    INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prov_path ON notes_provenance(agent_id, note_path);
+CREATE INDEX IF NOT EXISTS idx_prov_source ON notes_provenance(source_kind, source_id);
+"#;
+
+const NOTES_REVIEW_QUEUE_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_review_queue (
+    id              TEXT PRIMARY KEY,
+    agent_id        TEXT NOT NULL,
+    candidate_json  TEXT NOT NULL,
+    severity        TEXT NOT NULL,
+    confidence      REAL NOT NULL,
+    reason          TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    retry_count     INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL,
+    decided_at      INTEGER,
+    decision_actor  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_review_pending
+    ON notes_review_queue(agent_id, status, created_at);
+"#;
+
+const NOTES_REVIEW_ARCHIVE_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_review_archive (
+    id              TEXT PRIMARY KEY,
+    agent_id        TEXT NOT NULL,
+    candidate_json  TEXT NOT NULL,
+    final_status    TEXT NOT NULL,
+    reason          TEXT NOT NULL,
+    created_at      INTEGER NOT NULL,
+    archived_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_archive_age
+    ON notes_review_archive(archived_at);
+"#;
+
+// ---------------------------------------------------------------------------
 // sqlite-vec virtual tables (one per embedding dimension)
 // ---------------------------------------------------------------------------
 
@@ -542,6 +596,13 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(NOTES_FTS_META_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_fts_meta: {e}")))?;
 
+    conn.execute_batch(NOTES_PROVENANCE_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create notes_provenance: {e}")))?;
+    conn.execute_batch(NOTES_REVIEW_QUEUE_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create notes_review_queue: {e}")))?;
+    conn.execute_batch(NOTES_REVIEW_ARCHIVE_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create notes_review_archive: {e}")))?;
+
     // Spec 2026-04-27: unify legacy `default`-agent notes rows into `main`,
     // and purge `test-memory-validation` residue. Idempotent.
     migrate_unify_default_to_main_agent(conn)?;
@@ -602,7 +663,7 @@ pub fn init_notes_vec_tables(conn: &Connection) -> Result<(), AlephError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
+    use rusqlite::{Connection, OptionalExtension};
 
     #[test]
     fn init_schema_is_idempotent() {
@@ -617,6 +678,24 @@ mod tests {
         init_schema(&conn).expect("init_schema");
         conn.prepare("SELECT id FROM recall_signals LIMIT 0")
             .expect("recall_signals should exist");
+    }
+
+    #[test]
+    fn governance_tables_present_after_init() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        for table in ["notes_provenance", "notes_review_queue", "notes_review_archive"] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+                    rusqlite::params![table],
+                    |_| Ok(true),
+                )
+                .optional()
+                .unwrap()
+                .unwrap_or(false);
+            assert!(exists, "{table} missing");
+        }
     }
 
     #[test]
