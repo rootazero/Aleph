@@ -161,19 +161,46 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("index_note links insert: {e}")))?;
         }
 
-        // Replace FTS content
-        conn.execute(
-            "DELETE FROM notes_fts WHERE path = ?1 AND agent_id = ?2",
-            params![path, agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("index_note delete fts: {e}")))?;
-
+        // Skip notes_fts rebuild when the body text is unchanged — frontmatter-only
+        // edits (e.g. updated_at bump, link reorder, tag rotation) are common and
+        // each FTS5 DELETE+INSERT cascades to ~14 shadow-table writes
+        // (`_data`/`_idx`/`_docsize`/`_content`). The body hash is tracked in a
+        // sibling `notes_fts_meta` row so the gate survives across processes.
         let body = note.body_text();
-        conn.execute(
-            "INSERT INTO notes_fts (path, filename, content, agent_id) VALUES (?1, ?2, ?3, ?4)",
-            params![path, filename, body, agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("index_note insert fts: {e}")))?;
+        let body_hash = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(body.as_bytes());
+            format!("{:x}", h.finalize())
+        };
+
+        let prev_body_hash: Option<String> = conn
+            .query_row(
+                "SELECT content_hash FROM notes_fts_meta WHERE agent_id = ?1 AND path = ?2",
+                params![agent_id, path],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| AlephError::config(format!("index_note fts meta lookup: {e}")))?;
+
+        if prev_body_hash.as_deref() != Some(&body_hash) {
+            conn.execute(
+                "DELETE FROM notes_fts WHERE path = ?1 AND agent_id = ?2",
+                params![path, agent_id],
+            )
+            .map_err(|e| AlephError::config(format!("index_note delete fts: {e}")))?;
+            conn.execute(
+                "INSERT INTO notes_fts (path, filename, content, agent_id) VALUES (?1, ?2, ?3, ?4)",
+                params![path, filename, body, agent_id],
+            )
+            .map_err(|e| AlephError::config(format!("index_note insert fts: {e}")))?;
+            conn.execute(
+                "INSERT INTO notes_fts_meta (agent_id, path, content_hash) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(agent_id, path) DO UPDATE SET content_hash = excluded.content_hash",
+                params![agent_id, path, body_hash],
+            )
+            .map_err(|e| AlephError::config(format!("index_note fts meta upsert: {e}")))?;
+        }
 
         Ok(())
     }
@@ -198,6 +225,15 @@ impl NoteStore for SqliteMemoryBackend {
             params![path, agent_id],
         )
         .map_err(|e| AlephError::config(format!("remove_note_index fts: {e}")))?;
+
+        // Keep the body-hash meta in sync with the FTS content. Without this,
+        // a remove-then-recreate-with-identical-body would match the stale
+        // hash and skip rebuilding the FTS row, silently losing searchability.
+        conn.execute(
+            "DELETE FROM notes_fts_meta WHERE agent_id = ?1 AND path = ?2",
+            params![agent_id, path],
+        )
+        .map_err(|e| AlephError::config(format!("remove_note_index fts meta: {e}")))?;
 
         Ok(())
     }
@@ -1157,5 +1193,84 @@ mod tests {
         // 'd' must be new — its id must be strictly greater than any v1 id.
         let max_v1_id = snap_v1.iter().map(|r| r.0).max().unwrap();
         assert!(by_raw_v2["d"] > max_v1_id, "row 'd' must be a fresh insert");
+    }
+
+    #[tokio::test]
+    async fn reindex_same_body_skips_fts_rewrite() {
+        let temp = std::env::temp_dir().join(format!("aleph_fts_{}", uuid::Uuid::new_v4()));
+        let db = SqliteMemoryBackend::new(&temp).unwrap();
+
+        let note = crate::memory::notes::KnowledgeNote {
+            title: "x".into(),
+            category: "preference".into(),
+            facts: vec!["unchanged body".into()],
+            content_hash: "h0".into(),
+            ..Default::default()
+        };
+        db.index_note(&note, "default", "preference").await.unwrap();
+
+        let before: i64 = {
+            let conn = db.conn().lock().unwrap();
+            conn.query_row("SELECT total_changes()", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        // Same body, different content_hash (frontmatter changed)
+        let mut note2 = note.clone();
+        note2.content_hash = "h1".into();
+        db.index_note(&note2, "default", "preference").await.unwrap();
+
+        let after: i64 = {
+            let conn = db.conn().lock().unwrap();
+            conn.query_row("SELECT total_changes()", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        // notes_index UPDATE = 1 row changed; notes_fts and notes_fts_meta must
+        // contribute 0 because the body text is identical even though the
+        // frontmatter content_hash changed.
+        let delta = after - before;
+        assert!(
+            delta <= 1,
+            "expected ≤1 write (notes_index update only), got {delta}"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_then_recreate_with_same_body_rebuilds_fts() {
+        let temp =
+            std::env::temp_dir().join(format!("aleph_fts_recreate_{}", uuid::Uuid::new_v4()));
+        let db = SqliteMemoryBackend::new(&temp).unwrap();
+
+        let note = crate::memory::notes::KnowledgeNote {
+            title: "x".into(),
+            category: "preference".into(),
+            facts: vec!["body for fts".into()],
+            content_hash: "h0".into(),
+            ..Default::default()
+        };
+
+        db.index_note(&note, "default", "preference").await.unwrap();
+        db.remove_note_index("preference/x", "default")
+            .await
+            .unwrap();
+        // Recreate with identical body — meta must NOT be stale.
+        db.index_note(&note, "default", "preference").await.unwrap();
+
+        // notes_fts must contain a row for this path — proves the meta cleanup
+        // in remove_note_index correctly invalidated the stale hash.
+        let count: i64 = {
+            let conn = db.conn().lock().unwrap();
+            conn.query_row(
+                "SELECT COUNT(*) FROM notes_fts WHERE path = ?1 AND agent_id = ?2",
+                params!["preference/x", "default"],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            count, 1,
+            "FTS row must be rebuilt after remove+recreate even with identical body"
+        );
     }
 }

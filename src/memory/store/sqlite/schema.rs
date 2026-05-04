@@ -255,6 +255,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
 );
 "#;
 
+/// Tracks the SHA256 of the body text last written into `notes_fts` for each
+/// (agent_id, path). `index_note` consults this table to skip the expensive
+/// FTS5 DELETE+INSERT cascade when only the frontmatter (e.g. `updated_at`,
+/// link order, tag rotation) changed but the body is byte-identical.
+const NOTES_FTS_META_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_fts_meta (
+    agent_id     TEXT NOT NULL,
+    path         TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    PRIMARY KEY (agent_id, path)
+);
+"#;
+
 // ---------------------------------------------------------------------------
 // sqlite-vec virtual tables (one per embedding dimension)
 // ---------------------------------------------------------------------------
@@ -524,6 +537,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch(NOTES_FTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_fts table: {e}")))?;
+
+    conn.execute_batch(NOTES_FTS_META_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create notes_fts_meta: {e}")))?;
 
     // Spec 2026-04-27: unify legacy `default`-agent notes rows into `main`,
     // and purge `test-memory-validation` residue. Idempotent.
