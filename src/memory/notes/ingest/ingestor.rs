@@ -11,12 +11,16 @@ use crate::memory::store::raw_memory::RawMemory;
 use async_trait::async_trait;
 
 use crate::memory::embedding_provider::EmbeddingProvider;
+use crate::memory::notes::governance::gate::{
+    CandidateNote, GateOutcome, NoteWriteAction, NoteWriteGate,
+};
 use crate::memory::notes::indexer::NoteIndexer;
 use crate::memory::notes::ingest::plan::{IngestPlan, PageOp};
 use crate::memory::notes::ingest::prompts::build_compound_system_prompt;
 use crate::memory::notes::ingest::retrieve::{RelatedBudget, RelatedPage};
 use crate::memory::notes::orientation::NoteOrientation;
 use crate::memory::notes::store::NoteStore;
+use crate::memory::notes::KnowledgeNote;
 use crate::memory::store::raw_memory::RawMemorySource;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
@@ -24,7 +28,7 @@ use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use crate::utils::json_extract::extract_json_robust;
 use std::path::PathBuf;
-use tracing::warn;
+use tracing::{info, warn};
 
 pub struct DefaultCompoundIngestor<S: NoteStore + Send + Sync + 'static> {
     pub store: Arc<S>,
@@ -40,6 +44,13 @@ pub struct DefaultCompoundIngestor<S: NoteStore + Send + Sync + 'static> {
     /// `None` keeps the legacy fallback behaviour where vectors are filled
     /// in lazily by the periodic re-embed migration.
     pub embedding_manager: Option<Arc<crate::memory::embedding_manager::EmbeddingManager>>,
+    /// Optional admission gate. When set, `ingest_batch` evaluates each
+    /// `PageOp::Create` through the gate before staging; `Defer`/`Reject`
+    /// outcomes drop the action from the batch (the gate already enqueued
+    /// the candidate into `notes_review_queue` for async review). `None`
+    /// preserves the pre-governance bypass mode used by tests and any
+    /// production wiring that has not yet installed a gate.
+    pub gate: Option<Arc<dyn NoteWriteGate>>,
 }
 
 impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
@@ -179,9 +190,22 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
         )
         .await?;
 
-        let plan = self.plan(agent_id, &raws, &related, &source).await?;
+        let mut plan = self.plan(agent_id, &raws, &related, &source).await?;
         if plan.ops.is_empty() {
             return Ok(ApplyReport::default());
+        }
+
+        // Governance gate: scoped to PageOp::Create in this commit. Other
+        // PageOp variants (Append/Update/Contradict/Link/Supersede) pass
+        // through unchanged and will be gated in a follow-up commit. When
+        // `self.gate` is `None` the entire pre-filter is skipped, preserving
+        // backward compatibility for tests and any production wiring that
+        // has not yet installed a gate.
+        if self.gate.is_some() {
+            plan.ops = self.filter_ops_through_gate(agent_id, plan.ops).await?;
+            if plan.ops.is_empty() {
+                return Ok(ApplyReport::default());
+            }
         }
 
         let report = match self.try_apply(agent_id, &plan).await {
@@ -194,9 +218,15 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
                         "\n\n[system] previous plan referenced {path} with a stale hash; actual hash is {actual}. Re-plan using fresh data."
                     ));
                 }
-                let plan2 = self.plan(agent_id, &augmented, &related, &source).await?;
+                let mut plan2 = self.plan(agent_id, &augmented, &related, &source).await?;
                 if plan2.ops.is_empty() {
                     return Ok(ApplyReport::default());
+                }
+                if self.gate.is_some() {
+                    plan2.ops = self.filter_ops_through_gate(agent_id, plan2.ops).await?;
+                    if plan2.ops.is_empty() {
+                        return Ok(ApplyReport::default());
+                    }
                 }
                 self.try_apply(agent_id, &plan2)
                     .await
@@ -298,7 +328,105 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         }
         tx.commit().await
     }
+
+    /// Run each `PageOp::Create` through `self.gate` and drop ops whose
+    /// outcome is `Defer` (already enqueued by the gate) or `Reject`. Other
+    /// op kinds pass through unchanged in this scoped commit; their gating
+    /// ships in a follow-up. Returns the filtered op vector.
+    ///
+    /// Caller must ensure `self.gate.is_some()` before invoking; if it is
+    /// `None` the input vector is returned unchanged.
+    async fn filter_ops_through_gate(
+        &self,
+        agent_id: &str,
+        ops: Vec<PageOp>,
+    ) -> Result<Vec<PageOp>, AlephError> {
+        let Some(gate) = self.gate.as_ref() else {
+            return Ok(ops);
+        };
+        let mut out: Vec<PageOp> = Vec::with_capacity(ops.len());
+        for op in ops {
+            match candidate_from_pageop(agent_id, &op) {
+                Some(candidate) => match gate.evaluate(&candidate).await? {
+                    GateOutcome::Accept(_) => out.push(op),
+                    GateOutcome::Defer { queue_id, reason } => {
+                        info!(
+                            queue_id = %queue_id,
+                            reason = %reason,
+                            note_path = %op.primary_path(),
+                            "ingest deferred to review queue"
+                        );
+                    }
+                    GateOutcome::Reject { archive_id, reason } => {
+                        warn!(
+                            archive_id = %archive_id,
+                            reason = %reason,
+                            note_path = %op.primary_path(),
+                            "ingest rejected at gate"
+                        );
+                    }
+                },
+                // Op kinds the gate does not understand in this scoped
+                // commit (Append/Update/Contradict/Link/Supersede) pass
+                // through unchanged.
+                None => out.push(op),
+            }
+        }
+        Ok(out)
+    }
 }
+
+/// Build a `CandidateNote` for the gate from a `PageOp`. Returns `None` for
+/// op kinds that this scoped commit does not gate (Append/Update/Contradict/
+/// Link/Supersede). The candidate's `confidence` and `severity` come from
+/// the LLM-generated note shape; in this scoped commit `PageOp::Create`
+/// does not carry those fields, so we use `KnowledgeNote::default()` (which
+/// sets `confidence = 1.0` and `severity = Low`) so the gate's default
+/// thresholds (`min_confidence = 0.5`, `high_severity_min_confidence = 0.8`)
+/// admit them. Confidence/severity wiring on `PageOp::Create` is a
+/// follow-up task once the planner prompt is updated to emit them.
+fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<CandidateNote> {
+    match op {
+        PageOp::Create {
+            note_path,
+            title,
+            facts,
+            links,
+            tags,
+            ..
+        } => {
+            let category = note_path
+                .split_once('/')
+                .map(|(c, _)| c.to_string())
+                .unwrap_or_default();
+            let note = KnowledgeNote {
+                title: title.clone(),
+                category: category.clone(),
+                tags: tags.clone(),
+                facts: facts.clone(),
+                links: links.clone(),
+                ..KnowledgeNote::default()
+            };
+            Some(CandidateNote {
+                agent_id: agent_id.to_string(),
+                category,
+                note,
+                source_path: None,
+                fact_provenance: Vec::new(),
+                action: NoteWriteAction::Create,
+                bypass_review: false,
+                contradicts_existing: false,
+            })
+        }
+        // Scoped out in this commit; pass-through.
+        PageOp::Append { .. }
+        | PageOp::Update { .. }
+        | PageOp::Contradict { .. }
+        | PageOp::Link { .. }
+        | PageOp::Supersede { .. } => None,
+    }
+}
+
 
 fn build_user_prompt(
     raws: &[crate::memory::store::raw_memory::RawMemory],
@@ -438,6 +566,7 @@ mod plan_tests {
             memory_dir: dir.path().join("note"),
             budget: RelatedBudget::default(),
             embedding_manager: None,
+            gate: None,
         };
         let raw = RawMemory::new("some content".to_string(), RawMemorySource::Transcript);
         let plan = ing
@@ -464,6 +593,7 @@ mod plan_tests {
             memory_dir: dir.path().join("note"),
             budget: RelatedBudget::default(),
             embedding_manager: None,
+            gate: None,
         };
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
@@ -491,6 +621,7 @@ mod plan_tests {
             memory_dir: dir.path().join("note"),
             budget: RelatedBudget::default(),
             embedding_manager: None,
+            gate: None,
         };
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
@@ -564,6 +695,7 @@ mod plan_tests {
             memory_dir: memory_dir.clone(),
             budget: RelatedBudget::default(),
             embedding_manager: None,
+            gate: None,
         };
 
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
@@ -617,6 +749,7 @@ mod plan_tests {
             memory_dir: memory_dir.clone(),
             budget: RelatedBudget::default(),
             embedding_manager: Some(mgr.clone()),
+            gate: None,
         };
 
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
@@ -667,6 +800,7 @@ mod plan_tests {
             memory_dir: dir.path().join("note"),
             budget: RelatedBudget::default(),
             embedding_manager: None,
+            gate: None,
         };
         let r1 = ing_seed
             .ingest_batch(
@@ -697,6 +831,7 @@ mod plan_tests {
             memory_dir: dir.path().join("note"),
             budget: RelatedBudget::default(),
             embedding_manager: None,
+            gate: None,
         };
         let r2 = ing2
             .ingest_batch(

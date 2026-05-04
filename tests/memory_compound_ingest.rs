@@ -72,6 +72,8 @@ async fn compound_ingest_creates_and_links_pages() {
         orientation: None,
         memory_dir: dir.path().join("note"),
         budget: RelatedBudget::default(),
+        embedding_manager: None,
+        gate: None,
     };
 
     let raw = RawMemory::new(

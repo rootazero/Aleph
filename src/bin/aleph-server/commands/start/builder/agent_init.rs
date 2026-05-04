@@ -1282,6 +1282,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             // For now the legacy reembed_all path handles
                             // vector freshness for the production server.
                             embedding_manager: None,
+                            // TODO(C2): construct DefaultNoteWriteGate from
+                            // config when governance is enabled. C2.3.2 ships
+                            // the mount point; activation is a follow-up.
+                            gate: None,
                         }))
                     } else {
                         None
