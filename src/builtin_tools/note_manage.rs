@@ -105,6 +105,13 @@ pub struct NoteManageArgs {
     /// Maximum number of results for query/list (default: 20).
     #[serde(default)]
     pub limit: Option<usize>,
+
+    /// Agent ID to scope the note operation to. If absent, defaults to "default".
+    /// When the calling system prompt declares the active agent's id, prefer
+    /// passing it here so the note lands in the caller's per-agent vault rather
+    /// than the global "default" namespace.
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 /// A lightweight note entry returned by list/query.
@@ -150,10 +157,16 @@ impl NoteManageTool {
         }
     }
 
-    /// Default agent ID (matches the pattern used in wiki_manage).
-    // TODO: accept agent_id from session context instead of hardcoding
+    /// Default agent ID (used when args.agent_id is absent).
     fn agent_id(&self) -> &str {
         "default"
+    }
+
+    /// Resolve the effective agent_id for this invocation: prefer args.agent_id,
+    /// fall back to the tool's default. This is the only path callers should use
+    /// when they need an agent-scoped operation.
+    fn resolve_agent_id<'a>(&'a self, args: &'a NoteManageArgs) -> &'a str {
+        args.agent_id.as_deref().unwrap_or_else(|| self.agent_id())
     }
 
     // -------------------------------------------------------------------------
@@ -161,7 +174,7 @@ impl NoteManageTool {
     // -------------------------------------------------------------------------
 
     async fn handle_create(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.agent_id();
+        let agent_id = self.resolve_agent_id(args);
 
         let category = args
             .category
@@ -265,7 +278,7 @@ impl NoteManageTool {
     }
 
     async fn handle_update(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.agent_id();
+        let agent_id = self.resolve_agent_id(args);
 
         let category = args
             .category
@@ -353,7 +366,7 @@ impl NoteManageTool {
     }
 
     async fn handle_append(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.agent_id();
+        let agent_id = self.resolve_agent_id(args);
 
         let category = args
             .category
@@ -398,7 +411,7 @@ impl NoteManageTool {
     }
 
     async fn handle_query(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.agent_id();
+        let agent_id = self.resolve_agent_id(args);
 
         let query = args
             .query
@@ -462,7 +475,7 @@ impl NoteManageTool {
     }
 
     async fn handle_list(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.agent_id();
+        let agent_id = self.resolve_agent_id(args);
         let limit = args.limit.unwrap_or(100);
 
         let all_entries = self
@@ -507,7 +520,7 @@ impl NoteManageTool {
     }
 
     async fn handle_delete(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.agent_id();
+        let agent_id = self.resolve_agent_id(args);
 
         let category = args
             .category
