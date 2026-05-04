@@ -91,6 +91,42 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
     }
 }
 
+/// Build an `IngestBatchSummary` from an `ApplyReport` by aggregating
+/// `touched_paths` (each formatted as `"{category}/{filename}"`) into per-
+/// category counts.
+///
+/// `ApplyReport` does not split per-path created vs updated, so `added` here
+/// is conservatively the *total* touched-path count for the category and
+/// `updated` is left at 0. This is sufficient for cadence-only consumers
+/// (e.g. `refresh_index_after_ingest`); finer-grained breakdowns belong with
+/// the planner once `ApplyReport` learns to track them per op.
+fn summary_from_report(
+    agent_id: &str,
+    report: &ApplyReport,
+) -> crate::memory::notes::orientation::types::IngestBatchSummary {
+    use crate::memory::notes::orientation::types::{IngestBatchSummary, TouchedCategory};
+    use std::collections::BTreeMap;
+
+    let mut by_cat: BTreeMap<String, u32> = BTreeMap::new();
+    for path in &report.touched_paths {
+        if let Some((cat, _name)) = path.split_once('/') {
+            *by_cat.entry(cat.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    IngestBatchSummary {
+        agent_id: agent_id.to_string(),
+        touched: by_cat
+            .into_iter()
+            .map(|(category, count)| TouchedCategory {
+                category,
+                added: count,
+                updated: 0,
+            })
+            .collect(),
+    }
+}
+
 fn strip_kindless_ops(mut value: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = value.as_object_mut() {
         if let Some(ops) = obj.get_mut("ops") {
@@ -187,6 +223,22 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             };
             if let Err(e) = orient.record_ingest(agent_id, entry).await {
                 warn!("compound ingest: log record failed: {e}");
+            }
+        }
+
+        // Forward-compatible: tell orientation which categories were touched in
+        // this batch so it can refresh `index.md` immediately. Best-effort —
+        // failures are logged and ignored so the ingest still returns success;
+        // the next dream cycle's full `rebuild_index` will reconcile.
+        if let Some(orient) = &self.orientation {
+            let summary = summary_from_report(agent_id, &report);
+            if !summary.touched.is_empty() {
+                if let Err(e) = orient.refresh_index_after_ingest(agent_id, &summary).await {
+                    warn!(
+                        "ingest_batch: refresh_index_after_ingest failed (non-fatal); \
+                         next dream cycle will reconcile: {e}"
+                    );
+                }
             }
         }
 
@@ -408,6 +460,87 @@ mod plan_tests {
             .await
             .unwrap();
         assert_eq!(plan.ops.len(), 1);
+    }
+
+    #[test]
+    fn summary_from_report_aggregates_touched_paths_by_category() {
+        let report = ApplyReport {
+            tx_id: "tx".into(),
+            touched_paths: vec![
+                "learning/rust-async".into(),
+                "learning/tokio".into(),
+                "preference/editor".into(),
+                "no-slash-bad-path".into(), // dropped by split_once('/')
+            ],
+            ..Default::default()
+        };
+        let summary = summary_from_report("default", &report);
+        assert_eq!(summary.agent_id, "default");
+        // BTreeMap ordering: "learning" < "preference" alphabetically.
+        assert_eq!(summary.touched.len(), 2);
+        assert_eq!(summary.touched[0].category, "learning");
+        assert_eq!(summary.touched[0].added, 2);
+        assert_eq!(summary.touched[0].updated, 0);
+        assert_eq!(summary.touched[1].category, "preference");
+        assert_eq!(summary.touched[1].added, 1);
+    }
+
+    #[test]
+    fn summary_from_report_empty_when_no_touched_paths() {
+        let report = ApplyReport::default();
+        let summary = summary_from_report("default", &report);
+        assert!(summary.touched.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ingest_batch_refreshes_index_md_at_tail() {
+        use crate::memory::notes::orientation::FsNoteOrientation;
+
+        let dir = tempfile::tempdir().unwrap();
+        let memory_dir = dir.path().join("note");
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), backend.clone()));
+
+        let orient: Arc<dyn NoteOrientation> = Arc::new(FsNoteOrientation::new(
+            memory_dir.clone(),
+            backend.clone(),
+        ));
+        // bootstrap is also done by ingest_batch, but doing it here gives a
+        // pre-ingest baseline for index.md so we can prove the refresh fires.
+        orient.bootstrap("default").await.unwrap();
+
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
+            r#"{"ops":[
+                {"kind":"create","note_path":"preference/editor","title":"editor",
+                 "summary":"prefers vim","facts":["uses vim"],
+                 "links":["preference/keymap"],"tags":["tool"]}
+            ]}"#
+            .into(),
+        ));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: Some(orient.clone()),
+            memory_dir: memory_dir.clone(),
+            budget: RelatedBudget::default(),
+        };
+
+        let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
+        let report = ing.ingest_batch("default", vec![raw]).await.unwrap();
+        assert_eq!(report.created, 1);
+
+        let index_md_path = memory_dir.join("default").join("index.md");
+        assert!(
+            index_md_path.exists(),
+            "index.md must exist after ingest_batch"
+        );
+        let body = std::fs::read_to_string(&index_md_path).unwrap();
+        assert!(
+            body.contains("preference"),
+            "index.md must list the touched 'preference' category; got:\n{body}"
+        );
     }
 
     #[tokio::test]

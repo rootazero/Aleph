@@ -190,6 +190,39 @@ impl DreamStage for FeedbackDistillStage {
             }
         }
 
+        // Refresh `index.md` so the new/strengthened/superseded feedback notes
+        // become visible immediately rather than waiting for the next full
+        // `rebuild_index`. Pattern B: this stage only touches the `feedback`
+        // category, so we synthesize a single-entry summary from `applied`
+        // (the count is conservative — `added` is the total touch count and
+        // `updated` is left at 0, matching `summary_from_report` in the
+        // ingestor). Best-effort: failures are logged and ignored.
+        if applied > 0 {
+            if let Some(orient) = ctx.orientation.as_ref() {
+                use crate::memory::notes::orientation::types::{
+                    IngestBatchSummary, TouchedCategory,
+                };
+                let summary = IngestBatchSummary {
+                    agent_id: ctx.agent_id.clone(),
+                    touched: vec![TouchedCategory {
+                        category: "feedback".into(),
+                        added: applied as u32,
+                        updated: 0,
+                    }],
+                };
+                if let Err(e) = orient
+                    .refresh_index_after_ingest(&ctx.agent_id, &summary)
+                    .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        "feedback_distill: refresh_index_after_ingest failed (non-fatal); \
+                         next dream cycle will reconcile"
+                    );
+                }
+            }
+        }
+
         ctx.report
             .extra
             .insert("feedback_distill_count".into(), applied.to_string());
