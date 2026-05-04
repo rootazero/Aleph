@@ -78,7 +78,8 @@ async fn index_one_file<S: NoteStore + Send + Sync + 'static>(
             return Ok(IndexOutcome::Skipped);
         }
     }
-    let note = KnowledgeNote::from_markdown(title, &content)?;
+    let mut note = KnowledgeNote::from_markdown(title, &content)?;
+    crate::memory::notes::governance::supersession::sync_body_to_frontmatter(&mut note, &content);
     store.index_note(&note, agent_id, category).await?;
     Ok(IndexOutcome::Indexed)
 }
@@ -267,7 +268,8 @@ impl<S: NoteStore> NoteIndexer<S> {
             }
         }
 
-        let note = KnowledgeNote::from_markdown(title, &content)?;
+        let mut note = KnowledgeNote::from_markdown(title, &content)?;
+        crate::memory::notes::governance::supersession::sync_body_to_frontmatter(&mut note, &content);
         self.store.index_note(&note, agent_id, category).await?;
 
         Ok(true)
@@ -306,6 +308,9 @@ impl<S: NoteStore> NoteIndexer<S> {
         }
 
         let content = note.to_markdown();
+        let content = crate::memory::notes::governance::supersession::ensure_supersession_section(
+            &content, note,
+        );
         atomic_write_file(&path, &content).await?;
 
         // Sync to SQLite immediately so callers don't have to wait for full_rebuild.
