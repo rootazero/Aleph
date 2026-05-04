@@ -80,6 +80,17 @@ impl AgentHarness {
     /// forces Done. Prevents infinite loops when a hook permanently blocks.
     const MAX_STOP_HOOK_VETOS: usize = 10;
 
+    /// Lazy-construct a `LoopTraceEvent` and forward to `trace_sink`.
+    /// Returns immediately when no sink is wired — the closure is not invoked.
+    fn emit<F>(&self, build: F)
+    where
+        F: FnOnce() -> crate::harness::trace::LoopTraceEvent,
+    {
+        if let Some(ref sink) = self.deps.trace_sink {
+            sink.on_trace(&build());
+        }
+    }
+
     /// Internal turn execution with pre-computed counters to avoid O(n²)
     /// event-log scans in the outer loop.
     ///
@@ -102,6 +113,10 @@ impl AgentHarness {
                     None
                 }
             }
+        });
+
+        self.emit(|| crate::harness::trace::LoopTraceEvent::TurnStarted {
+            iteration: iterations,
         });
 
         // Kick off a throttled skill prefetch scan before the LLM call. The
@@ -182,6 +197,11 @@ impl AgentHarness {
             None => RequestPayload::new(&messages).with_tools(tools_ref),
         };
 
+        self.emit(|| crate::harness::trace::LoopTraceEvent::TurnStateEntered {
+            iteration: iterations,
+            state: crate::harness::trace::LoopTraceState::Think,
+        });
+
         // 3. Call the LLM.
         let response = self.deps.llm.process(payload).await?;
 
@@ -192,6 +212,11 @@ impl AgentHarness {
             // Non-streaming LLM layer emits one chunk per turn; the callback
             // shape permits finer chunking once `process_stream` is wired.
             callback.on_delta(&text);
+            self.emit(|| crate::harness::trace::LoopTraceEvent::TextEmitted {
+                iteration: iterations,
+                stream: crate::harness::trace::LoopTraceTextKind::Final,
+                text: text.clone(),
+            });
         }
         let blocks = tool_use_blocks(&response.tool_calls);
         let assistant_event = SessionEvent::AssistantMessage {
@@ -209,11 +234,13 @@ impl AgentHarness {
 
         // 5. If the LLM produced tool_calls, run the Act phase; otherwise
         //    evaluate stop hooks before declaring Done.
+        let outcome_for_trace;
+        let metrics_for_trace;
+        let result;
+
         if response.tool_calls.is_empty() {
-            // Task-10: let stop hooks veto the stop. A blocking verdict
-            // forces one more Continue turn so the model can react.
             let block = self
-                .evaluate_stop_hooks(iterations, tool_calls_made, Some(text))
+                .evaluate_stop_hooks(iterations, tool_calls_made, Some(text.clone()))
                 .await;
             if let Some(reason) = block {
                 tracing::info!(
@@ -221,8 +248,6 @@ impl AgentHarness {
                     reason = %reason,
                     "stop hook vetoed; forcing continue",
                 );
-                // Inject the block reason as a user turn so the model sees it
-                // and has a chance to act. Matches loop_core semantics.
                 let new_turn = uuid::Uuid::new_v4();
                 let block_event = SessionEvent::UserMessage {
                     turn_id: new_turn,
@@ -236,15 +261,52 @@ impl AgentHarness {
                     .session
                     .emit_event(session_id, block_event)
                     .await?;
-                return Ok((TurnState::Continue, 0, true));
+                outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;
+                metrics_for_trace = crate::harness::trace::LoopTraceTurnMetrics {
+                    requested_tool_calls: 0,
+                    executed_tool_calls: 0,
+                    productive: false,
+                    consecutive_errors: 0,
+                    total_tokens: 0,
+                };
+                result = Ok((TurnState::Continue, 0, true));
+            } else {
+                outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Stop;
+                metrics_for_trace = crate::harness::trace::LoopTraceTurnMetrics {
+                    requested_tool_calls: 0,
+                    executed_tool_calls: 0,
+                    productive: false,
+                    consecutive_errors: 0,
+                    total_tokens: 0,
+                };
+                result = Ok((TurnState::Done, 0, false));
             }
-            Ok((TurnState::Done, 0, false))
         } else {
+            self.emit(|| crate::harness::trace::LoopTraceEvent::TurnStateEntered {
+                iteration: iterations,
+                state: crate::harness::trace::LoopTraceState::Act,
+            });
+            let requested = response.tool_calls.len();
             let executed = self
-                .act(session_id, turn_id, response.tool_calls, callback)
+                .act(session_id, turn_id, response.tool_calls, callback, iterations)
                 .await?;
-            Ok((TurnState::Continue, executed, false))
+            outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;
+            metrics_for_trace = crate::harness::trace::LoopTraceTurnMetrics {
+                requested_tool_calls: requested,
+                executed_tool_calls: executed,
+                productive: executed > 0,
+                consecutive_errors: 0,
+                total_tokens: 0,
+            };
+            result = Ok((TurnState::Continue, executed, false));
         }
+
+        self.emit(|| crate::harness::trace::LoopTraceEvent::TurnCompleted {
+            iteration: iterations,
+            outcome: outcome_for_trace,
+            metrics: metrics_for_trace,
+        });
+        result
     }
 
     /// Act phase: execute each tool_call sequentially, emitting a
@@ -260,12 +322,22 @@ impl AgentHarness {
         turn_id: TurnId,
         tool_calls: Vec<NativeToolCall>,
         callback: &mut dyn HarnessCallback,
+        iteration: usize,
     ) -> Result<usize, HarnessError> {
         let mut first_error: Option<ToolError> = None;
         let mut executed_count: usize = 0;
 
         for call in tool_calls {
             callback.on_tool_call(&call.name);
+            let started = std::time::Instant::now();
+            self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallStarted {
+                iteration,
+                call: crate::harness::trace::ToolCallStartEvent {
+                    tool_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    input: call.arguments.clone(),
+                },
+            });
             let requested = SessionEvent::ToolCallRequested {
                 turn_id,
                 call_id: call.id.clone(),
@@ -290,15 +362,29 @@ impl AgentHarness {
                         "failed to persist skipped-tool ToolError event",
                     );
                 }
+                self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                    iteration,
+                    call: crate::harness::trace::ToolCallEndEvent {
+                        tool_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        input: call.arguments.clone(),
+                        duration_ms: started.elapsed().as_millis() as u64,
+                    },
+                    result: crate::tools::runtime::ToolResult::Error {
+                        error: format!("Skipped: {}", prior_err),
+                        retryable: false,
+                    },
+                });
                 continue;
             }
 
-            match self.deps.tools.execute(&call.name, call.arguments).await {
+            match self.deps.tools.execute(&call.name, call.arguments.clone()).await {
                 Ok(output) => {
                     executed_count = executed_count.saturating_add(1);
+                    let output_value = output.value.clone();
                     let result_event = SessionEvent::ToolResult {
                         turn_id,
-                        call_id: call.id,
+                        call_id: call.id.clone(),
                         output,
                         at: now_ms(),
                     };
@@ -306,12 +392,25 @@ impl AgentHarness {
                         .session
                         .emit_event(session_id, result_event)
                         .await?;
+                    self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                        iteration,
+                        call: crate::harness::trace::ToolCallEndEvent {
+                            tool_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                            input: call.arguments.clone(),
+                            duration_ms: started.elapsed().as_millis() as u64,
+                        },
+                        result: crate::tools::runtime::ToolResult::Success {
+                            output: output_value,
+                        },
+                    });
                 }
                 Err(e) => {
+                    let error_msg = e.to_string();
                     let error_event = SessionEvent::ToolError {
                         turn_id,
                         call_id: call.id.clone(),
-                        error: e.to_string(),
+                        error: error_msg.clone(),
                         at: now_ms(),
                     };
                     if let Err(emit_err) =
@@ -324,6 +423,19 @@ impl AgentHarness {
                             "failed to persist ToolError event",
                         );
                     }
+                    self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                        iteration,
+                        call: crate::harness::trace::ToolCallEndEvent {
+                            tool_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                            input: call.arguments.clone(),
+                            duration_ms: started.elapsed().as_millis() as u64,
+                        },
+                        result: crate::tools::runtime::ToolResult::Error {
+                            error: error_msg,
+                            retryable: false,
+                        },
+                    });
                     first_error = Some(e);
                 }
             }
@@ -436,21 +548,22 @@ impl Harness for AgentHarness {
         let mut iterations: usize = 0;
         let mut tool_calls_made: usize = 0;
         let mut stop_hook_veto_count: usize = 0;
-        loop {
+        let result: Result<crate::harness::trace::LoopTraceSessionOutcome, HarnessError> = loop {
             if cancel.is_cancelled() {
-                return Err(HarnessError::Cancelled);
+                break Err(HarnessError::Cancelled);
             }
             if let Some(ref tracker) = self.stall_tracker {
                 if tracker.is_stalled() {
                     let elapsed = tracker.elapsed().await;
-                    return Err(HarnessError::Stalled { elapsed });
+                    break Err(HarnessError::Stalled { elapsed });
                 }
             }
             match self
                 .run_turn_internal(session_id, callback, iterations, tool_calls_made)
-                .await?
+                .await
             {
-                (TurnState::Continue, executed, is_veto) => {
+                Err(e) => break Err(e),
+                Ok((TurnState::Continue, executed, is_veto)) => {
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
                     }
@@ -465,7 +578,7 @@ impl Harness for AgentHarness {
                                 "stop-hook veto limit reached; forcing Done to prevent infinite loop",
                             );
                             callback.on_complete();
-                            return Ok(());
+                            break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                         }
                     } else {
                         stop_hook_veto_count = 0;
@@ -474,14 +587,48 @@ impl Harness for AgentHarness {
                         if iterations >= limit {
                             self.hit_limit.store(true, Ordering::Relaxed);
                             callback.on_complete();
-                            return Ok(());
+                            break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                         }
                     }
                 }
-                (TurnState::Done, _, _) => {
+                Ok((TurnState::Done, _, _)) => {
                     callback.on_complete();
-                    return Ok(());
+                    break Ok(crate::harness::trace::LoopTraceSessionOutcome::Completed);
                 }
+            }
+        };
+
+        match result {
+            Ok(outcome) => {
+                self.emit(|| crate::harness::trace::LoopTraceEvent::SessionCompleted {
+                    outcome,
+                    iterations,
+                    tool_calls_made,
+                    total_tokens: 0,
+                    hit_limit: matches!(
+                        outcome,
+                        crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
+                    ),
+                    final_text: None,
+                });
+                Ok(())
+            }
+            Err(e) => {
+                let session_outcome = match &e {
+                    HarnessError::Cancelled | HarnessError::Stalled { .. } => {
+                        crate::harness::trace::LoopTraceSessionOutcome::Cancelled
+                    }
+                    _ => crate::harness::trace::LoopTraceSessionOutcome::Cancelled,
+                };
+                self.emit(|| crate::harness::trace::LoopTraceEvent::SessionCompleted {
+                    outcome: session_outcome,
+                    iterations,
+                    tool_calls_made,
+                    total_tokens: 0,
+                    hit_limit: false,
+                    final_text: None,
+                });
+                Err(e)
             }
         }
     }

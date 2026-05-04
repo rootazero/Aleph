@@ -247,3 +247,87 @@ pub(super) fn minimal_deps(
         // turn_timeout: None,
     }
 }
+
+use crate::harness::agent::AgentHarness;
+use crate::harness::trait_def::Harness;
+
+#[tokio::test]
+async fn recording_sink_captures_full_lifecycle() {
+    let (sink, events) = RecordingTraceSink::new();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider: Arc<dyn AiProvider> = Arc::new(OneShotToolProvider {
+        name: "ok_tool".into(),
+        calls,
+    });
+    let (session, sid) = fresh_session("trace-lifecycle").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.trace_sink = Some(sink);
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    harness.run(&sid, &mut cb, &cancel).await.expect("run ok");
+
+    let captured = events.lock().unwrap().clone();
+    let names: Vec<&str> = captured
+        .iter()
+        .map(|e| match e {
+            LoopTraceEvent::TurnStarted { .. } => "TurnStarted",
+            LoopTraceEvent::TurnStateEntered { .. } => "TurnStateEntered",
+            LoopTraceEvent::TextEmitted { .. } => "TextEmitted",
+            LoopTraceEvent::ToolCallStarted { .. } => "ToolCallStarted",
+            LoopTraceEvent::ToolCallCompleted { .. } => "ToolCallCompleted",
+            LoopTraceEvent::ToolSummary { .. } => "ToolSummary",
+            LoopTraceEvent::TurnCompleted { .. } => "TurnCompleted",
+            LoopTraceEvent::SessionCompleted { .. } => "SessionCompleted",
+        })
+        .collect();
+    // 2 turns: tool turn + final text turn. Then SessionCompleted.
+    assert!(names.contains(&"TurnStarted"), "missing TurnStarted: {names:?}");
+    assert!(
+        names.iter().filter(|n| **n == "TurnStateEntered").count() >= 2,
+        "expected at least 2 TurnStateEntered events: {names:?}",
+    );
+    assert!(
+        names.contains(&"ToolCallStarted") && names.contains(&"ToolCallCompleted"),
+        "missing tool lifecycle events: {names:?}",
+    );
+    assert!(
+        names.last().copied() == Some("SessionCompleted"),
+        "SessionCompleted should be last: {names:?}",
+    );
+}
+
+/// Sink builder that panics when invoked. Confirms `emit()` skips construction
+/// when `trace_sink` is `None`.
+struct PanickingTraceSink;
+impl TraceSink for PanickingTraceSink {
+    fn on_trace(&self, _event: &LoopTraceEvent) {
+        panic!("trace sink should not be invoked");
+    }
+    fn flush(&self) {
+        panic!("trace sink flush should not be invoked");
+    }
+}
+
+#[tokio::test]
+async fn noop_sink_zero_overhead() {
+    // No sink wired — the harness must complete without ever building events.
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider: Arc<dyn AiProvider> = Arc::new(OneShotToolProvider {
+        name: "ok_tool".into(),
+        calls,
+    });
+    let (session, sid) = fresh_session("trace-zero").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    // trace_sink stays None — the helper sets it that way.
+    let deps = minimal_deps(session, tools, provider);
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    harness.run(&sid, &mut cb, &cancel).await.expect("ok");
+}
