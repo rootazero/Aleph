@@ -293,6 +293,10 @@ harness = false
 name = "sandbox_performance"
 harness = false
 
+[[bench]]
+name = "notes_index_writes"
+harness = false
+
 [[test]]
 name = "cron_probe"
 required-features = ["test-helpers"]
