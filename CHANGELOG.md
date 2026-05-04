@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Harness per-turn timeout** (`HarnessDeps.turn_timeout`) — wraps each Think (LLM `process()`) and Act (tool `execute()`) phase with `tokio::time::timeout` / `tokio::select!`. New `TurnPhase::{Think, Act{tool_name}}` enum identifies which phase hung in `HarnessError::StalledTurn { phase, elapsed }`. Parent `CancellationToken` always wins over the timeout via `tokio::select! { biased; cancel; sleep; llm_fut }`.
+- **Harness TraceSink fire points** wired across the full turn lifecycle: `TurnStarted`, `TurnStateEntered { Think | Act }`, `TextEmitted`, `ToolCallStarted`, `ToolCallCompleted` (success / error / skipped), `TurnCompleted`, `SessionCompleted`. The `LoopTraceEvent` schema in `src/harness/trace.rs` is now live; existing `GatewayTraceSink` (mpsc-backed) consumes events without code change. The `emit()` helper short-circuits when `trace_sink` is `None` — closure is never invoked, zero allocation.
+- **Harness consecutive-failure cap** (`HarnessDeps.consecutive_failure_cap`) — terminates the loop with `Done { hit_limit: true }` after N consecutive turns where every tool call failed, preventing infinite retry on permanently-broken tools.
+
+### Fixed
+- **Harness tool-error abort** — tool failures inside `act()` no longer abort the entire session via `HarnessError::Tool`. Errors are now persisted as `SessionEvent::ToolError` and surfaced to the next Think as `tool_result.is_error=true` (matching Claude Code recoverable-error semantics). The model decides whether to retry, switch tactics, or stop — the harness no longer makes that decision.
+- **Harness stall false-positives** — `StallTracker::record_activity` now fires after Think completes (post `AssistantMessage` emit) and after each tool execute, in addition to the existing top-of-loop call. Eliminates spurious `Stalled` errors during legitimate long Think phases.
+
 ## [2026.04.27]
 
 ### Added

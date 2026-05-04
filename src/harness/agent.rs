@@ -31,7 +31,6 @@ use crate::session::events::{
     now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, TurnId,
 };
 use crate::session::service::SessionId;
-use crate::tools::service::ToolError;
 use crate::verification::stop_hooks::{execute_stop_hooks, StopHookContext, StopHookHandler};
 
 pub struct AgentHarness {
