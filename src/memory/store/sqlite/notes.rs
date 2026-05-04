@@ -50,6 +50,14 @@ fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<NoteIndexEntry> {
     })
 }
 
+/// SHA-256 hex digest of a note's body text — used to gate `notes_fts` rewrites.
+fn body_text_sha256(body: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(body.as_bytes());
+    format!("{:x}", h.finalize())
+}
+
 // ---------------------------------------------------------------------------
 // NoteStore implementation
 // ---------------------------------------------------------------------------
@@ -167,12 +175,7 @@ impl NoteStore for SqliteMemoryBackend {
         // (`_data`/`_idx`/`_docsize`/`_content`). The body hash is tracked in a
         // sibling `notes_fts_meta` row so the gate survives across processes.
         let body = note.body_text();
-        let body_hash = {
-            use sha2::{Digest, Sha256};
-            let mut h = Sha256::new();
-            h.update(body.as_bytes());
-            format!("{:x}", h.finalize())
-        };
+        let body_hash = body_text_sha256(&body);
 
         let prev_body_hash: Option<String> = conn
             .query_row(
@@ -213,33 +216,40 @@ impl NoteStore for SqliteMemoryBackend {
     async fn remove_note_index(&self, path: &str, agent_id: &str) -> Result<(), AlephError> {
         let conn = lock_conn!(self)?;
 
-        conn.execute(
+        // Wrap all four DELETEs in a single transaction so a crash mid-removal
+        // cannot leave an orphan `notes_fts_meta` row. Without this, recreating
+        // a note with the same body would match the stale hash and skip the
+        // FTS rewrite, silently making the recreated note search-invisible.
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("remove_note_index tx begin: {e}")))?;
+
+        tx.execute(
             "DELETE FROM notes_index WHERE path = ?1 AND agent_id = ?2",
             params![path, agent_id],
         )
         .map_err(|e| AlephError::config(format!("remove_note_index index: {e}")))?;
 
-        conn.execute(
+        tx.execute(
             "DELETE FROM notes_links WHERE (from_note = ?1 OR to_note = ?1) AND agent_id = ?2",
             params![path, agent_id],
         )
         .map_err(|e| AlephError::config(format!("remove_note_index links: {e}")))?;
 
-        conn.execute(
+        tx.execute(
             "DELETE FROM notes_fts WHERE path = ?1 AND agent_id = ?2",
             params![path, agent_id],
         )
         .map_err(|e| AlephError::config(format!("remove_note_index fts: {e}")))?;
 
-        // Keep the body-hash meta in sync with the FTS content. Without this,
-        // a remove-then-recreate-with-identical-body would match the stale
-        // hash and skip rebuilding the FTS row, silently losing searchability.
-        conn.execute(
+        tx.execute(
             "DELETE FROM notes_fts_meta WHERE agent_id = ?1 AND path = ?2",
             params![agent_id, path],
         )
         .map_err(|e| AlephError::config(format!("remove_note_index fts meta: {e}")))?;
 
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("remove_note_index tx commit: {e}")))?;
         Ok(())
     }
 
@@ -1235,10 +1245,61 @@ mod tests {
         // contribute 0 because the body text is identical even though the
         // frontmatter content_hash changed.
         let delta = after - before;
-        assert!(
-            delta <= 1,
-            "expected ≤1 write (notes_index update only), got {delta}"
+        assert_eq!(
+            delta, 1,
+            "expected exactly 1 write (notes_index update only), got {delta}"
         );
+    }
+
+    #[tokio::test]
+    async fn reindex_changed_body_rewrites_fts() {
+        // Negative control for `reindex_same_body_skips_fts_rewrite`: when the body
+        // actually changes, the FTS rewrite + meta upsert must engage. Asserts that
+        // the gate does not over-skip.
+        let temp = std::env::temp_dir().join(format!("aleph_fts_changed_{}", uuid::Uuid::new_v4()));
+        let db = SqliteMemoryBackend::new(&temp).unwrap();
+
+        let mut note = crate::memory::notes::KnowledgeNote {
+            title: "x".into(),
+            category: "preference".into(),
+            facts: vec!["original body".into()],
+            content_hash: "h0".into(),
+            ..Default::default()
+        };
+        db.index_note(&note, "default", "preference").await.unwrap();
+
+        let before: i64 = {
+            let conn = db.conn().lock().unwrap();
+            conn.query_row("SELECT total_changes()", [], |r| r.get(0)).unwrap()
+        };
+
+        // Body changed; content_hash bumped.
+        note.facts = vec!["MUTATED body".into()];
+        note.content_hash = "h1".into();
+        db.index_note(&note, "default", "preference").await.unwrap();
+
+        let after: i64 = {
+            let conn = db.conn().lock().unwrap();
+            conn.query_row("SELECT total_changes()", [], |r| r.get(0)).unwrap()
+        };
+
+        let delta = after - before;
+        // notes_index UPDATE (1) + notes_fts DELETE+INSERT cascade (FTS5 shadow tables: ~14)
+        // + notes_fts_meta upsert (1). Floor is conservative; we just want to confirm
+        // the gate engaged and a non-trivial rewrite happened.
+        assert!(delta > 5, "expected a substantive FTS rewrite (delta > 5), got {delta}");
+
+        // Sanity: the new meta hash should match the new body's SHA-256.
+        let stored_hash: String = {
+            let conn = db.conn().lock().unwrap();
+            conn.query_row(
+                "SELECT content_hash FROM notes_fts_meta WHERE agent_id = ?1 AND path = ?2",
+                params!["default", "preference/x"],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(stored_hash, body_text_sha256(&note.body_text()));
     }
 
     #[tokio::test]
@@ -1329,12 +1390,7 @@ mod tests {
         assert_eq!(fts_count, 1, "notes_fts must have exactly one row");
         assert_eq!(meta_count, 1, "notes_fts_meta must have exactly one row");
 
-        let expected_hash = {
-            use sha2::{Digest, Sha256};
-            let mut h = Sha256::new();
-            h.update(note.body_text().as_bytes());
-            format!("{:x}", h.finalize())
-        };
+        let expected_hash = body_text_sha256(&note.body_text());
         assert_eq!(meta_hash, expected_hash, "meta hash must match body_text() SHA-256");
     }
 }
