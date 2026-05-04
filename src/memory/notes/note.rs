@@ -259,14 +259,46 @@ fn parse_date_to_unix(date: &Option<String>) -> Result<i64, AlephError> {
     Ok(dt.and_utc().timestamp())
 }
 
-/// Extract bullet-point facts from the body (lines starting with `- `).
+/// Extract bullet-point facts from the body.
+///
+/// Each top-level bullet (`- `) starts a new fact. Indented lines (indent >= 2)
+/// that follow a bullet are attached to the current fact. A blank line terminates
+/// the current fact. Non-bullet lines at indent 0 also terminate the current fact
+/// and are ignored.
 fn extract_facts(body: &str) -> Vec<String> {
-    body.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            trimmed.strip_prefix("- ").map(|s| s.to_string())
-        })
-        .collect()
+    let mut out: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for raw_line in body.lines() {
+        let trimmed_start = raw_line.trim_start();
+        let indent = raw_line.len() - trimmed_start.len();
+        let is_top_bullet = indent == 0 && trimmed_start.starts_with("- ");
+        let is_blank = raw_line.trim().is_empty();
+
+        if is_top_bullet {
+            if let Some(c) = current.take() {
+                out.push(c);
+            }
+            current = Some(trimmed_start[2..].to_string());
+        } else if is_blank {
+            if let Some(c) = current.take() {
+                out.push(c);
+            }
+        } else if current.is_some() && indent >= 2 {
+            // attach indented line to current fact
+            let acc = current.as_mut().unwrap();
+            acc.push('\n');
+            acc.push_str(raw_line);
+        } else {
+            // non-bullet line at indent 0 ends any current fact and is ignored
+            if let Some(c) = current.take() {
+                out.push(c);
+            }
+        }
+    }
+    if let Some(c) = current.take() {
+        out.push(c);
+    }
+    out
 }
 
 /// Sanitize a note title for safe use as a filename.
@@ -719,5 +751,43 @@ tags: []
         assert!(note.links.is_empty());
         assert_eq!(note.created_at, 0);
         assert_eq!(note.updated_at, 0);
+    }
+
+    #[test]
+    fn extract_facts_keeps_subbullets() {
+        let body = "- top fact
+  - sub fact
+- second top
+";
+        let facts = extract_facts(body);
+        assert_eq!(facts.len(), 2);
+        assert!(facts[0].contains("top fact"));
+        assert!(facts[0].contains("sub fact"), "sub-bullet must attach to parent: {:?}", facts[0]);
+        assert_eq!(facts[1].trim(), "second top");
+    }
+
+    #[test]
+    fn extract_facts_keeps_continuation_lines() {
+        let body = "- claim line one
+  continuation line two
+  continuation line three
+- next claim
+";
+        let facts = extract_facts(body);
+        assert_eq!(facts.len(), 2);
+        assert!(facts[0].contains("continuation line two"));
+        assert!(facts[0].contains("continuation line three"));
+    }
+
+    #[test]
+    fn extract_facts_empty_line_ends_fact() {
+        let body = "- one
+
+  this should NOT belong to one
+- two
+";
+        let facts = extract_facts(body);
+        assert_eq!(facts.len(), 2);
+        assert!(!facts[0].contains("should NOT"));
     }
 }
