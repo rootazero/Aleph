@@ -34,6 +34,12 @@ pub struct DefaultCompoundIngestor<S: NoteStore + Send + Sync + 'static> {
     pub orientation: Option<Arc<dyn NoteOrientation>>,
     pub memory_dir: PathBuf,
     pub budget: RelatedBudget,
+    /// Optional embedding manager. When set, `ingest_batch` pushes touched
+    /// notes into the pending queue and flushes once at the tail so vectors
+    /// are written without waiting for the next `reembed_all` migration.
+    /// `None` keeps the legacy fallback behaviour where vectors are filled
+    /// in lazily by the periodic re-embed migration.
+    pub embedding_manager: Option<Arc<crate::memory::embedding_manager::EmbeddingManager>>,
 }
 
 impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
@@ -242,6 +248,35 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             }
         }
 
+        // Embedding queue — best-effort push for each touched note, then a
+        // single flush. Failures are logged at warn; the next `reembed_all`
+        // migration is the safety net. Mirrors `reembed_agent_notes`'s
+        // body-extraction pattern: read the freshly written file from disk
+        // and pass its full content (frontmatter + body) to the embedder.
+        if let Some(em) = &self.embedding_manager {
+            for path in &report.touched_paths {
+                let file = self
+                    .memory_dir
+                    .join(agent_id)
+                    .join(format!("{path}.md"));
+                match tokio::fs::read_to_string(&file).await {
+                    Ok(content) => {
+                        em.push_pending(agent_id, path, &content).await;
+                    }
+                    Err(e) => {
+                        warn!(
+                            path = %file.display(),
+                            error = %e,
+                            "ingest_batch: failed to read note for embedding push"
+                        );
+                    }
+                }
+            }
+            if let Err(e) = em.flush_pending(&*self.store, 64).await {
+                warn!(error = %e, "ingest_batch: flush_pending failed");
+            }
+        }
+
         Ok(report)
     }
 }
@@ -402,6 +437,7 @@ mod plan_tests {
             orientation: None,
             memory_dir: dir.path().join("note"),
             budget: RelatedBudget::default(),
+            embedding_manager: None,
         };
         let raw = RawMemory::new("some content".to_string(), RawMemorySource::Transcript);
         let plan = ing
@@ -427,6 +463,7 @@ mod plan_tests {
             orientation: None,
             memory_dir: dir.path().join("note"),
             budget: RelatedBudget::default(),
+            embedding_manager: None,
         };
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
@@ -453,6 +490,7 @@ mod plan_tests {
             orientation: None,
             memory_dir: dir.path().join("note"),
             budget: RelatedBudget::default(),
+            embedding_manager: None,
         };
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
@@ -525,6 +563,7 @@ mod plan_tests {
             orientation: Some(orient.clone()),
             memory_dir: memory_dir.clone(),
             budget: RelatedBudget::default(),
+            embedding_manager: None,
         };
 
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
@@ -540,6 +579,67 @@ mod plan_tests {
         assert!(
             body.contains("preference"),
             "index.md must list the touched 'preference' category; got:\n{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_batch_pushes_and_flushes_embedding() {
+        use crate::config::types::memory::EmbeddingSettings;
+        use crate::memory::embedding_manager::EmbeddingManager;
+        use crate::memory::embedding_provider::EmbeddingProvider;
+        use crate::memory::notes::store::NoteStore;
+
+        let dir = tempfile::tempdir().unwrap();
+        let memory_dir = dir.path().join("note");
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), backend.clone()));
+
+        // Seat a Mock provider on the manager so flush_pending writes vectors.
+        let mgr = Arc::new(EmbeddingManager::new(EmbeddingSettings::default()));
+        let mock: Arc<dyn EmbeddingProvider> =
+            Arc::new(MockEmbeddingProvider::new(1024, "mock-1024"));
+        mgr.install_provider_for_test(mock).await;
+
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
+            r#"{"ops":[
+                {"kind":"create","note_path":"preference/editor","title":"editor",
+                 "summary":"prefers vim","facts":["uses vim"],
+                 "links":["preference/keymap"],"tags":["tool"]}
+            ]}"#
+            .into(),
+        ));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: memory_dir.clone(),
+            budget: RelatedBudget::default(),
+            embedding_manager: Some(mgr.clone()),
+        };
+
+        let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
+        let report = ing.ingest_batch("default", vec![raw]).await.unwrap();
+        assert_eq!(report.created, 1);
+        assert_eq!(report.touched_paths.len(), 1);
+
+        // Queue must be drained — flush_pending ran at the tail.
+        assert_eq!(
+            mgr.pending_len().await,
+            0,
+            "pending queue must be drained after ingest tail flush"
+        );
+
+        // Vector must be persisted for the touched path.
+        let touched = &report.touched_paths[0];
+        let v = backend
+            .get_embedding(touched, "default", 1024)
+            .await
+            .unwrap();
+        assert!(
+            v.is_some(),
+            "embedding must be present after ingest tail flush; touched={touched}"
         );
     }
 
@@ -566,6 +666,7 @@ mod plan_tests {
             orientation: None,
             memory_dir: dir.path().join("note"),
             budget: RelatedBudget::default(),
+            embedding_manager: None,
         };
         let r1 = ing_seed
             .ingest_batch(
@@ -595,6 +696,7 @@ mod plan_tests {
             orientation: None,
             memory_dir: dir.path().join("note"),
             budget: RelatedBudget::default(),
+            embedding_manager: None,
         };
         let r2 = ing2
             .ingest_batch(

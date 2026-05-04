@@ -1275,6 +1275,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             orientation: orientation.clone(),
                             memory_dir: note_dir,
                             budget,
+                            // B5.2: ingest-tail flush wiring deferred to a
+                            // follow-up (the manager is constructed locally
+                            // here and dropped; passing an Arc requires
+                            // hoisting it to a long-lived AppContext field).
+                            // For now the legacy reembed_all path handles
+                            // vector freshness for the production server.
+                            embedding_manager: None,
                         }))
                     } else {
                         None
