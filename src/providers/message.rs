@@ -46,8 +46,18 @@ pub enum ContentBlock {
     },
     /// Structured JSON (preserves tool output structure)
     Json { value: Value },
-    /// Thinking/reasoning trace
-    Thinking { thinking: String },
+    /// Thinking/reasoning trace.
+    ///
+    /// `signature` is the opaque verifier returned by Anthropic-compatible APIs
+    /// alongside the thinking content. It is `None` for providers that do not
+    /// emit a signature (Gemini, OpenAI). Anthropic requires a signed thinking
+    /// block to be replayed verbatim on subsequent turns whenever the same
+    /// assistant message also contains tool_use blocks.
+    Thinking {
+        thinking: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
     /// Tool call (only in Assistant messages)
     ToolCall {
         id: String,
@@ -125,6 +135,7 @@ impl UnifiedMessage {
         if let Some(ref thinking) = resp.thinking {
             content.push(ContentBlock::Thinking {
                 thinking: thinking.clone(),
+                signature: resp.thinking_signature.clone(),
             });
         }
         if let Some(ref text) = resp.text {
@@ -182,7 +193,9 @@ impl UnifiedMessage {
         for block in self.content_blocks() {
             match block {
                 ContentBlock::Text { text, .. } => parts.push(text.as_str().to_owned()),
-                ContentBlock::Thinking { thinking } => parts.push(thinking.as_str().to_owned()),
+                ContentBlock::Thinking { thinking, .. } => {
+                    parts.push(thinking.as_str().to_owned())
+                }
                 ContentBlock::Json { value } => parts.push(value.to_string()),
                 ContentBlock::ToolCall {
                     name, arguments, ..
@@ -413,13 +426,23 @@ mod tests {
                 arguments: json!({"query": "rust"}),
             }],
             thinking: Some("Let me think...".into()),
+            thinking_signature: Some("sig_abc123".into()),
             ..Default::default()
         };
         let msg = UnifiedMessage::from_provider_response(&resp);
         match &msg {
             UnifiedMessage::Assistant { content } => {
                 assert_eq!(content.len(), 3); // thinking + text + tool_call
-                assert!(matches!(&content[0], ContentBlock::Thinking { .. }));
+                match &content[0] {
+                    ContentBlock::Thinking {
+                        thinking,
+                        signature,
+                    } => {
+                        assert_eq!(thinking, "Let me think...");
+                        assert_eq!(signature.as_deref(), Some("sig_abc123"));
+                    }
+                    _ => panic!("expected Thinking block"),
+                }
                 assert!(matches!(&content[1], ContentBlock::Text { .. }));
                 assert!(matches!(&content[2], ContentBlock::ToolCall { .. }));
             }

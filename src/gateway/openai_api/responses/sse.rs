@@ -142,6 +142,12 @@ pub fn provider_deltas_to_responses_sse(
                             );
                             return Some((frame, state));
                         }
+                        ProviderDelta::ThinkingSignatureDelta(_) => {
+                            // Signatures are internal accumulator state used to
+                            // round-trip Anthropic thinking blocks; not exposed
+                            // in the OpenAI Responses wire format.
+                            continue;
+                        }
                         ProviderDelta::ToolCallStart { id, name } => {
                             state
                                 .tool_calls

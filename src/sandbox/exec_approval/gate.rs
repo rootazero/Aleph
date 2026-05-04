@@ -137,6 +137,7 @@ mod tests {
             text: Some(text.to_string()),
             tool_calls: vec![],
             thinking: None,
+            thinking_signature: None,
             stop_reason: Default::default(),
             usage: None,
         }

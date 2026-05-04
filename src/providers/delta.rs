@@ -37,6 +37,13 @@ pub enum ProviderDelta {
     TextDelta(String),
     /// Incremental extended-thinking content
     ThinkingDelta(String),
+    /// Incremental signature for the current thinking block.
+    ///
+    /// Anthropic streams a signed thinking block as multiple `thinking_delta`
+    /// events followed by one or more `signature_delta` events. The collector
+    /// concatenates the signature fragments and stores the result on
+    /// [`ProviderResponse::thinking_signature`].
+    ThinkingSignatureDelta(String),
     /// A tool call began — provides the id and name
     ToolCallStart { id: String, name: String },
     /// Additional argument JSON fragment for a tool call
@@ -67,6 +74,7 @@ pub enum ProviderDelta {
 pub struct DeltaCollector {
     text: String,
     thinking: String,
+    thinking_signature: String,
     /// (id, name, accumulated_arg_json)
     tool_calls: Vec<(String, String, String)>,
     usage: Option<TokenUsage>,
@@ -84,6 +92,7 @@ impl DeltaCollector {
         match delta {
             ProviderDelta::TextDelta(s) => self.text.push_str(&s),
             ProviderDelta::ThinkingDelta(s) => self.thinking.push_str(&s),
+            ProviderDelta::ThinkingSignatureDelta(s) => self.thinking_signature.push_str(&s),
             ProviderDelta::ToolCallStart { id, name } => {
                 // Only add if not already tracked (idempotent start)
                 if !self.tool_calls.iter().any(|(tid, _, _)| tid == &id) {
@@ -152,6 +161,11 @@ impl DeltaCollector {
                 None
             } else {
                 Some(self.thinking)
+            },
+            thinking_signature: if self.thinking_signature.is_empty() {
+                None
+            } else {
+                Some(self.thinking_signature)
             },
             tool_calls,
             usage: self.usage,
@@ -230,6 +244,10 @@ fn collect_response_deltas(response: ProviderResponse) -> Vec<ProviderDelta> {
 
     if let Some(thinking) = response.thinking {
         events.push(ProviderDelta::ThinkingDelta(thinking));
+    }
+
+    if let Some(signature) = response.thinking_signature {
+        events.push(ProviderDelta::ThinkingSignatureDelta(signature));
     }
 
     if let Some(text) = response.text {
@@ -321,6 +339,22 @@ mod tests {
         let resp = c.finish();
         assert_eq!(resp.thinking.as_deref(), Some("hmm..."));
         assert_eq!(resp.text.as_deref(), Some("answer"));
+        assert!(resp.thinking_signature.is_none());
+    }
+
+    #[test]
+    fn test_collector_thinking_signature() {
+        let mut c = DeltaCollector::new();
+        c.push(ProviderDelta::ThinkingDelta("Let me ".to_string()));
+        c.push(ProviderDelta::ThinkingDelta("reason".to_string()));
+        c.push(ProviderDelta::ThinkingSignatureDelta("sig_".to_string()));
+        c.push(ProviderDelta::ThinkingSignatureDelta("abc123".to_string()));
+        c.push(ProviderDelta::TextDelta("answer".to_string()));
+        c.push(ProviderDelta::Done(StopReason::EndTurn));
+
+        let resp = c.finish();
+        assert_eq!(resp.thinking.as_deref(), Some("Let me reason"));
+        assert_eq!(resp.thinking_signature.as_deref(), Some("sig_abc123"));
     }
 
     #[test]
@@ -461,6 +495,7 @@ mod tests {
                 name: "search".to_string(),
                 arguments: serde_json::json!({"q": "rust"}),
             }],
+            thinking_signature: None,
             stop_reason: StopReason::ToolUse,
             usage: Some(TokenUsage {
                 input_tokens: 5,

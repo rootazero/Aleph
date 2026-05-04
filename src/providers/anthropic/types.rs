@@ -116,6 +116,12 @@ pub enum ContentBlock {
     Text { text: String },
     /// Image content (base64)
     Image { source: ImageSource },
+    /// Extended-thinking block from a prior assistant turn.
+    ///
+    /// Anthropic requires a signed thinking block to be replayed verbatim when
+    /// the same turn also contains tool_use blocks; the signature is opaque
+    /// and must round-trip exactly.
+    Thinking { thinking: String, signature: String },
     /// Tool use (assistant requesting tool execution)
     ToolUse {
         id: String,
@@ -168,7 +174,11 @@ pub enum AnthropicContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "thinking")]
-    Thinking { thinking: String },
+    Thinking {
+        thinking: String,
+        #[serde(default)]
+        signature: Option<String>,
+    },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -237,7 +247,7 @@ mod tests {
         let json = r#"{"type": "thinking", "thinking": "Let me reason about this..."}"#;
         let block: AnthropicContentBlock = serde_json::from_str(json).unwrap();
         match block {
-            AnthropicContentBlock::Thinking { thinking } => {
+            AnthropicContentBlock::Thinking { thinking, .. } => {
                 assert_eq!(thinking, "Let me reason about this...");
             }
             _ => panic!("Expected Thinking block"),

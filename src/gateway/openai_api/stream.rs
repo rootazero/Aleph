@@ -200,8 +200,11 @@ pub fn provider_deltas_to_sse(
                                     // No-op — continue to next delta
                                     continue;
                                 }
-                                ProviderDelta::ThinkingDelta(_) => {
-                                    // No-op — skip thinking deltas in OpenAI format
+                                ProviderDelta::ThinkingDelta(_)
+                                | ProviderDelta::ThinkingSignatureDelta(_) => {
+                                    // No-op — skip thinking deltas in OpenAI format.
+                                    // Signatures are internal accumulator state used
+                                    // to round-trip Anthropic thinking blocks.
                                     continue;
                                 }
                                 ProviderDelta::Usage(u) => {

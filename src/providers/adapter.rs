@@ -190,6 +190,11 @@ pub struct ProviderResponse {
     pub tool_calls: Vec<NativeToolCall>,
     /// Thinking/reasoning process (extended thinking)
     pub thinking: Option<String>,
+    /// Opaque signature accompanying the thinking content. Anthropic returns
+    /// this and requires it to be replayed verbatim on subsequent turns when
+    /// the same assistant message also contains tool_use blocks. `None` for
+    /// providers that do not sign thinking output.
+    pub thinking_signature: Option<String>,
     /// Why the LLM stopped generating
     pub stop_reason: StopReason,
     /// Token usage statistics

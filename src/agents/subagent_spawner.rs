@@ -476,6 +476,7 @@ mod tests {
                         arguments: json!({}),
                     }],
                     thinking: None,
+                    thinking_signature: None,
                     stop_reason: StopReason::ToolUse,
                     usage: None,
                 })
@@ -542,6 +543,7 @@ mod tests {
                         arguments: json!({}),
                     }],
                     thinking: None,
+                    thinking_signature: None,
                     stop_reason: StopReason::ToolUse,
                     usage: None,
                 })
@@ -713,6 +715,7 @@ mod tests {
                     arguments: json!({}),
                 }],
                 thinking: None,
+                thinking_signature: None,
                 stop_reason: StopReason::ToolUse,
                 usage: None,
             },

@@ -869,6 +869,7 @@ mod tests {
                         arguments: serde_json::json!({}),
                     }],
                     thinking: None,
+                    thinking_signature: None,
                     stop_reason: crate::providers::adapter::StopReason::ToolUse,
                     usage: None,
                 })
@@ -910,6 +911,7 @@ mod tests {
                             arguments: serde_json::json!({}),
                         }],
                         thinking: None,
+                        thinking_signature: None,
                         stop_reason: crate::providers::adapter::StopReason::ToolUse,
                         usage: None,
                     })

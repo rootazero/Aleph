@@ -174,6 +174,25 @@ impl AnthropicProtocol {
                                     blocks.push(ContentBlock::Text { text: text.clone() });
                                 }
                             }
+                            crate::providers::message::ContentBlock::Thinking {
+                                thinking,
+                                signature,
+                            } => {
+                                // Replay the signed thinking block when we have its signature.
+                                // Anthropic requires a verbatim replay (thinking + signature)
+                                // whenever the assistant turn also carries tool_use blocks.
+                                // Without a signature the API would reject the message, so
+                                // drop unsigned thinking — providers that don't sign (Gemini,
+                                // OpenAI) never produce it for an Anthropic-bound turn.
+                                if let Some(sig) = signature {
+                                    if !thinking.is_empty() {
+                                        blocks.push(ContentBlock::Thinking {
+                                            thinking: thinking.clone(),
+                                            signature: sig.clone(),
+                                        });
+                                    }
+                                }
+                            }
                             crate::providers::message::ContentBlock::ToolCall {
                                 id,
                                 name,
@@ -361,8 +380,11 @@ impl ProtocolAdapter for AnthropicProtocol {
             .or_else(|| Self::kimi_default_temperature(actual_model))
             .or(config.temperature);
 
-        // Build thinking config if enabled
-        // For Kimi models, enable thinking by default when no explicit think_level
+        // Build thinking config if enabled.
+        //
+        // Signed thinking blocks from prior assistant turns are replayed verbatim
+        // by `convert_messages` (see ContentBlock::Thinking handling), so multi-turn
+        // tool_use conversations now keep thinking enabled across turns.
         let thinking = if Self::is_kimi_model(actual_model) && payload.think_level.is_none() {
             Some(ThinkingBlock {
                 thinking_type: "enabled".to_string(),
@@ -657,7 +679,8 @@ impl ProtocolAdapter for AnthropicProtocol {
 ///
 /// Anthropic SSE event types handled:
 /// - `content_block_start`: tracks block types; emits `ToolCallStart` for tool_use blocks
-/// - `content_block_delta`: emits `TextDelta`, `ThinkingDelta`, or `ToolCallArgDelta`
+/// - `content_block_delta`: emits `TextDelta`, `ThinkingDelta`,
+///   `ThinkingSignatureDelta`, or `ToolCallArgDelta`
 /// - `content_block_stop`: emits `ToolCallEnd` for tool_use blocks
 /// - `message_delta`: emits `Usage` and `Done` from stop_reason
 /// - `error`: emits `Error`
@@ -724,6 +747,13 @@ pub(crate) fn parse_anthropic_sse_event(
                 "thinking_delta" => {
                     if let Some(thinking) = delta.get("thinking").and_then(|t| t.as_str()) {
                         out.push_back(Ok(ProviderDelta::ThinkingDelta(thinking.to_string())));
+                    }
+                }
+                "signature_delta" => {
+                    if let Some(signature) = delta.get("signature").and_then(|s| s.as_str()) {
+                        out.push_back(Ok(ProviderDelta::ThinkingSignatureDelta(
+                            signature.to_string(),
+                        )));
                     }
                 }
                 "input_json_delta" => {
@@ -1342,6 +1372,7 @@ mod stream_tests {
         let events = [
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_abc"}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
             r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
             r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer"}}"#,
@@ -1358,6 +1389,14 @@ mod stream_tests {
             Some(ProviderDelta::ThinkingDelta(t)) if t == "Let me think"
         ));
 
+        let signature = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::ThinkingSignatureDelta(_)));
+        assert!(matches!(
+            signature,
+            Some(ProviderDelta::ThinkingSignatureDelta(s)) if s == "sig_abc"
+        ));
+
         let text = deltas
             .iter()
             .find(|d| matches!(d, ProviderDelta::TextDelta(_)));
@@ -1371,6 +1410,75 @@ mod stream_tests {
             done,
             Some(ProviderDelta::Done(StopReason::EndTurn))
         ));
+    }
+
+    // ── Test 3b: Thinking-block round-trip in convert_messages ─────────────
+    //
+    // Regression test for the I-2 workaround removal: a prior assistant turn
+    // that carries Thinking + ToolCall blocks must be re-serialized into an
+    // Anthropic message with the signed thinking block emitted before the
+    // tool_use block. Without the signature the API would reject the request.
+    #[test]
+    fn test_convert_assistant_with_signed_thinking_and_tool_use() {
+        use crate::providers::message::{ContentBlock as UContentBlock, UnifiedMessage};
+        let messages = vec![UnifiedMessage::Assistant {
+            content: vec![
+                UContentBlock::Thinking {
+                    thinking: "Let me think...".to_string(),
+                    signature: Some("sig_abc123".to_string()),
+                },
+                UContentBlock::ToolCall {
+                    id: "toolu_1".to_string(),
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({"q": "rust"}),
+                },
+            ],
+        }];
+        let converted = AnthropicProtocol::convert_messages(&messages);
+        assert_eq!(converted.len(), 1);
+        let blocks = match &converted[0].content {
+            MessageContent::Multimodal { content } => content,
+            _ => panic!("expected multimodal assistant message"),
+        };
+        // First block: Thinking with signature
+        match &blocks[0] {
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
+                assert_eq!(thinking, "Let me think...");
+                assert_eq!(signature, "sig_abc123");
+            }
+            other => panic!("expected Thinking block first, got {:?}", other),
+        }
+        // Second block: ToolUse
+        assert!(matches!(blocks[1], ContentBlock::ToolUse { .. }));
+    }
+
+    #[test]
+    fn test_convert_assistant_drops_unsigned_thinking() {
+        use crate::providers::message::{ContentBlock as UContentBlock, UnifiedMessage};
+        let messages = vec![UnifiedMessage::Assistant {
+            content: vec![
+                UContentBlock::Thinking {
+                    thinking: "unsigned reasoning".to_string(),
+                    signature: None,
+                },
+                UContentBlock::Text {
+                    text: "answer".to_string(),
+                    cache_control: None,
+                },
+            ],
+        }];
+        let converted = AnthropicProtocol::convert_messages(&messages);
+        let blocks = match &converted[0].content {
+            MessageContent::Multimodal { content } => content,
+            MessageContent::Text { .. } => return, // collapsed-text path is also acceptable
+        };
+        // Unsigned thinking must be dropped (would be rejected by Anthropic API)
+        assert!(!blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Thinking { .. })));
     }
 
     // ── Test 4: Beta headers ────────────────────────────────────────────────
