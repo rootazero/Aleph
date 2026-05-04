@@ -60,7 +60,16 @@ impl MemoryCommandHandler {
         match projected {
             Some(fact) => {
                 let category = fact.note_type.to_category_dir();
-                let title = sanitize_title(&fact.id)?; // use fact_id as stable filename
+                // Mirror the None-arm policy: skip silently on unsanitizable fact_id
+                // rather than aborting the dual-write. Both branches are fire-and-forget
+                // best-effort projections, so the failure modes must agree.
+                let title = match sanitize_title(&fact.id) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::warn!(fact_id = %fact.id, error = %e, "Notes dual-write: skipping write for unsanitizable fact_id");
+                        return Ok(());
+                    }
+                };
                 let now = chrono::Utc::now().timestamp();
                 let note = KnowledgeNote {
                     title: title.clone(),

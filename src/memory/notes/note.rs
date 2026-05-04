@@ -602,10 +602,13 @@ Related: [[Rust Learning]] [[Dev Environment]]
 
     #[test]
     fn sanitize_title_rejects_empty_result() {
-        assert!(sanitize_title("").is_err());
-        assert!(sanitize_title("..").is_err());
-        assert!(sanitize_title("///").is_err());
-        assert!(sanitize_title("   ").is_err());
+        for bad in ["", "..", "///", "   "] {
+            let err = sanitize_title(bad).unwrap_err();
+            assert!(
+                matches!(err, AlephError::Validation(_)),
+                "expected Validation variant for {bad:?}, got {err:?}"
+            );
+        }
     }
 
     #[test]
