@@ -29,8 +29,33 @@ use async_trait::async_trait;
 use crate::error::AlephError;
 use crate::memory::dreaming::DreamContext;
 use crate::memory::notes::store::NoteStore;
+use crate::memory::notes::{KnowledgeNote, Severity};
 
 use super::DreamStage;
+
+/// Phase C2.7 — minimum confidence floor by severity. Critical / High notes
+/// must remain trustworthy even after long periods of no recall.
+fn severity_floor(sev: Severity) -> f32 {
+    match sev {
+        Severity::Low => 0.0,
+        Severity::Med => 0.5,
+        Severity::High => 0.7,
+        Severity::Critical => 0.85,
+    }
+}
+
+/// Days a note is treated as "cold" when it has never received a recall hit.
+/// ~10 years; large enough that `exp(-days / 90)` is effectively zero so
+/// `severity_floor` is the only thing keeping the note's confidence positive.
+const NEVER_RECALLED_DAYS: f32 = 3650.0;
+
+/// Decay half-life parameter. After 90 days of no recall a note's confidence
+/// multiplier is `exp(-1) ≈ 0.368`.
+const DECAY_TAU_DAYS: f32 = 90.0;
+
+/// Minimum delta required before we rewrite a note to disk. Avoids churn for
+/// rounding-noise updates (e.g. 0.99 → 0.989).
+const DECAY_WRITE_EPSILON: f32 = 0.02;
 
 // ---------------------------------------------------------------------------
 // Stage struct
@@ -159,6 +184,97 @@ impl DreamStage for NoteDecayStage {
                     tracing::warn!(path, error = %e, "NoteDecay: failed to move note to archive");
                 }
             }
+        }
+
+        // ---------------------------------------------------------------
+        // Phase C2.7 — recall-signal-driven confidence decay.
+        //
+        // For every note still in the index, look up the most recent
+        // recall hit and compute:
+        //
+        //     decayed   = old_confidence * exp(-days_since_hit / 90)
+        //     new_conf  = max(decayed, severity_floor(severity))
+        //
+        // If `(new_conf - old_conf).abs() > DECAY_WRITE_EPSILON`, rewrite
+        // the note to disk with the updated `confidence` frontmatter.
+        // ---------------------------------------------------------------
+        let archived_paths: std::collections::HashSet<&str> = low_score_notes
+            .iter()
+            .map(|(p, _, _, _)| p.as_str())
+            .collect();
+
+        let store = ctx.indexer.store().clone();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        // Snapshot the candidate (path, category, filename) tuples up front so
+        // we don't borrow `ctx.notes` while later calling `&mut ctx.indexer`.
+        let candidates: Vec<(String, String, String)> = ctx
+            .notes
+            .iter()
+            .filter(|n| !archived_paths.contains(n.path.as_str()))
+            .filter_map(|n| {
+                let (cat, fname) = n.path.split_once('/')?;
+                Some((n.path.clone(), cat.to_string(), fname.to_string()))
+            })
+            .collect();
+
+        for (note_path, category, filename) in candidates {
+            let last_hit = store
+                .recall_signals_last_hit(&ctx.agent_id, &note_path)
+                .await
+                .unwrap_or(None);
+
+            let days = match last_hit {
+                Some(t) => ((now_ts - t).max(0) as f32) / 86400.0_f32,
+                None => NEVER_RECALLED_DAYS,
+            };
+
+            let file_path = ctx
+                .indexer
+                .memory_dir()
+                .join(&ctx.agent_id)
+                .join(&category)
+                .join(format!("{filename}.md"));
+
+            let content = match tokio::fs::read_to_string(&file_path).await {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let mut note = match KnowledgeNote::from_markdown(&filename, &content) {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::debug!(path = %note_path, error = %e, "NoteDecay: parse failed, skipping");
+                    continue;
+                }
+            };
+
+            let old_conf = note.confidence;
+            let decayed = old_conf * (-days / DECAY_TAU_DAYS).exp();
+            let floor = severity_floor(note.severity);
+            let new_conf = decayed.max(floor);
+
+            if (new_conf - old_conf).abs() <= DECAY_WRITE_EPSILON {
+                continue;
+            }
+
+            note.confidence = new_conf;
+
+            if let Err(e) = ctx.indexer.write_note(&ctx.agent_id, &category, &note).await {
+                tracing::warn!(path = %note_path, error = %e, "NoteDecay: write_note failed");
+                continue;
+            }
+
+            // Evict the cached body so downstream stages re-read the updated
+            // markdown if they need it.
+            ctx.note_contents.remove(note_path.as_str());
+            tracing::debug!(
+                path = %note_path,
+                old_conf,
+                new_conf,
+                days,
+                "NoteDecay: applied recall-driven confidence decay"
+            );
         }
 
         ctx.report.notes_archived = notes_archived;
@@ -293,5 +409,54 @@ mod tests {
     #[test]
     fn stage_name_is_note_decay() {
         assert_eq!(NoteDecayStage.name(), "note_decay");
+    }
+
+    // --- C2.7 recall-driven confidence decay (pure formula) ---
+
+    #[test]
+    fn severity_floor_holds_critical() {
+        assert_eq!(severity_floor(Severity::Critical), 0.85);
+        assert_eq!(severity_floor(Severity::High), 0.7);
+        assert_eq!(severity_floor(Severity::Med), 0.5);
+        assert_eq!(severity_floor(Severity::Low), 0.0);
+    }
+
+    #[test]
+    fn decay_formula_cold_low_severity_decays() {
+        // 365 days cold, severity Low (floor 0.0), starting confidence 1.0.
+        let days: f32 = 365.0;
+        let old_conf: f32 = 1.0;
+        let decayed = old_conf * (-days / DECAY_TAU_DAYS).exp();
+        let floor = severity_floor(Severity::Low);
+        let new_conf = decayed.max(floor);
+        assert!(new_conf < 0.1, "expected decayed < 0.1, got {new_conf}");
+    }
+
+    #[test]
+    fn decay_formula_high_severity_holds_floor() {
+        // 365 days cold, severity High (floor 0.7), starting confidence 1.0.
+        let days: f32 = 365.0;
+        let old_conf: f32 = 1.0;
+        let decayed = old_conf * (-days / DECAY_TAU_DAYS).exp();
+        let floor = severity_floor(Severity::High);
+        let new_conf = decayed.max(floor);
+        assert!(
+            new_conf >= 0.7,
+            "expected confidence >= 0.7 floor, got {new_conf}"
+        );
+    }
+
+    #[test]
+    fn epsilon_avoids_micro_writes() {
+        // 1 day cold, confidence 0.99: tiny decay shouldn't trigger a write.
+        let days: f32 = 1.0;
+        let old_conf: f32 = 0.99;
+        let decayed = old_conf * (-days / DECAY_TAU_DAYS).exp();
+        let new_conf = decayed.max(0.0);
+        assert!(
+            (new_conf - old_conf).abs() <= DECAY_WRITE_EPSILON,
+            "delta should be within epsilon, got {}",
+            (new_conf - old_conf).abs()
+        );
     }
 }

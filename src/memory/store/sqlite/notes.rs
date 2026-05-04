@@ -1115,6 +1115,29 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("archive_review tx commit: {e}")))?;
         Ok(())
     }
+
+    /// Phase C2.7 — return the most recent `created_at` recall signal for
+    /// `note_path`, or `None` when no signals exist. The `recall_signals`
+    /// table has no `agent_id` column; recall data is already scoped to the
+    /// active agent's SQLite database, so `agent_id` is accepted but unused.
+    async fn recall_signals_last_hit(
+        &self,
+        agent_id: &str,
+        note_path: &str,
+    ) -> Result<Option<i64>, AlephError> {
+        let _ = agent_id;
+        let conn = lock_conn!(self)?;
+        let v: Option<i64> = conn
+            .query_row(
+                "SELECT MAX(created_at) FROM recall_signals WHERE note_path = ?1",
+                params![note_path],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| AlephError::config(format!("recall last hit: {e}")))?
+            .flatten();
+        Ok(v)
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -251,6 +251,18 @@ pub trait NoteStore: Send + Sync {
         let _ = (queue_id, final_status);
         Ok(())
     }
+
+    /// Phase C2.7 — return the `MAX(created_at)` recall signal for
+    /// `(agent_id, note_path)`, or `None` if the note has never been recalled.
+    /// Default impl returns `Ok(None)` so existing test mocks compile unchanged.
+    async fn recall_signals_last_hit(
+        &self,
+        agent_id: &str,
+        note_path: &str,
+    ) -> Result<Option<i64>, AlephError> {
+        let _ = (agent_id, note_path);
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
