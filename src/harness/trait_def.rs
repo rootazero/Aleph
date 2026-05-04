@@ -66,6 +66,24 @@ pub enum TurnState {
     Done,
 }
 
+/// Identifies which sub-phase of a turn was hung when a per-turn timeout fired.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnPhase {
+    /// LLM `process()` call was hung.
+    Think,
+    /// A specific tool's `execute()` call was hung.
+    Act { tool_name: String },
+}
+
+impl std::fmt::Display for TurnPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TurnPhase::Think => write!(f, "Think"),
+            TurnPhase::Act { tool_name } => write!(f, "Act({tool_name})"),
+        }
+    }
+}
+
 /// Harness-level errors.
 ///
 /// `ToolError` has named-field struct variants so `#[from]` is not usable;
@@ -88,6 +106,14 @@ pub enum HarnessError {
     /// Agent stalled — no activity detected within stall timeout.
     #[error("stalled for {elapsed:?}")]
     Stalled { elapsed: Duration },
+    /// A single Think or Act phase exceeded `turn_timeout`. Distinct from
+    /// `Stalled` (which captures cross-turn idle): `StalledTurn` fires when
+    /// an `await` itself does not return.
+    #[error("turn stalled in {phase} after {elapsed:?}")]
+    StalledTurn {
+        phase: TurnPhase,
+        elapsed: std::time::Duration,
+    },
 }
 
 impl From<AlephError> for HarnessError {

@@ -69,4 +69,9 @@ pub struct HarnessDeps {
     /// to prevent the model from looping on permanently-failing tools.
     /// `None` disables the cap (legacy behavior). Recommended `Some(8)`.
     pub consecutive_failure_cap: Option<usize>,
+    /// Hard wall-clock budget for a single Think or Act phase. When set, the
+    /// harness wraps each LLM call and each tool exec in `tokio::time::timeout`.
+    /// Exceeding the budget yields `HarnessError::StalledTurn` with the
+    /// hung phase. `None` disables (legacy behavior). Recommended `Some(300s)`.
+    pub turn_timeout: Option<std::time::Duration>,
 }

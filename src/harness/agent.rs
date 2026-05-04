@@ -24,10 +24,12 @@ use tokio_util::sync::CancellationToken;
 use crate::context::budget::LoopDirective;
 use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
 use crate::harness::deps::HarnessDeps;
-use crate::harness::trait_def::{Harness, HarnessError, TurnState};
+use crate::harness::trait_def::{Harness, HarnessError, TurnPhase, TurnState};
 use crate::providers::adapter::{NativeToolCall, RequestPayload};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
-use crate::session::events::{now_ms, MessageContent, SessionEvent, SessionEventRecord, TurnId};
+use crate::session::events::{
+    now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, TurnId,
+};
 use crate::session::service::SessionId;
 use crate::tools::service::ToolError;
 use crate::verification::stop_hooks::{execute_stop_hooks, StopHookContext, StopHookHandler};
@@ -101,6 +103,7 @@ impl AgentHarness {
         callback: &mut dyn HarnessCallback,
         iterations: usize,
         tool_calls_made: usize,
+        parent_cancel: &CancellationToken,
     ) -> Result<(TurnState, usize, bool), HarnessError> {
         // Hold a sleep-inhibit assertion for the duration of this turn so a long
         // Think→Act cycle does not get cut off by macOS idle sleep. Drop happens
@@ -202,8 +205,43 @@ impl AgentHarness {
             state: crate::harness::trace::LoopTraceState::Think,
         });
 
-        // 3. Call the LLM.
-        let response = self.deps.llm.process(payload).await?;
+        // 3. Call the LLM, racing against parent cancel and per-turn timeout.
+        let response = {
+            let llm_fut = self.deps.llm.process(payload);
+            let started = std::time::Instant::now();
+            match self.deps.turn_timeout {
+                Some(budget) => {
+                    tokio::select! {
+                        biased;
+                        _ = parent_cancel.cancelled() => {
+                            return Err(HarnessError::Cancelled);
+                        }
+                        _ = tokio::time::sleep(budget) => {
+                            return Err(HarnessError::StalledTurn {
+                                phase: TurnPhase::Think,
+                                elapsed: started.elapsed(),
+                            });
+                        }
+                        r = llm_fut => match r {
+                            Ok(r) => r,
+                            Err(e) => return Err(HarnessError::Llm(e)),
+                        },
+                    }
+                }
+                None => {
+                    tokio::select! {
+                        biased;
+                        _ = parent_cancel.cancelled() => {
+                            return Err(HarnessError::Cancelled);
+                        }
+                        r = llm_fut => match r {
+                            Ok(r) => r,
+                            Err(e) => return Err(HarnessError::Llm(e)),
+                        },
+                    }
+                }
+            }
+        };
 
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = current_turn_id(&events);
@@ -349,7 +387,30 @@ impl AgentHarness {
             };
             self.deps.session.emit_event(session_id, requested).await?;
 
-            match self.deps.tools.execute(&call.name, call.arguments.clone()).await {
+            let exec_fut = self.deps.tools.execute(&call.name, call.arguments.clone());
+            let exec_result: Result<
+                Result<ToolOutput, crate::tools::service::ToolError>,
+                HarnessError,
+            > = match self.deps.turn_timeout {
+                Some(budget) => {
+                    let started_call = std::time::Instant::now();
+                    match tokio::time::timeout(budget, exec_fut).await {
+                        Ok(inner) => Ok(inner),
+                        Err(_) => Err(HarnessError::StalledTurn {
+                            phase: TurnPhase::Act {
+                                tool_name: call.name.clone(),
+                            },
+                            elapsed: started_call.elapsed(),
+                        }),
+                    }
+                }
+                None => Ok(exec_fut.await),
+            };
+            let inner = match exec_result {
+                Ok(r) => r,
+                Err(stalled) => return Err(stalled),
+            };
+            match inner {
                 Ok(output) => {
                     executed_count = executed_count.saturating_add(1);
                     let output_value = output.value.clone();
@@ -497,6 +558,11 @@ impl crate::session::SessionDriver for AgentHarness {
                 HarnessError::Stalled { elapsed } => {
                     crate::error::AlephError::provider(format!("agent stalled after {:?}", elapsed))
                 }
+                HarnessError::StalledTurn { phase, elapsed } => {
+                    crate::error::AlephError::provider(format!(
+                        "agent turn stalled in {phase} after {elapsed:?}"
+                    ))
+                }
             })
     }
 }
@@ -530,7 +596,7 @@ impl Harness for AgentHarness {
                 }
             }
             match self
-                .run_turn_internal(session_id, callback, iterations, tool_calls_made)
+                .run_turn_internal(session_id, callback, iterations, tool_calls_made, cancel)
                 .await
             {
                 Err(e) => break Err(e),
@@ -649,7 +715,8 @@ impl Harness for AgentHarness {
         let events = self.deps.session.get_events(session_id, None, None).await?;
         let iterations = count_assistant_messages(&events).saturating_add(1);
         let tool_calls_made = count_tool_calls(&events);
-        self.run_turn_internal(session_id, callback, iterations, tool_calls_made)
+        let cancel = tokio_util::sync::CancellationToken::new();
+        self.run_turn_internal(session_id, callback, iterations, tool_calls_made, &cancel)
             .await
             .map(|(state, _, _)| state)
     }
@@ -992,6 +1059,7 @@ mod tests {
             power: None,
             stall_config: None,
             consecutive_failure_cap: None,
+            turn_timeout: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1182,6 +1250,7 @@ mod tests {
             power: None,
             stall_config: None,
             consecutive_failure_cap: None,
+            turn_timeout: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1233,6 +1302,7 @@ mod tests {
             power: None,
             stall_config: None,
             consecutive_failure_cap: None,
+            turn_timeout: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;

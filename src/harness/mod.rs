@@ -19,7 +19,7 @@ pub use deps::HarnessDeps;
 pub use loop_callback::{LoopCallback, NoopCallback};
 pub use stall::{StallConfig, StallTracker};
 pub use trace_sink::{NoopTraceSink, TraceSink};
-pub use trait_def::{Harness, HarnessError, TurnState};
+pub use trait_def::{Harness, HarnessError, TurnPhase, TurnState};
 
 #[cfg(test)]
 mod tests {

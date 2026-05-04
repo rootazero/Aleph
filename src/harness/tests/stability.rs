@@ -243,13 +243,12 @@ pub(super) fn minimal_deps(
         power: None,
         stall_config: None,
         consecutive_failure_cap: None,
-        // Will be filled in by Task 3:
-        // turn_timeout: None,
+        turn_timeout: None,
     }
 }
 
 use crate::harness::agent::AgentHarness;
-use crate::harness::trait_def::Harness;
+use crate::harness::trait_def::{Harness, HarnessError};
 
 #[tokio::test]
 async fn recording_sink_captures_full_lifecycle() {
@@ -494,4 +493,128 @@ async fn consecutive_total_failure_caps_loop() {
     ).await;
     outcome.expect("must terminate within 2s").expect("Ok exit");
     assert!(harness.hit_limit(), "hit_limit should be true after cap");
+}
+
+use crate::harness::trait_def::TurnPhase;
+
+#[tokio::test]
+async fn think_timeout_fires_with_phase_think() {
+    let provider: Arc<dyn AiProvider> = Arc::new(HangingProvider);
+    let (session, sid) = fresh_session("think-timeout").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.turn_timeout = Some(std::time::Duration::from_millis(200));
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let started = std::time::Instant::now();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        harness.run(&sid, &mut cb, &cancel),
+    ).await.expect("must return within 2s");
+
+    match result {
+        Err(HarnessError::StalledTurn { phase, elapsed }) => {
+            assert_eq!(phase, TurnPhase::Think, "phase must be Think");
+            assert!(elapsed >= std::time::Duration::from_millis(150), "elapsed {elapsed:?}");
+        }
+        other => panic!("expected StalledTurn(Think), got {other:?}"),
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(800),
+        "harness must abort within ~3× timeout, took {:?}",
+        started.elapsed(),
+    );
+}
+
+#[tokio::test]
+async fn act_timeout_fires_with_phase_act_and_tool_name() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider: Arc<dyn AiProvider> = Arc::new(OneShotToolProvider {
+        name: "slow_tool".into(),
+        calls,
+    });
+    let (session, sid) = fresh_session("act-timeout").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(HangingTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.turn_timeout = Some(std::time::Duration::from_millis(200));
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        harness.run(&sid, &mut cb, &cancel),
+    ).await.expect("must return within 2s");
+
+    match result {
+        Err(HarnessError::StalledTurn { phase, .. }) => match phase {
+            TurnPhase::Act { tool_name } => {
+                assert_eq!(tool_name, "slow_tool");
+            }
+            other => panic!("expected Act phase, got {other:?}"),
+        },
+        other => panic!("expected StalledTurn(Act), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn parent_cancel_takes_precedence_over_timeout() {
+    let provider: Arc<dyn AiProvider> = Arc::new(HangingProvider);
+    let (session, sid) = fresh_session("cancel-vs-timeout").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.turn_timeout = Some(std::time::Duration::from_secs(1));
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel_clone = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancel_clone.cancel();
+    });
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        harness.run(&sid, &mut cb, &cancel),
+    ).await.expect("must return within 2s");
+
+    assert!(matches!(result, Err(HarnessError::Cancelled)),
+            "expected Cancelled, got {result:?}");
+}
+
+#[tokio::test]
+async fn outcome_mapping_for_stalled_turn() {
+    let (sink, events) = RecordingTraceSink::new();
+    let provider: Arc<dyn AiProvider> = Arc::new(HangingProvider);
+    let (session, sid) = fresh_session("trace-stalled").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.turn_timeout = Some(std::time::Duration::from_millis(150));
+    deps.trace_sink = Some(sink);
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        harness.run(&sid, &mut cb, &cancel),
+    ).await.expect("must return within 2s");
+
+    let captured = events.lock().unwrap().clone();
+    let session_completed = captured.iter().rev().find_map(|e| match e {
+        LoopTraceEvent::SessionCompleted { outcome, .. } => Some(*outcome),
+        _ => None,
+    }).expect("SessionCompleted must be emitted");
+    assert_eq!(
+        session_completed,
+        crate::harness::trace::LoopTraceSessionOutcome::Cancelled,
+        "StalledTurn should map to Cancelled outcome",
+    );
 }
