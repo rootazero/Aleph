@@ -647,6 +647,15 @@ Related: [[Rust Learning]] [[Dev Environment]]
             md.contains("created: \"2024-04-29\""),
             "expected quoted date, got:\n{md}"
         );
+        // Writer formats only the date (`%Y-%m-%d`), not the time, so the
+        // round-trip truncates to start-of-day UTC: the input
+        // 1714377600 (2024-04-29 08:00:00 UTC) becomes 1714348800
+        // (2024-04-29 00:00:00 UTC). Pin the observed value to catch future
+        // regressions; if the truncation is ever fixed this assertion must
+        // be updated.
+        let parsed = KnowledgeNote::from_markdown("t", &md).expect("round-trip parse");
+        assert_eq!(parsed.created_at, 1714348800);
+        assert_eq!(parsed.updated_at, 1714348800);
     }
 
     #[test]
@@ -661,7 +670,14 @@ updated: 2026-04-01
 - fact
 ";
         let n = KnowledgeNote::from_markdown("t", md).expect("must parse native date");
-        assert!(n.created_at > 0);
+        assert_eq!(
+            n.created_at, 1775001600,
+            "created should be 2026-04-01 00:00:00 UTC"
+        );
+        assert_eq!(
+            n.updated_at, 1775001600,
+            "updated should be 2026-04-01 00:00:00 UTC"
+        );
     }
 
     #[test]
@@ -676,7 +692,14 @@ updated: \"2026-04-01\"
 - fact
 ";
         let n = KnowledgeNote::from_markdown("t", md).expect("must parse quoted date");
-        assert!(n.created_at > 0);
+        assert_eq!(
+            n.created_at, 1775001600,
+            "created should be 2026-04-01 00:00:00 UTC"
+        );
+        assert_eq!(
+            n.updated_at, 1775001600,
+            "updated should be 2026-04-01 00:00:00 UTC"
+        );
     }
 
     #[test]
