@@ -270,6 +270,12 @@ impl AgentHarness {
             .emit_event(session_id, assistant_event)
             .await?;
 
+        // Record activity after Think completes so a long Think doesn't
+        // falsely trip the stall detector on the next iteration.
+        if let Some(ref tracker) = self.stall_tracker {
+            tracker.record_activity().await;
+        }
+
         // 5. If the LLM produced tool_calls, run the Act phase; otherwise
         //    evaluate stop hooks before declaring Done.
         let outcome_for_trace;
@@ -472,6 +478,12 @@ impl AgentHarness {
                     // The error is persisted to session log; the next Think
                     // turn will see it as tool_result(is_error=true).
                 }
+            }
+
+            // Record activity after each tool execution completes so the stall
+            // tracker is reset for each progress event.
+            if let Some(ref tracker) = self.stall_tracker {
+                tracker.record_activity().await;
             }
         }
 

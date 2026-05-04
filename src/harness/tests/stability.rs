@@ -618,3 +618,110 @@ async fn outcome_mapping_for_stalled_turn() {
         "StalledTurn should map to Cancelled outcome",
     );
 }
+
+use crate::harness::stall::StallConfig;
+
+#[tokio::test]
+async fn cross_turn_stall_still_works() {
+    struct SlowTextProvider;
+    impl AiProvider for SlowTextProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async move {
+                // 100ms per LLM call; nothing happens between calls.
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                Ok(ProviderResponse::text_only("...".into()))
+            })
+        }
+        fn name(&self) -> &str { "slow-text" }
+        fn color(&self) -> &str { "#000000" }
+    }
+
+    let provider: Arc<dyn AiProvider> = Arc::new(SlowTextProvider);
+    let (session, sid) = fresh_session("cross-turn-stall").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    // After Task 4, record_activity also fires inside the Think completion
+    // path, so this test specifically exercises the "no Think completion at all"
+    // case. We force that by pre-stalling the tracker via a 50ms budget.
+    deps.stall_config = Some(StallConfig::default()
+        .with_timeout(std::time::Duration::from_millis(50))
+        .with_check_interval(std::time::Duration::from_millis(10)));
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    // Sleep first to age the tracker past its budget BEFORE first turn.
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        harness.run(&sid, &mut cb, &cancel),
+    ).await.expect("must return within 2s");
+
+    assert!(matches!(result, Err(HarnessError::Stalled { .. })),
+            "expected Stalled, got {result:?}");
+}
+
+#[tokio::test]
+async fn long_think_does_not_falsely_trip_stall() {
+    // Provider takes 80ms per Think. Stall budget is 200ms. Model produces
+    // text-only after first turn → Done. Without Task 4 dispersion, the
+    // tracker would be aged 80ms+ at top of next iteration check, but with
+    // dispersion it's reset right after Think.
+    struct EightyMsThinkProvider {
+        n: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl AiProvider for EightyMsThinkProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let n = self.n.clone();
+            Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                let v = n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if v == 0 {
+                    Ok(ProviderResponse {
+                        text: None,
+                        tool_calls: vec![NativeToolCall {
+                            id: "c".into(), name: "ok_x".into(),
+                            arguments: serde_json::json!({}),
+                        }],
+                        thinking: None, thinking_signature: None,
+                        stop_reason: StopReason::ToolUse, usage: None,
+                    })
+                } else {
+                    Ok(ProviderResponse::text_only("done".into()))
+                }
+            })
+        }
+        fn name(&self) -> &str { "80ms" }
+        fn color(&self) -> &str { "#000000" }
+    }
+
+    let provider: Arc<dyn AiProvider> = Arc::new(EightyMsThinkProvider {
+        n: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    });
+    let (session, sid) = fresh_session("no-false-stall").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.stall_config = Some(StallConfig::default()
+        .with_timeout(std::time::Duration::from_millis(200))
+        .with_check_interval(std::time::Duration::from_millis(10)));
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        harness.run(&sid, &mut cb, &cancel),
+    ).await.expect("must finish within 3s");
+
+    result.expect("legitimate two-turn run must succeed without stalling");
+}
