@@ -88,7 +88,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 tags,
             } => {
                 let (category, filename) = split_path(note_path)?;
-                let safe = sanitize_title(&filename);
+                let safe = sanitize_title(&filename)?;
                 // KnowledgeNote.title is the filename (without .md), not a human title.
                 // Human title + summary fold into facts so index.md picks them up.
                 let mut note = KnowledgeNote {
@@ -117,7 +117,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 new_links,
             } => {
                 let (category, filename) = split_path(note_path)?;
-                let safe = sanitize_title(&filename);
+                let safe = sanitize_title(&filename)?;
                 let existing = self.load_existing_or_default(&category, &safe).await?;
                 let mut merged = existing;
                 for f in new_facts {
@@ -140,7 +140,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 reason: _,
             } => {
                 let (category, filename) = split_path(note_path)?;
-                let safe = sanitize_title(&filename);
+                let safe = sanitize_title(&filename)?;
                 let entry = self.store.get_note_index(note_path, self.agent_id).await?;
                 let actual = entry
                     .as_ref()
@@ -165,7 +165,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 evidence_source_ids,
             } => {
                 let (category, filename) = split_path(note_path)?;
-                let safe = sanitize_title(&filename);
+                let safe = sanitize_title(&filename)?;
                 let mut existing = self.load_existing_or_default(&category, &safe).await?;
                 let ts = chrono::Utc::now().format("%Y-%m-%d").to_string();
                 let ev = if evidence_source_ids.is_empty() {
@@ -317,11 +317,12 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             Ok(p) => p,
             Err(_) => return Ok(()),
         };
+        let safe = sanitize_title(&filename)?;
         let disk = self
             .memory_dir
             .join(self.agent_id)
             .join(&category)
-            .join(format!("{}.md", sanitize_title(&filename)));
+            .join(format!("{safe}.md"));
         if tokio::fs::try_exists(&disk)
             .await
             .map_err(|e| AlephError::other(format!("link: stat from: {e}")))?
@@ -343,11 +344,12 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             Ok(p) => p,
             Err(_) => return Ok(()),
         };
+        let safe = sanitize_title(&filename)?;
         let disk = self
             .memory_dir
             .join(self.agent_id)
             .join(&category)
-            .join(format!("{}.md", sanitize_title(&filename)));
+            .join(format!("{safe}.md"));
         if !tokio::fs::try_exists(&disk)
             .await
             .map_err(|e| AlephError::other(format!("supersede: stat old: {e}")))?
@@ -368,7 +370,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
         tokio::fs::write(&disk, &combined)
             .await
             .map_err(|e| AlephError::other(format!("supersede: write: {e}")))?;
-        if let Ok(n) = KnowledgeNote::from_markdown(&sanitize_title(&filename), &combined) {
+        if let Ok(n) = KnowledgeNote::from_markdown(&safe, &combined) {
             self.store.index_note(&n, self.agent_id, &category).await?;
         }
         Ok(())

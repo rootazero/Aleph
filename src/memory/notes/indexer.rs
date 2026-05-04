@@ -197,7 +197,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         category: &str,
         note: &KnowledgeNote,
     ) -> Result<PathBuf, AlephError> {
-        let safe_title = sanitize_title(&note.title);
+        let safe_title = sanitize_title(&note.title)?;
         let path = self
             .memory_dir
             .join(agent_id)
@@ -250,7 +250,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                     suggestion: None,
                 })?;
 
-        let safe_title = sanitize_title(filename);
+        let safe_title = sanitize_title(filename)?;
         let file_path = self
             .memory_dir
             .join(agent_id)
@@ -324,8 +324,8 @@ impl<S: NoteStore> NoteIndexer<S> {
         old_title: &str,
         new_title: &str,
     ) -> Result<(), AlephError> {
-        let safe_old = sanitize_title(old_title);
-        let safe_new = sanitize_title(new_title);
+        let safe_old = sanitize_title(old_title)?;
+        let safe_new = sanitize_title(new_title)?;
 
         // Find the old note to determine its category
         let old_paths = self
@@ -431,7 +431,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                     ),
                     suggestion: None,
                 })?;
-        let safe_title = sanitize_title(filename);
+        let safe_title = sanitize_title(filename)?;
         let file_path = self
             .memory_dir
             .join(agent_id)
@@ -502,7 +502,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                 // to Strengthen semantics rather than silently overwriting
                 // (which would lose existing source_facts and stale the
                 // confidence to whatever the new action emitted).
-                let safe_title = sanitize_title(title);
+                let safe_title = sanitize_title(title)?;
                 let candidate_path = format!("{category}/{safe_title}");
                 if self
                     .store
@@ -568,7 +568,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                             ),
                             suggestion: None,
                         })?;
-                let safe_old = sanitize_title(old_filename);
+                let safe_old = sanitize_title(old_filename)?;
                 let old_file = self
                     .memory_dir
                     .join(agent_id)

@@ -183,7 +183,7 @@ impl DefaultQueryFiler {
         } else {
             gate.proposed_title.clone()
         };
-        let filename = sanitize_title(&raw_title);
+        let filename = sanitize_title(&raw_title)?;
 
         // Build source links from synthesis
         let mut all_links: Vec<String> = synthesis.sources.iter().map(|s| s.path.clone()).collect();

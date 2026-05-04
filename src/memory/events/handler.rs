@@ -60,7 +60,7 @@ impl MemoryCommandHandler {
         match projected {
             Some(fact) => {
                 let category = fact.note_type.to_category_dir();
-                let title = sanitize_title(&fact.id); // use fact_id as stable filename
+                let title = sanitize_title(&fact.id)?; // use fact_id as stable filename
                 let now = chrono::Utc::now().timestamp();
                 let note = KnowledgeNote {
                     title: title.clone(),
@@ -91,7 +91,13 @@ impl MemoryCommandHandler {
             }
             None => {
                 // Fact deleted — find and remove the note file
-                let title = sanitize_title(fact_id);
+                let title = match sanitize_title(fact_id) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::warn!(fact_id, error = %e, "Notes dual-write: skipping delete for unsanitizable fact_id");
+                        return Ok(());
+                    }
+                };
                 // We don't know the agent or category at delete time without re-reading the
                 // first event. Search the index by filename as a best-effort cleanup.
                 // This is intentionally fire-and-forget (errors are logged, not propagated).

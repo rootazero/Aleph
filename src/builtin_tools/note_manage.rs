@@ -178,7 +178,7 @@ impl NoteManageTool {
         validate_category(category)?;
 
         // Ensure directory exists
-        let safe_filename = sanitize_title(filename);
+        let safe_filename = sanitize_title(filename)?;
         let note_dir = self.indexer.memory_dir().join(agent_id).join(category);
         tokio::fs::create_dir_all(&note_dir)
             .await
@@ -281,7 +281,7 @@ impl NoteManageTool {
 
         validate_category(category)?;
 
-        let safe_filename = sanitize_title(filename);
+        let safe_filename = sanitize_title(filename)?;
         let file_path = self
             .indexer
             .memory_dir()
@@ -365,7 +365,7 @@ impl NoteManageTool {
 
         validate_category(category)?;
 
-        let safe_filename = sanitize_title(filename);
+        let safe_filename = sanitize_title(filename)?;
         let note_path = format!("{category}/{safe_filename}");
 
         let new_facts = args.facts.clone().unwrap_or_default();
@@ -519,7 +519,7 @@ impl NoteManageTool {
 
         validate_category(category)?;
 
-        let safe_filename = sanitize_title(filename);
+        let safe_filename = sanitize_title(filename)?;
         let file_path = self
             .indexer
             .memory_dir()

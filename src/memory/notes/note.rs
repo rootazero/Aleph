@@ -305,12 +305,22 @@ fn extract_facts(body: &str) -> Vec<String> {
 ///
 /// Strips path separators, null bytes, and filesystem-unsafe characters
 /// to prevent path traversal attacks from LLM-generated titles.
-pub fn sanitize_title(title: &str) -> String {
-    title
+///
+/// Returns `Err(AlephError::Validation)` if the result is empty / all-dots /
+/// all-whitespace — callers should reject the operation rather than write a
+/// note with an unstable filename.
+pub fn sanitize_title(title: &str) -> Result<String, crate::error::AlephError> {
+    let cleaned: String = title
         .replace(['/', '\\', '\0', ':', '*', '?', '"', '<', '>', '|'], "")
         .replace("..", "")
         .trim()
-        .to_string()
+        .to_string();
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '.' || c.is_whitespace()) {
+        return Err(crate::error::AlephError::Validation(format!(
+            "note title sanitizes to empty: {title:?}"
+        )));
+    }
+    Ok(cleaned)
 }
 
 /// Compute SHA-256 hex digest of content.
@@ -582,12 +592,26 @@ Related: [[Rust Learning]] [[Dev Environment]]
 
     #[test]
     fn sanitize_title_strips_path_traversal() {
-        assert_eq!(sanitize_title("../../etc/passwd"), "etcpasswd");
-        assert_eq!(sanitize_title("normal title"), "normal title");
-        assert_eq!(sanitize_title("has/slash"), "hasslash");
-        assert_eq!(sanitize_title("has\\back"), "hasback");
-        assert_eq!(sanitize_title("a]b*c?d"), "a]bcd");
-        assert_eq!(sanitize_title("  spaces  "), "spaces");
+        assert_eq!(sanitize_title("../../etc/passwd").unwrap(), "etcpasswd");
+        assert_eq!(sanitize_title("normal title").unwrap(), "normal title");
+        assert_eq!(sanitize_title("has/slash").unwrap(), "hasslash");
+        assert_eq!(sanitize_title("has\\back").unwrap(), "hasback");
+        assert_eq!(sanitize_title("a]b*c?d").unwrap(), "a]bcd");
+        assert_eq!(sanitize_title("  spaces  ").unwrap(), "spaces");
+    }
+
+    #[test]
+    fn sanitize_title_rejects_empty_result() {
+        assert!(sanitize_title("").is_err());
+        assert!(sanitize_title("..").is_err());
+        assert!(sanitize_title("///").is_err());
+        assert!(sanitize_title("   ").is_err());
+    }
+
+    #[test]
+    fn sanitize_title_returns_ok_for_normal_input() {
+        assert_eq!(sanitize_title("rust learning").unwrap(), "rust learning");
+        assert_eq!(sanitize_title("../etc/passwd").unwrap(), "etcpasswd");
     }
 
     #[test]
