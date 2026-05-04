@@ -66,7 +66,7 @@ impl MemoryCommandHandler {
                 let title = match sanitize_title(&fact.id) {
                     Ok(t) => t,
                     Err(e) => {
-                        tracing::warn!(fact_id = %fact.id, error = %e, "Notes dual-write: skipping write for unsanitizable fact_id");
+                        tracing::warn!(note_path = %fact.id, error = %e, "Notes dual-write: skipping write for unsanitizable fact_id");
                         return Ok(());
                     }
                 };

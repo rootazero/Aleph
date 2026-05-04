@@ -327,7 +327,7 @@ impl MemoryEventRow {
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    fact_id = %self.fact_id,
+                    note_path = %self.fact_id,
                     seq = self.seq,
                     event_type = %self.event_type,
                     "skipping unrecognized memory event during replay"

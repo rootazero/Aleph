@@ -215,7 +215,7 @@ mod tests {
         Arc::new(StateDatabase::in_memory().unwrap())
     }
 
-    /// Helper: build a FactCreated envelope with a given timestamp.
+    /// Helper: build a NoteCreated envelope with a given timestamp.
     fn make_created(fact_id: &str, seq: u64, ts: i64) -> MemoryEventEnvelope {
         let mut env = MemoryEventEnvelope::new(
             fact_id.into(),
@@ -237,7 +237,7 @@ mod tests {
         env
     }
 
-    /// Helper: build a FactContentUpdated envelope.
+    /// Helper: build a NoteContentUpdated envelope.
     fn make_content_updated(
         fact_id: &str,
         seq: u64,
@@ -260,7 +260,7 @@ mod tests {
         env
     }
 
-    /// Helper: build a FactInvalidated envelope.
+    /// Helper: build a NoteInvalidated envelope.
     fn make_invalidated(fact_id: &str, seq: u64, ts: i64) -> MemoryEventEnvelope {
         let mut env = MemoryEventEnvelope::new(
             fact_id.into(),
@@ -277,7 +277,7 @@ mod tests {
         env
     }
 
-    /// Helper: build a FactAccessed envelope.
+    /// Helper: build a NoteAccessed envelope.
     fn make_accessed(fact_id: &str, seq: u64, ts: i64, count: u32) -> MemoryEventEnvelope {
         let mut env = MemoryEventEnvelope::new(
             fact_id.into(),
@@ -564,18 +564,18 @@ mod tests {
 
     #[test]
     fn test_describe_event_all_variants() {
-        // FactCreated
+        // NoteCreated
         let env = make_created("f", 1, 1000);
         let desc = describe_event(&env);
         assert!(desc.contains("Fact created"));
 
-        // FactContentUpdated
+        // NoteContentUpdated
         let env = make_content_updated("f", 2, 2000, "new stuff");
         let desc = describe_event(&env);
         assert!(desc.contains("Content updated"));
         assert!(desc.contains("correction"));
 
-        // FactInvalidated
+        // NoteInvalidated
         let env = make_invalidated("f", 3, 3000);
         let desc = describe_event(&env);
         assert!(desc.contains("Invalidated"));

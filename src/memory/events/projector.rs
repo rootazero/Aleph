@@ -229,7 +229,7 @@ mod tests {
     use crate::memory::context::MemoryCategory;
     use crate::memory::events::*;
 
-    /// Helper: create a `MemoryEventEnvelope` wrapping a `FactCreated` event.
+    /// Helper: create a `MemoryEventEnvelope` wrapping a `NoteCreated` event.
     fn make_created_envelope(fact_id: &str, seq: u64, ts: i64) -> MemoryEventEnvelope {
         MemoryEventEnvelope {
             id: 0,
@@ -291,7 +291,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    // --- fold: single FactCreated --------------------------------------------
+    // --- fold: single NoteCreated --------------------------------------------
 
     #[test]
     fn test_fold_single_created() {
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(fact.temporal_scope, TemporalScope::default());
     }
 
-    // --- fold: FactCreated + FactContentUpdated ------------------------------
+    // --- fold: NoteCreated + NoteContentUpdated ------------------------------
 
     #[test]
     fn test_fold_created_then_content_updated() {
@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(fact.created_at, 1000); // unchanged
     }
 
-    // --- fold: FactCreated + FactInvalidated ---------------------------------
+    // --- fold: NoteCreated + NoteInvalidated ---------------------------------
 
     #[test]
     fn test_fold_created_then_invalidated() {
@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(fact.decay_invalidated_at, Some(3000));
     }
 
-    // --- fold: FactCreated + FactDeleted → None ------------------------------
+    // --- fold: NoteCreated + NoteDeleted → None ------------------------------
 
     #[test]
     fn test_fold_created_then_deleted() {
@@ -431,7 +431,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    // --- fold: FactCreated + FactAccessed ------------------------------------
+    // --- fold: NoteCreated + NoteAccessed ------------------------------------
 
     #[test]
     fn test_fold_created_then_accessed() {
@@ -471,7 +471,7 @@ mod tests {
         assert_eq!(fact.last_accessed_at, Some(6000));
     }
 
-    // --- fold: FactCreated + Invalidated + Restored --------------------------
+    // --- fold: NoteCreated + Invalidated + Restored --------------------------
 
     #[test]
     fn test_fold_created_invalidated_restored() {
@@ -507,7 +507,7 @@ mod tests {
         assert!(fact.decay_invalidated_at.is_none());
     }
 
-    // --- fold: FactMigrated --------------------------------------------------
+    // --- fold: NoteMigrated --------------------------------------------------
 
     #[test]
     fn test_fold_fact_migrated() {
@@ -559,7 +559,7 @@ mod tests {
         assert_eq!(fact.last_accessed_at, Some(800));
     }
 
-    // --- fold: FactConsolidated ----------------------------------------------
+    // --- fold: NoteConsolidated ----------------------------------------------
 
     #[test]
     fn test_fold_consolidated() {
@@ -589,7 +589,7 @@ mod tests {
         assert_eq!(fact.updated_at, 9000);
     }
 
-    // --- fold: FactMetadataUpdated -------------------------------------------
+    // --- fold: NoteMetadataUpdated -------------------------------------------
 
     #[test]
     fn test_fold_metadata_updated_path_only() {
@@ -671,7 +671,7 @@ mod tests {
 
     #[test]
     fn test_fold_mutation_before_created_is_skipped() {
-        // A content-update without a preceding FactCreated should not panic
+        // A content-update without a preceding NoteCreated should not panic
         let events = vec![wrap(
             "fact-orphan",
             1,

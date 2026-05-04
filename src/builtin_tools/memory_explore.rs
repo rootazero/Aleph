@@ -164,7 +164,7 @@ impl MemoryExploreTool {
                 Ok(Some(emb)) => fact.embedding = Some(emb),
                 Ok(None) => {}
                 Err(e) => {
-                    warn!(fact_id = %fact.id, error = %e, "Failed to load embedding for seed note, skipping");
+                    warn!(note_path = %fact.id, error = %e, "Failed to load embedding for seed note, skipping");
                 }
             }
         }

@@ -72,7 +72,7 @@ impl EventSourcingMigration {
     /// For each fact:
     /// 1. Check if events already exist (`get_latest_seq > 0` --> skip)
     /// 2. Serialize the full fact as a JSON snapshot
-    /// 3. Create a `FactMigrated` event with `seq=1`, `actor=Migration`,
+    /// 3. Create a `NoteMigrated` event with `seq=1`, `actor=Migration`,
     ///    `timestamp=fact.created_at`
     /// 4. Batch-append in chunks of 100
     ///
@@ -230,7 +230,7 @@ mod tests {
         if let MemoryEvent::NoteMigrated { snapshot, .. } = &events[0].event {
             assert_eq!(snapshot["is_valid"], false);
         } else {
-            panic!("Expected FactMigrated");
+            panic!("Expected NoteMigrated");
         }
     }
 

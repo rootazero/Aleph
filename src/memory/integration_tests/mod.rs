@@ -122,7 +122,7 @@ mod event_sourcing {
         // Verify event stored
         let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event.event_type_tag(), "FactCreated");
+        assert_eq!(events[0].event.event_type_tag(), "NoteCreated");
         assert_eq!(events[0].seq, 1);
 
         // Rebuild from events
@@ -145,7 +145,7 @@ mod event_sourcing {
 
         let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
         assert_eq!(events.len(), 2);
-        assert_eq!(events[1].event.event_type_tag(), "FactContentUpdated");
+        assert_eq!(events[1].event.event_type_tag(), "NoteContentUpdated");
 
         // 3. Record access (Pulse)
         handler
@@ -207,7 +207,7 @@ mod event_sourcing {
         assert_eq!(explanation.fact_id, fact_id);
         assert_eq!(explanation.events.len(), 5);
         // First event should describe creation
-        assert!(explanation.events[0].action.contains("FactCreated"));
+        assert!(explanation.events[0].action.contains("NoteCreated"));
 
         // 9. Delete
         handler
