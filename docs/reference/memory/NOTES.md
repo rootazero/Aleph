@@ -401,22 +401,35 @@ Category-specific frontmatter comes from `frontmatter_template(category, title, 
 
 Commands in `src/memory/events/commands.rs`:
 
-- `CreateFactCommand` — emits `MemoryEvent::FactCreated` at seq 1.
-- `UpdateContentCommand` — rebuilds current content via `EventProjector::fold_events_to_fact`, then emits `FactContentUpdated { old_content, new_content, reason }`.
-- `InvalidateFactCommand` — soft delete; emits `FactInvalidated { reason }`.
-- `RestoreFactCommand` — revives an invalidated fact; emits `FactRestored { new_strength }`.
-- `RecordAccessCommand` — emits `FactAccessed { query, relevance_score, used_in_response, new_access_count }` with `EventActor::Agent`.
-- `ConsolidateCommand` — emits `FactConsolidated { source_fact_ids, consolidated_content }`.
-- `DeleteFactCommand` — hard delete; emits `FactDeleted { reason }`.
+- `CreateNoteCommand` — emits `MemoryEvent::NoteCreated` at seq 1.
+- `UpdateContentCommand` — rebuilds current content via `EventProjector::fold_events_to_note`, then emits `NoteContentUpdated { old_content, new_content, reason }`.
+- `InvalidateNoteCommand` — soft delete; emits `NoteInvalidated { reason }`.
+- `RestoreNoteCommand` — revives an invalidated note; emits `NoteRestored { new_strength }`.
+- `RecordNoteAccessCommand` — emits `NoteAccessed { query, relevance_score, used_in_response, new_access_count }` with `EventActor::Agent`.
+- `ConsolidateCommand` — emits `NoteConsolidated { source_note_paths, consolidated_content }`.
+- `DeleteNoteCommand` — hard delete; emits `NoteDeleted { reason }`.
 
-> The former `ApplyDecayCommand` (bulk `StrengthDecayed` batch) and `TierTransitioned` event were removed as part of the memory sovereignty cleanup. Strength/tier/confidence are no longer part of the fact model; aging and salience are expressed through retrieval scoring stages and prompt-layer judgement instead of persisted per-fact fields.
+> The former `ApplyDecayCommand` (bulk `StrengthDecayed` batch) and `TierTransitioned` event were removed as part of the memory sovereignty cleanup. Strength/tier/confidence are no longer part of the note model; aging and salience are expressed through retrieval scoring stages and prompt-layer judgement instead of persisted per-note fields.
 
-The command names still contain "Fact" for historical reasons — the events originally drove a separate `facts` table that has since been deleted (see §8's `drop_obsolete_facts_tables`). The commands are retained as the audit log, and `MemoryCommandHandler` in `src/memory/events/handler.rs` now projects each event into the notes layer via `project_to_notes`:
+Pre-Phase-R2 events written with the legacy `Fact*` variant names and the
+`fact_id` payload field still deserialize correctly because every variant
+carries `#[serde(alias = "Fact...")]` and every `note_path` field carries
+`#[serde(alias = "fact_id")]`. Likewise `source_note_paths` carries
+`#[serde(alias = "source_fact_ids")]`. Writes only emit the new names.
+
+The SQL column `fact_id` on the `memory_events` table is preserved as schema
+metadata for audit-row stability — `MemoryEventEnvelope.fact_id` mirrors the
+inner event's `note_path` and only exists at the storage edge. Likewise the
+`MemoryEvent::fact_id()` accessor is retained as public API and returns the
+underlying `note_path` value.
+
+`MemoryCommandHandler` in `src/memory/events/handler.rs` projects each event
+into the notes layer via `project_to_notes`:
 
 1. Append the `MemoryEventEnvelope` to the SQLite event log (`append_memory_event`).
-2. Fold all events for the affected `fact_id` into a projected fact via `EventProjector::fold_events_to_fact`.
-3. On a present projection, write a `KnowledgeNote { title: sanitize_title(fact_id), category: fact.note_type.to_category_dir(), facts: [fact.content], ... }` via `NoteIndexer::write_note`, then `index_note`.
-4. On a `None` projection (fact deleted), scan `CATEGORY_DIRS` for a file named `{fact_id}.md` and remove both file and index entry.
+2. Fold all events for the affected note path into a projected note via `EventProjector::fold_events_to_note`.
+3. On a present projection, write a `KnowledgeNote { title: sanitize_title(note_path), category: note.note_type.to_category_dir(), facts: [note.content], ... }` via `NoteIndexer::write_note`, then `index_note`.
+4. On a `None` projection (note deleted), scan `CATEGORY_DIRS` for a file named `{note_path}.md` and remove both file and index entry.
 
 This is the "notes dual-write": the event log remains the audit-and-explain source of truth while markdown files are the primary read surface. See `RETRIEVAL.md` §12 for how the event log powers `explain_fact` and time-travel queries.
 
