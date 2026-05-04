@@ -53,7 +53,7 @@ pub trait NoteOrientation: Send + Sync {
 
     async fn rotate_log_if_needed(&self, agent_id: &str) -> Result<bool, AlephError>;
 
-    /// Mark a note dirty. A subsequent `rebuild_index` (or next `record_ingest`) flushes.
+    /// Mark a note dirty. A subsequent `rebuild_index` (or `refresh_index_after_ingest`) flushes.
     fn invalidate(&self, agent_id: &str, note_path: &str);
 }
 
@@ -160,7 +160,6 @@ impl<S: NoteStore + Send + Sync + 'static> NoteOrientation for FsNoteOrientation
     }
 
     async fn record_ingest(&self, agent_id: &str, entry: LogEntry) -> Result<(), AlephError> {
-        self.rebuild_index(agent_id).await?;
         self.append(agent_id, entry).await
     }
 
