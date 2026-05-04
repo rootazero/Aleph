@@ -43,7 +43,55 @@ pub async fn vector_retrieve(
 
 `retrieve` embeds the query once, infers `dim` from the embedding length, delegates to `NoteStore::hybrid_search_notes`, and maps each `NoteSearchResult` to a `ScoredFact` via `to_scored_fact(agent_id)`. `vector_retrieve` skips FTS and calls `vector_search_notes_with_content`. The return type is `Vec<ScoredFact>` where `ScoredFact { fact: MemoryFact, score: f32 }` — the scoring pipeline consumes this directly.
 
-## 2. Hybrid Search Algorithm
+## 2. Working Memory Assembler
+
+Before retrieval results reach the LLM, they pass through the `WorkingMemoryAssembler` (`src/memory/assembler/mod.rs`). `HybridAssembler` is the production implementation:
+
+```rust
+#[async_trait]
+pub trait WorkingMemoryAssembler: Send + Sync {
+    async fn assemble(
+        &self,
+        query: &str,
+        agent_id: &str,
+        session_id: Option<&str>,
+        budget: AssemblyBudget,
+        filter: FactSourceFilter,
+    ) -> Result<MemoryEnvelope, AlephError>;
+}
+```
+
+The assembly pipeline:
+
+1. **Retrieve** — calls `NoteFactRetrieval::retrieve` for hybrid search
+2. **Re-rank** — optionally runs `AiProviderReranker` for LLM-based re-ranking
+3. **Hydrate** — converts `NoteSearchResult`s into `EnvelopeItem`s
+4. **Extend** — applies registered `MemoryExtension::on_retrieve` hooks
+5. **Render** — serializes to XML via `render_with(&env, RenderStyle::Xml)`
+
+The `MemoryEnvelope` structure:
+
+```rust
+pub struct MemoryEnvelope {
+    pub schema_version: String,      // "1"
+    pub generated_at: i64,
+    pub query: String,
+    pub agent_id: String,
+    pub session_id: Option<String>,
+    pub slots: Vec<EnvelopeSlot>,    // Each slot has a SlotKind
+    pub meta: EnvelopeMeta,
+}
+```
+
+Slots are typed by `SlotKind`:
+- `RelevantNotes` — retrieved notes from hybrid search
+- `CuratedHot` — entries from `MEMORY.md` hot snapshot
+- `UserProfile` — synthesized user model
+- `Extension` — added by third-party extensions
+
+The rendered XML is injected as a `role=user` message containing a fenced `<MemoryEnvelope>` block. All user-supplied fields are `xml_escape`d. See [MEMORY_SYSTEM.md §5](../MEMORY_SYSTEM.md) for the full assembler architecture.
+
+## 3. Hybrid Search Algorithm
 
 `SqliteMemoryBackend::hybrid_search_notes` in `src/memory/store/sqlite/notes.rs` is the concrete implementation behind `NoteStore::hybrid_search_notes`. It takes the query embedding, the raw query text, an `agent_id`, a `dim_hint`, and a `limit`, and returns `Vec<NoteSearchResult>` with full content loaded from disk.
 
@@ -74,7 +122,7 @@ The algorithm has four steps:
 
 Both lists over-fetch `limit * 2` to give RRF enough signal for the final top-k pick.
 
-## 3. Bridge to Legacy Types
+## 4. Bridge to Legacy Types
 
 `NoteSearchResult` lives in `src/memory/notes/search_result.rs`. It is the hybrid-search native type and the bridge that lets notes-sourced results flow into code that still types against the legacy `MemoryFact` / `ScoredFact` DTOs:
 
@@ -115,7 +163,7 @@ impl NoteSearchResult {
 
 Downstream consumers still receive `ScoredFact<MemoryFact>`, but the path is now `note://{category}/{filename}` and `is_valid` is hard-coded to `true`. Category tags ride along as `source_memory_ids` on the fact. The legacy `tier` / `scope` / `strength` / `confidence` assignments were removed as part of the memory sovereignty cleanup — those fields no longer exist on `MemoryFact`.
 
-## 4. Scoring Pipeline
+## 5. Scoring Pipeline
 
 ### 4.1 Stages Overview
 
@@ -187,7 +235,7 @@ The `ratio.max(1.0)` clamp means short facts get `log2(1) = 0` → factor 1.0 (n
 
 Source: `src/memory/scoring_pipeline/stages/hard_min_score.rs`. Pure filter — no score mutation, no re-ordering. `candidates.into_iter().filter(|c| c.score >= threshold).collect()`. Threshold is `config.hard_min_score` (default 0.35). Placed after all multiplicative stages so a candidate that started at 0.9 but got hammered by decay + length penalties can still be dropped. Surviving order is preserved for `mmr_diversity`.
 
-## 5. Reranker (Optional, Not Wired)
+## 6. Reranker (Optional, Not Wired)
 
 `src/memory/rerank/` implements HTTP cross-encoder reranking against five providers. The trait (from `provider.rs`):
 
@@ -216,11 +264,11 @@ pub trait RerankProvider: Send + Sync {
 
 Config (`RerankConfig` in `provider.rs`) carries `enabled: bool` (default `false`), `provider`, `api_base`, `api_key` (vault-backed, never serialized), `models: Vec<String>`, `timeout_ms: 5000`, `rerank_weight: 0.6`. The `blend_scores` helper computes `final = rerank_weight * rerank_score + (1 - rerank_weight) * original_score` for sorted pairing. **Implemented but not wired into `NoteFactRetrieval` as of this doc; see `src/memory/note_retrieval/hybrid.rs` for the expected integration point.**
 
-## 6. Query Expander (Optional, Not Wired)
+## 7. Query Expander (Optional, Not Wired)
 
 `src/memory/query_expander.rs` exports `fn expand(query: &str) -> ExpandedQuery { original, bm25_query }`. When the input contains any CJK Unified Ideograph (`\u{4E00}..=\u{9FFF}`), the expander appends known Chinese synonyms (`喜欢 → 偏好 倾向 爱好`, `问题 → bug 错误 故障 缺陷`, and ten other groups from the static `SYNONYMS` table) to the BM25 query. The `original` field is left verbatim for vector search. No config key — the synonym table is hardcoded. **Not wired** into `NoteFactRetrieval` yet; hybrid search currently passes the raw query to both the FTS and embedding lookups.
 
-## 7. Embedding Provider
+## 8. Embedding Provider
 
 ### 7.1 Trait
 
@@ -256,7 +304,7 @@ From `src/config/types/memory.rs`:
 
 **Multi-dimension rationale.** The notes store keeps three parallel virtual tables — `notes_vec_768`, `notes_vec_1024`, `notes_vec_1536` — so that switching between Ollama (768), SiliconFlow (1024), and OpenAI (1536) does not invalidate existing embeddings. A query carries its `dim` hint, looks up in the matching table, and never mixes spaces.
 
-## 8. Context Assembly
+## 9. Context Assembly
 
 ### 8.1 `ContextComptroller`
 
@@ -264,7 +312,7 @@ From `src/config/types/memory.rs`:
 
 `ContextComptroller::arbitrate(results, budget)` sorts the input facts by `similarity_score` descending, then greedy-packs into a `TokenBudget::new(total)` using a crude `text.len() / 4` token estimate. Facts that don't fit bump `tokens_saved`. The return is `ArbitratedContext { facts, tokens_saved }`. Redundancy detection by embedding similarity is wired in the struct but the current `arbitrate` path uses pure budget trimming — `similarity_threshold` is consulted by future dedup logic; the inline comment notes raw-memory fold was removed.
 
-## 9. `AiMemoryRetriever`
+## 10. `AiMemoryRetriever`
 
 `src/memory/ai_retrieval.rs` is an LLM-in-the-loop alternative to vector retrieval. It sends a list of `MemoryCandidate { id, user_input, ai_output, timestamp }` (truncated) to an `AiProvider` with a strict JSON system prompt and parses `AiMemoryResult { selected_memory_ids, reasoning }` out. The request/result types:
 
@@ -281,7 +329,7 @@ pub struct AiMemoryResult {
 
 `retrieve(query, candidates, exclude_inputs)` filters current-session inputs out, caps at `max_candidates`, issues one LLM call under a `tokio::time::timeout(self.timeout)`. On success, it intersects the returned IDs with the candidate set. On error or timeout, it falls back to `fallback_selection` (most recent N). Construction: `AiMemoryRetriever::with_policy(provider, &AiRetrievalPolicy { max_candidates, fallback_count, timeout_ms, content_truncate_length })`. Used when the runtime wants semantic selection rather than similarity — gated behind an `AiRetrievalPolicy` config flag.
 
-## 10. RippleTask
+## 11. RippleTask
 
 `src/memory/ripple/` performs local knowledge-graph expansion around seed facts by BFS over vector similarity.
 
@@ -304,7 +352,7 @@ pub struct RippleResult {
 
 `RippleTask::explore(seed_facts)` maintains a `HashSet<String>` of visited IDs seeded from the input, then iterates up to `max_hops`. At each hop, for every fact with an embedding it calls `NoteStore::vector_search_notes_with_content(embedding, agent_id, dim, max_facts_per_hop)`, converts hits to `MemoryFact` with `similarity_score` attached, drops anything already visited, and keeps those above `similarity_threshold` as the next level. BFS stops when `current_level` is empty. `explore_tunnels` is currently a stub returning `Vec::new()` — the previous `graph_nodes` / `graph_edges` cross-domain edges were deprecated, and tunnel discovery will migrate to `notes_links` in a future change.
 
-## 11. Memory Tools
+## 12. Memory Tools
 
 ### 11.1 `memory_search`
 
@@ -334,7 +382,7 @@ Execution: embed query → `NoteStore::vector_search_notes_with_content` for thr
 
 Source: `src/builtin_tools/recall_context.rs`. Retrieves pre-compression conversation raw chunks. Args: `query` (string for the LLM's reference, not used as a filter) and `max_results` (default 3). Execution: builds `path_prefix = "aleph://session/{session_id}/raw/"` and calls `RawMemoryStore::get_raw_by_path_prefix(prefix, "default", max_results)`. Output: `RecallContextResult { fragments: Vec<RecalledFragment { content, relevance_score, source_path }>, query }`. This is how the LLM fetches specific code snippets or error text that existed in the transcript before session compression. See `RAW_MEMORY.md` §7.2 for the raw-memory store contract this tool sits on top of.
 
-## 12. Audit and Explainability
+## 13. Audit and Explainability
 
 `src/memory/audit.rs` defines the shape of every audit record written about a memory fact.
 
@@ -356,7 +404,7 @@ Explainability is served by two derived views. `FactExplanation { fact_id, conte
 
 **Explain path.** To trace why a note was returned or dropped: look up the fact by `fact_id`, materialize `Vec<AuditEntry>` ordered by `created_at`, fold them into a `FactExplanation`, and for each `Accessed` event inspect the `relevance_score` and `query`. For forgetting, materialize a `ForgettingExplanation` from the final `Invalidated` entry. This is the read side of memory observability; the write side — event-sourced note mutations — is covered in `NOTES.md` §12.
 
-## 13. Reflection / Synthesis (Spec 2)
+## 14. Reflection / Synthesis (Spec 2)
 
 `MemoryReflector` at `src/memory/reflector/` composes the hybrid assembler with an LLM synthesis pass. Given a natural-language query, it:
 
@@ -372,7 +420,7 @@ Internal-caller entry: `MemoryReflector::reflect(query, ReflectOpts) -> Result<S
 
 See `docs/superpowers/specs/2026-04-13-memory-evolution-spec2-reflector-design.md`.
 
-## 14. Context Fencing + Injection Modes (Spec 3)
+## 15. Context Fencing + Injection Modes (Spec 3)
 
 Recalled memory is injected into the LLM prompt as an independent `role=user` message containing a fenced XML envelope:
 
@@ -402,7 +450,7 @@ The legacy `MemoryContext` type, `memory_context_from_envelope` adapter, and `Me
 
 See `docs/superpowers/specs/2026-04-13-memory-evolution-spec3-fencing-modes-design.md`.
 
-## 15. Pluggable Memory Extensions (Spec 4)
+## 16. Pluggable Memory Extensions (Spec 4)
 
 The memory pipeline exposes three hook points — `on_retrieve`, `on_capture`, and `produce` — through the `MemoryExtension` trait. First-party Aleph code registers implementations in-process; third-party plugins register over MCP through the existing plugin manifest by declaring a `[memory]` section. Dispatch semantics: `on_retrieve` broadcasts (2s per-plugin timeout); `on_capture` chains with fail-safe Block on error/timeout (3s); `produce` runs per-plugin with 30s timeout under a dedicated scheduler. See `docs/reference/memory/EXTENSIONS.md` for full details.
 
@@ -416,7 +464,7 @@ The memory pipeline exposes three hook points — `on_retrieve`, `on_capture`, a
 - **`ContextComptroller.token_budget` is the last gate.** Default 100 000. If tool callers over-fetch, shrink the budget before shrinking `max_results` — the comptroller keeps the highest-scoring facts and reports `tokens_saved`.
 - **`similarity_threshold` on `RippleConfig` controls graph reach.** 0.7 is the BFS floor. Raise for tighter clusters, lower to let ripples travel further.
 
-## 16. Cross-session summary retrieval (Spec B)
+## 17. Cross-session summary retrieval (Spec B)
 
 The `session_search` tool returns one synthesized excerpt per matched session,
 plus 0-2 raw evidence quotes for grounding. Summaries come from three

@@ -66,10 +66,29 @@ From `src/memory/store/raw_memory.rs`:
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RawMemorySource {
+    // Legacy — keep for backward compatibility.
     SessionCompressed,
     Transcript,
     ToolOutput,
     Attachment,
+
+    // Spec 1 — Memory Capture Hooks.
+    PreCompress,
+    Delegation { child_agent_id: String },
+    SessionEnd { reason: SessionEndReason },
+
+    // Phase 3 self-evolution — user-correction signal.
+    Correction { severity: String, suggested_rule: Option<String> },
+}
+
+/// Sub-reason for `RawMemorySource::SessionEnd`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionEndReason {
+    /// Gateway close or idle timeout.
+    Disconnect,
+    /// LLM called the `session_complete` tool.
+    TaskDone,
 }
 
 /// A raw memory record — ephemeral data consumed by CompressionService.
@@ -88,7 +107,22 @@ pub struct RawMemory {
 }
 ```
 
-`RawMemory::new(content, source)` defaults `agent_id = "default"`, generates a UUID, and stamps `created_at`. Builder methods `with_agent`, `with_session`, `with_path`, `with_layer`, and `with_attachment_text` decorate the record before insertion. `RawMemorySource::as_str` / `from_str` map the enum to/from the on-disk `source` column.
+`RawMemory::new(content, source)` defaults `agent_id = "default"`, generates a UUID, and stamps `created_at`. Builder methods `with_agent`, `with_session`, `with_path`, `with_layer`, and `with_attachment_text` decorate the record before insertion.
+
+**Persistence format.** `RawMemorySource` uses `to_persisted()` → `(&'static str, Option<String>)` for SQLite storage, where the optional JSON detail carries variant-specific data:
+
+| Variant | Token | Detail JSON |
+|---|---|---|
+| `SessionCompressed` | `"session_compressed"` | `None` |
+| `Transcript` | `"transcript"` | `None` |
+| `ToolOutput` | `"tool_output"` | `None` |
+| `Attachment` | `"attachment"` | `None` |
+| `PreCompress` | `"pre_compress"` | `None` |
+| `Delegation { child_agent_id }` | `"delegation"` | `{ "child_agent_id": "..." }` |
+| `SessionEnd { reason }` | `"session_end"` | `{ "reason": "disconnect" \| "task_done" }` |
+| `Correction { severity, suggested_rule }` | `"correction"` | `{ "severity": "...", "suggested_rule": "..." }` |
+
+`from_persisted(token, detail)` reconstructs the enum. Unknown tokens fall through to `ToolOutput` for backward compatibility.
 
 ## 5. `RawMemoryStore` Trait
 
@@ -97,10 +131,15 @@ Trait defined in `src/memory/store/raw_memory.rs`; implemented by the SQLite bac
 | Method | Purpose |
 |---|---|
 | `async fn insert_raw_memory(&self, raw: &RawMemory) -> Result<(), AlephError>` | Persist a single record. Used by every writer in §6. |
+| `async fn insert_raw_memory_or_ignore(&self, raw: &RawMemory) -> Result<(), AlephError>` | Like `insert_raw_memory`, but silently discards unique-constraint violations (first writer wins). SQLite backend uses `INSERT OR IGNORE`. |
 | `async fn get_unprocessed_raw_memories(&self, agent_id: &str, limit: usize) -> Result<Vec<RawMemory>, AlephError>` | Batch-fetch pending rows, ordered by `created_at ASC`. Backed by the `idx_raw_unprocessed` partial index. |
 | `async fn mark_raw_as_processed(&self, ids: &[String]) -> Result<usize, AlephError>` | Flip rows to `is_processed = 1` after `CompressionService` consumes them. Returns affected row count. |
 | `async fn count_unprocessed(&self, agent_id: &str) -> Result<usize, AlephError>` | Backpressure / scheduling signal for compression triggers. |
+| `async fn unprocessed_agent_ids(&self) -> Result<Vec<String>, AlephError>` | Distinct `agent_id` values with pending work. Used by `CompressionService` to fan out across agents. |
 | `async fn get_raw_by_path_prefix(&self, path_prefix: &str, agent_id: &str, limit: usize) -> Result<Vec<RawMemory>, AlephError>` | Path-scoped lookup used by session-context tooling (e.g. `aleph://session/{id}/`). |
+| `async fn get_raw_by_path_prefix_since(&self, path_prefix: &str, agent_id: &str, since_created_at: i64, limit: usize) -> Result<Vec<RawMemory>, AlephError>` | Like `get_raw_by_path_prefix`, but only returns rows with `created_at > since`. Used by watermark-based consumers. |
+| `async fn find_by_path(&self, path: &str, agent_id: &str) -> Result<Option<RawMemory>, AlephError>` | Exact-match lookup by `(agent_id, path)`. SQLite backend uses indexed exact-match SELECT. |
+| `async fn get_raw_by_source(&self, source: RawMemorySource, agent_id: &str, limit: usize) -> Result<Vec<RawMemory>, AlephError>` | Filter by source type. Used for cross-session retrieval of specific source kinds. |
 
 ## 6. Writers
 
@@ -175,4 +214,4 @@ Operational implication: if rows must be truly deleted (privacy, disk pressure),
 ## See Also
 
 - [Notes (L1)](NOTES.md) — where processed raw rows land after distillation.
-- [Retrieval](RETRIEVAL.md) §11.4 — `recall_context` tool wiring and session-scoped lookup semantics.
+- [Retrieval](RETRIEVAL.md) §12.4 — `recall_context` tool wiring and session-scoped lookup semantics.

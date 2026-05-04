@@ -399,37 +399,51 @@ Category-specific frontmatter comes from `frontmatter_template(category, title, 
 
 ## 12. Event Sourcing
 
-Commands in `src/memory/events/commands.rs`:
+Every mutation to a note is captured as an immutable `MemoryEvent` wrapped in a `MemoryEventEnvelope`. This provides an audit trail, enables time-travel queries, and powers `explain_fact`.
 
-- `CreateNoteCommand` — emits `MemoryEvent::NoteCreated` at seq 1.
-- `UpdateContentCommand` — rebuilds current content via `EventProjector::fold_events_to_note`, then emits `NoteContentUpdated { old_content, new_content, reason }`.
-- `InvalidateNoteCommand` — soft delete; emits `NoteInvalidated { reason }`.
-- `RestoreNoteCommand` — revives an invalidated note; emits `NoteRestored { new_strength }`.
-- `RecordNoteAccessCommand` — emits `NoteAccessed { query, relevance_score, used_in_response, new_access_count }` with `EventActor::Agent`.
-- `ConsolidateCommand` — emits `NoteConsolidated { source_note_paths, consolidated_content }`.
-- `DeleteNoteCommand` — hard delete; emits `NoteDeleted { reason }`.
+### 12.1 Event Types
 
-> The former `ApplyDecayCommand` (bulk `StrengthDecayed` batch) and `TierTransitioned` event were removed as part of the memory sovereignty cleanup. Strength/tier/confidence are no longer part of the note model; aging and salience are expressed through retrieval scoring stages and prompt-layer judgement instead of persisted per-note fields.
+Events are classified as **Skeleton** (structural mutations, persisted immediately) or **Pulse** (high-frequency observations, buffered before persist):
+
+| Event | Type | Payload |
+|---|---|---|
+| `NoteCreated` | Skeleton | `note_path, content, note_type, path, namespace, agent, source, source_memory_ids` |
+| `NoteContentUpdated` | Skeleton | `note_path, old_content, new_content, reason` |
+| `NoteMetadataUpdated` | Skeleton | `note_path, field, old_value, new_value` |
+| `NoteAccessed` | Pulse | `note_path, query, relevance_score, used_in_response, new_access_count` |
+| `NoteInvalidated` | Skeleton | `note_path, reason, actor` |
+| `NoteRestored` | Skeleton | `note_path` |
+| `NoteDeleted` | Skeleton | `note_path, reason` |
+| `NoteConsolidated` | Skeleton | `note_path, source_note_paths, consolidated_content` |
+| `NoteMigrated` | Skeleton | `note_path, snapshot` |
 
 Pre-Phase-R2 events written with the legacy `Fact*` variant names and the
 `fact_id` payload field still deserialize correctly because every variant
 carries `#[serde(alias = "Fact...")]` and every `note_path` field carries
-`#[serde(alias = "fact_id")]`. Likewise `source_note_paths` carries
-`#[serde(alias = "source_fact_ids")]`. Writes only emit the new names.
+`#[serde(alias = "fact_id")]`.
 
-The SQL column `fact_id` on the `memory_events` table is preserved as schema
-metadata for audit-row stability — `MemoryEventEnvelope.fact_id` mirrors the
-inner event's `note_path` and only exists at the storage edge. Likewise the
-`MemoryEvent::fact_id()` accessor is retained as public API and returns the
-underlying `note_path` value.
+### 12.2 Commands
 
-`MemoryCommandHandler` in `src/memory/events/handler.rs` projects each event
-into the notes layer via `project_to_notes`:
+Commands in `src/memory/events/commands.rs`:
+
+- `CreateNoteCommand` — emits `MemoryEvent::NoteCreated` at seq 1.
+- `UpdateContentCommand` — rebuilds current content via `EventProjector::fold_events_to_note`, then emits `NoteContentUpdated`.
+- `InvalidateNoteCommand` — soft delete; emits `NoteInvalidated`.
+- `RestoreNoteCommand` — revives an invalidated note; emits `NoteRestored`.
+- `RecordNoteAccessCommand` — emits `NoteAccessed` with `EventActor::Agent`.
+- `ConsolidateCommand` — emits `NoteConsolidated`.
+- `DeleteNoteCommand` — hard delete; emits `NoteDeleted`.
+
+> The former `ApplyDecayCommand` (bulk `StrengthDecayed` batch) and `TierTransitioned` event were removed as part of the memory sovereignty cleanup. Strength/tier/confidence are no longer part of the note model; aging and salience are expressed through retrieval scoring stages and prompt-layer judgement instead of persisted per-note fields.
+
+### 12.3 Projection
+
+`MemoryCommandHandler` in `src/memory/events/handler.rs` projects each event into the notes layer:
 
 1. Append the `MemoryEventEnvelope` to the SQLite event log (`append_memory_event`).
 2. Fold all events for the affected note path into a projected note via `EventProjector::fold_events_to_note`.
-3. On a present projection, write a `KnowledgeNote { title: sanitize_title(note_path), category: note.note_type.to_category_dir(), facts: [note.content], ... }` via `NoteIndexer::write_note`, then `index_note`.
-4. On a `None` projection (note deleted), scan `CATEGORY_DIRS` for a file named `{note_path}.md` and remove both file and index entry.
+3. On a present projection, write a `KnowledgeNote` via `NoteIndexer::write_note`, then `index_note`.
+4. On a `None` projection (note deleted), scan `CATEGORY_DIRS` for the file and remove both file and index entry.
 
 This is the "notes dual-write": the event log remains the audit-and-explain source of truth while markdown files are the primary read surface. See `RETRIEVAL.md` §12 for how the event log powers `explain_fact` and time-travel queries.
 
