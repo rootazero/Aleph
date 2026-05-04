@@ -15,6 +15,25 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// C2.8 origin tagging: ensure every fact line carries an inline provenance
+/// marker. If the LLM already emitted one (matching the canonical regex),
+/// pass through unchanged; otherwise append a permissive
+/// `<!-- origin: inferred, inferred: true -->` marker so every stored fact
+/// is downstream-classifiable.
+fn ensure_origin_marker(line: &str) -> String {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"<!--\s*(?:src:[^,]+,\s*)?origin:\s*(?:raw_source|prior_note|inferred|legacy)\s*,\s*inferred:\s*(?:true|false)\s*-->",
+        )
+        .unwrap()
+    });
+    if RE.is_match(line) {
+        line.to_string()
+    } else {
+        format!("{line} <!-- origin: inferred, inferred: true -->")
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ApplyError {
     #[error("hash conflict on {path}: expected {expected}, got {actual}")]
@@ -95,7 +114,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                     title: safe.clone(),
                     category: category.clone(),
                     tags: tags.clone(),
-                    facts: facts.clone(),
+                    facts: facts.iter().map(|f| ensure_origin_marker(f)).collect(),
                     links: links.clone(),
                     created_at: chrono::Utc::now().timestamp(),
                     updated_at: chrono::Utc::now().timestamp(),
@@ -120,8 +139,9 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 let safe = sanitize_title(&filename)?;
                 let existing = self.load_existing_or_default(&category, &safe).await?;
                 let mut merged = existing;
-                for f in new_facts {
-                    if !merged.facts.contains(f) {
+                for raw in new_facts {
+                    let f = ensure_origin_marker(raw);
+                    if !merged.facts.contains(&f) {
                         merged.facts.push(f.clone());
                     }
                 }
@@ -407,6 +427,27 @@ mod tests {
     use super::*;
     use crate::memory::notes::indexer::NoteIndexer;
     use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+    #[test]
+    fn ensure_origin_marker_idempotent_when_present() {
+        let s = "- claim <!-- src: raw/x, origin: raw_source, inferred: false -->";
+        assert_eq!(ensure_origin_marker(s), s);
+    }
+
+    #[test]
+    fn ensure_origin_marker_patches_missing_to_inferred() {
+        let s = "- bare claim";
+        assert_eq!(
+            ensure_origin_marker(s),
+            "- bare claim <!-- origin: inferred, inferred: true -->"
+        );
+    }
+
+    #[test]
+    fn ensure_origin_marker_idempotent_for_inferred_origin() {
+        let s = "- gist <!-- origin: inferred, inferred: true -->";
+        assert_eq!(ensure_origin_marker(s), s);
+    }
 
     async fn fresh() -> (
         tempfile::TempDir,
