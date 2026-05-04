@@ -7,12 +7,12 @@
 ### R1. 大脑与四肢绝对分离 (Brain-Limb Separation)
 
 - **禁令**: 严禁在 `src` 中直接调用特定平台系统 API (AppKit, Vision, CoreGraphics, windows-rs)
-- **原则**: 核心层只定义"能力契约 (Trait)"，物理实现由 Desktop Bridge (Tauri-Rust) 通过 IPC 提供
+- **原则**: 核心层只定义"能力契约 (Trait)"，物理实现由原生 Bridge (Swift / 其他) 通过 IPC 提供
 
 ### R2. UI 逻辑唯一源 (Single Source of UI Truth)
 
-- **禁令**: 严禁在 Tauri 中实现具有业务逻辑的复杂设置页面、表单或列表
-- **原则**: 所有复杂业务 UI 在 Leptos (WASM) 中实现。原生外壳仅负责窗口容器、原生动画和菜单栏
+- **禁令**: 严禁在原生 Bridge 中实现具有业务逻辑的设置页面、表单或列表
+- **原则**: 所有复杂业务 UI 在 Leptos (WASM) Panel 中实现，原生 Bridge 仅负责系统 API 调用与桥接
 
 ### R3. 核心轻量化 (Core Minimalism)
 
@@ -22,27 +22,22 @@
 
 ### R4. Interface 层禁止业务逻辑 (I/O-Only Interfaces)
 
-- **禁令**: 禁止在 App/Bot/CLI 中处理数据持久化、记忆检索或任务规划逻辑
+- **禁令**: 禁止在 Channel/Bot/CLI/Panel 中处理数据持久化、记忆检索或任务规划逻辑
 - **原则**: Interface 层是"纯 I/O"— 输入转为 JSON-RPC 发给 Server，响应渲染给用户
 
-### R5. 菜单栏优先，按需展窗 (Menu Bar First)
+### R5. AI 主动到达 (AI Comes to You)
 
-- **默认形态**: macOS 无 Dock 图标，菜单栏常驻，Halo 浮窗为主要快捷交互入口
-- **允许窗口**: 复杂场景（设置、长对话、调试面板）应使用正常窗口，不要为"隐形"牺牲可用性
-- **原则**: 轻量入口 + 按需展开，而非"绝对无窗口"
+- **原则**: 减少用户切换上下文的成本，AI 通过用户已有的工作通道主动提供帮助
+- **实现**: 多端推送（Telegram / Slack / Email / 桌面通知 / Panel 浮窗等）、内联建议、订阅式 Daemon 触发
+- **边界**: 不打扰用户 (不抢焦点、不弹模态对话框)，但不要因此拒绝必要的交互入口
 
-### R6. AI 主动到达 (AI Comes to You)
+### R6. 一核多端 (One Core, Many Channels)
 
-- **原则**: 减少用户切换上下文的成本，AI 尽量在用户当前工作环境中提供帮助
-- **实现**: Halo 浮窗、通知、内联建议等
-- **边界**: 不打扰用户 (不抢焦点、不弹模态对话框)，但不要因此拒绝提供必要的 UI
+- **形态**: Aleph 是常驻后台服务（aleph-server），UI 不是必需品；所有终端用户体验都由 Channel/Panel 通过 JSON-RPC 与 Core 对话产生
+- **原则**: Rust Core 是唯一大脑，多端通道（CLI / Bot / WebChat Panel / 原生 Bridge）只负责 I/O 与渲染，不参与业务推理
+- **备注**: 这已在 R1、R2、R4 中体现，此条作为产品层面的重申
 
-### R7. 一核多端 (One Core, Many Shells)
-
-- **原则**: Rust Core 是唯一大脑，UI 通过 Leptos/WASM 统一，原生壳只负责窗口容器和系统集成
-- **备注**: 这已在 R1 和 R2 中体现，此条作为产品层面的重申
-
-### R8. LLM 主权原则 (LLM Sovereignty)
+### R7. LLM 主权原则 (LLM Sovereignty)
 
 - **禁令**: 严禁用确定性代码替代 LLM 擅长的推理判断（意图识别、任务评估、路由决策、内容分类等）
 - **原则**: 极简系统 + 强大 prompt = 释放 LLM 全部推理能力。把复杂留给模型，把简单留给系统
@@ -50,20 +45,20 @@
 - **赋能层（保留）**: Gateway 多端触达、Memory 持久记忆、Daemon 事件感知、Soul 人格、Provider 多厂商、Tool 执行能力、MCP 外部服务、Extension 插件生态、上下文压缩、安全硬过滤
 - **越俎代庖（禁止）**: Intent Detection 规则引擎、POE 目标验证管线、多层 Tool Filter、Context Aggregation 多层合并、Dispatcher 意图分析
 
-### R9. 工具即一切 (Everything is a Tool)
+### R8. 工具即一切 (Everything is a Tool)
 
 - **原则**: Aleph 自身的所有可配置操作都应暴露为工具，让 LLM 通过自然语言对话完成配置
 - **实现**: Agent 管理（创建/切换/删除）、Provider 配置、Channel 配置、Skill/MCP 安装卸载、Daemon 订阅规则 — 全部是 Tool
 - **核心循环**: `用户自然语言 → LLM 理解意图 → LLM 选择工具 → 工具执行 → 结果返回 LLM → LLM 回复用户`
 - **效果**: 对话即管理面板。用户无需学习配置文件或 API，自然语言驱动一切
 
-### R10. 智慧在 Prompt 中 (Intelligence Lives in the Prompt)
+### R9. 智慧在 Prompt 中 (Intelligence Lives in the Prompt)
 
 - **原则**: 被移除的中间件的"智慧"不是丢弃，而是迁移到 system prompt 模板中
 - **实现**: 主循环的 LLM 一次调用自然覆盖所有判断（意图理解 + 工具选择 + 安全评估 + 完成度判断）
 - **效果**: 零额外 LLM 调用，零中间件税，模型推理能力完整释放
 
-### R11. 薄 Harness 哲学，笨循环编排核心 (Thin Harness, Dumb Loop)
+### R10. 薄 Harness 哲学，笨循环编排核心 (Thin Harness, Dumb Loop)
 
 > *"If you're not the model, you're the harness."* — Vivek Trivedy
 > *"Models get stronger → harness gets thinner."* — Anthropic
@@ -83,7 +78,7 @@
   1. 这是脚手架还是认知？认知必须搬到 prompt
   2. 模型升级一档还需要它吗？不需要就删
   3. 现在有几个真实消费者？零个就撤回
-- **关联**: 是 R3 (核心轻量化) + R8 (LLM 主权) + R10 (智慧在 Prompt) 在 Agent Harness 工程上的具体落地。详见 [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md)
+- **关联**: 是 R3 (核心轻量化) + R7 (LLM 主权) + R9 (智慧在 Prompt) 在 Agent Harness 工程上的具体落地。详见 [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md)
 
 ---
 
