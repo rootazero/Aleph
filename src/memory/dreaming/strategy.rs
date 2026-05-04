@@ -23,6 +23,7 @@ impl DreamStrategy {
         match self {
             Self::Consolidate => vec![
                 "note_lint",
+                "note_review",
                 "note_consolidate",
                 "note_drift",
                 "index_refresher",
@@ -30,12 +31,13 @@ impl DreamStrategy {
             ],
             Self::Synthesize => vec![
                 "note_lint",
+                "note_review",
                 "note_consolidate",
                 "note_synthesis",
                 "skill_distill",
                 "daily_digest",
             ],
-            Self::Conserve => vec!["note_lint", "index_refresher"],
+            Self::Conserve => vec!["note_lint", "note_review", "index_refresher"],
         }
     }
 }
@@ -61,6 +63,7 @@ mod tests {
             names,
             vec![
                 "note_lint",
+                "note_review",
                 "note_consolidate",
                 "note_drift",
                 "index_refresher",
@@ -76,6 +79,7 @@ mod tests {
             names,
             vec![
                 "note_lint",
+                "note_review",
                 "note_consolidate",
                 "note_synthesis",
                 "skill_distill",
@@ -87,7 +91,7 @@ mod tests {
     #[test]
     fn conserve_stages() {
         let names = DreamStrategy::Conserve.stage_names();
-        assert_eq!(names, vec!["note_lint", "index_refresher"]);
+        assert_eq!(names, vec!["note_lint", "note_review", "index_refresher"]);
     }
 
     #[test]

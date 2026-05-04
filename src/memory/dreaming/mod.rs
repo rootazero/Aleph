@@ -134,6 +134,7 @@ impl DreamPipeline {
         let stage_list: Vec<Box<dyn DreamStage>> = match strategy {
             DreamStrategy::Consolidate => vec![
                 Box::new(stages::NoteLintStage),
+                Box::new(stages::NoteReviewStage::default()),
                 Box::new(stages::NoteConsolidateStage),
                 Box::new(stages::NoteDriftStage),
                 Box::new(stages::IndexRefresherStage),
@@ -141,6 +142,7 @@ impl DreamPipeline {
             ],
             DreamStrategy::Synthesize => vec![
                 Box::new(stages::NoteLintStage),
+                Box::new(stages::NoteReviewStage::default()),
                 Box::new(stages::NoteConsolidateStage),
                 Box::new(stages::NoteSynthesisStage),
                 Box::new(stages::SkillDistillStage {
@@ -159,6 +161,7 @@ impl DreamPipeline {
             ],
             DreamStrategy::Conserve => vec![
                 Box::new(stages::NoteLintStage),
+                Box::new(stages::NoteReviewStage::default()),
                 Box::new(stages::IndexRefresherStage),
             ],
         };
@@ -730,6 +733,7 @@ mod tests {
             names,
             vec![
                 "note_lint",
+                "note_review",
                 "note_consolidate",
                 "note_drift",
                 "index_refresher",
@@ -747,6 +751,7 @@ mod tests {
             names,
             vec![
                 "note_lint",
+                "note_review",
                 "note_consolidate",
                 "note_synthesis",
                 "skill_distill",
@@ -773,6 +778,6 @@ mod tests {
         let cfg = crate::config::types::memory::DreamingConfig::default();
         let pipeline = DreamPipeline::from_strategy(DreamStrategy::Conserve, &cfg);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
-        assert_eq!(names, vec!["note_lint", "index_refresher"]);
+        assert_eq!(names, vec!["note_lint", "note_review", "index_refresher"]);
     }
 }
