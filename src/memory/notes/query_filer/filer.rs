@@ -211,6 +211,7 @@ impl DefaultQueryFiler {
             confidence: 1.0,
             severity: crate::memory::notes::Severity::Low,
             source_facts: Vec::new(),
+            ..Default::default()
         };
 
         self.indexer.write_note(agent_id, "query", &note).await?;

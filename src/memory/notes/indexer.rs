@@ -371,6 +371,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                 confidence: 1.0,
                 severity: Severity::Low,
                 source_facts: Vec::new(),
+                ..Default::default()
             }
         };
 
@@ -625,6 +626,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                     confidence: *confidence,
                     severity: *severity,
                     source_facts: source_facts.clone(),
+                    ..Default::default()
                 };
                 self.write_note(agent_id, category, &note).await?;
             }
@@ -703,6 +705,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                     confidence: *confidence,
                     severity: *severity,
                     source_facts: source_facts.clone(),
+                    ..Default::default()
                 };
                 self.write_note(agent_id, category, &note).await?;
             }

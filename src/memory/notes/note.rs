@@ -25,6 +25,19 @@ pub enum Severity {
     Critical,
 }
 
+/// Governance status of a note. Used by Phase C2 supersession / contradiction
+/// handling. `Active` is the default so legacy notes (no `status:` in
+/// frontmatter) behave exactly as before.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[schemars(rename_all = "lowercase")]
+pub enum NoteStatus {
+    #[default]
+    Active,
+    Deprecated,
+    Contradicted,
+}
+
 /// YAML frontmatter parsed from the top of a markdown note.
 #[derive(Debug, Deserialize, Serialize)]
 struct Frontmatter {
@@ -42,6 +55,12 @@ struct Frontmatter {
     severity: Severity,
     #[serde(default)]
     source_facts: Vec<String>,
+    #[serde(default)]
+    status: NoteStatus,
+    #[serde(default)]
+    supersedes: Vec<String>,
+    #[serde(default)]
+    superseded_by: Vec<String>,
 }
 
 /// Accept a YAML date field as either a quoted string, a native YAML date
@@ -107,6 +126,15 @@ pub struct KnowledgeNote {
     /// Source synthesis-note paths or raw-memory IDs that produced this note.
     /// Empty for hand-authored / legacy notes.
     pub source_facts: Vec<String>,
+    /// Governance status. `Active` for legacy notes. Phase C2 supersession /
+    /// contradiction handling sets this to `Deprecated` or `Contradicted`.
+    pub status: NoteStatus,
+    /// Note paths this note supersedes (i.e. this note replaces them).
+    /// Empty for legacy / non-superseding notes.
+    pub supersedes: Vec<String>,
+    /// Note paths that supersede this note (i.e. they replace this one).
+    /// Empty for legacy / non-superseded notes.
+    pub superseded_by: Vec<String>,
 }
 
 impl Default for KnowledgeNote {
@@ -123,6 +151,9 @@ impl Default for KnowledgeNote {
             confidence: 1.0,
             severity: Severity::Low,
             source_facts: Vec::new(),
+            status: NoteStatus::default(),
+            supersedes: Vec::new(),
+            superseded_by: Vec::new(),
         }
     }
 }
@@ -155,6 +186,9 @@ impl KnowledgeNote {
             confidence: frontmatter.confidence,
             severity: frontmatter.severity,
             source_facts: frontmatter.source_facts,
+            status: frontmatter.status,
+            supersedes: frontmatter.supersedes,
+            superseded_by: frontmatter.superseded_by,
         })
     }
 
@@ -186,6 +220,20 @@ impl KnowledgeNote {
         out.push_str(&format!(
             "source_facts: {}\n",
             yaml_inline_array(&self.source_facts)
+        ));
+        let status_str = match self.status {
+            NoteStatus::Active => "active",
+            NoteStatus::Deprecated => "deprecated",
+            NoteStatus::Contradicted => "contradicted",
+        };
+        out.push_str(&format!("status: {status_str}\n"));
+        out.push_str(&format!(
+            "supersedes: {}\n",
+            yaml_inline_array(&self.supersedes)
+        ));
+        out.push_str(&format!(
+            "superseded_by: {}\n",
+            yaml_inline_array(&self.superseded_by)
         ));
         out.push_str("---\n\n");
 
@@ -407,6 +455,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn note_status_default_active_for_legacy() {
+        let md = "---\ncategory: skill\ntags: []\ncreated: \"2026-04-29\"\nupdated: \"2026-04-29\"\n---\n\n- f\n";
+        let n = KnowledgeNote::from_markdown("legacy", md).unwrap();
+        assert_eq!(n.status, NoteStatus::Active);
+        assert!(n.supersedes.is_empty());
+        assert!(n.superseded_by.is_empty());
+    }
+
+    #[test]
+    fn note_status_round_trip_contradicted() {
+        let n = KnowledgeNote {
+            title: "x".into(),
+            category: "preference".into(),
+            facts: vec!["body".into()],
+            status: NoteStatus::Contradicted,
+            supersedes: vec!["preference/old".into()],
+            superseded_by: vec!["preference/new".into()],
+            ..Default::default()
+        };
+        let md = n.to_markdown();
+        assert!(md.contains("status: contradicted"));
+        assert!(md.contains("supersedes: [preference/old]"));
+        assert!(md.contains("superseded_by: [preference/new]"));
+
+        let parsed = KnowledgeNote::from_markdown("x", &md).unwrap();
+        assert_eq!(parsed.status, NoteStatus::Contradicted);
+        assert_eq!(parsed.supersedes, vec!["preference/old".to_string()]);
+        assert_eq!(parsed.superseded_by, vec!["preference/new".to_string()]);
+    }
+
+    #[test]
     fn severity_default_is_low_for_backward_compat() {
         let s: Severity = Default::default();
         assert_eq!(s, Severity::Low);
@@ -490,6 +569,7 @@ mod tests {
             confidence: 0.85,
             severity: Severity::High,
             source_facts: vec!["synthesis/syn-1".into()],
+            ..Default::default()
         };
         let md = n.to_markdown();
         assert!(md.contains("confidence: 0.85"), "missing confidence:\n{md}");
@@ -517,6 +597,7 @@ mod tests {
             confidence: 1.0,
             severity: Severity::Low,
             source_facts: vec![],
+            ..Default::default()
         };
         let md = n.to_markdown();
         assert!(md.contains("confidence: 1"), "missing confidence:\n{md}");
