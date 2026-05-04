@@ -6,7 +6,21 @@
 use async_trait::async_trait;
 
 use crate::error::AlephError;
-use crate::memory::notes::KnowledgeNote;
+use crate::memory::notes::{FactProvenance, KnowledgeNote};
+
+/// One row from `notes_review_queue` — async LLM review pending decision.
+#[derive(Debug, Clone)]
+pub struct ReviewQueueRow {
+    pub id: String,
+    pub agent_id: String,
+    pub candidate_json: String,
+    pub severity: String,
+    pub confidence: f32,
+    pub reason: String,
+    pub status: String,
+    pub retry_count: i64,
+    pub created_at: i64,
+}
 
 /// Lightweight index entry for a knowledge note (no full content).
 #[derive(Debug, Clone)]
@@ -160,6 +174,82 @@ pub trait NoteStore: Send + Sync {
     async fn relink_unresolved(&self, agent_id: &str) -> Result<usize, AlephError> {
         let _ = agent_id;
         Ok(0)
+    }
+
+    // -----------------------------------------------------------------
+    // Phase C2.9.2 governance: per-fact provenance + async review queue.
+    // Default impls return empty/no-op so existing test mocks keep
+    // compiling; the real bodies live on `SqliteMemoryBackend`.
+    // -----------------------------------------------------------------
+
+    /// Replace stored provenance rows for `(agent_id, note_path)` with `provs`,
+    /// one row per fact in declaration order.
+    async fn upsert_provenance(
+        &self,
+        agent_id: &str,
+        note_path: &str,
+        provs: &[FactProvenance],
+    ) -> Result<(), AlephError> {
+        let _ = (agent_id, note_path, provs);
+        Ok(())
+    }
+
+    /// Read all stored provenance rows for `(agent_id, note_path)`, ordered by
+    /// fact_idx ascending.
+    async fn get_provenance(
+        &self,
+        agent_id: &str,
+        note_path: &str,
+    ) -> Result<Vec<FactProvenance>, AlephError> {
+        let _ = (agent_id, note_path);
+        Ok(Vec::new())
+    }
+
+    /// Enqueue a candidate for async LLM review. Returns the new queue row id.
+    async fn enqueue_review(
+        &self,
+        agent_id: &str,
+        candidate_json: &str,
+        severity: &str,
+        confidence: f32,
+        reason: &str,
+    ) -> Result<String, AlephError> {
+        let _ = (agent_id, candidate_json, severity, confidence, reason);
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
+
+    /// List pending review rows older than `earlier_than` (epoch seconds),
+    /// scoped by agent.
+    async fn list_pending_review(
+        &self,
+        agent_id: &str,
+        earlier_than: i64,
+    ) -> Result<Vec<ReviewQueueRow>, AlephError> {
+        let _ = (agent_id, earlier_than);
+        Ok(Vec::new())
+    }
+
+    /// Mark a queued review as decided (status + actor recorded), keeping the
+    /// row in `notes_review_queue` until `archive_review` moves it.
+    async fn mark_review_decided(
+        &self,
+        queue_id: &str,
+        new_status: &str,
+        decision_actor: &str,
+    ) -> Result<(), AlephError> {
+        let _ = (queue_id, new_status, decision_actor);
+        Ok(())
+    }
+
+    /// Move a decided review row from `notes_review_queue` to
+    /// `notes_review_archive` atomically.
+    async fn archive_review(
+        &self,
+        queue_id: &str,
+        final_status: &str,
+    ) -> Result<(), AlephError> {
+        let _ = (queue_id, final_status);
+        Ok(())
     }
 }
 

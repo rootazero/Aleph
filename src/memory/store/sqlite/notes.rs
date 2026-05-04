@@ -12,8 +12,8 @@ use rusqlite::OptionalExtension;
 use std::collections::{HashSet, VecDeque};
 
 use crate::error::AlephError;
-use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
-use crate::memory::notes::KnowledgeNote;
+use crate::memory::notes::store::{NoteIndexEntry, NoteStore, ReviewQueueRow};
+use crate::memory::notes::{FactProvenance, KnowledgeNote, ProvenanceOrigin};
 
 use super::vec;
 use super::SqliteMemoryBackend;
@@ -56,6 +56,29 @@ fn body_text_sha256(body: &str) -> String {
     let mut h = Sha256::new();
     h.update(body.as_bytes());
     format!("{:x}", h.finalize())
+}
+
+/// Stable string encoding of `ProvenanceOrigin` for the `notes_provenance.origin`
+/// column. Mirrors the literals parsed by `extract_provenance_markers` so a
+/// round-trip read+write is identity.
+fn provenance_origin_to_str(origin: &ProvenanceOrigin) -> &'static str {
+    match origin {
+        ProvenanceOrigin::RawSource => "raw_source",
+        ProvenanceOrigin::PriorNote => "prior_note",
+        ProvenanceOrigin::Inferred => "inferred",
+        ProvenanceOrigin::Legacy => "legacy",
+    }
+}
+
+/// Inverse of `provenance_origin_to_str`. Unknown values fall back to `Legacy`
+/// so a foreign writer cannot poison reads.
+fn provenance_origin_from_str(s: &str) -> ProvenanceOrigin {
+    match s {
+        "raw_source" => ProvenanceOrigin::RawSource,
+        "prior_note" => ProvenanceOrigin::PriorNote,
+        "inferred" => ProvenanceOrigin::Inferred,
+        _ => ProvenanceOrigin::Legacy,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +237,42 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("index_note fts meta upsert: {e}")))?;
             tx.commit()
                 .map_err(|e| AlephError::config(format!("index_note fts tx commit: {e}")))?;
+        }
+
+        // Persist per-fact provenance for governance / review (Phase C2.9.2).
+        // Inlined under the existing connection guard rather than calling
+        // `self.upsert_provenance(...)` so we don't drop and re-acquire the
+        // connection mutex mid-write. An empty `fact_provenance` (legacy notes)
+        // is fine: the DELETE clears any stale rows and the loop is a no-op.
+        conn.execute(
+            "DELETE FROM notes_provenance WHERE agent_id = ?1 AND note_path = ?2",
+            params![agent_id, path],
+        )
+        .map_err(|e| AlephError::config(format!("index_note prov delete: {e}")))?;
+        let now_ts = chrono::Utc::now().timestamp();
+        for (idx, p) in note.fact_provenance.iter().enumerate() {
+            let origin_str = provenance_origin_to_str(&p.origin);
+            let source_kind: Option<&str> = match p.origin {
+                ProvenanceOrigin::RawSource => Some("raw"),
+                ProvenanceOrigin::PriorNote => Some("note"),
+                _ => None,
+            };
+            conn.execute(
+                "INSERT INTO notes_provenance \
+                 (agent_id, note_path, fact_idx, origin, source_kind, source_id, inferred, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    agent_id,
+                    path,
+                    idx as i64,
+                    origin_str,
+                    source_kind,
+                    p.source_id,
+                    p.inferred as i64,
+                    now_ts,
+                ],
+            )
+            .map_err(|e| AlephError::config(format!("index_note prov insert: {e}")))?;
         }
 
         Ok(())
@@ -861,6 +920,201 @@ impl NoteStore for SqliteMemoryBackend {
         }
         Ok(updated)
     }
+
+    // -----------------------------------------------------------------
+    // Phase C2.9.2 governance: per-fact provenance + async review queue.
+    // -----------------------------------------------------------------
+
+    async fn upsert_provenance(
+        &self,
+        agent_id: &str,
+        note_path: &str,
+        provs: &[FactProvenance],
+    ) -> Result<(), AlephError> {
+        let conn = lock_conn!(self)?;
+
+        conn.execute(
+            "DELETE FROM notes_provenance WHERE agent_id = ?1 AND note_path = ?2",
+            params![agent_id, note_path],
+        )
+        .map_err(|e| AlephError::config(format!("upsert_provenance delete: {e}")))?;
+
+        let now_ts = chrono::Utc::now().timestamp();
+        for (idx, p) in provs.iter().enumerate() {
+            let origin_str = provenance_origin_to_str(&p.origin);
+            let source_kind: Option<&str> = match p.origin {
+                ProvenanceOrigin::RawSource => Some("raw"),
+                ProvenanceOrigin::PriorNote => Some("note"),
+                _ => None,
+            };
+            conn.execute(
+                "INSERT INTO notes_provenance \
+                 (agent_id, note_path, fact_idx, origin, source_kind, source_id, inferred, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    agent_id,
+                    note_path,
+                    idx as i64,
+                    origin_str,
+                    source_kind,
+                    p.source_id,
+                    p.inferred as i64,
+                    now_ts,
+                ],
+            )
+            .map_err(|e| AlephError::config(format!("upsert_provenance insert: {e}")))?;
+        }
+        Ok(())
+    }
+
+    async fn get_provenance(
+        &self,
+        agent_id: &str,
+        note_path: &str,
+    ) -> Result<Vec<FactProvenance>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT origin, source_id, inferred FROM notes_provenance \
+                 WHERE agent_id = ?1 AND note_path = ?2 \
+                 ORDER BY fact_idx ASC",
+            )
+            .map_err(|e| AlephError::config(format!("get_provenance prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![agent_id, note_path], |row| {
+                let origin: String = row.get(0)?;
+                let source_id: Option<String> = row.get(1)?;
+                let inferred: i64 = row.get(2)?;
+                Ok(FactProvenance {
+                    origin: provenance_origin_from_str(&origin),
+                    source_id,
+                    inferred: inferred != 0,
+                })
+            })
+            .map_err(|e| AlephError::config(format!("get_provenance query: {e}")))?;
+
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| AlephError::config(format!("get_provenance row: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    async fn enqueue_review(
+        &self,
+        agent_id: &str,
+        candidate_json: &str,
+        severity: &str,
+        confidence: f32,
+        reason: &str,
+    ) -> Result<String, AlephError> {
+        let conn = lock_conn!(self)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        conn.execute(
+            "INSERT INTO notes_review_queue \
+             (id, agent_id, candidate_json, severity, confidence, reason, status, retry_count, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', 0, ?7)",
+            params![id, agent_id, candidate_json, severity, confidence, reason, now_ts],
+        )
+        .map_err(|e| AlephError::config(format!("enqueue_review insert: {e}")))?;
+
+        Ok(id)
+    }
+
+    async fn list_pending_review(
+        &self,
+        agent_id: &str,
+        earlier_than: i64,
+    ) -> Result<Vec<ReviewQueueRow>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, agent_id, candidate_json, severity, confidence, reason, \
+                        status, retry_count, created_at \
+                 FROM notes_review_queue \
+                 WHERE agent_id = ?1 AND status = 'pending' AND created_at < ?2 \
+                 ORDER BY created_at ASC",
+            )
+            .map_err(|e| AlephError::config(format!("list_pending_review prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![agent_id, earlier_than], |row| {
+                Ok(ReviewQueueRow {
+                    id: row.get(0)?,
+                    agent_id: row.get(1)?,
+                    candidate_json: row.get(2)?,
+                    severity: row.get(3)?,
+                    confidence: row.get::<_, f64>(4)? as f32,
+                    reason: row.get(5)?,
+                    status: row.get(6)?,
+                    retry_count: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            })
+            .map_err(|e| AlephError::config(format!("list_pending_review query: {e}")))?;
+
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| AlephError::config(format!("list_pending_review row: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    async fn mark_review_decided(
+        &self,
+        queue_id: &str,
+        new_status: &str,
+        decision_actor: &str,
+    ) -> Result<(), AlephError> {
+        let conn = lock_conn!(self)?;
+        let now_ts = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE notes_review_queue \
+             SET status = ?1, decision_actor = ?2, decided_at = ?3 \
+             WHERE id = ?4",
+            params![new_status, decision_actor, now_ts, queue_id],
+        )
+        .map_err(|e| AlephError::config(format!("mark_review_decided update: {e}")))?;
+        Ok(())
+    }
+
+    async fn archive_review(
+        &self,
+        queue_id: &str,
+        final_status: &str,
+    ) -> Result<(), AlephError> {
+        let conn = lock_conn!(self)?;
+        // Wrap INSERT + DELETE in a single transaction so a crash mid-archive
+        // cannot leave a row in both tables (or in neither).
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("archive_review tx begin: {e}")))?;
+        let now_ts = chrono::Utc::now().timestamp();
+
+        tx.execute(
+            "INSERT INTO notes_review_archive \
+             (id, agent_id, candidate_json, final_status, reason, created_at, archived_at) \
+             SELECT id, agent_id, candidate_json, ?1, reason, created_at, ?2 \
+             FROM notes_review_queue WHERE id = ?3",
+            params![final_status, now_ts, queue_id],
+        )
+        .map_err(|e| AlephError::config(format!("archive_review insert: {e}")))?;
+
+        tx.execute(
+            "DELETE FROM notes_review_queue WHERE id = ?1",
+            params![queue_id],
+        )
+        .map_err(|e| AlephError::config(format!("archive_review delete: {e}")))?;
+
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("archive_review tx commit: {e}")))?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1344,6 +1598,52 @@ mod tests {
             count, 1,
             "FTS row must be rebuilt after remove+recreate even with identical body"
         );
+    }
+
+    #[tokio::test]
+    async fn upsert_provenance_writes_one_row_per_fact() {
+        use crate::memory::notes::{FactProvenance, ProvenanceOrigin};
+        let temp = std::env::temp_dir().join(format!("aleph_prov_{}", uuid::Uuid::new_v4()));
+        let db = SqliteMemoryBackend::new(&temp).unwrap();
+
+        let provs = vec![
+            FactProvenance {
+                origin: ProvenanceOrigin::RawSource,
+                source_id: Some("raw/x".into()),
+                inferred: false,
+            },
+            FactProvenance {
+                origin: ProvenanceOrigin::Inferred,
+                source_id: None,
+                inferred: true,
+            },
+        ];
+        db.upsert_provenance("default", "preference/p", &provs)
+            .await
+            .unwrap();
+
+        let rows = db.get_provenance("default", "preference/p").await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].source_id.as_deref(), Some("raw/x"));
+        assert!(rows[1].inferred);
+    }
+
+    #[tokio::test]
+    async fn enqueue_and_list_review_pending() {
+        let temp = std::env::temp_dir().join(format!("aleph_q_{}", uuid::Uuid::new_v4()));
+        let db = SqliteMemoryBackend::new(&temp).unwrap();
+        let id = db
+            .enqueue_review("default", r#"{"any":"json"}"#, "high", 0.4, "low confidence")
+            .await
+            .unwrap();
+        let pending = db
+            .list_pending_review("default", chrono::Utc::now().timestamp() + 60)
+            .await
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, id);
+        assert_eq!(pending[0].severity, "high");
+        assert_eq!(pending[0].status, "pending");
     }
 
     #[tokio::test]
