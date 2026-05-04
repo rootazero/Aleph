@@ -14,7 +14,7 @@ use super::wikilink::extract_wikilinks;
 /// Default is `Low` so legacy notes (no `severity:` in frontmatter) get
 /// `severity_boost = 1.0` and rank exactly as before. See
 /// `docs/superpowers/plans/2026-04-29-aleph-self-evolution.md` Phase 2 Decision 4.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 #[schemars(rename_all = "lowercase")]
 pub enum Severity {
@@ -42,7 +42,8 @@ pub enum NoteStatus {
 /// paragraph-level provenance. `Legacy` is the default for facts that have
 /// no `<!-- ... -->` marker, preserving backward compatibility with
 /// pre-C2.2 notes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProvenanceOrigin {
     RawSource,
     PriorNote,
@@ -51,7 +52,7 @@ pub enum ProvenanceOrigin {
 }
 
 /// Per-fact provenance metadata extracted from inline HTML comments.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactProvenance {
     pub origin: ProvenanceOrigin,
     pub source_id: Option<String>,
@@ -172,7 +173,7 @@ fn default_confidence() -> f32 {
 /// A knowledge note — the primary memory unit.
 ///
 /// Parsed from (and serializable back to) a markdown file with YAML frontmatter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeNote {
     /// Filename without `.md` extension
     pub title: String,

@@ -6,6 +6,7 @@
 
 pub mod dedup;
 pub mod extractor;
+pub mod governance;
 pub mod indexer;
 mod note;
 pub mod orientation;
@@ -15,6 +16,10 @@ pub mod store;
 mod wikilink;
 
 pub use dedup::find_similar_notes;
+pub use governance::gate::{
+    CandidateNote, DefaultNoteWriteGate, GateOutcome, GateThresholds, NoteWriteAction,
+    NoteWriteGate,
+};
 pub use indexer::{IndexStats, NoteIndexer, CATEGORY_DIRS};
 pub use note::{
     sanitize_title, FactProvenance, KnowledgeNote, ProvenanceOrigin, Severity,
