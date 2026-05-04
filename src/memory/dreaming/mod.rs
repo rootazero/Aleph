@@ -232,6 +232,20 @@ fn idle_seconds() -> i64 {
     (now - last).max(0)
 }
 
+/// Force-trigger a dream cycle on the globally-registered daemon.
+///
+/// Returns the resulting [`DreamReport`] on success, or an error explaining
+/// why the cycle could not run (no daemon registered, already running, etc.).
+/// Bypasses scheduling checks (window, idle threshold, already-ran-today) —
+/// intended for the `dreaming.run_now` admin RPC and E2E test harnesses.
+pub async fn try_run_now() -> Result<DreamReport, AlephError> {
+    let daemon = DREAM_DAEMON
+        .get()
+        .cloned()
+        .ok_or_else(|| AlephError::other("DreamDaemon not initialized"))?;
+    daemon.run_now().await
+}
+
 /// Ensure DreamDaemon is running (once) when memory is enabled.
 pub fn ensure_dream_daemon(
     database: MemoryBackend,
@@ -421,6 +435,72 @@ impl DreamDaemon {
         handle.spawn(async move {
             self.run_scheduler().await;
         })
+    }
+
+    /// Force-trigger a single dream cycle, bypassing window / idle / already-ran checks.
+    ///
+    /// Used by the `dreaming.run_now` admin RPC for deterministic test harnesses.
+    /// The `is_running` latch is still respected so concurrent triggers cannot
+    /// stack. Persists `last_run_at` / `last_status` exactly like the scheduler
+    /// path so observers (Panel, journalctl, dream_status table) see the cycle.
+    pub async fn run_now(&self) -> Result<DreamReport, AlephError> {
+        if self
+            .is_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(AlephError::other(
+                "dream cycle already running — try again later",
+            ));
+        }
+
+        struct RunGuard<'a>(&'a AtomicBool);
+        impl Drop for RunGuard<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let _guard = RunGuard(&self.is_running);
+
+        let run_start = now_timestamp();
+        let run_date = Local::now().format("%Y-%m-%d").to_string();
+
+        let _ = self
+            .database
+            .set_dream_status(DreamStatus {
+                last_run_at: Some(run_start),
+                last_status: Some("running".to_string()),
+                last_duration_ms: None,
+            })
+            .await;
+
+        let result = self.run_dream(run_start, run_date).await;
+        let duration_ms = ((now_timestamp() - run_start).max(0) as u64) * 1000;
+
+        match &result {
+            Ok((status, _report)) => {
+                let _ = self
+                    .database
+                    .set_dream_status(DreamStatus {
+                        last_run_at: Some(run_start),
+                        last_status: Some(status.as_str().to_string()),
+                        last_duration_ms: Some(duration_ms),
+                    })
+                    .await;
+            }
+            Err(_) => {
+                let _ = self
+                    .database
+                    .set_dream_status(DreamStatus {
+                        last_run_at: Some(run_start),
+                        last_status: Some("failed".to_string()),
+                        last_duration_ms: Some(duration_ms),
+                    })
+                    .await;
+            }
+        }
+
+        result.map(|(_, report)| report)
     }
 
     async fn run_scheduler(self: Arc<Self>) {

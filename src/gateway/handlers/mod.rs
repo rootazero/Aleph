@@ -107,6 +107,8 @@ pub mod skills;
 pub mod supervisor;
 pub mod system_info;
 pub mod teams;
+pub mod dreaming;
+pub mod tools_invoke;
 pub mod tools_visibility;
 pub mod trace_replay;
 pub mod version;
@@ -618,6 +620,13 @@ impl HandlerRegistry {
         // Tools visibility handlers (placeholders — actual handlers wired with ToolRegistry)
         registry.register("tools.catalog", tools_visibility::handle_catalog_stub);
         registry.register("tools.effective", tools_visibility::handle_effective_stub);
+        registry.register("tools.invoke", tools_invoke::handle_invoke_stub);
+
+        // Dreaming admin handler — bypasses scheduler for deterministic E2E.
+        // The handler always reads DREAM_DAEMON (a OnceCell) so it does not
+        // need two-phase wiring; if the daemon was never initialized (memory
+        // disabled or simulated mode), it simply returns an error.
+        registry.register("dreaming.run_now", dreaming::handle_run_now);
 
         // Agent management handlers (placeholders — actual handlers wired with AgentManager)
         registry.register("agents.list", |req| async move {

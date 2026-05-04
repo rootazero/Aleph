@@ -1934,6 +1934,24 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
+        // Wire tools.invoke to execute a single builtin tool directly,
+        // bypassing the LLM agent loop. Intended for E2E test harnesses
+        // (note_layer probes, deterministic tool exercising). Production
+        // callers should still go through agent.run.
+        // Only wire when a real BuiltinToolRegistry is present (real mode);
+        // in simulated mode the stub from HandlerRegistry::new remains.
+        if let Some(reg) = tool_reg_out.clone() {
+            server.handlers_mut().register("tools.invoke", move |req| {
+                let registry = reg.clone();
+                async move {
+                    alephcore::gateway::handlers::tools_invoke::handle_invoke(req, registry).await
+                }
+            });
+            if !daemon {
+                println!("  tools.invoke: wired to BuiltinToolRegistry (bypasses agent loop)");
+            }
+        }
+
         // Wire tools.effective to return tools available to a specific agent
         {
             let reg = dispatch_registry.clone();
