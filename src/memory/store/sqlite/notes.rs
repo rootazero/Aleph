@@ -184,22 +184,27 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("index_note fts meta lookup: {e}")))?;
 
         if prev_body_hash.as_deref() != Some(&body_hash) {
-            conn.execute(
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| AlephError::config(format!("index_note fts tx begin: {e}")))?;
+            tx.execute(
                 "DELETE FROM notes_fts WHERE path = ?1 AND agent_id = ?2",
                 params![path, agent_id],
             )
             .map_err(|e| AlephError::config(format!("index_note delete fts: {e}")))?;
-            conn.execute(
+            tx.execute(
                 "INSERT INTO notes_fts (path, filename, content, agent_id) VALUES (?1, ?2, ?3, ?4)",
                 params![path, filename, body, agent_id],
             )
             .map_err(|e| AlephError::config(format!("index_note insert fts: {e}")))?;
-            conn.execute(
+            tx.execute(
                 "INSERT INTO notes_fts_meta (agent_id, path, content_hash) VALUES (?1, ?2, ?3) \
                  ON CONFLICT(agent_id, path) DO UPDATE SET content_hash = excluded.content_hash",
                 params![agent_id, path, body_hash],
             )
             .map_err(|e| AlephError::config(format!("index_note fts meta upsert: {e}")))?;
+            tx.commit()
+                .map_err(|e| AlephError::config(format!("index_note fts tx commit: {e}")))?;
         }
 
         Ok(())
@@ -1272,5 +1277,64 @@ mod tests {
             count, 1,
             "FTS row must be rebuilt after remove+recreate even with identical body"
         );
+    }
+
+    #[tokio::test]
+    async fn fts_rewrite_is_atomic_with_meta_upsert() {
+        // Smoke-tests that under normal flow the (FTS DELETE/INSERT, meta upsert) trio
+        // commits together. The transaction wrapper protects against a crash window
+        // between DELETE and INSERT that would otherwise produce an empty notes_fts
+        // row paired with an up-to-date meta hash — silently making the note
+        // search-invisible.
+        let temp = std::env::temp_dir().join(format!("aleph_fts_atomic_{}", uuid::Uuid::new_v4()));
+        let db = SqliteMemoryBackend::new(&temp).unwrap();
+
+        let note = crate::memory::notes::KnowledgeNote {
+            title: "atom".into(),
+            category: "preference".into(),
+            facts: vec!["atomic body".into()],
+            content_hash: "h0".into(),
+            ..Default::default()
+        };
+        db.index_note(&note, "default", "preference").await.unwrap();
+
+        // After a successful index_note, both notes_fts and notes_fts_meta MUST contain
+        // exactly one row for this (agent_id, path), and the meta hash must match the
+        // SHA-256 of the body.
+        let (fts_count, meta_count, meta_hash): (i64, i64, String) = {
+            let conn = db.conn().lock().unwrap();
+            let fts_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM notes_fts WHERE path = ?1 AND agent_id = ?2",
+                    params!["preference/atom", "default"],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let meta_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM notes_fts_meta WHERE path = ?1 AND agent_id = ?2",
+                    params!["preference/atom", "default"],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let meta_hash: String = conn
+                .query_row(
+                    "SELECT content_hash FROM notes_fts_meta WHERE path = ?1 AND agent_id = ?2",
+                    params!["preference/atom", "default"],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            (fts_count, meta_count, meta_hash)
+        };
+        assert_eq!(fts_count, 1, "notes_fts must have exactly one row");
+        assert_eq!(meta_count, 1, "notes_fts_meta must have exactly one row");
+
+        let expected_hash = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(note.body_text().as_bytes());
+            format!("{:x}", h.finalize())
+        };
+        assert_eq!(meta_hash, expected_hash, "meta hash must match body_text() SHA-256");
     }
 }
