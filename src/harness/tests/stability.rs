@@ -242,8 +242,8 @@ pub(super) fn minimal_deps(
         max_iterations: None,
         power: None,
         stall_config: None,
-        // Will be filled in by Tasks 2 and 3:
-        // consecutive_failure_cap: None,
+        consecutive_failure_cap: None,
+        // Will be filled in by Task 3:
         // turn_timeout: None,
     }
 }
@@ -330,4 +330,168 @@ async fn noop_sink_zero_overhead() {
     let mut cb = NoopHarnessCallback;
     let cancel = tokio_util::sync::CancellationToken::new();
     harness.run(&sid, &mut cb, &cancel).await.expect("ok");
+}
+
+/// After Task 2 lands, a tool failure becomes a tool_result(is_error=true) in
+/// the session log and the model gets a chance to recover on the next Think.
+/// Currently (pre-Task 2), the harness aborts via `HarnessError::Tool`.
+#[tokio::test]
+async fn tool_failure_recovers_in_next_think() {
+    struct RecoveryProvider {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl AiProvider for RecoveryProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let calls = self.calls.clone();
+            Box::pin(async move {
+                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    Ok(ProviderResponse {
+                        text: None,
+                        tool_calls: vec![NativeToolCall {
+                            id: "c-0".into(),
+                            name: "fail_one".into(),
+                            arguments: serde_json::json!({}),
+                        }],
+                        thinking: None,
+                        thinking_signature: None,
+                        stop_reason: StopReason::ToolUse,
+                        usage: None,
+                    })
+                } else {
+                    Ok(ProviderResponse::text_only("recovered".into()))
+                }
+            })
+        }
+        fn name(&self) -> &str { "recovery" }
+        fn color(&self) -> &str { "#000000" }
+    }
+
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider: Arc<dyn AiProvider> = Arc::new(RecoveryProvider { calls: calls.clone() });
+    let (session, sid) = fresh_session("recover-tool-fail").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let deps = minimal_deps(session.clone(), tools, provider);
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let outcome = harness.run(&sid, &mut cb, &cancel).await;
+
+    assert!(outcome.is_ok(), "harness must not abort on tool error: {outcome:?}");
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "model should be called twice (tool turn + recovery turn)",
+    );
+    let events = session.get_events(&sid, None, None).await.unwrap();
+    let has_tool_error = events.iter().any(|r| matches!(
+        r.event,
+        SessionEvent::ToolError { .. }
+    ));
+    assert!(has_tool_error, "session log must contain ToolError event");
+}
+
+#[tokio::test]
+async fn partial_batch_failure_continues() {
+    struct BatchProvider {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl AiProvider for BatchProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let calls = self.calls.clone();
+            Box::pin(async move {
+                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    Ok(ProviderResponse {
+                        text: None,
+                        tool_calls: vec![
+                            NativeToolCall { id: "a".into(), name: "ok_a".into(), arguments: serde_json::json!({}) },
+                            NativeToolCall { id: "b".into(), name: "fail_b".into(), arguments: serde_json::json!({}) },
+                            NativeToolCall { id: "c".into(), name: "ok_c".into(), arguments: serde_json::json!({}) },
+                        ],
+                        thinking: None,
+                        thinking_signature: None,
+                        stop_reason: StopReason::ToolUse,
+                        usage: None,
+                    })
+                } else {
+                    Ok(ProviderResponse::text_only("done".into()))
+                }
+            })
+        }
+        fn name(&self) -> &str { "batch" }
+        fn color(&self) -> &str { "#000000" }
+    }
+
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider: Arc<dyn AiProvider> = Arc::new(BatchProvider { calls });
+    let (session, sid) = fresh_session("partial-batch").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let deps = minimal_deps(session.clone(), tools, provider);
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    harness.run(&sid, &mut cb, &cancel).await.expect("ok");
+
+    let events = session.get_events(&sid, None, None).await.unwrap();
+    let n_results = events.iter().filter(|r| matches!(r.event, SessionEvent::ToolResult { .. })).count();
+    let n_errors = events.iter().filter(|r| matches!(r.event, SessionEvent::ToolError { .. })).count();
+    assert_eq!(n_results, 2, "expected 2 ToolResult (ok_a, ok_c): events={events:#?}");
+    assert_eq!(n_errors, 1, "expected 1 ToolError (fail_b): events={events:#?}");
+}
+
+#[tokio::test]
+async fn consecutive_total_failure_caps_loop() {
+    struct AlwaysFailProvider;
+    impl AiProvider for AlwaysFailProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: format!("c-{}", uuid::Uuid::new_v4()),
+                        name: "fail_x".into(),
+                        arguments: serde_json::json!({}),
+                    }],
+                    thinking: None,
+                    thinking_signature: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                })
+            })
+        }
+        fn name(&self) -> &str { "always-fail" }
+        fn color(&self) -> &str { "#000000" }
+    }
+
+    let provider: Arc<dyn AiProvider> = Arc::new(AlwaysFailProvider);
+    let (session, sid) = fresh_session("cap-loop").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.consecutive_failure_cap = Some(3);
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        harness.run(&sid, &mut cb, &cancel),
+    ).await;
+    outcome.expect("must terminate within 2s").expect("Ok exit");
+    assert!(harness.hit_limit(), "hit_limit should be true after cap");
 }

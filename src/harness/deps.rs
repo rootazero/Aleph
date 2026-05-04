@@ -64,4 +64,9 @@ pub struct HarnessDeps {
     /// inactivity and returns `HarnessError::Stalled` if no activity
     /// is detected within the configured timeout.
     pub stall_config: Option<StallConfig>,
+    /// Hard cap on consecutive turns where every tool call failed. When
+    /// reached, the harness forces `TurnState::Done` with `hit_limit=true`
+    /// to prevent the model from looping on permanently-failing tools.
+    /// `None` disables the cap (legacy behavior). Recommended `Some(8)`.
+    pub consecutive_failure_cap: Option<usize>,
 }

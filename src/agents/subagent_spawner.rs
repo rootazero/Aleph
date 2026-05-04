@@ -199,6 +199,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         max_iterations: max_iter,
         power: None,
         stall_config: None,
+        consecutive_failure_cap: None,
     };
     let harness = Arc::new(AgentHarness::new(deps));
 

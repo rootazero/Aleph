@@ -115,6 +115,7 @@ async fn session_driver_delegates_to_harness_run() {
         max_iterations: None,
         power: None,
         stall_config: None,
+        consecutive_failure_cap: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-delegation");
@@ -179,6 +180,7 @@ async fn session_driver_preserves_cancelled_semantics() {
         max_iterations: None,
         power: None,
         stall_config: None,
+        consecutive_failure_cap: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-cancelled");

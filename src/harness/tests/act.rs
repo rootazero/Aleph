@@ -288,6 +288,7 @@ async fn act_executes_tools_sequentially() {
         max_iterations: None,
         power: None,
         stall_config: None,
+        consecutive_failure_cap: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -353,14 +354,17 @@ async fn act_tool_failure_returns_harness_tool_error() {
         max_iterations: None,
         power: None,
         stall_config: None,
+        consecutive_failure_cap: None,
     };
     let harness = AgentHarness::new(deps);
 
-    let err = harness
+    // After Task 2: tool failures are rescued back to the model as
+    // tool_result(is_error=true). run_turn must return Ok, not Err.
+    let state = harness
         .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
-        .expect_err("expected HarnessError::Tool");
-    assert!(matches!(err, HarnessError::Tool(_)), "got: {err:?}");
+        .expect("run_turn must succeed even on tool error");
+    assert_eq!(state, TurnState::Continue, "tool failure → Continue, not Done");
 
     let events = session.snapshot().await;
     let has_tool_error = events
@@ -438,6 +442,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
         max_iterations: None,
         power: None,
         stall_config: None,
+        consecutive_failure_cap: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -598,19 +603,17 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
         max_iterations: None,
         power: None,
         stall_config: None,
+        consecutive_failure_cap: None,
     };
     let harness = AgentHarness::new(deps);
 
-    let err = harness
+    // After Task 2: tool failures are rescued. The session emit failure for
+    // ToolError is swallowed with a warning — run_turn must still return Ok.
+    let state = harness
         .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
-        .expect_err("expected Err");
-
-    // The original tool failure must surface — not the session write failure.
-    assert!(
-        matches!(err, HarnessError::Tool(_)),
-        "expected HarnessError::Tool, got: {err:?}"
-    );
+        .expect("run_turn must succeed even when ToolError emit fails");
+    assert_eq!(state, TurnState::Continue, "tool failure → Continue");
 }
 
 // -- Round-trip test for Fix 3: writer/reader agreement ----------------------

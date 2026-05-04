@@ -311,11 +311,14 @@ impl AgentHarness {
 
     /// Act phase: execute each tool_call sequentially, emitting a
     /// `ToolCallRequested` event before every call and either a `ToolResult`
-    /// or `ToolError` event after. A failure short-circuits the rest of the
-    /// batch and surfaces as `HarnessError::Tool`.
+    /// or `ToolError` event after.
     ///
-    /// Returns the number of tool calls that were actually executed (not
-    /// skipped due to a prior error).
+    /// Tool failures are persisted as `SessionEvent::ToolError` and do NOT
+    /// abort the batch — all tool calls in the batch are attempted. The next
+    /// Think turn will see failures via `tool_result.is_error=true` (produced
+    /// by `build_prompt`) and can decide whether to retry or give up.
+    ///
+    /// Returns the number of tool calls that succeeded (not errored).
     async fn act(
         &self,
         session_id: &SessionId,
@@ -324,7 +327,6 @@ impl AgentHarness {
         callback: &mut dyn HarnessCallback,
         iteration: usize,
     ) -> Result<usize, HarnessError> {
-        let mut first_error: Option<ToolError> = None;
         let mut executed_count: usize = 0;
 
         for call in tool_calls {
@@ -346,37 +348,6 @@ impl AgentHarness {
                 at: now_ms(),
             };
             self.deps.session.emit_event(session_id, requested).await?;
-
-            if let Some(ref prior_err) = first_error {
-                let skip_event = SessionEvent::ToolError {
-                    turn_id,
-                    call_id: call.id.clone(),
-                    error: format!("Skipped: {}", prior_err),
-                    at: now_ms(),
-                };
-                if let Err(emit_err) = self.deps.session.emit_event(session_id, skip_event).await {
-                    tracing::warn!(
-                        ?session_id,
-                        call_id = %call.id,
-                        ?emit_err,
-                        "failed to persist skipped-tool ToolError event",
-                    );
-                }
-                self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
-                    iteration,
-                    call: crate::harness::trace::ToolCallEndEvent {
-                        tool_id: call.id.clone(),
-                        tool_name: call.name.clone(),
-                        input: call.arguments.clone(),
-                        duration_ms: started.elapsed().as_millis() as u64,
-                    },
-                    result: crate::tools::runtime::ToolResult::Error {
-                        error: format!("Skipped: {}", prior_err),
-                        retryable: false,
-                    },
-                });
-                continue;
-            }
 
             match self.deps.tools.execute(&call.name, call.arguments.clone()).await {
                 Ok(output) => {
@@ -436,14 +407,13 @@ impl AgentHarness {
                             retryable: false,
                         },
                     });
-                    first_error = Some(e);
+                    // Do NOT abort — continue processing remaining tool calls.
+                    // The error is persisted to session log; the next Think
+                    // turn will see it as tool_result(is_error=true).
                 }
             }
         }
 
-        if let Some(e) = first_error {
-            return Err(HarnessError::Tool(e));
-        }
         Ok(executed_count)
     }
 
@@ -548,6 +518,7 @@ impl Harness for AgentHarness {
         let mut iterations: usize = 0;
         let mut tool_calls_made: usize = 0;
         let mut stop_hook_veto_count: usize = 0;
+        let mut consecutive_failure_turns: usize = 0;
         let result: Result<crate::harness::trace::LoopTraceSessionOutcome, HarnessError> = loop {
             if cancel.is_cancelled() {
                 break Err(HarnessError::Cancelled);
@@ -569,6 +540,41 @@ impl Harness for AgentHarness {
                     }
                     iterations = iterations.saturating_add(1);
                     tool_calls_made = tool_calls_made.saturating_add(executed);
+                    if executed == 0 && !is_veto {
+                        let events = self
+                            .deps
+                            .session
+                            .get_events(session_id, None, None)
+                            .await
+                            .map_err(HarnessError::Session)?;
+                        let last_assistant_idx = events
+                            .iter()
+                            .rposition(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
+                            .unwrap_or(0);
+                        let had_failure = events[last_assistant_idx..]
+                            .iter()
+                            .any(|r| matches!(r.event, SessionEvent::ToolError { .. }));
+                        if had_failure {
+                            consecutive_failure_turns =
+                                consecutive_failure_turns.saturating_add(1);
+                            if let Some(cap) = self.deps.consecutive_failure_cap {
+                                if consecutive_failure_turns >= cap {
+                                    tracing::warn!(
+                                        ?session_id,
+                                        cap,
+                                        "consecutive total-failure cap reached; forcing Done",
+                                    );
+                                    self.hit_limit.store(true, Ordering::Relaxed);
+                                    callback.on_complete();
+                                    break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
+                                }
+                            }
+                        } else {
+                            consecutive_failure_turns = 0;
+                        }
+                    } else if executed > 0 {
+                        consecutive_failure_turns = 0;
+                    }
                     if is_veto {
                         stop_hook_veto_count = stop_hook_veto_count.saturating_add(1);
                         if stop_hook_veto_count >= Self::MAX_STOP_HOOK_VETOS {
@@ -985,6 +991,7 @@ mod tests {
             max_iterations: None,
             power: None,
             stall_config: None,
+            consecutive_failure_cap: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1174,6 +1181,7 @@ mod tests {
             max_iterations: Some(3),
             power: None,
             stall_config: None,
+            consecutive_failure_cap: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1224,6 +1232,7 @@ mod tests {
             max_iterations: None,
             power: None,
             stall_config: None,
+            consecutive_failure_cap: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
