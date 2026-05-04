@@ -127,8 +127,8 @@ struct Frontmatter {
     confidence: f32,
     #[serde(default)]
     severity: Severity,
-    #[serde(default)]
-    source_facts: Vec<String>,
+    #[serde(default, alias = "source_facts")]
+    source_notes: Vec<String>,
     #[serde(default)]
     status: NoteStatus,
     #[serde(default)]
@@ -199,7 +199,7 @@ pub struct KnowledgeNote {
     pub severity: Severity,
     /// Source synthesis-note paths or raw-memory IDs that produced this note.
     /// Empty for hand-authored / legacy notes.
-    pub source_facts: Vec<String>,
+    pub source_notes: Vec<String>,
     /// Governance status. `Active` for legacy notes. Phase C2 supersession /
     /// contradiction handling sets this to `Deprecated` or `Contradicted`.
     pub status: NoteStatus,
@@ -228,7 +228,7 @@ impl Default for KnowledgeNote {
             content_hash: String::new(),
             confidence: 1.0,
             severity: Severity::Low,
-            source_facts: Vec::new(),
+            source_notes: Vec::new(),
             status: NoteStatus::default(),
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
@@ -265,7 +265,7 @@ impl KnowledgeNote {
             content_hash,
             confidence: frontmatter.confidence,
             severity: frontmatter.severity,
-            source_facts: frontmatter.source_facts,
+            source_notes: frontmatter.source_notes,
             status: frontmatter.status,
             supersedes: frontmatter.supersedes,
             superseded_by: frontmatter.superseded_by,
@@ -299,8 +299,8 @@ impl KnowledgeNote {
         };
         out.push_str(&format!("severity: {severity_str}\n"));
         out.push_str(&format!(
-            "source_facts: {}\n",
-            yaml_inline_array(&self.source_facts)
+            "source_notes: {}\n",
+            yaml_inline_array(&self.source_notes)
         ));
         let status_str = match self.status {
             NoteStatus::Active => "active",
@@ -646,18 +646,67 @@ mod tests {
         );
         assert_eq!(n.severity, Severity::Low, "old notes get severity=Low");
         assert!(
-            n.source_facts.is_empty(),
-            "old notes get empty source_facts"
+            n.source_notes.is_empty(),
+            "old notes get empty source_notes"
         );
     }
 
     #[test]
     fn knowledge_note_new_markdown_roundtrips_new_fields() {
+        // Legacy on-disk YAML still uses the old `source_facts:` key — verify
+        // the serde alias deserializes it into the renamed `source_notes` field.
         let md = "---\ncategory: skill\ntags: [x]\ncreated: 2026-04-29\nupdated: 2026-04-29\nconfidence: 0.85\nseverity: high\nsource_facts: [synthesis/learning-syn]\n---\n\n- the rule\n";
         let n = KnowledgeNote::from_markdown("new-note", md).expect("must parse");
         assert!((n.confidence - 0.85).abs() < 1e-6);
         assert_eq!(n.severity, Severity::High);
-        assert_eq!(n.source_facts, vec!["synthesis/learning-syn".to_string()]);
+        assert_eq!(n.source_notes, vec!["synthesis/learning-syn".to_string()]);
+    }
+
+    #[test]
+    fn legacy_source_facts_yaml_round_trips_to_source_notes() {
+        // Feeds legacy `source_facts:` markdown, verifies the serde alias maps
+        // it to `source_notes`, and asserts re-serialization emits `source_notes:`
+        // only (no legacy `source_facts:`).
+        let legacy_md = "---\ncategory: skill\ntags: []\ncreated: 2026-04-29\nupdated: 2026-04-29\nconfidence: 0.9\nseverity: low\nsource_facts: [synthesis/legacy-a, synthesis/legacy-b]\n---\n\n- legacy rule\n";
+        let n = KnowledgeNote::from_markdown("legacy-syn", legacy_md).expect("must parse");
+        assert_eq!(
+            n.source_notes,
+            vec![
+                "synthesis/legacy-a".to_string(),
+                "synthesis/legacy-b".to_string()
+            ]
+        );
+
+        let re = n.to_markdown();
+        assert!(
+            re.contains("source_notes:"),
+            "re-serialized markdown must use new key:\n{re}"
+        );
+        assert!(
+            !re.contains("source_facts:"),
+            "re-serialized markdown must NOT contain legacy key:\n{re}"
+        );
+    }
+
+    #[test]
+    fn new_source_notes_field_round_trips() {
+        let n = KnowledgeNote {
+            title: "synthetic".into(),
+            category: "skill".into(),
+            facts: vec!["the rule".into()],
+            created_at: 1714377600,
+            updated_at: 1714377600,
+            confidence: 0.9,
+            severity: Severity::Med,
+            source_notes: vec!["synthesis/y".into()],
+            ..Default::default()
+        };
+        let md = n.to_markdown();
+        assert!(md.contains("source_notes:"), "missing source_notes:\n{md}");
+        assert!(!md.contains("source_facts:"));
+
+        let parsed = KnowledgeNote::from_markdown("synthetic", &md).expect("roundtrip");
+        assert_eq!(parsed.source_notes, vec!["synthesis/y".to_string()]);
     }
 
     #[test]
@@ -672,7 +721,7 @@ mod tests {
             Severity::Low,
             "Default severity must be Low (legacy-safe)"
         );
-        assert!(n.source_facts.is_empty());
+        assert!(n.source_notes.is_empty());
     }
 
     #[test]
@@ -688,19 +737,19 @@ mod tests {
             content_hash: String::new(),
             confidence: 0.85,
             severity: Severity::High,
-            source_facts: vec!["synthesis/syn-1".into()],
+            source_notes: vec!["synthesis/syn-1".into()],
             ..Default::default()
         };
         let md = n.to_markdown();
         assert!(md.contains("confidence: 0.85"), "missing confidence:\n{md}");
         assert!(md.contains("severity: high"), "missing severity:\n{md}");
-        assert!(md.contains("source_facts:"), "missing source_facts:\n{md}");
+        assert!(md.contains("source_notes:"), "missing source_notes:\n{md}");
         assert!(md.contains("synthesis/syn-1"), "missing source ref:\n{md}");
 
         let parsed = KnowledgeNote::from_markdown("test", &md).expect("roundtrip");
         assert!((parsed.confidence - 0.85).abs() < 1e-6);
         assert_eq!(parsed.severity, Severity::High);
-        assert_eq!(parsed.source_facts, vec!["synthesis/syn-1".to_string()]);
+        assert_eq!(parsed.source_notes, vec!["synthesis/syn-1".to_string()]);
     }
 
     #[test]
@@ -716,17 +765,17 @@ mod tests {
             content_hash: String::new(),
             confidence: 1.0,
             severity: Severity::Low,
-            source_facts: vec![],
+            source_notes: vec![],
             ..Default::default()
         };
         let md = n.to_markdown();
         assert!(md.contains("confidence: 1"), "missing confidence:\n{md}");
         assert!(md.contains("severity: low"), "missing severity:\n{md}");
-        assert!(md.contains("source_facts: []"));
+        assert!(md.contains("source_notes: []"));
         let parsed = KnowledgeNote::from_markdown("legacy", &md).unwrap();
         assert_eq!(parsed.confidence, 1.0);
         assert_eq!(parsed.severity, Severity::Low);
-        assert!(parsed.source_facts.is_empty());
+        assert!(parsed.source_notes.is_empty());
     }
 
     const SAMPLE_NOTE: &str = "\

@@ -210,7 +210,7 @@ impl DefaultQueryFiler {
             content_hash: String::new(),
             confidence: 1.0,
             severity: crate::memory::notes::Severity::Low,
-            source_facts: Vec::new(),
+            source_notes: Vec::new(),
             ..Default::default()
         };
 

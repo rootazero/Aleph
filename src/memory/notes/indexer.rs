@@ -376,7 +376,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                 content_hash: String::new(),
                 confidence: 1.0,
                 severity: Severity::Low,
-                source_facts: Vec::new(),
+                source_notes: Vec::new(),
                 ..Default::default()
             }
         };
@@ -501,19 +501,19 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// without overshooting on a single high-corroboration round.
     const STRENGTHEN_STEP: f32 = 0.05;
 
-    /// Merge new source_facts into an existing note on disk and bump its
+    /// Merge new source_notes into an existing note on disk and bump its
     /// confidence monotonically. Used by both `DistillAction::Strengthen`
     /// (no floor lift) and the `New`-with-collision demotion path
     /// (`confidence_floor = new_action.confidence` lifts the note's
     /// confidence to at least the LLM's latest judgment).
     ///
     /// Confidence formula:
-    ///   `confidence = min(1.0, max(existing, floor) + STRENGTHEN_STEP * newly_added_facts)`
-    async fn merge_source_facts_into_note(
+    ///   `confidence = min(1.0, max(existing, floor) + STRENGTHEN_STEP * newly_added_notes)`
+    async fn merge_source_notes_into_note(
         &self,
         agent_id: &str,
         existing_note_path: &str,
-        new_source_facts: &[String],
+        new_source_notes: &[String],
         confidence_floor: f32,
     ) -> Result<(), AlephError> {
         let (cat, filename) =
@@ -521,7 +521,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                 .split_once('/')
                 .ok_or_else(|| AlephError::ConfigError {
                     message: format!(
-                        "merge_source_facts: invalid note_path '{existing_note_path}' \
+                        "merge_source_notes: invalid note_path '{existing_note_path}' \
                      (expected 'category/filename')"
                     ),
                     suggestion: None,
@@ -534,7 +534,7 @@ impl<S: NoteStore> NoteIndexer<S> {
             .join(format!("{safe_title}.md"));
         if !file_path.exists() {
             return Err(AlephError::other(format!(
-                "merge_source_facts: target missing on disk: {existing_note_path}"
+                "merge_source_notes: target missing on disk: {existing_note_path}"
             )));
         }
         let content =
@@ -547,9 +547,9 @@ impl<S: NoteStore> NoteIndexer<S> {
         let mut note = KnowledgeNote::from_markdown(filename, &content)?;
 
         let mut added_count: u32 = 0;
-        for f in new_source_facts {
-            if !note.source_facts.contains(f) {
-                note.source_facts.push(f.clone());
+        for f in new_source_notes {
+            if !note.source_notes.contains(f) {
+                note.source_notes.push(f.clone());
                 added_count += 1;
             }
         }
@@ -610,7 +610,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                         "DistillAction::New collided with existing note — demoting to Strengthen"
                     );
                     return self
-                        .merge_source_facts_into_note(
+                        .merge_source_notes_into_note(
                             agent_id,
                             &candidate_path,
                             source_facts,
@@ -631,7 +631,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                     content_hash: String::new(),
                     confidence: *confidence,
                     severity: *severity,
-                    source_facts: source_facts.clone(),
+                    source_notes: source_facts.clone(),
                     ..Default::default()
                 };
                 self.write_note(agent_id, category, &note).await?;
@@ -643,7 +643,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                 // Strengthen does not carry a confidence value — pass 0.0 as
                 // floor so the bump is purely additive against the existing
                 // note's confidence.
-                self.merge_source_facts_into_note(agent_id, existing_note_path, source_facts, 0.0)
+                self.merge_source_notes_into_note(agent_id, existing_note_path, source_facts, 0.0)
                     .await?;
             }
             DistillAction::Supersede {
@@ -710,7 +710,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                     content_hash: String::new(),
                     confidence: *confidence,
                     severity: *severity,
-                    source_facts: source_facts.clone(),
+                    source_notes: source_facts.clone(),
                     ..Default::default()
                 };
                 self.write_note(agent_id, category, &note).await?;
@@ -1212,7 +1212,7 @@ mod reference_hook_tests {
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
             content_hash: String::new(),
-            source_facts: vec!["fact-original".into()],
+            source_notes: vec!["fact-original".into()],
             ..Default::default()
         };
         indexer.write_note("default", "skill", &seed).await.unwrap();
@@ -1227,7 +1227,7 @@ mod reference_hook_tests {
             .await
             .unwrap();
 
-        // Re-read from disk and verify source_facts merged + de-duplicated
+        // Re-read from disk and verify source_notes merged + de-duplicated
         let file = dir
             .path()
             .join("note")
@@ -1236,9 +1236,9 @@ mod reference_hook_tests {
             .join("async-error-handling.md");
         let content = fs::read_to_string(&file).await.unwrap();
         let reparsed = KnowledgeNote::from_markdown("async-error-handling", &content).unwrap();
-        assert_eq!(reparsed.source_facts.len(), 2, "should have 2 unique facts");
-        assert!(reparsed.source_facts.contains(&"fact-original".to_string()));
-        assert!(reparsed.source_facts.contains(&"fact-new".to_string()));
+        assert_eq!(reparsed.source_notes.len(), 2, "should have 2 unique facts");
+        assert!(reparsed.source_notes.contains(&"fact-original".to_string()));
+        assert!(reparsed.source_notes.contains(&"fact-new".to_string()));
         // updated_at must be bumped above the seeded value
         assert!(reparsed.updated_at >= seed.updated_at);
     }
@@ -1281,14 +1281,14 @@ mod reference_hook_tests {
             .confidence
     }
 
-    /// Seed a skill note with the given confidence and source_facts.
+    /// Seed a skill note with the given confidence and source_notes.
     async fn seed_note<S: NoteStore>(
         indexer: &NoteIndexer<S>,
         agent: &str,
         category: &str,
         title: &str,
         confidence: f32,
-        source_facts: Vec<String>,
+        source_notes: Vec<String>,
     ) {
         let note = KnowledgeNote {
             title: title.into(),
@@ -1297,7 +1297,7 @@ mod reference_hook_tests {
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
             confidence,
-            source_facts,
+            source_notes,
             ..Default::default()
         };
         indexer.write_note(agent, category, &note).await.unwrap();
@@ -1440,10 +1440,10 @@ mod reference_hook_tests {
         let content = fs::read_to_string(&file).await.unwrap();
         let merged = KnowledgeNote::from_markdown("duplicate-topic", &content).unwrap();
 
-        // Source facts are merged + deduped (seed-fact stays, extra-fact added).
-        assert_eq!(merged.source_facts.len(), 2);
-        assert!(merged.source_facts.contains(&"seed-fact".to_string()));
-        assert!(merged.source_facts.contains(&"extra-fact".to_string()));
+        // Source notes are merged + deduped (seed-fact stays, extra-fact added).
+        assert_eq!(merged.source_notes.len(), 2);
+        assert!(merged.source_notes.contains(&"seed-fact".to_string()));
+        assert!(merged.source_notes.contains(&"extra-fact".to_string()));
 
         // Confidence is lifted to ≥ the new action's confidence (0.9), then
         // bumped by STRENGTHEN_STEP for each new fact (1 new = +0.05).
