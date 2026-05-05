@@ -33,6 +33,14 @@ pub trait Harness: Send + Sync {
         callback: &mut dyn HarnessCallback,
     ) -> Result<TurnState, HarnessError>;
 
+    /// Position of this harness instance in the subagent call chain.
+    /// Default `None` keeps non-`AgentHarness` impls (test mocks, future
+    /// alternative drivers) ergonomic. `AgentHarness` overrides to return
+    /// `Some(&self.deps.chain_context)`. Stage 4 seam (#11).
+    fn chain_context(&self) -> Option<&crate::harness::chain_context::ChainContext> {
+        None
+    }
+
     /// Loop `run_turn` until `Done`, firing `callback.on_complete()` on exit.
     ///
     /// `cancel` is checked before every `run_turn`; a cancelled token aborts

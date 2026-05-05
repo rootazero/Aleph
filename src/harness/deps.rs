@@ -10,6 +10,7 @@
 
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
+use crate::harness::chain_context::ChainContext;
 use crate::harness::prompt::PromptBuilder;
 use crate::harness::trace_sink::TraceSink;
 use crate::providers::AiProvider;
@@ -58,6 +59,11 @@ pub struct HarnessDeps {
     /// `DefaultPromptBuilder` (byte-equivalent to legacy build_prompt).
     /// Subagent (#11) and JudgeAgent (#10) inject custom builders.
     pub prompt_builder: Arc<dyn PromptBuilder>,
+    /// Position of this harness instance in the subagent call chain.
+    /// Stage 4 seam (#11). Defaults to a fresh root chain (depth=0). The
+    /// subagent spawner overrides this with `parent.chain.child()` so each
+    /// nested harness reports its own depth via `AgentHarness::chain_context()`.
+    pub chain_context: ChainContext,
     /// Hard iteration cap. When set, AgentHarness::run forces TurnState::Done
     /// after that many Continue turns and sets hit_limit=true. None → unbounded
     /// (current Gateway default).

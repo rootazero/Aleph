@@ -154,6 +154,7 @@ impl HarnessRunner for AgentHarnessRunner {
             trace_sink: trace_sink.clone(),
             system_prompt,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+            chain_context: crate::harness::chain_context::ChainContext::default(),
             max_iterations: None,
             power,
             stall_config: None,
@@ -242,21 +243,19 @@ impl AgentHarnessRunner {
 
         let session_key_str = session_id.to_key_string();
 
-        let curated_text: Option<String> = match mcp
-            .build_curated_message(agent_id, &session_key_str)
-            .await
-        {
-            Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
-            Err(e) => {
-                tracing::warn!(
-                    agent_id,
-                    session = %session_key_str,
-                    error = %e,
-                    "build_curated_message failed; degrading curated envelope to None"
-                );
-                None
-            }
-        };
+        let curated_text: Option<String> =
+            match mcp.build_curated_message(agent_id, &session_key_str).await {
+                Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
+                Err(e) => {
+                    tracing::warn!(
+                        agent_id,
+                        session = %session_key_str,
+                        error = %e,
+                        "build_curated_message failed; degrading curated envelope to None"
+                    );
+                    None
+                }
+            };
 
         let memory_text: Option<String> = if user_query.is_empty() {
             None

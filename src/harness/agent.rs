@@ -72,6 +72,14 @@ impl AgentHarness {
         self.hit_limit.store(false, Ordering::Relaxed);
     }
 
+    /// Read-only accessor for this harness's position in the subagent chain.
+    /// Returns the root context for top-level agents (the `HarnessDeps`
+    /// default). The subagent spawner overrides this with the descended
+    /// chain when assembling a child harness. Stage 4 seam (#11).
+    pub fn chain_context(&self) -> &crate::harness::chain_context::ChainContext {
+        &self.deps.chain_context
+    }
+
     /// Convenience: wrap this harness as an `Arc<dyn SessionDriver>` so it
     /// can be stored in containers that don't depend on the concrete type.
     pub fn into_session_driver(self) -> std::sync::Arc<dyn crate::session::SessionDriver> {
@@ -583,6 +591,12 @@ impl crate::session::SessionDriver for AgentHarness {
 
 #[async_trait]
 impl Harness for AgentHarness {
+    /// Overrides the trait default to surface this harness's chain position.
+    /// Stage 4 seam (#11) — see `AgentHarness::chain_context` (inherent).
+    fn chain_context(&self) -> Option<&crate::harness::chain_context::ChainContext> {
+        Some(self.chain_context())
+    }
+
     /// Overrides the trait default to enforce `HarnessDeps.max_iterations`.
     /// When the cap is reached, sets `hit_limit=true`, fires `on_complete`,
     /// and returns `Ok(())` — the orchestrator bridge promotes `hit_limit`
@@ -964,6 +978,7 @@ mod tests {
             trace_sink: None,
             system_prompt: Some("ROLE: SPEC-BOT".into()),
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+            chain_context: crate::harness::chain_context::ChainContext::default(),
             max_iterations: None,
             power: None,
             stall_config: None,
@@ -1161,6 +1176,7 @@ mod tests {
             trace_sink: None,
             system_prompt: None,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+            chain_context: crate::harness::chain_context::ChainContext::default(),
             max_iterations: Some(3),
             power: None,
             stall_config: None,
@@ -1214,6 +1230,7 @@ mod tests {
             trace_sink: None,
             system_prompt: None,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+            chain_context: crate::harness::chain_context::ChainContext::default(),
             max_iterations: None,
             power: None,
             stall_config: None,
