@@ -316,7 +316,7 @@ Stage 3 (Prompt) ──────┴─> Stage 4 (Subagent) ─────┘
 
 ### Stage 6 — Verification & Feedback Loop (#10)
 
-**Status**: 🟡 Pending
+**Status**: 🟡 6a Shipped on 2026-05-06 · 6b Pending · 6a plan: docs/superpowers/specs/2026-05-06-harness-stage6a-turn-verifier-plan.md · 6a ships TurnVerifier trait + StopHookVerifier (1:1 migration) + ToolLoopVerifier (default threshold 5) at a single Think→Act callsite; closes the § 1.4 P1 fix. 6b (JudgeVerifier + ComputationalVerifier) explicitly gated on a redline waiver in `src/verification/mod.rs` to lift the post-P4 "no Rust-level verifier/judge/critic" prohibition (R8 + R10).
 **Depends on**: Stage 1, Stage 3, Stage 4, Stage 5
 **Risk class**: high
 
