@@ -114,7 +114,7 @@ Stage 3 (Prompt) ──────┴─> Stage 4 (Subagent) ─────┘
 
 ### Stage 1 — Error Handling Classification (#8)
 
-**Status**: 🟡 Pending
+**Status**: ✅ Shipped d5fc9d159 on 2026-05-05 · plan: docs/superpowers/specs/2026-05-05-harness-stage1-error-class-plan.md
 **Depends on**: 无
 **Risk class**: low
 
