@@ -186,7 +186,7 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         tool_service: Arc::new(NoopToolService) as Arc<dyn ToolService>,
         default_provider: Arc::new(NeverProvider) as Arc<dyn AiProvider>,
         named_providers: HashMap::new(),
-        stop_hooks: None,
+        verifier_chain: None,
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,

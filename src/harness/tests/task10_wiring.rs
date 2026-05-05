@@ -31,6 +31,7 @@ use crate::session::events::{
 use crate::session::service::{SessionError, SessionHandle, SessionId, SessionService};
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 use crate::verification::stop_hooks::{StopHookContext, StopHookHandler, StopHookVerdict};
+use crate::verification::{StopHookVerifier, VerifierChain};
 
 // -- Minimal mocks (kept local; the think/act suites have larger copies) -----
 
@@ -260,7 +261,7 @@ async fn budget_final_reply_short_circuits_to_done_with_hit_limit() {
         tools: Arc::new(NoopTools),
         sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
-        stop_hooks: None,
+        verifier_chain: None,
         context_budget: Some(Arc::new(AsyncMutex::new(budget))),
         context_compactor: None,
         skill_prefetcher: None,
@@ -325,7 +326,7 @@ async fn budget_warning_invokes_compactor_before_llm() {
         tools: Arc::new(NoopTools),
         sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
-        stop_hooks: None,
+        verifier_chain: None,
         context_budget: Some(Arc::new(AsyncMutex::new(budget))),
         context_compactor: Some(compactor.clone()),
         skill_prefetcher: None,
@@ -398,13 +399,18 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
     let hooks: Arc<Vec<Arc<dyn StopHookHandler>>> = Arc::new(vec![Arc::new(AlwaysBlockHook {
         reason: "tests not passing".to_string(),
     })]);
+    let chain = Arc::new(
+        VerifierChain::builder()
+            .with(Arc::new(StopHookVerifier::new(hooks)))
+            .build(),
+    );
 
     let deps = HarnessDeps {
         session: session.clone(),
         tools: Arc::new(NoopTools),
         sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
-        stop_hooks: Some(hooks),
+        verifier_chain: Some(chain),
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,
@@ -437,13 +443,13 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
     let events = session.snapshot().await;
     let veto_injected = events.iter().any(|r| match &r.event {
         SessionEvent::UserMessage { content, .. } => {
-            content.text.contains("stop-hook veto") && content.text.contains("tests not passing")
+            content.text.contains("verifier veto") && content.text.contains("tests not passing")
         }
         _ => false,
     });
     assert!(
         veto_injected,
-        "stop-hook block reason must be re-injected as a UserMessage; got events: {:#?}",
+        "verifier block reason must be re-injected as a UserMessage; got events: {:#?}",
         events
     );
 }

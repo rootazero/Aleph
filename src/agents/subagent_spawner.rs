@@ -197,7 +197,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         tools: scoped_tools,
         sandbox: base.sandbox.clone(),
         llm,
-        stop_hooks: None,
+        verifier_chain: None,
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,

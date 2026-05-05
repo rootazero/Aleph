@@ -18,7 +18,7 @@ use crate::sandbox::Sandbox;
 use crate::session::service::SessionService;
 use crate::skill::prefetch::SkillPrefetcher;
 use crate::tools::service::ToolService;
-use crate::verification::stop_hooks::StopHookHandler;
+use crate::verification::VerifierChain;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -41,10 +41,13 @@ pub struct HarnessDeps {
     /// that as `llm` instead.
     pub fallback_llm: Option<Arc<dyn AiProvider>>,
 
-    /// Stop hooks consulted before the harness yields `TurnState::Done`.
-    /// A blocking verdict forces an extra `Continue` turn so the model can
-    /// react to the veto (e.g. "tests are failing, try again").
-    pub stop_hooks: Option<Arc<Vec<Arc<dyn StopHookHandler>>>>,
+    /// Stage 6a seam (#10). Per-turn verifier chain consulted between Think
+    /// and Act every iteration. `StopHookVerifier` (in the chain) preserves
+    /// pre-6a "veto before Done" semantics; `ToolLoopVerifier` adds tool_use
+    /// death-loop detection. A `Veto` forces a `[verifier veto]` user-message
+    /// injection and an extra `Continue` turn so the model can react.
+    /// `None` is equivalent to "no verifiers wired" — zero-cost noop path.
+    pub verifier_chain: Option<Arc<VerifierChain>>,
     /// Context pressure sensor — evaluated between turns. Critical pressure
     /// surfaces as `FlowOutcome::hit_limit = true` via
     /// `AgentHarness::hit_limit()`.

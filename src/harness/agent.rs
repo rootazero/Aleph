@@ -13,7 +13,7 @@
 //! `HarnessDeps`:
 //!   * `context_budget.before_turn(...)` — drives compaction / hit_limit.
 //!   * `context_compactor.compact(...)` — fires when budget directs warning.
-//!   * `stop_hooks` — consulted before an early `TurnState::Done` handoff;
+//!   * `verifier_chain` — consulted between Think and Act every turn;
 //!     a blocking verdict forces one more `Continue` so the model reacts.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,7 +33,9 @@ use crate::session::events::{
     now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, TurnId,
 };
 use crate::session::service::SessionId;
-use crate::verification::stop_hooks::{execute_stop_hooks, StopHookContext, StopHookHandler};
+use crate::verification::{
+    hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict,
+};
 
 /// Outcome of `AgentHarness::apply_input_guardrail`. The two non-block
 /// variants both carry the (possibly mutated) events vector; the caller
@@ -109,9 +111,9 @@ impl AgentHarness {
         std::sync::Arc::new(self)
     }
 
-    /// Max consecutive stop-hook vetos before the harness gives up and
+    /// Max consecutive verifier vetos before the harness gives up and
     /// forces Done. Prevents infinite loops when a hook permanently blocks.
-    const MAX_STOP_HOOK_VETOS: usize = 10;
+    const MAX_VERIFIER_VETOS: usize = 10;
 
     /// Lazy-construct a `LoopTraceEvent` and forward to `trace_sink`.
     /// Returns immediately when no sink is wired — the closure is not invoked.
@@ -127,13 +129,14 @@ impl AgentHarness {
     /// Internal turn execution with pre-computed counters to avoid O(n²)
     /// event-log scans in the outer loop.
     ///
-    /// Returns `(TurnState, tool_calls_executed, is_stop_hook_veto)`.
+    /// Returns `(TurnState, tool_calls_executed, is_verifier_veto)`.
     async fn run_turn_internal(
         &self,
         session_id: &SessionId,
         callback: &mut dyn HarnessCallback,
         iterations: usize,
         tool_calls_made: usize,
+        tool_history: &mut std::collections::VecDeque<ToolCallSummary>,
         parent_cancel: &CancellationToken,
     ) -> Result<(TurnState, usize, bool), HarnessError> {
         // Hold a sleep-inhibit assertion for the duration of this turn so a long
@@ -357,57 +360,61 @@ impl AgentHarness {
             tracker.record_activity().await;
         }
 
-        // 5. If the LLM produced tool_calls, run the Act phase; otherwise
-        //    evaluate stop hooks before declaring Done.
+        // 5. Stage 6a (#10): VerifierChain runs every turn — StopHook + ToolLoop.
+        for tc in &response.tool_calls {
+            if tool_history.len() == 8 {
+                tool_history.pop_front();
+            }
+            tool_history.push_back(ToolCallSummary {
+                name: tc.name.clone(),
+                args_hash: hash_tool_args(&tc.arguments),
+            });
+        }
+        let stop_reason = response.tool_calls.is_empty().then_some("end_turn");
+        let verdict = self
+            .run_verifiers(
+                iterations,
+                tool_calls_made,
+                &text,
+                tool_history,
+                stop_reason,
+                parent_cancel,
+            )
+            .await;
+        let zero_metrics = crate::harness::trace::LoopTraceTurnMetrics {
+            requested_tool_calls: 0,
+            executed_tool_calls: 0,
+            productive: false,
+            consecutive_errors: 0,
+            total_tokens: 0,
+        };
         let outcome_for_trace;
         let metrics_for_trace;
         let result;
-
-        if response.tool_calls.is_empty() {
-            let block = self
-                .evaluate_stop_hooks(iterations, tool_calls_made, Some(text.clone()))
-                .await;
-            if let Some(reason) = block {
-                tracing::info!(
-                    ?session_id,
-                    reason = %reason,
-                    "stop hook vetoed; forcing continue",
-                );
-                let new_turn = uuid::Uuid::new_v4();
-                let block_event = SessionEvent::UserMessage {
-                    turn_id: new_turn,
-                    content: MessageContent {
-                        text: format!("[stop-hook veto] {reason}"),
-                        blocks: Vec::new(),
-                        thinking: None,
-                        thinking_signature: None,
-                    },
-                    at: now_ms(),
-                };
-                self.deps
-                    .session
-                    .emit_event(session_id, block_event)
-                    .await?;
-                outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;
-                metrics_for_trace = crate::harness::trace::LoopTraceTurnMetrics {
-                    requested_tool_calls: 0,
-                    executed_tool_calls: 0,
-                    productive: false,
-                    consecutive_errors: 0,
-                    total_tokens: 0,
-                };
-                result = Ok((TurnState::Continue, 0, true));
-            } else {
-                outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Stop;
-                metrics_for_trace = crate::harness::trace::LoopTraceTurnMetrics {
-                    requested_tool_calls: 0,
-                    executed_tool_calls: 0,
-                    productive: false,
-                    consecutive_errors: 0,
-                    total_tokens: 0,
-                };
-                result = Ok((TurnState::Done, 0, false));
-            }
+        if let VerifierVerdict::Veto { reason, .. } = verdict {
+            tracing::info!(?session_id, reason = %reason, "verifier vetoed; forcing continue");
+            let new_turn = uuid::Uuid::new_v4();
+            let block_event = SessionEvent::UserMessage {
+                turn_id: new_turn,
+                content: MessageContent {
+                    text: format!("[verifier veto] {reason}"),
+                    blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            };
+            self.deps
+                .session
+                .emit_event(session_id, block_event)
+                .await?;
+            outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;
+            metrics_for_trace = zero_metrics;
+            result = Ok((TurnState::Continue, 0, true));
+        } else if response.tool_calls.is_empty() {
+            outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Stop;
+            metrics_for_trace = zero_metrics;
+            result = Ok((TurnState::Done, 0, false));
         } else {
             self.emit(|| crate::harness::trace::LoopTraceEvent::TurnStateEntered {
                 iteration: iterations,
@@ -734,49 +741,28 @@ impl AgentHarness {
         }
     }
 
-    /// Evaluate stop hooks and return the blocking reason if any hook
-    /// vetoes the stop. Returns `None` when `stop_hooks` is unset, empty,
-    /// or when every hook allows the stop.
-    async fn evaluate_stop_hooks(
+    /// Stage 6a (#10): dispatch the per-turn verifier chain. `None` chain → noop.
+    async fn run_verifiers(
         &self,
         iterations: usize,
         tool_calls_made: usize,
-        final_text: Option<String>,
-    ) -> Option<String> {
-        let hooks = self.deps.stop_hooks.as_ref()?;
-        if hooks.is_empty() {
-            return None;
-        }
-        // `execute_stop_hooks` wants `&[Box<dyn StopHookHandler>]`; we hold
-        // `Arc`s for shareability. Adapt by wrapping each Arc in a forwarding
-        // Box — avoids cloning the hook implementations.
-        struct ArcHook(std::sync::Arc<dyn StopHookHandler>);
-        #[async_trait::async_trait]
-        impl StopHookHandler for ArcHook {
-            fn name(&self) -> &str {
-                self.0.name()
-            }
-            async fn evaluate(
-                &self,
-                ctx: &StopHookContext,
-                cancel: &CancellationToken,
-            ) -> crate::verification::stop_hooks::StopHookVerdict {
-                self.0.evaluate(ctx, cancel).await
-            }
-        }
-        let boxed: Vec<Box<dyn StopHookHandler>> = hooks
-            .iter()
-            .map(|h| Box::new(ArcHook(h.clone())) as Box<dyn StopHookHandler>)
-            .collect();
-        let ctx = StopHookContext {
-            final_text,
+        final_text: &str,
+        tool_history: &std::collections::VecDeque<ToolCallSummary>,
+        stop_reason: Option<&str>,
+        cancel: &CancellationToken,
+    ) -> VerifierVerdict {
+        let Some(chain) = self.deps.verifier_chain.as_ref() else {
+            return VerifierVerdict::Continue;
+        };
+        let snapshot: Vec<ToolCallSummary> = tool_history.iter().cloned().collect();
+        let ctx = TurnVerifyContext {
             iterations,
             tool_calls_made,
-            stop_reason: "end_turn".into(),
+            final_text: if final_text.is_empty() { None } else { Some(final_text) },
+            recent_tool_calls: &snapshot,
+            stop_reason,
         };
-        let cancel = CancellationToken::new();
-        let result = execute_stop_hooks(&boxed, &ctx, &cancel).await;
-        result.blocking_reason().map(|s| s.to_string())
+        chain.verify(&ctx, cancel).await
     }
 }
 
@@ -843,8 +829,11 @@ impl Harness for AgentHarness {
         let cap = self.deps.max_iterations;
         let mut iterations: usize = 0;
         let mut tool_calls_made: usize = 0;
-        let mut stop_hook_veto_count: usize = 0;
+        let mut verifier_veto_count: usize = 0;
         let mut consecutive_failure_turns: usize = 0;
+        // Stage 6a (#10): ring buffer for ToolLoopVerifier (cap=8 vs threshold 5).
+        let mut tool_history: std::collections::VecDeque<ToolCallSummary> =
+            std::collections::VecDeque::with_capacity(8);
         let result: Result<crate::harness::trace::LoopTraceSessionOutcome, HarnessError> = loop {
             if cancel.is_cancelled() {
                 break Err(HarnessError::Cancelled);
@@ -856,7 +845,14 @@ impl Harness for AgentHarness {
                 }
             }
             match self
-                .run_turn_internal(session_id, callback, iterations, tool_calls_made, cancel)
+                .run_turn_internal(
+                    session_id,
+                    callback,
+                    iterations,
+                    tool_calls_made,
+                    &mut tool_history,
+                    cancel,
+                )
                 .await
             {
                 Err(e) => break Err(e),
@@ -903,18 +899,18 @@ impl Harness for AgentHarness {
                         consecutive_failure_turns = 0;
                     }
                     if is_veto {
-                        stop_hook_veto_count = stop_hook_veto_count.saturating_add(1);
-                        if stop_hook_veto_count >= Self::MAX_STOP_HOOK_VETOS {
+                        verifier_veto_count = verifier_veto_count.saturating_add(1);
+                        if verifier_veto_count >= Self::MAX_VERIFIER_VETOS {
                             tracing::warn!(
                                 ?session_id,
-                                max_vetos = Self::MAX_STOP_HOOK_VETOS,
-                                "stop-hook veto limit reached; forcing Done to prevent infinite loop",
+                                max_vetos = Self::MAX_VERIFIER_VETOS,
+                                "verifier veto limit reached; forcing Done to prevent infinite loop",
                             );
                             callback.on_complete();
                             break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                         }
                     } else {
-                        stop_hook_veto_count = 0;
+                        verifier_veto_count = 0;
                     }
                     if let Some(limit) = cap {
                         if iterations >= limit {
@@ -992,9 +988,12 @@ impl Harness for AgentHarness {
         let iterations = count_assistant_messages(&events).saturating_add(1);
         let tool_calls_made = count_tool_calls(&events);
         let cancel = tokio_util::sync::CancellationToken::new();
-        self.run_turn_internal(session_id, callback, iterations, tool_calls_made, &cancel)
-            .await
-            .map(|(state, _, _)| state)
+        let mut history = std::collections::VecDeque::new();
+        self.run_turn_internal(
+            session_id, callback, iterations, tool_calls_made, &mut history, &cancel,
+        )
+        .await
+        .map(|(state, _, _)| state)
     }
 }
 
@@ -1203,7 +1202,7 @@ mod tests {
             tools,
             sandbox,
             llm: provider,
-            stop_hooks: None,
+            verifier_chain: None,
             context_budget: None,
             context_compactor: None,
             skill_prefetcher: None,
@@ -1403,7 +1402,7 @@ mod tests {
             tools,
             sandbox,
             llm: provider,
-            stop_hooks: None,
+            verifier_chain: None,
             context_budget: None,
             context_compactor: None,
             skill_prefetcher: None,
@@ -1459,7 +1458,7 @@ mod tests {
             tools,
             sandbox,
             llm: provider,
-            stop_hooks: None,
+            verifier_chain: None,
             context_budget: None,
             context_compactor: None,
             skill_prefetcher: None,

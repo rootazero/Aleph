@@ -156,7 +156,7 @@ impl OrchestratorFixture {
             tool_service,
             default_provider: scripted,
             named_providers: HashMap::new(),
-            stop_hooks: None,
+            verifier_chain: None,
             context_budget: None,
             context_compactor: None,
             skill_prefetcher: None,

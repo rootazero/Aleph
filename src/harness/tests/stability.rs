@@ -244,7 +244,7 @@ pub(super) fn minimal_deps(
         tools,
         sandbox: Arc::new(crate::sandbox::NoopSandbox),
         llm,
-        stop_hooks: None,
+        verifier_chain: None,
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,

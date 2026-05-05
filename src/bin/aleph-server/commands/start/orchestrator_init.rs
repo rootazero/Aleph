@@ -25,7 +25,10 @@ use alephcore::orchestrator::{
     harness_bridge::AgentHarnessRunner, loader::load_presets, resolver::RoutingOverrides,
     sandbox_factory::WorkspaceBuilder,
 };
-use alephcore::verification::stop_hooks::build_from_config as build_stop_hooks;
+use alephcore::verification::{
+    stop_hooks::build_from_config as build_stop_hooks, StopHookVerifier, ToolLoopVerifier,
+    VerifierChain,
+};
 use alephcore::StopHookConfig;
 
 /// Assemble the Phase 5 Orchestrator from already-constructed boot services.
@@ -75,12 +78,19 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // PHASE-6: populate named providers from AuthProfileRegistry. Only
     // `BrainRef::Default` works correctly until then — `Strict` returns
     // `ProviderUnavailable`.
-    // PHASE-6b Task-10: stop_hooks now wired from config.toml [[stop_hooks]].
-    // The remaining triad members (context_budget / context_compactor) plus
-    // skill_prefetcher stay `None` until their user-facing config surface
-    // lands. The harness supports both None and Some(...) shapes so future
-    // phases can inject real instances without touching this boot path again.
-    let stop_hooks = build_stop_hooks(stop_hook_configs);
+    // Stage 6a (#10): assemble the per-turn verifier chain from
+    // config.toml [[stop_hooks]] (wrapped as StopHookVerifier) plus the
+    // always-on ToolLoopVerifier (death-loop watchdog, default threshold
+    // 5). When no stop hooks AND no tool-loop concern, leave verifier_chain
+    // as None so the harness short-circuits the whole callsite.
+    let verifier_chain: Option<std::sync::Arc<VerifierChain>> = {
+        let mut builder = VerifierChain::builder();
+        if let Some(hooks) = build_stop_hooks(stop_hook_configs) {
+            builder = builder.with(std::sync::Arc::new(StopHookVerifier::new(hooks)));
+        }
+        builder = builder.with(std::sync::Arc::new(ToolLoopVerifier::new()));
+        Some(std::sync::Arc::new(builder.build()))
+    };
 
     // Platform-specific power-management capability.
     // Constructed here in the binary boot path so the core orchestrator
@@ -110,7 +120,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         tool_service,
         default_provider,
         named_providers: HashMap::new(),
-        stop_hooks,
+        verifier_chain,
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,

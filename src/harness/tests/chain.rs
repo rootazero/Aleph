@@ -82,7 +82,7 @@ mod stubs {
             tools: Arc::new(NoopTool),
             sandbox: Arc::new(crate::sandbox::NoopSandbox),
             llm: Arc::new(InertProvider),
-            stop_hooks: None,
+            verifier_chain: None,
             context_budget: None,
             context_compactor: None,
             skill_prefetcher: None,

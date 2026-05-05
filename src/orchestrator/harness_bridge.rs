@@ -37,7 +37,7 @@ use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
 use crate::session::service::{SessionId, SessionService};
 use crate::skill::prefetch::SkillPrefetcher;
 use crate::tools::service::ToolService;
-use crate::verification::stop_hooks::StopHookHandler;
+use crate::verification::VerifierChain;
 
 /// Concrete [`HarnessRunner`] that dispatches to the Phase 4 `AgentHarness`.
 pub struct AgentHarnessRunner {
@@ -54,7 +54,7 @@ pub struct AgentHarnessRunner {
     // Injected at orchestrator boot; forwarded into `HarnessDeps` on every
     // `run()` so each `AgentHarness` instance sees the same pressure sensor
     // / compactor / hook set.
-    pub stop_hooks: Option<Arc<Vec<Arc<dyn StopHookHandler>>>>,
+    pub verifier_chain: Option<Arc<VerifierChain>>,
     pub context_budget: Option<Arc<Mutex<ContextBudget>>>,
     pub context_compactor: Option<Arc<ContextCompactor>>,
     pub skill_prefetcher: Option<Arc<SkillPrefetcher>>,
@@ -147,7 +147,7 @@ impl HarnessRunner for AgentHarnessRunner {
             tools,
             sandbox,
             llm,
-            stop_hooks: self.stop_hooks.clone(),
+            verifier_chain: self.verifier_chain.clone(),
             context_budget: self.context_budget.clone(),
             context_compactor: self.context_compactor.clone(),
             skill_prefetcher: self.skill_prefetcher.clone(),
