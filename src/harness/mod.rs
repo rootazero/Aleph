@@ -28,4 +28,5 @@ mod tests {
     mod stability;
     mod task10_wiring;
     mod think;
+    mod tools_surface;
 }

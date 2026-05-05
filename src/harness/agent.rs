@@ -170,26 +170,15 @@ impl AgentHarness {
             return Ok((TurnState::Done, 0, false));
         }
 
-        // 2d. Fetch tool definitions from the tool service and convert to
-        // dispatcher format so the LLM sees available tools.
-        let tool_defs = self.deps.tools.list().await;
-        let dispatcher_tools: Vec<crate::dispatcher::ToolDefinition> = tool_defs
-            .into_iter()
-            .map(|def| crate::dispatcher::ToolDefinition {
-                name: def.name,
-                description: def.description,
-                parameters: def.input_schema,
-                requires_confirmation: false,
-                category: crate::dispatcher::ToolCategory::Builtin,
-                llm_context: None,
-                strict: false,
-            })
-            .collect();
+        // 2d. Fetch the cached dispatcher-form tool schema. This is an O(1)
+        // `Arc::clone` on the steady-state path (Stage 2). Cache invalidation
+        // is owned by `ToolService` impls; see `to_dispatcher_form`.
+        let dispatcher_tools = self.deps.tools.dispatcher_schema();
         let tools_ref: Option<&[crate::dispatcher::ToolDefinition]> = if dispatcher_tools.is_empty()
         {
             None
         } else {
-            Some(&dispatcher_tools)
+            Some(dispatcher_tools.as_ref())
         };
 
         let payload = match self.deps.system_prompt.as_deref() {
