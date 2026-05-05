@@ -7,6 +7,7 @@
 
 use std::collections::BTreeSet;
 
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -16,7 +17,7 @@ use crate::sync_primitives::Arc;
 use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 use crate::tools::service::{
-    ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
+    to_dispatcher_form, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
 };
 
 // =============================================================================
@@ -57,6 +58,8 @@ pub struct ScopedToolService {
     subagent_tool: Option<Arc<SubagentTool>>,
     refresh: Option<Arc<dyn ToolRefreshSource>>,
     hook_decorator: Option<Arc<dyn ToolHookDecorator>>,
+    schema_cache: ArcSwap<Option<(u64, Arc<[crate::dispatcher::ToolDefinition]>)>>,
+    cache_generation: std::sync::atomic::AtomicU64,
 }
 
 impl ScopedToolService {
@@ -70,6 +73,8 @@ impl ScopedToolService {
             subagent_tool: None,
             refresh: None,
             hook_decorator: None,
+            schema_cache: ArcSwap::from_pointee(None),
+            cache_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -240,7 +245,47 @@ impl ToolService for ScopedToolService {
     }
 
     fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
-        std::sync::Arc::from([])
+        use std::sync::atomic::Ordering;
+
+        // Bump generation if the refresh source signals external changes.
+        if let Some(ref refresh) = self.refresh {
+            if refresh.poll_changes() {
+                let _ = refresh.fetch_tools();
+                self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+        let gen_now = self.cache_generation.load(Ordering::Acquire);
+
+        // Cache hit?
+        if let Some(ref cached) = **self.schema_cache.load() {
+            if cached.0 == gen_now {
+                return Arc::clone(&cached.1);
+            }
+        }
+
+        // Cache miss: rebuild loop-side defs (matching list() body), then convert.
+        let mut defs: Vec<ToolDefinition> = self
+            .inner
+            .tool_definitions()
+            .into_iter()
+            .map(|d| ToolDefinition {
+                name: d.name,
+                description: d.description,
+                input_schema: d.parameters,
+                source: ToolSource::Builtin,
+                metadata: ToolDefinitionMetadata::default(),
+            })
+            .collect();
+        if let Some(ref st) = self.subagent_tool {
+            defs.push(Self::subagent_definition(st.as_ref()));
+        }
+        if !self.allowed.is_empty() {
+            defs.retain(|d| self.allowed.contains(&d.name));
+        }
+        let schema = to_dispatcher_form(&defs);
+        self.schema_cache
+            .store(Arc::new(Some((gen_now, Arc::clone(&schema)))));
+        schema
     }
 }
 
@@ -560,5 +605,49 @@ mod tests {
         // Totally unknown tool: must return None
         let def = svc.describe("nonexistent").await;
         assert!(def.is_none(), "unknown tool must return None");
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers for dispatcher_schema tests
+    // -------------------------------------------------------------------------
+
+    fn registry_with_stubs(names: &[&'static str]) -> Arc<LoopToolRegistry> {
+        let mut r = LoopToolRegistry::new();
+        for &name in names {
+            r.register(Box::new(StubTool { tool_name: name }));
+        }
+        Arc::new(r)
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 7: dispatcher_schema caches when no refresh signal
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn scoped_dispatcher_schema_caches_when_no_refresh_signal() {
+        let registry = registry_with_stubs(&["a", "b"]);
+        let svc = ScopedToolService::new(registry, BTreeSet::new());
+        let s1 = svc.dispatcher_schema();
+        let s2 = svc.dispatcher_schema();
+        assert!(
+            std::sync::Arc::ptr_eq(&s1, &s2),
+            "without refresh signal cache should hold across calls"
+        );
+        assert_eq!(s1.len(), 2);
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 8: dispatcher_schema respects allowed filter
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn scoped_dispatcher_schema_respects_allowed_filter() {
+        let registry = registry_with_stubs(&["a", "b"]);
+        let mut allowed = BTreeSet::new();
+        allowed.insert("a".to_string());
+        let svc = ScopedToolService::new(registry, allowed);
+        let s = svc.dispatcher_schema();
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].name, "a");
     }
 }
