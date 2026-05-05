@@ -32,6 +32,9 @@ pub mod stop_hook_verifier;
 pub mod tool_loop_verifier;
 pub mod turn_verifier;
 
+#[cfg(test)]
+mod tests;
+
 pub use stop_hook_verifier::StopHookVerifier;
 pub use tool_loop_verifier::ToolLoopVerifier;
 pub use turn_verifier::{

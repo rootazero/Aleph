@@ -31,7 +31,7 @@ use crate::session::events::{
 use crate::session::service::{SessionError, SessionHandle, SessionId, SessionService};
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 use crate::verification::stop_hooks::{StopHookContext, StopHookHandler, StopHookVerdict};
-use crate::verification::{StopHookVerifier, VerifierChain};
+use crate::verification::{StopHookVerifier, ToolLoopVerifier, VerifierChain};
 
 // -- Minimal mocks (kept local; the think/act suites have larger copies) -----
 
@@ -451,5 +451,115 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
         veto_injected,
         "verifier block reason must be re-injected as a UserMessage; got events: {:#?}",
         events
+    );
+}
+
+// =============================================================================
+// Test 4 — Stage 6a (#10) ToolLoopVerifier vetoes repeated tool_call end-to-end
+// =============================================================================
+
+/// Provider that always emits the *same* tool_call with empty text. Drives the
+/// harness into the precise pathology ToolLoopVerifier is designed to catch:
+/// pure repetition with no thinking text.
+struct RepeatingToolCallProvider {
+    calls: AtomicUsize,
+}
+
+impl RepeatingToolCallProvider {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+        })
+    }
+}
+
+impl AiProvider for RepeatingToolCallProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ProviderResponse {
+                text: None,
+                tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                    id: "loop-id".to_string(),
+                    name: "loop_tool".to_string(),
+                    arguments: serde_json::json!({"x": 1}),
+                }],
+                ..Default::default()
+            })
+        })
+    }
+    fn name(&self) -> &str {
+        "repeat"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+#[tokio::test]
+async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("loop on me")]);
+    let provider = RepeatingToolCallProvider::new();
+    // Threshold = 5; max_iterations cap small enough that the loop ends
+    // shortly after the verifier should have fired but before the
+    // MAX_VERIFIER_VETOS=10 safety cap.
+    let chain = Arc::new(
+        VerifierChain::builder()
+            .with(Arc::new(ToolLoopVerifier::new()))
+            .build(),
+    );
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: Some(chain),
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        fallback_llm: None,
+        max_iterations: Some(7),
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
+    let mut cb = crate::harness::NoopHarnessCallback;
+    let _ = harness
+        .run(&sample_session_id(), &mut cb, &cancel)
+        .await
+        .expect("harness.run should complete via hit_limit");
+
+    // After 7 iterations of the same tool_call with no text, ToolLoopVerifier
+    // must have fired at least once and injected `[verifier veto] ...` into
+    // the session as a UserMessage.
+    let events = session.snapshot().await;
+    let veto_count = events
+        .iter()
+        .filter(|r| {
+            matches!(&r.event,
+                SessionEvent::UserMessage { content, .. }
+                if content.text.starts_with("[verifier veto]"))
+        })
+        .count();
+    assert!(
+        veto_count >= 1,
+        "expected ≥1 [verifier veto] UserMessage; got {} events: {:#?}",
+        events.len(),
+        events
+    );
+    assert!(
+        harness.hit_limit(),
+        "max_iterations=7 should trip hit_limit",
     );
 }
