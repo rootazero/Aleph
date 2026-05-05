@@ -27,6 +27,7 @@ mod tests {
     mod act;
     mod chain;
     mod driver;
+    mod guardrails;
     mod prompt;
     mod stability;
     mod task10_wiring;

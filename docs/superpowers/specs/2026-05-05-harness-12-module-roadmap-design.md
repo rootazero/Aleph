@@ -263,7 +263,7 @@ Stage 3 (Prompt) ──────┴─> Stage 4 (Subagent) ─────┘
 
 ### Stage 5 — Guardrails Pipeline (#9)
 
-**Status**: 🟡 Pending
+**Status**: 🟡 5a Shipped on 2026-05-06 · plan: docs/superpowers/specs/2026-05-05-harness-stage5a-guardrails-pipeline-plan.md · 5b (ToolCall + on_model_fallback) Pending
 **Depends on**: Stage 1 (ErrorClass), Stage 2 (Tools surface)
 **Risk class**: high
 
