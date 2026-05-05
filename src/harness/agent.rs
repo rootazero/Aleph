@@ -37,7 +37,7 @@ pub struct AgentHarness {
     deps: HarnessDeps,
     /// Tracks agent activity for stall detection. `None` when stall detection
     /// is disabled (no `stall_config` in deps).
-    stall_tracker: Option<crate::harness::stall::StallTracker>,
+    stall_tracker: Option<crate::harness::deps::StallTracker>,
     /// Set when `context_budget.before_turn` returns `FinalReply`. Surfaced
     /// through [`AgentHarness::hit_limit`] so the orchestrator bridge can
     /// populate `FlowOutcome::hit_limit`.
@@ -47,7 +47,7 @@ pub struct AgentHarness {
 impl AgentHarness {
     pub fn new(deps: HarnessDeps) -> Self {
         let stall_tracker = deps.stall_config.as_ref().map(|config| {
-            crate::harness::stall::StallTracker::new(
+            crate::harness::deps::StallTracker::new(
                 config.clone(),
                 tokio_util::sync::CancellationToken::new(),
             )

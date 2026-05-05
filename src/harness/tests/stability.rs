@@ -689,7 +689,7 @@ async fn outcome_mapping_for_stalled_turn() {
     );
 }
 
-use crate::harness::stall::StallConfig;
+use crate::harness::StallConfig;
 
 #[tokio::test]
 async fn cross_turn_stall_still_works() {
