@@ -263,7 +263,7 @@ Stage 3 (Prompt) ──────┴─> Stage 4 (Subagent) ─────┘
 
 ### Stage 5 — Guardrails Pipeline (#9)
 
-**Status**: 🟡 5a Shipped on 2026-05-06 · plan: docs/superpowers/specs/2026-05-05-harness-stage5a-guardrails-pipeline-plan.md · 5b (ToolCall + on_model_fallback) Pending
+**Status**: ✅ Shipped on 2026-05-06 · 5a plan: docs/superpowers/specs/2026-05-05-harness-stage5a-guardrails-pipeline-plan.md · 5b plan: docs/superpowers/specs/2026-05-06-harness-stage5b-guardrails-toolcall-fallback-plan.md · all three callsites (Input + Output + ToolCall) live + on_model_fallback wired via `HarnessDeps.fallback_llm`
 **Depends on**: Stage 1 (ErrorClass), Stage 2 (Tools surface)
 **Risk class**: high
 
