@@ -616,7 +616,16 @@ impl AlephError {
         AlephError::ChannelClosed(msg.into())
     }
 
-    /// Map this error to a stable `ErrorClass` for cross-cutting decisions.
+    /// Map this error to a stable [`ErrorClass`] for cross-cutting decisions.
+    ///
+    /// The match in this method is intentionally exhaustive **without** a
+    /// wildcard arm so that adding a new `AlephError` variant fails at
+    /// compile time until it is consciously classified. Do not "fix" a
+    /// `non_exhaustive_patterns` error by adding `_ => ErrorClass::Unexpected`
+    /// — pick the variant's true class instead. See [`ErrorClass`] for the
+    /// vocabulary and the Stage 1 design doc
+    /// (`docs/superpowers/specs/2026-05-05-harness-stage1-error-class-plan.md`)
+    /// for the rationale.
     pub fn class(&self) -> ErrorClass {
         match self {
             // Transient — retry typically resolves
@@ -657,6 +666,12 @@ impl AlephError {
     }
 
     /// Whether this error is transient (worth retrying with another provider).
+    ///
+    /// **Note:** This predicate is narrower than [`AlephError::class`]'s
+    /// `ErrorClass::Transient` bucket — it omits `ProviderError` and
+    /// `McpTimeout`. New code should prefer `self.class() == ErrorClass::Transient`
+    /// for retry decisions; this method is retained for backwards compatibility
+    /// with existing call sites that have not yet migrated.
     pub fn is_transient(&self) -> bool {
         matches!(
             self,
