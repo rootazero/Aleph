@@ -151,7 +151,7 @@ Stage 3 (Prompt) ──────┴─> Stage 4 (Subagent) ─────┘
 
 ### Stage 2 — Tools Surface Unification (#2)
 
-**Status**: 🟡 Pending
+**Status**: ✅ Shipped eee6fd70a on 2026-05-05 · plan: docs/superpowers/specs/2026-05-05-harness-stage2-tools-surface-plan.md
 **Depends on**: 无
 **Risk class**: medium
 

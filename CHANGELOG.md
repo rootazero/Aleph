@@ -11,10 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Harness per-turn timeout** (`HarnessDeps.turn_timeout`) — wraps each Think (LLM `process()`) and Act (tool `execute()`) phase with `tokio::time::timeout` / `tokio::select!`. New `TurnPhase::{Think, Act{tool_name}}` enum identifies which phase hung in `HarnessError::StalledTurn { phase, elapsed }`. Parent `CancellationToken` always wins over the timeout via `tokio::select! { biased; cancel; sleep; llm_fut }`.
 - **Harness TraceSink fire points** wired across the full turn lifecycle: `TurnStarted`, `TurnStateEntered { Think | Act }`, `TextEmitted`, `ToolCallStarted`, `ToolCallCompleted` (success / error / skipped), `TurnCompleted`, `SessionCompleted`. The `LoopTraceEvent` schema in `src/harness/trace.rs` is now live; existing `GatewayTraceSink` (mpsc-backed) consumes events without code change. The `emit()` helper short-circuits when `trace_sink` is `None` — closure is never invoked, zero allocation.
 - **Harness consecutive-failure cap** (`HarnessDeps.consecutive_failure_cap`) — terminates the loop with `Done { hit_limit: true }` after N consecutive turns where every tool call failed, preventing infinite retry on permanently-broken tools.
+- **Harness Stage 2 — Tools Surface Unification** — `ToolService::dispatcher_schema()` exposes the cached dispatcher-form tool list as `Arc<[ToolDefinition]>`. Per-turn LLM tool list is now an O(1) `Arc::clone` instead of an O(n) `Vec` allocation; cache invalidates on `ToolRegistry` snapshot pointer change for `CoreDispatch` and on MCP `poll_changes()` generation bump for `ScopedToolService`. Middleware decorators delegate without per-layer caching. New helper `to_dispatcher_form()` is the single source of truth for the loop→dispatcher conversion. 4 acceptance tests added (2 integration + 1 perf assertion + 1 property test with 64 cases). Master spec § Stage 2.
 
 ### Fixed
 - **Harness tool-error abort** — tool failures inside `act()` no longer abort the entire session via `HarnessError::Tool`. Errors are now persisted as `SessionEvent::ToolError` and surfaced to the next Think as `tool_result.is_error=true` (matching Claude Code recoverable-error semantics). The model decides whether to retry, switch tactics, or stop — the harness no longer makes that decision.
 - **Harness stall false-positives** — `StallTracker::record_activity` now fires after Think completes (post `AssistantMessage` emit) and after each tool execute, in addition to the existing top-of-loop call. Eliminates spurious `Stalled` errors during legitimate long Think phases.
+
+### Removed
+- **Harness per-turn schema conversion** — `agent.rs` no longer rebuilds `Vec<DispatcherToolDefinition>` every Think turn; replaced by cached `Arc<[T]>` from `ToolService::dispatcher_schema()`.
 
 ## [2026.04.27]
 
