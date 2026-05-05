@@ -127,3 +127,63 @@ impl From<ToolError> for HarnessError {
         Self::Tool(e)
     }
 }
+
+impl HarnessError {
+    /// Map this error to a stable [`crate::error::ErrorClass`] for cross-cutting
+    /// decisions (trace dispatch in `agent.rs`, future Guardrail / Verification
+    /// consumers in Stage 5 / 6).
+    ///
+    /// The match is intentionally exhaustive **without** a wildcard arm so
+    /// adding a new `HarnessError` variant fails at compile time until it is
+    /// consciously classified. Do not "fix" a `non_exhaustive_patterns` error
+    /// by adding `_ => ErrorClass::Unexpected` — pick the variant's true class
+    /// instead.
+    pub fn class(&self) -> crate::error::ErrorClass {
+        use crate::error::ErrorClass;
+        match self {
+            HarnessError::Llm(inner) => inner.class(),
+            HarnessError::Tool(_) => ErrorClass::Fixable,
+            HarnessError::Session(_) => ErrorClass::Unexpected,
+            HarnessError::Cancelled => ErrorClass::Recoverable,
+            HarnessError::Stalled { .. } | HarnessError::StalledTurn { .. } => {
+                ErrorClass::Transient
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod harness_error_class_tests {
+    use super::{HarnessError, TurnPhase};
+    use crate::error::{AlephError, ErrorClass};
+
+    #[test]
+    fn cancelled_is_recoverable() {
+        assert_eq!(HarnessError::Cancelled.class(), ErrorClass::Recoverable);
+    }
+
+    #[test]
+    fn stalled_is_transient() {
+        let e = HarnessError::Stalled {
+            elapsed: std::time::Duration::from_secs(60),
+        };
+        assert_eq!(e.class(), ErrorClass::Transient);
+    }
+
+    #[test]
+    fn stalled_turn_is_transient() {
+        let e = HarnessError::StalledTurn {
+            phase: TurnPhase::Think,
+            elapsed: std::time::Duration::from_secs(60),
+        };
+        assert_eq!(e.class(), ErrorClass::Transient);
+    }
+
+    #[test]
+    fn llm_delegates_to_inner() {
+        let e = HarnessError::Llm(AlephError::network("net blip"));
+        assert_eq!(e.class(), ErrorClass::Transient);
+        let e = HarnessError::Llm(AlephError::authentication("anthropic", "bad key"));
+        assert_eq!(e.class(), ErrorClass::Fixable);
+    }
+}
