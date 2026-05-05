@@ -616,6 +616,46 @@ impl AlephError {
         AlephError::ChannelClosed(msg.into())
     }
 
+    /// Map this error to a stable `ErrorClass` for cross-cutting decisions.
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            // Transient — retry typically resolves
+            AlephError::NetworkError { .. } => ErrorClass::Transient,
+            AlephError::RateLimitError { .. } => ErrorClass::Transient,
+            AlephError::ProviderError { .. } => ErrorClass::Transient,
+            AlephError::Timeout { .. } => ErrorClass::Transient,
+            AlephError::McpTimeout => ErrorClass::Transient,
+            AlephError::ExecutionTimeout { .. } => ErrorClass::Transient,
+            // Fixable — model can self-correct on next turn
+            AlephError::AuthenticationError { .. } => ErrorClass::Fixable,
+            AlephError::ToolNotFound { .. } => ErrorClass::Fixable,
+            AlephError::MissingInput { .. } => ErrorClass::Fixable,
+            AlephError::Validation(_) => ErrorClass::Fixable,
+            // Recoverable — outer loop or fallback path can recover
+            AlephError::NoProviderAvailable { .. } => ErrorClass::Recoverable,
+            AlephError::Cancelled => ErrorClass::Recoverable,
+            // Unexpected — genuine system/data/config error; treat as terminal
+            AlephError::HotkeyError { .. } => ErrorClass::Unexpected,
+            AlephError::ClipboardError { .. } => ErrorClass::Unexpected,
+            AlephError::InputSimulationError { .. } => ErrorClass::Unexpected,
+            AlephError::CallbackError { .. } => ErrorClass::Unexpected,
+            AlephError::ConfigError { .. } => ErrorClass::Unexpected,
+            AlephError::InvalidConfig { .. } => ErrorClass::Unexpected,
+            AlephError::KeychainError { .. } => ErrorClass::Unexpected,
+            AlephError::Other { .. } => ErrorClass::Unexpected,
+            AlephError::PermissionDenied { .. } => ErrorClass::Unexpected,
+            AlephError::VideoError { .. } => ErrorClass::Unexpected,
+            AlephError::NotFound(_) => ErrorClass::Unexpected,
+            AlephError::IoError(_) => ErrorClass::Unexpected,
+            AlephError::GitError(_) => ErrorClass::Unexpected,
+            AlephError::McpToolNotFound(_) => ErrorClass::Unexpected,
+            AlephError::RuntimeError { .. } => ErrorClass::Unexpected,
+            AlephError::CorruptData(_) => ErrorClass::Unexpected,
+            AlephError::ChannelClosed(_) => ErrorClass::Unexpected,
+            AlephError::SandboxUnavailable { .. } => ErrorClass::Unexpected,
+        }
+    }
+
     /// Whether this error is transient (worth retrying with another provider).
     pub fn is_transient(&self) -> bool {
         matches!(
@@ -792,6 +832,58 @@ mod tests {
         let msg = err.user_friendly_message();
         assert!(msg.contains("Authentication"));
         assert!(msg.contains("API key"));
+    }
+}
+
+/// Error classification for cross-cutting decisions (retry, guardrail veto,
+/// verification feedback). Stable vocabulary shared by `HarnessError` and
+/// `AlephError`. Future Stage 5 (Guardrails) and Stage 6 (Verification)
+/// dispatch on these classes rather than enumerating concrete variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// Caller-side or environment hiccup — retry typically resolves.
+    /// Examples: network blip, provider 5xx, rate limit, timeout.
+    Transient,
+    /// Outer loop or fallback path can recover (try different provider,
+    /// re-run after user intervention). Not the model's fault.
+    /// Examples: user cancellation, no provider available.
+    Recoverable,
+    /// Model can read the error and self-correct on next turn.
+    /// Examples: tool not found, missing input, schema violation, bad auth.
+    Fixable,
+    /// Genuine system / data / config error; neither retry nor model
+    /// adjustment helps. Treat as terminal.
+    /// Examples: I/O failure, corrupt data, OS permission denied.
+    Unexpected,
+}
+
+#[cfg(test)]
+mod error_class_tests {
+    use super::{AlephError, ErrorClass};
+
+    #[test]
+    fn network_error_classifies_as_transient() {
+        let e = AlephError::network("connection reset");
+        assert_eq!(e.class(), ErrorClass::Transient);
+    }
+
+    #[test]
+    fn authentication_error_classifies_as_fixable() {
+        let e = AlephError::authentication("anthropic", "invalid key");
+        assert_eq!(e.class(), ErrorClass::Fixable);
+    }
+
+    #[test]
+    fn cancelled_classifies_as_recoverable() {
+        assert_eq!(AlephError::Cancelled.class(), ErrorClass::Recoverable);
+    }
+
+    #[test]
+    fn corrupt_data_classifies_as_unexpected() {
+        assert_eq!(
+            AlephError::CorruptData("bad blob".into()).class(),
+            ErrorClass::Unexpected
+        );
     }
 }
 
