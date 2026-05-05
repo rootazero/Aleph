@@ -155,6 +155,7 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(alephcore::harness::prompt::DefaultPromptBuilder),
         chain_context: alephcore::harness::chain_context::ChainContext::default(),
+        guardrails: None,
         max_iterations: None,
         power: None,
         stall_config: None,

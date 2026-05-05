@@ -72,6 +72,11 @@ pub struct SpawnerBase {
     /// Parent session id — when set, the row is tagged with it so
     /// `notes` can correlate the lesson with the originating session.
     pub parent_session_id: Option<String>,
+    /// Stage 5a (#9) — parent's guardrail registry. Inherited by the
+    /// subagent so sub-runs enforce the same Input/Output/ToolCall checks
+    /// as the spawning harness. `None` for harness instances without a
+    /// configured registry.
+    pub guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -203,6 +208,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         // so its `chain_context()` accessor reports the correct depth/chain_id
         // instead of falling back to a fresh root.
         chain_context: child_chain.clone(),
+        // Stage 5a (#9): inherit parent guardrails so the subagent enforces
+        // the same Input/Output/ToolCall checks as the spawning harness.
+        guardrails: base.guardrails.clone(),
         max_iterations: max_iter,
         power: None,
         stall_config: None,
@@ -622,6 +630,7 @@ mod tests {
             capture_registry: None,
             parent_agent_id: None,
             parent_session_id: None,
+            guardrails: None,
         }
     }
 

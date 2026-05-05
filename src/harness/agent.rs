@@ -34,6 +34,20 @@ use crate::session::events::{
 use crate::session::service::SessionId;
 use crate::verification::stop_hooks::{execute_stop_hooks, StopHookContext, StopHookHandler};
 
+/// Outcome of `AgentHarness::apply_input_guardrail`. The two non-block
+/// variants both carry the (possibly mutated) events vector; the caller
+/// rebinds `events` to the returned vector before assembling the prompt.
+enum InputGuardrailOutcome {
+    /// Pass-through; events are unchanged.
+    Allow(Vec<crate::session::events::SessionEventRecord>),
+    /// Latest UserMessage's text was rewritten in-memory only — the
+    /// session log retains the original event for audit.
+    Sanitized(Vec<crate::session::events::SessionEventRecord>),
+    /// Guardrail blocked the turn; caller emits `on_safety_block` and
+    /// returns `TurnState::Done` without invoking the LLM.
+    Blocked(String),
+}
+
 pub struct AgentHarness {
     deps: HarnessDeps,
     /// Tracks agent activity for stall detection. `None` when stall detection
@@ -141,6 +155,28 @@ impl AgentHarness {
         let events = self.deps.session.get_events(session_id, None, None).await?;
         let tail_start = tail_start_index(&events);
 
+        // 1a. Stage 5a (#9): Input guardrail. Inspect the latest UserMessage
+        // in the tail. `Block` ends the turn early via `on_safety_block`;
+        // `Sanitize` rewrites the in-memory event before the prompt builder
+        // sees it (the original session-log event is left intact for audit).
+        let events: Vec<crate::session::events::SessionEventRecord> = if let Some(registry) =
+            self.deps.guardrails.as_ref()
+        {
+            match self
+                .apply_input_guardrail(registry, events, tail_start)
+                .await?
+            {
+                InputGuardrailOutcome::Allow(events) => events,
+                InputGuardrailOutcome::Sanitized(events) => events,
+                InputGuardrailOutcome::Blocked(reason) => {
+                    callback.on_safety_block(&reason);
+                    return Ok((TurnState::Done, 0, false));
+                }
+            }
+        } else {
+            events
+        };
+
         // 2. Build the LLM request. `prompt_builder` has access to the full log
         //    so it can reconstruct the preceding assistant tool_use turn and
         //    resolve tool names for tool_result messages.
@@ -244,6 +280,34 @@ impl AgentHarness {
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = current_turn_id(&events);
         let text = response.text_content();
+
+        // 4a. Stage 5a (#9): Output guardrail. `Block` aborts with
+        // `HarnessError::Llm(ErrorClass::Fixable)` so the orchestrator can
+        // retry; `Sanitize` rewrites the text before persistence and stream.
+        // Tool-use blocks are not rewritten here — Stage 5b's
+        // `ToolCallGuardrail` covers their args.
+        let text = if let Some(registry) = self.deps.guardrails.as_ref() {
+            match registry.evaluate_output(&text).await {
+                crate::guardrails::GuardrailDecision::Allow => text,
+                crate::guardrails::GuardrailDecision::Warn { reason } => {
+                    tracing::warn!(?session_id, reason = %reason, "output guardrail warned");
+                    text
+                }
+                crate::guardrails::GuardrailDecision::Sanitize(rep) => {
+                    callback.on_safety_block(&format!("output sanitized by {}", rep.source));
+                    rep.text
+                }
+                crate::guardrails::GuardrailDecision::Block { reason, class: _ } => {
+                    callback.on_safety_block(&reason);
+                    return Err(HarnessError::Llm(crate::error::AlephError::other(format!(
+                        "output guardrail blocked: {reason}"
+                    ))));
+                }
+            }
+        } else {
+            text
+        };
+
         if !text.is_empty() {
             // Non-streaming LLM layer emits one chunk per turn; the callback
             // shape permits finer chunking once `process_stream` is wired.
@@ -500,6 +564,52 @@ impl AgentHarness {
         }
 
         Ok(executed_count)
+    }
+
+    /// Stage 5a (#9): Apply the input guardrail to the latest UserMessage in
+    /// the tail. Returns the (possibly rewritten) events vector or a `Block`
+    /// reason. The original session log is never mutated — sanitisation
+    /// happens only on the in-memory clone passed to the prompt builder, so
+    /// audit trails preserve the original text.
+    async fn apply_input_guardrail(
+        &self,
+        registry: &crate::guardrails::GuardrailRegistry,
+        events: Vec<crate::session::events::SessionEventRecord>,
+        tail_start: usize,
+    ) -> Result<InputGuardrailOutcome, HarnessError> {
+        // Locate the latest UserMessage index in the tail, if any.
+        let latest_user_idx = events[tail_start..]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(rel, r)| matches!(r.event, SessionEvent::UserMessage { .. }).then_some(rel))
+            .map(|rel| tail_start + rel);
+        let Some(idx) = latest_user_idx else {
+            return Ok(InputGuardrailOutcome::Allow(events));
+        };
+        let text = match &events[idx].event {
+            SessionEvent::UserMessage { content, .. } => content.text.clone(),
+            _ => return Ok(InputGuardrailOutcome::Allow(events)),
+        };
+        match registry.evaluate_input(&text).await {
+            crate::guardrails::GuardrailDecision::Allow => {
+                Ok(InputGuardrailOutcome::Allow(events))
+            }
+            crate::guardrails::GuardrailDecision::Warn { reason } => {
+                tracing::warn!(reason = %reason, "input guardrail warned");
+                Ok(InputGuardrailOutcome::Allow(events))
+            }
+            crate::guardrails::GuardrailDecision::Sanitize(rep) => {
+                let mut events = events;
+                if let SessionEvent::UserMessage { content, .. } = &mut events[idx].event {
+                    content.text = rep.text;
+                }
+                Ok(InputGuardrailOutcome::Sanitized(events))
+            }
+            crate::guardrails::GuardrailDecision::Block { reason, class: _ } => {
+                Ok(InputGuardrailOutcome::Blocked(reason))
+            }
+        }
     }
 
     /// Evaluate stop hooks and return the blocking reason if any hook
@@ -979,6 +1089,7 @@ mod tests {
             system_prompt: Some("ROLE: SPEC-BOT".into()),
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
+            guardrails: None,
             max_iterations: None,
             power: None,
             stall_config: None,
@@ -1177,6 +1288,7 @@ mod tests {
             system_prompt: None,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
+            guardrails: None,
             max_iterations: Some(3),
             power: None,
             stall_config: None,
@@ -1231,6 +1343,7 @@ mod tests {
             system_prompt: None,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
+            guardrails: None,
             max_iterations: None,
             power: None,
             stall_config: None,

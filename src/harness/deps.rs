@@ -64,6 +64,12 @@ pub struct HarnessDeps {
     /// subagent spawner overrides this with `parent.chain.child()` so each
     /// nested harness reports its own depth via `AgentHarness::chain_context()`.
     pub chain_context: ChainContext,
+    /// Stage 5a seam (#9). Optional registry consulted at three callsites
+    /// in `AgentHarness::run_turn_internal`: turn entry (input), model
+    /// output emit (output), and tool dispatch (tool-call, Stage 5b).
+    /// `None` is equivalent to "no guardrails registered" — zero-cost
+    /// noop path with no allocations on the steady-state hot loop.
+    pub guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
     /// Hard iteration cap. When set, AgentHarness::run forces TurnState::Done
     /// after that many Continue turns and sets hit_limit=true. None → unbounded
     /// (current Gateway default).

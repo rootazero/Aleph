@@ -120,6 +120,10 @@ pub struct AgentRuntime {
     parent_agent_id: Option<String>,
     /// Parent session id stamped onto the emitted Delegation row.
     parent_session_id: Option<String>,
+    /// Stage 5a (#9) — guardrail registry inherited by spawned subagents.
+    /// `None` keeps the legacy "no guardrails" path; `Some(_)` propagates
+    /// to every `SpawnerBase` built by `spawn_subagent`.
+    guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
 }
 
 impl AgentRuntime {
@@ -144,7 +148,17 @@ impl AgentRuntime {
             capture_registry: None,
             parent_agent_id: None,
             parent_session_id: None,
+            guardrails: None,
         }
+    }
+
+    /// Stage 5a (#9) — wire a guardrail registry that subagents inherit.
+    pub fn with_guardrails(
+        mut self,
+        registry: Arc<crate::guardrails::GuardrailRegistry>,
+    ) -> Self {
+        self.guardrails = Some(registry);
+        self
     }
 
     /// Wire a `RawMemoryStore` so the spawner emits the Delegation hook.
@@ -282,6 +296,7 @@ impl AgentRuntime {
             capture_registry: self.capture_registry.clone(),
             parent_agent_id: self.parent_agent_id.clone(),
             parent_session_id: self.parent_session_id.clone(),
+            guardrails: self.guardrails.clone(),
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

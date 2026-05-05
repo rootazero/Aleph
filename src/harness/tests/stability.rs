@@ -252,6 +252,7 @@ pub(super) fn minimal_deps(
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
         max_iterations: None,
         power: None,
         stall_config: None,
