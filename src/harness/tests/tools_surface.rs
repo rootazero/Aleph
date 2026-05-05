@@ -4,8 +4,8 @@
 //! ≥1 perf assertion (cache hit count), ≥1 property test (to_dispatcher_form
 //! consistency with field-by-field manual conversion).
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use proptest::prelude::*;

@@ -142,7 +142,12 @@ async fn assistant_then_tool_result_reconstructs_prior_turn() {
 
     // Second message: ToolResult
     match &new_output[1] {
-        UnifiedMessage::ToolResult { tool_call_id, tool_name, is_error, .. } => {
+        UnifiedMessage::ToolResult {
+            tool_call_id,
+            tool_name,
+            is_error,
+            ..
+        } => {
             assert_eq!(tool_call_id, "c1");
             assert_eq!(tool_name, "weather");
             assert!(!is_error);
@@ -205,8 +210,7 @@ mod prop {
 #[ignore]
 async fn perf_dispatch_overhead_documented() {
     use std::time::Instant;
-    let events: Vec<SessionEventRecord> =
-        (0..1000).map(|i| user_msg(&format!("m{i}"))).collect();
+    let events: Vec<SessionEventRecord> = (0..1000).map(|i| user_msg(&format!("m{i}"))).collect();
     let ctx = TurnContext::new(&events, 0);
 
     let start = Instant::now();

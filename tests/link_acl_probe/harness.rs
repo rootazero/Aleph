@@ -14,11 +14,9 @@ use tokio::sync::mpsc;
 
 use alephcore::gateway::event_emitter::EventEmitter;
 use alephcore::gateway::execution_engine::{ExecutionError, RunState};
-use alephcore::gateway::RunRequest;
-use alephcore::gateway::session_store::file_backend::{
-    FileSessionStore, FileSessionStoreConfig,
-};
+use alephcore::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
 use alephcore::gateway::session_store::SessionStore;
+use alephcore::gateway::RunRequest;
 use alephcore::gateway::{
     AgentEnvStore, AgentEnvStoreConfig, AgentInstance, AgentInstanceConfig, AgentRegistry, Channel,
     ChannelId, ChannelRegistry, ConversationId, DmPolicy, ExecutionAdapter, GroupPolicy,

@@ -98,7 +98,9 @@ impl PromptBuilder for DefaultPromptBuilder {
                 SessionEvent::UserMessage { content, .. } => {
                     messages.push(UnifiedMessage::user(&content.text));
                 }
-                SessionEvent::ToolResult { call_id, output, .. } => {
+                SessionEvent::ToolResult {
+                    call_id, output, ..
+                } => {
                     let tool_result_idx = tail_start + offset;
                     let tool_name =
                         resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
@@ -137,16 +139,28 @@ impl PromptBuilder for DefaultPromptBuilder {
 ///
 /// `pub(crate)` so the round-trip test in `harness::tests::act` can exercise
 /// the writer/reader pair without re-exporting through `harness::agent`.
-pub(crate) fn parse_tool_use_block(block: &serde_json::Value) -> Option<crate::providers::message::ContentBlock> {
+pub(crate) fn parse_tool_use_block(
+    block: &serde_json::Value,
+) -> Option<crate::providers::message::ContentBlock> {
     use crate::providers::message::ContentBlock;
     let obj = block.as_object()?;
     if obj.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
         return None;
     }
-    let id = obj.get("id").and_then(serde_json::Value::as_str)?.to_string();
-    let name = obj.get("name").and_then(serde_json::Value::as_str)?.to_string();
+    let id = obj
+        .get("id")
+        .and_then(serde_json::Value::as_str)?
+        .to_string();
+    let name = obj
+        .get("name")
+        .and_then(serde_json::Value::as_str)?
+        .to_string();
     let arguments = obj.get("input").cloned().unwrap_or(serde_json::Value::Null);
-    Some(ContentBlock::ToolCall { id, name, arguments })
+    Some(ContentBlock::ToolCall {
+        id,
+        name,
+        arguments,
+    })
 }
 
 /// Find the `ToolCallRequested.name` whose `call_id` matches, searching
@@ -159,9 +173,9 @@ fn resolve_tool_name<'a>(
     use crate::session::events::SessionEvent;
     let upper = before_idx.min(events.len());
     events[..upper].iter().rev().find_map(|r| match &r.event {
-        SessionEvent::ToolCallRequested { call_id: id, name, .. } if id == call_id => {
-            Some(name.as_str())
-        }
+        SessionEvent::ToolCallRequested {
+            call_id: id, name, ..
+        } if id == call_id => Some(name.as_str()),
         _ => None,
     })
 }

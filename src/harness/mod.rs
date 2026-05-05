@@ -16,15 +16,16 @@ pub mod trait_def;
 pub use agent::AgentHarness;
 pub use callback::{HarnessCallback, NoopHarnessCallback};
 pub use deps::HarnessDeps;
+pub use deps::{StallConfig, StallTracker};
 pub use loop_callback::{LoopCallback, NoopCallback};
 pub use prompt::{DefaultPromptBuilder, PromptBuilder, TurnContext};
-pub use deps::{StallConfig, StallTracker};
 pub use trace_sink::{NoopTraceSink, TraceSink};
 pub use trait_def::{Harness, HarnessError, TurnPhase, TurnState};
 
 #[cfg(test)]
 mod tests {
     mod act;
+    mod chain;
     mod driver;
     mod prompt;
     mod stability;
