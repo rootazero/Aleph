@@ -16,7 +16,8 @@ use tokio::sync::{broadcast, Mutex};
 use crate::error::{ErrorClass, Result as AlephResult};
 use crate::guardrails::decision::{GuardrailDecision, Replacement};
 use crate::guardrails::registry::GuardrailRegistry;
-use crate::guardrails::traits::{InputGuardrail, OutputGuardrail};
+use crate::guardrails::traits::{InputGuardrail, OutputGuardrail, ToolCallGuardrail};
+use crate::providers::adapter::NativeToolCall;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::{
     AgentHarness, Harness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState,
@@ -475,4 +476,295 @@ async fn output_guardrail_sanitize_rewrites_persisted_assistant_message() {
         "raw LEAK token leaked into persisted message: {:?}",
         text
     );
+}
+
+// ===========================================================================
+// Stage 5b — Tool-call guardrail integration tests
+// ===========================================================================
+
+/// `ToolService` that records every `(name, args)` it sees for assertions and
+/// returns a fixed Ok output. No name filtering — accepts any tool name.
+struct RecordingTools {
+    seen: Mutex<Vec<(String, serde_json::Value)>>,
+}
+
+impl RecordingTools {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            seen: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+#[async_trait]
+impl ToolService for RecordingTools {
+    async fn execute(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+    ) -> Result<crate::session::events::ToolOutput, ToolError> {
+        self.seen.lock().await.push((name.to_string(), input));
+        Ok(crate::session::events::ToolOutput {
+            value: serde_json::json!({"ok": true}),
+            metadata: Default::default(),
+        })
+    }
+    async fn list(&self) -> Vec<ToolDefinition> {
+        Vec::new()
+    }
+    async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
+        None
+    }
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
+}
+
+/// Blocks any tool call whose name matches `target`.
+struct BlockToolByName(&'static str);
+#[async_trait]
+impl ToolCallGuardrail for BlockToolByName {
+    fn name(&self) -> &str {
+        "block_tool_by_name"
+    }
+    async fn evaluate_tool_call(
+        &self,
+        tool_name: &str,
+        _args: &serde_json::Value,
+    ) -> GuardrailDecision {
+        if tool_name == self.0 {
+            GuardrailDecision::Block {
+                reason: format!("tool {} forbidden", self.0),
+                class: ErrorClass::Fixable,
+            }
+        } else {
+            GuardrailDecision::Allow
+        }
+    }
+}
+
+/// Sanitizes args containing a SECRET literal by replacing it with [REDACTED].
+struct SanitizeToolArgs;
+#[async_trait]
+impl ToolCallGuardrail for SanitizeToolArgs {
+    fn name(&self) -> &str {
+        "sanitize_tool_args"
+    }
+    async fn evaluate_tool_call(
+        &self,
+        _tool_name: &str,
+        args: &serde_json::Value,
+    ) -> GuardrailDecision {
+        let s = serde_json::to_string(args).unwrap_or_default();
+        if s.contains("SECRET") {
+            let rewritten = s.replace("SECRET", "[REDACTED]");
+            GuardrailDecision::Sanitize(Replacement {
+                text: rewritten,
+                source: "test".into(),
+            })
+        } else {
+            GuardrailDecision::Allow
+        }
+    }
+}
+
+/// Builds the deps used by the 5b tests — same shape as `make_deps` but with
+/// a `RecordingTools` instead of `EmptyTools` so we can assert on what tools
+/// actually got dispatched.
+fn make_deps_with_tools(
+    session: Arc<MockSession>,
+    provider: Arc<dyn AiProvider>,
+    tools: Arc<RecordingTools>,
+    registry: GuardrailRegistry,
+) -> HarnessDeps {
+    HarnessDeps {
+        session,
+        tools,
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider,
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: Some(Arc::new(registry)),
+        fallback_llm: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+    }
+}
+
+/// Build a provider that emits two tool calls in one turn.
+fn provider_with_two_calls(
+    first: NativeToolCall,
+    second: NativeToolCall,
+) -> Arc<CapturingProvider> {
+    Arc::new(CapturingProvider {
+        response: ProviderResponse {
+            text: Some("dispatching".into()),
+            tool_calls: vec![first, second],
+            ..Default::default()
+        },
+        seen_user_text: Mutex::new(Vec::new()),
+    })
+}
+
+#[tokio::test]
+async fn tool_call_block_skips_only_blocked_call_in_batch() {
+    // Provider asks for two tools; the first ("forbidden_tool") is blocked.
+    // The second ("safe_tool") must still execute — Stage 5b spec says Block
+    // skips ONE call, batch continues.
+    let blocked = NativeToolCall {
+        id: "c1".into(),
+        name: "forbidden_tool".into(),
+        arguments: serde_json::json!({"x": 1}),
+    };
+    let allowed = NativeToolCall {
+        id: "c2".into(),
+        name: "safe_tool".into(),
+        arguments: serde_json::json!({"y": 2}),
+    };
+    let session = MockSession::new(vec![turn_started(), user_message("run both")]);
+    let provider = provider_with_two_calls(blocked.clone(), allowed.clone());
+    let tools = RecordingTools::new();
+    let registry = GuardrailRegistry::builder()
+        .with_tool_call(Arc::new(BlockToolByName("forbidden_tool")))
+        .build();
+    let harness = AgentHarness::new(make_deps_with_tools(
+        session.clone(),
+        provider as Arc<dyn AiProvider>,
+        tools.clone(),
+        registry,
+    ));
+
+    let mut cb = CapturingCallback::default();
+    let state = harness
+        .run_turn(&sample_session_id(), &mut cb)
+        .await
+        .expect("run_turn ok");
+    assert_eq!(state, TurnState::Continue);
+
+    // Only the allowed tool reached the ToolService.
+    let seen = tools.seen.lock().await.clone();
+    assert_eq!(seen.len(), 1, "expected exactly one tool dispatch, got {seen:?}");
+    assert_eq!(seen[0].0, "safe_tool");
+
+    // safety_blocks fired once with the blocked tool name in the reason.
+    assert_eq!(cb.safety_blocks.len(), 1, "got {:?}", cb.safety_blocks);
+    assert!(cb.safety_blocks[0].contains("forbidden_tool"));
+
+    // Session log: ToolError for the blocked call AND ToolResult for the safe one.
+    let log = session.snapshot().await;
+    let tool_errors: Vec<&SessionEventRecord> = log
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolError { .. }))
+        .collect();
+    let tool_results: Vec<&SessionEventRecord> = log
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolResult { .. }))
+        .collect();
+    assert_eq!(tool_errors.len(), 1, "expected 1 ToolError, got log={log:?}");
+    assert_eq!(tool_results.len(), 1, "expected 1 ToolResult, got log={log:?}");
+}
+
+#[tokio::test]
+async fn tool_call_sanitize_rewrites_args_seen_by_tool() {
+    let dirty = NativeToolCall {
+        id: "c1".into(),
+        name: "send_message".into(),
+        arguments: serde_json::json!({"body": "the password is SECRET"}),
+    };
+    let session = MockSession::new(vec![turn_started(), user_message("send")]);
+    // CapturingProvider with a single tool call.
+    let provider = Arc::new(CapturingProvider {
+        response: ProviderResponse {
+            text: Some("dispatching".into()),
+            tool_calls: vec![dirty],
+            ..Default::default()
+        },
+        seen_user_text: Mutex::new(Vec::new()),
+    });
+    let tools = RecordingTools::new();
+    let registry = GuardrailRegistry::builder()
+        .with_tool_call(Arc::new(SanitizeToolArgs))
+        .build();
+    let harness = AgentHarness::new(make_deps_with_tools(
+        session.clone(),
+        provider as Arc<dyn AiProvider>,
+        tools.clone(),
+        registry,
+    ));
+
+    let mut cb = CapturingCallback::default();
+    let _ = harness
+        .run_turn(&sample_session_id(), &mut cb)
+        .await
+        .expect("run_turn ok");
+
+    // Tool was dispatched once, with the SECRET replaced by [REDACTED].
+    let seen = tools.seen.lock().await.clone();
+    assert_eq!(seen.len(), 1, "got {seen:?}");
+    let args_str = serde_json::to_string(&seen[0].1).unwrap();
+    assert!(
+        args_str.contains("[REDACTED]"),
+        "tool should see redacted args, got {args_str}"
+    );
+    assert!(
+        !args_str.contains("SECRET"),
+        "raw SECRET leaked into tool args: {args_str}"
+    );
+    assert!(
+        cb.safety_blocks.is_empty(),
+        "Sanitize must NOT fire on_safety_block, got {:?}",
+        cb.safety_blocks
+    );
+}
+
+#[tokio::test]
+async fn tool_call_allow_passes_through_unchanged() {
+    let call = NativeToolCall {
+        id: "c1".into(),
+        name: "noop".into(),
+        arguments: serde_json::json!({"k": "v"}),
+    };
+    let session = MockSession::new(vec![turn_started(), user_message("hi")]);
+    let provider = Arc::new(CapturingProvider {
+        response: ProviderResponse {
+            text: Some("ack".into()),
+            tool_calls: vec![call.clone()],
+            ..Default::default()
+        },
+        seen_user_text: Mutex::new(Vec::new()),
+    });
+    let tools = RecordingTools::new();
+    // BlockToolByName for a *different* tool name → registry is wired but
+    // allows everything we actually call. Confirms the Allow path doesn't
+    // accidentally rewrite or short-circuit.
+    let registry = GuardrailRegistry::builder()
+        .with_tool_call(Arc::new(BlockToolByName("some_other_tool")))
+        .build();
+    let harness = AgentHarness::new(make_deps_with_tools(
+        session.clone(),
+        provider as Arc<dyn AiProvider>,
+        tools.clone(),
+        registry,
+    ));
+
+    let mut cb = CapturingCallback::default();
+    let _ = harness
+        .run_turn(&sample_session_id(), &mut cb)
+        .await
+        .expect("run_turn ok");
+
+    let seen = tools.seen.lock().await.clone();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].0, "noop");
+    assert_eq!(seen[0].1, call.arguments);
+    assert!(cb.safety_blocks.is_empty());
 }

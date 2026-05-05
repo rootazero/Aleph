@@ -148,3 +148,85 @@ async fn counts_match_registered_guardrails() {
     assert_eq!(r.output_count(), 1);
     assert_eq!(r.tool_call_count(), 3);
 }
+
+/// Concurrency hammer: spawn N tasks each calling `evaluate_tool_call` in a
+/// loop while a sibling task flips `disable_all` / `enable_all`. The contract
+/// being tested is the sequential consistency of the AtomicBool kill-switch:
+/// every individual call must observe a coherent on/off state and produce
+/// either an `Allow` (registry off OR no guardrails fired) or a `Block` (an
+/// `AlwaysBlock` guardrail fired while registry was on). No call should
+/// panic, deadlock, or return an inconsistent decision.
+///
+/// This stands in for a `loom` model test — the repository's loom feature
+/// exists in `sync_primitives` but no `cfg(loom)` test infrastructure is
+/// wired into `cargo test` yet. A tokio hammer with high task count gives
+/// good practical coverage for a single-AtomicBool flag at minimal cost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_evaluate_vs_disable_all_is_consistent() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let registry = Arc::new(
+        GuardrailRegistry::builder()
+            .with_tool_call(Arc::new(AlwaysBlock))
+            .build(),
+    );
+
+    const READERS: usize = 16;
+    const ITERS: usize = 200;
+    let blocks = Arc::new(AtomicUsize::new(0));
+    let allows = Arc::new(AtomicUsize::new(0));
+
+    let toggler = {
+        let registry = registry.clone();
+        tokio::spawn(async move {
+            for i in 0..(READERS * ITERS) {
+                if i % 2 == 0 {
+                    registry.disable_all();
+                } else {
+                    registry.enable_all();
+                }
+                // Yield so readers actually get scheduled between toggles —
+                // without this the toggler can run to completion in one slot
+                // and the test degenerates into sequential execution.
+                if i % 8 == 0 {
+                    tokio::task::yield_now().await;
+                }
+            }
+        })
+    };
+
+    let mut readers = Vec::with_capacity(READERS);
+    for _ in 0..READERS {
+        let registry = registry.clone();
+        let blocks = blocks.clone();
+        let allows = allows.clone();
+        readers.push(tokio::spawn(async move {
+            for _ in 0..ITERS {
+                let d = registry
+                    .evaluate_tool_call("any", &serde_json::json!({"x": 1}))
+                    .await;
+                match d {
+                    GuardrailDecision::Block { .. } => {
+                        blocks.fetch_add(1, Ordering::Relaxed);
+                    }
+                    GuardrailDecision::Allow => {
+                        allows.fetch_add(1, Ordering::Relaxed);
+                    }
+                    other => panic!("unexpected decision under concurrency: {other:?}"),
+                }
+            }
+        }));
+    }
+
+    for r in readers {
+        r.await.expect("reader task");
+    }
+    toggler.await.expect("toggler task");
+
+    let total = blocks.load(Ordering::Relaxed) + allows.load(Ordering::Relaxed);
+    assert_eq!(total, READERS * ITERS, "every call must produce a decision");
+    // The contract being tested is sequential consistency of the
+    // AtomicBool — every call returned a coherent decision and no task
+    // panicked or deadlocked. We do NOT assert that both arms fired
+    // because the scheduler may run the toggler to completion before any
+    // readers schedule (especially on a busy CI runner).
+}
