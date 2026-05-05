@@ -31,6 +31,15 @@ pub struct HarnessDeps {
     /// Shared sandbox instance (produced by `build_sandbox` at boot).
     pub sandbox: Arc<dyn Sandbox>,
     pub llm: Arc<dyn AiProvider>,
+    /// Stage 5b seam (#9). Single-step fallback provider. When the primary
+    /// `llm.process(...)` returns an `ErrorClass::Transient` failure, the
+    /// harness retries the same `RequestPayload` against `fallback_llm` once.
+    /// On success, fires `HarnessCallback::on_model_fallback(reason, name)`.
+    /// `None` disables — primary errors propagate as before. This seam is
+    /// intentionally narrow: production callers wanting N-tier failover
+    /// should wrap their primary in `providers::FailoverProvider` and pass
+    /// that as `llm` instead.
+    pub fallback_llm: Option<Arc<dyn AiProvider>>,
 
     /// Stop hooks consulted before the harness yields `TurnState::Done`.
     /// A blocking verdict forces an extra `Continue` turn so the model can

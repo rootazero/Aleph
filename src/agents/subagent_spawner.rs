@@ -211,6 +211,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         // Stage 5a (#9): inherit parent guardrails so the subagent enforces
         // the same Input/Output/ToolCall checks as the spawning harness.
         guardrails: base.guardrails.clone(),
+        fallback_llm: None,
         max_iterations: max_iter,
         power: None,
         stall_config: None,

@@ -23,10 +23,11 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::context::budget::LoopDirective;
+use crate::error::{AlephError, ErrorClass};
 use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::{Harness, HarnessError, TurnPhase, TurnState};
-use crate::providers::adapter::{NativeToolCall, RequestPayload};
+use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 
 use crate::session::events::{
     now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, TurnId,
@@ -46,6 +47,14 @@ enum InputGuardrailOutcome {
     /// Guardrail blocked the turn; caller emits `on_safety_block` and
     /// returns `TurnState::Done` without invoking the LLM.
     Blocked(String),
+}
+
+/// Stage 5b tool-call guardrail outcome. `Block` means the helper already
+/// fired `on_safety_block` + emitted `ToolError`; the caller `continue`s.
+enum ToolCallGuardOutcome {
+    Pass,
+    Sanitize(Value),
+    Block,
 }
 
 pub struct AgentHarness {
@@ -239,42 +248,50 @@ impl AgentHarness {
             state: crate::harness::trace::LoopTraceState::Think,
         });
 
-        // 3. Call the LLM, racing against parent cancel and per-turn timeout.
-        let response = {
-            let llm_fut = self.deps.llm.process(payload);
-            let started = std::time::Instant::now();
-            match self.deps.turn_timeout {
-                Some(budget) => {
-                    tokio::select! {
-                        biased;
-                        _ = parent_cancel.cancelled() => {
-                            return Err(HarnessError::Cancelled);
-                        }
-                        _ = tokio::time::sleep(budget) => {
-                            return Err(HarnessError::StalledTurn {
-                                phase: TurnPhase::Think,
-                                elapsed: started.elapsed(),
-                            });
-                        }
-                        r = llm_fut => match r {
-                            Ok(r) => r,
-                            Err(e) => return Err(HarnessError::Llm(e)),
-                        },
+        // 3. Call the LLM, racing against cancel + turn-timeout. Stage 5b:
+        // on `ErrorClass::Transient`, retry once via `deps.fallback_llm`.
+        let started = std::time::Instant::now();
+        let primary_result = self
+            .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
+            .await?;
+        let response = match primary_result {
+            Ok(r) => r,
+            Err(primary_err)
+                if primary_err.class() == ErrorClass::Transient
+                    && self.deps.fallback_llm.is_some() =>
+            {
+                let fallback = self
+                    .deps
+                    .fallback_llm
+                    .as_ref()
+                    .expect("checked is_some above");
+                // Rebuild — primary `process` consumed the original payload.
+                let fb_payload = match self.deps.system_prompt.as_deref() {
+                    Some(sp) => RequestPayload::new(&messages)
+                        .with_system(Some(sp))
+                        .with_tools(tools_ref),
+                    None => RequestPayload::new(&messages).with_tools(tools_ref),
+                };
+                let fb_started = std::time::Instant::now();
+                match self
+                    .race_llm_call(fallback.process(fb_payload), parent_cancel, fb_started)
+                    .await?
+                {
+                    Ok(r) => {
+                        callback.on_model_fallback(&primary_err.to_string(), fallback.name());
+                        r
                     }
-                }
-                None => {
-                    tokio::select! {
-                        biased;
-                        _ = parent_cancel.cancelled() => {
-                            return Err(HarnessError::Cancelled);
-                        }
-                        r = llm_fut => match r {
-                            Ok(r) => r,
-                            Err(e) => return Err(HarnessError::Llm(e)),
-                        },
+                    Err(fb_err) => {
+                        tracing::warn!(
+                            primary = %primary_err,
+                            fallback = %fb_err,
+                            "fallback provider also failed; surfacing primary error",
+                        );
+                        return Err(HarnessError::Llm(primary_err));
                     }
                 }
             }
+            Err(primary_err) => return Err(HarnessError::Llm(primary_err)),
         };
 
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
@@ -445,7 +462,7 @@ impl AgentHarness {
     ) -> Result<usize, HarnessError> {
         let mut executed_count: usize = 0;
 
-        for call in tool_calls {
+        for mut call in tool_calls {
             callback.on_tool_call(&call.name);
             let started = std::time::Instant::now();
             self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallStarted {
@@ -464,6 +481,25 @@ impl AgentHarness {
                 at: now_ms(),
             };
             self.deps.session.emit_event(session_id, requested).await?;
+
+            // Stage 5b (#9): Tool-call guardrail (Block skips THIS call).
+            if let Some(registry) = self.deps.guardrails.as_ref() {
+                match self
+                    .apply_tool_call_guardrail(
+                        registry, session_id, turn_id, &call, started, iteration, callback,
+                    )
+                    .await?
+                {
+                    ToolCallGuardOutcome::Pass => {}
+                    ToolCallGuardOutcome::Sanitize(args) => call.arguments = args,
+                    ToolCallGuardOutcome::Block => {
+                        if let Some(ref tracker) = self.stall_tracker {
+                            tracker.record_activity().await;
+                        }
+                        continue;
+                    }
+                }
+            }
 
             let exec_fut = self.deps.tools.execute(&call.name, call.arguments.clone());
             let exec_result: Result<
@@ -566,6 +602,37 @@ impl AgentHarness {
         Ok(executed_count)
     }
 
+    /// Race a single LLM call against `parent_cancel` and the optional
+    /// per-turn timeout. Outer `Result` is harness-fatal; inner is provider.
+    /// Used by primary + Stage 5b fallback paths.
+    async fn race_llm_call<F>(
+        &self,
+        fut: F,
+        parent_cancel: &CancellationToken,
+        started: std::time::Instant,
+    ) -> Result<Result<ProviderResponse, AlephError>, HarnessError>
+    where
+        F: std::future::Future<Output = Result<ProviderResponse, AlephError>>,
+    {
+        let fut = std::pin::pin!(fut);
+        match self.deps.turn_timeout {
+            Some(budget) => tokio::select! {
+                biased;
+                _ = parent_cancel.cancelled() => Err(HarnessError::Cancelled),
+                _ = tokio::time::sleep(budget) => Err(HarnessError::StalledTurn {
+                    phase: TurnPhase::Think,
+                    elapsed: started.elapsed(),
+                }),
+                r = fut => Ok(r),
+            },
+            None => tokio::select! {
+                biased;
+                _ = parent_cancel.cancelled() => Err(HarnessError::Cancelled),
+                r = fut => Ok(r),
+            },
+        }
+    }
+
     /// Stage 5a (#9): Apply the input guardrail to the latest UserMessage in
     /// the tail. Returns the (possibly rewritten) events vector or a `Block`
     /// reason. The original session log is never mutated — sanitisation
@@ -608,6 +675,61 @@ impl AgentHarness {
             }
             crate::guardrails::GuardrailDecision::Block { reason, class: _ } => {
                 Ok(InputGuardrailOutcome::Blocked(reason))
+            }
+        }
+    }
+
+    /// Stage 5b (#9): Apply the tool-call guardrail. `Block` persists a
+    /// `ToolError`, fires `on_safety_block`, and emits a trace; the caller
+    /// then `continue`s the batch. `Sanitize` returns a fresh `Value`.
+    async fn apply_tool_call_guardrail(
+        &self,
+        registry: &crate::guardrails::GuardrailRegistry,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        call: &NativeToolCall,
+        started: std::time::Instant,
+        iteration: usize,
+        callback: &mut dyn HarnessCallback,
+    ) -> Result<ToolCallGuardOutcome, HarnessError> {
+        match registry.evaluate_tool_call(&call.name, &call.arguments).await {
+            crate::guardrails::GuardrailDecision::Allow => Ok(ToolCallGuardOutcome::Pass),
+            crate::guardrails::GuardrailDecision::Warn { reason } => {
+                tracing::warn!(?session_id, tool = %call.name, reason = %reason, "tool-call guardrail warned");
+                Ok(ToolCallGuardOutcome::Pass)
+            }
+            crate::guardrails::GuardrailDecision::Sanitize(rep) => {
+                let new_args = serde_json::from_str(&rep.text)
+                    .unwrap_or_else(|_| Value::String(rep.text.clone()));
+                tracing::info!(?session_id, tool = %call.name, source = %rep.source, "tool-call args sanitized");
+                Ok(ToolCallGuardOutcome::Sanitize(new_args))
+            }
+            crate::guardrails::GuardrailDecision::Block { reason, class: _ } => {
+                callback.on_safety_block(&reason);
+                let block_msg = format!("guardrail blocked: {reason}");
+                let error_event = SessionEvent::ToolError {
+                    turn_id,
+                    call_id: call.id.clone(),
+                    error: block_msg.clone(),
+                    at: now_ms(),
+                };
+                if let Err(e) = self.deps.session.emit_event(session_id, error_event).await {
+                    tracing::warn!(?session_id, call_id = %call.id, ?e, "failed to persist guardrail-block ToolError");
+                }
+                self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                    iteration,
+                    call: crate::harness::trace::ToolCallEndEvent {
+                        tool_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        input: call.arguments.clone(),
+                        duration_ms: started.elapsed().as_millis() as u64,
+                    },
+                    result: crate::tools::runtime::ToolResult::Error {
+                        error: block_msg,
+                        retryable: false,
+                    },
+                });
+                Ok(ToolCallGuardOutcome::Block)
             }
         }
     }
@@ -1090,6 +1212,7 @@ mod tests {
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: None,
+            fallback_llm: None,
             max_iterations: None,
             power: None,
             stall_config: None,
@@ -1289,6 +1412,7 @@ mod tests {
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: None,
+            fallback_llm: None,
             max_iterations: Some(3),
             power: None,
             stall_config: None,
@@ -1344,6 +1468,7 @@ mod tests {
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: None,
+            fallback_llm: None,
             max_iterations: None,
             power: None,
             stall_config: None,
