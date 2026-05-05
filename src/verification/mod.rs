@@ -1,20 +1,40 @@
-//! Verification — stop-hook infrastructure for Aleph's prompt-driven
-//! verification model.
+//! Verification — turn-level watchdog seam plus shell stop-hook
+//! infrastructure.
 //!
-//! Aleph's verification logic lives entirely in prompts (see
-//! `src/thinker/layers/agent_role.rs`): agents are instructed to emit a
-//! `VERDICT: PASS|FAIL|PARTIAL` block summarizing their self-checks
-//! before stopping. Per redlines R8 (LLM Sovereignty) and R10
-//! (Intelligence Lives in the Prompt), no Rust-level verifier, judge,
-//! or critic is introduced. The `StopHookHandler` trait below hosts
-//! the generic stop-interception mechanism plus `ShellStopHook` for
-//! shell-command hooks.
+//! Stage 6a (2026-05-06) introduces the `TurnVerifier` trait and
+//! `VerifierChain` — a structural watchdog layer that runs every turn
+//! between Think and Act. Two impls ship with 6a:
+//! - `StopHookVerifier` adapts the existing pre-stop shell hook flow
+//!   1:1 (was `agent.rs::evaluate_stop_hooks` before 6a).
+//! - `ToolLoopVerifier` closes the master roadmap § 1.4 P1 gap by
+//!   detecting N consecutive identical tool calls with no thinking
+//!   text — vetoes mid-turn and injects feedback.
 //!
-//! A separate `VerifyStopHook` Rust struct existed from April 2026
-//! through P0 but was never wired into production (zero instantiation
-//! sites outside its own tests). It was deleted in P4 (2026-04-24)
-//! because the prompt-level mechanism fully covers the use case.
-//! Retrievable from git history at commit b54877d7f if future work
-//! requires a Rust-layer verdict enforcer.
+//! R8 / R10 redline scope clarification (post Stage 6a):
+//! - 6a verifiers are *structural watchdogs*, not cognitive judges.
+//!   They encode patterns (exit code, repetition count) a stronger
+//!   model would never trigger and require zero LLM calls of their
+//!   own. This satisfies R10's Future-Proof Test.
+//! - **No JudgeVerifier or ComputationalVerifier ships in 6a.** The
+//!   prompt-driven verification model (`VERDICT: PASS|FAIL|PARTIAL`
+//!   in `src/thinker/layers/agent_role.rs`) remains the source of
+//!   truth for completion judgment, per R8 (LLM Sovereignty) and R10
+//!   (Intelligence Lives in the Prompt). Stage 6b is gated on an
+//!   explicit redline waiver.
+//! - Historical note: a `VerifyStopHook` Rust struct existed from
+//!   April 2026 through P0 but was deleted in P4 (2026-04-24) as
+//!   YAGNI. Retrievable from git history at commit b54877d7f if
+//!   future work needs a reference implementation.
 
 pub mod stop_hooks;
+
+pub mod stop_hook_verifier;
+pub mod tool_loop_verifier;
+pub mod turn_verifier;
+
+pub use stop_hook_verifier::StopHookVerifier;
+pub use tool_loop_verifier::ToolLoopVerifier;
+pub use turn_verifier::{
+    hash_tool_args, ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierChain,
+    VerifierChainBuilder, VerifierVerdict,
+};
