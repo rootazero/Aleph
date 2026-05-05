@@ -4,22 +4,37 @@
 //! ArcSwap snapshot. The snapshot is released *before* awaiting the handler so
 //! that a concurrent register/unregister cannot block an in-flight execution.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::session::events::ToolOutput;
+use crate::tools::handlers::ToolHandler;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::service::{ToolDefinition, ToolError, ToolService};
+use crate::tools::service::{to_dispatcher_form, ToolDefinition, ToolError, ToolService};
+
+/// Cache entry for `dispatcher_schema()`. Tuple of:
+/// - registry snapshot Arc (cache key — compared by pointer)
+/// - dispatcher-form schema (cache value)
+type CachedSchema = (
+    Arc<HashMap<String, Arc<dyn ToolHandler>>>,
+    Arc<[crate::dispatcher::ToolDefinition]>,
+);
 
 pub struct CoreDispatch {
     registry: Arc<ToolRegistry>,
+    schema_cache: ArcSwap<Option<CachedSchema>>,
 }
 
 impl CoreDispatch {
     pub fn new(registry: Arc<ToolRegistry>) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            schema_cache: ArcSwap::from_pointee(None),
+        }
     }
 }
 
@@ -49,8 +64,21 @@ impl ToolService for CoreDispatch {
         snapshot.get(name).map(|h| h.definition())
     }
 
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
-        std::sync::Arc::from([])
+    fn dispatcher_schema(&self) -> Arc<[crate::dispatcher::ToolDefinition]> {
+        let current = self.registry.snapshot();
+        // Cache hit: registry snapshot hasn't changed since last fill.
+        if let Some(ref cached) = **self.schema_cache.load() {
+            if Arc::ptr_eq(&cached.0, &current) {
+                return Arc::clone(&cached.1);
+            }
+        }
+        // Cache miss: recompute via list-equivalent enumeration of the snapshot,
+        // then publish under the new snapshot key.
+        let defs: Vec<ToolDefinition> = current.values().map(|h| h.definition()).collect();
+        let schema = to_dispatcher_form(&defs);
+        self.schema_cache
+            .store(Arc::new(Some((Arc::clone(&current), Arc::clone(&schema)))));
+        schema
     }
 }
 
@@ -154,5 +182,36 @@ mod tests {
         assert_eq!(def.name, "only");
         assert_eq!(def.description, "echo tool only");
         assert!(dispatch.describe("absent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatcher_schema_returns_same_arc_on_repeat_call() {
+        let reg = registry_with(&["a", "b"]);
+        let dispatch = CoreDispatch::new(reg);
+        let s1 = dispatch.dispatcher_schema();
+        let s2 = dispatch.dispatcher_schema();
+        assert!(
+            Arc::ptr_eq(&s1, &s2),
+            "second call should return the cached Arc"
+        );
+        assert_eq!(s1.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_schema_invalidates_on_registry_mutation() {
+        let reg = registry_with(&["a"]);
+        let dispatch = CoreDispatch::new(reg.clone());
+        let s1 = dispatch.dispatcher_schema();
+        assert_eq!(s1.len(), 1);
+
+        // Register a new tool — registry's ArcSwap publishes a new snapshot.
+        reg.register("b".to_string(), echo("b")).unwrap();
+
+        let s2 = dispatch.dispatcher_schema();
+        assert_eq!(s2.len(), 2, "cache should refresh after register()");
+        assert!(
+            !Arc::ptr_eq(&s1, &s2),
+            "after registry mutation, new Arc should be returned"
+        );
     }
 }
