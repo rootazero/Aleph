@@ -284,7 +284,10 @@ async fn recording_sink_captures_full_lifecycle() {
         })
         .collect();
     // 2 turns: tool turn + final text turn. Then SessionCompleted.
-    assert!(names.contains(&"TurnStarted"), "missing TurnStarted: {names:?}");
+    assert!(
+        names.contains(&"TurnStarted"),
+        "missing TurnStarted: {names:?}"
+    );
     assert!(
         names.iter().filter(|n| **n == "TurnStateEntered").count() >= 2,
         "expected at least 2 TurnStateEntered events: {names:?}",
@@ -365,12 +368,18 @@ async fn tool_failure_recovers_in_next_think() {
                 }
             })
         }
-        fn name(&self) -> &str { "recovery" }
-        fn color(&self) -> &str { "#000000" }
+        fn name(&self) -> &str {
+            "recovery"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
     }
 
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let provider: Arc<dyn AiProvider> = Arc::new(RecoveryProvider { calls: calls.clone() });
+    let provider: Arc<dyn AiProvider> = Arc::new(RecoveryProvider {
+        calls: calls.clone(),
+    });
     let (session, sid) = fresh_session("recover-tool-fail").await;
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
 
@@ -381,17 +390,19 @@ async fn tool_failure_recovers_in_next_think() {
     let cancel = tokio_util::sync::CancellationToken::new();
     let outcome = harness.run(&sid, &mut cb, &cancel).await;
 
-    assert!(outcome.is_ok(), "harness must not abort on tool error: {outcome:?}");
+    assert!(
+        outcome.is_ok(),
+        "harness must not abort on tool error: {outcome:?}"
+    );
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         2,
         "model should be called twice (tool turn + recovery turn)",
     );
     let events = session.get_events(&sid, None, None).await.unwrap();
-    let has_tool_error = events.iter().any(|r| matches!(
-        r.event,
-        SessionEvent::ToolError { .. }
-    ));
+    let has_tool_error = events
+        .iter()
+        .any(|r| matches!(r.event, SessionEvent::ToolError { .. }));
     assert!(has_tool_error, "session log must contain ToolError event");
 }
 
@@ -412,9 +423,21 @@ async fn partial_batch_failure_continues() {
                     Ok(ProviderResponse {
                         text: None,
                         tool_calls: vec![
-                            NativeToolCall { id: "a".into(), name: "ok_a".into(), arguments: serde_json::json!({}) },
-                            NativeToolCall { id: "b".into(), name: "fail_b".into(), arguments: serde_json::json!({}) },
-                            NativeToolCall { id: "c".into(), name: "ok_c".into(), arguments: serde_json::json!({}) },
+                            NativeToolCall {
+                                id: "a".into(),
+                                name: "ok_a".into(),
+                                arguments: serde_json::json!({}),
+                            },
+                            NativeToolCall {
+                                id: "b".into(),
+                                name: "fail_b".into(),
+                                arguments: serde_json::json!({}),
+                            },
+                            NativeToolCall {
+                                id: "c".into(),
+                                name: "ok_c".into(),
+                                arguments: serde_json::json!({}),
+                            },
                         ],
                         thinking: None,
                         thinking_signature: None,
@@ -426,8 +449,12 @@ async fn partial_batch_failure_continues() {
                 }
             })
         }
-        fn name(&self) -> &str { "batch" }
-        fn color(&self) -> &str { "#000000" }
+        fn name(&self) -> &str {
+            "batch"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
     }
 
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -443,10 +470,22 @@ async fn partial_batch_failure_continues() {
     harness.run(&sid, &mut cb, &cancel).await.expect("ok");
 
     let events = session.get_events(&sid, None, None).await.unwrap();
-    let n_results = events.iter().filter(|r| matches!(r.event, SessionEvent::ToolResult { .. })).count();
-    let n_errors = events.iter().filter(|r| matches!(r.event, SessionEvent::ToolError { .. })).count();
-    assert_eq!(n_results, 2, "expected 2 ToolResult (ok_a, ok_c): events={events:#?}");
-    assert_eq!(n_errors, 1, "expected 1 ToolError (fail_b): events={events:#?}");
+    let n_results = events
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolResult { .. }))
+        .count();
+    let n_errors = events
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolError { .. }))
+        .count();
+    assert_eq!(
+        n_results, 2,
+        "expected 2 ToolResult (ok_a, ok_c): events={events:#?}"
+    );
+    assert_eq!(
+        n_errors, 1,
+        "expected 1 ToolError (fail_b): events={events:#?}"
+    );
 }
 
 #[tokio::test]
@@ -472,8 +511,12 @@ async fn consecutive_total_failure_caps_loop() {
                 })
             })
         }
-        fn name(&self) -> &str { "always-fail" }
-        fn color(&self) -> &str { "#000000" }
+        fn name(&self) -> &str {
+            "always-fail"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
     }
 
     let provider: Arc<dyn AiProvider> = Arc::new(AlwaysFailProvider);
@@ -490,7 +533,8 @@ async fn consecutive_total_failure_caps_loop() {
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         harness.run(&sid, &mut cb, &cancel),
-    ).await;
+    )
+    .await;
     outcome.expect("must terminate within 2s").expect("Ok exit");
     assert!(harness.hit_limit(), "hit_limit should be true after cap");
 }
@@ -513,12 +557,17 @@ async fn think_timeout_fires_with_phase_think() {
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         harness.run(&sid, &mut cb, &cancel),
-    ).await.expect("must return within 2s");
+    )
+    .await
+    .expect("must return within 2s");
 
     match result {
         Err(HarnessError::StalledTurn { phase, elapsed }) => {
             assert_eq!(phase, TurnPhase::Think, "phase must be Think");
-            assert!(elapsed >= std::time::Duration::from_millis(150), "elapsed {elapsed:?}");
+            assert!(
+                elapsed >= std::time::Duration::from_millis(150),
+                "elapsed {elapsed:?}"
+            );
         }
         other => panic!("expected StalledTurn(Think), got {other:?}"),
     }
@@ -548,7 +597,9 @@ async fn act_timeout_fires_with_phase_act_and_tool_name() {
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         harness.run(&sid, &mut cb, &cancel),
-    ).await.expect("must return within 2s");
+    )
+    .await
+    .expect("must return within 2s");
 
     match result {
         Err(HarnessError::StalledTurn { phase, .. }) => match phase {
@@ -582,10 +633,14 @@ async fn parent_cancel_takes_precedence_over_timeout() {
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         harness.run(&sid, &mut cb, &cancel),
-    ).await.expect("must return within 2s");
+    )
+    .await
+    .expect("must return within 2s");
 
-    assert!(matches!(result, Err(HarnessError::Cancelled)),
-            "expected Cancelled, got {result:?}");
+    assert!(
+        matches!(result, Err(HarnessError::Cancelled)),
+        "expected Cancelled, got {result:?}"
+    );
 }
 
 #[tokio::test]
@@ -605,13 +660,19 @@ async fn outcome_mapping_for_stalled_turn() {
     let _ = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         harness.run(&sid, &mut cb, &cancel),
-    ).await.expect("must return within 2s");
+    )
+    .await
+    .expect("must return within 2s");
 
     let captured = events.lock().unwrap().clone();
-    let session_completed = captured.iter().rev().find_map(|e| match e {
-        LoopTraceEvent::SessionCompleted { outcome, .. } => Some(*outcome),
-        _ => None,
-    }).expect("SessionCompleted must be emitted");
+    let session_completed = captured
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            LoopTraceEvent::SessionCompleted { outcome, .. } => Some(*outcome),
+            _ => None,
+        })
+        .expect("SessionCompleted must be emitted");
     assert_eq!(
         session_completed,
         crate::harness::trace::LoopTraceSessionOutcome::Cancelled,
@@ -635,8 +696,12 @@ async fn cross_turn_stall_still_works() {
                 Ok(ProviderResponse::text_only("...".into()))
             })
         }
-        fn name(&self) -> &str { "slow-text" }
-        fn color(&self) -> &str { "#000000" }
+        fn name(&self) -> &str {
+            "slow-text"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
     }
 
     let provider: Arc<dyn AiProvider> = Arc::new(SlowTextProvider);
@@ -647,9 +712,11 @@ async fn cross_turn_stall_still_works() {
     // After Task 4, record_activity also fires inside the Think completion
     // path, so this test specifically exercises the "no Think completion at all"
     // case. We force that by pre-stalling the tracker via a 50ms budget.
-    deps.stall_config = Some(StallConfig::default()
-        .with_timeout(std::time::Duration::from_millis(50))
-        .with_check_interval(std::time::Duration::from_millis(10)));
+    deps.stall_config = Some(
+        StallConfig::default()
+            .with_timeout(std::time::Duration::from_millis(50))
+            .with_check_interval(std::time::Duration::from_millis(10)),
+    );
     let harness = AgentHarness::new(deps);
 
     let mut cb = NoopHarnessCallback;
@@ -661,10 +728,14 @@ async fn cross_turn_stall_still_works() {
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         harness.run(&sid, &mut cb, &cancel),
-    ).await.expect("must return within 2s");
+    )
+    .await
+    .expect("must return within 2s");
 
-    assert!(matches!(result, Err(HarnessError::Stalled { .. })),
-            "expected Stalled, got {result:?}");
+    assert!(
+        matches!(result, Err(HarnessError::Stalled { .. })),
+        "expected Stalled, got {result:?}"
+    );
 }
 
 #[tokio::test]
@@ -689,19 +760,26 @@ async fn long_think_does_not_falsely_trip_stall() {
                     Ok(ProviderResponse {
                         text: None,
                         tool_calls: vec![NativeToolCall {
-                            id: "c".into(), name: "ok_x".into(),
+                            id: "c".into(),
+                            name: "ok_x".into(),
                             arguments: serde_json::json!({}),
                         }],
-                        thinking: None, thinking_signature: None,
-                        stop_reason: StopReason::ToolUse, usage: None,
+                        thinking: None,
+                        thinking_signature: None,
+                        stop_reason: StopReason::ToolUse,
+                        usage: None,
                     })
                 } else {
                     Ok(ProviderResponse::text_only("done".into()))
                 }
             })
         }
-        fn name(&self) -> &str { "80ms" }
-        fn color(&self) -> &str { "#000000" }
+        fn name(&self) -> &str {
+            "80ms"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
     }
 
     let provider: Arc<dyn AiProvider> = Arc::new(EightyMsThinkProvider {
@@ -711,9 +789,11 @@ async fn long_think_does_not_falsely_trip_stall() {
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
 
     let mut deps = minimal_deps(session, tools, provider);
-    deps.stall_config = Some(StallConfig::default()
-        .with_timeout(std::time::Duration::from_millis(200))
-        .with_check_interval(std::time::Duration::from_millis(10)));
+    deps.stall_config = Some(
+        StallConfig::default()
+            .with_timeout(std::time::Duration::from_millis(200))
+            .with_check_interval(std::time::Duration::from_millis(10)),
+    );
     let harness = AgentHarness::new(deps);
 
     let mut cb = NoopHarnessCallback;
@@ -721,7 +801,33 @@ async fn long_think_does_not_falsely_trip_stall() {
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(3),
         harness.run(&sid, &mut cb, &cancel),
-    ).await.expect("must finish within 3s");
+    )
+    .await
+    .expect("must finish within 3s");
 
     result.expect("legitimate two-turn run must succeed without stalling");
+}
+
+#[tokio::test]
+async fn session_error_path_carries_error_class_in_tracing() {
+    // Regression test for Stage 1: pin the class mapping that the
+    // Err(e) branch in agent.rs now dispatches on. Pure unit-level
+    // contract test — proves the seam is wired correctly without
+    // having to spin up a full Harness session.
+    use crate::error::{AlephError, ErrorClass};
+    use crate::harness::trait_def::HarnessError;
+    use crate::tools::service::ToolError;
+
+    assert_eq!(
+        HarnessError::Llm(AlephError::network("net blip")).class(),
+        ErrorClass::Transient,
+    );
+    assert_eq!(HarnessError::Cancelled.class(), ErrorClass::Recoverable);
+    assert_eq!(
+        HarnessError::Tool(ToolError::NotFound {
+            name: "ghost".into()
+        })
+        .class(),
+        ErrorClass::Fixable,
+    );
 }

@@ -331,7 +331,13 @@ impl AgentHarness {
             });
             let requested = response.tool_calls.len();
             let executed = self
-                .act(session_id, turn_id, response.tool_calls, callback, iterations)
+                .act(
+                    session_id,
+                    turn_id,
+                    response.tool_calls,
+                    callback,
+                    iterations,
+                )
                 .await?;
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;
             metrics_for_trace = crate::harness::trace::LoopTraceTurnMetrics {
@@ -429,18 +435,20 @@ impl AgentHarness {
                         .session
                         .emit_event(session_id, result_event)
                         .await?;
-                    self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
-                        iteration,
-                        call: crate::harness::trace::ToolCallEndEvent {
-                            tool_id: call.id.clone(),
-                            tool_name: call.name.clone(),
-                            input: call.arguments.clone(),
-                            duration_ms: started.elapsed().as_millis() as u64,
+                    self.emit(
+                        || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                            iteration,
+                            call: crate::harness::trace::ToolCallEndEvent {
+                                tool_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                input: call.arguments.clone(),
+                                duration_ms: started.elapsed().as_millis() as u64,
+                            },
+                            result: crate::tools::runtime::ToolResult::Success {
+                                output: output_value,
+                            },
                         },
-                        result: crate::tools::runtime::ToolResult::Success {
-                            output: output_value,
-                        },
-                    });
+                    );
                 }
                 Err(e) => {
                     let error_msg = e.to_string();
@@ -460,19 +468,21 @@ impl AgentHarness {
                             "failed to persist ToolError event",
                         );
                     }
-                    self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
-                        iteration,
-                        call: crate::harness::trace::ToolCallEndEvent {
-                            tool_id: call.id.clone(),
-                            tool_name: call.name.clone(),
-                            input: call.arguments.clone(),
-                            duration_ms: started.elapsed().as_millis() as u64,
+                    self.emit(
+                        || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                            iteration,
+                            call: crate::harness::trace::ToolCallEndEvent {
+                                tool_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                input: call.arguments.clone(),
+                                duration_ms: started.elapsed().as_millis() as u64,
+                            },
+                            result: crate::tools::runtime::ToolResult::Error {
+                                error: error_msg,
+                                retryable: false,
+                            },
                         },
-                        result: crate::tools::runtime::ToolResult::Error {
-                            error: error_msg,
-                            retryable: false,
-                        },
-                    });
+                    );
                     // Do NOT abort — continue processing remaining tool calls.
                     // The error is persisted to session log; the next Think
                     // turn will see it as tool_result(is_error=true).
@@ -569,11 +579,9 @@ impl crate::session::SessionDriver for AgentHarness {
                 HarnessError::Stalled { elapsed } => {
                     crate::error::AlephError::provider(format!("agent stalled after {:?}", elapsed))
                 }
-                HarnessError::StalledTurn { phase, elapsed } => {
-                    crate::error::AlephError::provider(format!(
-                        "agent turn stalled in {phase} after {elapsed:?}"
-                    ))
-                }
+                HarnessError::StalledTurn { phase, elapsed } => crate::error::AlephError::provider(
+                    format!("agent turn stalled in {phase} after {elapsed:?}"),
+                ),
             })
     }
 }
@@ -632,8 +640,7 @@ impl Harness for AgentHarness {
                             .iter()
                             .any(|r| matches!(r.event, SessionEvent::ToolError { .. }));
                         if had_failure {
-                            consecutive_failure_turns =
-                                consecutive_failure_turns.saturating_add(1);
+                            consecutive_failure_turns = consecutive_failure_turns.saturating_add(1);
                             if let Some(cap) = self.deps.consecutive_failure_cap {
                                 if consecutive_failure_turns >= cap {
                                     tracing::warn!(
@@ -643,7 +650,9 @@ impl Harness for AgentHarness {
                                     );
                                     self.hit_limit.store(true, Ordering::Relaxed);
                                     callback.on_complete();
-                                    break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
+                                    break Ok(
+                                        crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
+                                    );
                                 }
                             }
                         } else {
@@ -697,11 +706,26 @@ impl Harness for AgentHarness {
                 Ok(())
             }
             Err(e) => {
-                let session_outcome = match &e {
-                    HarnessError::Cancelled | HarnessError::Stalled { .. } => {
+                let error_class = e.class();
+                tracing::warn!(
+                    ?session_id,
+                    ?error_class,
+                    error = %e,
+                    "harness session ended in error",
+                );
+                // Stage 1: all classes still map to Cancelled (preserves P0
+                // rescue behavior). Future stages will distinguish (e.g.
+                // Stage 6 Verification may map Unexpected -> Failed). The
+                // match is exhaustive without a wildcard so any new
+                // ErrorClass variant forces an explicit decision here.
+                #[allow(clippy::match_same_arms)]
+                let session_outcome = match error_class {
+                    crate::error::ErrorClass::Recoverable
+                    | crate::error::ErrorClass::Transient
+                    | crate::error::ErrorClass::Fixable
+                    | crate::error::ErrorClass::Unexpected => {
                         crate::harness::trace::LoopTraceSessionOutcome::Cancelled
                     }
-                    _ => crate::harness::trace::LoopTraceSessionOutcome::Cancelled,
                 };
                 self.emit(|| crate::harness::trace::LoopTraceEvent::SessionCompleted {
                     outcome: session_outcome,
