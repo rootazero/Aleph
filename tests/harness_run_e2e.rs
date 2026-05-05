@@ -82,6 +82,10 @@ impl ToolService for NoopTool {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
+
+    fn dispatcher_schema(&self) -> std::sync::Arc<[alephcore::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from(Vec::<alephcore::dispatcher::ToolDefinition>::new())
+    }
 }
 
 /// Scripted provider: turn 0 returns text + a single tool_call, every

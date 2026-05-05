@@ -66,6 +66,10 @@ impl ToolService for DynamicToolService {
             None
         }
     }
+
+    fn dispatcher_schema(&self) -> std::sync::Arc<[alephcore::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from(Vec::<alephcore::dispatcher::ToolDefinition>::new())
+    }
 }
 
 #[tokio::test]

@@ -15,6 +15,10 @@ use tokio::sync::mpsc;
 use alephcore::gateway::event_emitter::EventEmitter;
 use alephcore::gateway::execution_engine::{ExecutionError, RunState};
 use alephcore::gateway::RunRequest;
+use alephcore::gateway::session_store::file_backend::{
+    FileSessionStore, FileSessionStoreConfig,
+};
+use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{
     AgentEnvStore, AgentEnvStoreConfig, AgentInstance, AgentInstanceConfig, AgentRegistry, Channel,
     ChannelId, ChannelRegistry, ConversationId, DmPolicy, ExecutionAdapter, GroupPolicy,
@@ -103,6 +107,10 @@ impl ExecutionAdapter for TrackingExecutionAdapter {
             current_tool: None,
         })
     }
+
+    async fn active_run_count(&self) -> usize {
+        0
+    }
 }
 
 // =============================================================================
@@ -118,6 +126,7 @@ pub struct LinkAclHarness {
     pub reply_rx: mpsc::UnboundedReceiver<CapturedReply>,
     reply_tx: mpsc::UnboundedSender<CapturedReply>,
     router: InboundMessageRouter,
+    session_store: Arc<dyn SessionStore>,
     _temp_dir: TempDir,
     msg_counter: AtomicU64,
 }
@@ -154,6 +163,14 @@ impl LinkAclHarness {
 
         let (reply_tx, reply_rx) = mpsc::unbounded_channel();
 
+        let session_store: Arc<dyn SessionStore> = Arc::new(
+            FileSessionStore::new(FileSessionStoreConfig {
+                base_dir: temp_dir.path().join("sessions"),
+                ..FileSessionStoreConfig::default()
+            })
+            .expect("Failed to create FileSessionStore"),
+        );
+
         Self {
             channel_registry,
             agent_registry,
@@ -162,6 +179,7 @@ impl LinkAclHarness {
             reply_rx,
             reply_tx,
             router,
+            session_store,
             _temp_dir: temp_dir,
             msg_counter: AtomicU64::new(0),
         }
@@ -204,7 +222,8 @@ impl LinkAclHarness {
             allowed_links,
             ..AgentInstanceConfig::default()
         };
-        let instance = AgentInstance::new(config).expect("Failed to create AgentInstance");
+        let instance = AgentInstance::new(config, Arc::clone(&self.session_store))
+            .expect("Failed to create AgentInstance");
         self.agent_registry.register(instance).await;
     }
 
@@ -243,6 +262,7 @@ impl LinkAclHarness {
             reply_to: None,
             is_group,
             raw: None,
+            metadata: vec![],
         }
     }
 

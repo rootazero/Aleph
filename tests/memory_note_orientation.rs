@@ -36,6 +36,7 @@ async fn orientation_layer_end_to_end() {
             created_at: 0,
             updated_at: 0,
             content_hash: String::new(),
+            ..Default::default()
         };
         indexer.write_note("default", cat, &note).await.unwrap();
     }

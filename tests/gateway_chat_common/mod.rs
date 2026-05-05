@@ -62,6 +62,10 @@ impl ToolService for NoopToolService {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
+
+    fn dispatcher_schema(&self) -> Arc<[alephcore::dispatcher::ToolDefinition]> {
+        Arc::from(Vec::<alephcore::dispatcher::ToolDefinition>::new())
+    }
 }
 
 // -- Dummy provider (not exercised but required by AgentHarnessRunner) ------
@@ -186,6 +190,8 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,
+        power: None,
+        memory_context_provider: None,
     };
 
     Arc::new(Orchestrator::new(

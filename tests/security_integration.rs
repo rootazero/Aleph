@@ -58,7 +58,10 @@ async fn test_outbound_inbound_roundtrip_blocks_echo() {
 
     // Inbound: simulate LLM echoing the secret back
     let inbound_input = "Your key sk-ant-integration123456789012345 has been used";
-    let inbound_result = guard.process_inbound(inbound_input).unwrap();
+    let inbound_result = guard
+        .process_inbound(inbound_input, &SecurityContext::default())
+        .await
+        .unwrap();
 
     assert!(
         matches!(inbound_result, GuardResult::Blocked { .. }),
@@ -343,7 +346,10 @@ async fn test_audit_inbound_exec_blocked() {
     while let Ok(Some(_)) = timeout(Duration::from_millis(50), rx.recv()).await {}
 
     let inbound = "Your key sk-ant-integration123456789012345 has been used";
-    let result = guard.process_inbound(inbound).unwrap();
+    let result = guard
+        .process_inbound(inbound, &SecurityContext::default())
+        .await
+        .unwrap();
 
     assert!(
         matches!(result, GuardResult::Blocked { .. }),

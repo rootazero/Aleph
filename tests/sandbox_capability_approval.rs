@@ -141,7 +141,7 @@ fn build_test_sandbox(
     let (requester, calls) = FixedRequester::new(outcome);
     let gate = Arc::new(ApprovalGate::new(
         ApprovalConfig::default(),
-        Some(Box::new(requester)),
+        Some(Arc::from(requester) as Arc<dyn ApprovalRequester>),
     ));
     let sandbox = build_sandbox(&cfg, driver_trait, gate, SandboxRateLimitConfig::default());
     (sandbox, run_count, calls, tmp)

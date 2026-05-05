@@ -41,6 +41,8 @@ async fn crash_then_wake_then_continue() {
             content: MessageContent {
                 text: "hi".into(),
                 blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
             },
             at: now_ms(),
         },
@@ -65,6 +67,8 @@ async fn crash_then_wake_then_continue() {
                 content: MessageContent {
                     text: "hello back".into(),
                     blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
                 },
                 at: now_ms(),
             },

@@ -60,6 +60,10 @@ impl ToolService for NoopToolService {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
+
+    fn dispatcher_schema(&self) -> Arc<[alephcore::dispatcher::ToolDefinition]> {
+        Arc::from(Vec::<alephcore::dispatcher::ToolDefinition>::new())
+    }
 }
 
 /// Scripted `AiProvider` — pops pre-queued text-only responses FIFO. Once
@@ -156,6 +160,8 @@ impl OrchestratorFixture {
             context_budget: None,
             context_compactor: None,
             skill_prefetcher: None,
+            power: None,
+            memory_context_provider: None,
         });
 
         let orchestrator = Orchestrator::new(
