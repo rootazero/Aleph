@@ -214,6 +214,8 @@ mod tests {
                 content: MessageContent {
                     text: "hi".into(),
                     blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
                 },
                 at: now_ms(),
             },

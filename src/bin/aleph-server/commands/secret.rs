@@ -98,8 +98,8 @@ fn resolve_secret_value(value: Option<String>) -> Result<String, Box<dyn Error>>
 }
 
 /// Local fast-path: list secrets while holding the singleton lock.
-fn list_locked() -> Result<Vec<alephcore::gateway::admin_api::secrets::SecretSummary>, Box<dyn Error>>
-{
+fn list_locked(
+) -> Result<Vec<alephcore::gateway::admin_api::secrets::SecretSummary>, Box<dyn Error>> {
     use alephcore::gateway::admin_api::secrets::SecretSummary;
     let manager = open_token_manager()?;
     let names = manager

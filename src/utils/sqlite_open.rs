@@ -42,14 +42,16 @@ mod tests {
     use super::*;
 
     fn pragma_str(conn: &rusqlite::Connection, pragma: &str) -> String {
-        conn.query_row(&format!("PRAGMA {pragma}"), [], |row| row.get::<_, String>(0))
-            .unwrap_or_else(|_| {
-                conn.query_row(&format!("PRAGMA {pragma}"), [], |row| {
-                    let v: i64 = row.get(0)?;
-                    Ok(v.to_string())
-                })
-                .unwrap()
+        conn.query_row(&format!("PRAGMA {pragma}"), [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap_or_else(|_| {
+            conn.query_row(&format!("PRAGMA {pragma}"), [], |row| {
+                let v: i64 = row.get(0)?;
+                Ok(v.to_string())
             })
+            .unwrap()
+        })
     }
 
     #[test]

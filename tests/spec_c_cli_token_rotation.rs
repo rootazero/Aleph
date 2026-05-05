@@ -35,10 +35,7 @@ struct MockState {
     security_db: std::path::PathBuf,
 }
 
-async fn handler(
-    State(state): State<MockState>,
-    headers: HeaderMap,
-) -> (StatusCode, &'static str) {
+async fn handler(State(state): State<MockState>, headers: HeaderMap) -> (StatusCode, &'static str) {
     let n = state.counter.fetch_add(1, Ordering::SeqCst);
     let auth = headers
         .get("authorization")

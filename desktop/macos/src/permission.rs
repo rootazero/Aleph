@@ -519,11 +519,14 @@ mod tests {
         for &perm in TccPermission::ALL {
             let info = do_check(perm);
             assert!(
-                matches!(info.status, PermissionStatus::Granted
-                    | PermissionStatus::Denied
-                    | PermissionStatus::Restricted
-                    | PermissionStatus::NotDetermined
-                    | PermissionStatus::Unknown),
+                matches!(
+                    info.status,
+                    PermissionStatus::Granted
+                        | PermissionStatus::Denied
+                        | PermissionStatus::Restricted
+                        | PermissionStatus::NotDetermined
+                        | PermissionStatus::Unknown
+                ),
                 "do_check({:?}) returned invalid status: {:?}",
                 perm,
                 info.status
@@ -537,11 +540,14 @@ mod tests {
         for &perm in TccPermission::ALL {
             let info = do_request(perm);
             assert!(
-                matches!(info.status, PermissionStatus::Granted
-                    | PermissionStatus::Denied
-                    | PermissionStatus::Restricted
-                    | PermissionStatus::NotDetermined
-                    | PermissionStatus::Unknown),
+                matches!(
+                    info.status,
+                    PermissionStatus::Granted
+                        | PermissionStatus::Denied
+                        | PermissionStatus::Restricted
+                        | PermissionStatus::NotDetermined
+                        | PermissionStatus::Unknown
+                ),
                 "do_request({:?}) returned invalid status: {:?}",
                 perm,
                 info.status

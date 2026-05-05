@@ -51,6 +51,14 @@ pub struct MessageContent {
     /// provider-specific types at this layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<serde_json::Value>,
+    /// Thinking/reasoning trace from extended-thinking models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    /// Opaque signature accompanying the thinking content. Anthropic requires
+    /// a signed thinking block to be replayed verbatim on subsequent turns
+    /// whenever the same assistant message also contains tool_use blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -270,7 +270,9 @@ impl<S: NoteStore> NoteIndexer<S> {
         }
 
         let mut note = KnowledgeNote::from_markdown(title, &content)?;
-        crate::memory::notes::governance::supersession::sync_body_to_frontmatter(&mut note, &content);
+        crate::memory::notes::governance::supersession::sync_body_to_frontmatter(
+            &mut note, &content,
+        );
         self.store.index_note(&note, agent_id, category).await?;
 
         Ok(true)

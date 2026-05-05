@@ -285,10 +285,7 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
         // and pass its full content (frontmatter + body) to the embedder.
         if let Some(em) = &self.embedding_manager {
             for path in &report.touched_paths {
-                let file = self
-                    .memory_dir
-                    .join(agent_id)
-                    .join(format!("{path}.md"));
+                let file = self.memory_dir.join(agent_id).join(format!("{path}.md"));
                 match tokio::fs::read_to_string(&file).await {
                     Ok(content) => {
                         em.push_pending(agent_id, path, &content).await;
@@ -426,7 +423,6 @@ fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<CandidateNote> {
         | PageOp::Supersede { .. } => None,
     }
 }
-
 
 fn build_user_prompt(
     raws: &[crate::memory::store::raw_memory::RawMemory],
@@ -670,10 +666,8 @@ mod plan_tests {
         let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
         let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), backend.clone()));
 
-        let orient: Arc<dyn NoteOrientation> = Arc::new(FsNoteOrientation::new(
-            memory_dir.clone(),
-            backend.clone(),
-        ));
+        let orient: Arc<dyn NoteOrientation> =
+            Arc::new(FsNoteOrientation::new(memory_dir.clone(), backend.clone()));
         // bootstrap is also done by ingest_batch, but doing it here gives a
         // pre-ingest baseline for index.md so we can prove the refresh fires.
         orient.bootstrap("default").await.unwrap();

@@ -48,7 +48,10 @@ async fn list_secrets(
         .list_secret_names()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(
-        names.into_iter().map(|k| SecretSummary { key: k }).collect(),
+        names
+            .into_iter()
+            .map(|k| SecretSummary { key: k })
+            .collect(),
     ))
 }
 

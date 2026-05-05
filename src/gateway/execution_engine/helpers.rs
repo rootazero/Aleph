@@ -43,11 +43,15 @@ pub fn history_to_flow_input(history: Vec<UnifiedMessage>, prompt: String) -> Fl
             UnifiedMessage::User { content } => Some(FlowHistoryTurn::User(MessageContent {
                 text: extract_text(&content),
                 blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
             })),
             UnifiedMessage::Assistant { content } => {
                 Some(FlowHistoryTurn::Assistant(MessageContent {
                     text: extract_text(&content),
                     blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
                 }))
             }
             // ToolResult messages are part of the Think→Act cadence; the

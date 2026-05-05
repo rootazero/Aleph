@@ -164,9 +164,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_jxa() {
         let auto = MacOSAutomation::new();
-        let result = auto
-            .run_script(ScriptLanguage::Jxa, "2 + 2")
-            .await;
+        let result = auto.run_script(ScriptLanguage::Jxa, "2 + 2").await;
         // JXA may not be available on all macOS versions; result is Ok or Err
         assert!(result.is_ok() || result.is_err());
     }
@@ -174,9 +172,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_shell_failure() {
         let auto = MacOSAutomation::new();
-        let result = auto
-            .run_script(ScriptLanguage::Shell, "exit 1")
-            .await;
+        let result = auto.run_script(ScriptLanguage::Shell, "exit 1").await;
         assert!(result.is_err());
     }
 
@@ -201,7 +197,9 @@ mod tests {
     async fn test_run_shortcut_with_input() {
         let auto = MacOSAutomation::new();
         // Use a shortcut that exists and accepts input; if none exist, this will error gracefully
-        let result = auto.run_shortcut("__nonexistent__", Some("test input")).await;
+        let result = auto
+            .run_shortcut("__nonexistent__", Some("test input"))
+            .await;
         assert!(result.is_err());
     }
 }

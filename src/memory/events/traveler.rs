@@ -181,10 +181,7 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
         MemoryEvent::NoteConsolidated {
             source_note_paths, ..
         } => {
-            format!(
-                "Consolidated from {} source notes",
-                source_note_paths.len()
-            )
+            format!("Consolidated from {} source notes", source_note_paths.len())
         }
         MemoryEvent::NoteMigrated { .. } => "Migrated from legacy CRUD store".to_string(),
     }

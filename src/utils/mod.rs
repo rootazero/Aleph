@@ -11,4 +11,3 @@ pub mod text_format;
 pub mod vault_io;
 
 pub use one_or_many::OneOrMany;
-

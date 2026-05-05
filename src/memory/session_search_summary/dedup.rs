@@ -120,10 +120,7 @@ mod tests {
 
     #[test]
     fn ties_broken_by_session_key_ascending() {
-        let input = vec![
-            cand("session-z", 0.5, "p1"),
-            cand("session-a", 0.5, "p2"),
-        ];
+        let input = vec![cand("session-z", 0.5, "p1"), cand("session-a", 0.5, "p2")];
         let out = top_per_session(input, 5);
         assert_eq!(out[0].session_key, "session-a");
         assert_eq!(out[1].session_key, "session-z");

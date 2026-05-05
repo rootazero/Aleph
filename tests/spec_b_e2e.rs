@@ -9,17 +9,13 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex as StdMutex;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 
 use async_trait::async_trait;
 
-use alephcore::builtin_tools::session_search::{
-    SessionSearchArgs, SessionSearchTool,
-};
 use alephcore::builtin_tools::session_search::SummarySource;
-use alephcore::AlephError;
-use alephcore::AssemblerConfig;
+use alephcore::builtin_tools::session_search::{SessionSearchArgs, SessionSearchTool};
 use alephcore::gateway::agent_instance::AgentRegistry;
 use alephcore::gateway::context::GatewayContext;
 use alephcore::gateway::execution_adapter::ExecutionAdapter;
@@ -31,16 +27,20 @@ use alephcore::gateway::session_store::error::SessionStoreError;
 use alephcore::gateway::session_store::types::*;
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{AgentInstance, EventEmitter};
-use alephcore::memory::assembler::{HybridAssembler, LlmReranker, UserProfileLoader, WorkingMemoryAssembler};
+use alephcore::memory::assembler::{
+    HybridAssembler, LlmReranker, UserProfileLoader, WorkingMemoryAssembler,
+};
 use alephcore::memory::embedding_provider::EmbeddingProvider;
 use alephcore::memory::note_retrieval::NoteFactRetrieval;
 use alephcore::memory::notes::NoteIndexer;
 use alephcore::memory::session_resume::reader::SnapshotReader;
-use alephcore::memory::session_search_summary::synthesizer::{SummaryLlm, SummarySynthesizer};
 use alephcore::memory::session_search_summary::end_hook::SessionEndSummarizer;
+use alephcore::memory::session_search_summary::synthesizer::{SummaryLlm, SummarySynthesizer};
 use alephcore::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use alephcore::memory::SqliteMemoryBackend;
 use alephcore::tools::AlephTool;
+use alephcore::AlephError;
+use alephcore::AssemblerConfig;
 
 // ---------------------------------------------------------------------------
 // NeverCalledReranker — stub reranker; skeleton path never calls it
@@ -71,9 +71,15 @@ impl EmbeddingProvider for ZeroEmbedder {
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
         Ok(texts.iter().map(|_| vec![0.0_f32; 768]).collect())
     }
-    fn dimensions(&self) -> usize { 768 }
-    fn model_name(&self) -> &str { "zero" }
-    fn provider_id(&self) -> &str { "zero" }
+    fn dimensions(&self) -> usize {
+        768
+    }
+    fn model_name(&self) -> &str {
+        "zero"
+    }
+    fn provider_id(&self) -> &str {
+        "zero"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +189,11 @@ impl SessionStore for E2eSessionStore {
         };
         drop(map);
 
-        let start = if msgs.len() > max_turns { msgs.len() - max_turns } else { 0 };
+        let start = if msgs.len() > max_turns {
+            msgs.len() - max_turns
+        } else {
+            0
+        };
         let slice = &msgs[start..];
         let mut result = Vec::with_capacity(slice.len());
         let mut total = 0usize;
@@ -231,10 +241,16 @@ impl SessionStore for E2eSessionStore {
     async fn get_or_create(&self, _key: &SessionKey) -> Result<SessionMetadata, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn get_metadata(&self, _key: &SessionKey) -> Result<Option<SessionMetadata>, SessionStoreError> {
+    async fn get_metadata(
+        &self,
+        _key: &SessionKey,
+    ) -> Result<Option<SessionMetadata>, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn list_sessions(&self, _filter: SessionFilter) -> Result<Vec<SessionMetadata>, SessionStoreError> {
+    async fn list_sessions(
+        &self,
+        _filter: SessionFilter,
+    ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn delete_session(&self, _key: &SessionKey) -> Result<DeleteResult, SessionStoreError> {
@@ -243,75 +259,125 @@ impl SessionStore for E2eSessionStore {
     async fn reset_session(&self, _key: &SessionKey) -> Result<bool, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn append_message(&self, _key: &SessionKey, _msg: MessageRecord) -> Result<(), SessionStoreError> {
+    async fn append_message(
+        &self,
+        _key: &SessionKey,
+        _msg: MessageRecord,
+    ) -> Result<(), SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn get_history(&self, _key: &SessionKey, _limit: Option<usize>) -> Result<Vec<MessageRecord>, SessionStoreError> {
+    async fn get_history(
+        &self,
+        _key: &SessionKey,
+        _limit: Option<usize>,
+    ) -> Result<Vec<MessageRecord>, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn compact(&self, _key: &SessionKey, _strategy: CompactStrategy) -> Result<CompactResult, SessionStoreError> {
+    async fn compact(
+        &self,
+        _key: &SessionKey,
+        _strategy: CompactStrategy,
+    ) -> Result<CompactResult, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn list_checkpoints(&self, _key: &SessionKey) -> Result<Vec<CheckpointSummary>, SessionStoreError> {
+    async fn list_checkpoints(
+        &self,
+        _key: &SessionKey,
+    ) -> Result<Vec<CheckpointSummary>, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn branch_from_checkpoint(
-        &self, _key: &SessionKey, _checkpoint_id: &str, _new_key: &SessionKey,
+        &self,
+        _key: &SessionKey,
+        _checkpoint_id: &str,
+        _new_key: &SessionKey,
     ) -> Result<SessionMetadata, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn restore_checkpoint(
-        &self, _key: &SessionKey, _checkpoint_id: &str,
+        &self,
+        _key: &SessionKey,
+        _checkpoint_id: &str,
     ) -> Result<SessionMetadata, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn close_session(&self, _key: &SessionKey, _topic: Option<&str>) -> Result<(), SessionStoreError> {
+    async fn close_session(
+        &self,
+        _key: &SessionKey,
+        _topic: Option<&str>,
+    ) -> Result<(), SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn set_topic(&self, _key: &SessionKey, _topic: &str) -> Result<(), SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn set_state(&self, _key: &SessionKey, _state: SessionState) -> Result<(), SessionStoreError> {
+    async fn set_state(
+        &self,
+        _key: &SessionKey,
+        _state: SessionState,
+    ) -> Result<(), SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn get_state(&self, _key: &SessionKey) -> Result<SessionState, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn get_identity_context(
-        &self, _session_key: &str, _source_channel: &str,
+        &self,
+        _session_key: &str,
+        _source_channel: &str,
     ) -> Result<aleph_protocol::IdentityContext, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn get_current_epoch(&self, _base_key_pattern: &str) -> Result<u32, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn get_session_topic(&self, _key: &SessionKey) -> Result<Option<String>, SessionStoreError> {
+    async fn get_session_topic(
+        &self,
+        _key: &SessionKey,
+    ) -> Result<Option<String>, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn cleanup_expired(&self) -> Result<usize, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn patch_session(&self, _key: &SessionKey, _patch: &SessionPatch) -> Result<bool, SessionStoreError> {
+    async fn patch_session(
+        &self,
+        _key: &SessionKey,
+        _patch: &SessionPatch,
+    ) -> Result<bool, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn update_session_usage(
-        &self, _key: &SessionKey, _input_tokens: i64, _output_tokens: i64,
-        _model: Option<&str>, _model_provider: Option<&str>,
+        &self,
+        _key: &SessionKey,
+        _input_tokens: i64,
+        _output_tokens: i64,
+        _model: Option<&str>,
+        _model_provider: Option<&str>,
     ) -> Result<(), SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn get_session_preview(
-        &self, _key: &SessionKey, _message_limit: usize,
+        &self,
+        _key: &SessionKey,
+        _message_limit: usize,
     ) -> Result<SessionPreview, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn count_by_state(&self, _state: SessionState) -> Result<usize, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn list_by_state(&self, _state: SessionState) -> Result<Vec<SessionMetadata>, SessionStoreError> {
+    async fn list_by_state(
+        &self,
+        _state: SessionState,
+    ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn set_error(&self, _key: &SessionKey, _error_msg: Option<&str>) -> Result<(), SessionStoreError> {
+    async fn set_error(
+        &self,
+        _key: &SessionKey,
+        _error_msg: Option<&str>,
+    ) -> Result<(), SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
     async fn stop(&self, _key: &SessionKey) -> Result<(), SessionStoreError> {
@@ -346,10 +412,7 @@ impl TestEnv {
         let db_path = tmp.path().join("raw.db");
         let notes_dir = tmp.path().join("notes");
         std::fs::create_dir_all(&notes_dir).expect("notes dir");
-        let raw_store = Arc::new(
-            SqliteMemoryBackend::new(&db_path)
-                .expect("SqliteMemoryBackend"),
-        );
+        let raw_store = Arc::new(SqliteMemoryBackend::new(&db_path).expect("SqliteMemoryBackend"));
         // Keep the tempdir alive for the lifetime of the TestEnv.
         // We leak it deliberately — the OS will reclaim it after the test process exits.
         std::mem::forget(tmp);
@@ -402,7 +465,14 @@ impl TestEnv {
             a2a_policy,
         ));
 
-        Self { raw_store, session_store, mock_llm, synthesizer, assembler, context }
+        Self {
+            raw_store,
+            session_store,
+            mock_llm,
+            synthesizer,
+            assembler,
+            context,
+        }
     }
 
     /// Build a `SessionSearchTool` for the given caller agent with no assembler.
@@ -488,7 +558,10 @@ async fn fresh_short_session_lazy_synthesis() {
 
     // --- First call: should trigger lazy synthesis ---
     let result = tool
-        .call(SessionSearchArgs { query: "deploy".into(), max_results: 5 })
+        .call(SessionSearchArgs {
+            query: "deploy".into(),
+            max_results: 5,
+        })
         .await
         .expect("first call failed");
 
@@ -516,7 +589,10 @@ async fn fresh_short_session_lazy_synthesis() {
 
     // --- Second call: must hit the cached /end-summary, NO extra LLM call ---
     let result2 = tool
-        .call(SessionSearchArgs { query: "deploy".into(), max_results: 5 })
+        .call(SessionSearchArgs {
+            query: "deploy".into(),
+            max_results: 5,
+        })
         .await
         .expect("second call failed");
 
@@ -736,6 +812,10 @@ async fn a2a_filter_preserved() {
     assert!(
         result.hits.iter().all(|h| h.agent_id != "agent-B"),
         "A2A filter must drop agent-B hits when caller is agent-A. Got hits: {:?}",
-        result.hits.iter().map(|h| (&h.agent_id, &h.session_key)).collect::<Vec<_>>()
+        result
+            .hits
+            .iter()
+            .map(|h| (&h.agent_id, &h.session_key))
+            .collect::<Vec<_>>()
     );
 }

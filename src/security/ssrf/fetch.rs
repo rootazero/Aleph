@@ -240,9 +240,7 @@ pub async fn safe_fetch(
         if !preserve_method_and_body
             && matches!(
                 status,
-                StatusCode::MOVED_PERMANENTLY
-                    | StatusCode::FOUND
-                    | StatusCode::SEE_OTHER
+                StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND | StatusCode::SEE_OTHER
             )
             && current_method == Method::POST
         {

@@ -81,12 +81,22 @@ impl Rect {
         if height < 0.0 {
             return Err("height must be non-negative");
         }
-        Ok(Self { x, y, width, height })
+        Ok(Self {
+            x,
+            y,
+            width,
+            height,
+        })
     }
 
     /// Create a new Rect without validation (use with caution).
     pub fn new_unchecked(x: f64, y: f64, width: f64, height: f64) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Check if the rectangle has valid dimensions (non-negative width/height).

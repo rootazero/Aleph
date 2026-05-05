@@ -1365,10 +1365,8 @@ impl BuiltinToolRegistry {
             tools,
             "remember",
             crate::builtin_tools::RememberTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::remember::RememberArgs
-            ))
-            .unwrap_or_default(),
+            serde_json::to_value(schema_for!(crate::builtin_tools::remember::RememberArgs))
+                .unwrap_or_default(),
         );
         info!("Registered remember tool in BuiltinToolRegistry");
 

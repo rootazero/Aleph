@@ -69,8 +69,12 @@ mod tests {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use crate::memory::assembler::{AssemblyBudget, HybridAssembler, UserProfileLoader, WorkingMemoryAssembler};
+    use crate::error::AlephError;
     use crate::memory::assembler::hybrid::LlmReranker;
+    use crate::memory::assembler::{
+        AssemblyBudget, HybridAssembler, UserProfileLoader, WorkingMemoryAssembler,
+    };
+    use crate::memory::context::FactSource;
     use crate::memory::embedding_provider::EmbeddingProvider;
     use crate::memory::note_retrieval::NoteFactRetrieval;
     use crate::memory::notes::NoteIndexer;
@@ -78,10 +82,8 @@ mod integration_tests {
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
     use crate::memory::store::MemoryBackend;
     use crate::memory::SqliteMemoryBackend;
-    use crate::error::AlephError;
-    use crate::memory::context::FactSource;
-    use async_trait::async_trait;
     use crate::sync_primitives::Arc;
+    use async_trait::async_trait;
 
     struct NeverCalledReranker;
 
@@ -102,9 +104,15 @@ mod integration_tests {
         async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
             Ok(texts.iter().map(|_| vec![0.0_f32; 768]).collect())
         }
-        fn dimensions(&self) -> usize { 768 }
-        fn model_name(&self) -> &str { "zero" }
-        fn provider_id(&self) -> &str { "zero" }
+        fn dimensions(&self) -> usize {
+            768
+        }
+        fn model_name(&self) -> &str {
+            "zero"
+        }
+        fn provider_id(&self) -> &str {
+            "zero"
+        }
     }
 
     fn build_assembler(backend: MemoryBackend, notes_dir: std::path::PathBuf) -> HybridAssembler {
@@ -145,12 +153,9 @@ mod integration_tests {
 
         // Seed 2 Transcript fragments with matching content
         for i in 0..2u32 {
-            let raw = RawMemory::new(
-                format!("Transcript body {i}"),
-                RawMemorySource::Transcript,
-            )
-            .with_agent("agent-filter-test")
-            .with_session("sess-filter");
+            let raw = RawMemory::new(format!("Transcript body {i}"), RawMemorySource::Transcript)
+                .with_agent("agent-filter-test")
+                .with_session("sess-filter");
             backend.insert_raw_memory(&raw).await.unwrap();
         }
 

@@ -104,9 +104,9 @@ mod tests {
     use crate::gateway::session_store::error::SessionStoreError;
     use crate::gateway::session_store::types::*;
     use crate::gateway::session_store::SessionStore;
-    use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::memory::session_search_summary::lookup::retrieve_summary_fact;
     use crate::memory::session_search_summary::synthesizer::SummaryLlm;
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
 
     // -----------------------------------------------------------------------
     // MockSummaryLlm — counts calls, returns a fixed response
@@ -270,10 +270,7 @@ mod tests {
         ) -> Result<(), SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
-        async fn get_state(
-            &self,
-            _key: &SessionKey,
-        ) -> Result<SessionState, SessionStoreError> {
+        async fn get_state(&self, _key: &SessionKey) -> Result<SessionState, SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
         async fn get_identity_context(
@@ -322,10 +319,7 @@ mod tests {
         ) -> Result<SessionPreview, SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
-        async fn count_by_state(
-            &self,
-            _state: SessionState,
-        ) -> Result<usize, SessionStoreError> {
+        async fn count_by_state(&self, _state: SessionState) -> Result<usize, SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
         async fn list_by_state(
@@ -366,7 +360,11 @@ mod tests {
             };
             drop(map);
 
-            let start = if msgs.len() > max_turns { msgs.len() - max_turns } else { 0 };
+            let start = if msgs.len() > max_turns {
+                msgs.len() - max_turns
+            } else {
+                0
+            };
             let slice = &msgs[start..];
             let mut result = Vec::with_capacity(slice.len());
             let mut total = 0usize;
@@ -410,21 +408,30 @@ mod tests {
         let llm = MockSummaryLlm::with_response("LLM should not be called");
 
         // Pre-seed an /end-summary row.
-        let raw =
-            RawMemory::new("Existing summary".to_string(), RawMemorySource::SessionCompressed)
-                .with_agent("agent-1")
-                .with_session("sk1")
-                .with_path("aleph://session/sk1/end-summary");
+        let raw = RawMemory::new(
+            "Existing summary".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("agent-1")
+        .with_session("sk1")
+        .with_path("aleph://session/sk1/end-summary");
         store.insert_raw_memory(&raw).await.unwrap();
 
         let summarizer = make_summarizer(store.clone(), session_store, llm.clone());
         summarizer.produce("agent-1", "sk1").await.unwrap();
 
         // LLM must not be called.
-        assert_eq!(llm.call_count(), 0, "LLM must not be called when /end-summary already exists");
+        assert_eq!(
+            llm.call_count(),
+            0,
+            "LLM must not be called when /end-summary already exists"
+        );
 
         // Existing row must be unchanged.
-        let existing = retrieve_summary_fact(&store, "agent-1", "sk1").await.unwrap().unwrap();
+        let existing = retrieve_summary_fact(&store, "agent-1", "sk1")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(existing.content, "Existing summary");
     }
 
@@ -445,25 +452,38 @@ mod tests {
             .with_path("aleph://session/sk2/d0/0");
         store.insert_raw_memory(&d0).await.unwrap();
 
-        let d2 = RawMemory::new("d2 abstract".to_string(), RawMemorySource::SessionCompressed)
-            .with_agent("agent-1")
-            .with_session("sk2")
-            .with_path("aleph://session/sk2/d2/0");
+        let d2 = RawMemory::new(
+            "d2 abstract".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("agent-1")
+        .with_session("sk2")
+        .with_path("aleph://session/sk2/d2/0");
         store.insert_raw_memory(&d2).await.unwrap();
 
         let summarizer = make_summarizer(store.clone(), session_store, llm.clone());
         summarizer.produce("agent-1", "sk2").await.unwrap();
 
         // Written row's content must be from d2 (highest depth wins).
-        let written = retrieve_summary_fact(&store, "agent-1", "sk2").await.unwrap().unwrap();
-        assert_eq!(written.content, "d2 abstract", "highest-depth fact must be reused");
+        let written = retrieve_summary_fact(&store, "agent-1", "sk2")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            written.content, "d2 abstract",
+            "highest-depth fact must be reused"
+        );
         assert_eq!(
             written.path.as_deref(),
             Some("aleph://session/sk2/end-summary")
         );
 
         // LLM must not be called.
-        assert_eq!(llm.call_count(), 0, "LLM must not be called when d* facts exist");
+        assert_eq!(
+            llm.call_count(),
+            0,
+            "LLM must not be called when d* facts exist"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -476,10 +496,7 @@ mod tests {
         let session_store = InMemorySessionStore::new().with_messages(
             "agent-1",
             "sk3",
-            &[
-                ("user", "Hello"),
-                ("assistant", "Hi there"),
-            ],
+            &[("user", "Hello"), ("assistant", "Hi there")],
         );
         let llm = MockSummaryLlm::with_response("Fallback summary text");
 
@@ -487,11 +504,18 @@ mod tests {
         summarizer.produce("agent-1", "sk3").await.unwrap();
 
         // /end-summary must be written with the LLM output.
-        let written = retrieve_summary_fact(&store, "agent-1", "sk3").await.unwrap().unwrap();
+        let written = retrieve_summary_fact(&store, "agent-1", "sk3")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(written.content, "Fallback summary text");
 
         // LLM must be called exactly once.
-        assert_eq!(llm.call_count(), 1, "LLM must be called exactly once for fallback");
+        assert_eq!(
+            llm.call_count(),
+            1,
+            "LLM must be called exactly once for fallback"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -510,6 +534,9 @@ mod tests {
 
     #[test]
     fn extract_depth_returns_0_for_end_summary() {
-        assert_eq!(extract_depth_from_path("aleph://session/sid/end-summary"), 0);
+        assert_eq!(
+            extract_depth_from_path("aleph://session/sid/end-summary"),
+            0
+        );
     }
 }

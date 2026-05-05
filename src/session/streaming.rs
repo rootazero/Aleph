@@ -27,7 +27,7 @@ use crate::providers::delta::ProviderDelta;
 use crate::tools::execution_context::CascadePolicy;
 use crate::tools::orchestrator::ToolOutcome;
 use crate::tools::pipeline::{PipelineOutcome, ToolPipeline};
-use crate::tools::runtime::{ToolResult, LoopToolRegistry};
+use crate::tools::runtime::{LoopToolRegistry, ToolResult};
 use tokio::sync::Mutex;
 
 // =============================================================================
@@ -243,7 +243,8 @@ impl StreamingToolExecutor {
                         }
                     }
                     if let Some(call) = self.concurrent_calls.remove(&call_index) {
-                        self.emit_callback(&call.id, &call.name, &call.arguments, &outcome).await;
+                        self.emit_callback(&call.id, &call.name, &call.arguments, &outcome)
+                            .await;
                     }
                     results.push((call_index, outcome));
                 }
@@ -270,8 +271,8 @@ impl StreamingToolExecutor {
                         confirmation_reason: None,
                     };
                     if let Some(call) = self.concurrent_calls.remove(&call_index) {
-                        self.emit_callback(&call.id, &call.name, &call.arguments, &panic_outcome
-                        ).await;
+                        self.emit_callback(&call.id, &call.name, &call.arguments, &panic_outcome)
+                            .await;
                     }
                     results.push((call_index, panic_outcome));
                 }
@@ -301,7 +302,10 @@ impl StreamingToolExecutor {
         call_index: usize,
         cancel: CancellationToken,
     ) -> JoinHandle<(usize, PipelineOutcome)> {
-        let call = self.concurrent_calls.get(&call_index).expect("concurrent call must exist");
+        let call = self
+            .concurrent_calls
+            .get(&call_index)
+            .expect("concurrent call must exist");
         let registry = Arc::clone(&self.registry);
         let pipeline = Arc::clone(&self.pipeline);
         let id = call.id.clone();
@@ -763,8 +767,12 @@ mod tests {
         registry.register(Box::new(VerySlowTool));
 
         let cancel = CancellationToken::new();
-        let (mut bridge, executor) =
-            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel.clone(), None);
+        let (mut bridge, executor) = StreamingToolBridge::new(
+            Arc::new(registry),
+            permissive_pipeline(),
+            cancel.clone(),
+            None,
+        );
 
         feed_tool_call(&mut bridge, "s1", "very_slow", "{}");
         bridge.finish();

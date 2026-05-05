@@ -219,6 +219,8 @@ pub(super) async fn fresh_session(
                 content: MessageContent {
                     text: "go".into(),
                     blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
                 },
                 at: now_ms(),
             },

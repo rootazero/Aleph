@@ -260,7 +260,11 @@ impl DreamStage for NoteDecayStage {
 
             note.confidence = new_conf;
 
-            if let Err(e) = ctx.indexer.write_note(&ctx.agent_id, &category, &note).await {
+            if let Err(e) = ctx
+                .indexer
+                .write_note(&ctx.agent_id, &category, &note)
+                .await
+            {
                 tracing::warn!(path = %note_path, error = %e, "NoteDecay: write_note failed");
                 continue;
             }

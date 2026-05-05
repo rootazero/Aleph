@@ -25,6 +25,8 @@ fn user_msg(text: &str) -> SessionEventRecord {
         content: MessageContent {
             text: text.to_string(),
             blocks: vec![],
+            thinking: None,
+            thinking_signature: None,
         },
         at: now_ms(),
     })
@@ -41,6 +43,8 @@ fn assistant_with_tool_use(tool_id: &str, tool_name: &str) -> SessionEventRecord
                 "name": tool_name,
                 "input": {}
             })],
+            thinking: None,
+            thinking_signature: None,
         },
         at: now_ms(),
     })

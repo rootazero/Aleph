@@ -14,7 +14,9 @@ use super::wikilink::extract_wikilinks;
 /// Default is `Low` so legacy notes (no `severity:` in frontmatter) get
 /// `severity_boost = 1.0` and rank exactly as before. See
 /// `docs/superpowers/plans/2026-04-29-aleph-self-evolution.md` Phase 2 Decision 4.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord,
+)]
 #[serde(rename_all = "lowercase")]
 #[schemars(rename_all = "lowercase")]
 pub enum Severity {
@@ -476,18 +478,37 @@ fn sha256_hex(content: &str) -> String {
 fn is_yaml_implicit_scalar(s: &str) -> bool {
     matches!(
         s,
-        ""
-        | "~"
-        | "null" | "Null" | "NULL"
-        | "true" | "True" | "TRUE"
-        | "false" | "False" | "FALSE"
-        | "yes" | "Yes" | "YES"
-        | "no" | "No" | "NO"
-        | "on" | "On" | "ON"
-        | "off" | "Off" | "OFF"
-        | ".inf" | ".Inf" | ".INF"
-        | "-.inf" | "-.Inf" | "-.INF"
-        | ".nan" | ".NaN" | ".NAN"
+        "" | "~"
+            | "null"
+            | "Null"
+            | "NULL"
+            | "true"
+            | "True"
+            | "TRUE"
+            | "false"
+            | "False"
+            | "FALSE"
+            | "yes"
+            | "Yes"
+            | "YES"
+            | "no"
+            | "No"
+            | "NO"
+            | "on"
+            | "On"
+            | "ON"
+            | "off"
+            | "Off"
+            | "OFF"
+            | ".inf"
+            | ".Inf"
+            | ".INF"
+            | "-.inf"
+            | "-.Inf"
+            | "-.INF"
+            | ".nan"
+            | ".NaN"
+            | ".NAN"
     ) || s.parse::<i64>().is_ok()
         || s.parse::<f64>().is_ok()
         || s.starts_with("0x")
@@ -1039,7 +1060,11 @@ tags: []
         let facts = extract_facts(body);
         assert_eq!(facts.len(), 2);
         assert!(facts[0].contains("top fact"));
-        assert!(facts[0].contains("sub fact"), "sub-bullet must attach to parent: {:?}", facts[0]);
+        assert!(
+            facts[0].contains("sub fact"),
+            "sub-bullet must attach to parent: {:?}",
+            facts[0]
+        );
         assert_eq!(facts[1].trim(), "second top");
     }
 

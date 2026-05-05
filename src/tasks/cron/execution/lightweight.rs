@@ -1,5 +1,5 @@
-use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, RunStatus};
+use crate::tasks::shared::clock::Clock;
 
 /// Execute a lightweight job. The actual event injection into the main session
 /// is wired by the service layer via a callback. This function produces the result structure.

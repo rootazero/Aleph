@@ -57,8 +57,7 @@ impl LlmReranker for NoopReranker {
 
 /// Per-(agent_id, session_key) curated snapshot cache. Frozen until
 /// invalidation; see [`MemoryContextProvider::build_curated_message`].
-type CuratedSnapshotCache =
-    Arc<TokioRwLock<HashMap<(String, String), Arc<CuratedSnapshot>>>>;
+type CuratedSnapshotCache = Arc<TokioRwLock<HashMap<(String, String), Arc<CuratedSnapshot>>>>;
 
 /// Provides pre-fetched memory context for prompt injection.
 pub struct MemoryContextProvider {
@@ -256,7 +255,9 @@ impl MemoryContextProvider {
             .map(|_| {
                 dirs::home_dir()
                     .unwrap_or_else(|| {
-                        tracing::warn!("HOME directory not available for session snapshots, using temp dir");
+                        tracing::warn!(
+                            "HOME directory not available for session snapshots, using temp dir"
+                        );
                         std::env::temp_dir()
                     })
                     .join(".aleph/data/sessions")
@@ -1051,8 +1052,14 @@ mod curated_snapshot_tests {
             .unwrap();
         assert!(m1.is_some(), "first call must produce a message");
         let txt1 = format!("{:?}", m1);
-        assert!(txt1.contains("fact one"), "rendered block must include entries");
-        assert!(txt1.contains("CuratedMemory"), "must be wrapped in <CuratedMemory>");
+        assert!(
+            txt1.contains("fact one"),
+            "rendered block must include entries"
+        );
+        assert!(
+            txt1.contains("CuratedMemory"),
+            "must be wrapped in <CuratedMemory>"
+        );
 
         // Mutate disk; same session_key must NOT reflect the change.
         std::fs::write(

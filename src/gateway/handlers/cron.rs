@@ -41,9 +41,9 @@ fn job_view_to_json(view: &CronJobView) -> Value {
         "created_at": view.created_at,
         "updated_at": view.updated_at,
         // State fields
-        "next_run_at_ms": view.state.next_run_at_ms,
+        "next_run_at": view.state.next_run_at_ms,
         "running_at_ms": view.state.running_at_ms,
-        "last_run_at_ms": view.state.last_run_at_ms,
+        "last_run_at": view.state.last_run_at_ms,
         "last_run_status": view.state.last_run_status,
         "last_error": view.state.last_error,
         "last_error_reason": view.state.last_error_reason,

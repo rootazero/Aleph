@@ -193,9 +193,7 @@ impl UnifiedMessage {
         for block in self.content_blocks() {
             match block {
                 ContentBlock::Text { text, .. } => parts.push(text.as_str().to_owned()),
-                ContentBlock::Thinking { thinking, .. } => {
-                    parts.push(thinking.as_str().to_owned())
-                }
+                ContentBlock::Thinking { thinking, .. } => parts.push(thinking.as_str().to_owned()),
                 ContentBlock::Json { value } => parts.push(value.to_string()),
                 ContentBlock::ToolCall {
                     name, arguments, ..

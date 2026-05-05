@@ -243,11 +243,7 @@ pub trait NoteStore: Send + Sync {
 
     /// Move a decided review row from `notes_review_queue` to
     /// `notes_review_archive` atomically.
-    async fn archive_review(
-        &self,
-        queue_id: &str,
-        final_status: &str,
-    ) -> Result<(), AlephError> {
+    async fn archive_review(&self, queue_id: &str, final_status: &str) -> Result<(), AlephError> {
         let _ = (queue_id, final_status);
         Ok(())
     }

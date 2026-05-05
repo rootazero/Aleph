@@ -88,10 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .join(".aleph/data");
             match alephcore::utils::instance_lock::try_acquire(&data_dir)? {
                 alephcore::utils::instance_lock::AcquireOutcome::Acquired(lock) => Some(lock),
-                alephcore::utils::instance_lock::AcquireOutcome::HeldByLive {
-                    pid,
-                    lock_path,
-                } => {
+                alephcore::utils::instance_lock::AcquireOutcome::HeldByLive { pid, lock_path } => {
                     eprintln!(
                         "Another Aleph instance is already running (PID {pid}). \
                          Stop it first: kill {pid} or `aleph stop`. Lock file: {}",

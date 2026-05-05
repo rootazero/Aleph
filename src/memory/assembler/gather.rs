@@ -146,8 +146,10 @@ impl Gatherer {
         // When filtering to SessionCompressed only and there is no active
         // session, fetch all SessionCompressed rows for this agent (cross-
         // session retrieval path).
-        if matches!(filter, FactSourceFilter::Only(FactSource::SessionCompressed))
-            && session_id.is_none()
+        if matches!(
+            filter,
+            FactSourceFilter::Only(FactSource::SessionCompressed)
+        ) && session_id.is_none()
         {
             return self.fetch_session_compressed(agent_id).await;
         }

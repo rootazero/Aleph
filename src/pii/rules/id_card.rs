@@ -67,9 +67,13 @@ impl IdCardRule {
             1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
             4 | 6 | 9 | 11 => 30,
             2 => {
-                let is_leap =
-                    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
-                if is_leap { 29 } else { 28 }
+                let is_leap = (year.is_multiple_of(4) && !year.is_multiple_of(100))
+                    || year.is_multiple_of(400);
+                if is_leap {
+                    29
+                } else {
+                    28
+                }
             }
             _ => return false,
         };

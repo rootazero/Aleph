@@ -45,16 +45,10 @@ fn check_status_google(response: Response, provider_name: &str, api_key: &str) -
     if status.is_success() {
         Ok(response)
     } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-        let msg = sanitize_api_key(
-            format!("{} API error: {}", provider_name, status),
-            api_key,
-        );
+        let msg = sanitize_api_key(format!("{} API error: {}", provider_name, status), api_key);
         Err(AlephError::authentication(provider_name, msg))
     } else {
-        let msg = sanitize_api_key(
-            format!("{} API error: {}", provider_name, status),
-            api_key,
-        );
+        let msg = sanitize_api_key(format!("{} API error: {}", provider_name, status), api_key);
         Err(AlephError::provider(msg))
     }
 }
@@ -104,13 +98,10 @@ impl SearchProvider for GoogleProvider {
 
         let response = check_status_google(response, NAME, &self.api_key)?;
 
-        let google_response: GoogleResponse = response
-            .json()
-            .await
-            .map_err(|e| {
-                let msg = sanitize_api_key(e.to_string(), &self.api_key);
-                AlephError::provider(format!("Failed to parse Google response: {}", msg))
-            })?;
+        let google_response: GoogleResponse = response.json().await.map_err(|e| {
+            let msg = sanitize_api_key(e.to_string(), &self.api_key);
+            AlephError::provider(format!("Failed to parse Google response: {}", msg))
+        })?;
 
         let results = google_response
             .items

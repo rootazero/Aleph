@@ -14,5 +14,3 @@ fn flow_run_descriptor_has_expected_shape() {
     assert!(required.iter().any(|v| v == "flow_id"));
     assert!(required.iter().any(|v| v == "input"));
 }
-
-

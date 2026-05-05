@@ -78,7 +78,9 @@ impl VisionPipeline {
         }
 
         if !any_capable {
-            return Err(VisionError::UnsupportedCapability("image_understanding".to_string()));
+            return Err(VisionError::UnsupportedCapability(
+                "image_understanding".to_string(),
+            ));
         }
 
         Err(last_err)

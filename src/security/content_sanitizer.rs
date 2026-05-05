@@ -257,7 +257,9 @@ mod tests {
         // The spoofed end marker should be escaped in the output body
         assert!(result.contains("<<<ESCAPED_END_EXTERNAL_UNTRUSTED_CONTENT"));
         // Only one real closing marker at the end
-        let count = result.matches("<<<END_EXTERNAL_UNTRUSTED_CONTENT id=").count();
+        let count = result
+            .matches("<<<END_EXTERNAL_UNTRUSTED_CONTENT id=")
+            .count();
         assert_eq!(count, 1, "should have exactly one real end boundary marker");
     }
 

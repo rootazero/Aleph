@@ -56,13 +56,10 @@ impl SearchProvider for BingProvider {
             .client
             .get("https://api.bing.microsoft.com/v7.0/search")
             .header("Ocp-Apim-Subscription-Key", &self.api_key)
-            .query(&[(
-                "q",
-                query,
-            ), (
-                "count",
-                &options.validated_max_results().to_string(),
-            )])
+            .query(&[
+                ("q", query),
+                ("count", &options.validated_max_results().to_string()),
+            ])
             .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await

@@ -12,18 +12,18 @@
 use std::path::Path;
 
 use alephcore::memory::assembler::hybrid::LlmReranker;
-use alephcore::{AlephError, AssemblerConfig};
 use alephcore::memory::assembler::{
     AssemblyBudget, HybridAssembler, ItemSource, MemoryEnvelope, UserProfileLoader,
     WorkingMemoryAssembler,
 };
-use alephcore::memory::session_search_summary::FactSourceFilter;
 use alephcore::memory::embedding_provider::EmbeddingProvider;
 use alephcore::memory::note_retrieval::NoteFactRetrieval;
 use alephcore::memory::notes::NoteIndexer;
 use alephcore::memory::session_resume::reader::SnapshotReader;
+use alephcore::memory::session_search_summary::FactSourceFilter;
 use alephcore::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use alephcore::memory::{MemoryBackend, SqliteMemoryBackend};
+use alephcore::{AlephError, AssemblerConfig};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -112,13 +112,10 @@ fn build_assembler(backend: MemoryBackend, notes_dir: std::path::PathBuf) -> Hyb
 /// reproducible across runs regardless of wall-clock time.
 async fn seed_facts(backend: &MemoryBackend) {
     // (a) Transcript fragment — represents a note-like retrieval candidate.
-    let mut fact_a = RawMemory::new(
-        "Aleph uses Rust".to_string(),
-        RawMemorySource::Transcript,
-    )
-    .with_agent("agent-1")
-    .with_session("sess-baseline")
-    .with_path("aleph://session/sess-baseline/raw/frag-a");
+    let mut fact_a = RawMemory::new("Aleph uses Rust".to_string(), RawMemorySource::Transcript)
+        .with_agent("agent-1")
+        .with_session("sess-baseline")
+        .with_path("aleph://session/sess-baseline/raw/frag-a");
     fact_a.created_at = 1_234_567_890;
     backend.insert_raw_memory(&fact_a).await.unwrap();
 
@@ -158,10 +155,9 @@ async fn seed_facts(backend: &MemoryBackend) {
 ///   → `"Raw fragment <uuid>"`
 fn redact_uuid_suffix(s: &str) -> String {
     // Match the standard UUID format: 8-4-4-4-12 lower-hex groups.
-    let uuid_pattern = regex::Regex::new(
-        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-    )
-    .expect("valid regex");
+    let uuid_pattern =
+        regex::Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+            .expect("valid regex");
     uuid_pattern.replace_all(s, "<uuid>").into_owned()
 }
 

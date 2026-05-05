@@ -1286,8 +1286,7 @@ pub(crate) fn emit_session_end_raw_with_registry(
         // Spec B Task 9: fire SessionEndSummarizer fire-and-forget alongside
         // Spec A's curated-invalidate. Non-fatal — a failure here must never
         // block or surface to the user.
-        if let Some(summarizer) =
-            crate::thinker::memory_context_provider::session_end_summarizer()
+        if let Some(summarizer) = crate::thinker::memory_context_provider::session_end_summarizer()
         {
             let b_agent_id = agent_id.clone();
             let b_session_id = session_id.clone();

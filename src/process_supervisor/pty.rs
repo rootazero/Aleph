@@ -99,24 +99,18 @@ impl ClaudeSupervisor {
             .map_err(|e| SupervisorError::SpawnFailed(e.to_string()))?;
 
         // Get reader and writer
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| {
-                SupervisorError::Io(std::io::Error::other(format!(
-                    "failed to clone PTY reader: {}",
-                    e
-                )))
-            })?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| {
-                SupervisorError::Io(std::io::Error::other(format!(
-                    "failed to take PTY writer: {}",
-                    e
-                )))
-            })?;
+        let reader = pair.master.try_clone_reader().map_err(|e| {
+            SupervisorError::Io(std::io::Error::other(format!(
+                "failed to clone PTY reader: {}",
+                e
+            )))
+        })?;
+        let writer = pair.master.take_writer().map_err(|e| {
+            SupervisorError::Io(std::io::Error::other(format!(
+                "failed to take PTY writer: {}",
+                e
+            )))
+        })?;
 
         self.master = Some(pair.master);
         self.writer = Some(writer);
@@ -334,15 +328,15 @@ mod tests {
 
     #[test]
     fn test_args_validation_accepts_safe_args() {
-        let result =
-            SupervisorConfig::new("/tmp").with_args(vec!["--help".to_string(), "file.txt".to_string()]);
+        let result = SupervisorConfig::new("/tmp")
+            .with_args(vec!["--help".to_string(), "file.txt".to_string()]);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_custom_secret_pattern() {
-        let config = SupervisorConfig::new("/tmp")
-            .with_secret_pattern(r"SECRET_\d+", "SECRET_REDACTED");
+        let config =
+            SupervisorConfig::new("/tmp").with_secret_pattern(r"SECRET_\d+", "SECRET_REDACTED");
         let supervisor = ClaudeSupervisor::new(config);
         let masked = supervisor.masker.mask("Token: SECRET_12345");
         assert!(masked.contains("SECRET_REDACTED"));

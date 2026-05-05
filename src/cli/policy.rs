@@ -83,9 +83,7 @@ where
         CommandPolicy::LockOrIpc { route, method } => match instance_lock::try_acquire(data_dir)? {
             AcquireOutcome::Acquired(lock) => local(&lock),
             AcquireOutcome::HeldByLive { .. } | AcquireOutcome::HeldByOrphaned { .. } => {
-                crate::cli::ipc_client::forward_to_server::<T>(
-                    data_dir, method, route, ipc_body,
-                )
+                crate::cli::ipc_client::forward_to_server::<T>(data_dir, method, route, ipc_body)
             }
         },
     }
@@ -142,7 +140,8 @@ mod tests {
             dir.path(),
             |_lock| Ok(7),
             serde_json::Value::Null,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(result, 7);
     }
 

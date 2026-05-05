@@ -189,9 +189,7 @@ impl SearchRegistry {
             Err(e) => {
                 let error_type = match e {
                     AlephError::AuthenticationError { .. } => "auth",
-                    AlephError::NetworkError { .. } | AlephError::Timeout { .. } => {
-                        "network"
-                    }
+                    AlephError::NetworkError { .. } | AlephError::Timeout { .. } => "network",
                     _ => "config",
                 };
 

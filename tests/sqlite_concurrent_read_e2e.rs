@@ -21,10 +21,8 @@ fn one_writer_four_readers_no_busy_panic() {
 
     {
         let conn = open_sqlite_safe(&path).expect("seed open");
-        conn.execute_batch(
-            "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT);",
-        )
-        .expect("schema");
+        conn.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT);")
+            .expect("schema");
     }
 
     let stop = Arc::new(AtomicBool::new(false));

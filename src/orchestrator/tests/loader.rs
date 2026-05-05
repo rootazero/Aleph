@@ -13,7 +13,10 @@ fn preset_catalog_contains_expected_flows() {
         "plan",
         "verify",
     ] {
-        assert!(set.contains_key(*expected), "missing preset {expected} among {ids:?}");
+        assert!(
+            set.contains_key(*expected),
+            "missing preset {expected} among {ids:?}"
+        );
     }
 }
 

@@ -84,7 +84,6 @@ impl IdentityFileLoader {
     pub fn load_agents_md(&mut self, identity_dir: &Path) -> Option<String> {
         self.load(identity_dir, "AGENTS.md")
     }
-
 }
 
 impl Default for IdentityFileLoader {

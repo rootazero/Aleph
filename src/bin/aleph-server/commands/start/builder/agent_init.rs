@@ -1384,9 +1384,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 > = mcp.clone();
                 cs.add_post_hook(mcp_hook).await;
             }
-            alephcore::thinker::memory_context_provider::register_session_end_mcp(
-                mcp.clone(),
-            );
+            alephcore::thinker::memory_context_provider::register_session_end_mcp(mcp.clone());
 
             // Spec B Task 9 — register SessionEndSummarizer for on-session-end
             // summary production. Requires an AiProvider for the synthesizer
@@ -1401,17 +1399,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 > = AiProviderReranker::new(prov.clone());
                 let synthesizer = std::sync::Arc::new(SummarySynthesizer::new(
                     memory_db.clone()
-                        as std::sync::Arc<
-                            dyn alephcore::memory::store::raw_memory::RawMemoryStore,
-                        >,
+                        as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
                     session_store.clone(),
                     summary_llm,
                 ));
                 let summarizer = std::sync::Arc::new(SessionEndSummarizer {
                     store: memory_db.clone()
-                        as std::sync::Arc<
-                            dyn alephcore::memory::store::raw_memory::RawMemoryStore,
-                        >,
+                        as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
                     synthesizer,
                 });
                 alephcore::thinker::memory_context_provider::register_session_end_summarizer(

@@ -253,8 +253,7 @@ mod radial_tests {
         let one_hop = vec![n("b", "concept", 1)];
         let two_hop = vec![n("c", "concept", 2)];
         let edges = vec![e(0, 1, "uses"), e(1, 2, "part_of")];
-        let targets =
-            compute_target_positions(&active, &one_hop, &two_hop, &[], &edges, 800.0);
+        let targets = compute_target_positions(&active, &one_hop, &two_hop, &[], &edges, 800.0);
         let pos_c = targets.get("c").unwrap();
         let r = (pos_c.x.powi(2) + pos_c.y.powi(2)).sqrt();
         // total_visible = 1 (one_hop) + 0 (clusters) + 1 (two_hop) = 2.
@@ -354,21 +353,28 @@ mod radial_tests {
     fn r_one_hop_grows_with_node_count() {
         let small = r_one_hop(20, 800.0);
         let big = r_one_hop(500, 800.0);
-        assert!(big > small * 1.5, "expected bigger n to grow R, got small={small} big={big}");
+        assert!(
+            big > small * 1.5,
+            "expected bigger n to grow R, got small={small} big={big}"
+        );
     }
 
     #[test]
     fn r_one_hop_clamps_viewport() {
         // Below the lower bound (clamped to 0.6) and above the upper (1.4) should both pin.
-        let narrow_low  = r_one_hop(50, 100.0);
-        let narrow_min  = r_one_hop(50, 480.0);  // 480/800 = 0.6 exactly
-        let wide_max    = r_one_hop(50, 1120.0); // 1120/800 = 1.4
-        let wide_high   = r_one_hop(50, 4000.0);
+        let narrow_low = r_one_hop(50, 100.0);
+        let narrow_min = r_one_hop(50, 480.0); // 480/800 = 0.6 exactly
+        let wide_max = r_one_hop(50, 1120.0); // 1120/800 = 1.4
+        let wide_high = r_one_hop(50, 4000.0);
         let eps = 1e-3;
-        assert!((narrow_low - narrow_min).abs() < eps,
-            "lower clamp: {narrow_low} vs {narrow_min}");
-        assert!((wide_high - wide_max).abs() < eps,
-            "upper clamp: {wide_high} vs {wide_max}");
+        assert!(
+            (narrow_low - narrow_min).abs() < eps,
+            "lower clamp: {narrow_low} vs {narrow_min}"
+        );
+        assert!(
+            (wide_high - wide_max).abs() < eps,
+            "upper clamp: {wide_high} vs {wide_max}"
+        );
     }
 
     #[test]
@@ -382,7 +388,9 @@ mod radial_tests {
     fn r_orphan_outside_two_hop() {
         let two = r_two_hop(50, 800.0);
         let orphan = r_orphan(50, 800.0);
-        assert!(orphan > two, "R_orphan must exceed R₂: two={two} orphan={orphan}");
+        assert!(
+            orphan > two,
+            "R_orphan must exceed R₂: two={two} orphan={orphan}"
+        );
     }
 }
-

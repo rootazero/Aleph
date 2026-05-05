@@ -45,8 +45,7 @@ fn child_holds_lock_parent_sees_held_by_live() {
         .spawn()
         .unwrap();
 
-    wait_for_path(&ready_path, READY_TIMEOUT)
-        .expect("child failed to signal READY within timeout");
+    wait_for_path(&ready_path, READY_TIMEOUT).expect("child failed to signal READY within timeout");
 
     let outcome = instance_lock::try_acquire(dir.path()).unwrap();
     match outcome {
@@ -90,10 +89,10 @@ fn lock_helper_entry_point() {
     }
     let dir = std::env::var("ALEPH_LOCK_HELPER_DIR")
         .expect("ALEPH_LOCK_HELPER_DIR must be set when ALEPH_LOCK_HELPER=1");
-    let ready_path = std::env::var("ALEPH_LOCK_HELPER_READY")
-        .expect("ALEPH_LOCK_HELPER_READY must be set");
-    let exit_path = std::env::var("ALEPH_LOCK_HELPER_EXIT")
-        .expect("ALEPH_LOCK_HELPER_EXIT must be set");
+    let ready_path =
+        std::env::var("ALEPH_LOCK_HELPER_READY").expect("ALEPH_LOCK_HELPER_READY must be set");
+    let exit_path =
+        std::env::var("ALEPH_LOCK_HELPER_EXIT").expect("ALEPH_LOCK_HELPER_EXIT must be set");
 
     let outcome = instance_lock::try_acquire(Path::new(&dir)).unwrap();
     let hold = match outcome {

@@ -734,6 +734,9 @@ mod tests {
             name: "shell".to_string(),
             input: json!({ "command": "rm -rf /" }),
         };
-        assert!(matches!(guard.check(&call), Err(SafetyError::Blocked { .. })));
+        assert!(matches!(
+            guard.check(&call),
+            Err(SafetyError::Blocked { .. })
+        ));
     }
 }

@@ -54,7 +54,9 @@ mod tests {
         assert_eq!(
             parse(body),
             vec!["fact one", "fact two", "fact three"]
-                .into_iter().map(String::from).collect::<Vec<_>>()
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
         );
     }
 

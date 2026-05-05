@@ -9,18 +9,16 @@ use super::format::serialize;
 #[derive(Debug, Clone)]
 pub struct CuratedSnapshot {
     pub agent_id: String,
-    pub agent_md_block: String,             // <CuratedMemory> XML
-    pub user_md_block: Option<String>,      // <UserProfile> XML, optional
+    pub agent_md_block: String,        // <CuratedMemory> XML
+    pub user_md_block: Option<String>, // <UserProfile> XML, optional
     pub captured_at: SystemTime,
 }
 
 /// Render the agent-side MEMORY.md as an XML envelope. Empty entries → empty string.
-pub fn render_agent_block(
-    entries: &[String],
-    char_limit: usize,
-    near_threshold: f32,
-) -> String {
-    if entries.is_empty() { return String::new(); }
+pub fn render_agent_block(entries: &[String], char_limit: usize, near_threshold: f32) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
     let head = header(entries, char_limit, near_threshold);
     let body = serialize(entries);
     format!("<CuratedMemory>\n{head}\n{body}\n</CuratedMemory>")
@@ -29,12 +27,10 @@ pub fn render_agent_block(
 /// Render the user-profile body as an XML envelope with a budget header.
 /// `body` is the synthesized USER.md content (already markdown). Truncated
 /// to `char_limit` to enforce budget on synthesizer output.
-pub fn render_user_block(
-    body: &str,
-    char_limit: usize,
-    near_threshold: f32,
-) -> String {
-    if body.trim().is_empty() { return String::new(); }
+pub fn render_user_block(body: &str, char_limit: usize, near_threshold: f32) -> String {
+    if body.trim().is_empty() {
+        return String::new();
+    }
     let truncated: String = if body.chars().count() > char_limit {
         body.chars().take(char_limit).collect()
     } else {
@@ -86,12 +82,20 @@ mod tests {
         let body = "x".repeat(2000);
         let block = render_user_block(&body, 1375, 0.95);
         assert!(block.contains("<UserProfile>"));
-        let inside = block.replace("<UserProfile>", "").replace("</UserProfile>", "");
+        let inside = block
+            .replace("<UserProfile>", "")
+            .replace("</UserProfile>", "");
         let xs = inside.matches('x').count();
         assert!(xs <= 1375, "got {xs} xs");
         // Lock in the fix: at-limit must report 100%, not OVER BUDGET.
-        assert!(block.contains("100%"), "header should report 100%, not over: {block}");
-        assert!(!block.contains("OVER BUDGET"), "must not over-report when truncated to limit");
+        assert!(
+            block.contains("100%"),
+            "header should report 100%, not over: {block}"
+        );
+        assert!(
+            !block.contains("OVER BUDGET"),
+            "must not over-report when truncated to limit"
+        );
     }
 
     #[test]
@@ -106,7 +110,10 @@ mod tests {
         let body = "中".repeat(100);
         let block = render_user_block(&body, 200, 0.95);
         assert!(block.contains("<UserProfile>"));
-        assert!(block.contains("100/200 chars"), "header should count chars not bytes: {block}");
+        assert!(
+            block.contains("100/200 chars"),
+            "header should count chars not bytes: {block}"
+        );
         assert!(!block.contains("OVER BUDGET"));
     }
 }

@@ -281,7 +281,6 @@ pub fn GraphCanvas(
                         draw_placeholder(&ctx, &viewport, "");
                     }
                 }
-
             }
 
             // Schedule next frame

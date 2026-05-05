@@ -1083,11 +1083,7 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(())
     }
 
-    async fn archive_review(
-        &self,
-        queue_id: &str,
-        final_status: &str,
-    ) -> Result<(), AlephError> {
+    async fn archive_review(&self, queue_id: &str, final_status: &str) -> Result<(), AlephError> {
         let conn = lock_conn!(self)?;
         // Wrap INSERT + DELETE in a single transaction so a crash mid-archive
         // cannot leave a row in both tables (or in neither).
@@ -1454,7 +1450,8 @@ mod tests {
 
     #[tokio::test]
     async fn reindex_with_partial_link_change_preserves_intersection_ids() {
-        let temp = std::env::temp_dir().join(format!("aleph_diff_partial_{}", uuid::Uuid::new_v4()));
+        let temp =
+            std::env::temp_dir().join(format!("aleph_diff_partial_{}", uuid::Uuid::new_v4()));
         let db = SqliteMemoryBackend::new(&temp).unwrap();
 
         let note_v1 = crate::memory::notes::KnowledgeNote {
@@ -1465,7 +1462,9 @@ mod tests {
             content_hash: "h0".into(),
             ..Default::default()
         };
-        db.index_note(&note_v1, "default", "preference").await.unwrap();
+        db.index_note(&note_v1, "default", "preference")
+            .await
+            .unwrap();
 
         let snap_v1 = snapshot_links(&db);
         assert_eq!(snap_v1.len(), 3);
@@ -1473,7 +1472,9 @@ mod tests {
         // v2: remove "c", add "d" — "a" and "b" must keep their original ids.
         let mut note_v2 = note_v1.clone();
         note_v2.links = vec!["a".into(), "b".into(), "d".into()];
-        db.index_note(&note_v2, "default", "preference").await.unwrap();
+        db.index_note(&note_v2, "default", "preference")
+            .await
+            .unwrap();
 
         let snap_v2 = snapshot_links(&db);
         assert_eq!(snap_v2.len(), 3);
@@ -1516,7 +1517,9 @@ mod tests {
         // Same body, different content_hash (frontmatter changed)
         let mut note2 = note.clone();
         note2.content_hash = "h1".into();
-        db.index_note(&note2, "default", "preference").await.unwrap();
+        db.index_note(&note2, "default", "preference")
+            .await
+            .unwrap();
 
         let after: i64 = {
             let conn = db.conn().lock().unwrap();
@@ -1553,7 +1556,8 @@ mod tests {
 
         let before: i64 = {
             let conn = db.conn().lock().unwrap();
-            conn.query_row("SELECT total_changes()", [], |r| r.get(0)).unwrap()
+            conn.query_row("SELECT total_changes()", [], |r| r.get(0))
+                .unwrap()
         };
 
         // Body changed; content_hash bumped.
@@ -1563,14 +1567,18 @@ mod tests {
 
         let after: i64 = {
             let conn = db.conn().lock().unwrap();
-            conn.query_row("SELECT total_changes()", [], |r| r.get(0)).unwrap()
+            conn.query_row("SELECT total_changes()", [], |r| r.get(0))
+                .unwrap()
         };
 
         let delta = after - before;
         // notes_index UPDATE (1) + notes_fts DELETE+INSERT cascade (FTS5 shadow tables: ~14)
         // + notes_fts_meta upsert (1). Floor is conservative; we just want to confirm
         // the gate engaged and a non-trivial rewrite happened.
-        assert!(delta > 5, "expected a substantive FTS rewrite (delta > 5), got {delta}");
+        assert!(
+            delta > 5,
+            "expected a substantive FTS rewrite (delta > 5), got {delta}"
+        );
 
         // Sanity: the new meta hash should match the new body's SHA-256.
         let stored_hash: String = {
@@ -1656,7 +1664,13 @@ mod tests {
         let temp = std::env::temp_dir().join(format!("aleph_q_{}", uuid::Uuid::new_v4()));
         let db = SqliteMemoryBackend::new(&temp).unwrap();
         let id = db
-            .enqueue_review("default", r#"{"any":"json"}"#, "high", 0.4, "low confidence")
+            .enqueue_review(
+                "default",
+                r#"{"any":"json"}"#,
+                "high",
+                0.4,
+                "low confidence",
+            )
             .await
             .unwrap();
         let pending = db
@@ -1720,6 +1734,9 @@ mod tests {
         assert_eq!(meta_count, 1, "notes_fts_meta must have exactly one row");
 
         let expected_hash = body_text_sha256(&note.body_text());
-        assert_eq!(meta_hash, expected_hash, "meta hash must match body_text() SHA-256");
+        assert_eq!(
+            meta_hash, expected_hash,
+            "meta hash must match body_text() SHA-256"
+        );
     }
 }

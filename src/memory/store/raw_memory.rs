@@ -288,7 +288,9 @@ pub trait RawMemoryStore: Send + Sync {
         agent_id: &str,
     ) -> Result<Option<RawMemory>, AlephError> {
         let candidates = self.get_raw_by_path_prefix(path, agent_id, 4).await?;
-        Ok(candidates.into_iter().find(|r| r.path.as_deref() == Some(path)))
+        Ok(candidates
+            .into_iter()
+            .find(|r| r.path.as_deref() == Some(path)))
     }
 
     /// Get raw memories by storage source type, scoped to an agent.
@@ -303,7 +305,9 @@ pub trait RawMemoryStore: Send + Sync {
         limit: usize,
     ) -> Result<Vec<RawMemory>, AlephError> {
         let token = source.to_persisted().0;
-        let all = self.get_unprocessed_raw_memories(agent_id, limit * 10).await?;
+        let all = self
+            .get_unprocessed_raw_memories(agent_id, limit * 10)
+            .await?;
         Ok(all
             .into_iter()
             .filter(|r| r.source.to_persisted().0 == token)

@@ -490,6 +490,8 @@ async fn seed_session(
                 MessageContent {
                     text,
                     blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
                 },
                 true,
             )
@@ -533,6 +535,8 @@ async fn seed_session(
                         content: MessageContent {
                             text: prompt,
                             blocks: Vec::new(),
+                            thinking: None,
+                            thinking_signature: None,
                         },
                         at: now_ms(),
                     },
@@ -768,18 +772,26 @@ mod tests {
             FlowHistoryTurn::User(MessageContent {
                 text: "q1".into(),
                 blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
             }),
             FlowHistoryTurn::Assistant(MessageContent {
                 text: "a1".into(),
                 blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
             }),
             FlowHistoryTurn::User(MessageContent {
                 text: "q2".into(),
                 blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
             }),
             FlowHistoryTurn::Assistant(MessageContent {
                 text: "a2".into(),
                 blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
             }),
         ];
         seed_session(
@@ -829,10 +841,14 @@ mod tests {
             MessageContent {
                 text: "m1".into(),
                 blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
             },
             MessageContent {
                 text: "m2".into(),
                 blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
             },
         ];
         seed_session(service.as_ref(), &sid, FlowInput::Multimodal(msgs))
@@ -860,6 +876,8 @@ mod tests {
         crate::session::events::MessageContent {
             text: text.to_string(),
             blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
         }
     }
 

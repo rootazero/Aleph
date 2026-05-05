@@ -516,8 +516,8 @@ impl MessageStore for SqliteMessageStore {
                 reply_to: raw.reply_to,
                 thread_id: raw.thread_id,
                 attachments,
-            created_at: parse_rfc3339(&raw.created_at_str)?,
-            expires_at: parse_rfc3339_opt(&raw.expires_at_str)?,
+                created_at: parse_rfc3339(&raw.created_at_str)?,
+                expires_at: parse_rfc3339_opt(&raw.expires_at_str)?,
             });
         }
 
@@ -589,8 +589,8 @@ impl MessageStore for SqliteMessageStore {
                 reply_to: raw.reply_to,
                 thread_id: raw.thread_id,
                 attachments,
-            created_at: parse_rfc3339(&raw.created_at_str)?,
-            expires_at: parse_rfc3339_opt(&raw.expires_at_str)?,
+                created_at: parse_rfc3339(&raw.created_at_str)?,
+                expires_at: parse_rfc3339_opt(&raw.expires_at_str)?,
             });
         }
 

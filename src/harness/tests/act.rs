@@ -240,6 +240,8 @@ fn user_message_event(text: &str) -> SessionEvent {
         content: MessageContent {
             text: text.to_string(),
             blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
         },
         at: now_ms(),
     }
@@ -409,6 +411,8 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
             content: MessageContent {
                 text: "read a.txt".into(),
                 blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
             },
             at: now_ms(),
         },
@@ -417,6 +421,8 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
             content: MessageContent {
                 text: "calling…".into(),
                 blocks: assistant_blocks,
+                thinking: None,
+                thinking_signature: None,
             },
             at: now_ms(),
         },

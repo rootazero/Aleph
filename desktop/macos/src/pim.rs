@@ -282,7 +282,9 @@ mod tests {
     #[tokio::test]
     async fn notes_create_and_read() {
         let pim = MacOSPim::new();
-        let id = pim.notes_create("test-folder", "test title", "test body").await;
+        let id = pim
+            .notes_create("test-folder", "test title", "test body")
+            .await;
         if let Ok(note_id) = id {
             let content = pim.notes_read(&note_id).await;
             assert!(content.is_ok());
@@ -294,7 +296,9 @@ mod tests {
         let pim = MacOSPim::new();
         let create_result = pim.notes_create("test-folder", "update test", "body").await;
         if let Ok(note_id) = create_result {
-            let update_result = pim.notes_update(&note_id, Some("new title"), Some("new body")).await;
+            let update_result = pim
+                .notes_update(&note_id, Some("new title"), Some("new body"))
+                .await;
             assert!(update_result.is_ok());
             let delete_result = pim.notes_delete(&note_id).await;
             assert!(delete_result.is_ok());

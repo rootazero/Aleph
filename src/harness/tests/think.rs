@@ -220,6 +220,8 @@ fn user_message_event(text: &str) -> SessionEvent {
         content: MessageContent {
             text: text.to_string(),
             blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
         },
         at: now_ms(),
     }

@@ -185,14 +185,25 @@ mod parallax_tests {
         let mut v = Viewport::new(800.0, 600.0);
         // Tiny bbox → would compute very high scale; must clamp at 3.0.
         v.fit_to_content(&[make_node(0.0, 0.0), make_node(0.5, 0.5)], 0.10);
-        assert!(v.scale <= 3.0 + 1e-6, "expected scale ≤ 3.0, got {}", v.scale);
+        assert!(
+            v.scale <= 3.0 + 1e-6,
+            "expected scale ≤ 3.0, got {}",
+            v.scale
+        );
 
         // Massive bbox → would compute very low scale; must clamp at 0.2.
         let mut v2 = Viewport::new(800.0, 600.0);
         v2.fit_to_content(
-            &[make_node(-100_000.0, -100_000.0), make_node(100_000.0, 100_000.0)],
+            &[
+                make_node(-100_000.0, -100_000.0),
+                make_node(100_000.0, 100_000.0),
+            ],
             0.10,
         );
-        assert!(v2.scale >= 0.2 - 1e-6, "expected scale ≥ 0.2, got {}", v2.scale);
+        assert!(
+            v2.scale >= 0.2 - 1e-6,
+            "expected scale ≥ 0.2, got {}",
+            v2.scale
+        );
     }
 }

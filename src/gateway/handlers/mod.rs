@@ -102,12 +102,12 @@ pub mod security_config;
 pub mod services;
 pub mod session;
 
+pub mod dreaming;
 pub mod skills;
 #[allow(dead_code)] // DTOs only — handlers deferred to Milestone 2
 pub mod supervisor;
 pub mod system_info;
 pub mod teams;
-pub mod dreaming;
 pub mod tools_invoke;
 pub mod tools_visibility;
 pub mod trace_replay;

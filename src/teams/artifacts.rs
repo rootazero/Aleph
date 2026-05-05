@@ -216,11 +216,7 @@ pub(crate) fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tas
     let created_at = DateTime::parse_from_rfc3339(&created_at_str)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                11,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            )
+            rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
     let started_at = match started_at_str {

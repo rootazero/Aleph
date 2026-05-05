@@ -16,11 +16,17 @@ pub struct ParsedLoad {
 
 pub fn load_body(body: &str) -> ParsedLoad {
     if body.trim().is_empty() {
-        return ParsedLoad { entries: Vec::new(), legacy: false };
+        return ParsedLoad {
+            entries: Vec::new(),
+            legacy: false,
+        };
     }
     if body.contains(ENTRY_DELIMITER) {
         let entries = super::format::parse(body);
-        return ParsedLoad { entries, legacy: false };
+        return ParsedLoad {
+            entries,
+            legacy: false,
+        };
     }
     // No delimiter → legacy free-form file → single entry.
     ParsedLoad {

@@ -12,11 +12,8 @@ fn acp_sessions_atomic_write_yields_valid_json() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("acp_sessions.json");
 
-    alephcore::utils::atomic_io::write_atomic(
-        &path,
-        br#"[{"session_id":"abc","cwd":"/tmp"}]"#,
-    )
-    .expect("atomic write");
+    alephcore::utils::atomic_io::write_atomic(&path, br#"[{"session_id":"abc","cwd":"/tmp"}]"#)
+        .expect("atomic write");
 
     let bytes = std::fs::read_to_string(&path).expect("read back");
     let parsed: serde_json::Value = serde_json::from_str(&bytes).expect("valid json");

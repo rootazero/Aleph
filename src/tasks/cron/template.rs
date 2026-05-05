@@ -2,8 +2,8 @@
 
 use std::sync::LazyLock;
 
-use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::{CronJob, JobRun};
+use crate::tasks::shared::clock::Clock;
 
 static ENV_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"\{\{env:(\w+)\}\}").expect("ENV_RE regex is hardcoded and always valid")

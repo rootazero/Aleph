@@ -135,11 +135,14 @@ impl SessionSearchTool {
                 .filter_map(|item| {
                     let (session_key, fact_path) = match &item.source {
                         ItemSource::Summary { session_id, layer } => {
-                            let path =
-                                format!("aleph://session/{}/{}", session_id, layer);
+                            let path = format!("aleph://session/{}/{}", session_id, layer);
                             (session_id.clone(), path)
                         }
-                        ItemSource::Raw { session_id, raw_id, path } => {
+                        ItemSource::Raw {
+                            session_id,
+                            raw_id,
+                            path,
+                        } => {
                             let fact_path = path.clone().unwrap_or_else(|| {
                                 format!("aleph://session/{}/raw/{}", session_id, raw_id)
                             });

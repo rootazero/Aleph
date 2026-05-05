@@ -92,10 +92,7 @@ impl CuratedMemoryStore {
     }
 
     pub fn is_legacy(&self) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .legacy
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).legacy
     }
 
     /// Append a new entry. Rejects: empty, exact duplicate, over budget, legacy mode.
@@ -411,9 +408,7 @@ mod tests {
             .unwrap();
         s.add("durable").await.unwrap();
         // Reload from disk in a fresh store; entry should survive.
-        let s2 = CuratedMemoryStore::load(path, 100, "agent")
-            .await
-            .unwrap();
+        let s2 = CuratedMemoryStore::load(path, 100, "agent").await.unwrap();
         assert_eq!(s2.current_entries(), vec!["durable"]);
     }
 }

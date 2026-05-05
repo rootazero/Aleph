@@ -561,10 +561,7 @@ mod tests {
         .await
         .unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("Use the `remember` tool"),
-            "msg was: {msg}"
-        );
+        assert!(msg.contains("Use the `remember` tool"), "msg was: {msg}");
         assert!(!tmp.path().join("MEMORY.md").exists());
     }
 

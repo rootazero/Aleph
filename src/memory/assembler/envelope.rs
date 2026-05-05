@@ -50,7 +50,10 @@ pub struct EnvelopeItem {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ItemSource {
-    Note { path: String, category: String },
+    Note {
+        path: String,
+        category: String,
+    },
     Raw {
         raw_id: String,
         session_id: String,
@@ -59,7 +62,10 @@ pub enum ItemSource {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
     },
-    Summary { layer: String, session_id: String },
+    Summary {
+        layer: String,
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -63,6 +63,18 @@ impl PromptBuilder for DefaultPromptBuilder {
         if tail_start > 0 {
             if let SessionEvent::AssistantMessage { content, .. } = &events[tail_start - 1].event {
                 let mut blocks: Vec<ContentBlock> = Vec::new();
+                // Reconstruct signed thinking block first so tool_use blocks
+                // that follow it receive reasoning_content in convert_messages.
+                if let (Some(ref thinking), Some(ref sig)) =
+                    (&content.thinking, &content.thinking_signature)
+                {
+                    if !thinking.is_empty() {
+                        blocks.push(ContentBlock::Thinking {
+                            thinking: thinking.clone(),
+                            signature: Some(sig.clone()),
+                        });
+                    }
+                }
                 if !content.text.is_empty() {
                     blocks.push(ContentBlock::Text {
                         text: content.text.clone(),

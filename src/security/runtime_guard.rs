@@ -9,8 +9,8 @@ use crate::secrets::leak_detector::{LeakDecision, LeakDetector as SecretLeakDete
 use crate::security::audit::{AuditEntry, AuditEventType, AuditSeverity, SecurityAuditLog};
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::sync_primitives::{Arc, RwLock};
-use tokio::sync::Mutex;
 use thiserror::Error;
+use tokio::sync::Mutex;
 
 #[derive(Error, Debug)]
 pub enum SecurityGuardError {

@@ -163,6 +163,9 @@ impl AnthropicProtocol {
                 }
                 UnifiedMessage::Assistant { content } => {
                     let mut blocks = Vec::new();
+                    // Track the most recent signed thinking block so we can inject
+                    // reasoning_content into the next ToolUse when thinking is enabled.
+                    let mut pending_thinking: Option<String> = None;
                     for block in content {
                         match block {
                             crate::providers::message::ContentBlock::Text { text, .. } => {
@@ -190,6 +193,8 @@ impl AnthropicProtocol {
                                             thinking: thinking.clone(),
                                             signature: sig.clone(),
                                         });
+                                        // Remember this thinking for the next ToolCall
+                                        pending_thinking = Some(thinking.clone());
                                     }
                                 }
                             }
@@ -210,12 +215,29 @@ impl AnthropicProtocol {
                                     })
                                     .take(64)
                                     .collect();
-                                // Anthropic API requires input to be a dictionary, never a string
-                                let input = if arguments.is_object() {
+                                // Anthropic API requires input to be a dictionary, never a string.
+                                // When thinking is enabled and precedes a tool call, we must
+                                // include reasoning_content in the tool_use input or the API
+                                // rejects the request with:
+                                //   "thinking is enabled but reasoning_content is missing
+                                //    in assistant tool call message".
+                                let mut input = if arguments.is_object() {
                                     arguments.clone()
                                 } else {
                                     serde_json::json!({})
                                 };
+                                if let Some(ref reasoning) = pending_thinking {
+                                    if let Some(obj) = input.as_object_mut() {
+                                        obj.insert(
+                                            "reasoning_content".to_string(),
+                                            serde_json::Value::String(reasoning.clone()),
+                                        );
+                                    }
+                                    // Keep pending_thinking set: Anthropic requires
+                                    // reasoning_content in EVERY tool_use block that
+                                    // follows a signed thinking block within the same
+                                    // assistant message, not just the first one.
+                                }
                                 blocks.push(ContentBlock::ToolUse {
                                     id: sanitized_id,
                                     name: sanitize_anthropic_tool_name(name),

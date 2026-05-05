@@ -170,11 +170,7 @@ impl EmbeddingManager {
     ///   The next `reembed_all` migration will rebuild their vectors.
     /// - Per-row `upsert_embedding` error: that single item is skipped
     ///   (logged at warn); successful peers are still counted.
-    pub async fn flush_pending<S>(
-        &self,
-        store: &S,
-        batch_size: usize,
-    ) -> Result<usize, AlephError>
+    pub async fn flush_pending<S>(&self, store: &S, batch_size: usize) -> Result<usize, AlephError>
     where
         S: crate::memory::notes::store::NoteStore + ?Sized + Send + Sync,
     {
@@ -245,10 +241,7 @@ impl EmbeddingManager {
     /// `init()` + remote config. Used by `tests_pending` to seat a Mock
     /// provider so `flush_pending` can be exercised end-to-end.
     #[cfg(test)]
-    pub(crate) async fn install_provider_for_test(
-        &self,
-        provider: Arc<dyn EmbeddingProvider>,
-    ) {
+    pub(crate) async fn install_provider_for_test(&self, provider: Arc<dyn EmbeddingProvider>) {
         *self.active_provider.write().await = Some(provider);
     }
 }

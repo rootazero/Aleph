@@ -30,12 +30,13 @@ pub fn forward_to_server<T>(
 where
     T: serde::de::DeserializeOwned,
 {
-    let endpoint = read_endpoint(data_dir)?
-        .with_context(|| format!(
+    let endpoint = read_endpoint(data_dir)?.with_context(|| {
+        format!(
             "server is initializing or crashed (no .ipc-endpoint.json at {}). \
              Try again or run `aleph stop` first.",
             data_dir.display()
-        ))?;
+        )
+    })?;
     let url = format!("{}{}", endpoint.url.trim_end_matches('/'), route);
 
     let token = read_token(data_dir)?;
@@ -56,10 +57,9 @@ where
 fn read_token(data_dir: &Path) -> anyhow::Result<String> {
     let conn = open_sqlite_readonly(&data_dir.join(SECURITY_DB_FILENAME))
         .context("cannot open security.db read-only — is data_dir set up?")?;
-    let token = read_current_token_readonly(&conn)?
-        .ok_or_else(|| anyhow::anyhow!(
-            "no bearer token in security.db — has the server ever been started?"
-        ))?;
+    let token = read_current_token_readonly(&conn)?.ok_or_else(|| {
+        anyhow::anyhow!("no bearer token in security.db — has the server ever been started?")
+    })?;
     Ok(token)
 }
 

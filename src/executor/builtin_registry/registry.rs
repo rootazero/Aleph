@@ -335,10 +335,7 @@ impl BuiltinToolRegistry {
     /// Takes `&self` (not `&mut self`) so it works through `Arc` — the MCP is
     /// constructed after the registry has been wrapped in `Arc::new` in
     /// `agent_init`.
-    pub fn set_memory_context_provider(
-        &self,
-        mcp: Arc<crate::thinker::MemoryContextProvider>,
-    ) {
+    pub fn set_memory_context_provider(&self, mcp: Arc<crate::thinker::MemoryContextProvider>) {
         if self.memory_context_provider.set(mcp).is_ok() {
             info!("MemoryContextProvider injected — `remember` tool now available");
         }

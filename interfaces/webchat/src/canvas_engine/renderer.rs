@@ -594,11 +594,7 @@ fn endpoints_world_pos(
     Some(((x1, y1), (x2, y2), z1, z2))
 }
 
-fn draw_dragged_node(
-    ctx: &CanvasRenderingContext2d,
-    n: &CanvasNode,
-    overlay: &DragOverlay,
-) {
+fn draw_dragged_node(ctx: &CanvasRenderingContext2d, n: &CanvasNode, overlay: &DragOverlay) {
     use std::f64::consts::TAU;
 
     // overlay.position is in world space (Task 5 contract). The canvas context
@@ -637,8 +633,18 @@ mod drift_tests {
         let period = 5000.0_f32;
         let a = drift_offset(0.0, id, amp, period);
         let b = drift_offset(period as f64, id, amp, period);
-        assert!((a.x - b.x).abs() < 1e-3, "x not periodic: {} vs {}", a.x, b.x);
-        assert!((a.y - b.y).abs() < 1e-3, "y not periodic: {} vs {}", a.y, b.y);
+        assert!(
+            (a.x - b.x).abs() < 1e-3,
+            "x not periodic: {} vs {}",
+            a.x,
+            b.x
+        );
+        assert!(
+            (a.y - b.y).abs() < 1e-3,
+            "y not periodic: {} vs {}",
+            a.y,
+            b.y
+        );
     }
 
     #[test]
@@ -653,7 +659,8 @@ mod drift_tests {
                 assert!(
                     v.x.abs() <= bound && v.y.abs() <= bound,
                     "drift exceeded amp√2 for id={id} t={t_ms}: ({},{})",
-                    v.x, v.y
+                    v.x,
+                    v.y
                 );
             }
         }
@@ -667,6 +674,9 @@ mod drift_tests {
         let b = drift_offset(1234.0, "node-z-different", amp, period);
         let dx = (a.x - b.x).abs();
         let dy = (a.y - b.y).abs();
-        assert!(dx + dy > 0.5, "drift identical for distinct ids: a={a:?} b={b:?}");
+        assert!(
+            dx + dy > 0.5,
+            "drift identical for distinct ids: a={a:?} b={b:?}"
+        );
     }
 }

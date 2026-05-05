@@ -516,7 +516,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // Falls back silently when memory_backend isn't configured.
                 if let Some(ref mb) = self.memory_backend {
                     t = t.with_raw_memory_writer(
-                        mb.clone() as Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+                        mb.clone() as Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>
                     );
                 }
                 Arc::new(t)

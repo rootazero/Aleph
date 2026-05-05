@@ -1294,8 +1294,19 @@ fn RunHistory(runs: RwSignal<Vec<JobRunInfo>>) -> impl IntoView {
 
                                     // Combine error_reason prefix with error
                                     let error_str = match (&run.error_reason, &run.error) {
-                                        (Some(reason), Some(err)) => format!("[{}] {}", reason, err),
-                                        (Some(reason), None) => reason.clone(),
+                                        (Some(reason), Some(err)) => {
+                                            let reason_str = reason.get("message")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string())
+                                                .unwrap_or_else(|| reason.to_string());
+                                            format!("[{}] {}", reason_str, err)
+                                        }
+                                        (Some(reason), None) => {
+                                            reason.get("message")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string())
+                                                .unwrap_or_else(|| reason.to_string())
+                                        }
                                         (None, Some(err)) => err.clone(),
                                         (None, None) => String::new(),
                                     };

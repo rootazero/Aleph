@@ -252,6 +252,8 @@ impl AgentHarness {
             content: MessageContent {
                 text: text.clone(),
                 blocks,
+                thinking: response.thinking.clone(),
+                thinking_signature: response.thinking_signature.clone(),
             },
             at: now_ms(),
         };
@@ -288,6 +290,8 @@ impl AgentHarness {
                     content: MessageContent {
                         text: format!("[stop-hook veto] {reason}"),
                         blocks: Vec::new(),
+                        thinking: None,
+                        thinking_signature: None,
                     },
                     at: now_ms(),
                 };
@@ -939,6 +943,8 @@ mod tests {
                     content: MessageContent {
                         text: "hello".into(),
                         blocks: vec![],
+                        thinking: None,
+                        thinking_signature: None,
                     },
                     at: now_ms(),
                 },
@@ -1121,6 +1127,8 @@ mod tests {
                     content: MessageContent {
                         text: "go".into(),
                         blocks: vec![],
+                        thinking: None,
+                        thinking_signature: None,
                     },
                     at: now_ms(),
                 },

@@ -200,12 +200,10 @@ mod tests {
 
     #[tokio::test]
     async fn forwards_arguments_and_returns_tool_result() {
-        let reg = Arc::new(
-            StubRegistry::new().with_ok(
-                "memory_search",
-                json!({"hits": [{"id": "n1", "snippet": "hello"}]}),
-            ),
-        );
+        let reg = Arc::new(StubRegistry::new().with_ok(
+            "memory_search",
+            json!({"hits": [{"id": "n1", "snippet": "hello"}]}),
+        ));
         let params = json!({
             "tool_name": "memory_search",
             "arguments": {"query": "hello"},

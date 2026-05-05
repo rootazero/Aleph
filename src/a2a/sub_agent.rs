@@ -174,9 +174,7 @@ pub(crate) fn emit_delegation_primitives(
     child_agent_id: String,
     registry: Option<std::sync::Arc<MemoryExtensionRegistry>>,
 ) {
-    let content = format!(
-        "DELEGATION_PROMPT:\n{prompt}\n\nDELEGATION_RESULT:\n{summary}",
-    );
+    let content = format!("DELEGATION_PROMPT:\n{prompt}\n\nDELEGATION_RESULT:\n{summary}",);
 
     let mut raw = RawMemory::new(content, RawMemorySource::Delegation { child_agent_id })
         .with_agent(parent_agent_id.clone());

@@ -14,12 +14,10 @@ use crate::config::types::agents_def::AgentDefinition;
 use crate::gateway::admin_api::AdminApiState;
 
 pub fn router() -> Router<AdminApiState> {
-    Router::new()
-        .route("/", post(create_agent))
-        .route(
-            "/{id}",
-            axum::routing::patch(update_agent).delete(delete_agent),
-        )
+    Router::new().route("/", post(create_agent)).route(
+        "/{id}",
+        axum::routing::patch(update_agent).delete(delete_agent),
+    )
 }
 
 async fn create_agent(

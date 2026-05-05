@@ -149,6 +149,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 content: MessageContent {
                     text: effective_task,
                     blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
                 },
                 at: now_ms(),
             },
@@ -959,6 +961,8 @@ mod tests {
                         content: MessageContent {
                             text: text.unwrap_or("").to_string(),
                             blocks: Vec::new(),
+                            thinking: None,
+                            thinking_signature: None,
                         },
                         at: now_ms(),
                     },

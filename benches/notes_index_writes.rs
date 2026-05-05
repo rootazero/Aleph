@@ -32,8 +32,7 @@ fn make_note(i: usize) -> KnowledgeNote {
 #[tokio::main]
 async fn main() {
     // Use a unique temp path per process so concurrent runs do not collide.
-    let temp = std::env::temp_dir()
-        .join(format!("aleph_bench_writes_{}.db", std::process::id()));
+    let temp = std::env::temp_dir().join(format!("aleph_bench_writes_{}.db", std::process::id()));
     let _ = std::fs::remove_file(&temp);
 
     let store = Arc::new(SqliteMemoryBackend::new(&temp).expect("open backend"));

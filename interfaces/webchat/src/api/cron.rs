@@ -44,7 +44,7 @@ pub struct CronJobInfo {
     #[serde(default)]
     pub consecutive_errors: Option<u32>,
     #[serde(default)]
-    pub last_error_reason: Option<String>,
+    pub last_error_reason: Option<Value>,
     #[serde(default)]
     pub last_delivery_status: Option<String>,
     #[serde(default)]
@@ -117,7 +117,7 @@ pub struct JobRunInfo {
     #[serde(default)]
     pub delivery_status: Option<String>,
     #[serde(default)]
-    pub error_reason: Option<String>,
+    pub error_reason: Option<Value>,
 }
 
 // ============================================================================

@@ -77,7 +77,10 @@ mod concurrency_tests {
                 ok += 1;
             }
         }
-        assert_eq!(ok, 10, "all 10 distinct adds should succeed under serialization");
+        assert_eq!(
+            ok, 10,
+            "all 10 distinct adds should succeed under serialization"
+        );
         assert_eq!(store.current_entries().len(), 10);
     }
 }

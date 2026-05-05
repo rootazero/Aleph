@@ -161,7 +161,13 @@ async fn path_tiny_pool_skips_llm() {
     let fx = fixture(reranker.clone(), default_cfg());
     let env = fx
         .assembler
-        .assemble("q", "default", None, AssemblyBudget { total_tokens: 4000 }, crate::memory::session_search_summary::FactSourceFilter::Any)
+        .assemble(
+            "q",
+            "default",
+            None,
+            AssemblyBudget { total_tokens: 4000 },
+            crate::memory::session_search_summary::FactSourceFilter::Any,
+        )
         .await
         .unwrap();
     assert!(env.meta.used_fallback);
@@ -259,7 +265,13 @@ async fn path_disabled_config_short_circuits() {
     let fx = fixture(reranker.clone(), cfg);
     let env = fx
         .assembler
-        .assemble("q", "default", None, AssemblyBudget { total_tokens: 4000 }, crate::memory::session_search_summary::FactSourceFilter::Any)
+        .assemble(
+            "q",
+            "default",
+            None,
+            AssemblyBudget { total_tokens: 4000 },
+            crate::memory::session_search_summary::FactSourceFilter::Any,
+        )
         .await
         .unwrap();
     assert_eq!(env.meta.strategy, "disabled");

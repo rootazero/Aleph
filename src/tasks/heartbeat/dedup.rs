@@ -27,7 +27,11 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     let sim = dot / (norm_a * norm_b);
-    if sim.is_nan() { 0.0 } else { sim }
+    if sim.is_nan() {
+        0.0
+    } else {
+        sim
+    }
 }
 
 // ── DedupEngine ───────────────────────────────────────────────────────────────
@@ -70,10 +74,9 @@ impl DedupEngine {
                 tracing::warn!(error = %e, "failed to open in-memory connection for noop DedupEngine");
                 return Self {
                     config,
-                    conn: Arc::new(Mutex::new(
-                        Connection::open_in_memory()
-                            .expect("failed to open in-memory connection for noop DedupEngine fallback")
-                    )),
+                    conn: Arc::new(Mutex::new(Connection::open_in_memory().expect(
+                        "failed to open in-memory connection for noop DedupEngine fallback",
+                    ))),
                     embedding_provider: None,
                 };
             }

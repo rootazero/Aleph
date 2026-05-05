@@ -425,13 +425,15 @@ mod tests {
         PiiEngine::init(initial_config);
 
         let mut new_config = PrivacyConfig::default();
-        new_config.custom_rules.push(crate::config::types::CustomPiiRule {
-            name: "test_token".to_string(),
-            pattern: r"TK-[0-9]{4}".to_string(),
-            placeholder: "[TK]".to_string(),
-            severity: crate::config::types::CustomPiiSeverity::High,
-            action: PiiAction::Block,
-        });
+        new_config
+            .custom_rules
+            .push(crate::config::types::CustomPiiRule {
+                name: "test_token".to_string(),
+                pattern: r"TK-[0-9]{4}".to_string(),
+                placeholder: "[TK]".to_string(),
+                severity: crate::config::types::CustomPiiSeverity::High,
+                action: PiiAction::Block,
+            });
 
         PiiEngine::reload(new_config);
 

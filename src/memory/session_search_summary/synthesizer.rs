@@ -20,7 +20,9 @@ use async_trait::async_trait;
 use crate::error::AlephError;
 use crate::gateway::session_store::SessionStore;
 use crate::memory::session_compactor::fallback::FallbackLevel;
-use crate::memory::session_compactor::summary_engine::{build_summary_prompt, strip_analysis_block};
+use crate::memory::session_compactor::summary_engine::{
+    build_summary_prompt, strip_analysis_block,
+};
 use crate::memory::session_search_summary::lookup::retrieve_summary_fact;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 
@@ -63,7 +65,11 @@ impl SummarySynthesizer {
         session_store: Arc<dyn SessionStore>,
         llm: Arc<dyn SummaryLlm>,
     ) -> Self {
-        Self { store, session_store, llm }
+        Self {
+            store,
+            session_store,
+            llm,
+        }
     }
 
     /// Return the canonical `/end-summary` `RawMemory` for `(agent_id,
@@ -85,7 +91,12 @@ impl SummarySynthesizer {
         // 2. Load transcript window.
         let transcript = self
             .session_store
-            .load_window(agent_id, session_id, LAZY_INPUT_MAX_TURNS, LAZY_INPUT_MAX_CHARS)
+            .load_window(
+                agent_id,
+                session_id,
+                LAZY_INPUT_MAX_TURNS,
+                LAZY_INPUT_MAX_CHARS,
+            )
             .await
             .map_err(|e| AlephError::other(format!("load_window failed: {e}")))?;
 
@@ -308,10 +319,7 @@ pub(crate) mod test_support {
         ) -> Result<(), SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
-        async fn get_state(
-            &self,
-            _key: &SessionKey,
-        ) -> Result<SessionState, SessionStoreError> {
+        async fn get_state(&self, _key: &SessionKey) -> Result<SessionState, SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
         async fn get_identity_context(
@@ -360,10 +368,7 @@ pub(crate) mod test_support {
         ) -> Result<SessionPreview, SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
-        async fn count_by_state(
-            &self,
-            _state: SessionState,
-        ) -> Result<usize, SessionStoreError> {
+        async fn count_by_state(&self, _state: SessionState) -> Result<usize, SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
         async fn list_by_state(
@@ -442,7 +447,7 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{InMemorySessionStore, MockSummaryLlm, make_store};
+    use super::test_support::{make_store, InMemorySessionStore, MockSummaryLlm};
     use super::*;
 
     use crate::gateway::session_store::SessionStore;
@@ -459,18 +464,27 @@ mod tests {
         let llm = MockSummaryLlm::with_response("LLM should not be called");
 
         // Pre-seed an end-summary row.
-        let raw =
-            RawMemory::new("Pre-existing summary".to_string(), RawMemorySource::SessionCompressed)
-                .with_agent("agent-1")
-                .with_session("sess-existing")
-                .with_path("aleph://session/sess-existing/end-summary");
+        let raw = RawMemory::new(
+            "Pre-existing summary".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("agent-1")
+        .with_session("sess-existing")
+        .with_path("aleph://session/sess-existing/end-summary");
         store.insert_raw_memory(&raw).await.unwrap();
 
         let synthesizer = SummarySynthesizer::new(store, session_store, llm.clone());
-        let result = synthesizer.lazy_for("agent-1", "sess-existing").await.unwrap();
+        let result = synthesizer
+            .lazy_for("agent-1", "sess-existing")
+            .await
+            .unwrap();
 
         assert_eq!(result.content, "Pre-existing summary");
-        assert_eq!(llm.call_count(), 0, "LLM must not be called when summary exists");
+        assert_eq!(
+            llm.call_count(),
+            0,
+            "LLM must not be called when summary exists"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -480,11 +494,11 @@ mod tests {
     #[tokio::test]
     async fn synthesizes_when_no_existing_summary() {
         let store = make_store();
-        let session_store = InMemorySessionStore::new()
-            .with_messages("agent-2", "sess-new", &[
-                ("user", "Hello world"),
-                ("assistant", "Hi there!"),
-            ]);
+        let session_store = InMemorySessionStore::new().with_messages(
+            "agent-2",
+            "sess-new",
+            &[("user", "Hello world"), ("assistant", "Hi there!")],
+        );
         let llm = MockSummaryLlm::with_response("Synthesized summary text");
 
         let synthesizer = SummarySynthesizer::new(store.clone(), session_store, llm.clone());
@@ -497,7 +511,11 @@ mod tests {
         // Second call — idempotent fast-path, LLM count stays at 1.
         let result2 = synthesizer.lazy_for("agent-2", "sess-new").await.unwrap();
         assert_eq!(result2.content, "Synthesized summary text");
-        assert_eq!(llm.call_count(), 1, "second call must short-circuit via fast-path");
+        assert_eq!(
+            llm.call_count(),
+            1,
+            "second call must short-circuit via fast-path"
+        );
     }
 
     // -----------------------------------------------------------------------

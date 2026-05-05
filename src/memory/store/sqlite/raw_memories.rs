@@ -268,7 +268,11 @@ impl RawMemoryStore for SqliteMemoryBackend {
         Ok(results)
     }
 
-    async fn find_by_path(&self, path: &str, agent_id: &str) -> Result<Option<RawMemory>, AlephError> {
+    async fn find_by_path(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Option<RawMemory>, AlephError> {
         let conn = lock_conn!(self)?;
 
         let mut stmt = conn
@@ -286,9 +290,11 @@ impl RawMemoryStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("find_by_path query: {e}")))?;
 
         match rows.next() {
-            Some(row) => Ok(Some(
-                row.map_err(|e| AlephError::config(format!("find_by_path row: {e}")))?,
-            )),
+            Some(row) => {
+                Ok(Some(row.map_err(|e| {
+                    AlephError::config(format!("find_by_path row: {e}"))
+                })?))
+            }
             None => Ok(None),
         }
     }
@@ -314,14 +320,16 @@ impl RawMemoryStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("get_raw_by_source prepare: {e}")))?;
 
         let rows = stmt
-            .query_map(params![src_token, agent_id, limit as i64], row_to_raw_memory)
+            .query_map(
+                params![src_token, agent_id, limit as i64],
+                row_to_raw_memory,
+            )
             .map_err(|e| AlephError::config(format!("get_raw_by_source query: {e}")))?;
 
         let mut results = Vec::new();
         for row in rows {
-            results.push(
-                row.map_err(|e| AlephError::config(format!("get_raw_by_source row: {e}")))?,
-            );
+            results
+                .push(row.map_err(|e| AlephError::config(format!("get_raw_by_source row: {e}")))?);
         }
         Ok(results)
     }

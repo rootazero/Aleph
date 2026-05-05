@@ -139,7 +139,9 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
             |row| row.get(0),
         )
         .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
+            if let Err(rollback_err) =
+                conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace")
+            {
                 tracing::warn!(error = %rollback_err, "Rollback of task_traces migration failed");
             }
             AlephError::config(format!("Failed to check task_traces table: {}", e))

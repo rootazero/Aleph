@@ -49,10 +49,13 @@ mod tests {
     #[tokio::test]
     async fn returns_raw_when_summary_exists() {
         let store = build_in_memory_store().await;
-        let raw = RawMemory::new("Test summary".to_string(), RawMemorySource::SessionCompressed)
-            .with_agent("agent-1")
-            .with_session("sess-found")
-            .with_path("aleph://session/sess-found/end-summary");
+        let raw = RawMemory::new(
+            "Test summary".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("agent-1")
+        .with_session("sess-found")
+        .with_path("aleph://session/sess-found/end-summary");
         store.insert_raw_memory(&raw).await.unwrap();
 
         let result = retrieve_summary_fact(&store, "agent-1", "sess-found")

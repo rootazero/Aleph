@@ -232,10 +232,8 @@ pub fn populate_orphans(nbhd: &mut Neighborhood, all_dtos: &[NoteNodeDto]) {
     for (i, (kind, members)) in by_kind.into_iter().enumerate() {
         // Cluster-centre angle: even slots, slightly perturbed by hash so the
         // pattern differs across kinds. Stable across sessions.
-        let h = crate::canvas_engine::layout::fnv1a_32(kind.as_bytes()) as f64
-            / u32::MAX as f64;
-        let center_angle =
-            (i as f64 / kind_count) * std::f64::consts::TAU + h * 0.5;
+        let h = crate::canvas_engine::layout::fnv1a_32(kind.as_bytes()) as f64 / u32::MAX as f64;
+        let center_angle = (i as f64 / kind_count) * std::f64::consts::TAU + h * 0.5;
         let cx = r_ring * center_angle.cos();
         let cy = r_ring * center_angle.sin();
 
@@ -564,7 +562,11 @@ mod tests {
         for p in &person {
             let d = ((p.x - cx).powi(2) + (p.y - cy).powi(2)).sqrt();
             // Golden-angle disc with j∈{0,1,2}, radius = √(j+1)·16 → max ≈ √3·16 ≈ 27.7.
-            assert!(d < 60.0, "person orphan {} too far from cluster centre: d={d}", p.x);
+            assert!(
+                d < 60.0,
+                "person orphan {} too far from cluster centre: d={d}",
+                p.x
+            );
         }
     }
 
@@ -597,7 +599,10 @@ mod tests {
         angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
         for w in angles.windows(2) {
             let gap = (w[1] - w[0]).abs();
-            assert!(gap > std::f64::consts::PI / 3.0 - 0.1, "clusters too close: gap={gap}");
+            assert!(
+                gap > std::f64::consts::PI / 3.0 - 0.1,
+                "clusters too close: gap={gap}"
+            );
         }
     }
 

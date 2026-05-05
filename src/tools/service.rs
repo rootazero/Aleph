@@ -100,9 +100,7 @@ pub trait ToolService: Send + Sync + 'static {
 /// Information loss (e.g., `ToolSource::Mcp` collapses to `category: Builtin`,
 /// `metadata.requires_approval` is dropped) is preserved as-is from the
 /// pre-Stage-2 behavior. Fixing the lossy mapping is out of Stage 2 scope.
-pub fn to_dispatcher_form(
-    defs: &[ToolDefinition],
-) -> Arc<[crate::dispatcher::ToolDefinition]> {
+pub fn to_dispatcher_form(defs: &[ToolDefinition]) -> Arc<[crate::dispatcher::ToolDefinition]> {
     defs.iter()
         .map(|def| crate::dispatcher::ToolDefinition {
             name: def.name.clone(),

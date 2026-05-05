@@ -684,7 +684,11 @@ mod tests {
     fn governance_tables_present_after_init() {
         let conn = Connection::open_in_memory().expect("in-memory db");
         init_schema(&conn).expect("init_schema");
-        for table in ["notes_provenance", "notes_review_queue", "notes_review_archive"] {
+        for table in [
+            "notes_provenance",
+            "notes_review_queue",
+            "notes_review_archive",
+        ] {
             let exists: bool = conn
                 .query_row(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",

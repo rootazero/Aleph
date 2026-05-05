@@ -30,6 +30,8 @@ pub async fn mirror_user_message(
                 content: MessageContent {
                     text,
                     blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
                 },
                 at: now_ms(),
             },
@@ -55,6 +57,8 @@ pub async fn mirror_assistant_message(
                 content: MessageContent {
                     text,
                     blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
                 },
                 at: now_ms(),
             },
