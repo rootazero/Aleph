@@ -608,24 +608,12 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Helpers for dispatcher_schema tests
-    // -------------------------------------------------------------------------
-
-    fn registry_with_stubs(names: &[&'static str]) -> Arc<LoopToolRegistry> {
-        let mut r = LoopToolRegistry::new();
-        for &name in names {
-            r.register(Box::new(StubTool { tool_name: name }));
-        }
-        Arc::new(r)
-    }
-
-    // -------------------------------------------------------------------------
     // Test 7: dispatcher_schema caches when no refresh signal
     // -------------------------------------------------------------------------
 
     #[test]
     fn scoped_dispatcher_schema_caches_when_no_refresh_signal() {
-        let registry = registry_with_stubs(&["a", "b"]);
+        let registry = make_registry(&["a", "b"]);
         let svc = ScopedToolService::new(registry, BTreeSet::new());
         let s1 = svc.dispatcher_schema();
         let s2 = svc.dispatcher_schema();
@@ -642,7 +630,7 @@ mod tests {
 
     #[test]
     fn scoped_dispatcher_schema_respects_allowed_filter() {
-        let registry = registry_with_stubs(&["a", "b"]);
+        let registry = make_registry(&["a", "b"]);
         let mut allowed = BTreeSet::new();
         allowed.insert("a".to_string());
         let svc = ScopedToolService::new(registry, allowed);
