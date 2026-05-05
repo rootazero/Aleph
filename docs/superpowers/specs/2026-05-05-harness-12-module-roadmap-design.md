@@ -227,7 +227,7 @@ Stage 3 (Prompt) ──────┴─> Stage 4 (Subagent) ─────┘
 
 ### Stage 4 — Subagent ChainContext Wiring (#11)
 
-**Status**: 🟡 Pending
+**Status**: ✅ Shipped 2026-05-05 · plan: docs/superpowers/specs/2026-05-05-harness-stage4-subagent-chain-plan.md
 **Depends on**: Stage 3
 **Risk class**: low
 
