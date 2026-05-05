@@ -949,6 +949,22 @@ fn current_turn_id(events: &[SessionEventRecord]) -> TurnId {
 }
 
 #[cfg(test)]
+pub(crate) mod test_helpers {
+    //! Test-only re-export of legacy build_prompt for byte-equivalence
+    //! verification during Stage 3 Task 3. Removed in Task 4 along with
+    //! the legacy function itself.
+    use crate::providers::message::UnifiedMessage;
+    use crate::session::events::SessionEventRecord;
+
+    pub(crate) fn legacy_build_prompt(
+        events: &[SessionEventRecord],
+        tail_start: usize,
+    ) -> Vec<UnifiedMessage> {
+        super::build_prompt(events, tail_start)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     //! Inline tests for `AgentHarness` behaviours that assert on the exact
     //! `RequestPayload` handed to the provider. The broader Think/Act/Driver

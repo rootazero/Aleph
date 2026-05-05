@@ -26,6 +26,7 @@ pub use trait_def::{Harness, HarnessError, TurnPhase, TurnState};
 mod tests {
     mod act;
     mod driver;
+    mod prompt;
     mod stability;
     mod task10_wiring;
     mod think;
