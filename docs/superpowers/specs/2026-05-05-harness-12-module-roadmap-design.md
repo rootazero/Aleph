@@ -189,7 +189,7 @@ Stage 3 (Prompt) ──────┴─> Stage 4 (Subagent) ─────┘
 
 ### Stage 3 — Prompt Assembly Seam (#5)
 
-**Status**: 🟡 Pending
+**Status**: ✅ Shipped 2026-05-05 · last functional commit `3ed7390cf` · plan: `docs/superpowers/specs/2026-05-05-harness-stage3-prompt-builder-plan.md`
 **Depends on**: 无
 **Risk class**: medium
 

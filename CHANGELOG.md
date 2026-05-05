@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Harness Stage 3 — Prompt Assembly Seam** — `PromptBuilder` trait + `DefaultPromptBuilder` ship as the single seam through which `AgentHarness` produces the per-turn `Vec<UnifiedMessage>`. `DefaultPromptBuilder` is byte-equivalent to the previous private `build_prompt`; downstream stages (#11 Subagent, #10 Verification) can inject custom builders without patching `agent.rs`. `TurnContext` input struct carries the per-turn event slice + tail boundary into `PromptBuilder::assemble`. `HarnessDeps` gains a `prompt_builder: Arc<dyn PromptBuilder>` field; all 21 construction sites pass `Arc::new(DefaultPromptBuilder)`. 3 golden tests + a 64-case proptest verify behavior; `agent.rs` shrinks from 1375 → 1237 lines. Master spec § Stage 3.
 - **Harness per-turn timeout** (`HarnessDeps.turn_timeout`) — wraps each Think (LLM `process()`) and Act (tool `execute()`) phase with `tokio::time::timeout` / `tokio::select!`. New `TurnPhase::{Think, Act{tool_name}}` enum identifies which phase hung in `HarnessError::StalledTurn { phase, elapsed }`. Parent `CancellationToken` always wins over the timeout via `tokio::select! { biased; cancel; sleep; llm_fut }`.
 - **Harness TraceSink fire points** wired across the full turn lifecycle: `TurnStarted`, `TurnStateEntered { Think | Act }`, `TextEmitted`, `ToolCallStarted`, `ToolCallCompleted` (success / error / skipped), `TurnCompleted`, `SessionCompleted`. The `LoopTraceEvent` schema in `src/harness/trace.rs` is now live; existing `GatewayTraceSink` (mpsc-backed) consumes events without code change. The `emit()` helper short-circuits when `trace_sink` is `None` — closure is never invoked, zero allocation.
 - **Harness consecutive-failure cap** (`HarnessDeps.consecutive_failure_cap`) — terminates the loop with `Done { hit_limit: true }` after N consecutive turns where every tool call failed, preventing infinite retry on permanently-broken tools.
@@ -18,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Harness stall false-positives** — `StallTracker::record_activity` now fires after Think completes (post `AssistantMessage` emit) and after each tool execute, in addition to the existing top-of-loop call. Eliminates spurious `Stalled` errors during legitimate long Think phases.
 
 ### Removed
+- **Harness private `build_prompt`** — function (was `agent.rs:846`) deleted; body lives in `DefaultPromptBuilder::assemble`. `resolve_tool_name` helper retired; `parse_tool_use_block` moved from `agent.rs` to `prompt.rs` (sole production caller is `DefaultPromptBuilder`).
+- **Harness `src/harness/stall.rs` module file** — contents folded into `deps.rs` next to `HarnessDeps.stall_config`. R10 file count rebalanced for the new `prompt.rs` seam.
 - **Harness per-turn schema conversion** — `agent.rs` no longer rebuilds `Vec<DispatcherToolDefinition>` every Think turn; replaced by cached `Arc<[T]>` from `ToolService::dispatcher_schema()`.
 
 ## [2026.04.27]
