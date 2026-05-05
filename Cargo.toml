@@ -305,10 +305,6 @@ harness = false
 name = "cron_probe"
 required-features = ["test-helpers"]
 
-[[test]]
-name = "cucumber"
-harness = false
-
 # Channel instanceless testing framework
 [[test]]
 name = "webhook_contract_test"
