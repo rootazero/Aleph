@@ -59,7 +59,7 @@ impl ToolService for ExecAuditLayer {
     }
 
     fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
-        std::sync::Arc::from([])
+        self.inner.dispatcher_schema()
     }
 }
 
