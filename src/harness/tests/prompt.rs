@@ -146,3 +146,69 @@ async fn assistant_then_tool_result_reconstructs_prior_turn() {
         other => panic!("expected ToolResult, got {other:?}"),
     }
 }
+
+#[cfg(test)]
+mod prop {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Property: regardless of the order/content of UserMessage events
+    /// before the tail boundary, `DefaultPromptBuilder` never panics
+    /// and always produces a `Vec<UnifiedMessage>` whose length is
+    /// `<= events.len() + 1` (the +1 accounts for the optionally
+    /// reconstructed assistant turn — irrelevant here since this case
+    /// has no AssistantMessage events, but kept as the upper bound
+    /// invariant of the assemble function).
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn assemble_is_total_for_user_only_logs(
+            texts in proptest::collection::vec("[a-z ]{0,40}", 0..16),
+        ) {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            let events: Vec<SessionEventRecord> = texts
+                .iter()
+                .map(|t| user_msg(t))
+                .collect();
+
+            // tail_start = 0 for user-only logs (no assistant message).
+            let ctx = TurnContext::new(&events, 0);
+            let out = rt
+                .block_on(DefaultPromptBuilder.assemble(&ctx))
+                .expect("assemble must not error on user-only logs");
+
+            prop_assert!(out.len() <= events.len() + 1);
+            // Every output for user-only logs must itself be a User msg
+            // since there's no assistant turn to reconstruct.
+            for msg in &out {
+                let is_user = matches!(msg, UnifiedMessage::User { .. });
+                prop_assert!(is_user);
+            }
+        }
+    }
+}
+
+/// Sanity benchmark — not an assertion; run with
+/// `cargo test -p alephcore --lib harness::tests::prompt::perf_dispatch_overhead_documented -- --ignored --nocapture`
+/// to print timings. We document this rather than assert because trait
+/// dispatch is one vtable jump and any measurable regression would show
+/// up in the broader gateway-level perf suite.
+#[tokio::test]
+#[ignore]
+async fn perf_dispatch_overhead_documented() {
+    use std::time::Instant;
+    let events: Vec<SessionEventRecord> =
+        (0..1000).map(|i| user_msg(&format!("m{i}"))).collect();
+    let ctx = TurnContext::new(&events, 0);
+
+    let start = Instant::now();
+    for _ in 0..1000 {
+        let _ = DefaultPromptBuilder.assemble(&ctx).await;
+    }
+    let elapsed = start.elapsed();
+    eprintln!("1000 × assemble(1000 events) = {elapsed:?}");
+}
