@@ -199,6 +199,10 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         trace_sink: None,
         system_prompt: Some(system_prompt),
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        // Stage 4 (#11): stamp the descended child chain on the inner harness
+        // so its `chain_context()` accessor reports the correct depth/chain_id
+        // instead of falling back to a fresh root.
+        chain_context: child_chain.clone(),
         max_iterations: max_iter,
         power: None,
         stall_config: None,
