@@ -10,6 +10,7 @@
 
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
+use crate::harness::prompt::PromptBuilder;
 use crate::harness::trace_sink::TraceSink;
 use crate::providers::AiProvider;
 use crate::sandbox::Sandbox;
@@ -53,6 +54,10 @@ pub struct HarnessDeps {
     /// System prompt injected into every RequestPayload. Subagent path builds
     /// this via PromptBuilder at spawn time; Gateway passes None for now.
     pub system_prompt: Option<String>,
+    /// Per-turn message assembler. Stage 3 seam (#5). Defaults to
+    /// `DefaultPromptBuilder` (byte-equivalent to legacy build_prompt).
+    /// Subagent (#11) and JudgeAgent (#10) inject custom builders.
+    pub prompt_builder: Arc<dyn PromptBuilder>,
     /// Hard iteration cap. When set, AgentHarness::run forces TurnState::Done
     /// after that many Continue turns and sets hit_limit=true. None → unbounded
     /// (current Gateway default).

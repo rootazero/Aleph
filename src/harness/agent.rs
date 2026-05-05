@@ -5,8 +5,9 @@
 //!     ToolError events).
 //!   * Preservation of assistant `tool_use` intent inside `AssistantMessage`
 //!     events so later Think cycles can reconstruct the conversation.
-//!   * Full-history `build_prompt` that re-emits the preceding assistant
-//!     tool_use turn and resolves real tool names for `ToolResult` messages.
+//!   * Full-history prompt assembly (now in `prompt.rs`) that re-emits the
+//!     preceding assistant tool_use turn and resolves real tool names for
+//!     `ToolResult` messages.
 //!
 //! Task 10 (Phase 6b) additionally consumes the optional triad on
 //! `HarnessDeps`:
@@ -26,7 +27,7 @@ use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::{Harness, HarnessError, TurnPhase, TurnState};
 use crate::providers::adapter::{NativeToolCall, RequestPayload};
-use crate::providers::message::{ContentBlock, UnifiedMessage};
+
 use crate::session::events::{
     now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, TurnId,
 };
@@ -132,10 +133,11 @@ impl AgentHarness {
         let events = self.deps.session.get_events(session_id, None, None).await?;
         let tail_start = tail_start_index(&events);
 
-        // 2. Build the LLM request. `build_prompt` has access to the full log
+        // 2. Build the LLM request. `prompt_builder` has access to the full log
         //    so it can reconstruct the preceding assistant tool_use turn and
         //    resolve tool names for tool_result messages.
-        let mut messages = build_prompt(&events, tail_start);
+        let ctx = crate::harness::prompt::TurnContext::new(&events, tail_start);
+        let mut messages = self.deps.prompt_builder.assemble(&ctx).await?;
 
         // 2a. Task-10 budget check: evaluate context pressure before issuing
         // the LLM call. `FinalReply` forces a terminal turn with no tools.
@@ -354,7 +356,7 @@ impl AgentHarness {
     /// Tool failures are persisted as `SessionEvent::ToolError` and do NOT
     /// abort the batch — all tool calls in the batch are attempted. The next
     /// Think turn will see failures via `tool_result.is_error=true` (produced
-    /// by `build_prompt`) and can decide whether to retry or give up.
+    /// by the prompt assembler) and can decide whether to retry or give up.
     ///
     /// Returns the number of tool calls that succeeded (not errored).
     async fn act(
@@ -809,133 +811,6 @@ pub(crate) fn tool_use_blocks(tool_calls: &[NativeToolCall]) -> Vec<Value> {
         .collect()
 }
 
-/// Parse a previously persisted `tool_use` JSON block back into a
-/// `ContentBlock::ToolCall`. Returns `None` for blocks that don't match
-/// the shape written by `tool_use_blocks`.
-///
-/// `pub(crate)` so round-trip tests can exercise the writer/reader pair.
-pub(crate) fn parse_tool_use_block(block: &Value) -> Option<ContentBlock> {
-    let obj = block.as_object()?;
-    if obj.get("type").and_then(Value::as_str) != Some("tool_use") {
-        return None;
-    }
-    let id = obj.get("id").and_then(Value::as_str)?.to_string();
-    let name = obj.get("name").and_then(Value::as_str)?.to_string();
-    let arguments = obj.get("input").cloned().unwrap_or(Value::Null);
-    Some(ContentBlock::ToolCall {
-        id,
-        name,
-        arguments,
-    })
-}
-
-/// Build the prompt messages from the full event log.
-///
-/// Shape of the output:
-///   1. Any `UserMessage` events that precede the last `AssistantMessage`
-///      (current turn's boundary) are not replayed — only events at or after
-///      the tail boundary are carried forward, EXCEPT for the immediately
-///      preceding `AssistantMessage` itself which is reconstructed as an
-///      `Assistant` turn so the model sees its own prior `tool_use` request.
-///   2. The reconstructed assistant turn (if any) goes first.
-///   3. Then the tail events (`UserMessage`, `ToolResult`) in log order.
-///
-/// Tool names for `ToolResult` entries are resolved by scanning backwards
-/// through the full log for the matching `ToolCallRequested`. Falls back
-/// to `"unknown"` only if no such event exists.
-fn build_prompt(events: &[SessionEventRecord], tail_start: usize) -> Vec<UnifiedMessage> {
-    let mut messages = Vec::new();
-
-    // Reconstruct the preceding assistant turn (if any) so the model sees
-    // its own tool_use request in context.
-    if tail_start > 0 {
-        if let SessionEvent::AssistantMessage { content, .. } = &events[tail_start - 1].event {
-            let mut blocks: Vec<ContentBlock> = Vec::new();
-            if !content.text.is_empty() {
-                blocks.push(ContentBlock::Text {
-                    text: content.text.clone(),
-                    cache_control: None,
-                });
-            }
-            for raw in &content.blocks {
-                if let Some(tc) = parse_tool_use_block(raw) {
-                    blocks.push(tc);
-                }
-            }
-            if !blocks.is_empty() {
-                messages.push(UnifiedMessage::Assistant { content: blocks });
-            }
-        }
-    }
-
-    // Walk the tail and emit UserMessage / ToolResult entries.
-    for (offset, record) in events[tail_start..].iter().enumerate() {
-        match &record.event {
-            SessionEvent::UserMessage { content, .. } => {
-                messages.push(UnifiedMessage::user(&content.text));
-            }
-            SessionEvent::ToolResult {
-                call_id, output, ..
-            } => {
-                // Resolve the tool name by searching strictly BEFORE this
-                // ToolResult, so matching `call_id`s in later turns cannot
-                // win over the correct in-turn `ToolCallRequested`.
-                let tool_result_idx = tail_start + offset;
-                let tool_name =
-                    resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
-                // Use ContentBlock::Json to preserve structure and avoid PII
-                // false-positives on numeric values (e.g., stock prices,
-                // index points) being mistaken for bank card numbers.
-                messages.push(UnifiedMessage::tool_result_json(
-                    call_id.clone(),
-                    tool_name.to_string(),
-                    output.value.clone(),
-                    false,
-                ));
-            }
-            SessionEvent::ToolError { call_id, error, .. } => {
-                let tool_result_idx = tail_start + offset;
-                let tool_name =
-                    resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
-                messages.push(UnifiedMessage::ToolResult {
-                    tool_call_id: call_id.clone(),
-                    tool_name: tool_name.to_string(),
-                    content: vec![ContentBlock::Text {
-                        text: error.clone(),
-                        cache_control: None,
-                    }],
-                    is_error: true,
-                });
-            }
-            _ => {}
-        }
-    }
-
-    messages
-}
-
-/// Find the `ToolCallRequested.name` whose `call_id` matches, searching
-/// strictly BEFORE `before_idx` (i.e. within `events[..before_idx]`).
-///
-/// Scanning from the end of the log would return the most recent match
-/// anywhere, which is wrong when two turns reuse the same `call_id`
-/// (provider retries, deterministic ID schemes). Bounding the search to
-/// the segment preceding the `ToolResult` guarantees we pick the matching
-/// request from the same turn.
-fn resolve_tool_name<'a>(
-    events: &'a [SessionEventRecord],
-    before_idx: usize,
-    call_id: &str,
-) -> Option<&'a str> {
-    let upper = before_idx.min(events.len());
-    events[..upper].iter().rev().find_map(|r| match &r.event {
-        SessionEvent::ToolCallRequested {
-            call_id: id, name, ..
-        } if id == call_id => Some(name.as_str()),
-        _ => None,
-    })
-}
-
 /// Find the most recent `TurnStarted` id; generate a fresh one if none exists.
 fn current_turn_id(events: &[SessionEventRecord]) -> TurnId {
     events
@@ -946,22 +821,6 @@ fn current_turn_id(events: &[SessionEventRecord]) -> TurnId {
             _ => None,
         })
         .unwrap_or_else(uuid::Uuid::new_v4)
-}
-
-#[cfg(test)]
-pub(crate) mod test_helpers {
-    //! Test-only re-export of legacy build_prompt for byte-equivalence
-    //! verification during Stage 3 Task 3. Removed in Task 4 along with
-    //! the legacy function itself.
-    use crate::providers::message::UnifiedMessage;
-    use crate::session::events::SessionEventRecord;
-
-    pub(crate) fn legacy_build_prompt(
-        events: &[SessionEventRecord],
-        tail_start: usize,
-    ) -> Vec<UnifiedMessage> {
-        super::build_prompt(events, tail_start)
-    }
 }
 
 #[cfg(test)]
@@ -1098,6 +957,7 @@ mod tests {
             skill_prefetcher: None,
             trace_sink: None,
             system_prompt: Some("ROLE: SPEC-BOT".into()),
+            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             max_iterations: None,
             power: None,
             stall_config: None,
@@ -1292,6 +1152,7 @@ mod tests {
             skill_prefetcher: None,
             trace_sink: None,
             system_prompt: None,
+            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             max_iterations: Some(3),
             power: None,
             stall_config: None,
@@ -1344,6 +1205,7 @@ mod tests {
             skill_prefetcher: None,
             trace_sink: None,
             system_prompt: None,
+            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             max_iterations: None,
             power: None,
             stall_config: None,

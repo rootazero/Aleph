@@ -51,7 +51,6 @@ impl PromptBuilder for DefaultPromptBuilder {
         &self,
         ctx: &TurnContext<'_>,
     ) -> Result<Vec<UnifiedMessage>, crate::harness::trait_def::HarnessError> {
-        use crate::harness::agent::parse_tool_use_block;
         use crate::providers::message::{ContentBlock, UnifiedMessage};
         use crate::session::events::SessionEvent;
 
@@ -118,6 +117,24 @@ impl PromptBuilder for DefaultPromptBuilder {
 
         Ok(messages)
     }
+}
+
+/// Parse a previously persisted `tool_use` JSON block back into a
+/// `ContentBlock::ToolCall`. Returns `None` for blocks that don't match
+/// the shape written by `tool_use_blocks`.
+///
+/// `pub(crate)` so the round-trip test in `harness::tests::act` can exercise
+/// the writer/reader pair without re-exporting through `harness::agent`.
+pub(crate) fn parse_tool_use_block(block: &serde_json::Value) -> Option<crate::providers::message::ContentBlock> {
+    use crate::providers::message::ContentBlock;
+    let obj = block.as_object()?;
+    if obj.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
+        return None;
+    }
+    let id = obj.get("id").and_then(serde_json::Value::as_str)?.to_string();
+    let name = obj.get("name").and_then(serde_json::Value::as_str)?.to_string();
+    let arguments = obj.get("input").cloned().unwrap_or(serde_json::Value::Null);
+    Some(ContentBlock::ToolCall { id, name, arguments })
 }
 
 /// Find the `ToolCallRequested.name` whose `call_id` matches, searching

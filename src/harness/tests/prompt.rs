@@ -1,12 +1,7 @@
-//! Golden tests for `DefaultPromptBuilder` — verify byte-equivalence with
-//! the legacy private `build_prompt` (still present in agent.rs during
-//! Task 3; retired in Task 4).
-//!
-//! Strategy: construct minimal SessionEventRecord fixtures, run both the
-//! legacy function and DefaultPromptBuilder::assemble, assert the
-//! resulting Vec<UnifiedMessage> serializes to the same JSON.
-//! (UnifiedMessage and SessionEvent both lack PartialEq, so JSON shape is
-//! the comparison vehicle.)
+//! Shape tests for `DefaultPromptBuilder` — verify the assembler produces
+//! the expected message structure for common session event patterns.
+//! (UnifiedMessage and SessionEvent both lack PartialEq, so structural
+//! pattern matching is the comparison vehicle.)
 
 use crate::harness::prompt::{DefaultPromptBuilder, PromptBuilder, TurnContext};
 use crate::providers::message::UnifiedMessage;
@@ -73,15 +68,6 @@ fn tool_result(call_id: &str, value: serde_json::Value) -> SessionEventRecord {
     })
 }
 
-fn json_eq(a: &[UnifiedMessage], b: &[UnifiedMessage]) {
-    let aj = serde_json::to_value(a).expect("ser a");
-    let bj = serde_json::to_value(b).expect("ser b");
-    assert_eq!(
-        aj, bj,
-        "DefaultPromptBuilder must be byte-equivalent to legacy build_prompt"
-    );
-}
-
 #[tokio::test]
 async fn empty_log_yields_empty_messages() {
     let events: Vec<SessionEventRecord> = Vec::new();
@@ -96,8 +82,18 @@ async fn single_user_message_passes_through() {
     let ctx = TurnContext::new(&events, 0);
     let out = DefaultPromptBuilder.assemble(&ctx).await.expect("ok");
     assert_eq!(out.len(), 1);
-    let legacy = crate::harness::agent::test_helpers::legacy_build_prompt(&events, 0);
-    json_eq(&out, &legacy);
+    match &out[0] {
+        UnifiedMessage::User { content } => {
+            assert_eq!(content.len(), 1);
+            match &content[0] {
+                crate::providers::message::ContentBlock::Text { text, .. } => {
+                    assert_eq!(text, "hello");
+                }
+                other => panic!("expected Text block, got {other:?}"),
+            }
+        }
+        other => panic!("expected User message, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -121,13 +117,32 @@ async fn assistant_then_tool_result_reconstructs_prior_turn() {
 
     let ctx = TurnContext::new(&events, tail_start);
     let new_output = DefaultPromptBuilder.assemble(&ctx).await.expect("ok");
-    let legacy_output =
-        crate::harness::agent::test_helpers::legacy_build_prompt(&events, tail_start);
 
-    json_eq(&new_output, &legacy_output);
-
-    // Sanity-check shape: 1 reconstructed Assistant + 1 ToolResult
+    // Shape: 1 reconstructed Assistant + 1 ToolResult
     assert_eq!(new_output.len(), 2);
-    assert!(matches!(new_output[0], UnifiedMessage::Assistant { .. }));
-    assert!(matches!(new_output[1], UnifiedMessage::ToolResult { .. }));
+
+    // First message: reconstructed Assistant turn with the tool_use block
+    match &new_output[0] {
+        UnifiedMessage::Assistant { content } => {
+            assert_eq!(content.len(), 1);
+            match &content[0] {
+                crate::providers::message::ContentBlock::ToolCall { id, name, .. } => {
+                    assert_eq!(id, "c1");
+                    assert_eq!(name, "weather");
+                }
+                other => panic!("expected ToolCall, got {other:?}"),
+            }
+        }
+        other => panic!("expected Assistant, got {other:?}"),
+    }
+
+    // Second message: ToolResult
+    match &new_output[1] {
+        UnifiedMessage::ToolResult { tool_call_id, tool_name, is_error, .. } => {
+            assert_eq!(tool_call_id, "c1");
+            assert_eq!(tool_name, "weather");
+            assert!(!is_error);
+        }
+        other => panic!("expected ToolResult, got {other:?}"),
+    }
 }

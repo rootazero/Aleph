@@ -153,6 +153,7 @@ impl HarnessRunner for AgentHarnessRunner {
             skill_prefetcher: self.skill_prefetcher.clone(),
             trace_sink: trace_sink.clone(),
             system_prompt,
+            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             max_iterations: None,
             power,
             stall_config: None,

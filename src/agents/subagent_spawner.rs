@@ -196,6 +196,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         skill_prefetcher: None,
         trace_sink: None,
         system_prompt: Some(system_prompt),
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         max_iterations: max_iter,
         power: None,
         stall_config: None,

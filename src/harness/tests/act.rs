@@ -287,6 +287,7 @@ async fn act_executes_tools_sequentially() {
         skill_prefetcher: None,
         trace_sink: None,
         system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         max_iterations: None,
         power: None,
         stall_config: None,
@@ -354,6 +355,7 @@ async fn act_tool_failure_returns_harness_tool_error() {
         skill_prefetcher: None,
         trace_sink: None,
         system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         max_iterations: None,
         power: None,
         stall_config: None,
@@ -447,6 +449,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
         skill_prefetcher: None,
         trace_sink: None,
         system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         max_iterations: None,
         power: None,
         stall_config: None,
@@ -613,6 +616,7 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
         skill_prefetcher: None,
         trace_sink: None,
         system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         max_iterations: None,
         power: None,
         stall_config: None,
@@ -637,7 +641,8 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
 /// on only one side would break the tool_use continuity across turns.
 #[test]
 fn tool_use_blocks_round_trip_through_parse_tool_use_block() {
-    use crate::harness::agent::{parse_tool_use_block, tool_use_blocks};
+    use crate::harness::agent::tool_use_blocks;
+    use crate::harness::prompt::parse_tool_use_block;
 
     let calls = vec![
         NativeToolCall {

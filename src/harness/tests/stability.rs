@@ -248,6 +248,7 @@ pub(super) fn minimal_deps(
         skill_prefetcher: None,
         trace_sink: None,
         system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         max_iterations: None,
         power: None,
         stall_config: None,
