@@ -74,6 +74,10 @@ impl ToolService for NoopTool {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
+
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
 }
 
 /// Always returns a text-only response → `TurnState::Done` after one turn.

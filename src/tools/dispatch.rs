@@ -48,6 +48,10 @@ impl ToolService for CoreDispatch {
         let snapshot = self.registry.snapshot();
         snapshot.get(name).map(|h| h.definition())
     }
+
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
 }
 
 // =============================================================================

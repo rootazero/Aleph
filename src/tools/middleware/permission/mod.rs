@@ -166,6 +166,10 @@ impl ToolService for PermissionLayer {
     async fn describe(&self, name: &str) -> Option<ToolDefinition> {
         self.inner.describe(name).await
     }
+
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
 }
 
 #[cfg(test)]
@@ -212,6 +216,9 @@ mod tests {
 
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
+        }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
         }
     }
 

@@ -129,6 +129,9 @@ impl ToolService for NoopTools {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
 }
 
 /// Text-only provider that counts calls so tests can assert whether the

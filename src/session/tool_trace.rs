@@ -133,6 +133,9 @@ mod tests {
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
         }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
+        }
     }
 
     struct AlwaysDenied;
@@ -151,6 +154,9 @@ mod tests {
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
         }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
+        }
     }
 
     struct AlwaysBoom;
@@ -168,6 +174,9 @@ mod tests {
         }
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
+        }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
         }
     }
 
@@ -323,6 +332,9 @@ mod tests {
         }
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
+        }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
         }
     }
 

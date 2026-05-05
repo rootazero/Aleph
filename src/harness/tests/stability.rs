@@ -122,6 +122,9 @@ impl crate::tools::service::ToolService for AlwaysFailTools {
     async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
         None
     }
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
 }
 
 /// Tool service that succeeds for tools whose name starts with "ok_" and
@@ -152,6 +155,9 @@ impl crate::tools::service::ToolService for MixedTools {
     async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
         None
     }
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
 }
 
 /// Tool service whose `execute` blocks forever (for act-phase timeout tests).
@@ -171,6 +177,9 @@ impl crate::tools::service::ToolService for HangingTools {
     }
     async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
         None
+    }
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
     }
 }
 

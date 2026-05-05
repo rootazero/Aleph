@@ -1030,6 +1030,9 @@ mod tests {
         async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
             None
         }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
+        }
     }
 
     #[tokio::test]
@@ -1211,6 +1214,9 @@ mod tests {
 
         async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
             None
+        }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
         }
     }
 

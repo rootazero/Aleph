@@ -148,6 +148,10 @@ impl ToolService for ScriptedTools {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
+
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
 }
 
 // -- Mock AiProvider with capture -------------------------------------------
@@ -364,7 +368,11 @@ async fn act_tool_failure_returns_harness_tool_error() {
         .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect("run_turn must succeed even on tool error");
-    assert_eq!(state, TurnState::Continue, "tool failure → Continue, not Done");
+    assert_eq!(
+        state,
+        TurnState::Continue,
+        "tool failure → Continue, not Done"
+    );
 
     let events = session.snapshot().await;
     let has_tool_error = events
@@ -518,6 +526,10 @@ impl ToolService for ScriptedToolsNever {
 
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
+    }
+
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
     }
 }
 

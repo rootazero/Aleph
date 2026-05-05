@@ -238,6 +238,10 @@ impl ToolService for ScopedToolService {
 
         result
     }
+
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
 }
 
 // =============================================================================
@@ -272,6 +276,9 @@ mod tests {
         }
         async fn describe(&self, _: &str) -> Option<ToolDefinition> {
             None
+        }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
         }
     }
 

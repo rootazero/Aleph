@@ -127,6 +127,10 @@ impl ToolService for EmptyTools {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
+
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
 }
 
 // -- Mock AiProvider ---------------------------------------------------------
@@ -358,6 +362,9 @@ async fn callback_fires_on_delta_and_tool_call() {
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
         }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
+        }
     }
 
     // Turn with one tool_call: expect one on_delta("calling…") + on_tool_call("echo").
@@ -478,6 +485,9 @@ async fn think_tool_use_after_act_returns_continue() {
         }
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
+        }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
         }
     }
 

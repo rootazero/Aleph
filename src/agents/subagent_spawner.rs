@@ -592,6 +592,9 @@ mod tests {
         async fn describe(&self, name: &str) -> Option<ToolDefinition> {
             self.list().await.into_iter().find(|d| d.name == name)
         }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
+        }
     }
 
     // -- Fixtures ---------------------------------------------------------
@@ -626,9 +629,7 @@ mod tests {
     /// Mirrors the pattern in `a2a::sub_agent::spec1_tests::FakeWriter` and
     /// `components::session_compactor::tests::pre_compress_tests::FakeWriter`.
     #[derive(Default)]
-    struct FakeWriter(
-        tokio::sync::Mutex<Vec<crate::memory::store::raw_memory::RawMemory>>,
-    );
+    struct FakeWriter(tokio::sync::Mutex<Vec<crate::memory::store::raw_memory::RawMemory>>);
 
     #[async_trait::async_trait]
     impl crate::memory::store::raw_memory::RawMemoryStore for FakeWriter {
@@ -644,10 +645,8 @@ mod tests {
             &self,
             _agent_id: &str,
             _limit: usize,
-        ) -> Result<
-            Vec<crate::memory::store::raw_memory::RawMemory>,
-            crate::error::AlephError,
-        > {
+        ) -> Result<Vec<crate::memory::store::raw_memory::RawMemory>, crate::error::AlephError>
+        {
             Ok(vec![])
         }
 
@@ -670,10 +669,8 @@ mod tests {
             _path_prefix: &str,
             _agent_id: &str,
             _limit: usize,
-        ) -> Result<
-            Vec<crate::memory::store::raw_memory::RawMemory>,
-            crate::error::AlephError,
-        > {
+        ) -> Result<Vec<crate::memory::store::raw_memory::RawMemory>, crate::error::AlephError>
+        {
             Ok(vec![])
         }
     }
