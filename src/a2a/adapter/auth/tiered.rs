@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::a2a::domain::security::{Credentials, SecurityScheme, TrustLevel};
 use crate::a2a::domain::A2AError;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -214,7 +214,8 @@ fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
 fn extract_credentials(headers: &HeaderMap) -> Credentials {
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         // RFC 7235: auth-scheme is case-insensitive
-        if let Some(prefix) = auth.get(..7) {
+        if auth.len() >= 7 {
+            let prefix = &auth[..7];
             if prefix.eq_ignore_ascii_case("bearer ") {
                 return Credentials::BearerToken(auth[7..].to_string());
             }

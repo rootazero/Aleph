@@ -33,11 +33,11 @@ pub struct A2ASubAgent {
     /// Optional writer for raw memory delegation hooks (Spec 1 G2).
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
     /// row before returning a successful result.
-    raw_memory_writer: Option<std::sync::Arc<dyn RawMemoryStore>>,
+    raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
     /// Optional capture-filter registry (Spec 4 Task 6).
     /// When set, delegation raw-memory writes go through `insert_with_capture_filter`.
     /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
-    capture_registry: Option<std::sync::Arc<MemoryExtensionRegistry>>,
+    capture_registry: Option<Arc<MemoryExtensionRegistry>>,
 }
 
 impl A2ASubAgent {
@@ -56,7 +56,7 @@ impl A2ASubAgent {
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
     /// row carrying the delegation prompt + sub-agent summary before returning,
     /// allowing CompressionService to distil durable lessons for the parent agent.
-    pub fn with_raw_memory_writer(mut self, writer: std::sync::Arc<dyn RawMemoryStore>) -> Self {
+    pub fn with_raw_memory_writer(mut self, writer: Arc<dyn RawMemoryStore>) -> Self {
         self.raw_memory_writer = Some(writer);
         self
     }
@@ -67,7 +67,7 @@ impl A2ASubAgent {
     /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
     pub fn with_capture_registry(
         mut self,
-        registry: std::sync::Arc<MemoryExtensionRegistry>,
+        registry: Arc<MemoryExtensionRegistry>,
     ) -> Self {
         self.capture_registry = Some(registry);
         self
@@ -119,7 +119,7 @@ impl A2ASubAgent {
 /// (falls back to `"default"` when absent — Task 10 will wire the real value at startup).
 #[allow(dead_code)]
 pub(crate) fn emit_delegation_raw(
-    writer: std::sync::Arc<dyn RawMemoryStore>,
+    writer: Arc<dyn RawMemoryStore>,
     request: &SubAgentRequest,
     result: &SubAgentResult,
     child_agent_id: impl Into<String>,
@@ -132,11 +132,11 @@ pub(crate) fn emit_delegation_raw(
 /// scope; the new harness-based subagent_spawner calls the primitive helper
 /// directly to avoid coupling on a2a request/result shapes.
 pub(crate) fn emit_delegation_raw_with_registry(
-    writer: std::sync::Arc<dyn RawMemoryStore>,
+    writer: Arc<dyn RawMemoryStore>,
     request: &SubAgentRequest,
     result: &SubAgentResult,
     child_agent_id: impl Into<String>,
-    registry: Option<std::sync::Arc<MemoryExtensionRegistry>>,
+    registry: Option<Arc<MemoryExtensionRegistry>>,
 ) {
     let parent_agent_id = request
         .execution_context
@@ -166,13 +166,13 @@ pub(crate) fn emit_delegation_raw_with_registry(
 /// it through the `MemoryExtensionRegistry` capture filter. Logs and returns
 /// when no tokio runtime is available rather than panicking.
 pub(crate) fn emit_delegation_primitives(
-    writer: std::sync::Arc<dyn RawMemoryStore>,
+    writer: Arc<dyn RawMemoryStore>,
     prompt: String,
     summary: String,
     parent_agent_id: String,
     parent_session_id: Option<String>,
     child_agent_id: String,
-    registry: Option<std::sync::Arc<MemoryExtensionRegistry>>,
+    registry: Option<Arc<MemoryExtensionRegistry>>,
 ) {
     let content = format!("DELEGATION_PROMPT:\n{prompt}\n\nDELEGATION_RESULT:\n{summary}",);
 
@@ -575,7 +575,7 @@ mod spec1_tests {
     use crate::agents::sub_agents::SubAgentRequest;
     use crate::error::AlephError;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     #[derive(Default)]
     struct FakeWriter(tokio::sync::Mutex<Vec<RawMemory>>);
