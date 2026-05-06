@@ -11,7 +11,8 @@ pub(crate) fn generate_config_schema() -> RootSchema {
 /// Generate JSON Schema as a serde_json::Value.
 pub fn generate_config_schema_json() -> serde_json::Value {
     let schema = generate_config_schema();
-    serde_json::to_value(schema).unwrap()
+    serde_json::to_value(schema)
+        .expect("Config schema serialization should never fail: generated from schemars")
 }
 
 #[cfg(test)]

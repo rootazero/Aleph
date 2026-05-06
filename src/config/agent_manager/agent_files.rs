@@ -61,7 +61,7 @@ impl AgentManager {
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
+                .and_then(|d| d.as_secs().try_into().ok())
                 .unwrap_or(0);
 
             files.push(WorkspaceFile {

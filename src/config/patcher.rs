@@ -12,6 +12,7 @@ use crate::config::backup::ConfigBackup;
 use crate::config::schema::generate_config_schema;
 use crate::config::Config;
 use crate::error::{AlephError, Result};
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,11 +22,15 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 /// Cached JSON Schema for Config validation (generated once, reused).
-fn cached_config_schema() -> &'static serde_json::Value {
+fn cached_config_schema() -> Result<&'static serde_json::Value> {
     static SCHEMA: OnceLock<serde_json::Value> = OnceLock::new();
     SCHEMA.get_or_init(|| {
         let schema = generate_config_schema();
-        serde_json::to_value(&schema).unwrap()
+        serde_json::to_value(&schema)
+            .expect("Config schema serialization should never fail: generated from schemars")
+    });
+    SCHEMA.get().ok_or_else(|| {
+        AlephError::invalid_config("Failed to initialize config schema cache".to_string())
     })
 }
 
@@ -93,7 +98,7 @@ pub enum HealthCheckResult {
 /// The central patching engine for Aleph self-configuration.
 pub struct ConfigPatcher {
     /// Shared config state (same Arc used by the gateway)
-    config: std::sync::Arc<RwLock<Config>>,
+    config: Arc<RwLock<Config>>,
     /// Path to the config.toml file
     config_path: PathBuf,
     /// Backup manager for pre-change snapshots
@@ -105,7 +110,7 @@ pub struct ConfigPatcher {
 impl ConfigPatcher {
     /// Create a new ConfigPatcher.
     pub fn new(
-        config: std::sync::Arc<RwLock<Config>>,
+        config: Arc<RwLock<Config>>,
         config_path: PathBuf,
         backup: ConfigBackup,
     ) -> Self {
@@ -296,7 +301,7 @@ impl ConfigPatcher {
 
     /// Validate a JSON value against the Config JSON Schema.
     pub fn validate_schema(&self, config_json: &serde_json::Value) -> Result<()> {
-        let schema_json = cached_config_schema();
+        let schema_json = cached_config_schema()?;
 
         let validator = jsonschema::validator_for(schema_json)
             .map_err(|e| AlephError::invalid_config(format!("Invalid JSON Schema: {}", e)))?;
@@ -393,13 +398,15 @@ pub(crate) fn set_nested_value(
         }
         current = current
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| AlephError::invalid_config("Failed to access object".to_string()))?
             .entry(segment.to_string())
             .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
     }
 
     // Apply at the final segment
-    let last_segment = segments.last().unwrap();
+    let last_segment = segments.last().ok_or_else(|| {
+        AlephError::invalid_config("Path must have at least one segment".to_string())
+    })?;
     if !current.is_object() {
         return Err(AlephError::invalid_config(format!(
             "Cannot set '{}': parent is not an object",
@@ -407,7 +414,9 @@ pub(crate) fn set_nested_value(
         )));
     }
 
-    let obj = current.as_object_mut().unwrap();
+    let obj = current.as_object_mut().ok_or_else(|| {
+        AlephError::invalid_config("Failed to access target object".to_string())
+    })?;
     let existing = obj
         .entry(last_segment.to_string())
         .or_insert(serde_json::Value::Null);
@@ -428,10 +437,8 @@ pub(crate) fn set_nested_value(
 /// - If both are objects: merge keys recursively.
 /// - Otherwise: source overwrites target.
 pub(crate) fn deep_merge(target: &mut serde_json::Value, source: &serde_json::Value) {
-    match (target.is_object(), source.is_object()) {
-        (true, true) => {
-            let target_obj = target.as_object_mut().unwrap();
-            let source_obj = source.as_object().unwrap();
+    match (target.as_object_mut(), source.as_object()) {
+        (Some(target_obj), Some(source_obj)) => {
             for (key, source_val) in source_obj {
                 let target_val = target_obj
                     .entry(key.clone())
@@ -722,7 +729,7 @@ mod tests {
 
     use crate::config::backup::ConfigBackup;
     use crate::config::Config;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use tempfile::TempDir;
 
     /// Helper: build a ConfigPatcher wired to a temp directory.

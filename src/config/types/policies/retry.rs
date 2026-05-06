@@ -104,10 +104,16 @@ impl RetryPolicy {
 
     /// Calculate backoff duration for a given attempt (0-indexed)
     pub fn backoff_for_attempt(&self, attempt: u32) -> std::time::Duration {
-        let backoff_ms =
-            (self.initial_backoff_ms as f64 * self.backoff_multiplier.powi(attempt as i32)) as u64;
+        // Guard against invalid multiplier values that could produce NaN/Infinity
+        if !self.backoff_multiplier.is_finite() || self.backoff_multiplier < 0.0 {
+            return std::time::Duration::from_millis(self.initial_backoff_ms);
+        }
+
+        let backoff_ms = (self.initial_backoff_ms as f64
+            * self.backoff_multiplier.powi(attempt as i32))
+        .clamp(0.0, u64::MAX as f64) as u64;
         let capped = backoff_ms.min(self.max_backoff_ms);
-        std::time::Duration::from_millis(capped)
+        std::time::Duration::from_millis(capped.max(self.initial_backoff_ms))
     }
 
     /// Check if a status code should trigger retry

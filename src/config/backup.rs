@@ -42,7 +42,10 @@ impl ConfigBackup {
     /// Returns the default backup directory: `~/.aleph/backups/`
     pub fn default_dir() -> PathBuf {
         dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
+            .unwrap_or_else(|| {
+                tracing::warn!("HOME not set, falling back to current directory for backups");
+                PathBuf::from(".")
+            })
             .join(".aleph")
             .join("backups")
     }
