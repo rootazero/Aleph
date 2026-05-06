@@ -57,6 +57,7 @@ impl IpcServer {
 
         loop {
             line.clear();
+            line.shrink_to(4096);
             let bytes_read = reader.read_line(&mut line).await?;
 
             if bytes_read == 0 {

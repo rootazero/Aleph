@@ -63,39 +63,42 @@ impl Dispatcher {
         log::info!("Dispatcher main loop started");
 
         loop {
+            let event = match rx.recv().await {
+                Ok(event) => event,
+                Err(_) => {
+                    log::info!("Event bus closed, exiting dispatcher loop");
+                    break Ok(());
+                }
+            };
+
             let mode = self.mode.read().await.clone();
 
-            tokio::select! {
-                // Listen for Derived Events only
-                Ok(event) = rx.recv() => {
-                    // Only process Derived Events
-                    let derived_event = match event {
-                        DaemonEvent::Derived(e) => e,
-                        _ => continue,
-                    };
+            // Only process Derived Events
+            let derived_event = match event {
+                DaemonEvent::Derived(e) => e,
+                _ => continue,
+            };
 
-                    // Skip processing if in Reconciling mode
-                    if !self.should_process_event(&mode) {
-                        log::debug!("Skipping event in Reconciling mode: {:?}", derived_event);
-                        continue;
-                    }
+            // Skip processing if in Reconciling mode
+            if !self.should_process_event(&mode) {
+                log::debug!("Skipping event in Reconciling mode: {:?}", derived_event);
+                continue;
+            }
 
-                    // Get enhanced context from WorldModel
-                    let context = self.worldmodel.get_context().await;
+            // Get enhanced context from WorldModel
+            let context = self.worldmodel.get_context().await;
 
-                    // Evaluate all policies
-                    let proposed_actions = self.policy_engine.evaluate_all(&context, &derived_event);
+            // Evaluate all policies
+            let proposed_actions = self.policy_engine.evaluate_all(&context, &derived_event);
 
-                    if !proposed_actions.is_empty() {
-                        log::info!("Policies proposed {} action(s)", proposed_actions.len());
-                    }
+            if !proposed_actions.is_empty() {
+                log::info!("Policies proposed {} action(s)", proposed_actions.len());
+            }
 
-                    // Handle each proposed action by risk level
-                    for action in proposed_actions {
-                        if let Err(e) = self.handle_action(action).await {
-                            log::error!("Failed to handle action: {}", e);
-                        }
-                    }
+            // Handle each proposed action by risk level
+            for action in proposed_actions {
+                if let Err(e) = self.handle_action(action).await {
+                    log::error!("Failed to handle action: {}", e);
                 }
             }
         }

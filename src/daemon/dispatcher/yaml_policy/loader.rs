@@ -15,13 +15,19 @@ pub fn load_yaml_policies(
 ) -> Result<Vec<Box<dyn Policy>>> {
     let path = path.as_ref();
 
-    if !path.exists() {
-        log::info!("No YAML policy file at {:?}, skipping", path);
-        return Ok(Vec::new());
-    }
-
-    let content = fs::read_to_string(path)
-        .map_err(|e| DaemonError::Config(format!("Failed to read {:?}: {}", path, e)))?;
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            log::info!("No YAML policy file at {:?}, skipping", path);
+            return Ok(Vec::new());
+        }
+        Err(e) => {
+            return Err(DaemonError::Config(format!(
+                "Failed to read {:?}: {}",
+                path, e
+            )))
+        }
+    };
 
     let rules: Vec<YamlRule> = serde_yaml::from_str(&content)
         .map_err(|e| DaemonError::Config(format!("Failed to parse YAML: {}", e)))?;

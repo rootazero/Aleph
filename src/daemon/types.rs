@@ -26,19 +26,19 @@ pub struct DaemonConfig {
 fn default_socket_path() -> String {
     dirs::home_dir()
         .map(|h| h.join(".aleph/daemon.sock").to_string_lossy().to_string())
-        .unwrap_or("~/.aleph/daemon.sock".to_string())
+        .unwrap_or_else(|| "/tmp/.aleph/daemon.sock".to_string())
 }
 
 fn default_binary_path() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(".aleph/bin/aleph-daemon"))
-        .unwrap_or_else(|| PathBuf::from("~/.aleph/bin/aleph-daemon"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/.aleph/bin/aleph-daemon"))
 }
 
 fn default_log_dir() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(".aleph/logs"))
-        .unwrap_or_else(|| PathBuf::from("~/.aleph/logs"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/.aleph/logs"))
 }
 
 impl Default for DaemonConfig {

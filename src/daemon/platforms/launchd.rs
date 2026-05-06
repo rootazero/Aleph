@@ -17,10 +17,10 @@ impl LaunchdService {
     pub fn new() -> Result<Self> {
         let home = std::env::var("HOME")
             .map_err(|_| DaemonError::Config("HOME environment variable not set".to_string()))?;
-        let plist_path = PathBuf::from(format!(
-            "{}/Library/LaunchAgents/{}.plist",
-            home, LAUNCHD_LABEL
-        ));
+        let plist_path = PathBuf::from(&home)
+            .join("Library")
+            .join("LaunchAgents")
+            .join(format!("{}.plist", LAUNCHD_LABEL));
 
         Ok(Self { plist_path })
     }
