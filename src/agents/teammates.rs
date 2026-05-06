@@ -39,7 +39,7 @@ impl TeammateManager {
             .await
         {
             Ok(team) => Ok(team.id),
-            Err(_) => {
+            Err(e) => {
                 // Race: another call created the team first. Retry lookup.
                 let teams = self.team_store.list_teams().await?;
                 teams
@@ -47,7 +47,10 @@ impl TeammateManager {
                     .find(|t| t.name == team_name)
                     .map(|t| t.id.clone())
                     .ok_or_else(|| crate::error::AlephError::Other {
-                        message: format!("Failed to create or find team '{}'", team_name),
+                        message: format!(
+                            "Failed to create or find team '{}': {}",
+                            team_name, e
+                        ),
                         suggestion: None,
                     })
             }

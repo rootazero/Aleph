@@ -377,7 +377,8 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         }
 
         if let Some(ref metadata) = update.metadata {
-            let json = serde_json::to_string(metadata).unwrap_or_else(|_| "{}".into());
+            let json = serde_json::to_string(metadata)
+                .map_err(|e| db_err(format!("failed to serialize metadata: {e}")))?;
             sets.push(format!("metadata = ?{idx}"));
             values.push(Box::new(json));
             idx += 1;

@@ -190,7 +190,12 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         agent_def_arc.clone(),
     ));
 
-    let max_iter = req.agent_def.max_iterations.map(|v| v as usize);
+    let max_iter = req
+        .agent_def
+        .max_iterations
+        .map(|v| usize::try_from(v))
+        .transpose()
+        .map_err(|_| "max_iterations exceeds platform limit".to_string())?;
 
     let deps = HarnessDeps {
         session: base.session.clone(),
@@ -809,14 +814,18 @@ mod tests {
     async fn spawn_tool_allowlist_enforced_via_harness() {
         // Provider always calls `forbidden_tool`. The agent's allowlist
         // only contains `noop`, so the allowlist decorator returns
-        // PermissionDenied. The harness surfaces that as an error.
+        // PermissionDenied on every turn. The harness records the error
+        // as a ToolError event and continues looping until max_iterations
+        // is reached (harness design: tool failures are non-fatal).
         let provider: Arc<dyn AiProvider> = Arc::new(SingleCallProvider {
             tool_name: "forbidden_tool".into(),
             called: AtomicUsize::new(0),
         });
         let base = make_base(provider);
 
-        let agent = agent_with_allowed("gated", vec!["noop"]);
+        let agent = AgentDef::new("gated", AgentMode::SubAgent)
+            .with_allowed_tools(vec!["noop".into()])
+            .with_max_iterations(2);
         let req = SpawnRequest {
             agent_def: &agent,
             task: "please don't call forbidden_tool",
@@ -826,15 +835,15 @@ mod tests {
             cancel: CancellationToken::new(),
         };
 
-        let err = spawn(&base, req)
-            .await
-            .expect_err("allowlist should block forbidden_tool");
-        let lower = err.to_lowercase();
+        let result = spawn(&base, req).await.expect("spawn ok");
         assert!(
-            lower.contains("sub-agent failed")
-                || lower.contains("permissiondenied")
-                || lower.contains("permission"),
-            "expected allowlist denial, got: {err}",
+            result.hit_limit,
+            "expected hit_limit=true when allowlist blocks every tool call"
+        );
+        assert_eq!(result.iterations, 2, "expected max_iterations to cap the loop");
+        assert!(
+            result.tool_calls_made > 0,
+            "expected at least one attempted tool call"
         );
     }
 

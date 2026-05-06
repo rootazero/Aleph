@@ -188,11 +188,7 @@ impl AgentRuntime {
     /// Execute a sub-agent to completion with lifecycle tracing.
     pub async fn run(&self, config: AgentRuntimeConfig) -> Result<LoopRunResult, String> {
         let start = Instant::now();
-        let agent_id = format!(
-            "{}-{}",
-            config.agent_def.id,
-            start.elapsed().as_nanos() % 100_000
-        );
+        let agent_id = format!("{}-{}", config.agent_def.id, uuid::Uuid::new_v4());
         let agent_type = config.agent_def.id.clone();
         let task_summary = truncate_for_log(&config.task, 120);
 
@@ -205,7 +201,7 @@ impl AgentRuntime {
 
         let result = self.execute_via_harness(&config).await;
 
-        let duration_ms = start.elapsed().as_millis() as u64;
+        let duration_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
         let key_findings = match &result {
             Ok(run_result) => run_result
                 .final_text

@@ -178,7 +178,13 @@ impl SubagentTool {
 /// Parse the input JSON into a SubagentAction.
 fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     // Determine action from explicit field, falling back to legacy heuristics.
-    let action = input.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let action = match input.get("action") {
+        Some(v) => match v.as_str() {
+            Some(s) => s,
+            None => return Err("'action' must be a string".to_string()),
+        },
+        None => "",
+    };
 
     match action {
         "send_message" => {
@@ -418,9 +424,15 @@ impl LoopTool for SubagentTool {
 
                 // Resolve team_name to team_id via teammate_manager
                 let resolved_team_id = if let Some(ref mgr) = self.teammate_manager {
-                    mgr.ensure_team(&team_name, &self.parent_agent_id)
-                        .await
-                        .unwrap_or_else(|_| team_name.clone())
+                    match mgr.ensure_team(&team_name, &self.parent_agent_id).await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            return ToolResult::Error {
+                                error: format!("Failed to resolve team '{}': {}", team_name, e),
+                                retryable: false,
+                            };
+                        }
+                    }
                 } else {
                     team_name.clone()
                 };
@@ -469,9 +481,15 @@ impl LoopTool for SubagentTool {
 
                 // Resolve team_name to team_id via teammate_manager
                 let resolved_team_id = if let Some(ref mgr) = self.teammate_manager {
-                    mgr.ensure_team(&team_name, &self.parent_agent_id)
-                        .await
-                        .unwrap_or_else(|_| team_name.clone())
+                    match mgr.ensure_team(&team_name, &self.parent_agent_id).await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            return ToolResult::Error {
+                                error: format!("Failed to resolve team '{}': {}", team_name, e),
+                                retryable: false,
+                            };
+                        }
+                    }
                 } else {
                     team_name.clone()
                 };
