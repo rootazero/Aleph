@@ -159,6 +159,12 @@ impl CommandNode {
         self
     }
 
+    /// Builder: set node_type (override the default)
+    pub fn with_node_type(mut self, node_type: CommandType) -> Self {
+        self.node_type = node_type;
+        self
+    }
+
     /// Check if this is an action node
     pub fn is_action(&self) -> bool {
         matches!(self.node_type, CommandType::Action)
@@ -231,7 +237,7 @@ impl CommandTriggers {
 
     /// Get total trigger count
     pub fn len(&self) -> usize {
-        self.manual.len() + self.auto_extracted.len()
+        self.manual.len().saturating_add(self.auto_extracted.len())
     }
 
     /// Check if empty

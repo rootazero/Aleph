@@ -97,11 +97,12 @@ impl CommandParser {
 
     /// Synchronous parse (for backward compatibility with ExecutionDecider)
     ///
-    /// Uses `tokio::task::block_in_place` — only safe when called from
-    /// within an async context on a multi-threaded runtime.
+    /// Returns `None` if not running within a Tokio runtime.
+    /// Requires a multi-threaded runtime (will panic on `current_thread` flavor).
     pub fn parse(&self, input: &str) -> Option<ParsedCommand> {
+        let handle = tokio::runtime::Handle::try_current().ok()?;
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.parse_async(input))
+            handle.block_on(self.parse_async(input))
         })
     }
 
