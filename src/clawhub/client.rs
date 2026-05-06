@@ -29,6 +29,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Encodes everything except alphanumerics, `-`, `_`, `.`, `~`, and `/` (slug separator).
 fn encode_slug_path(slug: &str) -> String {
     slug.split('/')
+        .filter(|s| !s.is_empty())
         .map(|segment| utf8_percent_encode(segment, PATH_SEGMENT_ENCODE_SET).to_string())
         .collect::<Vec<_>>()
         .join("/")
@@ -162,7 +163,14 @@ impl ClawHubClient {
         }
 
         // Fallback: browse endpoint returned empty, use search instead
-        debug!("Browse returned empty, falling back to search");
+        if api_resp.next_cursor.is_some() {
+            warn!(
+                cursor = api_resp.next_cursor,
+                "Browse returned empty but has next_cursor; falling back to search (pagination lost)"
+            );
+        } else {
+            debug!("Browse returned empty, falling back to search");
+        }
         let results = self.search("", limit).await?;
         Ok(BrowseResponse {
             skills: results,
@@ -277,7 +285,11 @@ impl ClawHubClient {
                 )
             }
             _ => {
-                let body = resp.text().await.unwrap_or_default();
+                let body = resp
+                    .bytes()
+                    .await
+                    .map(|b| String::from_utf8_lossy(&b[..b.len().min(1024)]).into_owned())
+                    .unwrap_or_default();
                 let detail = if body.is_empty() {
                     String::new()
                 } else {
@@ -335,5 +347,68 @@ mod tests {
         assert_eq!(SortOrder::Stars.as_api_str(), "stars");
         assert_eq!(SortOrder::Updated.as_api_str(), "updated");
         assert_eq!(SortOrder::Trending.as_api_str(), "trending");
+    }
+
+    #[test]
+    fn test_encode_slug_path_basic() {
+        assert_eq!(encode_slug_path("owner/skill"), "owner/skill");
+    }
+
+    #[test]
+    fn test_encode_slug_path_with_spaces() {
+        assert_eq!(encode_slug_path("owner/my skill"), "owner/my%20skill");
+    }
+
+    #[test]
+    fn test_encode_slug_path_with_special_chars() {
+        assert_eq!(
+            encode_slug_path("owner/skill@name#v1.0"),
+            "owner/skill%40name%23v1.0"
+        );
+    }
+
+    #[test]
+    fn test_encode_slug_path_filters_empty_segments() {
+        assert_eq!(encode_slug_path("owner//skill"), "owner/skill");
+        assert_eq!(encode_slug_path("/owner/skill/"), "owner/skill");
+        assert_eq!(encode_slug_path("///"), "");
+    }
+
+    #[test]
+    fn test_is_newer_version_prerelease() {
+        assert!(ClawHubClient::is_newer_version("1.0.0-alpha", "1.0.0"));
+        assert!(!ClawHubClient::is_newer_version("1.0.0", "1.0.0-alpha"));
+        assert!(ClawHubClient::is_newer_version("1.0.0-beta", "1.0.0-rc1"));
+    }
+
+    #[test]
+    fn test_is_newer_version_build_metadata() {
+        // semver crate compares build metadata lexicographically
+        assert!(ClawHubClient::is_newer_version(
+            "1.0.0+build1",
+            "1.0.0+build2"
+        ));
+        assert!(!ClawHubClient::is_newer_version(
+            "1.0.0+build2",
+            "1.0.0+build1"
+        ));
+    }
+
+    #[test]
+    fn test_is_newer_version_empty_strings() {
+        assert!(!ClawHubClient::is_newer_version("", ""));
+        assert!(ClawHubClient::is_newer_version("", "v1"));
+    }
+
+    #[test]
+    fn test_with_registry_trims_trailing_slash() {
+        let client = ClawHubClient::with_registry("https://my-hub.com/");
+        assert_eq!(client.base_url, "https://my-hub.com");
+    }
+
+    #[test]
+    fn test_with_registry_preserves_path() {
+        let client = ClawHubClient::with_registry("https://my-hub.com/api");
+        assert_eq!(client.base_url, "https://my-hub.com/api");
     }
 }
