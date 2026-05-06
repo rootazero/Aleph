@@ -240,6 +240,21 @@ impl ArenaManifest {
             return Err("At least one participant is required".to_string());
         }
 
+        const MAX_PARTICIPANTS: usize = 100;
+        if agent_ids.len() > MAX_PARTICIPANTS {
+            return Err(format!(
+                "Too many participants: got {}, max {}",
+                agent_ids.len(),
+                MAX_PARTICIPANTS
+            ));
+        }
+
+        for id in agent_ids {
+            if id.trim().is_empty() {
+                return Err("Agent IDs cannot be empty".to_string());
+            }
+        }
+
         let coord = coordinator.unwrap_or_else(|| agent_ids[0].clone());
 
         if !agent_ids.contains(&coord) {
@@ -269,6 +284,20 @@ impl ArenaManifest {
                         })
                         .collect()
                 });
+
+                let participant_ids: std::collections::HashSet<_> =
+                    agent_ids.iter().cloned().collect();
+                for stage in &stages {
+                    for dep in &stage.depends_on {
+                        if !participant_ids.contains(dep) {
+                            return Err(format!(
+                                "Stage '{}' depends on '{}', but '{}' is not a participant",
+                                stage.agent_id, dep, dep
+                            ));
+                        }
+                    }
+                }
+
                 CoordinationStrategy::Pipeline { stages }
             }
             other => {
@@ -572,7 +601,6 @@ mod tests {
 
     #[test]
     fn arena_manifest_build_validates_coordinator() {
-        // Coordinator not in agent_ids should fail
         let result = ArenaManifest::build(
             "test".to_string(),
             "peer",
@@ -585,7 +613,6 @@ mod tests {
             .unwrap_err()
             .contains("Coordinator 'agent-c' must be one of the participants"));
 
-        // Coordinator in agent_ids should succeed
         let result = ArenaManifest::build(
             "test".to_string(),
             "peer",
@@ -594,6 +621,60 @@ mod tests {
             None,
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn arena_manifest_build_rejects_empty_agent_ids() {
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "peer",
+            &["agent-a".to_string(), "".to_string()],
+            None,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Agent IDs cannot be empty"));
+    }
+
+    #[test]
+    fn arena_manifest_build_rejects_too_many_participants() {
+        let many_agents: Vec<String> = (0..101).map(|i| format!("agent-{}", i)).collect();
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "peer",
+            &many_agents,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Too many participants"));
+    }
+
+    #[test]
+    fn arena_manifest_build_validates_pipeline_depends_on() {
+        let stages = vec![
+            StageSpec {
+                agent_id: "agent-a".to_string(),
+                description: "Stage 1".to_string(),
+                depends_on: vec![],
+            },
+            StageSpec {
+                agent_id: "agent-b".to_string(),
+                description: "Stage 2".to_string(),
+                depends_on: vec!["nonexistent".to_string()],
+            },
+        ];
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "pipeline",
+            &["agent-a".to_string(), "agent-b".to_string()],
+            None,
+            Some(stages),
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("depends on 'nonexistent', but 'nonexistent' is not a participant"));
     }
 
     #[test]

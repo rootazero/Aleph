@@ -198,7 +198,13 @@ impl SharedArena {
             .or_default();
         agent_prog.current = current;
         if let Some(c) = completed {
-            let delta = c.saturating_sub(agent_prog.completed);
+            if c < agent_prog.completed {
+                return Err(format!(
+                    "Completed count cannot decrease: current={}, requested={}",
+                    agent_prog.completed, c
+                ));
+            }
+            let delta = c - agent_prog.completed;
             agent_prog.completed = c;
             self.progress.completed_steps = self.progress.completed_steps.saturating_add(delta);
         }
@@ -390,5 +396,59 @@ mod tests {
         let drained = arena.drain_shared_facts();
         assert_eq!(drained.len(), 1);
         assert!(arena.shared_facts().is_empty());
+    }
+
+    #[test]
+    fn report_progress_rejects_decreasing_completed() {
+        let mut arena = SharedArena::new(test_manifest(&["agent-a"]));
+        arena.activate().unwrap();
+
+        // Initial progress: 3 completed
+        arena
+            .report_progress(&"agent-a".to_string(), Some("task 3".to_string()), Some(3))
+            .unwrap();
+        assert_eq!(arena.progress().completed_steps, 3);
+
+        // Attempt to decrease should fail
+        let result = arena.report_progress(
+            &"agent-a".to_string(),
+            Some("task 2".to_string()),
+            Some(2),
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Completed count cannot decrease"));
+
+        // completed_steps should remain unchanged
+        assert_eq!(arena.progress().completed_steps, 3);
+        assert_eq!(
+            arena.progress().agent_progress["agent-a"].completed,
+            3
+        );
+    }
+
+    #[test]
+    fn report_progress_allows_increasing_and_repeating() {
+        let mut arena = SharedArena::new(test_manifest(&["agent-a"]));
+        arena.activate().unwrap();
+
+        // 0 -> 5
+        arena
+            .report_progress(&"agent-a".to_string(), None, Some(5))
+            .unwrap();
+        assert_eq!(arena.progress().completed_steps, 5);
+
+        // 5 -> 5 (no-op)
+        arena
+            .report_progress(&"agent-a".to_string(), None, Some(5))
+            .unwrap();
+        assert_eq!(arena.progress().completed_steps, 5);
+
+        // 5 -> 10
+        arena
+            .report_progress(&"agent-a".to_string(), None, Some(10))
+            .unwrap();
+        assert_eq!(arena.progress().completed_steps, 10);
     }
 }
