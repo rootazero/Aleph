@@ -109,9 +109,15 @@ impl QuestionGroup {
         }
     }
 
-    /// Set default selection
+    /// Set default selection, clamped to valid range.
+    ///
+    /// If `index` is out of bounds or options is empty, sets `default_index` to `None`.
     pub fn with_default(mut self, index: u32) -> Self {
-        self.default_index = Some(index);
+        if let Some(max_index) = self.options.len().checked_sub(1) {
+            self.default_index = Some((index as usize).min(max_index) as u32);
+        } else {
+            self.default_index = None;
+        }
         self
     }
 }
@@ -460,10 +466,40 @@ mod tests {
     }
 
     #[test]
-    fn test_question_group_with_default() {
+    fn test_question_group_with_default_empty_options() {
         let group = QuestionGroup::new("test", "Prompt", vec![]).with_default(3);
 
-        assert_eq!(group.default_index, Some(3));
+        assert_eq!(group.default_index, None);
+    }
+
+    #[test]
+    fn test_question_group_with_default_in_bounds() {
+        let group = QuestionGroup::new(
+            "test",
+            "Prompt",
+            vec![
+                ClarificationOption::new("a", "Option A"),
+                ClarificationOption::new("b", "Option B"),
+            ],
+        )
+        .with_default(1);
+
+        assert_eq!(group.default_index, Some(1));
+    }
+
+    #[test]
+    fn test_question_group_with_default_out_of_bounds() {
+        let group = QuestionGroup::new(
+            "test",
+            "Prompt",
+            vec![
+                ClarificationOption::new("a", "Option A"),
+                ClarificationOption::new("b", "Option B"),
+            ],
+        )
+        .with_default(5);
+
+        assert_eq!(group.default_index, Some(1)); // clamped to last valid index
     }
 
     #[test]

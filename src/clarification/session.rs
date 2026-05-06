@@ -27,11 +27,10 @@
 //! ```
 
 use super::{ClarificationOption, ClarificationRequest};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// A pending clarification session
@@ -145,13 +144,9 @@ pub struct SessionConfig {
     #[serde(default = "default_timeout_secs")]
     pub default_timeout_secs: u64,
 
-    /// Maximum number of concurrent sessions
+    /// Maximum number of concurrent sessions (0 = unlimited)
     #[serde(default = "default_max_sessions")]
     pub max_sessions: usize,
-
-    /// Interval for cleanup task in seconds
-    #[serde(default = "default_cleanup_interval_secs")]
-    pub cleanup_interval_secs: u64,
 }
 
 fn default_timeout_secs() -> u64 {
@@ -162,16 +157,11 @@ fn default_max_sessions() -> usize {
     10
 }
 
-fn default_cleanup_interval_secs() -> u64 {
-    30
-}
-
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             default_timeout_secs: default_timeout_secs(),
             max_sessions: default_max_sessions(),
-            cleanup_interval_secs: default_cleanup_interval_secs(),
         }
     }
 }
@@ -183,7 +173,7 @@ impl Default for SessionConfig {
 #[derive(Clone)]
 pub struct ClarificationManager {
     /// Active sessions indexed by session_id
-    sessions: Arc<RwLock<HashMap<String, PendingClarification>>>,
+    sessions: Arc<AsyncRwLock<HashMap<String, PendingClarification>>>,
 
     /// Configuration
     config: SessionConfig,
@@ -193,7 +183,7 @@ impl ClarificationManager {
     /// Create a new clarification manager
     pub fn new(config: SessionConfig) -> Self {
         Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
+            sessions: Arc::new(AsyncRwLock::new(HashMap::new())),
             config,
         }
     }
@@ -231,8 +221,8 @@ impl ClarificationManager {
         {
             let mut sessions = self.sessions.write().await;
 
-            // Enforce max sessions limit by removing expired first, then oldest active
-            while self.config.max_sessions > 0 && sessions.len() >= self.config.max_sessions {
+            // Enforce max sessions limit: remove expired first, then oldest active
+            if self.config.max_sessions > 0 && sessions.len() >= self.config.max_sessions {
                 let expired_ids: Vec<String> = sessions
                     .iter()
                     .filter(|(_, s)| s.is_expired())
@@ -243,10 +233,13 @@ impl ClarificationManager {
                     for id in expired_ids {
                         sessions.remove(&id);
                     }
-                } else if let Some(oldest_id) = self.find_oldest_active_session(&sessions) {
-                    sessions.remove(&oldest_id);
-                } else {
-                    break;
+                }
+
+                // If still at capacity after removing expired, evict oldest active
+                if sessions.len() >= self.config.max_sessions {
+                    if let Some(oldest_id) = self.find_oldest_active_session(&sessions) {
+                        sessions.remove(&oldest_id);
+                    }
                 }
             }
 
@@ -440,7 +433,6 @@ mod tests {
 
         assert_eq!(config.default_timeout_secs, 60);
         assert_eq!(config.max_sessions, 10);
-        assert_eq!(config.cleanup_interval_secs, 30);
     }
 
     #[test]
@@ -448,7 +440,6 @@ mod tests {
         let config = SessionConfig {
             default_timeout_secs: 120,
             max_sessions: 20,
-            cleanup_interval_secs: 60,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -456,7 +447,6 @@ mod tests {
 
         assert_eq!(deserialized.default_timeout_secs, 120);
         assert_eq!(deserialized.max_sessions, 20);
-        assert_eq!(deserialized.cleanup_interval_secs, 60);
     }
 
     #[tokio::test]
@@ -673,12 +663,10 @@ mod tests {
         let config = SessionConfig {
             default_timeout_secs: 300,
             max_sessions: 50,
-            cleanup_interval_secs: 120,
         };
 
         assert_eq!(config.default_timeout_secs, 300);
         assert_eq!(config.max_sessions, 50);
-        assert_eq!(config.cleanup_interval_secs, 120);
     }
 
     #[tokio::test]
@@ -686,13 +674,11 @@ mod tests {
         let config = SessionConfig {
             default_timeout_secs: 90,
             max_sessions: 15,
-            cleanup_interval_secs: 45,
         };
         let manager = ClarificationManager::new(config);
 
         let retrieved_config = manager.config();
         assert_eq!(retrieved_config.default_timeout_secs, 90);
         assert_eq!(retrieved_config.max_sessions, 15);
-        assert_eq!(retrieved_config.cleanup_interval_secs, 45);
     }
 }
