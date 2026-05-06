@@ -20,6 +20,14 @@
 // external crate APIs that expect std::sync::Arc (e.g. tokio::sync).
 pub use std::sync::Arc;
 
+/// Async RwLock for tokio contexts.
+///
+/// Daemon and other async modules use this instead of `std::sync::RwLock`
+/// to avoid deadlocks when holding a guard across `.await` points.
+/// Note: loom does not instrument async RwLock; this is acceptable because
+/// loom tests target sync concurrency patterns only.
+pub use tokio::sync::RwLock as AsyncRwLock;
+
 #[cfg(feature = "loom")]
 pub use loom::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "loom")]

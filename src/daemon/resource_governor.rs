@@ -1,7 +1,6 @@
 use crate::daemon::{DaemonError, Result};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock};
 use sysinfo::{CpuRefreshKind, RefreshKind, System};
-use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 /// Resource limits configuration
@@ -40,7 +39,7 @@ pub enum GovernorDecision {
 /// Resource Governor monitors system resources and throttles operations
 pub struct ResourceGovernor {
     limits: ResourceLimits,
-    system: Arc<RwLock<System>>,
+    system: Arc<AsyncRwLock<System>>,
 }
 
 impl ResourceGovernor {
@@ -51,7 +50,7 @@ impl ResourceGovernor {
 
         Self {
             limits,
-            system: Arc::new(RwLock::new(System::new_with_specifics(refresh_kind))),
+            system: Arc::new(AsyncRwLock::new(System::new_with_specifics(refresh_kind))),
         }
     }
 

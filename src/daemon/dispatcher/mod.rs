@@ -19,16 +19,15 @@ pub use policy::{
 
 use crate::daemon::worldmodel::{PendingAction, WorldModel};
 use crate::daemon::{DaemonEvent, DaemonEventBus, Result};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock};
 use chrono::{Duration, Utc};
-use tokio::sync::RwLock;
 
 /// Dispatcher - Main orchestrator for proactive actions
 ///
 /// Subscribes to DerivedEvents from WorldModel, evaluates policies,
 /// and routes actions based on risk level.
 pub struct Dispatcher {
-    mode: Arc<RwLock<DispatcherMode>>,
+    mode: Arc<AsyncRwLock<DispatcherMode>>,
     policy_engine: Arc<PolicyEngine>,
     event_bus: Arc<DaemonEventBus>,
     worldmodel: Arc<WorldModel>,
@@ -44,7 +43,7 @@ impl Dispatcher {
         event_bus: Arc<DaemonEventBus>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            mode: Arc::new(RwLock::new(DispatcherMode::Running)),
+            mode: Arc::new(AsyncRwLock::new(DispatcherMode::Running)),
             policy_engine: Arc::new(PolicyEngine::new_mvp()),
             event_bus,
             worldmodel,

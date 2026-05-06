@@ -14,14 +14,13 @@ pub use state::{
 };
 
 use crate::daemon::{DaemonEventBus, Result};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock};
 use chrono::{DateTime, Utc};
-use tokio::sync::RwLock;
 
 /// Minimal WorldModel — holds state without event processing
 pub struct WorldModel {
-    state: Arc<RwLock<CoreState>>,
-    context: Arc<RwLock<EnhancedContext>>,
+    state: Arc<AsyncRwLock<CoreState>>,
+    context: Arc<AsyncRwLock<EnhancedContext>>,
     #[allow(dead_code)]
     config: WorldModelConfig,
 }
@@ -30,8 +29,8 @@ impl WorldModel {
     /// Create a new WorldModel instance with default state
     pub async fn new(config: WorldModelConfig, _event_bus: Arc<DaemonEventBus>) -> Result<Self> {
         Ok(Self {
-            state: Arc::new(RwLock::new(CoreState::default())),
-            context: Arc::new(RwLock::new(EnhancedContext::default())),
+            state: Arc::new(AsyncRwLock::new(CoreState::default())),
+            context: Arc::new(AsyncRwLock::new(EnhancedContext::default())),
             config,
         })
     }
@@ -41,8 +40,8 @@ impl WorldModel {
         self.state.read().await.clone()
     }
 
-    /// Get the state handle (Arc<RwLock<CoreState>>)
-    pub fn get_state(&self) -> Arc<RwLock<CoreState>> {
+    /// Get the state handle (Arc<AsyncRwLock<CoreState>>)
+    pub fn get_state(&self) -> Arc<AsyncRwLock<CoreState>> {
         self.state.clone()
     }
 
