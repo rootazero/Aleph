@@ -15,9 +15,9 @@
 //! Missing `SESSION_ID` or unreachable channel produces `Denied` with an
 //! explicit warning — never a silent auto-approve.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
+
+use crate::sync_primitives::Arc;
 
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
