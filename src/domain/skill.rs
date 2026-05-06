@@ -40,6 +40,22 @@ impl SkillId {
             .split_once(':')
             .map_or(self.0.as_str(), |(_, name)| name)
     }
+
+    /// Check whether the ID follows the `plugin:skill_name` convention.
+    ///
+    /// Returns `true` when:
+    /// - There is no `:` and the string is non-empty (bare skill name).
+    /// - There is exactly one `:` and both prefix and name are non-empty.
+    pub fn is_well_formed(&self) -> bool {
+        match self.0.split_once(':') {
+            None => !self.0.is_empty(),
+            Some((prefix, name)) => {
+                !prefix.is_empty()
+                    && !name.is_empty()
+                    && !name.contains(':')
+            }
+        }
+    }
 }
 
 impl fmt::Display for SkillId {
@@ -625,6 +641,39 @@ mod tests {
         let bare = SkillId::new("standalone");
         assert_eq!(bare.plugin_prefix(), None);
         assert_eq!(bare.skill_name(), "standalone");
+    }
+
+    #[test]
+    fn test_skill_id_well_formed() {
+        assert!(SkillId::new("git:commit").is_well_formed());
+        assert!(SkillId::new("plugin:skill_name").is_well_formed());
+        assert!(SkillId::new("standalone").is_well_formed());
+
+        assert!(!SkillId::new("").is_well_formed());
+        assert!(!SkillId::new(":commit").is_well_formed());
+        assert!(!SkillId::new("git:").is_well_formed());
+        assert!(!SkillId::new(":").is_well_formed());
+        assert!(!SkillId::new("a:b:c").is_well_formed());
+        assert!(!SkillId::new(":a:b").is_well_formed());
+    }
+
+    #[test]
+    fn test_skill_id_edge_cases() {
+        let id = SkillId::new("a:b:c");
+        assert_eq!(id.plugin_prefix(), Some("a"));
+        assert_eq!(id.skill_name(), "b:c");
+
+        let id = SkillId::new(":foo");
+        assert_eq!(id.plugin_prefix(), Some(""));
+        assert_eq!(id.skill_name(), "foo");
+
+        let id = SkillId::new("foo:");
+        assert_eq!(id.plugin_prefix(), Some("foo"));
+        assert_eq!(id.skill_name(), "");
+
+        let id = SkillId::new("");
+        assert_eq!(id.plugin_prefix(), None);
+        assert_eq!(id.skill_name(), "");
     }
 
     #[test]
