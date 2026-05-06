@@ -142,9 +142,9 @@ impl SemanticPurposeInferrer {
         for (i, c) in name.chars().enumerate() {
             if c.is_uppercase() && i > 0 {
                 result.push(' ');
-                result.push(c.to_lowercase().next().unwrap_or(c));
+                result.extend(c.to_lowercase());
             } else if i == 0 {
-                result.push(c.to_uppercase().next().unwrap_or(c));
+                result.extend(c.to_uppercase());
             } else {
                 result.push(c);
             }

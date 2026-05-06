@@ -124,7 +124,7 @@ impl ToolIndexCoordinator {
     fn now_timestamp() -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock is before UNIX epoch")
+            .unwrap_or_default()
             .as_secs() as i64
     }
 
@@ -288,7 +288,6 @@ impl ToolIndexCoordinator {
 
             let indexer_store = Arc::clone(self.indexer.store());
             let memory_dir = self.indexer.memory_dir().to_path_buf();
-            let db_clone = self.db.clone();
             let inferrer = Arc::clone(&self.inferrer);
             let tool_name = name.to_string();
             let tool_desc = description.map(|s| s.to_string());
@@ -348,9 +347,6 @@ impl ToolIndexCoordinator {
                                 }
                             }
                         }
-
-                        let _ = &db_clone;
-                        let _ = &note_id;
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -377,7 +373,9 @@ impl ToolIndexCoordinator {
             .join(TOOL_AGENT_ID)
             .join(TOOL_CATEGORY)
             .join(format!("{name}.md"));
-        tokio::fs::remove_file(&file_path).await.ok();
+        if let Err(e) = tokio::fs::remove_file(&file_path).await {
+            tracing::debug!(tool_name = %name, error = %e, "Note file not found or could not be removed");
+        }
 
         // Remove from notes index
         self.indexer

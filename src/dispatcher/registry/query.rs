@@ -162,7 +162,7 @@ impl ToolQuery {
         // Max depth 3: try at most 3 words as the command path
         let max_depth = words.len().min(3);
 
-        // Greedy longest-match: try joining progressively fewer words with "."
+        // Greedy longest-match: try joining progressively fewer words with "_"
         for n in (1..=max_depth).rev() {
             let candidate = words[..n].join("_");
             if let Some(tool) = Self::find_best_match(&tools, &candidate) {
