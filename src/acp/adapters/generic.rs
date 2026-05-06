@@ -3,6 +3,8 @@
 //! Covers ~90% of preset agents (Claude Code, Codex, Gemini, OpenCode, etc.)
 //! that differ only in executable name, CLI args, and output format.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use tokio::process::Command;
 use tracing::{debug, error};
@@ -28,6 +30,7 @@ pub struct GenericAcpAdapter {
     oneshot_args: Vec<String>,
     native_acp_args: Vec<String>,
     output_format: OutputFormat,
+    timeout: Duration,
 }
 
 impl GenericAcpAdapter {
@@ -50,6 +53,7 @@ impl GenericAcpAdapter {
             oneshot_args: entry.args.clone(),
             native_acp_args: vec!["--acp".to_string()],
             output_format: OutputFormat::from(&entry.output_format),
+            timeout: Duration::from_secs(entry.timeout_seconds),
         }
     }
 
@@ -75,6 +79,7 @@ impl GenericAcpAdapter {
             oneshot_args,
             native_acp_args,
             output_format,
+            timeout: Duration::from_secs(300),
         }
     }
 
@@ -110,6 +115,7 @@ impl AcpAdapter for GenericAcpAdapter {
             executable: self.executable.clone(),
             args: self.resolve_args(self.default_mode),
             cwd: cwd.map(String::from),
+            timeout: self.timeout,
             ..Default::default()
         }
     }
@@ -130,13 +136,21 @@ impl AcpAdapter for GenericAcpAdapter {
             "Spawning oneshot generic harness process"
         );
 
-        let output = cmd.output().await.map_err(|e| {
-            AlephError::tool(format!(
-                "Failed to execute harness '{}' (executable: '{}'): {}. \
-                 Is the executable installed and in PATH?",
-                self.id, self.executable, e
-            ))
-        })?;
+        let output = tokio::time::timeout(self.timeout, cmd.output())
+            .await
+            .map_err(|_| {
+                AlephError::tool(format!(
+                    "Harness '{}' timed out after {:?}",
+                    self.id, self.timeout
+                ))
+            })?
+            .map_err(|e| {
+                AlephError::tool(format!(
+                    "Failed to execute harness '{}' (executable: '{}'): {}. \
+                     Is the executable installed and in PATH?",
+                    self.id, self.executable, e
+                ))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -162,11 +176,11 @@ impl AcpAdapter for GenericAcpAdapter {
             executable: self.executable.clone(),
             args: self.native_acp_args.clone(),
             cwd: cwd.map(String::from),
+            timeout: self.timeout,
             ..Default::default()
         };
-        let timeout = config.timeout;
         let mut session = AcpSession::spawn(self.id(), &config).await?;
-        session.initialize(timeout).await?;
+        session.initialize(self.timeout).await?;
         Ok(session)
     }
 }

@@ -67,40 +67,43 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
     let sessions_ref = Arc::clone(&sessions);
     manager
         .set_persistence_hook(Arc::new(move |event: super::AcpSessionEvent| {
-            let mut store = sessions_ref.lock().unwrap_or_else(|e| e.into_inner());
-            match event {
-                super::AcpSessionEvent::Created {
-                    ref harness_id,
-                    ref acp_session_id,
-                    ref cwd,
-                } => {
-                    store.retain(|s| !(s.harness_id == *harness_id && s.cwd == *cwd));
-                    store.push(crate::acp::session::PersistedAcpSession {
-                        harness_id: harness_id.clone(),
-                        acp_session_id: acp_session_id.clone(),
-                        cwd: cwd.clone(),
-                        created_at: chrono::Utc::now(),
-                        last_used_at: chrono::Utc::now(),
-                    });
-                }
-                super::AcpSessionEvent::Updated {
-                    ref harness_id,
-                    ref acp_session_id,
-                } => {
-                    if let Some(entry) = store.iter_mut().find(|s| {
-                        s.harness_id == *harness_id && s.acp_session_id == *acp_session_id
-                    }) {
-                        entry.last_used_at = chrono::Utc::now();
+            let store_clone = {
+                let mut store = sessions_ref.lock().unwrap_or_else(|e| e.into_inner());
+                match event {
+                    super::AcpSessionEvent::Created {
+                        ref harness_id,
+                        ref acp_session_id,
+                        ref cwd,
+                    } => {
+                        store.retain(|s| !(s.harness_id == *harness_id && s.cwd == *cwd));
+                        store.push(crate::acp::session::PersistedAcpSession {
+                            harness_id: harness_id.clone(),
+                            acp_session_id: acp_session_id.clone(),
+                            cwd: cwd.clone(),
+                            created_at: chrono::Utc::now(),
+                            last_used_at: chrono::Utc::now(),
+                        });
+                    }
+                    super::AcpSessionEvent::Updated {
+                        ref harness_id,
+                        ref acp_session_id,
+                    } => {
+                        if let Some(entry) = store.iter_mut().find(|s| {
+                            s.harness_id == *harness_id && s.acp_session_id == *acp_session_id
+                        }) {
+                            entry.last_used_at = chrono::Utc::now();
+                        }
+                    }
+                    super::AcpSessionEvent::Removed {
+                        ref harness_id,
+                        ref cwd,
+                    } => {
+                        store.retain(|s| !(s.harness_id == *harness_id && s.cwd == *cwd));
                     }
                 }
-                super::AcpSessionEvent::Removed {
-                    ref harness_id,
-                    ref cwd,
-                } => {
-                    store.retain(|s| !(s.harness_id == *harness_id && s.cwd == *cwd));
-                }
-            }
-            save_persisted_sessions(&store);
+                store.clone()
+            };
+            save_persisted_sessions(&store_clone);
         }))
         .await;
 
