@@ -187,19 +187,26 @@ impl PressureSensor {
         let overhead = self.estimate_overhead(system_prompt, tool_defs);
 
         let used_tokens = if let Some(ref anchor) = self.anchor {
-            // Use anchor for messages up to anchor point, estimate delta after
-            let delta_messages = messages
-                .get(anchor.message_count_at_anchor..)
-                .unwrap_or(&[]);
-            let delta_tokens = self.estimate_all_messages(delta_messages);
-            anchor.input_tokens + delta_tokens
+            if anchor.message_count_at_anchor <= messages.len() {
+                // Use anchor for messages up to anchor point, estimate delta after
+                let delta_messages = messages
+                    .get(anchor.message_count_at_anchor..)
+                    .unwrap_or(&[]);
+                let delta_tokens = self.estimate_all_messages(delta_messages);
+                anchor.input_tokens + delta_tokens
+            } else {
+                // Anchor is stale (messages were compacted since anchor was set).
+                // Fall back to full estimation.
+                let msg_tokens = self.estimate_all_messages(messages);
+                overhead + msg_tokens
+            }
         } else {
             // No anchor — estimate everything from scratch including overhead
             let msg_tokens = self.estimate_all_messages(messages);
             overhead + msg_tokens
         };
 
-        let budget = token_budget as usize;
+        let budget: usize = token_budget.try_into().unwrap_or(usize::MAX);
         ContextPressure {
             used_tokens,
             budget_tokens: budget,

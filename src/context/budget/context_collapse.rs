@@ -26,6 +26,10 @@ const MIN_ROUNDS_FILE_EXPLORATION: usize = 3;
 /// Minimum consecutive rounds of Grep to qualify as a search sweep.
 const MIN_ROUNDS_SEARCH_SWEEP: usize = 2;
 
+/// Minimum messages in the compressible zone before attempting collapse.
+/// Heuristic: 2 rounds × 3 messages/round = 6 messages minimum.
+const MIN_MESSAGES_FOR_COLLAPSE: usize = 6;
+
 // =============================================================================
 // Group types
 // =============================================================================
@@ -240,7 +244,7 @@ impl PreflightStage for ContextCollapseStage {
         }
 
         let partition = partition_fresh_tail(messages, fresh_tail_count);
-        if partition < 6 {
+        if partition < MIN_MESSAGES_FOR_COLLAPSE {
             return 0;
         }
 

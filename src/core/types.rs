@@ -77,12 +77,47 @@ pub struct MediaAttachment {
     pub size_bytes: u64,
 }
 
+impl MediaAttachment {
+    /// Create a new media attachment with validated size.
+    ///
+    /// # Arguments
+    /// * `media_type` - Content type classification
+    /// * `mime_type` - MIME type (e.g. "image/png")
+    /// * `data` - Content string (base64-encoded or utf8 text)
+    /// * `encoding` - Encoding format
+    /// * `filename` - Optional original filename
+    pub fn new(
+        media_type: MediaType,
+        mime_type: impl Into<String>,
+        data: impl Into<String>,
+        encoding: ContentEncoding,
+        filename: Option<String>,
+    ) -> Self {
+        let data = data.into();
+        let size_bytes = match encoding {
+            // Base64 encoding inflates size by ~33%; store original decoded size
+            ContentEncoding::Base64 => {
+                (data.len().saturating_mul(3) / 4) as u64
+            }
+            ContentEncoding::Utf8 => data.len() as u64,
+        };
+        Self {
+            media_type,
+            mime_type: mime_type.into(),
+            data,
+            encoding,
+            filename,
+            size_bytes,
+        }
+    }
+}
+
 impl fmt::Debug for MediaAttachment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MediaAttachment")
             .field("media_type", &self.media_type)
             .field("mime_type", &self.mime_type)
-            .field("data", &format!("<REDACTED: {} bytes>", self.data.len()))
+            .field("data", &format!("<REDACTED: {} bytes>", self.size_bytes))
             .field("encoding", &self.encoding)
             .field("filename", &self.filename)
             .field("size_bytes", &self.size_bytes)
@@ -91,7 +126,7 @@ impl fmt::Debug for MediaAttachment {
 }
 
 /// Captured context from active application (Swift → Rust)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CapturedContext {
     /// Window title of the active application, if available
     pub window_title: Option<String>,
@@ -104,7 +139,7 @@ pub struct CapturedContext {
 /// Statistics about memory compression state
 ///
 /// Used for displaying compression status in Settings UI
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompressionStats {
     /// Total number of raw memories (Layer 1)
     pub total_raw_memories: u64,
@@ -118,7 +153,7 @@ pub struct CompressionStats {
 }
 
 /// Memory entry for API responses
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryEntry {
     /// Unique identifier for the memory entry
     pub id: String,

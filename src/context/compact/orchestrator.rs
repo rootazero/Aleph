@@ -144,8 +144,11 @@ impl CompactionOrchestrator {
                     // Update simulated pressure — keep used_tokens and ratio in sync.
                     ctx.pressure.used_tokens =
                         ctx.pressure.used_tokens.saturating_sub(result.freed_tokens);
-                    ctx.pressure.ratio =
-                        ctx.pressure.used_tokens as f64 / ctx.pressure.budget_tokens.max(1) as f64;
+                    ctx.pressure.ratio = if ctx.pressure.budget_tokens == 0 {
+                        1.0
+                    } else {
+                        ctx.pressure.used_tokens as f64 / ctx.pressure.budget_tokens as f64
+                    };
                     ctx.pressure_level = PressureLevel::from_ratio(ctx.pressure.ratio);
                 }
                 Err(e) => {

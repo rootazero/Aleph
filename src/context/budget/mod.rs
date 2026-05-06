@@ -61,7 +61,7 @@ impl ContextPressure {
         let overhead = prompt_tokens + tool_tokens;
         let msg_tokens = estimate_total_tokens(messages, ratio);
         let used = overhead + msg_tokens;
-        let budget = token_budget as usize;
+        let budget: usize = token_budget.try_into().unwrap_or(usize::MAX);
         Self {
             used_tokens: used,
             budget_tokens: budget,

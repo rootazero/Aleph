@@ -287,7 +287,7 @@ impl CompactionStage for RoundDrop {
             .map(|m| estimate_tokens_smart(&m.text_content()))
             .sum();
 
-        let budget = self.token_budget as usize;
+        let budget: usize = self.token_budget.try_into().unwrap_or(usize::MAX);
         if total_tokens <= budget {
             return 0;
         }
@@ -321,6 +321,19 @@ impl CompactionStage for RoundDrop {
 
         for round in &rounds {
             if freed >= need_to_free {
+                break;
+            }
+
+            // Calculate tokens in this round before modifying.
+            let round_tokens: usize = round
+                .clone()
+                .map(|idx| estimate_tokens_smart(&messages[idx].text_content()))
+                .sum();
+
+            // Only drop complete rounds. If we've already freed some tokens and
+            // this round would overshoot the target, stop early to preserve
+            // round integrity (partial rounds break message pairing).
+            if freed > 0 && freed + round_tokens > need_to_free {
                 break;
             }
 
