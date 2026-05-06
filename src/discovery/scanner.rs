@@ -149,6 +149,11 @@ impl DirectoryScanner {
 
     /// Discover a specific component type (skills, commands, agents, plugins)
     pub fn discover_component(&self, component_name: &str) -> DiscoveryResult<Vec<DiscoveredPath>> {
+        if component_name.is_empty() {
+            return Err(DiscoveryError::InvalidPath(
+                "component name cannot be empty".to_string(),
+            ));
+        }
         if component_name.contains('/') || component_name.contains('\\') {
             return Err(DiscoveryError::InvalidPath(format!(
                 "component name cannot contain path separators: {}",
@@ -346,24 +351,23 @@ fn component_marker_file(component_name: &str) -> Option<&'static str> {
 /// - Auto-discover: `skills/`, `commands/`, `agents/`, `hooks/`, `.mcp.json`
 fn has_plugin_manifest(path: &Path) -> bool {
     let cc_dir = path.join(PLUGIN_MANIFEST_DIR);
-    // Claude Code
-    cc_dir.join("plugin.toml").exists()
-        || cc_dir.join(PLUGIN_MANIFEST_FILE).exists()
-        // Codex CLI
-        || path.join(".codex-plugin/plugin.json").exists()
-        // Cursor IDE
-        || path.join(".cursor-plugin/plugin.json").exists()
-        || path.join(".cursorrules").exists()
+    [
+        cc_dir.join("plugin.toml"),
+        cc_dir.join(PLUGIN_MANIFEST_FILE),
+        path.join(".codex-plugin/plugin.json"),
+        path.join(".cursor-plugin/plugin.json"),
+        path.join(".cursorrules"),
+        path.join("aleph.plugin.toml"),
+        path.join("aleph.plugin.json"),
+        path.join(MCP_CONFIG_FILE),
+    ]
+    .iter()
+    .any(|p| p.exists())
         || path.join(".cursor/rules").is_dir()
-        // Legacy
-        || path.join("aleph.plugin.toml").exists()
-        || path.join("aleph.plugin.json").exists()
-        // Auto-discover (bare component directories)
         || path.join("skills").is_dir()
         || path.join("commands").is_dir()
         || path.join("agents").is_dir()
         || path.join("hooks").is_dir()
-        || path.join(MCP_CONFIG_FILE).exists()
 }
 
 #[cfg(test)]

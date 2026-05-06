@@ -121,14 +121,15 @@ where
     let mut current = start.to_path_buf();
     let mut depth = 0;
 
-    // Canonicalize paths for comparison
-    let stop = stop.and_then(|p| p.canonicalize().ok());
+    // Canonicalize paths for comparison; if canonicalization fails,
+    // fall back to the original path so traversal still works.
+    let stop = stop.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
     if let Ok(canonical) = current.canonicalize() {
         current = canonical;
     }
 
     loop {
-        if depth > max_depth {
+        if depth >= max_depth {
             break;
         }
 
@@ -183,11 +184,14 @@ pub fn find_dir_upward(
 
 /// Ensure a directory exists, creating it if necessary
 pub fn ensure_dir(path: &Path) -> DiscoveryResult<()> {
-    if !path.exists() {
-        std::fs::create_dir_all(path)?;
-        tracing::info!("Created directory: {:?}", path);
+    match std::fs::create_dir_all(path) {
+        Ok(()) => {
+            tracing::info!("Created directory: {:?}", path);
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e.into()),
     }
-    Ok(())
 }
 
 #[cfg(test)]
