@@ -37,7 +37,7 @@ where
             data_dir.display()
         )
     })?;
-    let url = format!("{}{}", endpoint.url.trim_end_matches('/'), route);
+    let url = format!("{}/{}", endpoint.url.trim_end_matches('/'), route.trim_start_matches('/'));
 
     let token = read_token(data_dir)?;
     let resp = call_once(&url, method, &body, &token)?;
@@ -49,7 +49,7 @@ where
             let resp2 = call_once(&url, method, &body, &fresh)?;
             return finalize::<T>(resp2);
         }
-        anyhow::bail!("auth token rotated mid-call; retry");
+        anyhow::bail!("authentication failed — bearer token rejected by server");
     }
     finalize::<T>(resp)
 }

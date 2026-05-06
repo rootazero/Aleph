@@ -4,6 +4,34 @@
 //! through `run_no_lock` (NoLock) or `with_policy` (LockOnly / LockOrIpc,
 //! filled in by Task 11).
 
+use std::fmt;
+use std::path::Path;
+
+use crate::utils::instance_lock::{self, AcquireOutcome, InstanceLock};
+
+/// Error returned when the instance lock is held by another process.
+/// This is a distinct type so callers can match on it without fragile
+/// string comparison.
+#[derive(Debug)]
+pub struct LockHeldError {
+    pub pid: i32,
+    pub lock_path: std::path::PathBuf,
+}
+
+impl fmt::Display for LockHeldError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "server is running (PID {}). This command requires \
+             exclusive access — run `aleph stop` first. Lock: {}",
+            self.pid,
+            self.lock_path.display()
+        )
+    }
+}
+
+impl std::error::Error for LockHeldError {}
+
 #[derive(Debug, Clone, Copy)]
 pub enum HttpMethod {
     Get,
@@ -48,9 +76,18 @@ where
     f()
 }
 
-use std::path::Path;
-
-use crate::utils::instance_lock::{self, AcquireOutcome, InstanceLock};
+/// Attempt to acquire the lock and, if held, build a typed `LockHeldError`
+/// instead of a plain string so callers can distinguish lock contention
+/// from other failures.
+fn acquire_or_held(data_dir: &Path) -> anyhow::Result<InstanceLock> {
+    match instance_lock::try_acquire(data_dir)? {
+        AcquireOutcome::Acquired(lock) => Ok(lock),
+        AcquireOutcome::HeldByLive { pid, lock_path }
+        | AcquireOutcome::HeldByOrphaned { pid, lock_path } => {
+            Err(LockHeldError { pid, lock_path }.into())
+        }
+    }
+}
 
 /// Test-friendly variant of `with_policy` that returns `Err` instead of
 /// calling `std::process::exit` on lock contention. Production callers
@@ -63,26 +100,19 @@ pub fn try_with_policy<L, T>(
 ) -> anyhow::Result<T>
 where
     L: FnOnce(&InstanceLock) -> anyhow::Result<T>,
-    T: serde::de::DeserializeOwned + serde::Serialize,
+    T: serde::de::DeserializeOwned,
 {
     match policy {
         CommandPolicy::NoLock => {
             anyhow::bail!("NoLock commands must dispatch through run_no_lock, not with_policy")
         }
-        CommandPolicy::LockOnly => match instance_lock::try_acquire(data_dir)? {
-            AcquireOutcome::Acquired(lock) => local(&lock),
-            AcquireOutcome::HeldByLive { pid, lock_path }
-            | AcquireOutcome::HeldByOrphaned { pid, lock_path } => {
-                anyhow::bail!(
-                    "server is running (PID {pid}). This command requires \
-                     exclusive access — run `aleph stop` first. Lock: {}",
-                    lock_path.display()
-                )
-            }
-        },
-        CommandPolicy::LockOrIpc { route, method } => match instance_lock::try_acquire(data_dir)? {
-            AcquireOutcome::Acquired(lock) => local(&lock),
-            AcquireOutcome::HeldByLive { .. } | AcquireOutcome::HeldByOrphaned { .. } => {
+        CommandPolicy::LockOnly => {
+            let lock = acquire_or_held(data_dir)?;
+            local(&lock)
+        }
+        CommandPolicy::LockOrIpc { route, method } => match acquire_or_held(data_dir) {
+            Ok(lock) => local(&lock),
+            Err(_) => {
                 crate::cli::ipc_client::forward_to_server::<T>(data_dir, method, route, ipc_body)
             }
         },
@@ -90,7 +120,7 @@ where
 }
 
 /// Production dispatch: same as `try_with_policy` but converts lock
-/// contention errors into a clean stderr + `std::process::exit(64)`
+/// contention into a clean stderr + `std::process::exit(64)`
 /// instead of returning an `Err` to the caller.
 pub fn with_policy<L, T>(
     policy: CommandPolicy,
@@ -100,18 +130,34 @@ pub fn with_policy<L, T>(
 ) -> anyhow::Result<T>
 where
     L: FnOnce(&InstanceLock) -> anyhow::Result<T>,
-    T: serde::de::DeserializeOwned + serde::Serialize,
+    T: serde::de::DeserializeOwned,
 {
-    match try_with_policy(policy, data_dir, local, ipc_body) {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            let msg = format!("{e:?}");
-            if msg.contains("server is running") {
-                eprintln!("{msg}");
-                std::process::exit(64);
-            }
-            Err(e)
+    match policy {
+        CommandPolicy::NoLock => {
+            anyhow::bail!("NoLock commands must dispatch through run_no_lock, not with_policy")
         }
+        CommandPolicy::LockOnly => {
+            let lock = acquire_or_held(data_dir).map_err(|e| {
+                if let Some(held) = e.downcast_ref::<LockHeldError>() {
+                    eprintln!("{held}");
+                    std::process::exit(64);
+                }
+                e
+            })?;
+            local(&lock)
+        }
+        CommandPolicy::LockOrIpc { route, method } => match acquire_or_held(data_dir) {
+            Ok(lock) => local(&lock),
+            Err(e) => {
+                if e.downcast_ref::<LockHeldError>().is_some() {
+                    crate::cli::ipc_client::forward_to_server::<T>(
+                        data_dir, method, route, ipc_body,
+                    )
+                } else {
+                    Err(e)
+                }
+            }
+        },
     }
 }
 

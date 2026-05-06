@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 const ENDPOINT_FILENAME: &str = ".ipc-endpoint.json";
 
@@ -38,7 +39,9 @@ pub fn write_endpoint(data_dir: &Path, endpoint: &IpcEndpoint) -> std::io::Resul
     {
         use std::os::unix::fs::PermissionsExt;
         let perm = std::fs::Permissions::from_mode(0o600);
-        let _ = std::fs::set_permissions(&path, perm);
+        if let Err(e) = std::fs::set_permissions(&path, perm) {
+            warn!(path = %path.display(), error = %e, "failed to restrict endpoint file permissions");
+        }
     }
     Ok(())
 }
@@ -57,7 +60,12 @@ pub fn read_endpoint(data_dir: &Path) -> std::io::Result<Option<IpcEndpoint>> {
 }
 
 pub fn remove_endpoint(data_dir: &Path) {
-    let _ = std::fs::remove_file(endpoint_path(data_dir));
+    let path = endpoint_path(data_dir);
+    if let Err(e) = std::fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            warn!(path = %path.display(), error = %e, "failed to remove endpoint file");
+        }
+    }
 }
 
 #[cfg(test)]
