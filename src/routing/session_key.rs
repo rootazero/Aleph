@@ -277,7 +277,7 @@ impl SessionKey {
             } => Self::Main {
                 agent_id: agent_id.clone(),
                 main_key: main_key.clone(),
-                epoch: epoch + 1,
+                epoch: epoch.saturating_add(1),
             },
             Self::DirectMessage {
                 agent_id,
@@ -290,7 +290,7 @@ impl SessionKey {
                 channel: channel.clone(),
                 peer_id: peer_id.clone(),
                 dm_scope: *dm_scope,
-                epoch: epoch + 1,
+                epoch: epoch.saturating_add(1),
             },
             other => other.clone(),
         }
@@ -379,7 +379,10 @@ impl SessionKey {
         }
     }
 
-    /// Parse a session key from a string
+    /// Parse a session key from a string.
+    ///
+    /// Epoch suffixes (`:sN`) are only recognised after the standard key segments so
+    /// that IDs which happen to be formatted like `"s1"` are not mis‑interpreted.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         let parts: Vec<&str> = s.split(':').collect();
@@ -395,29 +398,35 @@ impl SessionKey {
 
         let rest = &parts[2..];
 
-        // Check if the last segment is an epoch suffix (pattern: sN where N is a number)
-        let (rest, epoch) = if let Some(last) = rest.last() {
-            if let Some(n_str) = last.strip_prefix('s') {
-                if let Ok(n) = n_str.parse::<u32>() {
-                    if n > 0 {
-                        (&rest[..rest.len() - 1], n)
-                    } else {
-                        (rest, 0)
-                    }
-                } else {
-                    (rest, 0)
-                }
-            } else {
-                (rest, 0)
-            }
-        } else {
-            (rest, 0)
-        };
+        // Try parsing as-is first — an ID or thread ID may legitimately be "sN".
+        if let Some(key) = Self::parse_rest(&agent_id, rest, 0) {
+            return Some(key);
+        }
 
+        // Then try stripping a trailing epoch suffix.
+        if let Some((rest_no_epoch, epoch)) = Self::strip_epoch(rest) {
+            Self::parse_rest(&agent_id, rest_no_epoch, epoch)
+        } else {
+            None
+        }
+    }
+
+    fn strip_epoch<'a>(rest: &'a [&'a str]) -> Option<(&'a [&'a str], u32)> {
+        let last = rest.last()?;
+        let n_str = last.strip_prefix('s')?;
+        let n = n_str.parse::<u32>().ok()?;
+        if n > 0 && rest.len() > 1 {
+            Some((&rest[..rest.len() - 1], n))
+        } else {
+            None
+        }
+    }
+
+    fn parse_rest(agent_id: &str, rest: &[&str], epoch: u32) -> Option<Self> {
         match rest {
             // agent:id:peer:peer_id (legacy per-peer DM format)
             ["peer", peer_id] => Some(Self::DirectMessage {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 channel: String::new(),
                 peer_id: peer_id.to_string(),
                 dm_scope: DmScope::PerPeer,
@@ -426,7 +435,7 @@ impl SessionKey {
 
             // agent:id:dm:peer (per-peer DM)
             ["dm", peer_id] => Some(Self::DirectMessage {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 channel: String::new(),
                 peer_id: peer_id.to_string(),
                 dm_scope: DmScope::PerPeer,
@@ -435,7 +444,7 @@ impl SessionKey {
 
             // agent:id:channel:dm:peer (per-channel-peer DM)
             [channel, "dm", peer_id] => Some(Self::DirectMessage {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 channel: channel.to_string(),
                 peer_id: peer_id.to_string(),
                 dm_scope: DmScope::PerChannelPeer,
@@ -444,7 +453,7 @@ impl SessionKey {
 
             // agent:id:channel:group:peer:thread:tid
             [channel, "group", peer_id, "thread", thread_id] => Some(Self::Group {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 channel: channel.to_string(),
                 peer_kind: PeerKind::Group,
                 peer_id: peer_id.to_string(),
@@ -453,7 +462,7 @@ impl SessionKey {
 
             // agent:id:channel:channel:peer:thread:tid
             [channel, "channel", peer_id, "thread", thread_id] => Some(Self::Group {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 channel: channel.to_string(),
                 peer_kind: PeerKind::Channel,
                 peer_id: peer_id.to_string(),
@@ -462,7 +471,7 @@ impl SessionKey {
 
             // agent:id:channel:thread:peer:thread:tid
             [channel, "thread", peer_id, "thread", thread_id] => Some(Self::Group {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 channel: channel.to_string(),
                 peer_kind: PeerKind::Thread,
                 peer_id: peer_id.to_string(),
@@ -471,7 +480,7 @@ impl SessionKey {
 
             // agent:id:channel:group:peer
             [channel, "group", peer_id] => Some(Self::Group {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 channel: channel.to_string(),
                 peer_kind: PeerKind::Group,
                 peer_id: peer_id.to_string(),
@@ -480,7 +489,7 @@ impl SessionKey {
 
             // agent:id:channel:channel:peer
             [channel, "channel", peer_id] => Some(Self::Group {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 channel: channel.to_string(),
                 peer_kind: PeerKind::Channel,
                 peer_id: peer_id.to_string(),
@@ -489,7 +498,7 @@ impl SessionKey {
 
             // agent:id:channel:thread:peer
             [channel, "thread", peer_id] => Some(Self::Group {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 channel: channel.to_string(),
                 peer_kind: PeerKind::Thread,
                 peer_id: peer_id.to_string(),
@@ -498,20 +507,20 @@ impl SessionKey {
 
             // agent:id:cron|webhook|scheduled:task_id
             [task_type @ ("cron" | "webhook" | "scheduled"), task_id] => Some(Self::Task {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 task_type: task_type.to_string(),
                 task_id: task_id.to_string(),
             }),
 
             // agent:id:ephemeral:uuid
             ["ephemeral", ephemeral_id] => Some(Self::Ephemeral {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 ephemeral_id: ephemeral_id.to_string(),
             }),
 
             // agent:id:main (or any single token as main_key)
             [main_key] => Some(Self::Main {
-                agent_id,
+                agent_id: agent_id.to_string(),
                 main_key: main_key.to_string(),
                 epoch,
             }),
@@ -547,7 +556,7 @@ impl SessionKey {
                 agent_id,
                 ephemeral_id: ephemeral_id.to_string(),
             }),
-            _ => Self::parse(s),
+            _ => None,
         }
     }
 }

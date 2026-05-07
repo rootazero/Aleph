@@ -86,13 +86,19 @@ pub fn parse_classify_response(response: &str) -> Result<TaskRoute, ClassifyErro
 
     let parsed: ClassifyResponse = serde_json::from_str(json_str)?;
 
+    let quality_threshold = if parsed.quality_threshold.is_finite() {
+        parsed.quality_threshold
+    } else {
+        default_quality_threshold()
+    };
+
     Ok(match parsed.category.as_str() {
         "critical" => TaskRoute::Critical {
             reason: parsed.reason,
-            manifest_hints: ManifestHints {
-                hard_constraints: parsed.hard_constraints,
-                quality_threshold: parsed.quality_threshold,
-            },
+                manifest_hints: ManifestHints {
+                    hard_constraints: parsed.hard_constraints,
+                    quality_threshold,
+                },
         },
         "multi_step" => TaskRoute::MultiStep {
             reason: parsed.reason,

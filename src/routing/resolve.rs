@@ -67,7 +67,12 @@ pub fn resolve_route(
     input: &RouteInput,
 ) -> ResolvedRoute {
     let channel = input.channel.trim().to_lowercase();
-    let account_id = input.account_id.as_deref().unwrap_or("default");
+    let account_id = input
+        .account_id
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("default");
 
     // Filter bindings matching channel and account
     let candidates: Vec<&RouteBinding> = bindings

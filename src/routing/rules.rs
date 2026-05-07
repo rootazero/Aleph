@@ -41,7 +41,7 @@ fn default_simple() -> Vec<String> {
 }
 
 fn default_collaborative() -> Vec<String> {
-    vec![r"/group".into(), r"@专家".into()]
+    vec![r"/group".into()]
 }
 
 impl Default for RoutingPatternsConfig {

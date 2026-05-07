@@ -92,26 +92,41 @@ pub(crate) fn resolve_linked_peer_id(
         Some(format!("{}:{}", channel_lower, peer_lower))
     };
 
+    // First pass: prefer scoped match (more specific) for deterministic behavior.
+    // A scoped ID like "telegram:123" is more precise than a bare "123" and
+    // prevents HashMap iteration order from affecting the result when both forms
+    // appear under different canonicals.
+    if let Some(ref scoped_id) = scoped {
+        for (canonical, ids) in identity_links {
+            let canonical_name = canonical.trim();
+            if canonical_name.is_empty() {
+                continue;
+            }
+            for id in ids {
+                let id_lower = id.trim().to_lowercase();
+                if id_lower.is_empty() {
+                    continue;
+                }
+                if &id_lower == scoped_id {
+                    return Some(canonical_name.to_string());
+                }
+            }
+        }
+    }
+
+    // Second pass: bare peer ID match
     for (canonical, ids) in identity_links {
         let canonical_name = canonical.trim();
         if canonical_name.is_empty() {
             continue;
         }
-
         for id in ids {
             let id_lower = id.trim().to_lowercase();
             if id_lower.is_empty() {
                 continue;
             }
-
             if id_lower == peer_lower {
                 return Some(canonical_name.to_string());
-            }
-
-            if let Some(ref scoped_id) = scoped {
-                if &id_lower == scoped_id {
-                    return Some(canonical_name.to_string());
-                }
             }
         }
     }
