@@ -93,19 +93,21 @@ impl ClaudeSupervisor {
         }
 
         // Spawn process (keep child handle alive to prevent premature termination)
-        let child = pair
+        let mut child = pair
             .slave
             .spawn_command(cmd)
             .map_err(|e| SupervisorError::SpawnFailed(e.to_string()))?;
 
-        // Get reader and writer
+        // Get reader and writer — on failure, kill the child to prevent zombies.
         let reader = pair.master.try_clone_reader().map_err(|e| {
+            let _ = child.kill();
             SupervisorError::Io(std::io::Error::other(format!(
                 "failed to clone PTY reader: {}",
                 e
             )))
         })?;
         let writer = pair.master.take_writer().map_err(|e| {
+            let _ = child.kill();
             SupervisorError::Io(std::io::Error::other(format!(
                 "failed to take PTY writer: {}",
                 e
@@ -114,6 +116,7 @@ impl ClaudeSupervisor {
 
         self.master = Some(pair.master);
         self.writer = Some(writer);
+        self.child = Some(child);
         self.running.store(true, Ordering::Release);
 
         // Create event channel
@@ -145,7 +148,6 @@ impl ClaudeSupervisor {
         });
 
         self.reader_handle = Some(handle);
-        self.child = Some(child);
 
         Ok(rx)
     }
@@ -225,11 +227,14 @@ impl Drop for ClaudeSupervisor {
 
 /// Strip ANSI escape sequences from text.
 ///
-/// Returns the original text if stripping produces invalid UTF-8.
+/// If stripping produces invalid UTF-8, falls back to lossy conversion
+/// rather than retaining the original ANSI-encoded text, so downstream
+/// heuristic matching sees clean (if slightly corrupted) content.
 fn strip_ansi(text: &str) -> String {
     let bytes = text.as_bytes();
     let stripped = strip_ansi_escapes::strip(bytes);
-    String::from_utf8(stripped).unwrap_or_else(|_| text.to_string())
+    String::from_utf8(stripped)
+        .unwrap_or_else(|_| String::from_utf8_lossy(&strip_ansi_escapes::strip(bytes)).into_owned())
 }
 
 /// Detect semantic events from cleaned output text.
@@ -247,8 +252,9 @@ fn detect_event(text: &str) -> SupervisorEvent {
         return SupervisorEvent::ContextOverflow;
     }
 
-    // Error detection
-    if text.starts_with("Error:") || text.contains("error:") {
+    // Error detection — require a leading word boundary to reduce false
+    // positives in normal prose (e.g. "The error: 0 value is fine").
+    if text.starts_with("Error:") || text.contains(" error:") || text.contains("\terror:") {
         return SupervisorEvent::Error(text.to_string());
     }
 
@@ -282,6 +288,13 @@ mod tests {
     }
 
     #[test]
+    fn test_strip_ansi_nested_sequences() {
+        let input = "\x1b[1m\x1b[31m\x1b[40mNested\x1b[0m";
+        let output = strip_ansi(input);
+        assert_eq!(output, "Nested");
+    }
+
+    #[test]
     fn test_detect_approval_request() {
         let text = "Do you want to run this command?";
         let event = detect_event(text);
@@ -310,6 +323,24 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_error_no_false_positive() {
+        let text = "The preerror: value is fine";
+        let event = detect_event(text);
+        assert!(
+            matches!(event, SupervisorEvent::Output(_)),
+            "Expected Output, got {:?}",
+            event
+        );
+    }
+
+    #[test]
+    fn test_detect_error_with_leading_space() {
+        let text = "Command failed with error: not found";
+        let event = detect_event(text);
+        assert!(matches!(event, SupervisorEvent::Error(_)));
+    }
+
+    #[test]
     fn test_secret_masking_in_output() {
         let masker = crate::exec::SecretMasker::new();
         let input = "API_KEY=sk-abcdefghijklmnopqrstuvwxyz12345678901234";
@@ -324,6 +355,12 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("forbidden character"));
+    }
+
+    #[test]
+    fn test_args_validation_rejects_glob() {
+        let result = SupervisorConfig::new("/tmp").with_args(vec!["*.txt".to_string()]);
+        assert!(result.is_err());
     }
 
     #[test]

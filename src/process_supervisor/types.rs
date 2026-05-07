@@ -34,7 +34,10 @@ pub struct SupervisorConfig {
 }
 
 /// Characters disallowed in command arguments to prevent shell injection.
-const ARGUMENT_FORBIDDEN_CHARS: &[char] = &[';', '|', '&', '$', '`', '(', ')', '<', '>', '\n'];
+const ARGUMENT_FORBIDDEN_CHARS: &[char] = &[
+    ';', '|', '&', '$', '`', '(', ')', '<', '>', '\n', '*', '?', '{', '}', '[', ']', '~', '\\',
+    '#', '!', '=',
+];
 
 impl SupervisorConfig {
     pub fn new(workspace: impl Into<PathBuf>) -> Self {
