@@ -22,6 +22,9 @@ struct SearchMatch {
     line_content: String,
 }
 
+/// Maximum number of search matches to return (safety limit)
+const MAX_SEARCH_MATCHES: usize = 10_000;
+
 /// Search operations handler
 ///
 /// Handles file search with regex, fuzzy, and AST-based pattern matching.
@@ -108,6 +111,9 @@ impl SearchOpsHandler {
                             line_number: line_num + 1,
                             line_content: line.to_string(),
                         });
+                        if matches.len() >= MAX_SEARCH_MATCHES {
+                            return Ok(matches);
+                        }
                     }
                 }
             }
@@ -124,6 +130,7 @@ impl SearchOpsHandler {
         threshold: f32,
     ) -> Result<Vec<SearchMatch>> {
         let mut matches = Vec::new();
+        let text_lower = text.to_lowercase();
 
         for file in files {
             // Skip files that are too large
@@ -139,7 +146,7 @@ impl SearchOpsHandler {
                     // Simple fuzzy matching: check if text appears as substring (case-insensitive)
                     // FIXME: Replace with proper fuzzy matching (e.g., Levenshtein distance)
                     //        Current implementation is just substring matching, not true fuzzy.
-                    let similarity = if line.to_lowercase().contains(&text.to_lowercase()) {
+                    let similarity = if line.to_lowercase().contains(&text_lower) {
                         1.0
                     } else {
                         0.0
@@ -151,6 +158,9 @@ impl SearchOpsHandler {
                             line_number: line_num + 1,
                             line_content: line.to_string(),
                         });
+                        if matches.len() >= MAX_SEARCH_MATCHES {
+                            return Ok(matches);
+                        }
                     }
                 }
             }

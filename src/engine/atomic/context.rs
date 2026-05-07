@@ -37,8 +37,8 @@ impl ExecutorContext {
     /// Resolve a path relative to working_dir
     ///
     /// This method performs the following operations:
-    /// 1. Handles absolute paths by returning them as-is
-    /// 2. Expands `~` to home directory
+    /// 1. Validates absolute paths do not escape the sandbox
+    /// 2. Expands `~` to home directory (also validated)
     /// 3. Resolves relative paths against `working_dir`
     ///
     /// # Arguments
@@ -57,31 +57,56 @@ impl ExecutorContext {
     /// // Relative path
     /// let path = context.resolve_path("src/main.rs")?;
     /// assert_eq!(path, PathBuf::from("/workspace/src/main.rs"));
-    ///
-    /// // Absolute path
-    /// let path = context.resolve_path("/etc/passwd")?;
-    /// assert_eq!(path, PathBuf::from("/etc/passwd"));
     /// ```
     pub fn resolve_path(&self, path: &str) -> Result<PathBuf> {
         let path = Path::new(path);
 
-        // If absolute, use as-is
-        if path.is_absolute() {
-            return Ok(path.to_path_buf());
-        }
-
-        // If starts with ~, expand home directory
-        if let Some(path_str) = path.to_str() {
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else if let Some(path_str) = path.to_str() {
             if path_str.starts_with("~/") || path_str == "~" {
                 if let Some(home) = dirs::home_dir() {
                     let relative = path_str.strip_prefix("~/").unwrap_or("");
-                    return Ok(home.join(relative));
+                    home.join(relative)
+                } else {
+                    self.working_dir.join(path)
                 }
+            } else {
+                self.working_dir.join(path)
             }
+        } else {
+            self.working_dir.join(path)
+        };
+
+        // Normalize and validate sandbox boundary
+        let normalized = Self::normalize_path(&resolved);
+        let normalized_working = Self::normalize_path(&self.working_dir);
+
+        if !normalized.starts_with(&normalized_working) {
+            return Err(crate::error::AlephError::tool(format!(
+                "Path escapes sandbox: {} (working dir: {})",
+                path.display(),
+                self.working_dir.display()
+            )));
         }
 
-        // Otherwise, resolve relative to working directory
-        Ok(self.working_dir.join(path))
+        Ok(resolved)
+    }
+
+    /// Normalize a path by resolving `.` and `..` without requiring the path to exist.
+    fn normalize_path(path: &Path) -> PathBuf {
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::Normal(name) => normalized.push(name),
+                std::path::Component::RootDir => normalized = PathBuf::from("/"),
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                _ => {}
+            }
+        }
+        normalized
     }
 
     /// Recursively collect files from directory with filters
@@ -185,20 +210,35 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let context = ExecutorContext::new(temp_dir.path().to_path_buf());
 
-        // Resolve absolute path
-        let resolved = context.resolve_path("/etc/passwd").unwrap();
-        assert_eq!(resolved, PathBuf::from("/etc/passwd"));
+        // Absolute path inside working_dir is allowed
+        let file = temp_dir.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+        let resolved = context.resolve_path(file.to_str().unwrap()).unwrap();
+        assert_eq!(resolved, file);
+
+        // Absolute path outside working_dir is rejected (sandbox)
+        assert!(context.resolve_path("/etc/passwd").is_err());
     }
 
     #[test]
     fn test_resolve_home_path() {
+        let home = dirs::home_dir().unwrap();
+        let context = ExecutorContext::new(home.clone());
+
+        // Resolve home path — valid because it stays within working_dir
+        let resolved = context.resolve_path("~/test.txt").unwrap();
+        assert_eq!(resolved, home.join("test.txt"));
+    }
+
+    #[test]
+    fn test_resolve_path_escapes_sandbox() {
         let temp_dir = TempDir::new().unwrap();
         let context = ExecutorContext::new(temp_dir.path().to_path_buf());
 
-        // Resolve home path
-        let resolved = context.resolve_path("~/test.txt").unwrap();
-        if let Some(home) = dirs::home_dir() {
-            assert_eq!(resolved, home.join("test.txt"));
-        }
+        // Absolute path outside working_dir should be rejected
+        assert!(context.resolve_path("/etc/passwd").is_err());
+
+        // Relative path with .. traversal should be rejected
+        assert!(context.resolve_path("../secret.txt").is_err());
     }
 }

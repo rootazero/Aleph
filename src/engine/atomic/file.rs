@@ -218,24 +218,11 @@ impl FileOps for FileOpsHandler {
         update_imports: bool,
         create_parent: bool,
     ) -> Result<AtomicResult> {
-        // Parse paths
-        let source_pathbuf = PathBuf::from(source);
-        let dest_pathbuf = PathBuf::from(dest);
+        debug!(source = %source, destination = %dest, "Executing move");
 
-        debug!(source = ?source_pathbuf, destination = ?dest_pathbuf, "Executing move");
-
-        // Resolve paths
-        let source_path = if source_pathbuf.is_absolute() {
-            source_pathbuf.clone()
-        } else {
-            self.context.working_dir.join(&source_pathbuf)
-        };
-
-        let dest_path = if dest_pathbuf.is_absolute() {
-            dest_pathbuf.clone()
-        } else {
-            self.context.working_dir.join(&dest_pathbuf)
-        };
+        // Resolve paths through context (enforces sandbox, handles ~ expansion)
+        let source_path = self.context.resolve_path(source)?;
+        let dest_path = self.context.resolve_path(dest)?;
 
         // Check source exists
         if !source_path.exists() {

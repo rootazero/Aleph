@@ -1,15 +1,14 @@
 use crate::engine::{AtomicAction, AtomicExecutor, ReflexLayer};
 use crate::error::AlephError;
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use tokio::sync::RwLock;
 
 /// Main atomic engine that orchestrates L1/L2/L3 routing and self-healing execution
 pub struct AtomicEngine {
     /// Fast reflex routing layer (L1/L2)
-    reflex: Arc<RwLock<ReflexLayer>>,
+    reflex: Arc<AsyncRwLock<ReflexLayer>>,
     /// Atomic operation executor
     executor: AtomicExecutor,
     /// Maximum retry attempts for self-healing
@@ -33,7 +32,7 @@ impl AtomicEngine {
     /// Create a new atomic engine
     pub fn new(working_dir: PathBuf) -> Self {
         Self {
-            reflex: Arc::new(RwLock::new(ReflexLayer::with_default_rules())),
+            reflex: Arc::new(AsyncRwLock::new(ReflexLayer::with_default_rules())),
             executor: AtomicExecutor::new(working_dir.clone()),
             max_retries: 3,
             _working_dir: working_dir,
