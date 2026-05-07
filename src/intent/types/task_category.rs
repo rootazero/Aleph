@@ -45,7 +45,7 @@ pub enum TaskCategory {
     /// Text processing (translation, summarization)
     TextProcessing,
     /// Data processing
-    DataProcess,
+    DataProcessing,
 }
 
 impl TaskCategory {
@@ -70,7 +70,7 @@ impl TaskCategory {
             Self::SystemInfo => "system_info",
             Self::MediaDownload => "media_download",
             Self::TextProcessing => "text_processing",
-            Self::DataProcess => "data_process",
+            Self::DataProcessing => "data_process",
         }
     }
 
@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(TaskCategory::SystemInfo.as_str(), "system_info");
         assert_eq!(TaskCategory::MediaDownload.as_str(), "media_download");
         assert_eq!(TaskCategory::TextProcessing.as_str(), "text_processing");
-        assert_eq!(TaskCategory::DataProcess.as_str(), "data_process");
+        assert_eq!(TaskCategory::DataProcessing.as_str(), "data_process");
     }
 
     #[test]

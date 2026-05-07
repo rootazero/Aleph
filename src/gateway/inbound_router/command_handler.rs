@@ -56,7 +56,7 @@ pub(super) fn serialize_intent_result(result: &IntentResult) -> Option<String> {
             "source": source.as_str(),
         }))
         .ok(),
-        IntentResult::Execute { .. } | IntentResult::Converse { .. } | IntentResult::Abort => None,
+        IntentResult::Execute { .. } | IntentResult::Converse { .. } | IntentResult::Abort { .. } => None,
     }
 }
 

@@ -91,7 +91,7 @@ pub enum IntentResult {
     /// The message is conversational — no tool needed.
     Converse { confidence: f32 },
     /// The request was aborted (e.g. safety filter).
-    Abort,
+    Abort { reason: Option<String> },
 }
 
 impl IntentResult {
@@ -108,13 +108,16 @@ impl IntentResult {
     }
 
     pub fn is_abort(&self) -> bool {
-        matches!(self, Self::Abort)
+        matches!(self, Self::Abort { .. })
     }
 
     /// Return the confidence score. `DirectTool` and `Abort` are always 1.0.
+    ///
+    /// For `Execute` and `Converse` variants, the confidence value is expected
+    /// to be in the range [0.0, 1.0], where 1.0 represents maximum confidence.
     pub fn confidence(&self) -> f32 {
         match self {
-            Self::DirectTool { .. } | Self::Abort => 1.0,
+            Self::DirectTool { .. } | Self::Abort { .. } => 1.0,
             Self::Execute { confidence, .. } | Self::Converse { confidence, .. } => *confidence,
         }
     }
@@ -170,7 +173,9 @@ mod tests {
 
     #[test]
     fn intent_result_abort() {
-        let result = IntentResult::Abort;
+        let result = IntentResult::Abort {
+            reason: Some("safety_filter".to_string()),
+        };
         assert!(result.is_abort());
         assert!((result.confidence() - 1.0).abs() < f32::EPSILON);
     }
@@ -203,7 +208,9 @@ mod tests {
         let converse = IntentResult::Converse { confidence: 0.5 };
         assert_eq!(converse.layer(), None);
 
-        let abort = IntentResult::Abort;
+        let abort = IntentResult::Abort {
+            reason: Some("test".to_string()),
+        };
         assert_eq!(abort.layer(), None);
     }
 
