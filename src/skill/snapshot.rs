@@ -57,7 +57,7 @@ impl SkillSnapshot {
 
         // Collect and sort by skill ID for deterministic ordering
         let mut entries: Vec<_> = registry.iter().collect();
-        entries.sort_by_key(|(id, _)| id.as_str().to_string());
+        entries.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
 
         for (id, manifest) in entries {
             match eligibility.evaluate(manifest) {

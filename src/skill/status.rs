@@ -88,7 +88,7 @@ impl SkillStatusEntry {
         };
 
         if let Some(env_name) = manifest.primary_env() {
-            if !api_key_set && !missing.env.contains(&env_name.to_string()) {
+            if !api_key_set && !missing.env.iter().any(|e| e == env_name) {
                 missing.env.push(env_name.to_string());
             }
         }

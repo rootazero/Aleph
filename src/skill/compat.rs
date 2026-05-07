@@ -31,14 +31,7 @@ impl From<SkillManifest> for SkillInfo {
 
 impl From<&SkillManifest> for SkillInfo {
     fn from(manifest: &SkillManifest) -> Self {
-        Self {
-            id: manifest.id().as_str().to_string(),
-            name: manifest.name().to_string(),
-            description: manifest.description().to_string(),
-            triggers: Vec::new(),
-            allowed_tools: Vec::new(),
-            ecosystem: "aleph".to_string(),
-        }
+        SkillInfo::from(manifest.clone())
     }
 }
 

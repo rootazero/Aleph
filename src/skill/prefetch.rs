@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;

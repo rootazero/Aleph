@@ -23,7 +23,9 @@ pub fn format_skills_prompt(skills: &[MemoryFact]) -> Option<String> {
     for fact in skills {
         let name = skill_name_from_path(&fact.path).unwrap_or("unknown");
         out.push('\n');
-        out.push_str(&format!("### {name}\n"));
+        out.push_str("### ");
+        out.push_str(name);
+        out.push('\n');
         out.push_str(&fact.content);
         out.push('\n');
     }
