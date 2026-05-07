@@ -87,7 +87,11 @@ impl<M: MemoryBackend + 'static> LoopTool for MemorySearchTool<M> {
             }
         };
 
-        let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+        let limit = input
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| v.try_into().ok())
+            .unwrap_or(5);
 
         match self.backend.search(query, limit).await {
             Ok(entries) => {

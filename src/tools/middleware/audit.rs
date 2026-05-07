@@ -26,7 +26,7 @@ impl ToolService for ExecAuditLayer {
         tracing::info!(target: "tool.call", tool = %name, phase = "start");
         match self.inner.execute(name, input).await {
             Ok(mut out) => {
-                let elapsed_ms = started.elapsed().as_millis() as u64;
+                let elapsed_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
                 tracing::info!(
                     target: "tool.call",
                     tool = %name,
@@ -37,7 +37,7 @@ impl ToolService for ExecAuditLayer {
                 Ok(out)
             }
             Err(e) => {
-                let elapsed_ms = started.elapsed().as_millis() as u64;
+                let elapsed_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
                 tracing::warn!(
                     target: "tool.call",
                     tool = %name,

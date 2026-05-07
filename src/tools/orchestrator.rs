@@ -149,8 +149,11 @@ pub async fn execute_tool_batch(
                                 let mut outcome = pipeline
                                     .execute(&tc.id, &tc.name, &tc.arguments, registry, cancel)
                                     .await;
-                                outcome.outcome.duration_ms =
-                                    started_at.elapsed().as_millis() as u64;
+                                outcome.outcome.duration_ms = started_at
+                                    .elapsed()
+                                    .as_millis()
+                                    .try_into()
+                                    .unwrap_or(u64::MAX);
                                 outcome
                             }
                         })
@@ -200,7 +203,11 @@ pub async fn execute_tool_batch(
                 let mut po = pipeline
                     .execute(&tc.id, &tc.name, &tc.arguments, registry, cancel)
                     .await;
-                po.outcome.duration_ms = started_at.elapsed().as_millis() as u64;
+                po.outcome.duration_ms = started_at
+                    .elapsed()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX);
 
                 if is_safe {
                     let tool_result = outcome_to_tool_result(&po.outcome);

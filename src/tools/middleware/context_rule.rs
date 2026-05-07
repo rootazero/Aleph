@@ -127,14 +127,15 @@ mod tests {
         }
 
         fn last(&self) -> Option<(String, Value)> {
-            self.last.lock().expect("mutex poisoned").clone()
+            self.last.lock().unwrap_or_else(|e| e.into_inner()).clone()
         }
     }
 
     #[async_trait]
     impl ToolService for RecordingInner {
         async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
-            *self.last.lock().expect("mutex poisoned") = Some((name.to_string(), input.clone()));
+            *self.last.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some((name.to_string(), input.clone()));
             Ok(ToolOutput {
                 value: serde_json::json!({"ran": name}),
                 metadata: ToolOutputMetadata::default(),

@@ -16,8 +16,10 @@
 //! 7. Failure hooks (observers): fire on error outcomes
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Instant;
+
+use crate::sync_primitives::RwLock;
 
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -375,7 +377,11 @@ impl ToolPipeline {
                 };
             }
         };
-        let exec_elapsed_ms = exec_start.elapsed().as_millis() as u64;
+        let exec_elapsed_ms = exec_start
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
 
         let budget = default_result_budget(name);
         let mut outcome = Self::map_result(id, name, &result, self.result_store.as_ref(), budget);

@@ -203,7 +203,7 @@ mod tests {
     impl ToolService for RecordingInner {
         async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            *self.last.lock().expect("mutex poisoned") = Some((name.to_string(), input));
+            *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some((name.to_string(), input));
             Ok(ToolOutput {
                 value: serde_json::json!({"ran": name}),
                 metadata: ToolOutputMetadata::default(),

@@ -46,7 +46,7 @@ impl ToolService for TimeoutLayer {
             Ok(result) => result,
             Err(_) => Err(ToolError::Timeout {
                 name: name.to_string(),
-                elapsed_ms: t.as_millis() as u64,
+                elapsed_ms: t.as_millis().try_into().unwrap_or(u64::MAX),
             }),
         }
     }
