@@ -99,15 +99,14 @@ pub struct BuiltinToolConfig {
     /// Capture-filter registry (Spec 4 Task 11).
     /// When set, the `session_complete` tool's raw-memory writes go through
     /// `insert_with_capture_filter` so extensions can mutate or block them.
-    pub capture_registry:
-        Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    pub capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
 
     /// Note orientation handle (Spec 5 Task 12).
     /// When set, `note_orient` tool is registered and dispatched, and
     /// `note_schema` tool always has its memory_dir resolved.
     /// `None` → note orientation tools unavailable at runtime (schema tool still registered
     /// but dispatched stateless from memory_dir derived from paths).
-    pub orientation: Option<std::sync::Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
+    pub orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
 
     /// Memory dir root for note_schema tool (Spec 5 Task 12).
     /// Points to the `note` subdirectory (e.g. `~/.aleph/memory/note`).
@@ -116,7 +115,7 @@ pub struct BuiltinToolConfig {
     /// Profile synthesizer for `user_profile` tool (Spec 7 Task 9).
     /// When set, the `user_profile` tool is registered and dispatched.
     pub profile_synthesizer:
-        Option<std::sync::Arc<dyn crate::memory::notes::profile::synthesizer::ProfileSynthesizer>>,
+        Option<Arc<dyn crate::memory::notes::profile::synthesizer::ProfileSynthesizer>>,
 
     /// Sandbox for exec-class tools (code_exec, bash_exec).
     /// `None` → tools return a structured "sandbox not configured" error.

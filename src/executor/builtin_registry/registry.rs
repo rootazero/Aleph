@@ -900,6 +900,8 @@ impl ToolRegistry for BuiltinToolRegistry {
                         })?;
                         tool.call_json(arguments).await
                     }),
+                    // SAFETY: Outer match already matched exactly "agent_create" | "agent_list" | "agent_delete",
+                    // so this arm is unreachable by construction. The never type (!) coerces to the return type.
                     _ => unreachable!(),
                 }
             }

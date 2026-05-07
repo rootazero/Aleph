@@ -95,7 +95,7 @@ pub trait ToolRegistry: Send + Sync {
     /// The execution engine writes the active workspace_id to this handle after
     /// workspace resolution, so tools use the correct workspace by default.
     /// Returns None if no workspace-aware tools are registered.
-    fn workspace_handle(&self) -> Option<std::sync::Arc<tokio::sync::RwLock<String>>> {
+    fn workspace_handle(&self) -> Option<Arc<tokio::sync::RwLock<String>>> {
         None
     }
 
@@ -105,11 +105,8 @@ pub trait ToolRegistry: Send + Sync {
     /// here so the memory_search tool can use Two-Phase Smart Recall.
     fn smart_recall_config_handle(
         &self,
-    ) -> Option<
-        std::sync::Arc<
-            tokio::sync::RwLock<Option<crate::config::types::profile::SmartRecallConfig>>,
-        >,
-    > {
+    ) -> Option<Arc<tokio::sync::RwLock<Option<crate::config::types::profile::SmartRecallConfig>>>>
+    {
         None
     }
 
@@ -119,9 +116,7 @@ pub trait ToolRegistry: Send + Sync {
     /// tools can bind agent switches to the correct conversation.
     fn session_context_handle(
         &self,
-    ) -> Option<
-        std::sync::Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::SessionContext>>,
-    > {
+    ) -> Option<Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::SessionContext>>> {
         None
     }
 
@@ -131,8 +126,7 @@ pub trait ToolRegistry: Send + Sync {
     /// Default ToolPolicy (empty whitelist/blacklist) allows all tools.
     fn tool_policy_handle(
         &self,
-    ) -> Option<std::sync::Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>>
-    {
+    ) -> Option<Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
         None
     }
 
@@ -148,7 +142,7 @@ pub trait ToolRegistry: Send + Sync {
     ///
     /// The execution engine writes the active session's key string here after
     /// session resolution so memory_search can filter facts by session scope.
-    fn session_key_handle(&self) -> Option<std::sync::Arc<tokio::sync::RwLock<String>>> {
+    fn session_key_handle(&self) -> Option<Arc<tokio::sync::RwLock<String>>> {
         None
     }
 }

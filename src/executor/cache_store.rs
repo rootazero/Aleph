@@ -23,7 +23,8 @@ struct ToolCallCacheKey {
 
 impl ToolCallCacheKey {
     fn new(tool_name: String, arguments: &serde_json::Value) -> Self {
-        let args_str = serde_json::to_string(arguments).unwrap_or_default();
+        let args_str =
+            serde_json::to_string(arguments).unwrap_or_else(|_| String::from("__invalid__"));
         let mut hasher = DefaultHasher::new();
         args_str.hash(&mut hasher);
 
@@ -51,8 +52,8 @@ pub struct ToolResultCache {
 impl ToolResultCache {
     /// Create a new cache store
     pub fn new(config: ToolCacheConfig) -> Self {
-        let capacity =
-            NonZeroUsize::new(config.capacity).unwrap_or(NonZeroUsize::new(100).unwrap());
+        let capacity = NonZeroUsize::new(config.capacity)
+            .unwrap_or_else(|| NonZeroUsize::new(100).expect("100 is non-zero"));
         let cache = Arc::new(RwLock::new(LruCache::new(capacity)));
 
         Self { cache, config }

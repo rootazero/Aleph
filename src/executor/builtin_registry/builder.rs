@@ -49,22 +49,22 @@ impl BuiltinToolRegistry {
         };
         let web_fetch_tool = WebFetchTool::new();
         let file_ops_tool = if let Some(ref tc) = config.tool_context {
-            FileOpsTool::new().with_tool_context(std::sync::Arc::clone(tc))
+            FileOpsTool::new().with_tool_context(Arc::clone(tc))
         } else {
             FileOpsTool::new()
         };
         let file_read_tool = if let Some(ref tc) = config.tool_context {
-            FileReadTool::new().with_tool_context(std::sync::Arc::clone(tc))
+            FileReadTool::new().with_tool_context(Arc::clone(tc))
         } else {
             FileReadTool::new()
         };
         let file_write_tool = if let Some(ref tc) = config.tool_context {
-            FileWriteTool::new().with_tool_context(std::sync::Arc::clone(tc))
+            FileWriteTool::new().with_tool_context(Arc::clone(tc))
         } else {
             FileWriteTool::new()
         };
         let file_edit_tool = if let Some(ref tc) = config.tool_context {
-            FileEditTool::new().with_tool_context(std::sync::Arc::clone(tc))
+            FileEditTool::new().with_tool_context(Arc::clone(tc))
         } else {
             FileEditTool::new()
         };
@@ -79,7 +79,7 @@ impl BuiltinToolRegistry {
             CodeExecTool::new()
         };
         let pdf_generate_tool = if let Some(ref tc) = config.tool_context {
-            PdfGenerateTool::new().with_tool_context(std::sync::Arc::clone(tc))
+            PdfGenerateTool::new().with_tool_context(Arc::clone(tc))
         } else {
             PdfGenerateTool::new()
         };
@@ -817,7 +817,7 @@ impl BuiltinToolRegistry {
                 agent_id,
             );
             if let Some(ref reg) = config.capture_registry {
-                tool = tool.with_capture_registry(std::sync::Arc::clone(reg));
+                tool = tool.with_capture_registry(Arc::clone(reg));
             }
 
             // Register tool schema

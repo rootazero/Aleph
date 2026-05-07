@@ -44,6 +44,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "memory_browse",
             "memory_explore",
             "memory_timeline",
+            "remember",
             "note_manage",
             "session_search",
             "skill_list",
