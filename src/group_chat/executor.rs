@@ -197,9 +197,11 @@ impl GroupChatExecutor {
 
         // Step 4 & 5: Invoke each persona and collect messages
         let mut prior_discussion = String::new();
-        let total_respondents = plan.respondents.len();
+        let mut sorted_respondents = plan.respondents.clone();
+        sorted_respondents.sort_by_key(|r| r.order);
+        let total_respondents = sorted_respondents.len();
 
-        for (i, respondent) in plan.respondents.iter().enumerate() {
+        for (i, respondent) in sorted_respondents.iter().enumerate() {
             // Find the persona in the session participants
             let persona = session
                 .participants
@@ -728,5 +730,34 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "Special provider response.");
+    }
+
+    #[tokio::test]
+    async fn test_execute_round_respects_order_field() {
+        let coordinator_response = r#"{"respondents":[{"persona_id":"pm","order":1,"guidance":"second"},{"persona_id":"arch","order":0,"guidance":"first"}],"need_summary":false}"#;
+
+        let provider = Arc::new(SequentialMockProvider::new(vec![
+            coordinator_response.to_string(),
+            "Architect goes first.".to_string(),
+            "PM goes second.".to_string(),
+        ]));
+
+        let executor = GroupChatExecutor::new(provider);
+        let mut session = make_session();
+
+        let messages = executor
+            .execute_round(&mut session, "Who should go first?", &[])
+            .await
+            .expect("execute_round should succeed");
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].speaker.name(), "Architect");
+        assert_eq!(messages[0].content, "Architect goes first.");
+        assert_eq!(messages[0].sequence, 0);
+
+        assert_eq!(messages[1].speaker.name(), "Product Manager");
+        assert_eq!(messages[1].content, "PM goes second.");
+        assert_eq!(messages[1].sequence, 1);
+        assert!(messages[1].is_final);
     }
 }

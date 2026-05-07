@@ -153,7 +153,7 @@ fn parse_inline_role(spec: &str) -> Option<Persona> {
     let name = name.trim();
     let prompt = prompt.trim();
 
-    if name.is_empty() {
+    if name.is_empty() || prompt.is_empty() {
         return None;
     }
 
@@ -188,15 +188,39 @@ fn tokenize(input: &str) -> Vec<String> {
                 let quote = ch;
                 chars.next();
                 let mut quoted = String::new();
+                let mut closed = false;
                 while let Some(&c) = chars.peek() {
+                    if c == '\\' {
+                        chars.next();
+                        if let Some(&escaped) = chars.peek() {
+                            if escaped == quote {
+                                quoted.push(quote);
+                            } else {
+                                quoted.push('\\');
+                                quoted.push(escaped);
+                            }
+                            chars.next();
+                        } else {
+                            quoted.push('\\');
+                        }
+                        continue;
+                    }
                     if c == quote {
                         chars.next();
+                        closed = true;
                         break;
                     }
                     quoted.push(c);
                     chars.next();
                 }
-                tokens.push(quoted);
+                if closed {
+                    tokens.push(quoted);
+                } else {
+                    let mut literal = String::new();
+                    literal.push(quote);
+                    literal.push_str(&quoted);
+                    tokens.push(literal);
+                }
             }
             c if c.is_whitespace() => {
                 if !current.is_empty() {
@@ -362,5 +386,27 @@ mod tests {
         let result = parser.parse_group_chat_command("just a regular message");
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_tokenize_escaped_quotes() {
+        let tokens = tokenize(r#"--role "Expert: You are a \"special\" expert""#);
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0], "--role");
+        assert_eq!(tokens[1], "Expert: You are a \"special\" expert");
+    }
+
+    #[test]
+    fn test_tokenize_unclosed_quote() {
+        let tokens = tokenize(r#"--role "unclosed role"#);
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0], "--role");
+        assert_eq!(tokens[1], "\"unclosed role");
+    }
+
+    #[test]
+    fn test_parse_inline_role_rejects_empty_prompt() {
+        let result = parse_inline_role("Expert: ");
+        assert!(result.is_none(), "should reject empty prompt");
     }
 }
