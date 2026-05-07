@@ -122,7 +122,7 @@ mod tests {
                 last_args: Mutex::new(None),
             }
         }
-        fn with_ok(mut self, name: &str, value: Value) -> Self {
+        fn with_ok(self, name: &str, value: Value) -> Self {
             self.results
                 .lock()
                 .unwrap()
@@ -130,7 +130,7 @@ mod tests {
             self
         }
         fn last_call(&self) -> Option<(String, Value)> {
-            self.last_args.lock().unwrap().clone()
+            self.last_args.lock().unwrap_or_else(|e| e.into_inner()).clone()
         }
     }
 
@@ -144,7 +144,7 @@ mod tests {
             arguments: Value,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AlephResult<Value>> + Send + '_>>
         {
-            *self.last_args.lock().unwrap() = Some((tool_name.to_string(), arguments.clone()));
+            *self.last_args.lock().unwrap_or_else(|e| e.into_inner()) = Some((tool_name.to_string(), arguments.clone()));
             let canned = self
                 .results
                 .lock()

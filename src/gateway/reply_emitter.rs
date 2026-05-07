@@ -1675,7 +1675,6 @@ impl EventEmitter for ReplyEmitter {
 mod tests {
     use super::*;
     use crate::gateway::channel::{ChannelId, ConversationId};
-    use crate::sync_primitives::Mutex;
 
     #[test]
     fn test_config_defaults() {

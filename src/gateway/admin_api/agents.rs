@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
 
-use crate::config::agent_manager::{AgentManager, AgentPatch};
+use crate::config::agent_manager::AgentPatch;
 use crate::config::types::agents_def::AgentDefinition;
 use crate::gateway::admin_api::AdminApiState;
 
@@ -60,6 +60,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    use crate::config::agent_manager::AgentManager;
     use std::sync::Arc;
     use tempfile::TempDir;
     use tower::ServiceExt;

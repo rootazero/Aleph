@@ -10,7 +10,7 @@ static PLUGINS: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| crate::sync_primitives::RwLock::new(HashMap::new()));
 
 pub fn register(channel_type: &'static str, create: ChannelFactoryFn) {
-    let mut guard = PLUGINS.write().unwrap();
+    let mut guard = PLUGINS.write().unwrap_or_else(|e| e.into_inner());
     if guard.contains_key(channel_type) {
         panic!(
             "Duplicate ChannelFactory registration for type: {}",
@@ -21,11 +21,15 @@ pub fn register(channel_type: &'static str, create: ChannelFactoryFn) {
 }
 
 pub fn get_factory(channel_type: &str) -> Option<ChannelFactoryFn> {
-    PLUGINS.read().unwrap().get(channel_type).copied()
+    PLUGINS.read().unwrap_or_else(|e| e.into_inner()).get(channel_type).copied()
 }
 
 pub fn channel_types() -> Vec<&'static str> {
-    PLUGINS.read().unwrap().keys().copied().collect()
+    PLUGINS.read()
+        .unwrap_or_else(|e| e.into_inner())
+        .keys()
+        .copied()
+        .collect()
 }
 
 pub fn create(channel_type: &str, config: ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>> {
@@ -40,12 +44,6 @@ pub fn create(channel_type: &str, config: ChannelConfig) -> ChannelResult<Arc<dy
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn test_creator(_config: ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>> {
-        Err(crate::gateway::channel::ChannelError::ConfigError(
-            "test".into(),
-        ))
-    }
 
     #[test]
     fn test_unknown_channel_type() {

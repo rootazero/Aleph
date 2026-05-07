@@ -1340,7 +1340,7 @@ mod spec1_tests {
     #[async_trait::async_trait]
     impl RawMemoryStore for FakeWriter {
         async fn insert_raw_memory(&self, raw: &RawMemory) -> Result<(), crate::error::AlephError> {
-            self.0.lock().unwrap().push(raw.clone());
+            self.0.lock().unwrap_or_else(|e| e.into_inner()).push(raw.clone());
             Ok(())
         }
 
@@ -1388,7 +1388,7 @@ mod spec1_tests {
             SessionEndReason::Disconnect,
         );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let captured = fake.0.lock().unwrap();
+            let captured = fake.0.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].agent_id, "agent-x");
         assert_eq!(captured[0].session_id.as_deref(), Some("sess-y"));
@@ -1412,6 +1412,6 @@ mod spec1_tests {
             SessionEndReason::Disconnect,
         );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(fake.0.lock().unwrap().is_empty());
+            assert!(fake.0.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
     }
 }

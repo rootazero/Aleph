@@ -39,6 +39,8 @@ pub async fn handle_shutdown(request: JsonRpcRequest) -> JsonRpcResponse {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         tracing::info!("Initiating graceful shutdown via SIGTERM");
         #[cfg(unix)]
+        // SAFETY: getpid() always returns a valid PID for the current process,
+        // and SIGTERM is a standard signal that the process handles gracefully.
         unsafe {
             libc::kill(libc::getpid(), libc::SIGTERM);
         }

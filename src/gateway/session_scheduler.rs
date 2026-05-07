@@ -103,7 +103,7 @@ impl SessionScheduler {
         let session_key_str = enriched.merged.primary_context.session_key.to_key_string();
 
         let should_execute = {
-            let mut queues = self.queues.lock().unwrap();
+            let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
             let queue = queues
                 .entry(session_key_str.clone())
                 .or_insert_with(SessionQueue::new);
@@ -145,7 +145,7 @@ impl SessionScheduler {
 
         // Set active run id
         {
-            let mut queues = self.queues.lock().unwrap();
+            let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
             let queue = queues
                 .entry(session_key_str.to_string())
                 .or_insert_with(SessionQueue::new);
@@ -158,7 +158,7 @@ impl SessionScheduler {
             None => {
                 error!(agent_id = %agent_id, "Agent not found — dropping message");
                 // Clear active run
-                let mut queues = self.queues.lock().unwrap();
+                let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(queue) = queues.get_mut(session_key_str) {
                     queue.active_run_id = None;
                 }
@@ -267,7 +267,7 @@ pub struct QueueDepthFuture<'a> {
 impl<'a> QueueDepthFuture<'a> {
     /// Get the queue depth.
     pub fn get(self) -> usize {
-        let queues = self.queues.lock().unwrap();
+        let queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
         queues
             .get(&self.session_key)
             .map(|q| q.pending.len())
@@ -295,7 +295,7 @@ impl SchedulerEventListener {
     /// the next one if available.
     async fn on_run_finished(&self) {
         let next_task = {
-            let mut queues = self.queues.lock().unwrap();
+            let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(queue) = queues.get_mut(&self.session_key) {
                 queue.active_run_id = None;
 
@@ -385,7 +385,7 @@ async fn execute_next(
 
     // Set active run id
     {
-        let mut qs = queues.lock().unwrap();
+        let mut qs = queues.lock().unwrap_or_else(|e| e.into_inner());
         let queue = qs
             .entry(session_key_str.to_string())
             .or_insert_with(SessionQueue::new);
@@ -397,7 +397,7 @@ async fn execute_next(
         Some(a) => a,
         None => {
             error!(agent_id = %agent_id, "Agent not found — dropping queued message");
-            let mut qs = queues.lock().unwrap();
+            let mut qs = queues.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(queue) = qs.get_mut(session_key_str) {
                 queue.active_run_id = None;
             }

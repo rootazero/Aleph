@@ -5,7 +5,6 @@
 
 use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
 use loom::thread;
-use std::collections::HashMap;
 
 /// Verify sequence counter allocates unique values under concurrent access.
 ///
@@ -100,7 +99,7 @@ fn loom_chunk_counter_reset() {
         let incrementer = thread::spawn(move || c2.fetch_add(1, Ordering::SeqCst));
 
         resetter.join().unwrap();
-        let prev = incrementer.join().unwrap();
+        let _prev = incrementer.join().unwrap();
 
         let final_val = counter.load(Ordering::SeqCst);
         // Final value must be consistent with some valid interleaving
@@ -122,7 +121,7 @@ fn loom_execution_run_limit() {
         let runs1 = active_runs.clone();
         let acc1 = accepted.clone();
         let t1 = thread::spawn(move || {
-            let mut runs = runs1.lock().unwrap();
+            let mut runs = runs1.lock().unwrap_or_else(|e| e.into_inner());
             if runs.len() < max_runs {
                 runs.push("run_1".to_string());
                 acc1.fetch_add(1, Ordering::SeqCst);
@@ -132,7 +131,7 @@ fn loom_execution_run_limit() {
         let runs2 = active_runs.clone();
         let acc2 = accepted.clone();
         let t2 = thread::spawn(move || {
-            let mut runs = runs2.lock().unwrap();
+            let mut runs = runs2.lock().unwrap_or_else(|e| e.into_inner());
             if runs.len() < max_runs {
                 runs.push("run_2".to_string());
                 acc2.fetch_add(1, Ordering::SeqCst);
@@ -142,7 +141,7 @@ fn loom_execution_run_limit() {
         let runs3 = active_runs.clone();
         let acc3 = accepted.clone();
         let t3 = thread::spawn(move || {
-            let mut runs = runs3.lock().unwrap();
+            let mut runs = runs3.lock().unwrap_or_else(|e| e.into_inner());
             if runs.len() < max_runs {
                 runs.push("run_3".to_string());
                 acc3.fetch_add(1, Ordering::SeqCst);

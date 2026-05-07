@@ -122,20 +122,13 @@ impl Channel for QQChannel {
             account.client_secret.clone(),
         ));
 
-        api.get_access_token()
+        let token = api
+            .get_access_token()
             .await
             .map_err(|e| ChannelError::AuthFailed(format!("QQ auth failed: {e}")))?;
 
         tracing::info!("QQ bot authenticated for account {}", account.id);
         self.api_client = Some(api);
-
-        let token = self
-            .api_client
-            .as_ref()
-            .unwrap()
-            .get_access_token()
-            .await
-            .map_err(|e| ChannelError::AuthFailed(e.to_string()))?;
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<QQEvent>(100);
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);

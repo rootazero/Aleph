@@ -327,7 +327,7 @@ mod tests {
         /// Test-only: set the internal breaker state.
         #[cfg(test)]
         fn set_typing_breaker_state(&self, failures: u32, tripped_at: Option<Instant>) {
-            let mut state = self.typing_breaker.lock().unwrap();
+            let mut state = self.typing_breaker.lock().unwrap_or_else(|e| e.into_inner());
             state.consecutive_failures = failures;
             state.tripped_at = tripped_at;
         }
@@ -335,7 +335,7 @@ mod tests {
         /// Test-only: read the internal breaker state.
         #[cfg(test)]
         fn typing_breaker_snapshot(&self) -> (u32, Option<Instant>) {
-            let state = self.typing_breaker.lock().unwrap();
+            let state = self.typing_breaker.lock().unwrap_or_else(|e| e.into_inner());
             (state.consecutive_failures, state.tripped_at)
         }
     }

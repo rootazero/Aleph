@@ -116,7 +116,7 @@ impl DiscordResolver {
         &self,
     ) -> Result<Vec<(GuildSummary, Vec<ChannelSummary>)>, ChannelResolutionError> {
         {
-            let cache = self.cache.lock().unwrap();
+            let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(ref cached) = *cache {
                 return Ok(cached.channels.clone());
             }
@@ -137,7 +137,7 @@ impl DiscordResolver {
         }
 
         {
-            let mut cache = self.cache.lock().unwrap();
+            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             *cache = Some(Cache {
                 guilds,
                 channels: channels.clone(),

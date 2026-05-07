@@ -100,7 +100,6 @@ mod tests {
     use crate::gateway::execution_engine::RunState;
     use crate::gateway::media::PendingMedia;
     use crate::gateway::router::SessionKey;
-    use crate::sync_primitives::Mutex;
 
     /// Mock execution adapter for testing
     struct MockExecutionAdapter {

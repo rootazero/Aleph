@@ -46,7 +46,7 @@ impl InboundPolicy {
 mod tests {
     use super::*;
     use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
-    use crate::gateway::channel_policy::{DmPolicy, GroupPolicy};
+    use crate::gateway::channel_policy::DmPolicy;
 
     fn make_dm(sender: &str) -> InboundMessage {
         InboundMessage {

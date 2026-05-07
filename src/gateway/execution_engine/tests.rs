@@ -8,7 +8,7 @@ use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::router::SessionKey;
 
-use crate::sync_primitives::{Arc, Mutex};
+    use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 

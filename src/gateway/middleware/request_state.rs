@@ -25,7 +25,7 @@ fn state_registry() -> &'static RwLock<Option<Arc<RequestStateRegistry>>> {
 pub fn set_global_registry(registry: Arc<RequestStateRegistry>) {
     let mut guard = state_registry()
         .write()
-        .expect("STATE_REGISTRY lock poisoned");
+        .unwrap_or_else(|e| e.into_inner());
     *guard = Some(registry);
 }
 
@@ -35,7 +35,7 @@ pub fn set_global_registry(registry: Arc<RequestStateRegistry>) {
 pub fn get_global_registry() -> Option<Arc<RequestStateRegistry>> {
     let guard = state_registry()
         .read()
-        .expect("STATE_REGISTRY lock poisoned");
+        .unwrap_or_else(|e| e.into_inner());
     guard.clone()
 }
 
@@ -545,7 +545,7 @@ mod tests {
         let mut handles = vec![];
 
         // Spawn multiple tasks that insert and transition requests concurrently
-        for i in 0..10 {
+        for _ in 0..10 {
             let registry = registry.clone();
             let handle = task::spawn(async move {
                 let request_id = Uuid::new_v4();

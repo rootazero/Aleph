@@ -28,7 +28,7 @@ impl PairingTracker {
     }
 
     pub fn add(&self, sender_id: String) -> Result<(), String> {
-        let mut req = self.requests.lock().unwrap();
+        let mut req = self.requests.lock().unwrap_or_else(|e| e.into_inner());
         if req.len() >= self.max_pending {
             return Err("Max pending pairing requests reached".into());
         }
@@ -43,17 +43,17 @@ impl PairingTracker {
     }
 
     pub fn approve(&self, sender_id: &str) -> bool {
-        self.requests.lock().unwrap().remove(sender_id).is_some()
+        self.requests.lock().unwrap_or_else(|e| e.into_inner()).remove(sender_id).is_some()
     }
 
     pub fn is_approved_or_pending(&self, sender_id: &str) -> bool {
-        let req = self.requests.lock().unwrap();
+        let req = self.requests.lock().unwrap_or_else(|e| e.into_inner());
         req.contains_key(sender_id)
     }
 
     pub fn prune_expired(&self) {
         let cutoff = chrono::Utc::now() - chrono::Duration::seconds(self.ttl_secs as i64);
-        let mut req = self.requests.lock().unwrap();
+        let mut req = self.requests.lock().unwrap_or_else(|e| e.into_inner());
         req.retain(|_, v| v.created_at > cutoff);
     }
 }

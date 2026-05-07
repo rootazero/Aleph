@@ -55,14 +55,14 @@ impl WaAuthManager {
             updated_at: chrono::Utc::now().timestamp(),
             metadata: crate::secrets::types::EntryMetadata::default(),
         };
-        let mut vault = self.vault.lock().unwrap();
+        let mut vault = self.vault.lock().unwrap_or_else(|e| e.into_inner());
         vault
             .set(&self.key(), entry)
             .map_err(|e| WaAuthError::Vault(e.to_string()))
     }
 
     pub fn load(&self) -> Result<WaAuthData, WaAuthError> {
-        let vault = self.vault.lock().unwrap();
+        let vault = self.vault.lock().unwrap_or_else(|e| e.into_inner());
         let entry = vault
             .get(&self.key())
             .map_err(|_| WaAuthError::NotFound(self.account_id.clone()))?;
@@ -72,7 +72,7 @@ impl WaAuthManager {
     }
 
     pub fn exists(&self) -> bool {
-        let vault = self.vault.lock().unwrap();
+        let vault = self.vault.lock().unwrap_or_else(|e| e.into_inner());
         vault.exists(&self.key())
     }
 

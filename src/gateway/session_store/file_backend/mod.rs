@@ -55,12 +55,12 @@ impl FileSessionStore {
     }
 
     pub fn with_event_bus(self, bus: Arc<GatewayEventBus>) -> Self {
-        *self.event_bus.write().unwrap() = Some(bus);
+        *self.event_bus.write().unwrap_or_else(|e| e.into_inner()) = Some(bus);
         self
     }
 
     fn emit_session_changed(&self, key: &str, reason: &str, meta: Option<&SessionMetadata>) {
-        let bus_opt = self.event_bus.read().unwrap().clone();
+        let bus_opt = self.event_bus.read().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(bus) = bus_opt {
             let event = SessionChangedEvent {
                 session_key: key.to_string(),
