@@ -84,12 +84,19 @@ impl StageTimer {
     ///
     /// Uses the policy's warning multiplier and logging settings.
     pub fn start_with_policy(name: &str, policy: &MetricsPolicy) -> Self {
+        let warning_multiplier = if policy.warning_multiplier.is_finite()
+            && policy.warning_multiplier >= 0.0
+        {
+            policy.warning_multiplier
+        } else {
+            DEFAULT_WARNING_MULTIPLIER
+        };
         Self {
             name: name.to_string(),
             start: Instant::now(),
             metadata: None,
             target_ms: None,
-            warning_multiplier: policy.warning_multiplier,
+            warning_multiplier,
             enable_logging: policy.enable_logging,
             enable_warnings: policy.enable_warnings,
         }
@@ -160,13 +167,22 @@ impl StageTimer {
     ///
     /// This method does not stop the timer or trigger logging.
     pub fn elapsed_ms(&self) -> u64 {
-        self.start.elapsed().as_millis() as u64
+        self.start
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
     }
 }
 
 impl Drop for StageTimer {
     fn drop(&mut self) {
-        let elapsed_ms = self.start.elapsed().as_millis() as u64;
+        let elapsed_ms = self
+            .start
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
 
         // Check if we exceeded the target (if set) and warnings are enabled
         if let Some(target_ms) = self.target_ms {
@@ -360,5 +376,36 @@ mod tests {
         let timer = StageTimer::start("stop_test").with_meta("key", "value");
         let elapsed = timer.stop();
         assert!(elapsed < 10, "stop() should return elapsed time");
+    }
+
+    #[test]
+    fn test_timer_target_zero_no_warning() {
+        let timer = StageTimer::start("zero_target").with_target(0);
+        assert_eq!(timer.target_ms, Some(0));
+    }
+
+    #[test]
+    fn test_timer_invalid_policy_multiplier() {
+        let mut policy = MetricsPolicy::default();
+        policy.warning_multiplier = f64::NAN;
+        let timer = StageTimer::start_with_policy("nan_test", &policy);
+        assert_eq!(timer.warning_multiplier, DEFAULT_WARNING_MULTIPLIER);
+
+        policy.warning_multiplier = -1.0;
+        let timer = StageTimer::start_with_policy("neg_test", &policy);
+        assert_eq!(timer.warning_multiplier, DEFAULT_WARNING_MULTIPLIER);
+    }
+
+    #[test]
+    fn test_timer_with_empty_metadata() {
+        let timer = StageTimer::start("empty_meta_test");
+        assert!(timer.metadata.is_none());
+    }
+
+    #[test]
+    fn test_timer_stop_suppresses_logging() {
+        let timer = StageTimer::start("suppress_test");
+        let elapsed = timer.stop();
+        assert!(elapsed < 10);
     }
 }
