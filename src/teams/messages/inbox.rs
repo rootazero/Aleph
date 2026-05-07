@@ -3,7 +3,7 @@
 //! Wraps [`MessageStore`] with convenience methods for reading messages,
 //! optionally marking them as read and logging read events.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::Serialize;
 

@@ -377,7 +377,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     match alephcore::utils::paths::get_config_dir() {
         Ok(config_dir) => {
             if let Err(e) = std::fs::create_dir_all(&config_dir) {
-                eprintln!("Error: cannot create config directory {}: {}", config_dir.display(), e);
+                eprintln!(
+                    "Error: cannot create config directory {}: {}",
+                    config_dir.display(),
+                    e
+                );
                 std::process::exit(1);
             }
             // Deploy config guide files for LLM self-management
@@ -662,9 +666,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // SQLite log lives in a separate DB from the main SessionStore; there
     // is no reason to couple them. (Prior code gated the build behind
     // `sqlite_sm`, which left `file` deployments without an Orchestrator.)
-    let session_service_for_orchestrator = build_sqlite_session_service(
-        &alephcore::gateway::SessionManagerConfig::default().db_path,
-    );
+    let session_service_for_orchestrator =
+        build_sqlite_session_service(&alephcore::gateway::SessionManagerConfig::default().db_path);
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
         let mut sm = sm
             .with_raw_memory_writer(
@@ -1003,75 +1006,80 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.artifact_store.clone(),
         agent_result.event_store.clone(),
     ) {
-        let _ = (|| -> () {
+        let _ = (|| {
             use alephcore::event::{
                 AlephEvent, EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
             };
             use alephcore::teams::events::TeamEventLogger;
             use alephcore::teams::kanban::unblocker::KanbanAutoUnblocker;
 
-            let artifact_store_concrete =
-                match Arc::downcast::<alephcore::teams::artifacts::SqliteArtifactStore>(artifact_store)
-                {
-                    Ok(s) => s,
-                    Err(_) => {
-                        tracing::error!("artifact_store is not SqliteArtifactStore; skipping KanbanAutoUnblocker registration");
-                        return;
-                    }
-                };
+            let artifact_store_concrete = match Arc::downcast::<
+                alephcore::teams::artifacts::SqliteArtifactStore,
+            >(artifact_store)
+            {
+                Ok(s) => s,
+                Err(_) => {
+                    tracing::error!("artifact_store is not SqliteArtifactStore; skipping KanbanAutoUnblocker registration");
+                    return;
+                }
+            };
             let kanban_handler = Arc::new(KanbanAutoUnblocker::new(artifact_store_concrete));
             let team_logger = Arc::new(TeamEventLogger::new(event_store));
             let dummy_bus = EventBus::new();
             let ctx = EventContext::new(dummy_bus);
 
-        let kanban_handler_clone = kanban_handler.clone();
-        let ctx_kanban = ctx.clone();
-        let _kanban_sub = GlobalBus::global()
-            .subscribe_async(EventFilter::new(vec![EventType::TeamTaskCompleted]), move |global_event| {
-                let AlephEvent::TeamTaskCompleted { team_id, task_id, result_summary } = global_event.event else {
-                    return;
-                };
-                let handler = kanban_handler_clone.clone();
-                let task_id_str = task_id.clone();
-                let ctx = ctx_kanban.clone();
-                tokio::spawn(async move {
-                    match handler.handle(&AlephEvent::TeamTaskCompleted { team_id, task_id, result_summary }, &ctx).await {
-                        Ok(_) => {},
-                        Err(e) => tracing::debug!(handler = handler.name(), task_id = %task_id_str, error = %e, "KanbanAutoUnblocker handle error"),
-                    }
-                });
-            })
-            .await;
-
-        let team_logger_clone = team_logger.clone();
-        let ctx_team = ctx.clone();
-        let _team_sub = GlobalBus::global()
-            .subscribe_async(
-                EventFilter::new(vec![
-                    EventType::TeamCreated,
-                    EventType::TeamMemberAdded,
-                    EventType::TeamMemberRemoved,
-                    EventType::TeamTaskAssigned,
-                    EventType::TeamTaskUpdated,
-                    EventType::TeamTaskCompleted,
-                    EventType::TeamDisbanded,
-                    EventType::TeamMessageSent,
-                ]),
-                move |global_event| {
-                    let handler = team_logger_clone.clone();
-                    let event = global_event.event.clone();
-                    let ctx = ctx_team.clone();
+            let kanban_handler_clone = kanban_handler.clone();
+            let ctx_kanban = ctx.clone();
+            tokio::spawn(async move {
+                let _kanban_sub = GlobalBus::global()
+                .subscribe_async(EventFilter::new(vec![EventType::TeamTaskCompleted]), move |global_event| {
+                    let AlephEvent::TeamTaskCompleted { team_id, task_id, result_summary } = global_event.event else {
+                        return;
+                    };
+                    let handler = kanban_handler_clone.clone();
+                    let task_id_str = task_id.clone();
+                    let ctx = ctx_kanban.clone();
                     tokio::spawn(async move {
-                        match handler.handle(&event, &ctx).await {
+                        match handler.handle(&AlephEvent::TeamTaskCompleted { team_id, task_id, result_summary }, &ctx).await {
                             Ok(_) => {},
-                            Err(e) => tracing::warn!(handler = handler.name(), error = %e, "TeamEventLogger handle error"),
+                            Err(e) => tracing::debug!(handler = handler.name(), task_id = %task_id_str, error = %e, "KanbanAutoUnblocker handle error"),
                         }
                     });
-                },
-            )
-            .await;
+                })
+                .await;
 
-        tracing::info!("Team event handlers registered (KanbanAutoUnblocker, TeamEventLogger)");
+                let team_logger_clone = team_logger.clone();
+                let ctx_team = ctx.clone();
+                let _team_sub = GlobalBus::global()
+                .subscribe_async(
+                    EventFilter::new(vec![
+                        EventType::TeamCreated,
+                        EventType::TeamMemberAdded,
+                        EventType::TeamMemberRemoved,
+                        EventType::TeamTaskAssigned,
+                        EventType::TeamTaskUpdated,
+                        EventType::TeamTaskCompleted,
+                        EventType::TeamDisbanded,
+                        EventType::TeamMessageSent,
+                    ]),
+                    move |global_event| {
+                        let handler = team_logger_clone.clone();
+                        let event = global_event.event.clone();
+                        let ctx = ctx_team.clone();
+                        tokio::spawn(async move {
+                            match handler.handle(&event, &ctx).await {
+                                Ok(_) => {},
+                                Err(e) => tracing::warn!(handler = handler.name(), error = %e, "TeamEventLogger handle error"),
+                            }
+                        });
+                    },
+                )
+                .await;
+
+                tracing::info!(
+                    "Team event handlers registered (KanbanAutoUnblocker, TeamEventLogger)"
+                );
+            });
         })();
     }
 

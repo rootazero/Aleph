@@ -229,13 +229,20 @@ impl KanbanBoard for SqliteKanbanBoard {
             )
             .map_err(db_err)?;
 
-        let mut blocked_by: Vec<String> = serde_json::from_str(&blocked_by_str).unwrap_or_default();
+        let mut blocked_by: Vec<String> = serde_json::from_str(&blocked_by_str).map_err(|e| {
+            db_err(format!(
+                "invalid blocked_by JSON for artifact {artifact_id}: {e}"
+            ))
+        })?;
         if !blocked_by.contains(&depends_on.to_string()) {
             blocked_by.push(depends_on.to_string());
         }
 
-        let new_blocked_by =
-            serde_json::to_string(&blocked_by).unwrap_or_else(|_| "[]".to_string());
+        let new_blocked_by = serde_json::to_string(&blocked_by).map_err(|e| {
+            db_err(format!(
+                "failed to serialize blocked_by for artifact {artifact_id}: {e}"
+            ))
+        })?;
 
         conn.execute(
             "UPDATE task_artifacts SET blocked_by = ?1, status = 'blocked' WHERE id = ?2",

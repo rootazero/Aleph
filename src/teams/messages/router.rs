@@ -3,7 +3,7 @@
 //! Provides a higher-level API over [`MessageStore`] that automatically logs
 //! events and checks thread-based escalation rules to notify the team leader.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::{Deserialize, Serialize};
 

@@ -3,7 +3,7 @@
 //! Uses `Arc<tokio::sync::Mutex<rusqlite::Connection>>` for thread-safe
 //! async access to the team management tables.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};

@@ -2,8 +2,8 @@
 // KanbanAutoUnblocker — EventHandler for automatic task dependency unblocking
 // ---------------------------------------------------------------------------
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use std::sync::Arc;
 
 use crate::event::{AlephEvent, EventContext, EventHandler, EventType, HandlerError};
 use crate::teams::artifacts::SqliteArtifactStore;
