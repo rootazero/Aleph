@@ -89,13 +89,28 @@ pub(crate) fn compress_tool_output(tool_name: &str, output: &str) -> String {
 /// If the output looks like base64 data, replaces it entirely.
 /// Otherwise keeps the first few lines as metadata.
 fn compress_screenshot(output: &str) -> String {
-    // Pure base64 or data URI — discard entirely
+    // Pure base64 or data URI — discard entirely.
+    // We require at least one base64-specific character (+, /, =) in the
+    // prefix, or a trailing '=' padding, to avoid treating long alphanumeric
+    // text (e.g. logs, hex dumps) as base64.
+    let prefix_is_base64_chars = || {
+        output
+            .bytes()
+            .take(128)
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
+    };
+    let prefix_has_base64_marker = || {
+        output
+            .bytes()
+            .take(128)
+            .any(|b| b == b'+' || b == b'/' || b == b'=')
+    };
+    let has_base64_padding = || output.ends_with('=');
+
     if output.starts_with("data:image/")
         || (output.len() > 100
-            && output
-                .bytes()
-                .take(128)
-                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='))
+            && prefix_is_base64_chars()
+            && (prefix_has_base64_marker() || has_base64_padding()))
     {
         return "[Screenshot captured successfully]".to_owned();
     }
@@ -140,7 +155,18 @@ fn compress_snapshot(output: &str) -> String {
     }
 
     if kept.is_empty() {
-        return compress_generic(output, 5 * 1024);
+        // No interactive elements found — keep first 20 lines as structural summary
+        // rather than a raw byte truncation so element types are still visible.
+        let summary_lines = lines.len().min(20);
+        let mut result = lines[..summary_lines].join("\n");
+        if lines.len() > summary_lines {
+            result.push_str(&format!(
+                "\n[Snapshot compressed: no interactive elements; kept first {} of {} lines]",
+                summary_lines,
+                lines.len()
+            ));
+        }
+        return result;
     }
 
     let kept_count = kept.len();
@@ -181,8 +207,11 @@ fn compress_network_requests(output: &str) -> String {
             .unwrap_or("unknown");
         let status = entry
             .get("status")
-            .and_then(|v| v.as_u64())
-            .map(|s| s.to_string())
+            .and_then(|v| {
+                v.as_u64()
+                    .map(|s| s.to_string())
+                    .or_else(|| v.as_str().map(|s| s.to_string()))
+            })
             .unwrap_or_else(|| "pending".to_owned());
         lines.push(format!("{} {} → {}", method, url, status));
     }
@@ -229,7 +258,7 @@ fn compress_generic(output: &str, max_bytes: usize) -> String {
         end -= 1;
     }
 
-    let mut result = output.get(..end).unwrap_or(output).to_owned();
+    let mut result = output[..end].to_owned();
     result.push_str(&format!(
         "\n[... output truncated, showing first {} bytes of {} total]",
         end, total,
@@ -279,7 +308,8 @@ mod tests {
 
     #[test]
     fn test_compress_screenshot_replaces_raw_base64() {
-        let raw_b64 = "A".repeat(50_000);
+        // Must include at least one base64-specific char (+, /, =) to be recognised
+        let raw_b64 = format!("{}=", "A".repeat(50_000));
         let result = compress_tool_output("take_screenshot", &raw_b64);
         assert_eq!(result, "[Screenshot captured successfully]");
     }
@@ -290,6 +320,18 @@ mod tests {
         let output = "OK";
         let result = compress_tool_output("take_screenshot", output);
         assert_eq!(result, "OK");
+    }
+
+    #[test]
+    fn test_compress_screenshot_long_alphanumeric_not_base64() {
+        // Long pure-alphanumeric text (e.g. hex dump, log) should NOT be
+        // mistaken for base64 — it lacks +, /, or = and does not end with =.
+        let output = "A".repeat(50_000);
+        let result = compress_tool_output("take_screenshot", &output);
+        // Must NOT be replaced with the base64 placeholder
+        assert!(!result.contains("Screenshot captured successfully"));
+        // Single-line input without newlines is preserved as-is (1 line <= 5)
+        assert_eq!(result, output);
     }
 
     #[test]
@@ -351,6 +393,22 @@ mod tests {
         assert_eq!(compress_tool_output("take_snapshot", output), output);
     }
 
+    #[test]
+    fn test_compress_snapshot_fallback_no_interactive() {
+        // Large snapshot with no interactive elements should keep first 20 lines
+        let lines: Vec<String> = (0..200)
+            .map(|i| format!("  paragraph \"Content line {}\"", i))
+            .collect();
+        let input = lines.join("\n");
+        assert!(input.len() > 4 * 1024);
+
+        let result = compress_tool_output("take_snapshot", &input);
+        assert!(result.contains("paragraph \"Content line 0\""));
+        assert!(result.contains("paragraph \"Content line 19\""));
+        assert!(!result.contains("paragraph \"Content line 20\""));
+        assert!(result.contains("no interactive elements"));
+    }
+
     // --- evaluate_script ---
 
     #[test]
@@ -395,6 +453,18 @@ mod tests {
     fn test_compress_network_requests_empty_array() {
         let result = compress_tool_output("list_network_requests", "[]");
         assert_eq!(result, "[No network requests captured]");
+    }
+
+    #[test]
+    fn test_compress_network_requests_string_status() {
+        // Some DevTools implementations return status as a string.
+        let entries = serde_json::json!([
+            {"method": "GET", "url": "https://example.com/", "status": "200"},
+            {"method": "POST", "url": "https://example.com/api", "status": "pending"}
+        ]);
+        let result = compress_tool_output("list_network_requests", &entries.to_string());
+        assert!(result.contains("200"));
+        assert!(result.contains("pending"));
     }
 
     // --- console messages ---
