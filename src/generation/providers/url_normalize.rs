@@ -59,7 +59,12 @@ impl ResolvedUrl {
 pub fn resolve_base_url(url: &str) -> ResolvedUrl {
     let trimmed = url.trim_end_matches('/');
     if needs_auto_complete(trimmed) {
-        let base = trimmed.trim_end_matches("/v1").trim_end_matches('/');
+        let base = if trimmed.ends_with("/v1") {
+            &trimmed[..trimmed.len() - 3]
+        } else {
+            trimmed
+        }
+        .trim_end_matches('/');
         ResolvedUrl::Standard(base.to_string())
     } else {
         ResolvedUrl::Custom(trimmed.to_string())

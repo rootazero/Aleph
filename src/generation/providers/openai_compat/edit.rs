@@ -59,7 +59,7 @@ pub(crate) async fn edit_image_impl(
     // Add prompt
     form = form.text("prompt", request.prompt.clone());
 
-    // Add image - handle both base64 and URL
+    // Add image - handle URL, data URI, or raw base64
     if reference_image.starts_with("http://") || reference_image.starts_with("https://") {
         // Download image from URL first
         let image_bytes = provider
@@ -78,9 +78,19 @@ pub(crate) async fn edit_image_impl(
             .map_err(|e| GenerationError::invalid_parameters(e.to_string(), None))?;
         form = form.part("image", part);
     } else {
-        // Assume base64-encoded data
+        // Extract base64 from data URI or assume raw base64
+        let base64_data = if let Some(idx) = reference_image.find(",") {
+            if reference_image.starts_with("data:image/") {
+                &reference_image[idx + 1..]
+            } else {
+                reference_image
+            }
+        } else {
+            reference_image
+        };
+
         let image_bytes = base64::engine::general_purpose::STANDARD
-            .decode(reference_image)
+            .decode(base64_data)
             .map_err(|e| {
                 GenerationError::invalid_parameters(
                     format!("Invalid base64 image data: {}", e),
@@ -239,18 +249,21 @@ pub(crate) async fn edit_image_impl(
             .data
             .iter()
             .skip(1)
-            .filter_map(|img| {
-                if let Some(url) = &img.url {
-                    Some(GenerationData::url(url.clone()))
-                } else if let Some(b64) = &img.b64_json {
-                    base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .ok()
-                        .map(GenerationData::bytes)
-                } else {
-                    None
-                }
-            })
+                .filter_map(|img| {
+                    if let Some(url) = &img.url {
+                        Some(GenerationData::url(url.clone()))
+                    } else if let Some(b64) = &img.b64_json {
+                        match base64::engine::general_purpose::STANDARD.decode(b64) {
+                            Ok(bytes) => Some(GenerationData::bytes(bytes)),
+                            Err(e) => {
+                                error!(error = %e, "Failed to decode base64 for additional image");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                })
             .collect();
 
         if !additional.is_empty() {

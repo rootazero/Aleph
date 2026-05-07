@@ -170,7 +170,7 @@ impl GenerationProviderRegistry {
     /// ```
     pub fn get_or_err(&self, name: &str) -> GenerationResult<Arc<dyn GenerationProvider>> {
         self.get(name)
-            .ok_or_else(|| GenerationError::internal(format!("Provider '{}' not found", name)))
+            .ok_or_else(|| GenerationError::model_not_found(name, "registry"))
     }
 
     /// Get all registered provider names in sorted order
@@ -359,10 +359,12 @@ impl GenerationProviderRegistry {
     pub fn get_voices_for_provider(&self, provider_id: &str) -> Vec<VoiceInfo> {
         if let Some(provider) = self.get(provider_id) {
             let voices = provider.list_voices();
-            if !voices.is_empty() {
-                return voices;
+            if voices.is_empty() {
+                tracing::debug!("Provider '{}' has no voices configured", provider_id);
             }
+            return voices;
         }
+        tracing::warn!("Provider '{}' not found in registry", provider_id);
         vec![]
     }
 

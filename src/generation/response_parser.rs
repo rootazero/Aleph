@@ -35,6 +35,9 @@ pub struct ParseResult {
 
 // Regex pattern for [GENERATE:type:provider:model:prompt]
 static GENERATE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    // SAFETY: This regex pattern is statically defined and known to be valid.
+    // A failure here indicates a programming error in the pattern itself,
+    // which would be caught by any test exercising the parser.
     Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]")
         .expect("GENERATE_PATTERN regex is valid and statically defined")
 });

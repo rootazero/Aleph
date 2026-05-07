@@ -199,9 +199,9 @@ impl StabilityImageProvider {
             });
         }
 
-        // Get dimensions (use defaults if not provided)
-        let width = request.params.width.unwrap_or(DEFAULT_WIDTH);
-        let height = request.params.height.unwrap_or(DEFAULT_HEIGHT);
+        // Get dimensions (use defaults if not provided or zero)
+        let width = request.params.width.filter(|&w| w > 0).unwrap_or(DEFAULT_WIDTH);
+        let height = request.params.height.filter(|&h| h > 0).unwrap_or(DEFAULT_HEIGHT);
 
         // Get CFG scale (guidance_scale maps to cfg_scale)
         let cfg_scale = request.params.guidance_scale.unwrap_or(DEFAULT_CFG_SCALE);

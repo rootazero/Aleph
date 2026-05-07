@@ -173,9 +173,9 @@ impl OpenAiImageProvider {
             .clone()
             .unwrap_or_else(|| self.model.clone());
 
-        // Build size string from width/height if provided
+        // Build size string from width/height if both are provided and positive
         let size = match (request.params.width, request.params.height) {
-            (Some(w), Some(h)) => Some(format!("{}x{}", w, h)),
+            (Some(w), Some(h)) if w > 0 && h > 0 => Some(format!("{}x{}", w, h)),
             _ => None,
         };
 
@@ -446,10 +446,13 @@ impl GenerationProvider for OpenAiImageProvider {
                         if let Some(url) = &img.url {
                             Some(GenerationData::url(url.clone()))
                         } else if let Some(b64) = &img.b64_json {
-                            base64::engine::general_purpose::STANDARD
-                                .decode(b64)
-                                .ok()
-                                .map(GenerationData::bytes)
+                            match base64::engine::general_purpose::STANDARD.decode(b64) {
+                                Ok(bytes) => Some(GenerationData::bytes(bytes)),
+                                Err(e) => {
+                                    error!(error = %e, "Failed to decode base64 for additional image");
+                                    None
+                                }
+                            }
                         } else {
                             None
                         }

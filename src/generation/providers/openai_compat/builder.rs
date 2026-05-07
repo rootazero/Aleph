@@ -178,7 +178,7 @@ impl OpenAiCompatProviderBuilder {
             .supported_types
             .first()
             .copied()
-            .unwrap_or(GenerationType::Image);
+            .unwrap();
         let resolved =
             crate::generation::providers::url_normalize::resolve_base_url(&self.base_url);
         let endpoint = resolved.primary_endpoint(gen_type);

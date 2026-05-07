@@ -539,8 +539,8 @@ impl GenerationProvider for MockGenerationProvider {
 /// let provider = create_mock_generation_provider();
 /// assert_eq!(provider.name(), "mock");
 /// ```
-pub fn create_mock_generation_provider() -> std::sync::Arc<dyn GenerationProvider> {
-    std::sync::Arc::new(MockGenerationProvider::new("mock"))
+pub fn create_mock_generation_provider() -> crate::sync_primitives::Arc<dyn GenerationProvider> {
+    crate::sync_primitives::Arc::new(MockGenerationProvider::new("mock"))
 }
 
 #[cfg(test)]

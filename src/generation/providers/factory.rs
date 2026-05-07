@@ -70,7 +70,7 @@ use crate::sync_primitives::Arc;
 pub fn create_provider(
     name: &str,
     config: &GenerationProviderConfig,
-    _gen_type: GenerationType,
+    gen_type: GenerationType,
 ) -> GenerationResult<Arc<dyn GenerationProvider>> {
     let resolved_url = config.base_url.as_deref().map(resolve_base_url);
 
@@ -195,6 +195,13 @@ pub fn create_provider(
             ));
         }
     };
+
+    if !provider.supports(gen_type) {
+        return Err(GenerationError::unsupported_generation_type(
+            gen_type.to_string(),
+            name,
+        ));
+    }
 
     Ok(provider)
 }
