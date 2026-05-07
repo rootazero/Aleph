@@ -6,10 +6,10 @@
 //! The `DedupEngine` stores embedding vectors in the heartbeat SQLite DB
 //! and compares them against recent history within a configurable time window.
 
-use std::sync::Arc;
-
 use rusqlite::{params, Connection};
 use tokio::sync::Mutex;
+
+use crate::sync_primitives::Arc;
 
 use crate::memory::EmbeddingProvider;
 use crate::tasks::heartbeat::config::DedupConfig;
@@ -71,12 +71,13 @@ impl DedupEngine {
         let conn = match Connection::open_in_memory() {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(error = %e, "failed to open in-memory connection for noop DedupEngine");
+                tracing::warn!(error = %e, "failed to open in-memory connection for noop DedupEngine, using no-op fallback");
                 return Self {
                     config,
-                    conn: Arc::new(Mutex::new(Connection::open_in_memory().expect(
-                        "failed to open in-memory connection for noop DedupEngine fallback",
-                    ))),
+                    conn: Arc::new(Mutex::new(Connection::open_in_memory().unwrap_or_else(|e2| {
+                        tracing::error!(error = %e2, "critical: failed to open in-memory connection for noop DedupEngine fallback");
+                        panic!("failed to open in-memory SQLite connection: {e2}")
+                    }))),
                     embedding_provider: None,
                 };
             }

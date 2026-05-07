@@ -2,9 +2,7 @@
 //!
 //! Holds the shared store, config, and lifecycle flags.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 use crate::tasks::heartbeat::config::HeartbeatConfig;
 use crate::tasks::heartbeat::store::HeartbeatStore;
 

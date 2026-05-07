@@ -7,9 +7,9 @@
 //! This model minimizes lock hold time — the lock is only held during
 //! brief metadata updates, never during actual job execution.
 
-use std::sync::Arc;
-
 use tracing::warn;
+
+use crate::sync_primitives::Arc;
 
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, RunStatus, TriggerSource};
 use crate::tasks::cron::history::CronRunRecord;

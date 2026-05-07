@@ -1,8 +1,8 @@
 //! Restart recovery: clear stale running markers and catch up missed jobs.
 
-use std::sync::Arc;
-
 use tracing::info;
+
+use crate::sync_primitives::Arc;
 
 use crate::tasks::cron::service::ops::recompute_next_run_full;
 use crate::tasks::cron::store::CronStore;

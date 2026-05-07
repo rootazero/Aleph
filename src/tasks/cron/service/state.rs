@@ -2,9 +2,7 @@
 //!
 //! Holds the shared store, clock, config, and lifecycle flags.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 use crate::tasks::cron::config::CronConfig;
 use crate::tasks::cron::store::CronStore;
 use crate::tasks::shared::clock::Clock;

@@ -5,10 +5,9 @@
 //! optionally triggers L2 agent analysis, handles dedup and delivery, and writes
 //! back results.
 
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-
 use futures::future::join_all;
+
+use crate::sync_primitives::{Arc, Ordering};
 use tokio::sync::Semaphore;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
@@ -103,11 +102,13 @@ pub async fn run_heartbeat_loop(
             let mut handles = Vec::with_capacity(due_tasks.len());
 
             for (task, wake_reason) in due_tasks {
-                let permit = semaphore
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .expect("semaphore should not be closed since we just created it");
+                let permit = match semaphore.clone().acquire_owned().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!(error = %e, "failed to acquire semaphore permit");
+                        continue;
+                    }
+                };
                 let ctx = ctx.clone();
                 let task_id = task.id.clone();
                 handles.push(tokio::spawn(async move {

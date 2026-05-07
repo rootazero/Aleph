@@ -11,8 +11,9 @@ pub mod service;
 pub mod store;
 pub mod wake;
 
-use std::sync::Arc;
 use tokio::sync::Mutex;
+
+use crate::sync_primitives::Arc;
 
 use crate::tasks::heartbeat::config::{HeartbeatConfig, HeartbeatTask, HeartbeatTaskView};
 use crate::tasks::heartbeat::service::ops;

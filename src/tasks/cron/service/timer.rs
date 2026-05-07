@@ -7,9 +7,9 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-
 use tracing::{debug, error, info};
+
+use crate::sync_primitives::Arc;
 
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, SessionTarget};
 use crate::tasks::cron::service::concurrency::{phase1_mark_due_jobs, phase3_writeback};
@@ -164,7 +164,9 @@ pub async fn run_worker_pool(
     }
 
     for handle in handles {
-        let _ = handle.await;
+        if let Err(e) = handle.await {
+            error!(error = %e, "cron worker task panicked");
+        }
     }
 
     let guard = results.lock().await;

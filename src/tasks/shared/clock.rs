@@ -40,7 +40,7 @@ impl Clock for SystemClock {
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod testing {
     use super::*;
-    use std::sync::atomic::{AtomicI64, Ordering};
+    use crate::sync_primitives::{AtomicI64, Ordering};
 
     /// A fake clock whose time is controlled explicitly.
     ///

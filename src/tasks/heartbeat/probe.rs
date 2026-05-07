@@ -3,9 +3,9 @@
 //! Executes tool probes and evaluates trigger conditions to determine
 //! whether L2 agent analysis should be triggered.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
+
+use crate::sync_primitives::Arc;
 use serde_json::Value;
 
 use crate::executor::{BuiltinToolRegistry, ToolRegistry};
