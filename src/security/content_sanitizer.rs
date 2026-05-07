@@ -19,17 +19,29 @@ pub enum ContentSource {
 impl ContentSource {
     fn as_label(&self) -> String {
         match self {
-            ContentSource::WebFetch { url } => format!("web_fetch url=\"{}\"", url),
-            ContentSource::McpTool { server, tool } => {
-                format!("mcp_tool server=\"{}\" tool=\"{}\"", server, tool)
+            ContentSource::WebFetch { url } => {
+                format!("web_fetch url=\"{}\"", url.replace('\"', "&quot;"))
             }
-            ContentSource::Webhook { sender } => format!("webhook sender=\"{}\"", sender),
+            ContentSource::McpTool { server, tool } => {
+                format!(
+                    "mcp_tool server=\"{}\" tool=\"{}\"",
+                    server.replace('\"', "&quot;"),
+                    tool.replace('\"', "&quot;")
+                )
+            }
+            ContentSource::Webhook { sender } => {
+                format!("webhook sender=\"{}\"", sender.replace('\"', "&quot;"))
+            }
             ContentSource::Email { from, subject } => {
-                format!("email from=\"{}\" subject=\"{}\"", from, subject)
+                format!(
+                    "email from=\"{}\" subject=\"{}\"",
+                    from.replace('\"', "&quot;"),
+                    subject.replace('\"', "&quot;")
+                )
             }
             ContentSource::BrowserContent => "browser_content".to_string(),
             ContentSource::UserUpload { filename } => {
-                format!("user_upload filename=\"{}\"", filename)
+                format!("user_upload filename=\"{}\"", filename.replace('\"', "&quot;"))
             }
         }
     }

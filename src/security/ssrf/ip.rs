@@ -117,21 +117,11 @@ fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
     }
 
     // ::x.x.x.x — IPv4-compatible (deprecated, RFC 4291 section 2.5.5.1)
-    // All first 96 bits are zero, and last 32 bits are the IPv4 address.
-    // Exclude ::0 and ::1 which are unspecified/loopback, not embedded IPv4.
-    if segments[0] == 0
-        && segments[1] == 0
-        && segments[2] == 0
-        && segments[3] == 0
-        && segments[4] == 0
-        && segments[5] == 0
-        && segments[6] == 0
+    // First 96 bits (segments 0–5) are zero; last 32 bits (segments 6–7) hold the IPv4.
+    // segments[6] != 0 excludes :: and ::1, which are handled by is_loopback / is_unspecified.
+    if segments[0..6] == [0, 0, 0, 0, 0, 0] && segments[6] != 0
     {
-        // Only treat as embedded if there's a non-trivial IPv4 (not ::0 or ::1)
-        let v4 = Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]);
-        if !v4.is_unspecified() && !v4.is_loopback() {
-            return Some(v4);
-        }
+        return Some(Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]));
     }
 
     None
@@ -386,6 +376,24 @@ mod tests {
     fn allows_public_ipv6() {
         // Google public DNS IPv6
         let addr: Ipv6Addr = "2001:4860:4860::8888".parse().unwrap();
+        assert!(!is_blocked_ipv6(addr));
+    }
+
+    #[test]
+    fn blocks_ipv4_compatible_loopback() {
+        let addr: Ipv6Addr = "::127.0.0.1".parse().unwrap();
+        assert!(is_blocked_ipv6(addr));
+    }
+
+    #[test]
+    fn blocks_ipv4_compatible_private() {
+        let addr: Ipv6Addr = "::10.0.0.1".parse().unwrap();
+        assert!(is_blocked_ipv6(addr));
+    }
+
+    #[test]
+    fn allows_ipv4_compatible_public() {
+        let addr: Ipv6Addr = "::8.8.8.8".parse().unwrap();
         assert!(!is_blocked_ipv6(addr));
     }
 

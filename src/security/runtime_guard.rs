@@ -384,17 +384,14 @@ impl RuntimeSecurityGuard {
             });
         }
 
-        if exec_scan.has_warnings() {
+        let exec_warned = exec_scan.has_warnings();
+        if exec_warned {
             self.log_audit(
                 context,
                 AuditEventType::LeakWarning,
                 AuditSeverity::Warn,
                 "inbound leak detector warning".to_string(),
             );
-            return Ok(GuardResult::Warned {
-                text: text.to_string(),
-                warnings: vec!["Inbound leak detector warning".to_string()],
-            });
         }
 
         // Inbound PII filtering: scrub sensitive data echoed back by LLM
@@ -432,6 +429,13 @@ impl RuntimeSecurityGuard {
                     });
                 }
             }
+        }
+
+        if exec_warned {
+            return Ok(GuardResult::Warned {
+                text: text.to_string(),
+                warnings: vec!["Inbound leak detector warning".to_string()],
+            });
         }
 
         Ok(GuardResult::Clean {
