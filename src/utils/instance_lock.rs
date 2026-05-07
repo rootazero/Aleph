@@ -86,11 +86,13 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
             let mut buf = String::new();
             file.seek(SeekFrom::Start(0))?;
             file.read_to_string(&mut buf)?;
-            let pid: i32 = buf.trim().parse().unwrap_or(0);
-            if is_process_alive(pid) {
+            let pid: i32 = buf.trim().parse().unwrap_or(-1);
+            if pid > 0 && is_process_alive(pid) {
                 Ok(AcquireOutcome::HeldByLive { pid, lock_path })
-            } else {
+            } else if pid > 0 {
                 Ok(AcquireOutcome::HeldByOrphaned { pid, lock_path })
+            } else {
+                Ok(AcquireOutcome::HeldByLive { pid: 0, lock_path })
             }
         }
     }
@@ -103,7 +105,11 @@ pub fn diagnose_holder(data_dir: &Path) -> Option<HolderDiagnostic> {
     let mut file = std::fs::File::open(&lock_path).ok()?;
     let mut buf = String::new();
     file.read_to_string(&mut buf).ok()?;
-    let pid: i32 = buf.trim().parse().ok()?;
+    let trimmed = buf.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let pid: i32 = trimmed.parse().ok()?;
     Some(HolderDiagnostic {
         pid,
         process_alive: is_process_alive(pid),

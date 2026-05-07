@@ -8,32 +8,55 @@
 //! crosses a filesystem boundary.
 
 use crate::error::AlephError;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::fs;
 
 /// Write `content` atomically to `path` using a temp-file-and-rename strategy.
 /// Readers either see the previous complete content or the new complete content,
 /// never a half-written file.
 ///
-/// Implementation: write to `<path>.tmp` first, then rename. POSIX rename is
-/// atomic within a single filesystem, so readers either see the old file or
-/// the new file but never a partial write.
+/// Implementation: write to a randomly-named temp file in the same directory,
+/// fsync, then rename. POSIX rename is atomic within a single filesystem,
+/// so readers either see the old file or the new file but never a partial write.
 pub async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephError> {
-    let mut tmp_os = path.as_os_str().to_owned();
-    tmp_os.push(".tmp");
-    let tmp = PathBuf::from(tmp_os);
-    fs::write(&tmp, content)
-        .await
+    let parent = path.parent().ok_or_else(|| AlephError::ConfigError {
+        message: format!("Path has no parent directory: {path:?}"),
+        suggestion: None,
+    })?;
+
+    let tmp = tempfile::Builder::new()
+        .prefix(".aleph_atomic_")
+        .suffix(".tmp")
+        .tempfile_in(parent)
         .map_err(|e| AlephError::ConfigError {
-            message: format!("Failed to write {tmp:?}: {e}"),
+            message: format!("Failed to create temp file: {e}"),
             suggestion: None,
         })?;
-    fs::rename(&tmp, path)
+    let tmp_path = tmp.path().to_path_buf();
+
+    fs::write(&tmp_path, content)
         .await
         .map_err(|e| AlephError::ConfigError {
-            message: format!("Failed to rename {tmp:?} -> {path:?}: {e}"),
+            message: format!("Failed to write {tmp_path:?}: {e}"),
             suggestion: None,
         })?;
+
+    let file = fs::File::open(&tmp_path).await.map_err(|e| AlephError::ConfigError {
+        message: format!("Failed to open temp file for sync: {e}"),
+        suggestion: None,
+    })?;
+    file.sync_all().await.map_err(|e| AlephError::ConfigError {
+        message: format!("Failed to sync temp file: {e}"),
+        suggestion: None,
+    })?;
+
+    fs::rename(&tmp_path, path)
+        .await
+        .map_err(|e| AlephError::ConfigError {
+            message: format!("Failed to rename {tmp_path:?} -> {path:?}: {e}"),
+            suggestion: None,
+        })?;
+
     Ok(())
 }
 

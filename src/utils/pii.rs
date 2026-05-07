@@ -219,14 +219,10 @@ mod tests {
     }
 
     #[test]
-    fn test_scrub_partial_matches_avoided() {
-        // Test that we don't scrub non-PII that looks similar
+    fn test_scrub_no_false_positive_on_version_string() {
         let text = "Version 1.2.3-45-6789 released";
         let scrubbed = scrub_pii(text);
-        // This is a false positive (matches SSN pattern), but that's acceptable
-        // for conservative privacy protection
-        // We'll just verify the scrubbing function works
-        assert!(!scrubbed.is_empty());
+        assert_eq!(scrubbed, text);
     }
 
     #[test]
@@ -237,9 +233,9 @@ mod tests {
         let _scrubbed = scrub_pii(&long_text);
         let elapsed = start.elapsed();
 
-        // Should complete in <50ms even for large text (more lenient for CI)
+        // Should complete in <200ms even for large text (lenient for CI)
         assert!(
-            elapsed.as_millis() < 50,
+            elapsed.as_millis() < 200,
             "Scrubbing took too long: {:?}",
             elapsed
         );

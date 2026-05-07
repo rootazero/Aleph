@@ -78,14 +78,17 @@ pub fn extract_json_robust(response: &str) -> Option<serde_json::Value> {
     }
 
     // Strategy 4: Find first complete JSON object using brace matching
-    if let Some(start) = response.find('{') {
-        if let Some(end) = find_matching_brace(response, start) {
-            let candidate = &response[start..=end];
+    let mut search_start = 0;
+    while let Some(start) = response[search_start..].find('{') {
+        let abs_start = search_start + start;
+        if let Some(end) = find_matching_brace(response, abs_start) {
+            let candidate = &response[abs_start..=end];
             if let Ok(v) = serde_json::from_str(candidate) {
                 debug!(strategy = "brace_match", "JSON extraction successful");
                 return Some(v);
             }
         }
+        search_start = abs_start + 1;
     }
 
     debug!("JSON extraction failed: no valid JSON found");

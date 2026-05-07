@@ -22,7 +22,7 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
 pub fn escape_markdown(text: &str) -> String {
     text.chars()
         .flat_map(|c| match c {
-            '[' | ']' | '(' | ')' | '*' | '_' | '`' => ['\\', c],
+            '[' | ']' | '(' | ')' | '*' | '_' | '`' | '\\' => ['\\', c],
             _ => ['\0', c],
         })
         .filter(|&c| c != '\0')

@@ -31,7 +31,10 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .tempfile_in(parent)?;
     tmp.write_all(bytes)?;
     tmp.as_file_mut().sync_all()?;
-    tmp.persist(path).map_err(|e| e.error)?;
+    tmp.persist(path).map_err(|e| {
+        let _ = std::fs::remove_file(e.file.path());
+        e.error
+    })?;
     Ok(())
 }
 
