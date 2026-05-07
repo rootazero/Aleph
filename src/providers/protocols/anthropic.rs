@@ -18,7 +18,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Client;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use tracing::{debug, warn};
 
 /// Anthropic API version header value
@@ -444,14 +444,13 @@ impl ProtocolAdapter for AnthropicProtocol {
                     crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut schema);
                     let sanitized = sanitize_anthropic_tool_name(&td.name);
                     if sanitized != td.name {
-                        if let Ok(mut map) = self.name_map.write() {
-                            if map.insert(sanitized.clone(), td.name.clone()).is_none() {
-                                warn!(
-                                    original = %td.name,
-                                    sanitized = %sanitized,
-                                    "Tool name sanitized for Anthropic compatibility"
-                                );
-                            }
+                        let mut map = self.name_map.write().unwrap_or_else(|e| e.into_inner());
+                        if map.insert(sanitized.clone(), td.name.clone()).is_none() {
+                            warn!(
+                                original = %td.name,
+                                sanitized = %sanitized,
+                                "Tool name sanitized for Anthropic compatibility"
+                            );
                         }
                     }
                     AnthropicTool {
@@ -740,7 +739,10 @@ pub(crate) fn parse_anthropic_sse_event(
                 // Map sanitized → original so the dispatcher receives the
                 // tool name as it was registered (round-trip from build_request).
                 let name = name_map
-                    .and_then(|m| m.read().ok().and_then(|g| g.get(wire_name).cloned()))
+                    .and_then(|m| {
+                        let guard = m.read().unwrap_or_else(|e| e.into_inner());
+                        guard.get(wire_name).cloned()
+                    })
                     .unwrap_or_else(|| wire_name.to_string());
                 // Track index → id for subsequent input_json_delta events
                 block_ids.track(index, id.to_string());
@@ -817,11 +819,12 @@ pub(crate) fn parse_anthropic_sse_event(
                 let output = usage
                     .get("output_tokens")
                     .and_then(|t| t.as_u64())
-                    .unwrap_or(0) as u32;
+                    .and_then(|t| t.try_into().ok())
+                    .unwrap_or(0);
                 let cache_read = usage
                     .get("cache_read_input_tokens")
                     .and_then(|t| t.as_u64())
-                    .map(|t| t as u32);
+                    .and_then(|t| t.try_into().ok());
                 out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
                     input_tokens: 0, // input usage is in message_start, not message_delta
                     output_tokens: output,

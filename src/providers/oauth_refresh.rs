@@ -17,7 +17,7 @@ fn oauth_client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .unwrap_or_default()
+            .expect("Failed to build OAuth HTTP client")
     })
 }
 
@@ -106,11 +106,11 @@ pub async fn refresh_token(cred: &OAuthCredential) -> Result<OAuthCredential> {
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("No access_token in refresh response"))?;
     let expires_in = body["expires_in"].as_u64().unwrap_or(3600);
-    let new_expires_ms = SystemTime::now()
+    let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64
-        + expires_in * 1000;
+        .as_millis() as u64;
+    let new_expires_ms = now_ms.saturating_add(expires_in.saturating_mul(1000));
 
     // Use new refresh token if provided, otherwise keep existing
     let new_refresh = body["refresh_token"]

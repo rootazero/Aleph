@@ -578,11 +578,13 @@ fn parse_gemini_sse_chunk(
         let input = usage
             .get("promptTokenCount")
             .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
+            .and_then(|v| v.try_into().ok())
+            .unwrap_or(0);
         let output = usage
             .get("candidatesTokenCount")
             .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
+            .and_then(|v| v.try_into().ok())
+            .unwrap_or(0);
 
         // Insert Usage before the Done event so consumers see it in the right order
         let done_pos = out

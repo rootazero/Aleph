@@ -198,7 +198,7 @@ pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
 /// Compute exponential backoff: `base * 2^attempt`, capped at `max_delay`.
 pub fn backoff_delay(base: Duration, attempt: u32, max_delay: Duration) -> Duration {
     let factor = 2u64.saturating_pow(attempt);
-    let delay_ms = base.as_millis() as u64 * factor;
+    let delay_ms = (base.as_millis() as u64).saturating_mul(factor);
     Duration::from_millis(delay_ms.min(max_delay.as_millis() as u64))
 }
 

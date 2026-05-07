@@ -588,11 +588,13 @@ fn parse_chat_sse_event(
         let input = usage
             .get("prompt_tokens")
             .and_then(|t| t.as_u64())
-            .unwrap_or(0) as u32;
+            .and_then(|t| t.try_into().ok())
+            .unwrap_or(0);
         let output = usage
             .get("completion_tokens")
             .and_then(|t| t.as_u64())
-            .unwrap_or(0) as u32;
+            .and_then(|t| t.try_into().ok())
+            .unwrap_or(0);
         out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
             input_tokens: input,
             output_tokens: output,
