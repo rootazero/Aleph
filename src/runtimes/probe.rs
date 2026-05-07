@@ -137,6 +137,12 @@ fn check_version_warning(spec: &RuntimeSpec, version: Option<&str>) -> Option<St
     }
 }
 
+/// Compare two version strings, checking only major.minor.
+///
+/// Patch and pre-release components are ignored — this is intentional
+/// because runtime specs declare `min_version` at the minor level
+/// (e.g. "18.0" for Node). If finer-grained comparison is needed in
+/// the future, this should be replaced by a proper semver parser.
 fn version_lt(actual: &str, minimum: &str) -> bool {
     let parse = |s: &str| -> (u64, u64) {
         let mut parts = s.split('.');

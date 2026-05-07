@@ -31,6 +31,26 @@ pub async fn ensure_capability(
     capability: &str,
     ledger: &Arc<RwLock<CapabilityLedger>>,
 ) -> Result<PathBuf, AlephError> {
+    ensure_capability_recursive(capability, ledger, 0).await
+}
+
+const MAX_BOOTSTRAP_DEPTH: usize = 10;
+
+async fn ensure_capability_recursive(
+    capability: &str,
+    ledger: &Arc<RwLock<CapabilityLedger>>,
+    depth: usize,
+) -> Result<PathBuf, AlephError> {
+    if depth > MAX_BOOTSTRAP_DEPTH {
+        return Err(AlephError::runtime(
+            capability,
+            format!(
+                "dependency resolution exceeded maximum depth ({MAX_BOOTSTRAP_DEPTH}); \
+                 possible circular dependency"
+            ),
+        ));
+    }
+
     // Fast path: already Ready
     {
         let guard = ledger.read().await;
@@ -95,7 +115,7 @@ pub async fn ensure_capability(
 
     // Bootstrap phase — resolve dependencies first
     for dep in bootstrap::dependencies(capability) {
-        Box::pin(ensure_capability(dep, ledger)).await?;
+        Box::pin(ensure_capability_recursive(dep, ledger, depth + 1)).await?;
     }
 
     // Check if bootstrap spec exists

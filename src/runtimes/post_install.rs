@@ -17,16 +17,18 @@ pub enum PostInstallError {
     NoNodeVersion,
     #[error("repair command failed for missing asset")]
     RepairFailed,
+    #[error("HOME or USERPROFILE environment variable not set")]
+    HomeNotSet,
 }
 
 /// Expand `$HOME` or `%USERPROFILE%` in a template path. On Windows also
 /// rewrites Unix `/bin/python` → `\Scripts\python.exe` and converts forward
 /// slashes to backslashes, so a single template string like
 /// `"$HOME/.aleph/.venv/bin/python"` works cross-platform.
-fn expand_home(template: &str) -> String {
+fn expand_home(template: &str) -> Result<String, PostInstallError> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default();
+        .map_err(|_| PostInstallError::HomeNotSet)?;
     let s = template
         .replacen("$HOME", &home, 1)
         .replacen("%USERPROFILE%", &home, 1);
@@ -37,7 +39,7 @@ fn expand_home(template: &str) -> String {
         .replace("/bin/", r"\Scripts\")
         .replace('/', r"\");
 
-    s
+    Ok(s)
 }
 
 /// Run a single post-install action. `bin_path` is the just-installed
@@ -62,7 +64,7 @@ async fn run_subcommand(
     let mut cmd = Command::new(bin_path);
     cmd.args(args);
     if let Some(td) = target_dir {
-        let expanded = expand_home(td);
+        let expanded = expand_home(td)?;
         if let Some(parent) = PathBuf::from(&expanded).parent() {
             tokio::fs::create_dir_all(parent).await.ok();
         }
@@ -90,11 +92,15 @@ async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
         })
         .next_back()
         .ok_or(PostInstallError::NoNodeVersion)?;
-    // Best-effort: failure is not fatal; caller logs it.
-    let _ = Command::new("fnm")
+    let output = Command::new("fnm")
         .args(["alias", &version, alias_name])
         .output()
-        .await;
+        .await?;
+    if !output.status.success() {
+        return Err(PostInstallError::SubcommandFailed {
+            stderr: String::from_utf8_lossy(&output.stderr).into(),
+        });
+    }
     Ok(())
 }
 
@@ -103,11 +109,14 @@ async fn verify_or_repair(
     path_template: &str,
     repair: &[&str],
 ) -> Result<(), PostInstallError> {
-    let expanded = PathBuf::from(expand_home(path_template));
+    let expanded = PathBuf::from(expand_home(path_template)?);
     if expanded.exists() {
         return Ok(());
     }
-    let expanded_repair: Vec<String> = repair.iter().map(|a| expand_home(a)).collect();
+    let expanded_repair: Vec<String> = repair
+        .iter()
+        .map(|a| expand_home(a))
+        .collect::<Result<Vec<_>, _>>()?;
     let output = Command::new(bin_path)
         .args(&expanded_repair)
         .output()
@@ -130,13 +139,13 @@ mod tests {
     fn test_expand_home_with_var() {
         let _lock = HOME_LOCK.lock().unwrap();
         std::env::set_var("HOME", "/tmp/fake-home");
-        let out = expand_home("$HOME/.aleph/skills");
+        let out = expand_home("$HOME/.aleph/skills").unwrap();
         assert_eq!(out, "/tmp/fake-home/.aleph/skills");
     }
 
     #[test]
     fn test_expand_home_no_placeholder() {
-        let out = expand_home("/absolute/no/expansion");
+        let out = expand_home("/absolute/no/expansion").unwrap();
         assert_eq!(out, "/absolute/no/expansion");
     }
 
@@ -144,7 +153,7 @@ mod tests {
     fn test_expand_home_multiple_placeholders() {
         let _lock = HOME_LOCK.lock().unwrap();
         std::env::set_var("HOME", "/tmp/fake-home");
-        let out = expand_home("$HOME/a/$HOME/b");
+        let out = expand_home("$HOME/a/$HOME/b").unwrap();
         assert_eq!(out, "/tmp/fake-home/a/$HOME/b");
         // Only the first occurrence is replaced — caller should pass templates
         // with a single $HOME placeholder per arg. Document this contract.

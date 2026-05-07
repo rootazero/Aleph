@@ -29,17 +29,17 @@ impl StateDatabase {
         // Register sqlite-vec extension before opening any connection
         // SAFETY: sqlite3_vec_init is the C entrypoint for the extension.
         // sqlite3_auto_extension registers it to be loaded for all new connections.
+        // The function item is first cast to a data pointer (*const ()), then to the
+        // target function pointer type. Rust explicitly permits casting between raw
+        // pointers and function pointers, making this well-defined.
         unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
-                *const (),
-                unsafe extern "C" fn(
-                    *mut rusqlite::ffi::sqlite3,
-                    *mut *mut std::ffi::c_char,
-                    *const rusqlite::ffi::sqlite3_api_routines,
-                ) -> std::ffi::c_int,
-            >(
-                sqlite3_vec_init as *const ()
-            )));
+            type SqliteVecInit = unsafe extern "C" fn(
+                *mut rusqlite::ffi::sqlite3,
+                *mut *mut std::ffi::c_char,
+                *const rusqlite::ffi::sqlite3_api_routines,
+            ) -> std::ffi::c_int;
+            let init: SqliteVecInit = (sqlite3_vec_init as *const ()) as SqliteVecInit;
+            rusqlite::ffi::sqlite3_auto_extension(Some(init));
         }
     }
 
@@ -229,7 +229,9 @@ impl StateDatabase {
                 [],
                 |row| row.get(0),
             )
-            .unwrap_or(false);
+            .map_err(|e| {
+                AlephError::config(format!("Failed to check schema_info table: {}", e))
+            })?;
 
         if !table_exists {
             return Ok(false);
@@ -242,7 +244,9 @@ impl StateDatabase {
                 |row| row.get(0),
             )
             .optional()
-            .unwrap_or(None);
+            .map_err(|e| {
+                AlephError::config(format!("Failed to read embedding dimension: {}", e))
+            })?;
 
         match stored {
             Some(dim) if dim == target_dim.to_string() => Ok(false),
@@ -263,11 +267,11 @@ impl StateDatabase {
         // Check if migration needed (vec tables exist but empty, memories table has data)
         let memories_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
-            .unwrap_or(0);
+            .map_err(|e| AlephError::config(format!("Failed to count memories: {}", e)))?;
 
         let vec_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM memories_vec", [], |row| row.get(0))
-            .unwrap_or(0);
+            .map_err(|e| AlephError::config(format!("Failed to count memories_vec: {}", e)))?;
 
         if memories_count > 0 && vec_count == 0 {
             tracing::info!(
@@ -302,7 +306,9 @@ impl StateDatabase {
                 [],
                 |row| row.get(0),
             )
-            .unwrap_or(false);
+            .map_err(|e| {
+                AlephError::config(format!("Failed to check schema_info table: {}", e))
+            })?;
 
         if !table_exists {
             // Check if memories table exists (old database without schema_info)
@@ -312,7 +318,9 @@ impl StateDatabase {
                     [],
                     |row| row.get(0),
                 )
-                .unwrap_or(false);
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to check memories table: {}", e))
+                })?;
 
             // If old memories table exists but no schema_info, needs migration
             return Ok(memories_exists);
@@ -326,7 +334,9 @@ impl StateDatabase {
                 |row| row.get(0),
             )
             .optional()
-            .unwrap_or(None);
+            .map_err(|e| {
+                AlephError::config(format!("Failed to read embedding dimension: {}", e))
+            })?;
 
         match current_dimension {
             Some(dim) if dim == DEFAULT_EMBEDDING_DIM.to_string() => Ok(false), // Already at current dimension

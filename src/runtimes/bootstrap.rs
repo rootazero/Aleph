@@ -84,7 +84,14 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
             expected: format!("binary '{}' on PATH after install", name),
         });
     }
-    let bin_path = probe_result.bin_path.clone().unwrap();
+    let bin_path = match probe_result.bin_path.clone() {
+        Some(path) => path,
+        None => {
+            return Ok(BootstrapResult::PathNotFound {
+                expected: format!("binary path for '{}' after successful probe", name),
+            });
+        }
+    };
 
     // 3. Run post-install actions.
     for action in spec.post_install {

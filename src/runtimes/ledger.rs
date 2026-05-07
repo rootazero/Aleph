@@ -167,10 +167,16 @@ impl CapabilityLedger {
         self.entries.insert(entry.name.clone(), entry);
     }
 
-    /// Update only the status of an existing entry. No-op if unknown.
-    pub fn update_status(&mut self, name: &str, status: CapabilityStatus) {
+    /// Update only the status of an existing entry.
+    ///
+    /// Returns `true` if the entry existed and was updated, `false` if the
+    /// name was unknown (caller may want to log this as a logic error).
+    pub fn update_status(&mut self, name: &str, status: CapabilityStatus) -> bool {
         if let Some(entry) = self.entries.get_mut(name) {
             entry.status = status;
+            true
+        } else {
+            false
         }
     }
 
