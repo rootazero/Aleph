@@ -160,9 +160,8 @@ impl PluginHttpHandler {
         let args = serde_json::to_value(&request)
             .map_err(|e| ExtensionError::Runtime(format!("Failed to serialize request: {}", e)))?;
 
-        // Call the plugin handler
         let result = {
-            let mut loader = self.loader.write().await;
+            let loader = self.loader.read().await;
             loader.call_tool(&route.plugin_id, &route.handler, args)?
         };
 

@@ -149,7 +149,7 @@ impl PluginProviderAdapter {
 
         // Call plugin's chat handler
         let result = {
-            let mut loader = self.loader.write().await;
+            let loader = self.loader.read().await;
             loader.call_tool(&self.registration.plugin_id, "chat", request_json)?
         };
 

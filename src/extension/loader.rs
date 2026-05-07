@@ -242,7 +242,7 @@ impl PluginLoader {
     ///
     /// For MCP plugins, tool calls should go through the MCP system (McpManager).
     pub fn call_tool(
-        &mut self,
+        &self,
         plugin_id: &str,
         handler: &str,
         args: serde_json::Value,
@@ -254,7 +254,7 @@ impl PluginLoader {
 
         match kind {
             PluginKind::Wasm => {
-                let runtime = self.wasm_runtime.as_mut().ok_or_else(|| {
+                let runtime = self.wasm_runtime.as_ref().ok_or_else(|| {
                     ExtensionError::Runtime("WASM runtime not initialized".to_string())
                 })?;
                 let input = crate::extension::runtime::WasmToolInput {
@@ -284,7 +284,7 @@ impl PluginLoader {
 
     /// Execute a hook handler on a loaded plugin.
     pub fn execute_hook(
-        &mut self,
+        &self,
         plugin_id: &str,
         _handler: &str,
         _event_data: serde_json::Value,
@@ -310,7 +310,7 @@ impl PluginLoader {
 
     /// Execute a direct command handler on a loaded plugin.
     pub fn execute_command(
-        &mut self,
+        &self,
         plugin_id: &str,
         handler: &str,
         args: serde_json::Value,
@@ -322,7 +322,7 @@ impl PluginLoader {
 
         match kind {
             PluginKind::Wasm => {
-                let runtime = self.wasm_runtime.as_mut().ok_or_else(|| {
+                let runtime = self.wasm_runtime.as_ref().ok_or_else(|| {
                     ExtensionError::Runtime("WASM runtime not initialized".to_string())
                 })?;
 

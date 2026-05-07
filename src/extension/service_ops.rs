@@ -16,8 +16,8 @@ impl ExtensionManager {
             .find_service_registration(plugin_id, service_id)
             .await?;
         let mut service_manager = self.service_manager.write().await;
-        let mut loader = self.plugin_loader.write().await;
-        service_manager.start_service(&registration, &mut loader)
+        let loader = self.plugin_loader.read().await;
+        service_manager.start_service(&registration, &loader)
     }
 
     /// Stop a background service.
@@ -30,8 +30,8 @@ impl ExtensionManager {
             .find_service_registration(plugin_id, service_id)
             .await?;
         let mut service_manager = self.service_manager.write().await;
-        let mut loader = self.plugin_loader.write().await;
-        service_manager.stop_service(&registration, &mut loader)
+        let loader = self.plugin_loader.read().await;
+        service_manager.stop_service(&registration, &loader)
     }
 
     /// Get service status.

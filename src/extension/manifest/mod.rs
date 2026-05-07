@@ -82,7 +82,10 @@ pub fn validate_plugin_id(id: &str) -> Result<(), String> {
     if id.len() > 64 {
         return Err(format!("Plugin ID too long ({} chars, max 64)", id.len()));
     }
-    let first_char = id.chars().next().unwrap();
+    let first_char = id
+        .chars()
+        .next()
+        .ok_or_else(|| "Plugin ID cannot be empty".to_string())?;
     if !first_char.is_ascii_lowercase() {
         return Err("Plugin ID must start with a lowercase letter".to_string());
     }

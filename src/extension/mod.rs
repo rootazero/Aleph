@@ -83,11 +83,11 @@ pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::RwLock as StdRwLock;
+use crate::sync_primitives::{AtomicU64, Ordering};
 use hooks::HookExecutor;
 use manifest::adapter::AdapterRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 

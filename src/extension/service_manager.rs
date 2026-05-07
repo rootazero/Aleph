@@ -111,13 +111,16 @@ impl ServiceManager {
     pub fn start_service(
         &mut self,
         registration: &ServiceRegistration,
-        loader: &mut PluginLoader,
+        loader: &PluginLoader,
     ) -> ExtensionResult<ServiceInfo> {
         let key = Self::make_key(&registration.plugin_id, &registration.id);
 
         // Check if already running or starting
         if let Some(existing) = self.services.get(&key) {
-            if matches!(existing.state, ServiceState::Running | ServiceState::Starting) {
+            if matches!(
+                existing.state,
+                ServiceState::Running | ServiceState::Starting
+            ) {
                 debug!(
                     "Service {} is already {:?}, returning existing info",
                     key, existing.state
@@ -201,7 +204,7 @@ impl ServiceManager {
     pub fn stop_service(
         &mut self,
         registration: &ServiceRegistration,
-        loader: &mut PluginLoader,
+        loader: &PluginLoader,
     ) -> ExtensionResult<ServiceInfo> {
         let key = Self::make_key(&registration.plugin_id, &registration.id);
 
@@ -340,7 +343,7 @@ impl ServiceManager {
         &mut self,
         plugin_id: &str,
         registrations: &[ServiceRegistration],
-        loader: &mut PluginLoader,
+        loader: &PluginLoader,
     ) -> Vec<ServiceInfo> {
         let mut results = Vec::new();
 

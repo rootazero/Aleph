@@ -79,8 +79,11 @@ impl SkillTemplate {
 
         // Find all file references
         for cap in FILE_REF_REGEX.captures_iter(content) {
-            let full_match = cap.get(0).unwrap();
-            let path_str = cap.get(1).unwrap().as_str();
+            let full_match = cap.get(0).expect("regex capture group 0 always present");
+            let path_str = cap
+                .get(1)
+                .expect("regex capture group 1 always present for file refs")
+                .as_str();
 
             // Resolve the path
             let resolved_path = self.resolve_path(path_str)?;

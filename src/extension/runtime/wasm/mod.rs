@@ -28,7 +28,7 @@ use tracing::{debug, info};
 use crate::extension::error::ExtensionError;
 use crate::extension::manifest::PluginManifest;
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 
 use extism::{Manifest as ExtismManifest, PluginBuilder, UserData, Wasm, PTR};
 
@@ -54,7 +54,7 @@ pub struct WasmRuntime {
 }
 
 struct LoadedWasmPlugin {
-    plugin: extism::Plugin,
+    plugin: Mutex<extism::Plugin>,
     #[allow(dead_code)]
     manifest: PluginManifest,
     #[allow(dead_code)]
@@ -133,7 +133,7 @@ impl WasmRuntime {
             .map_err(|e| ExtensionError::Runtime(format!("Failed to load WASM: {}", e)))?;
 
         let loaded = LoadedWasmPlugin {
-            plugin,
+            plugin: Mutex::new(plugin),
             manifest: manifest.clone(),
             kernel,
         };
@@ -155,14 +155,14 @@ impl WasmRuntime {
 
     /// Call a tool handler in a WASM plugin
     pub fn call_tool(
-        &mut self,
+        &self,
         plugin_id: &str,
         handler: &str,
         input: WasmToolInput,
     ) -> Result<WasmToolOutput, ExtensionError> {
         let loaded = self
             .plugins
-            .get_mut(plugin_id)
+            .get(plugin_id)
             .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
 
         let input_json = serde_json::to_string(&input)
@@ -173,8 +173,11 @@ impl WasmRuntime {
             handler, input_json
         );
 
-        let result = loaded
-            .plugin
+        let mut plugin = loaded.plugin.lock().map_err(|e| {
+            ExtensionError::Runtime(format!("Failed to lock plugin: {}", e))
+        })?;
+
+        let result = plugin
             .call::<&str, &str>(handler, &input_json)
             .map_err(|e| ExtensionError::Runtime(format!("WASM call failed: {}", e)))?;
 

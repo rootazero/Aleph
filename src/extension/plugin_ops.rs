@@ -74,7 +74,7 @@ impl ExtensionManager {
         event_data: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
         self.plugin_loader
-            .write()
+            .read()
             .await
             .execute_hook(plugin_id, handler, event_data)
     }
@@ -87,7 +87,7 @@ impl ExtensionManager {
         args: serde_json::Value,
     ) -> ExtensionResult<DirectCommandResult> {
         self.plugin_loader
-            .write()
+            .read()
             .await
             .execute_command(plugin_id, handler, args)
     }

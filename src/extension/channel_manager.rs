@@ -166,7 +166,7 @@ impl ChannelManager {
         &mut self,
         registration: &ChannelRegistration,
         config: serde_json::Value,
-        loader: &mut PluginLoader,
+        loader: &PluginLoader,
     ) -> ExtensionResult<ChannelInfo> {
         let key = Self::channel_key(&registration.plugin_id, &registration.id);
 
@@ -247,7 +247,7 @@ impl ChannelManager {
         &mut self,
         plugin_id: &str,
         channel_id: &str,
-        loader: &mut PluginLoader,
+        loader: &PluginLoader,
     ) -> ExtensionResult<()> {
         let key = Self::channel_key(plugin_id, channel_id);
 

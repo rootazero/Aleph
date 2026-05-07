@@ -119,12 +119,15 @@ fn scan_plugin_dir(
                 root_dir: dir.to_path_buf(),
                 origin,
                 kind: PluginKind::Static,
-                manifest: PluginManifest::new(
-                    id.clone(),
-                    id,
-                    PluginKind::Static,
-                    md_path.file_name().unwrap().into(),
-                )
+                    manifest: PluginManifest::new(
+                        id.clone(),
+                        id,
+                        PluginKind::Static,
+                        md_path
+                            .file_name()
+                            .unwrap_or_else(|| std::ffi::OsStr::new("unknown"))
+                            .into(),
+                    )
                 .with_root_dir(dir.to_path_buf()),
             }));
         }
