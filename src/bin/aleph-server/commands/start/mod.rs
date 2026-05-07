@@ -1006,7 +1006,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.artifact_store.clone(),
         agent_result.event_store.clone(),
     ) {
-        let _ = (|| {
+        (|| {
             use alephcore::event::{
                 AlephEvent, EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
             };

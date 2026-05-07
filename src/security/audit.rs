@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
-use tracing::{error, warn};
+use tracing::error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditEventType {
@@ -99,7 +99,7 @@ impl SecurityAuditLog {
     pub fn log(&self, entry: AuditEntry) {
         if let Err(e) = self.sender.try_send(entry) {
             let count = self.dropped_count.fetch_add(1, Ordering::Relaxed) + 1;
-            if count == 1 || count % 100 == 0 {
+            if count == 1 || count.is_multiple_of(100) {
                 error!(
                     "Security audit log channel full, dropping entry (total dropped: {}): {}",
                     count, e

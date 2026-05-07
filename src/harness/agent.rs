@@ -690,6 +690,7 @@ impl AgentHarness {
     /// Stage 5b (#9): Apply the tool-call guardrail. `Block` persists a
     /// `ToolError`, fires `on_safety_block`, and emits a trace; the caller
     /// then `continue`s the batch. `Sanitize` returns a fresh `Value`.
+    #[allow(clippy::too_many_arguments)]
     async fn apply_tool_call_guardrail(
         &self,
         registry: &crate::guardrails::GuardrailRegistry,

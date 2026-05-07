@@ -23,6 +23,7 @@ pub fn extract_wikilinks(text: &str) -> Vec<String> {
         .collect()
 }
 
+#[allow(dead_code)]
 /// Extract wikilink targets and their optional aliases from `text`.
 ///
 /// `[[target]]` yields `(target, None)`; `[[target|alias]]` yields `(target, Some(alias))`.

@@ -82,7 +82,7 @@ impl SearchOptions {
 
     /// Returns validated max_results, capped at 50 and at least 1
     pub fn validated_max_results(&self) -> usize {
-        self.max_results.max(1).min(50)
+        self.max_results.clamp(1, 50)
     }
 }
 

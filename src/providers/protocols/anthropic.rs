@@ -179,7 +179,7 @@ impl AnthropicProtocol {
                             }
                             crate::providers::message::ContentBlock::Thinking {
                                 thinking,
-                                signature,
+                                signature: Some(sig),
                             } => {
                                 // Replay the signed thinking block when we have its signature.
                                 // Anthropic requires a verbatim replay (thinking + signature)
@@ -187,15 +187,13 @@ impl AnthropicProtocol {
                                 // Without a signature the API would reject the message, so
                                 // drop unsigned thinking — providers that don't sign (Gemini,
                                 // OpenAI) never produce it for an Anthropic-bound turn.
-                                if let Some(sig) = signature {
-                                    if !thinking.is_empty() {
-                                        blocks.push(ContentBlock::Thinking {
-                                            thinking: thinking.clone(),
-                                            signature: sig.clone(),
-                                        });
-                                        // Remember this thinking for the next ToolCall
-                                        pending_thinking = Some(thinking.clone());
-                                    }
+                                if !thinking.is_empty() {
+                                    blocks.push(ContentBlock::Thinking {
+                                        thinking: thinking.clone(),
+                                        signature: sig.clone(),
+                                    });
+                                    // Remember this thinking for the next ToolCall
+                                    pending_thinking = Some(thinking.clone());
                                 }
                             }
                             crate::providers::message::ContentBlock::ToolCall {

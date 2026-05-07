@@ -14,7 +14,7 @@
 //!   - `Manual` (User-created manually)
 //!   - `SessionCompressed` (Compressed summary from SessionCompactor during active session)
 //!   - `Synthesis` (Synthesized from cross-session pattern extraction during weekly dream cycles)
-//!   `SessionCompressed` is the primary variant Spec B targets for filtering.
+//!     `SessionCompressed` is the primary variant Spec B targets for filtering.
 //!
 //! - `SessionStore::search_messages` at `src/gateway/session_store/mod.rs:37`.
 //!   Signature: `async fn search_messages(&self, query: &str, max_results: usize) -> Result<Vec<SearchHit>, SessionStoreError>`.

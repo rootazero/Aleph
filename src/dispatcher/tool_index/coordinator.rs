@@ -84,6 +84,7 @@ const TOOL_CATEGORY: &str = "tool";
 /// Stores tools as notes in the `tool/` category (markdown files + notes_index).
 /// Uses SemanticPurposeInferrer to generate rich content descriptions.
 pub struct ToolIndexCoordinator {
+    #[allow(dead_code)]
     db: MemoryBackend,
     indexer: NoteIndexer<crate::memory::store::SqliteMemoryBackend>,
     inferrer: Arc<SemanticPurposeInferrer>,

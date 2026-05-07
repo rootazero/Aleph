@@ -7,17 +7,12 @@
 
 use crate::memory::context::FactSource;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FactSourceFilter {
+    #[default]
     Any,
     Only(FactSource),
     Excluding(FactSource),
-}
-
-impl Default for FactSourceFilter {
-    fn default() -> Self {
-        Self::Any
-    }
 }
 
 impl FactSourceFilter {

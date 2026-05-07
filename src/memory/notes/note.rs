@@ -425,11 +425,17 @@ fn extract_facts(body: &str) -> Vec<String> {
             if let Some(c) = current.take() {
                 out.push(c);
             }
-        } else if current.is_some() && indent >= 2 {
-            // attach indented line to current fact
-            let acc = current.as_mut().unwrap();
-            acc.push('\n');
-            acc.push_str(raw_line);
+        } else if let Some(acc) = current.as_mut() {
+            if indent >= 2 {
+                // attach indented line to current fact
+                acc.push('\n');
+                acc.push_str(raw_line);
+            } else {
+                // non-bullet line at indent 0 ends any current fact and is ignored
+                if let Some(c) = current.take() {
+                    out.push(c);
+                }
+            }
         } else {
             // non-bullet line at indent 0 ends any current fact and is ignored
             if let Some(c) = current.take() {

@@ -103,6 +103,8 @@ pub struct WebFetchTool {
     timeout_secs: u64,
     /// Whether Readability extraction is enabled
     enable_readability: bool,
+    /// SSRF protection policy
+    ssrf_policy: SsrfPolicy,
 }
 
 impl WebFetchTool {
@@ -135,7 +137,14 @@ impl WebFetchTool {
             user_agent: Self::DEFAULT_USER_AGENT.to_string(),
             timeout_secs: Self::DEFAULT_TIMEOUT_SECS,
             enable_readability: true,
+            ssrf_policy: SsrfPolicy::default(),
         }
+    }
+
+    /// Set the SSRF policy
+    pub fn with_ssrf_policy(mut self, policy: SsrfPolicy) -> Self {
+        self.ssrf_policy = policy;
+        self
     }
 
     /// Create a new WebFetchTool with policy configuration
@@ -146,6 +155,7 @@ impl WebFetchTool {
             user_agent: policy.user_agent.clone(),
             timeout_secs: policy.timeout_seconds,
             enable_readability: policy.enable_readability,
+            ssrf_policy: SsrfPolicy::default(),
         }
     }
 
@@ -163,7 +173,7 @@ impl WebFetchTool {
         info!("Fetching URL: {}", args.url);
 
         // SSRF-protected fetch with DNS pinning
-        let ssrf_policy = SsrfPolicy::default();
+        let ssrf_policy = &self.ssrf_policy;
         let mut headers = reqwest::header::HeaderMap::new();
         if let Ok(ua) = reqwest::header::HeaderValue::from_str(&self.user_agent) {
             headers.insert(reqwest::header::USER_AGENT, ua);
@@ -172,7 +182,7 @@ impl WebFetchTool {
             SafeFetchRequest::get(std::time::Duration::from_secs(self.timeout_secs))
                 .with_headers(headers);
 
-        let fetch_response = safe_fetch(&args.url, &ssrf_policy, fetch_request)
+        let fetch_response = safe_fetch(&args.url, ssrf_policy, fetch_request)
             .await
             .map_err(|e| {
                 let error_msg = format!("Fetch blocked or failed: {}", e);
@@ -455,6 +465,7 @@ impl Clone for WebFetchTool {
             user_agent: self.user_agent.clone(),
             timeout_secs: self.timeout_secs,
             enable_readability: self.enable_readability,
+            ssrf_policy: self.ssrf_policy.clone(),
         }
     }
 }

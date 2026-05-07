@@ -134,6 +134,9 @@ pub struct Config {
     /// Shell security configuration (custom risk patterns)
     #[serde(default)]
     pub security: ShellSecurityConfig,
+    /// SSRF protection configuration
+    #[serde(default)]
+    pub ssrf: crate::security::ssrf::SsrfPolicy,
     /// Workspace profiles configuration (Anti-Gravity Architecture)
     /// Profiles define the "Physics" of workspaces: model binding, tool whitelist, system prompt
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -357,6 +360,7 @@ impl Default for Config {
             media: MediaConfig::default(),
             privacy: PrivacyConfig::default(),
             security: ShellSecurityConfig::default(),
+            ssrf: crate::security::ssrf::SsrfPolicy::default(),
             profiles: HashMap::new(),
             secret_providers: HashMap::new(),
             secrets: HashMap::new(),

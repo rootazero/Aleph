@@ -22,7 +22,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::warn;
 
 use super::types::{FilesystemAccess, PluginPermission};
 

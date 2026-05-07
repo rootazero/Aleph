@@ -59,8 +59,8 @@ impl ResolvedUrl {
 pub fn resolve_base_url(url: &str) -> ResolvedUrl {
     let trimmed = url.trim_end_matches('/');
     if needs_auto_complete(trimmed) {
-        let base = if trimmed.ends_with("/v1") {
-            &trimmed[..trimmed.len() - 3]
+        let base = if let Some(stripped) = trimmed.strip_suffix("/v1") {
+            stripped
         } else {
             trimmed
         }

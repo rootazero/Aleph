@@ -137,12 +137,11 @@ where
             anyhow::bail!("NoLock commands must dispatch through run_no_lock, not with_policy")
         }
         CommandPolicy::LockOnly => {
-            let lock = acquire_or_held(data_dir).map_err(|e| {
+            let lock = acquire_or_held(data_dir).inspect_err(|e| {
                 if let Some(held) = e.downcast_ref::<LockHeldError>() {
                     eprintln!("{held}");
                     std::process::exit(64);
                 }
-                e
             })?;
             local(&lock)
         }

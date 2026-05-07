@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use super::task::ResilientTask;
 use super::types::{DegradationReason, DegradationStrategy, TaskContext, TaskOutcome};

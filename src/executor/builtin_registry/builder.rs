@@ -47,7 +47,14 @@ impl BuiltinToolRegistry {
         } else {
             SearchTool::with_api_key(config.tavily_api_key.clone())
         };
-        let web_fetch_tool = WebFetchTool::new();
+        let web_fetch_tool = {
+            let mut tool = WebFetchTool::new();
+            if let Some(ref cfg) = config.config {
+                let cfg_guard = cfg.read().await;
+                tool = tool.with_ssrf_policy(cfg_guard.ssrf.clone());
+            }
+            tool
+        };
         let file_ops_tool = if let Some(ref tc) = config.tool_context {
             FileOpsTool::new().with_tool_context(Arc::clone(tc))
         } else {

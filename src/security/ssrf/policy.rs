@@ -1,9 +1,10 @@
 //! SSRF policy configuration.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Policy controlling SSRF validation behavior.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SsrfPolicy {
     /// Master switch for SSRF protection.
     pub enabled: bool,

@@ -12,7 +12,7 @@
 
 use alephcore::exec::approval::audit::{AuditQuery, ToolExecutionRecord};
 use alephcore::exec::approval::storage::ApprovalAuditStorage;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// ANSI color codes for risk levels
 const COLOR_RESET: &str = "\x1b[0m";
@@ -265,7 +265,7 @@ fn print_execution_record(record: &ToolExecutionRecord) {
 }
 
 /// Helper function to get all tool names from database
-async fn get_all_tool_names(db_path: &PathBuf) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+async fn get_all_tool_names(db_path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let conn = alephcore::utils::sqlite_open::open_sqlite_safe(db_path)?;
     let mut stmt = conn.prepare(
         "SELECT DISTINCT tool_name FROM tool_executions

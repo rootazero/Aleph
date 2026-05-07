@@ -30,6 +30,7 @@ pub struct CandidateNote {
     pub contradicts_existing: bool,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum GateOutcome {
     Accept(CandidateNote),

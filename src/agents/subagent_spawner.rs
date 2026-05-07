@@ -193,7 +193,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     let max_iter = req
         .agent_def
         .max_iterations
-        .map(|v| usize::try_from(v))
+        .map(usize::try_from)
         .transpose()
         .map_err(|_| "max_iterations exceeds platform limit".to_string())?;
 
