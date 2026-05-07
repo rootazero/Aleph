@@ -107,7 +107,7 @@ impl MediaPolicy {
             }
             MediaType::Video { duration_secs, .. } => {
                 if let Some(dur) = duration_secs {
-                    if *dur > self.max_video_duration as f64 {
+                    if !dur.is_finite() || *dur > self.max_video_duration as f64 {
                         return Err(MediaError::SizeLimitExceeded {
                             message: format!(
                                 "Video duration {:.0}s exceeds limit of {}s",
@@ -129,7 +129,19 @@ impl MediaPolicy {
                     }
                 }
             }
-            MediaType::Unknown => {}
+            MediaType::Unknown => {
+                // Apply a conservative default limit for unknown media types
+                // to prevent unbounded file processing
+                const DEFAULT_MAX_BYTES: u64 = 100 * 1024 * 1024; // 100 MB
+                if file_size_bytes > DEFAULT_MAX_BYTES {
+                    return Err(MediaError::SizeLimitExceeded {
+                        message: format!(
+                            "Unknown media type size {} bytes exceeds default limit of {} bytes",
+                            file_size_bytes, DEFAULT_MAX_BYTES
+                        ),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -203,8 +215,14 @@ mod tests {
     }
 
     #[test]
-    fn check_size_unknown_always_ok() {
+    fn check_size_unknown_within_default_limit() {
         let p = MediaPolicy::default();
-        assert!(p.check_size(&MediaType::Unknown, u64::MAX).is_ok());
+        assert!(p.check_size(&MediaType::Unknown, 1024).is_ok());
+    }
+
+    #[test]
+    fn check_size_unknown_exceeds_default_limit() {
+        let p = MediaPolicy::default();
+        assert!(p.check_size(&MediaType::Unknown, 101 * 1024 * 1024).is_err());
     }
 }

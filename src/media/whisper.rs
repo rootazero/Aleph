@@ -45,7 +45,7 @@ impl WhisperTranscription {
         let client = reqwest::Client::builder()
             .timeout(TRANSCRIPTION_TIMEOUT)
             .build()
-            .expect("reqwest client build should not fail with only timeout set");
+            .unwrap_or_else(|_| reqwest::Client::new());
 
         Self {
             api_key,
@@ -63,6 +63,14 @@ impl TranscriptionService for WhisperTranscription {
         audio: &CachedMedia,
         language: Option<&str>,
     ) -> anyhow::Result<TranscriptionResult> {
+        const MAX_AUDIO_BYTES: u64 = 25 * 1024 * 1024;
+        if audio.size > MAX_AUDIO_BYTES {
+            anyhow::bail!(
+                "Audio file too large: {} bytes (max: {} bytes)",
+                audio.size,
+                MAX_AUDIO_BYTES
+            );
+        }
         let file_bytes = tokio::fs::read(&audio.local_path).await?;
         let file_name = audio
             .local_path

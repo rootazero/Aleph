@@ -64,7 +64,7 @@ impl MediaCache {
         let client = reqwest::Client::builder()
             .timeout(DOWNLOAD_TIMEOUT)
             .build()
-            .expect("reqwest client build should not fail with only timeout set");
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self { client }
     }
 
@@ -196,7 +196,8 @@ impl MediaCache {
             let age = timestamp
                 .and_then(|t| now.duration_since(t).ok())
                 .unwrap_or(Duration::ZERO);
-            if age > STALE_THRESHOLD {
+            // If timestamp is in the future (clock skew), treat as fresh
+            if age > STALE_THRESHOLD && age != Duration::ZERO {
                 if let Err(e) = std::fs::remove_dir_all(entry.path()) {
                     warn!(path = %entry.path().display(), error = %e, "failed to remove stale media dir");
                 } else {

@@ -55,6 +55,22 @@ impl MediaProvider for TextDocumentProvider {
     ) -> Result<MediaOutput, MediaError> {
         match input {
             MediaInput::FilePath { path } => {
+                const MAX_TEXT_FILE_BYTES: u64 = 10 * 1024 * 1024;
+                let meta = std::fs::metadata(path).map_err(|e| MediaError::ProviderError {
+                    provider: "text-document".into(),
+                    message: format!("Failed to read metadata for {}: {}", path.display(), e),
+                })?;
+                if meta.len() > MAX_TEXT_FILE_BYTES {
+                    return Err(MediaError::ProviderError {
+                        provider: "text-document".into(),
+                        message: format!(
+                            "File {} is too large ({} bytes > {} bytes limit)",
+                            path.display(),
+                            meta.len(),
+                            MAX_TEXT_FILE_BYTES
+                        ),
+                    });
+                }
                 let content =
                     std::fs::read_to_string(path).map_err(|e| MediaError::ProviderError {
                         provider: "text-document".into(),

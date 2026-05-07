@@ -384,7 +384,8 @@ fn fallback_text(attachment: &Attachment, error: &str) -> ContentBlock {
 /// Returns `None` for formats that cannot be reliably converted to a
 /// vision-api-compatible format (e.g. SVG, HEIC).
 fn image_format_from_mime(mime: &str) -> Option<ImageFormat> {
-    match mime {
+    let mime_lower = mime.to_ascii_lowercase();
+    match mime_lower.as_str() {
         "image/png" => Some(ImageFormat::Png),
         "image/webp" => Some(ImageFormat::WebP),
         // JPEG variants
