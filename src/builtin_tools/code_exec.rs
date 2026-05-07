@@ -17,8 +17,8 @@
 //! at the executor layer; this tool is now a thin adapter from `CodeExecArgs`
 //! to `SandboxCommand`.
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -388,7 +388,7 @@ Timeout: Default 60 seconds, configurable."#;
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
     use crate::sandbox::capabilities::NetworkPolicy;
     use crate::sandbox::context::SESSION_ID;

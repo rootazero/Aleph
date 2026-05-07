@@ -78,8 +78,8 @@ impl UserProfileTool {
 mod tests {
     use super::*;
     use crate::memory::notes::profile::types::{SessionSignal, UpdateOutcome, UserProfile};
+    use crate::sync_primitives::Arc;
     use async_trait::async_trait;
-    use std::sync::Arc;
 
     struct MockSynth;
 

@@ -154,7 +154,11 @@ pub fn check_and_resolve_path(
             denied.clone()
         };
 
-        if path_str.starts_with(&denied_expanded) {
+        // Use Path::starts_with for proper directory-prefix matching.
+        // String starts_with would falsely match "/foo-bar" when "/foo" is denied.
+        let canonical_path = Path::new(&*path_str);
+        let denied_path = Path::new(&denied_expanded);
+        if canonical_path.starts_with(denied_path) {
             info!(
                 path_str = %path_str,
                 denied = %denied,

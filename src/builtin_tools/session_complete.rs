@@ -196,7 +196,7 @@ mod tests {
     #[async_trait]
     impl RawMemoryStore for FakeStore {
         async fn insert_raw_memory(&self, raw: &RawMemory) -> std::result::Result<(), AlephError> {
-            self.0.lock().unwrap().push(raw.clone());
+            self.0.lock().unwrap_or_else(|e| e.into_inner()).push(raw.clone());
             Ok(())
         }
         async fn get_unprocessed_raw_memories(
@@ -274,9 +274,7 @@ mod tests {
     /// AlephTool and test `build_content` + `RawMemoryStore` directly.
     #[tokio::test]
     async fn emit_writes_session_end_task_done_row() {
-        use std::sync::Arc as StdArc;
-
-        let fake = StdArc::new(FakeStore::default());
+        let fake = Arc::new(FakeStore::default());
         let args = SessionCompleteArgs {
             outcome: "built test".into(),
             key_learnings: Some(vec!["L1".into()]),
@@ -294,7 +292,7 @@ mod tests {
 
         fake.insert_raw_memory(&raw).await.unwrap();
 
-        let captured = fake.0.lock().unwrap();
+        let captured = fake.0.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(captured.len(), 1);
         assert!(matches!(
             captured[0].source,

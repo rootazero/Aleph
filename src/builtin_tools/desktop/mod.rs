@@ -33,7 +33,7 @@ pub struct DesktopTool {
     pub(super) approval_policy: Option<Arc<dyn ApprovalPolicy>>,
     pub(super) platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
     pub(super) session_lock: Option<Arc<Mutex<ComputerUseLock>>>,
-    pub(super) escape_started: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) escape_started: Arc<crate::sync_primitives::AtomicBool>,
 }
 
 impl DesktopTool {
@@ -42,7 +42,7 @@ impl DesktopTool {
             approval_policy: None,
             platform: None,
             session_lock: None,
-            escape_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            escape_started: Arc::new(crate::sync_primitives::AtomicBool::new(false)),
         }
     }
 
@@ -95,11 +95,11 @@ impl DesktopTool {
             if let Some(listener) = platform.escape_listener() {
                 if !self
                     .escape_started
-                    .load(std::sync::atomic::Ordering::Acquire)
+                    .load(crate::sync_primitives::Ordering::Acquire)
                 {
                     let _ = listener.start();
                     self.escape_started
-                        .store(true, std::sync::atomic::Ordering::Release);
+                        .store(true, crate::sync_primitives::Ordering::Release);
                 }
                 if listener.is_aborted() {
                     return Err(DesktopOutput {
