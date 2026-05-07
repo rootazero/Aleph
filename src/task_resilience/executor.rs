@@ -134,8 +134,11 @@ impl ResilientExecutor {
                     reason = ?reason,
                     "Task skipped due to degradation"
                 );
+                let error_msg = "Task skipped".to_string();
+                self.notify_failure(ctx, &error_msg);
+                task.on_failed(ctx, &error_msg);
                 TaskOutcome::Failed {
-                    error: "Task skipped".to_string(),
+                    error: error_msg,
                     attempts: ctx.attempt,
                     last_attempt_duration: elapsed,
                 }
@@ -148,81 +151,21 @@ impl ResilientExecutor {
                         fallback_id = %fallback_id,
                         "Attempting fallback"
                     );
-
-                    let fallback_ctx = ctx.for_degradation();
-                    match task.fallback(&fallback_ctx).await {
-                        Ok(output) => {
-                            task.on_degraded(&fallback_ctx, &reason);
-                            TaskOutcome::Degraded {
-                                result: output,
-                                reason,
-                                attempts: ctx.attempt,
-                            }
-                        }
-                        Err(e) => {
-                            error!(
-                                task_id = %ctx.task_id,
-                                error = %e,
-                                "Fallback also failed"
-                            );
-                            let error_msg = format!("Fallback failed: {}", e);
-                            task.on_failed(&fallback_ctx, &error_msg);
-                            self.notify_failure(&fallback_ctx, &error_msg);
-                            TaskOutcome::Failed {
-                                error: error_msg,
-                                attempts: ctx.attempt,
-                                last_attempt_duration: elapsed,
-                            }
-                        }
-                    }
-                } else {
-                    warn!(
-                        task_id = %ctx.task_id,
-                        "No fallback available"
-                    );
-                    self.notify_failure(ctx, "No fallback available");
-                    TaskOutcome::Failed {
-                        error: "No fallback available".to_string(),
-                        attempts: ctx.attempt,
-                        last_attempt_duration: elapsed,
-                    }
                 }
+                self.try_fallback(task, ctx, reason, elapsed, "Fallback failed", "No fallback available")
+                    .await
             }
 
             DegradationStrategy::PartialResult => {
-                // For partial results, try fallback which might return partial data
-                if task.has_fallback() {
-                    let fallback_ctx = ctx.for_degradation();
-                    match task.fallback(&fallback_ctx).await {
-                        Ok(output) => {
-                            task.on_degraded(&fallback_ctx, &reason);
-                            TaskOutcome::Degraded {
-                                result: output,
-                                reason,
-                                attempts: ctx.attempt,
-                            }
-                        }
-                        Err(e) => {
-                            let error_msg = format!("Partial result failed: {}", e);
-                            task.on_failed(&fallback_ctx, &error_msg);
-                            self.notify_failure(&fallback_ctx, &error_msg);
-                            TaskOutcome::Failed {
-                                error: error_msg,
-                                attempts: ctx.attempt,
-                                last_attempt_duration: elapsed,
-                            }
-                        }
-                    }
-                } else {
-                    let error_msg = "No partial result available";
-                    task.on_failed(ctx, error_msg);
-                    self.notify_failure(ctx, error_msg);
-                    TaskOutcome::Failed {
-                        error: error_msg.to_string(),
-                        attempts: ctx.attempt,
-                        last_attempt_duration: elapsed,
-                    }
-                }
+                self.try_fallback(
+                    task,
+                    ctx,
+                    reason,
+                    elapsed,
+                    "Partial result failed",
+                    "No partial result available",
+                )
+                .await
             }
 
             DegradationStrategy::UseCached { max_age_secs: _ } => {
@@ -231,8 +174,11 @@ impl ResilientExecutor {
                     task_id = %ctx.task_id,
                     "Cache not implemented, failing"
                 );
+                let error_msg = "Cache not available".to_string();
+                self.notify_failure(ctx, &error_msg);
+                task.on_failed(ctx, &error_msg);
                 TaskOutcome::Failed {
-                    error: "Cache not available".to_string(),
+                    error: error_msg,
                     attempts: ctx.attempt,
                     last_attempt_duration: elapsed,
                 }
@@ -276,6 +222,47 @@ impl ResilientExecutor {
     fn notify_failure(&self, ctx: &TaskContext, error: &str) {
         if let Some(callback) = &self.notify_callback {
             callback(&ctx.task_id, error);
+        }
+    }
+
+    async fn try_fallback<T: ResilientTask>(
+        &self,
+        task: &T,
+        ctx: &TaskContext,
+        reason: DegradationReason,
+        elapsed: Duration,
+        error_prefix: &str,
+        no_fallback_msg: &str,
+    ) -> TaskOutcome<T::Output> {
+        if task.has_fallback() {
+            let fallback_ctx = ctx.for_degradation();
+            match task.fallback(&fallback_ctx).await {
+                Ok(output) => {
+                    task.on_degraded(&fallback_ctx, &reason);
+                    TaskOutcome::Degraded {
+                        result: output,
+                        reason,
+                        attempts: ctx.attempt,
+                    }
+                }
+                Err(e) => {
+                    let error_msg = format!("{}: {}", error_prefix, e);
+                    task.on_failed(&fallback_ctx, &error_msg);
+                    self.notify_failure(&fallback_ctx, &error_msg);
+                    TaskOutcome::Failed {
+                        error: error_msg,
+                        attempts: ctx.attempt,
+                        last_attempt_duration: elapsed,
+                    }
+                }
+            }
+        } else {
+            self.notify_failure(ctx, no_fallback_msg);
+            TaskOutcome::Failed {
+                error: no_fallback_msg.to_string(),
+                attempts: ctx.attempt,
+                last_attempt_duration: elapsed,
+            }
         }
     }
 }
@@ -444,14 +431,14 @@ mod tests {
         let executor = ResilientExecutor::new().with_notify_callback(move |task_id, error| {
             notifications_clone
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .push((task_id.to_string(), error.to_string()));
         });
 
         let outcome = executor.execute(&task).await;
 
         assert!(outcome.is_failed());
-        let notifs = notifications.lock().unwrap();
+        let notifs = notifications.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(notifs.len(), 1);
         assert_eq!(notifs[0].0, "notify-test");
     }

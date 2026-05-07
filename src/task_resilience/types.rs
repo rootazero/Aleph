@@ -202,7 +202,9 @@ impl ResilienceConfig {
         let capped_ms = base_ms.min(self.max_backoff_ms as f64);
 
         let final_ms = if self.use_jitter {
-            let jitter = rand::random::<f64>() * self.jitter_factor * 2.0 - self.jitter_factor;
+            // Clamp jitter_factor to [0.0, 1.0] to prevent unbounded backoff
+            let jitter_factor = self.jitter_factor.clamp(0.0, 1.0);
+            let jitter = rand::random::<f64>() * jitter_factor * 2.0 - jitter_factor;
             (capped_ms * (1.0 + jitter)).max(0.0)
         } else {
             capped_ms
@@ -288,11 +290,27 @@ pub fn classify_error(error: &str) -> ErrorClass {
         return ErrorClass::RateLimit { retry_after: None };
     }
 
-    if lower.contains("connection") || lower.contains("network") || lower.contains("503") {
+    if lower.contains("connection")
+        || lower.contains("network")
+        || lower.contains("503")
+        || lower.contains("502")
+        || lower.contains("504")
+        || lower.contains("500")
+        || lower.contains("unavailable")
+        || lower.contains("overload")
+        || lower.contains("busy")
+    {
         return ErrorClass::Transient;
     }
 
-    if lower.contains("invalid") || lower.contains("not found") || lower.contains("401") {
+    if lower.contains("invalid")
+        || lower.contains("not found")
+        || lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("400")
+        || lower.contains("unauthorized")
+        || lower.contains("forbidden")
+    {
         return ErrorClass::Permanent;
     }
 
