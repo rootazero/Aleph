@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::Path;
+use tracing::warn;
 
 use super::types::{FilesystemAccess, PluginPermission};
 
@@ -486,7 +487,9 @@ pub fn convert_permissions(perms: &PermissionsSection) -> Vec<PluginPermission> 
             "read" => permissions.push(PluginPermission::Filesystem(FilesystemAccess::Read)),
             "write" => permissions.push(PluginPermission::Filesystem(FilesystemAccess::Write)),
             "full" => permissions.push(PluginPermission::Filesystem(FilesystemAccess::Full)),
-            _ => {}
+            _ => {
+                tracing::warn!("Unknown filesystem permission level '{}', ignoring", level);
+            }
         },
     }
     if perms.env {

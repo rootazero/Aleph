@@ -87,7 +87,7 @@ use hooks::HookExecutor;
 use manifest::adapter::AdapterRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::sync_primitives::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 

@@ -115,12 +115,12 @@ impl ServiceManager {
     ) -> ExtensionResult<ServiceInfo> {
         let key = Self::make_key(&registration.plugin_id, &registration.id);
 
-        // Check if already running
+        // Check if already running or starting
         if let Some(existing) = self.services.get(&key) {
-            if existing.state == ServiceState::Running {
+            if matches!(existing.state, ServiceState::Running | ServiceState::Starting) {
                 debug!(
-                    "Service {} is already running, returning existing info",
-                    key
+                    "Service {} is already {:?}, returning existing info",
+                    key, existing.state
                 );
                 return Ok(existing.clone());
             }
@@ -219,9 +219,9 @@ impl ServiceManager {
                 error: None,
             });
 
-        // If already stopped, return early
-        if info.state == ServiceState::Stopped {
-            debug!("Service {} is already stopped", key);
+        // If already stopped or stopping, return early
+        if matches!(info.state, ServiceState::Stopped | ServiceState::Stopping) {
+            debug!("Service {} is already {:?}", key, info.state);
             return Ok(info);
         }
 

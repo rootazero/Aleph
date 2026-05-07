@@ -258,7 +258,14 @@ impl ChannelManager {
 
         // Call plugin's disconnect handler
         let handler = format!("disconnect_{}", channel_id);
-        let _ = loader.call_tool(plugin_id, &handler, serde_json::json!({}));
+        if let Err(e) = loader.call_tool(plugin_id, &handler, serde_json::json!({})) {
+            tracing::warn!(
+                "Disconnect handler failed for channel '{}' from plugin '{}': {}",
+                channel_id,
+                plugin_id,
+                e
+            );
+        }
 
         // Remove from tracking (message queues will be dropped)
         self.channels.remove(&key);
