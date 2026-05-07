@@ -27,18 +27,18 @@ impl StateDatabase {
     /// Register sqlite-vec extension for all connections
     fn register_sqlite_vec_extension() {
         // Register sqlite-vec extension before opening any connection
-        // SAFETY: sqlite3_vec_init is the C entrypoint for the extension.
+        // SAFETY: sqlite3_vec_init is the C entrypoint for the sqlite-vec extension.
         // sqlite3_auto_extension registers it to be loaded for all new connections.
-        // The function item is first cast to a data pointer (*const ()), then to the
-        // target function pointer type. Rust explicitly permits casting between raw
-        // pointers and function pointers, making this well-defined.
+        // The function item (a zero-sized type) is first cast to a data pointer,
+        // then transmuted to the target function pointer type. Both are pointer-sized
+        // on all platforms Rust supports; this is the standard FFI pattern.
         unsafe {
             type SqliteVecInit = unsafe extern "C" fn(
                 *mut rusqlite::ffi::sqlite3,
                 *mut *mut std::ffi::c_char,
                 *const rusqlite::ffi::sqlite3_api_routines,
             ) -> std::ffi::c_int;
-            let init: SqliteVecInit = (sqlite3_vec_init as *const ()) as SqliteVecInit;
+            let init: SqliteVecInit = std::mem::transmute(sqlite3_vec_init as *const ());
             rusqlite::ffi::sqlite3_auto_extension(Some(init));
         }
     }

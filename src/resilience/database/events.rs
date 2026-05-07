@@ -54,6 +54,9 @@ impl StateDatabase {
         )
         .map_err(|e| AlephError::config(format!("Failed to insert event: {}", e)))?;
 
+        let last_id = conn.last_insert_rowid();
+        drop(conn);
+
         if !first_event_logged().swap(true, AtomicOrdering::Relaxed) {
             tracing::info!(
                 subsystem = "resilience",
@@ -64,7 +67,7 @@ impl StateDatabase {
             );
         }
 
-        Ok(conn.last_insert_rowid())
+        Ok(last_id)
     }
 
     /// Bulk insert events (for pulse buffering)

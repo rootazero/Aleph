@@ -106,36 +106,52 @@ impl StateDatabase {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Simple update - timestamps handled separately for clarity
-        conn.execute(
-            r#"
-            UPDATE agent_tasks
-            SET status = ?1, updated_at = ?2
-            WHERE id = ?3
-            "#,
-            params![status.to_string(), now, task_id],
-        )
-        .map_err(|e| AlephError::config(format!("Failed to update task status: {}", e)))?;
+        // Wrap all updates in a transaction so started_at / completed_at
+        // stay in sync with status even on crash.
+        conn.execute_batch("BEGIN")
+            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {}", e)))?;
 
-        // Update started_at for Running status
-        if status == TaskStatus::Running {
+        let result = (|| {
+            // Simple update - timestamps handled separately for clarity
             conn.execute(
-                "UPDATE agent_tasks SET started_at = ?1 WHERE id = ?2 AND started_at IS NULL",
-                params![now, task_id],
-            )
-            .map_err(|e| AlephError::config(format!("Failed to update started_at: {}", e)))?;
-        }
+                r#"
+                UPDATE agent_tasks
+                SET status = ?1, updated_at = ?2
+                WHERE id = ?3
+                "#,
+                params![status.to_string(), now, task_id],
+            )?;
 
-        // Update completed_at for terminal states
-        if matches!(status, TaskStatus::Completed | TaskStatus::Failed) {
-            conn.execute(
-                "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2",
-                params![now, task_id],
-            )
-            .map_err(|e| AlephError::config(format!("Failed to update completed_at: {}", e)))?;
-        }
+            // Update started_at for Running status
+            if status == TaskStatus::Running {
+                conn.execute(
+                    "UPDATE agent_tasks SET started_at = ?1 WHERE id = ?2 AND started_at IS NULL",
+                    params![now, task_id],
+                )?;
+            }
 
-        Ok(())
+            // Update completed_at for terminal states
+            if matches!(status, TaskStatus::Completed | TaskStatus::Failed) {
+                conn.execute(
+                    "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2",
+                    params![now, task_id],
+                )?;
+            }
+
+            Ok(()) as rusqlite::Result<()>
+        })();
+
+        match result {
+            Ok(()) => {
+                conn.execute_batch("COMMIT")
+                    .map_err(|e| AlephError::config(format!("Failed to commit transaction: {}", e)))?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(AlephError::config(format!("Failed to update task status: {}", e)))
+            }
+        }
     }
 
     /// Get all tasks for a session

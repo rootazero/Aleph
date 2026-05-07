@@ -190,22 +190,16 @@ impl StateDatabase {
         Ok(count as u64)
     }
 
-    /// Delete a session
+    /// Delete a session.
+    ///
+    /// Returns `Ok(())` even if the session does not exist (idempotent).
     pub async fn delete_session(&self, session_id: &str) -> Result<(), AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let deleted = conn
-            .execute(
-                "DELETE FROM subagent_sessions WHERE id = ?1",
-                params![session_id],
-            )
-            .map_err(|e| AlephError::config(format!("Failed to delete session: {}", e)))?;
-
-        if deleted == 0 {
-            return Err(AlephError::config(format!(
-                "Session not found: {}",
-                session_id
-            )));
-        }
+        conn.execute(
+            "DELETE FROM subagent_sessions WHERE id = ?1",
+            params![session_id],
+        )
+        .map_err(|e| AlephError::config(format!("Failed to delete session: {}", e)))?;
         Ok(())
     }
 }
