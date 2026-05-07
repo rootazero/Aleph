@@ -155,6 +155,8 @@ impl InitializationCoordinator {
     async fn rollback(&self, completed_phases: &[InitPhase]) -> Result<(), InitError> {
         info!(phases = ?completed_phases, "Rolling back initialization");
 
+        let mut errors: Vec<String> = Vec::new();
+
         for phase in completed_phases.iter().rev() {
             match phase {
                 InitPhase::Skills => {
@@ -162,6 +164,7 @@ impl InitializationCoordinator {
                     if skills_dir.exists() {
                         if let Err(e) = tokio::fs::remove_dir_all(&skills_dir).await {
                             warn!(error = %e, dir = ?skills_dir, "Failed to remove skills directory during rollback");
+                            errors.push(format!("skills dir: {}", e));
                         }
                     }
                 }
@@ -170,14 +173,23 @@ impl InitializationCoordinator {
                     if runtimes_dir.exists() {
                         if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
                             warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
+                            errors.push(format!("runtimes dir: {}", e));
                         }
                     }
                 }
                 InitPhase::Database => {
-                    let db_path = self.config_dir.join("memory.db");
-                    if db_path.exists() {
-                        if let Err(e) = tokio::fs::remove_file(&db_path).await {
-                            warn!(error = %e, path = ?db_path, "Failed to remove database during rollback");
+                    let db_base = self.config_dir.join("memory.db");
+                    let db_artifacts = [
+                        &db_base,
+                        &self.config_dir.join("memory.db-wal"),
+                        &self.config_dir.join("memory.db-shm"),
+                    ];
+                    for path in &db_artifacts {
+                        if path.exists() {
+                            if let Err(e) = tokio::fs::remove_file(path).await {
+                                warn!(error = %e, path = ?path, "Failed to remove database file during rollback");
+                                errors.push(format!("database file: {}", e));
+                            }
                         }
                     }
                 }
@@ -186,6 +198,7 @@ impl InitializationCoordinator {
                     if config_path.exists() {
                         if let Err(e) = tokio::fs::remove_file(&config_path).await {
                             warn!(error = %e, path = ?config_path, "Failed to remove config during rollback");
+                            errors.push(format!("config file: {}", e));
                         }
                     }
                 }
@@ -195,8 +208,15 @@ impl InitializationCoordinator {
             }
         }
 
-        info!("Rollback completed");
-        Ok(())
+        if errors.is_empty() {
+            info!("Rollback completed");
+            Ok(())
+        } else {
+            Err(InitError::new(
+                "rollback",
+                format!("Partial rollback failed: {}", errors.join("; ")),
+            ))
+        }
     }
 
     // =========================================================================
@@ -208,7 +228,7 @@ impl InitializationCoordinator {
             self.config_dir.clone(),
             self.config_dir.join("logs"),
             self.config_dir.join("cache"),
-            self.config_dir.join("output"), // Default output directory for generated files
+            self.config_dir.join("output"),
             self.config_dir.join("skills"),
             self.config_dir.join("models"),
             self.config_dir.join("runtimes"),
@@ -218,6 +238,19 @@ impl InitializationCoordinator {
             tokio::fs::create_dir_all(dir).await.map_err(|e| {
                 InitError::new("directories", format!("Failed to create {:?}: {}", dir, e))
             })?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let metadata = tokio::fs::metadata(dir).await.map_err(|e| {
+                    InitError::new("directories", format!("Failed to get metadata for {:?}: {}", dir, e))
+                })?;
+                let mut perms = metadata.permissions();
+                perms.set_mode(0o700);
+                tokio::fs::set_permissions(dir, perms).await.map_err(|e| {
+                    InitError::new("directories", format!("Failed to set permissions for {:?}: {}", dir, e))
+                })?;
+            }
         }
 
         info!(dir = ?self.config_dir, "Directory structure created");
@@ -292,7 +325,14 @@ impl InitializationCoordinator {
         let dir = runtimes_dir.clone();
         tokio::task::spawn_blocking(move || migrate_from_legacy(&dir))
             .await
-            .map_err(|e| InitError::new("runtimes", format!("Runtime init task panicked: {}", e)))?
+            .map_err(|e| {
+                let msg = if e.is_panic() {
+                    "Runtime init task panicked".to_string()
+                } else {
+                    format!("Runtime init task cancelled: {}", e)
+                };
+                InitError::new("runtimes", msg)
+            })?
             .map_err(|e| {
                 InitError::new("runtimes", format!("Failed to initialize ledger: {}", e))
             })?;
@@ -312,17 +352,9 @@ impl InitializationCoordinator {
 
         info!(path = ?skills_dir, "Setting up skills directory");
 
-        // Ensure skills directory exists
-        tokio::fs::create_dir_all(&skills_dir).await.map_err(|e| {
-            InitError::new(
-                "skills",
-                format!("Failed to create skills directory: {}", e),
-            )
-        })?;
-
         // Note: Built-in skills are copied from app bundle by the platform layer (Swift/C#)
         // The bundle_skills_dir path is not available from Rust core
-        // This phase just ensures the directory exists and validates the system
+        // Directory was created in phase 1; this phase validates the skills system
 
         // Report progress
         if let Some(h) = &self.handler {
