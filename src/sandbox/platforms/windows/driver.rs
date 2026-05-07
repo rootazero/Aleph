@@ -155,7 +155,7 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 })?
             };
 
-            let child = cmd.spawn().map_err(|e| {
+            let mut child = cmd.spawn().map_err(|e| {
                 SandboxError::ExecutionFailed(format!("failed to spawn process: {e}"))
             })?;
 
