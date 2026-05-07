@@ -103,8 +103,10 @@ impl PiiEngine {
     /// Reload configuration (hot-reload support)
     pub fn reload(config: PrivacyConfig) {
         if let Some(engine) = PII_ENGINE.get() {
+            // Build rules outside the lock to avoid blocking readers.
+            let new_rules = crate::pii::rules::build_rules(&config.custom_rules);
             let mut guard = engine.write().unwrap_or_else(|e| e.into_inner());
-            guard.rules = crate::pii::rules::build_rules(&config.custom_rules);
+            guard.rules = new_rules;
             guard.config = config;
         }
     }
@@ -217,14 +219,18 @@ impl PiiEngine {
             return FilterResult::unchanged(text);
         }
 
-        all_matches.sort_by(|a, b| b.start.cmp(&a.start));
         let deduped = dedup_overlapping(all_matches);
+
+        // Sort by start descending so we can replace from back to front
+        // without invalidating earlier offsets.
+        let mut sorted = deduped;
+        sorted.sort_by(|a, b| b.start.cmp(&a.start));
 
         let mut result = text.to_string();
         let mut blocked_count = 0;
         let mut warned_count = 0;
 
-        for detection in &deduped {
+        for detection in &sorted {
             let action = Self::action_for_rule(config, &detection.rule_name);
             match action {
                 PiiAction::Block => {
@@ -274,15 +280,18 @@ impl PiiEngine {
     }
 }
 
-/// Remove overlapping matches, keeping the one with the larger start offset.
+/// Remove overlapping matches, keeping the one with the higher severity.
 ///
-/// Callers must sort matches by `start` descending before calling this function
-/// so that higher-severity matches (which are processed first by the engine)
-/// win when two matches overlap.
-fn dedup_overlapping(matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
+/// Matches are sorted by severity descending so that Critical > High > Medium > Low.
+/// When two matches overlap, the higher-severity match is retained. If severities
+/// are equal, the first one encountered wins.
+fn dedup_overlapping(mut matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
     if matches.len() <= 1 {
         return matches;
     }
+
+    // Sort by severity descending so higher-severity matches are retained.
+    matches.sort_by(|a, b| b.severity.cmp(&a.severity));
 
     let mut result: Vec<PiiMatch> = Vec::new();
     for m in matches {
@@ -292,7 +301,6 @@ fn dedup_overlapping(matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
         if !overlaps {
             result.push(m);
         }
-        // If overlapping, the already-added one wins (higher severity rule ran first)
     }
     result
 }
@@ -451,5 +459,37 @@ mod tests {
         // The digits "1990030700" also match the phone pattern.
         let result = engine().filter("ID: 11010119900307002X");
         assert!(result.text.contains("[ID_CARD]"));
+    }
+
+    #[test]
+    fn test_dedup_overlapping_bug_low_start_greater_than_high() {
+        // Regression test for severity-priority bug:
+        // When a Low-severity match has a larger start offset than a High-severity
+        // match they overlap with, the Low match incorrectly wins because
+        // `dedup_overlapping` sorts by start descending instead of severity.
+        let mut config = PrivacyConfig::default();
+        config.custom_rules.push(crate::config::types::CustomPiiRule {
+            name: "low_overlap".to_string(),
+            pattern: r"5320151128303\d+".to_string(),
+            placeholder: "[LOW]".to_string(),
+            severity: crate::config::types::CustomPiiSeverity::Low,
+            action: PiiAction::Block,
+        });
+
+        let engine = PiiEngine::new(config);
+        // Bank card (High) matches "4532015112830366" at start=6, end=22.
+        // Custom rule (Low) matches "53201511283036"   at start=7, end=21.
+        // They overlap. High severity should win -> [BANK_CARD].
+        let result = engine.filter("Card: 4532015112830366");
+        assert!(
+            result.text.contains("[BANK_CARD]"),
+            "High-severity bank_card should win over Low-severity custom rule, but got: {}",
+            result.text
+        );
+        assert!(
+            !result.text.contains("[LOW]"),
+            "Low-severity match should be discarded, but got: {}",
+            result.text
+        );
     }
 }
