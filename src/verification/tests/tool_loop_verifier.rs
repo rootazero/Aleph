@@ -106,7 +106,7 @@ async fn threshold_minimum_is_two() {
     // with_threshold(0) and with_threshold(1) should clamp up to 2 to
     // avoid pathological "single call ⇒ instant veto" behavior.
     let v = ToolLoopVerifier::new().with_threshold(0);
-    assert_eq!(v.repeat_threshold, 2);
+    assert_eq!(v.threshold(), 2);
     let v = ToolLoopVerifier::new().with_threshold(1);
-    assert_eq!(v.repeat_threshold, 2);
+    assert_eq!(v.threshold(), 2);
 }

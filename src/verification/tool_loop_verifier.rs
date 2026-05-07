@@ -23,7 +23,7 @@ use crate::error::ErrorClass;
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
 pub struct ToolLoopVerifier {
-    pub repeat_threshold: usize,
+    repeat_threshold: usize,
 }
 
 impl ToolLoopVerifier {
@@ -31,12 +31,19 @@ impl ToolLoopVerifier {
     /// number cited in master spec § Stage 6 ("纯重复 tool call N
     /// 轮"). Tunable per deployment via `with_threshold`.
     pub fn new() -> Self {
-        Self { repeat_threshold: 5 }
+        Self {
+            repeat_threshold: 5,
+        }
     }
 
     pub fn with_threshold(mut self, n: usize) -> Self {
         self.repeat_threshold = n.max(2);
         self
+    }
+
+    /// Current repetition threshold (always >= 2).
+    pub fn threshold(&self) -> usize {
+        self.repeat_threshold
     }
 }
 
@@ -60,7 +67,10 @@ impl TurnVerifier for ToolLoopVerifier {
         if ctx.recent_tool_calls.len() < self.repeat_threshold {
             return VerifierVerdict::Continue;
         }
-        let has_text = ctx.final_text.map(|t| !t.trim().is_empty()).unwrap_or(false);
+        let has_text = ctx
+            .final_text
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false);
         if has_text {
             return VerifierVerdict::Continue;
         }

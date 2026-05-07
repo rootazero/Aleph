@@ -164,11 +164,16 @@ impl VerifierChainBuilder {
     }
 }
 
-/// Hash a tool's JSON arguments into a u64. Stable per
-/// (`serde_json` canonical form, `DefaultHasher`); two calls with
-/// identical argument trees collide; legitimate parameter differences
-/// produce different hashes. Used by `ToolLoopVerifier` for cheap
-/// repetition detection.
+/// Hash a tool's JSON arguments into a u64.
+///
+/// **Note:** Uses `std::collections::hash_map::DefaultHasher`, which is
+/// *not* guaranteed stable across Rust versions or process restarts.
+/// This is acceptable for in-process repetition detection (the only
+/// current use case), but do **not** persist these hashes to storage.
+///
+/// Two calls with identical argument trees collide; legitimate
+/// parameter differences produce different hashes. Used by
+/// `ToolLoopVerifier` for cheap repetition detection.
 pub fn hash_tool_args(args: &serde_json::Value) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

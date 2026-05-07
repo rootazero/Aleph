@@ -224,10 +224,9 @@ async fn execute_shell_hook(
 
             match child.wait().await {
                 Ok(status) => {
-                    let code = status.code().unwrap_or(-1);
-                    match code {
-                        0 => StopHookVerdict::Allow,
-                        2 => {
+                    match status.code() {
+                        Some(0) => StopHookVerdict::Allow,
+                        Some(2) => {
                             let reason = String::from_utf8_lossy(&stdout_buf)
                                 .trim()
                                 .to_string();
@@ -239,10 +238,17 @@ async fn execute_shell_hook(
                                 },
                             }
                         }
-                        _ => StopHookVerdict::Error {
+                        Some(code) => StopHookVerdict::Error {
                             hook_name: hook.hook_name.clone(),
                             message: format!(
                                 "exit code {code}: {}",
+                                String::from_utf8_lossy(&stderr_buf).trim()
+                            ),
+                        },
+                        None => StopHookVerdict::Error {
+                            hook_name: hook.hook_name.clone(),
+                            message: format!(
+                                "terminated by signal: {}",
                                 String::from_utf8_lossy(&stderr_buf).trim()
                             ),
                         },
