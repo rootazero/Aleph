@@ -430,6 +430,11 @@ mod tests {
 
         let rect = Rect::new(0.0, 0.0, 100.0, -1.0);
         assert!(rect.is_err());
+
+        assert!(Rect::new(0.0, 0.0, f64::NAN, 80.0).is_err());
+        assert!(Rect::new(0.0, 0.0, 100.0, f64::NAN).is_err());
+        assert!(Rect::new(0.0, 0.0, f64::INFINITY, 80.0).is_err());
+        assert!(Rect::new(0.0, 0.0, 100.0, f64::NEG_INFINITY).is_err());
     }
 
     #[test]

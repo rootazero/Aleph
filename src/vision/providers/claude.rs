@@ -4,6 +4,7 @@
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::Client;
+use std::time::Duration;
 
 use crate::providers::anthropic::{
     ContentBlock, ImageSource, Message, MessageContent, MessagesRequest, MessagesResponse,
@@ -12,6 +13,9 @@ use crate::providers::anthropic::{
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
 use crate::vision::types::{ImageFormat, ImageInput, OcrResult, VisionCapabilities, VisionResult};
+
+const MAX_IMAGE_FILE_SIZE: u64 = 10 * 1024 * 1024;
+const API_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Vision provider backed by Anthropic's Claude multimodal model.
 ///
@@ -28,6 +32,13 @@ pub struct ClaudeVisionProvider {
 }
 
 impl ClaudeVisionProvider {
+    fn build_client() -> Client {
+        Client::builder()
+            .timeout(API_TIMEOUT)
+            .build()
+            .expect("failed to build reqwest client")
+    }
+
     /// Create a new Claude Vision provider.
     ///
     /// # Arguments
@@ -35,7 +46,7 @@ impl ClaudeVisionProvider {
     /// * `model` — Model identifier (e.g. "claude-sonnet-4-20250514")
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Self::build_client(),
             api_key: api_key.into(),
             model: model.into(),
             base_url: "https://api.anthropic.com".to_string(),
@@ -51,7 +62,7 @@ impl ClaudeVisionProvider {
         base_url: impl Into<String>,
     ) -> Self {
         Self {
-            client: Client::new(),
+            client: Self::build_client(),
             api_key: api_key.into(),
             model: model.into(),
             base_url: base_url.into(),
@@ -76,6 +87,17 @@ impl ClaudeVisionProvider {
         format!("{}/v1/messages", self.base_url.trim_end_matches('/'))
     }
 
+    fn mime_from_url(url: &str) -> &'static str {
+        url.rsplit('.').next()
+            .map(|ext| match ext.to_lowercase().as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "webp" => "image/webp",
+                _ => "image/jpeg",
+            })
+            .unwrap_or("image/jpeg")
+    }
+
     fn to_content_block(&self, image: &ImageInput) -> Result<ContentBlock, VisionError> {
         match image {
             ImageInput::Base64 { data, format } => {
@@ -93,6 +115,14 @@ impl ClaudeVisionProvider {
                 })
             }
             ImageInput::FilePath { path } => {
+                let metadata = std::fs::metadata(path)
+                    .map_err(|e| VisionError::ImageError(format!("failed to read image metadata: {e}")))?;
+                if metadata.len() > MAX_IMAGE_FILE_SIZE {
+                    return Err(VisionError::ImageError(format!(
+                        "image file exceeds maximum size of {} MB",
+                        MAX_IMAGE_FILE_SIZE / (1024 * 1024)
+                    )));
+                }
                 let bytes =
                     std::fs::read(path).map_err(|e| VisionError::ImageError(e.to_string()))?;
                 let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -111,13 +141,16 @@ impl ClaudeVisionProvider {
                     },
                 })
             }
-            ImageInput::Url { url } => Ok(ContentBlock::Image {
-                source: ImageSource {
-                    source_type: "url".to_string(),
-                    media_type: "image/jpeg".to_string(),
-                    data: url.clone(),
-                },
-            }),
+            ImageInput::Url { url } => {
+                let mime = Self::mime_from_url(url);
+                Ok(ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "url".to_string(),
+                        media_type: mime.to_string(),
+                        data: url.clone(),
+                    },
+                })
+            }
         }
     }
 
@@ -172,14 +205,20 @@ impl ClaudeVisionProvider {
             .await
             .map_err(|e| VisionError::ProviderError(format!("parse failed: {}", e)))?;
 
-        Ok(response
+        let text = response
             .content
             .into_iter()
             .find_map(|b| match b {
                 crate::providers::anthropic::AnthropicContentBlock::Text { text } => Some(text),
                 _ => None,
             })
-            .unwrap_or_default())
+            .unwrap_or_default();
+
+        if text.is_empty() {
+            tracing::warn!("Claude API returned no text content for vision request");
+        }
+
+        Ok(text)
     }
 }
 
@@ -238,14 +277,6 @@ impl VisionProvider for ClaudeVisionProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vision::types::ImageFormat;
-
-    fn sample_image() -> ImageInput {
-        ImageInput::Base64 {
-            data: "iVBORw0KGgo=".to_string(),
-            format: ImageFormat::Png,
-        }
-    }
 
     #[test]
     fn capabilities_correct() {
