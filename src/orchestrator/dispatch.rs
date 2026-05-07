@@ -1,7 +1,9 @@
 //! Orchestrator core + seven-step dispatch. See design §6.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use crate::sync_primitives::Mutex;
 
 use tokio::sync::{broadcast, oneshot};
 use tokio_util::sync::CancellationToken;

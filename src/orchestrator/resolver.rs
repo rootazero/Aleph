@@ -89,8 +89,10 @@ pub fn resolve_session(input: SessionResolveInput) -> Result<SessionResolution, 
             is_new: true,
         }),
         SessionStrategy::Child { parent_session_key } => {
-            let parent = parent_session_key
-                .or(input.parent_session.clone())
+            let parent = input
+                .parent_session
+                .clone()
+                .or(parent_session_key)
                 .ok_or_else(|| {
                     FlowError::InvalidConfig(
                         "SessionStrategy::Child requires parent_session at runtime".into(),

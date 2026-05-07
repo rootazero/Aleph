@@ -141,13 +141,27 @@ fn child_strategy_uses_parent_from_request() {
 }
 
 #[test]
-fn child_strategy_spec_override_beats_request() {
+fn child_strategy_request_beats_spec_override() {
     let input = SessionResolveInput {
         strategy: SessionStrategy::Child {
             parent_session_key: Some("from-spec".into()),
         },
         session_hint: None,
         parent_session: Some("from-request".into()),
+        fresh_key_fn: fixed_key,
+    };
+    let r = resolve_session(input).unwrap();
+    assert_eq!(r.parent_session_key.as_deref(), Some("from-request"));
+}
+
+#[test]
+fn child_strategy_falls_back_to_spec_when_request_empty() {
+    let input = SessionResolveInput {
+        strategy: SessionStrategy::Child {
+            parent_session_key: Some("from-spec".into()),
+        },
+        session_hint: None,
+        parent_session: None,
         fresh_key_fn: fixed_key,
     };
     let r = resolve_session(input).unwrap();

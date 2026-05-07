@@ -1,6 +1,6 @@
 //! Orchestrator metrics for monitoring flow execution, retry rates, and stall detection.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::sync_primitives::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

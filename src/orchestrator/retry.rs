@@ -99,7 +99,11 @@ pub fn compute_retry_delay(attempt: u32, config: &RetryConfig) -> Duration {
 
     // Use checked arithmetic to prevent overflow
     let multiplier = 1u64.checked_shl(exp).unwrap_or(u64::MAX);
-    let delay_ms = config.base_delay.as_millis() as u64 * multiplier;
+    let base_ms = config.base_delay.as_millis();
+    let delay_ms = base_ms
+        .checked_mul(multiplier as u128)
+        .and_then(|ms| ms.try_into().ok())
+        .unwrap_or(u64::MAX);
 
     // Cap at max_delay
     config.max_delay.min(Duration::from_millis(delay_ms))
