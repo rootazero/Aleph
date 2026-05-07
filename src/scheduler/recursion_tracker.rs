@@ -38,13 +38,22 @@ impl RecursionTracker {
     pub async fn get_depth(&self, run_id: &str) -> usize {
         let map = self.parent_map.read().await;
         let mut depth = 0;
+        let mut visited = std::collections::HashSet::new();
         let mut current = run_id.to_string();
 
         while let Some(parent) = map.get(&current) {
+            if !visited.insert(current.clone()) {
+                tracing::warn!(
+                    run_id = %run_id,
+                    cycle_at = %current,
+                    "recursion tracker detected a cycle in parent chain"
+                );
+                break;
+            }
             depth += 1;
             current = parent.clone();
 
-            // Safety check to prevent infinite loops
+            // Safety check to prevent infinite loops on deep chains
             if depth > self.max_depth {
                 break;
             }

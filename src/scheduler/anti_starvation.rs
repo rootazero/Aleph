@@ -59,7 +59,7 @@ impl WaitTimeTracker {
                 // Calculate boost: +boost_per_30s per 30 seconds over threshold
                 let boost = (((wait_ms - threshold_ms) / 30_000).min(127) as i8)
                     .saturating_mul(boost_per_30s);
-                boost.min(10)
+                boost.clamp(0, 10)
             } else {
                 0
             }

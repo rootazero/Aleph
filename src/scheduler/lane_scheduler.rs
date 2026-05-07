@@ -27,6 +27,7 @@ pub enum SchedulerError {
 /// Holds references to both the global and lane semaphores.
 /// On drop, automatically releases one permit to each semaphore.
 /// This ensures permits are returned even if the task panics.
+#[must_use = "ScheduleGuard must be held for the duration of the run and passed to on_run_complete"]
 pub struct ScheduleGuard {
     global_semaphore: Arc<Semaphore>,
     lane_semaphore: Arc<Semaphore>,
@@ -62,9 +63,6 @@ impl LaneScheduler {
         // internally; we log the offending lane here so the warn line carries
         // the lane name instead of just the symptom.
         for (lane, quota) in &config.quotas {
-            if quota.max_concurrent == 0 {
-                tracing::warn!(?lane, "lane quota has max_concurrent=0; clamping to 1");
-            }
             lanes.insert(*lane, Arc::new(LaneState::new(quota.max_concurrent)));
         }
 
@@ -86,7 +84,7 @@ impl LaneScheduler {
         if let Some(state) = self.lanes.get(&lane) {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock before UNIX epoch")
+                .unwrap_or_default()
                 .as_millis() as i64;
             self.wait_tracker.track_enqueue(&run_id, lane, now).await;
             state.enqueue(run_id).await;
