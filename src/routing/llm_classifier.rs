@@ -95,10 +95,10 @@ pub fn parse_classify_response(response: &str) -> Result<TaskRoute, ClassifyErro
     Ok(match parsed.category.as_str() {
         "critical" => TaskRoute::Critical {
             reason: parsed.reason,
-                manifest_hints: ManifestHints {
-                    hard_constraints: parsed.hard_constraints,
-                    quality_threshold,
-                },
+            manifest_hints: ManifestHints {
+                hard_constraints: parsed.hard_constraints,
+                quality_threshold,
+            },
         },
         "multi_step" => TaskRoute::MultiStep {
             reason: parsed.reason,

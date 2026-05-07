@@ -468,13 +468,15 @@ mod tests {
         // match they overlap with, the Low match incorrectly wins because
         // `dedup_overlapping` sorts by start descending instead of severity.
         let mut config = PrivacyConfig::default();
-        config.custom_rules.push(crate::config::types::CustomPiiRule {
-            name: "low_overlap".to_string(),
-            pattern: r"5320151128303\d+".to_string(),
-            placeholder: "[LOW]".to_string(),
-            severity: crate::config::types::CustomPiiSeverity::Low,
-            action: PiiAction::Block,
-        });
+        config
+            .custom_rules
+            .push(crate::config::types::CustomPiiRule {
+                name: "low_overlap".to_string(),
+                pattern: r"5320151128303\d+".to_string(),
+                placeholder: "[LOW]".to_string(),
+                severity: crate::config::types::CustomPiiSeverity::Low,
+                action: PiiAction::Block,
+            });
 
         let engine = PiiEngine::new(config);
         // Bank card (High) matches "4532015112830366" at start=6, end=22.

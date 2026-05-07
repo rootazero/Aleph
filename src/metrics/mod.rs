@@ -84,13 +84,12 @@ impl StageTimer {
     ///
     /// Uses the policy's warning multiplier and logging settings.
     pub fn start_with_policy(name: &str, policy: &MetricsPolicy) -> Self {
-        let warning_multiplier = if policy.warning_multiplier.is_finite()
-            && policy.warning_multiplier >= 0.0
-        {
-            policy.warning_multiplier
-        } else {
-            DEFAULT_WARNING_MULTIPLIER
-        };
+        let warning_multiplier =
+            if policy.warning_multiplier.is_finite() && policy.warning_multiplier >= 0.0 {
+                policy.warning_multiplier
+            } else {
+                DEFAULT_WARNING_MULTIPLIER
+            };
         Self {
             name: name.to_string(),
             start: Instant::now(),

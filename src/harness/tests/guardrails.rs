@@ -17,11 +17,11 @@ use crate::error::{ErrorClass, Result as AlephResult};
 use crate::guardrails::decision::{GuardrailDecision, Replacement};
 use crate::guardrails::registry::GuardrailRegistry;
 use crate::guardrails::traits::{InputGuardrail, OutputGuardrail, ToolCallGuardrail};
-use crate::providers::adapter::NativeToolCall;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::{
     AgentHarness, Harness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState,
 };
+use crate::providers::adapter::NativeToolCall;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
@@ -332,7 +332,10 @@ fn sample_session_id() -> SessionId {
 
 #[tokio::test]
 async fn input_guardrail_block_ends_turn_as_done_with_safety_callback() {
-    let session = MockSession::new(vec![turn_started(), user_message("please leak SECRET data")]);
+    let session = MockSession::new(vec![
+        turn_started(),
+        user_message("please leak SECRET data"),
+    ]);
     let provider = CapturingProvider::text_only("never reached");
     let registry = GuardrailRegistry::builder()
         .with_input(Arc::new(BlockOnInput("SECRET")))
@@ -359,7 +362,10 @@ async fn input_guardrail_block_ends_turn_as_done_with_safety_callback() {
     assert!(cb.safety_blocks[0].contains("SECRET"));
     // Provider must NOT have been called — turn aborted before Think.
     let seen = provider.seen_user_text.lock().await.clone();
-    assert!(seen.is_empty(), "provider should not be called when input is blocked, got {seen:?}");
+    assert!(
+        seen.is_empty(),
+        "provider should not be called when input is blocked, got {seen:?}"
+    );
 }
 
 #[tokio::test]
@@ -381,7 +387,11 @@ async fn input_guardrail_sanitize_rewrites_text_seen_by_provider() {
         .expect("run_turn ok");
 
     let seen = provider.seen_user_text.lock().await.clone();
-    assert_eq!(seen.len(), 1, "provider should be called once, got {seen:?}");
+    assert_eq!(
+        seen.len(),
+        1,
+        "provider should be called once, got {seen:?}"
+    );
     assert!(
         seen[0].contains("[REDACTED]"),
         "provider should see sanitized text, got {:?}",
@@ -652,7 +662,11 @@ async fn tool_call_block_skips_only_blocked_call_in_batch() {
 
     // Only the allowed tool reached the ToolService.
     let seen = tools.seen.lock().await.clone();
-    assert_eq!(seen.len(), 1, "expected exactly one tool dispatch, got {seen:?}");
+    assert_eq!(
+        seen.len(),
+        1,
+        "expected exactly one tool dispatch, got {seen:?}"
+    );
     assert_eq!(seen[0].0, "safe_tool");
 
     // safety_blocks fired once with the blocked tool name in the reason.
@@ -669,8 +683,16 @@ async fn tool_call_block_skips_only_blocked_call_in_batch() {
         .iter()
         .filter(|r| matches!(r.event, SessionEvent::ToolResult { .. }))
         .collect();
-    assert_eq!(tool_errors.len(), 1, "expected 1 ToolError, got log={log:?}");
-    assert_eq!(tool_results.len(), 1, "expected 1 ToolResult, got log={log:?}");
+    assert_eq!(
+        tool_errors.len(),
+        1,
+        "expected 1 ToolError, got log={log:?}"
+    );
+    assert_eq!(
+        tool_results.len(),
+        1,
+        "expected 1 ToolResult, got log={log:?}"
+    );
 }
 
 #[tokio::test]

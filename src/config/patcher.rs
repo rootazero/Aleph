@@ -109,11 +109,7 @@ pub struct ConfigPatcher {
 
 impl ConfigPatcher {
     /// Create a new ConfigPatcher.
-    pub fn new(
-        config: Arc<RwLock<Config>>,
-        config_path: PathBuf,
-        backup: ConfigBackup,
-    ) -> Self {
+    pub fn new(config: Arc<RwLock<Config>>, config_path: PathBuf, backup: ConfigBackup) -> Self {
         Self {
             config,
             config_path,
@@ -414,9 +410,9 @@ pub(crate) fn set_nested_value(
         )));
     }
 
-    let obj = current.as_object_mut().ok_or_else(|| {
-        AlephError::invalid_config("Failed to access target object".to_string())
-    })?;
+    let obj = current
+        .as_object_mut()
+        .ok_or_else(|| AlephError::invalid_config("Failed to access target object".to_string()))?;
     let existing = obj
         .entry(last_segment.to_string())
         .or_insert(serde_json::Value::Null);

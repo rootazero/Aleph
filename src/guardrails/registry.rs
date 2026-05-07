@@ -95,11 +95,7 @@ impl GuardrailRegistry {
         last_warn.unwrap_or(GuardrailDecision::Allow)
     }
 
-    pub async fn evaluate_tool_call(
-        &self,
-        tool_name: &str,
-        args: &Value,
-    ) -> GuardrailDecision {
+    pub async fn evaluate_tool_call(&self, tool_name: &str, args: &Value) -> GuardrailDecision {
         if !self.is_enabled() || self.tool_call.is_empty() {
             return GuardrailDecision::Allow;
         }

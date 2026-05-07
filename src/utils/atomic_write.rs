@@ -41,10 +41,12 @@ pub async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephEr
             suggestion: None,
         })?;
 
-    let file = fs::File::open(&tmp_path).await.map_err(|e| AlephError::ConfigError {
-        message: format!("Failed to open temp file for sync: {e}"),
-        suggestion: None,
-    })?;
+    let file = fs::File::open(&tmp_path)
+        .await
+        .map_err(|e| AlephError::ConfigError {
+            message: format!("Failed to open temp file for sync: {e}"),
+            suggestion: None,
+        })?;
     file.sync_all().await.map_err(|e| AlephError::ConfigError {
         message: format!("Failed to sync temp file: {e}"),
         suggestion: None,

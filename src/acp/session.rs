@@ -250,9 +250,7 @@ impl AcpSession {
 
             match result {
                 Ok(resp) => {
-                    let acc_text = accumulated
-                        .into_inner()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let acc_text = accumulated.into_inner().unwrap_or_else(|e| e.into_inner());
                     let result_text = if acc_text.is_empty() {
                         resp.text_content().unwrap_or_default()
                     } else {

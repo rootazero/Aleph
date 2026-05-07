@@ -229,9 +229,7 @@ impl StateDatabase {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| {
-                AlephError::config(format!("Failed to check schema_info table: {}", e))
-            })?;
+            .map_err(|e| AlephError::config(format!("Failed to check schema_info table: {}", e)))?;
 
         if !table_exists {
             return Ok(false);
@@ -306,9 +304,7 @@ impl StateDatabase {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| {
-                AlephError::config(format!("Failed to check schema_info table: {}", e))
-            })?;
+            .map_err(|e| AlephError::config(format!("Failed to check schema_info table: {}", e)))?;
 
         if !table_exists {
             // Check if memories table exists (old database without schema_info)

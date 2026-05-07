@@ -84,7 +84,11 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
             {
                 println!("Sending SIGTERM to gateway process (PID {})", pid);
                 if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
-                    eprintln!("Warning: failed to send SIGTERM to PID {}: {}", pid, std::io::Error::last_os_error());
+                    eprintln!(
+                        "Warning: failed to send SIGTERM to PID {}: {}",
+                        pid,
+                        std::io::Error::last_os_error()
+                    );
                 }
 
                 // Wait for process to exit (max 5 seconds)
@@ -99,7 +103,11 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
 
                 println!("Gateway did not stop gracefully, sending SIGKILL");
                 if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
-                    eprintln!("Warning: failed to send SIGKILL to PID {}: {}", pid, std::io::Error::last_os_error());
+                    eprintln!(
+                        "Warning: failed to send SIGKILL to PID {}: {}",
+                        pid,
+                        std::io::Error::last_os_error()
+                    );
                 }
             }
 

@@ -639,13 +639,7 @@ mod tests {
     #[test]
     fn arena_manifest_build_rejects_too_many_participants() {
         let many_agents: Vec<String> = (0..101).map(|i| format!("agent-{}", i)).collect();
-        let result = ArenaManifest::build(
-            "test".to_string(),
-            "peer",
-            &many_agents,
-            None,
-            None,
-        );
+        let result = ArenaManifest::build("test".to_string(), "peer", &many_agents, None, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Too many participants"));
     }

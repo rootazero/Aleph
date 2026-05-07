@@ -21,11 +21,16 @@ pub fn register(channel_type: &'static str, create: ChannelFactoryFn) {
 }
 
 pub fn get_factory(channel_type: &str) -> Option<ChannelFactoryFn> {
-    PLUGINS.read().unwrap_or_else(|e| e.into_inner()).get(channel_type).copied()
+    PLUGINS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(channel_type)
+        .copied()
 }
 
 pub fn channel_types() -> Vec<&'static str> {
-    PLUGINS.read()
+    PLUGINS
+        .read()
         .unwrap_or_else(|e| e.into_inner())
         .keys()
         .copied()

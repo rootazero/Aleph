@@ -41,7 +41,10 @@ impl ContentSource {
             }
             ContentSource::BrowserContent => "browser_content".to_string(),
             ContentSource::UserUpload { filename } => {
-                format!("user_upload filename=\"{}\"", filename.replace('\"', "&quot;"))
+                format!(
+                    "user_upload filename=\"{}\"",
+                    filename.replace('\"', "&quot;")
+                )
             }
         }
     }

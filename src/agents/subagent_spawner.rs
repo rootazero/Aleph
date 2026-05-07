@@ -840,7 +840,10 @@ mod tests {
             result.hit_limit,
             "expected hit_limit=true when allowlist blocks every tool call"
         );
-        assert_eq!(result.iterations, 2, "expected max_iterations to cap the loop");
+        assert_eq!(
+            result.iterations, 2,
+            "expected max_iterations to cap the loop"
+        );
         assert!(
             result.tool_calls_made > 0,
             "expected at least one attempted tool call"

@@ -196,7 +196,10 @@ mod tests {
     #[async_trait]
     impl RawMemoryStore for FakeStore {
         async fn insert_raw_memory(&self, raw: &RawMemory) -> std::result::Result<(), AlephError> {
-            self.0.lock().unwrap_or_else(|e| e.into_inner()).push(raw.clone());
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(raw.clone());
             Ok(())
         }
         async fn get_unprocessed_raw_memories(

@@ -8,7 +8,8 @@ use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Guard to keep the non-blocking writer alive, plus initialization result
-static GUARD: OnceLock<Result<tracing_appender::non_blocking::WorkerGuard, String>> = OnceLock::new();
+static GUARD: OnceLock<Result<tracing_appender::non_blocking::WorkerGuard, String>> =
+    OnceLock::new();
 
 /// Initialize file + console logging for a named component.
 ///
@@ -37,8 +38,7 @@ pub fn init_component_logging(
     default_filter: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let result = GUARD.get_or_init(|| {
-        setup_logging(component, retention_days, default_filter)
-            .map_err(|e| e.to_string())
+        setup_logging(component, retention_days, default_filter).map_err(|e| e.to_string())
     });
 
     match result {

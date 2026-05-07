@@ -249,21 +249,21 @@ pub(crate) async fn edit_image_impl(
             .data
             .iter()
             .skip(1)
-                .filter_map(|img| {
-                    if let Some(url) = &img.url {
-                        Some(GenerationData::url(url.clone()))
-                    } else if let Some(b64) = &img.b64_json {
-                        match base64::engine::general_purpose::STANDARD.decode(b64) {
-                            Ok(bytes) => Some(GenerationData::bytes(bytes)),
-                            Err(e) => {
-                                error!(error = %e, "Failed to decode base64 for additional image");
-                                None
-                            }
+            .filter_map(|img| {
+                if let Some(url) = &img.url {
+                    Some(GenerationData::url(url.clone()))
+                } else if let Some(b64) = &img.b64_json {
+                    match base64::engine::general_purpose::STANDARD.decode(b64) {
+                        Ok(bytes) => Some(GenerationData::bytes(bytes)),
+                        Err(e) => {
+                            error!(error = %e, "Failed to decode base64 for additional image");
+                            None
                         }
-                    } else {
-                        None
                     }
-                })
+                } else {
+                    None
+                }
+            })
             .collect();
 
         if !additional.is_empty() {

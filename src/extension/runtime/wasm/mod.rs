@@ -173,9 +173,10 @@ impl WasmRuntime {
             handler, input_json
         );
 
-        let mut plugin = loaded.plugin.lock().map_err(|e| {
-            ExtensionError::Runtime(format!("Failed to lock plugin: {}", e))
-        })?;
+        let mut plugin = loaded
+            .plugin
+            .lock()
+            .map_err(|e| ExtensionError::Runtime(format!("Failed to lock plugin: {}", e)))?;
 
         let result = plugin
             .call::<&str, &str>(handler, &input_json)

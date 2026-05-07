@@ -38,20 +38,34 @@ impl Default for LaneConfig {
         let mut quotas = HashMap::new();
         quotas.insert(
             Lane::Main,
-            LaneQuota::new(Lane::Main.default_max_concurrent(), Lane::Main.default_priority()),
+            LaneQuota::new(
+                Lane::Main.default_max_concurrent(),
+                Lane::Main.default_priority(),
+            ),
         );
         quotas.insert(
             Lane::Nested,
-            LaneQuota::new(Lane::Nested.default_max_concurrent(), Lane::Nested.default_priority()).with_token_budget(200_000),
+            LaneQuota::new(
+                Lane::Nested.default_max_concurrent(),
+                Lane::Nested.default_priority(),
+            )
+            .with_token_budget(200_000),
         );
         quotas.insert(
             Lane::Subagent,
-            LaneQuota::new(Lane::Subagent.default_max_concurrent(), Lane::Subagent.default_priority()).with_token_budget(500_000),
+            LaneQuota::new(
+                Lane::Subagent.default_max_concurrent(),
+                Lane::Subagent.default_priority(),
+            )
+            .with_token_budget(500_000),
         );
         quotas.insert(
             Lane::Cron,
-            LaneQuota::new(Lane::Cron.default_max_concurrent(), Lane::Cron.default_priority())
-                .with_token_budget(100_000),
+            LaneQuota::new(
+                Lane::Cron.default_max_concurrent(),
+                Lane::Cron.default_priority(),
+            )
+            .with_token_budget(100_000),
         );
 
         Self {

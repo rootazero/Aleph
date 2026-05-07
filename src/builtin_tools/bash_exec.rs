@@ -10,8 +10,8 @@
 //! `Arc<dyn Sandbox>` transitively — all subprocess execution routes through
 //! `WorkspaceSandbox::execute`.
 
-use std::path::PathBuf;
 use crate::sync_primitives::Arc;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

@@ -33,9 +33,7 @@ use crate::session::events::{
     now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, TurnId,
 };
 use crate::session::service::SessionId;
-use crate::verification::{
-    hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict,
-};
+use crate::verification::{hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict};
 
 /// Outcome of `AgentHarness::apply_input_guardrail`. The two non-block
 /// variants both carry the (possibly mutated) events vector; the caller
@@ -169,23 +167,22 @@ impl AgentHarness {
         // in the tail. `Block` ends the turn early via `on_safety_block`;
         // `Sanitize` rewrites the in-memory event before the prompt builder
         // sees it (the original session-log event is left intact for audit).
-        let events: Vec<crate::session::events::SessionEventRecord> = if let Some(registry) =
-            self.deps.guardrails.as_ref()
-        {
-            match self
-                .apply_input_guardrail(registry, events, tail_start)
-                .await?
-            {
-                InputGuardrailOutcome::Allow(events) => events,
-                InputGuardrailOutcome::Sanitized(events) => events,
-                InputGuardrailOutcome::Blocked(reason) => {
-                    callback.on_safety_block(&reason);
-                    return Ok((TurnState::Done, 0, false));
+        let events: Vec<crate::session::events::SessionEventRecord> =
+            if let Some(registry) = self.deps.guardrails.as_ref() {
+                match self
+                    .apply_input_guardrail(registry, events, tail_start)
+                    .await?
+                {
+                    InputGuardrailOutcome::Allow(events) => events,
+                    InputGuardrailOutcome::Sanitized(events) => events,
+                    InputGuardrailOutcome::Blocked(reason) => {
+                        callback.on_safety_block(&reason);
+                        return Ok((TurnState::Done, 0, false));
+                    }
                 }
-            }
-        } else {
-            events
-        };
+            } else {
+                events
+            };
 
         // 2. Build the LLM request. `prompt_builder` has access to the full log
         //    so it can reconstruct the preceding assistant tool_use turn and
@@ -550,7 +547,11 @@ impl AgentHarness {
                                 tool_id: call.id.clone(),
                                 tool_name: call.name.clone(),
                                 input: call.arguments.clone(),
-                                duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                                duration_ms: started
+                                    .elapsed()
+                                    .as_millis()
+                                    .try_into()
+                                    .unwrap_or(u64::MAX),
                             },
                             result: crate::tools::runtime::ToolResult::Success {
                                 output: output_value,
@@ -583,7 +584,11 @@ impl AgentHarness {
                                 tool_id: call.id.clone(),
                                 tool_name: call.name.clone(),
                                 input: call.arguments.clone(),
-                                duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                                duration_ms: started
+                                    .elapsed()
+                                    .as_millis()
+                                    .try_into()
+                                    .unwrap_or(u64::MAX),
                             },
                             result: crate::tools::runtime::ToolResult::Error {
                                 error: error_msg,
@@ -664,9 +669,7 @@ impl AgentHarness {
             _ => return Ok(InputGuardrailOutcome::Allow(events)),
         };
         match registry.evaluate_input(&text).await {
-            crate::guardrails::GuardrailDecision::Allow => {
-                Ok(InputGuardrailOutcome::Allow(events))
-            }
+            crate::guardrails::GuardrailDecision::Allow => Ok(InputGuardrailOutcome::Allow(events)),
             crate::guardrails::GuardrailDecision::Warn { reason } => {
                 tracing::warn!(reason = %reason, "input guardrail warned");
                 Ok(InputGuardrailOutcome::Allow(events))
@@ -697,7 +700,10 @@ impl AgentHarness {
         iteration: usize,
         callback: &mut dyn HarnessCallback,
     ) -> Result<ToolCallGuardOutcome, HarnessError> {
-        match registry.evaluate_tool_call(&call.name, &call.arguments).await {
+        match registry
+            .evaluate_tool_call(&call.name, &call.arguments)
+            .await
+        {
             crate::guardrails::GuardrailDecision::Allow => Ok(ToolCallGuardOutcome::Pass),
             crate::guardrails::GuardrailDecision::Warn { reason } => {
                 tracing::warn!(?session_id, tool = %call.name, reason = %reason, "tool-call guardrail warned");
@@ -721,19 +727,25 @@ impl AgentHarness {
                 if let Err(e) = self.deps.session.emit_event(session_id, error_event).await {
                     tracing::warn!(?session_id, call_id = %call.id, ?e, "failed to persist guardrail-block ToolError");
                 }
-                self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
-                    iteration,
-                    call: crate::harness::trace::ToolCallEndEvent {
-                        tool_id: call.id.clone(),
-                        tool_name: call.name.clone(),
-                        input: call.arguments.clone(),
-                        duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                self.emit(
+                    || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                        iteration,
+                        call: crate::harness::trace::ToolCallEndEvent {
+                            tool_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                            input: call.arguments.clone(),
+                            duration_ms: started
+                                .elapsed()
+                                .as_millis()
+                                .try_into()
+                                .unwrap_or(u64::MAX),
+                        },
+                        result: crate::tools::runtime::ToolResult::Error {
+                            error: block_msg,
+                            retryable: false,
+                        },
                     },
-                    result: crate::tools::runtime::ToolResult::Error {
-                        error: block_msg,
-                        retryable: false,
-                    },
-                });
+                );
                 Ok(ToolCallGuardOutcome::Block)
             }
         }
@@ -756,7 +768,11 @@ impl AgentHarness {
         let ctx = TurnVerifyContext {
             iterations,
             tool_calls_made,
-            final_text: if final_text.is_empty() { None } else { Some(final_text) },
+            final_text: if final_text.is_empty() {
+                None
+            } else {
+                Some(final_text)
+            },
             recent_tool_calls: &snapshot,
             stop_reason,
         };
@@ -989,7 +1005,12 @@ impl Harness for AgentHarness {
         let cancel = tokio_util::sync::CancellationToken::new();
         let mut history = std::collections::VecDeque::new();
         self.run_turn_internal(
-            session_id, callback, iterations, tool_calls_made, &mut history, &cancel,
+            session_id,
+            callback,
+            iterations,
+            tool_calls_made,
+            &mut history,
+            &cancel,
         )
         .await
         .map(|(state, _, _)| state)

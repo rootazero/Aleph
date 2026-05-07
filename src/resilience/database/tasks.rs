@@ -143,13 +143,17 @@ impl StateDatabase {
 
         match result {
             Ok(()) => {
-                conn.execute_batch("COMMIT")
-                    .map_err(|e| AlephError::config(format!("Failed to commit transaction: {}", e)))?;
+                conn.execute_batch("COMMIT").map_err(|e| {
+                    AlephError::config(format!("Failed to commit transaction: {}", e))
+                })?;
                 Ok(())
             }
             Err(e) => {
                 let _ = conn.execute_batch("ROLLBACK");
-                Err(AlephError::config(format!("Failed to update task status: {}", e)))
+                Err(AlephError::config(format!(
+                    "Failed to update task status: {}",
+                    e
+                )))
             }
         }
     }

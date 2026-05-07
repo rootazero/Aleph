@@ -23,9 +23,7 @@ fn state_registry() -> &'static RwLock<Option<Arc<RequestStateRegistry>>> {
 ///
 /// Called by MiddlewareChain during initialization.
 pub fn set_global_registry(registry: Arc<RequestStateRegistry>) {
-    let mut guard = state_registry()
-        .write()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut guard = state_registry().write().unwrap_or_else(|e| e.into_inner());
     *guard = Some(registry);
 }
 
@@ -33,9 +31,7 @@ pub fn set_global_registry(registry: Arc<RequestStateRegistry>) {
 ///
 /// Returns None if not yet initialized.
 pub fn get_global_registry() -> Option<Arc<RequestStateRegistry>> {
-    let guard = state_registry()
-        .read()
-        .unwrap_or_else(|e| e.into_inner());
+    let guard = state_registry().read().unwrap_or_else(|e| e.into_inner());
     guard.clone()
 }
 

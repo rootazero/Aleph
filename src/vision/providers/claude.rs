@@ -88,7 +88,8 @@ impl ClaudeVisionProvider {
     }
 
     fn mime_from_url(url: &str) -> &'static str {
-        url.rsplit('.').next()
+        url.rsplit('.')
+            .next()
             .map(|ext| match ext.to_lowercase().as_str() {
                 "png" => "image/png",
                 "jpg" | "jpeg" => "image/jpeg",
@@ -115,8 +116,9 @@ impl ClaudeVisionProvider {
                 })
             }
             ImageInput::FilePath { path } => {
-                let metadata = std::fs::metadata(path)
-                    .map_err(|e| VisionError::ImageError(format!("failed to read image metadata: {e}")))?;
+                let metadata = std::fs::metadata(path).map_err(|e| {
+                    VisionError::ImageError(format!("failed to read image metadata: {e}"))
+                })?;
                 if metadata.len() > MAX_IMAGE_FILE_SIZE {
                     return Err(VisionError::ImageError(format!(
                         "image file exceeds maximum size of {} MB",

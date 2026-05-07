@@ -410,11 +410,8 @@ mod tests {
         assert_eq!(arena.progress().completed_steps, 3);
 
         // Attempt to decrease should fail
-        let result = arena.report_progress(
-            &"agent-a".to_string(),
-            Some("task 2".to_string()),
-            Some(2),
-        );
+        let result =
+            arena.report_progress(&"agent-a".to_string(), Some("task 2".to_string()), Some(2));
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -422,10 +419,7 @@ mod tests {
 
         // completed_steps should remain unchanged
         assert_eq!(arena.progress().completed_steps, 3);
-        assert_eq!(
-            arena.progress().agent_progress["agent-a"].completed,
-            3
-        );
+        assert_eq!(arena.progress().agent_progress["agent-a"].completed, 3);
     }
 
     #[test]

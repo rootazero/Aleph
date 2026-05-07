@@ -153,10 +153,7 @@ impl AgentRuntime {
     }
 
     /// Stage 5a (#9) — wire a guardrail registry that subagents inherit.
-    pub fn with_guardrails(
-        mut self,
-        registry: Arc<crate::guardrails::GuardrailRegistry>,
-    ) -> Self {
+    pub fn with_guardrails(mut self, registry: Arc<crate::guardrails::GuardrailRegistry>) -> Self {
         self.guardrails = Some(registry);
         self
     }

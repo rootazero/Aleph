@@ -243,12 +243,18 @@ impl InitializationCoordinator {
             {
                 use std::os::unix::fs::PermissionsExt;
                 let metadata = tokio::fs::metadata(dir).await.map_err(|e| {
-                    InitError::new("directories", format!("Failed to get metadata for {:?}: {}", dir, e))
+                    InitError::new(
+                        "directories",
+                        format!("Failed to get metadata for {:?}: {}", dir, e),
+                    )
                 })?;
                 let mut perms = metadata.permissions();
                 perms.set_mode(0o700);
                 tokio::fs::set_permissions(dir, perms).await.map_err(|e| {
-                    InitError::new("directories", format!("Failed to set permissions for {:?}: {}", dir, e))
+                    InitError::new(
+                        "directories",
+                        format!("Failed to set permissions for {:?}: {}", dir, e),
+                    )
                 })?;
             }
         }

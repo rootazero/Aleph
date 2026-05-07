@@ -1,7 +1,7 @@
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use crate::sync_primitives::Arc;
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};

@@ -754,8 +754,8 @@ mod spec3_tests {
     async fn build_memory_user_message_invokes_on_retrieve_extension() {
         use crate::memory::extensions::traits::MemoryExtension;
         use crate::memory::extensions::{MemoryExtensionRegistry, RetrieveCtx};
-        use async_trait::async_trait;
         use crate::sync_primitives::{Arc, Mutex};
+        use async_trait::async_trait;
 
         struct Recorder(Mutex<u32>);
         #[async_trait]
@@ -782,7 +782,11 @@ mod spec3_tests {
 
         // Empty envelope → still invokes on_retrieve before the emptiness check.
         let _ = provider.build_memory_user_message("a1", "q").await.unwrap();
-        assert_eq!(*rec.0.lock().unwrap_or_else(|e| e.into_inner()), 1, "on_retrieve must be dispatched");
+        assert_eq!(
+            *rec.0.lock().unwrap_or_else(|e| e.into_inner()),
+            1,
+            "on_retrieve must be dispatched"
+        );
     }
 
     #[tokio::test]
@@ -790,8 +794,8 @@ mod spec3_tests {
         // In Tools mode we bail before calling assemble, so extensions shouldn't fire.
         use crate::memory::extensions::traits::MemoryExtension;
         use crate::memory::extensions::{MemoryExtensionRegistry, RetrieveCtx};
-        use async_trait::async_trait;
         use crate::sync_primitives::{Arc, Mutex};
+        use async_trait::async_trait;
 
         struct Recorder(Mutex<u32>);
         #[async_trait]

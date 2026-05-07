@@ -3,10 +3,10 @@
 //! These tests verify end-to-end behavior across multiple A2A components
 //! working together, complementing the unit tests in each module.
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

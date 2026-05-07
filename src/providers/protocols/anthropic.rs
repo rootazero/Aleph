@@ -13,12 +13,12 @@ use crate::providers::anthropic::{
 };
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
+use crate::sync_primitives::{Arc, RwLock};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Client;
 use std::collections::{HashMap, VecDeque};
-use crate::sync_primitives::{Arc, RwLock};
 use tracing::{debug, warn};
 
 /// Anthropic API version header value

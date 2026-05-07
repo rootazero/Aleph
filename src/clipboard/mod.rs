@@ -154,7 +154,11 @@ mod tests {
         let result = ImageData::from_base64("data:image/png;base64");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("missing comma separator"), "Error should mention missing comma: {}", err);
+        assert!(
+            err.contains("missing comma separator"),
+            "Error should mention missing comma: {}",
+            err
+        );
     }
 
     #[test]
@@ -162,7 +166,11 @@ mod tests {
         let result = ImageData::from_base64("image/png;base64,aGVsbG8=");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("expected 'data:' prefix"), "Error should mention data: prefix: {}", err);
+        assert!(
+            err.contains("expected 'data:' prefix"),
+            "Error should mention data: prefix: {}",
+            err
+        );
     }
 
     #[test]
@@ -170,7 +178,11 @@ mod tests {
         let result = ImageData::from_base64("data:image/webp;base64,aGVsbG8=");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Unsupported image MIME type"), "Error should mention unsupported MIME type: {}", err);
+        assert!(
+            err.contains("Unsupported image MIME type"),
+            "Error should mention unsupported MIME type: {}",
+            err
+        );
     }
 
     #[test]
@@ -178,7 +190,11 @@ mod tests {
         let result = ImageData::from_base64("data:image/png;base64,!!!invalid!!!");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Base64 decoding failed"), "Error should mention Base64 decoding: {}", err);
+        assert!(
+            err.contains("Base64 decoding failed"),
+            "Error should mention Base64 decoding: {}",
+            err
+        );
     }
 
     #[test]
@@ -187,7 +203,11 @@ mod tests {
         let result = ImageData::from_base64("data:image/png-extra;base64,aGVsbG8=");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Unsupported image MIME type"), "Error should reject malformed MIME type: {}", err);
+        assert!(
+            err.contains("Unsupported image MIME type"),
+            "Error should reject malformed MIME type: {}",
+            err
+        );
     }
 
     #[test]

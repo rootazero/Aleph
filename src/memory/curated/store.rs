@@ -1,11 +1,11 @@
 //! CuratedMemoryStore: load → mutate → atomic write, with cross-process locking.
 
 use crate::error::AlephError;
+use crate::sync_primitives::Mutex;
 use crate::utils::atomic_write::atomic_write_file;
 use fs2::FileExt;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
-use crate::sync_primitives::Mutex;
 use tokio::fs;
 
 use super::format::serialize;

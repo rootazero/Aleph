@@ -37,7 +37,11 @@ where
             data_dir.display()
         )
     })?;
-    let url = format!("{}/{}", endpoint.url.trim_end_matches('/'), route.trim_start_matches('/'));
+    let url = format!(
+        "{}/{}",
+        endpoint.url.trim_end_matches('/'),
+        route.trim_start_matches('/')
+    );
 
     let token = read_token(data_dir)?;
     let resp = call_once(&url, method, &body, &token)?;

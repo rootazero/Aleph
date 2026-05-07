@@ -65,10 +65,7 @@ impl A2ASubAgent {
     ///
     /// When set, delegation raw-memory writes go through `insert_with_capture_filter`.
     /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
-    pub fn with_capture_registry(
-        mut self,
-        registry: Arc<MemoryExtensionRegistry>,
-    ) -> Self {
+    pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
         self.capture_registry = Some(registry);
         self
     }

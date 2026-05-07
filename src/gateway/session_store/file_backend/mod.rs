@@ -60,7 +60,11 @@ impl FileSessionStore {
     }
 
     fn emit_session_changed(&self, key: &str, reason: &str, meta: Option<&SessionMetadata>) {
-        let bus_opt = self.event_bus.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let bus_opt = self
+            .event_bus
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         if let Some(bus) = bus_opt {
             let event = SessionChangedEvent {
                 session_key: key.to_string(),

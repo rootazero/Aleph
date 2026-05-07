@@ -4,9 +4,9 @@
 //! into `RunRequest`, executing via `ExecutionAdapter`, and mapping results
 //! back to A2A task state transitions.
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;

@@ -43,7 +43,11 @@ impl PairingTracker {
     }
 
     pub fn approve(&self, sender_id: &str) -> bool {
-        self.requests.lock().unwrap_or_else(|e| e.into_inner()).remove(sender_id).is_some()
+        self.requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(sender_id)
+            .is_some()
     }
 
     pub fn is_approved_or_pending(&self, sender_id: &str) -> bool {

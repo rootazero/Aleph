@@ -260,7 +260,10 @@ pub(in crate::commands::start) async fn initialize_channels(
                         e
                     );
                     if !daemon {
-                        eprintln!("Warning: iMessage channel '{}' has invalid config and was skipped", inst.id);
+                        eprintln!(
+                            "Warning: iMessage channel '{}' has invalid config and was skipped",
+                            inst.id
+                        );
                     }
                 }
             }

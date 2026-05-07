@@ -47,10 +47,7 @@ impl TeammateManager {
                     .find(|t| t.name == team_name)
                     .map(|t| t.id.clone())
                     .ok_or_else(|| crate::error::AlephError::Other {
-                        message: format!(
-                            "Failed to create or find team '{}': {}",
-                            team_name, e
-                        ),
+                        message: format!("Failed to create or find team '{}': {}", team_name, e),
                         suggestion: None,
                     })
             }

@@ -190,9 +190,11 @@ impl EditOps for EditOpsHandler {
 
             // Perform replacement based on pattern type
             let new_content = match pattern {
-                SearchPattern::Regex { .. } => {
-                    regex.as_ref().unwrap().replace_all(&content, replacement).to_string()
-                }
+                SearchPattern::Regex { .. } => regex
+                    .as_ref()
+                    .unwrap()
+                    .replace_all(&content, replacement)
+                    .to_string(),
                 SearchPattern::Fuzzy { text, .. } => {
                     // Simple case-insensitive replacement
                     content.replace(text, replacement)
@@ -209,7 +211,9 @@ impl EditOps for EditOpsHandler {
             // Count replacements
             if content != new_content {
                 let count = match pattern {
-                    SearchPattern::Regex { .. } => regex.as_ref().unwrap().find_iter(&content).count(),
+                    SearchPattern::Regex { .. } => {
+                        regex.as_ref().unwrap().find_iter(&content).count()
+                    }
                     SearchPattern::Fuzzy { text, .. } => content.matches(text).count(),
                     _ => 0,
                 };

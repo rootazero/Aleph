@@ -101,9 +101,7 @@ impl CommandParser {
     /// Requires a multi-threaded runtime (will panic on `current_thread` flavor).
     pub fn parse(&self, input: &str) -> Option<ParsedCommand> {
         let handle = tokio::runtime::Handle::try_current().ok()?;
-        tokio::task::block_in_place(|| {
-            handle.block_on(self.parse_async(input))
-        })
+        tokio::task::block_in_place(|| handle.block_on(self.parse_async(input)))
     }
 
     /// Get a reference to the underlying ToolRegistry

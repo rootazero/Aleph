@@ -49,11 +49,7 @@ impl SkillId {
     pub fn is_well_formed(&self) -> bool {
         match self.0.split_once(':') {
             None => !self.0.is_empty(),
-            Some((prefix, name)) => {
-                !prefix.is_empty()
-                    && !name.is_empty()
-                    && !name.contains(':')
-            }
+            Some((prefix, name)) => !prefix.is_empty() && !name.is_empty() && !name.contains(':'),
         }
     }
 }

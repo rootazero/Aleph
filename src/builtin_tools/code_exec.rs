@@ -388,7 +388,7 @@ Timeout: Default 60 seconds, configurable."#;
 
 #[cfg(test)]
 mod tests {
-use crate::sync_primitives::Arc;
+    use crate::sync_primitives::Arc;
 
     use crate::sandbox::capabilities::NetworkPolicy;
     use crate::sandbox::context::SESSION_ID;

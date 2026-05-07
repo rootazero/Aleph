@@ -315,7 +315,8 @@ impl StreamingToolExecutor {
                             tool_id: String::new(),
                             tool_name: String::new(),
                             duration_ms: 0,
-                            output_text: "[INTERNAL_ERROR] tool call state lost before execution".to_string(),
+                            output_text: "[INTERNAL_ERROR] tool call state lost before execution"
+                                .to_string(),
                             is_error: true,
                             should_stop: false,
                             retryable: false,

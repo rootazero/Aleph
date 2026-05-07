@@ -4,8 +4,8 @@
 //! preference, plan, learning, project, personal, tool, lesson, skill, reference,
 //! transcript, other, and the subagent-* family.
 
-use std::path::PathBuf;
 use crate::sync_primitives::Arc;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;

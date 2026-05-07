@@ -223,6 +223,8 @@ mod tests {
     #[test]
     fn check_size_unknown_exceeds_default_limit() {
         let p = MediaPolicy::default();
-        assert!(p.check_size(&MediaType::Unknown, 101 * 1024 * 1024).is_err());
+        assert!(p
+            .check_size(&MediaType::Unknown, 101 * 1024 * 1024)
+            .is_err());
     }
 }
