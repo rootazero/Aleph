@@ -45,7 +45,7 @@ pub async fn invoke_with_session_trace(
     // can discover the current session via sandbox::context::current_session()
     // without threading the id through the AlephTool trait.
     with_session_scope(session_id, async move {
-        let _ = session_svc
+        if let Err(e) = session_svc
             .emit_event(
                 session_id,
                 SessionEvent::ToolCallRequested {
@@ -56,49 +56,86 @@ pub async fn invoke_with_session_trace(
                     at: now_ms(),
                 },
             )
-            .await;
+            .await
+        {
+            tracing::warn!(
+                session_id = ?session_id,
+                turn_id = ?turn_id,
+                call_id = %call_id,
+                tool_name = %name,
+                error = ?e,
+                "Failed to emit ToolCallRequested event — session trace may be incomplete"
+            );
+        }
 
         let result = tool_svc.execute(&name, input).await;
 
         match &result {
             Ok(output) => {
-                let _ = session_svc
+                if let Err(e) = session_svc
                     .emit_event(
                         session_id,
                         SessionEvent::ToolResult {
                             turn_id,
-                            call_id,
+                            call_id: call_id.clone(),
                             output: output.clone(),
                             at: now_ms(),
                         },
                     )
-                    .await;
+                    .await
+                {
+                    tracing::warn!(
+                        session_id = ?session_id,
+                        turn_id = ?turn_id,
+                        call_id = %call_id,
+                        error = ?e,
+                        "Failed to emit ToolResult event — session trace may be incomplete"
+                    );
+                }
             }
             Err(ToolError::PermissionDenied { reason, .. }) => {
-                let _ = session_svc
+                if let Err(e) = session_svc
                     .emit_event(
                         session_id,
                         SessionEvent::ToolCallDenied {
                             turn_id,
-                            call_id,
+                            call_id: call_id.clone(),
                             reason: reason.clone(),
                             at: now_ms(),
                         },
                     )
-                    .await;
+                    .await
+                {
+                    tracing::warn!(
+                        session_id = ?session_id,
+                        turn_id = ?turn_id,
+                        call_id = %call_id,
+                        error = ?e,
+                        "Failed to emit ToolCallDenied event — session trace may be incomplete"
+                    );
+                }
             }
             Err(e) => {
-                let _ = session_svc
+                if let Err(e) = session_svc
                     .emit_event(
                         session_id,
                         SessionEvent::ToolError {
                             turn_id,
-                            call_id,
+                            call_id: call_id.clone(),
                             error: e.to_string(),
                             at: now_ms(),
                         },
                     )
-                    .await;
+                    .await
+                {
+                    tracing::warn!(
+                        session_id = ?session_id,
+                        turn_id = ?turn_id,
+                        call_id = %call_id,
+                        error = ?e,
+                        "Failed to emit ToolError event — session trace may be incomplete"
+                    );
+                }
             }
         }
 

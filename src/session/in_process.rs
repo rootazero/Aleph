@@ -44,7 +44,12 @@ impl InProcessActorSessionService {
     }
 
     async fn sender_for(&self, id: &SessionId) -> Option<mpsc::Sender<ActorCommand>> {
-        self.senders.read().await.get(id).cloned()
+        self.senders
+            .read()
+            .await
+            .get(id)
+            .filter(|s| !s.is_closed())
+            .cloned()
     }
 
     async fn spawn_actor(

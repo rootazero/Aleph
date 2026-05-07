@@ -72,12 +72,10 @@ pub struct AgentHarness {
 
 impl AgentHarness {
     pub fn new(deps: HarnessDeps) -> Self {
-        let stall_tracker = deps.stall_config.as_ref().map(|config| {
-            crate::harness::deps::StallTracker::new(
-                config.clone(),
-                tokio_util::sync::CancellationToken::new(),
-            )
-        });
+        let stall_tracker = deps
+            .stall_config
+            .as_ref()
+            .map(|config| crate::harness::deps::StallTracker::new(config.clone()));
         Self {
             deps,
             stall_tracker,
@@ -552,7 +550,7 @@ impl AgentHarness {
                                 tool_id: call.id.clone(),
                                 tool_name: call.name.clone(),
                                 input: call.arguments.clone(),
-                                duration_ms: started.elapsed().as_millis() as u64,
+                                duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                             },
                             result: crate::tools::runtime::ToolResult::Success {
                                 output: output_value,
@@ -585,7 +583,7 @@ impl AgentHarness {
                                 tool_id: call.id.clone(),
                                 tool_name: call.name.clone(),
                                 input: call.arguments.clone(),
-                                duration_ms: started.elapsed().as_millis() as u64,
+                                duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                             },
                             result: crate::tools::runtime::ToolResult::Error {
                                 error: error_msg,
@@ -729,7 +727,7 @@ impl AgentHarness {
                         tool_id: call.id.clone(),
                         tool_name: call.name.clone(),
                         input: call.arguments.clone(),
-                        duration_ms: started.elapsed().as_millis() as u64,
+                        duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                     },
                     result: crate::tools::runtime::ToolResult::Error {
                         error: block_msg,
@@ -906,6 +904,7 @@ impl Harness for AgentHarness {
                                 max_vetos = Self::MAX_VERIFIER_VETOS,
                                 "verifier veto limit reached; forcing Done to prevent infinite loop",
                             );
+                            self.hit_limit.store(true, Ordering::Relaxed);
                             callback.on_complete();
                             break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                         }

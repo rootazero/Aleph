@@ -119,6 +119,8 @@ impl StreamingToolBridge {
             ProviderDelta::ToolCallArgDelta { id, delta } => {
                 if let Some(pending) = self.pending.get_mut(id) {
                     pending.arg_buffer.push_str(delta);
+                } else {
+                    tracing::warn!(tool_id = %id, "ToolCallArgDelta arrived for unknown tool call id — delta discarded");
                 }
             }
             ProviderDelta::ToolCallEnd { id } => {
@@ -140,12 +142,13 @@ impl StreamingToolBridge {
                     let ready = ReadyToolCall {
                         index: pending.index,
                         id: id.clone(),
-                        name,
+                        name: name.clone(),
                         arguments,
                     };
                     if let Err(e) = self.ready_tx.try_send(ready) {
                         tracing::error!(
                             tool_id = %id,
+                            tool_name = %name,
                             error = %e,
                             "Failed to send ready tool call to executor — channel full or closed. Tool call dropped."
                         );
@@ -302,10 +305,31 @@ impl StreamingToolExecutor {
         call_index: usize,
         cancel: CancellationToken,
     ) -> JoinHandle<(usize, PipelineOutcome)> {
-        let call = self
-            .concurrent_calls
-            .get(&call_index)
-            .expect("concurrent call must exist");
+        let call = match self.concurrent_calls.get(&call_index) {
+            Some(c) => c,
+            None => {
+                tracing::error!(call_index = %call_index, "spawn_tool_execution_with_cancel: call missing from concurrent_calls map");
+                return tokio::spawn(async move {
+                    let missing_outcome = PipelineOutcome {
+                        outcome: ToolOutcome {
+                            tool_id: String::new(),
+                            tool_name: String::new(),
+                            duration_ms: 0,
+                            output_text: "[INTERNAL_ERROR] tool call state lost before execution".to_string(),
+                            is_error: true,
+                            should_stop: false,
+                            retryable: false,
+                        },
+                        additional_contexts: Vec::new(),
+                        prevent_continuation: false,
+                        hook_messages: Vec::new(),
+                        needs_user_confirmation: false,
+                        confirmation_reason: None,
+                    };
+                    (call_index, missing_outcome)
+                });
+            }
+        };
         let registry = Arc::clone(&self.registry);
         let pipeline = Arc::clone(&self.pipeline);
         let id = call.id.clone();

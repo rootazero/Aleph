@@ -194,7 +194,7 @@ impl SessionEventStore for SqliteEventStore {
             .prepare(
                 "SELECT seq, payload_json, created_at
                  FROM session_events
-                 WHERE session_id = ?1 AND seq >= ?2 AND seq <= ?3
+                 WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3
                  ORDER BY seq ASC",
             )
             .map_err(|e| SessionError::Storage(e.to_string()))?;

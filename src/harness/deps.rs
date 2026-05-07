@@ -23,7 +23,6 @@ use crate::verification::VerifierChain;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 
 pub struct HarnessDeps {
     pub session: Arc<dyn SessionService>,
@@ -144,15 +143,13 @@ impl StallConfig {
 pub struct StallTracker {
     last_activity: Arc<Mutex<Instant>>,
     config: StallConfig,
-    cancel: CancellationToken,
 }
 
 impl StallTracker {
-    pub fn new(config: StallConfig, cancel: CancellationToken) -> Self {
+    pub fn new(config: StallConfig) -> Self {
         Self {
             last_activity: Arc::new(Mutex::new(Instant::now())),
             config,
-            cancel,
         }
     }
 
@@ -167,9 +164,6 @@ impl StallTracker {
     }
 
     pub fn is_stalled(&self) -> bool {
-        if self.cancel.is_cancelled() {
-            return false;
-        }
         if let Ok(guard) = self.last_activity.try_lock() {
             guard.elapsed() > self.config.timeout
         } else {
@@ -184,9 +178,8 @@ mod stall_tests {
 
     #[tokio::test]
     async fn test_not_stalled_when_recent_activity() {
-        let cancel = CancellationToken::new();
         let config = StallConfig::default();
-        let tracker = StallTracker::new(config, cancel);
+        let tracker = StallTracker::new(config);
 
         tracker.record_activity().await;
 
@@ -195,30 +188,14 @@ mod stall_tests {
 
     #[tokio::test]
     async fn test_stalled_when_timeout_exceeded() {
-        let cancel = CancellationToken::new();
         let config = StallConfig {
             timeout: Duration::from_millis(10),
             check_interval: Duration::from_millis(1),
         };
-        let tracker = StallTracker::new(config, cancel);
+        let tracker = StallTracker::new(config);
 
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         assert!(tracker.is_stalled());
-    }
-
-    #[tokio::test]
-    async fn test_cancel_takes_precedence() {
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-        let config = StallConfig {
-            timeout: Duration::ZERO,
-            check_interval: Duration::from_millis(1),
-        };
-        let tracker = StallTracker::new(config, cancel);
-
-        tokio::time::sleep(Duration::from_millis(5)).await;
-
-        assert!(!tracker.is_stalled());
     }
 }

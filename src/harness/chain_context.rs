@@ -14,7 +14,9 @@ fn generate_chain_id() -> String {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64;
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("ch-{ts:x}-{seq:x}")
 }
