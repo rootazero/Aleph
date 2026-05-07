@@ -7,8 +7,7 @@
 //! short-circuits to `Allow` — the high-risk runtime rollback knob from
 //! master spec § Stage 5.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 
 use serde_json::Value;
 
@@ -64,39 +63,58 @@ impl GuardrailRegistry {
         if !self.is_enabled() || self.input.is_empty() {
             return GuardrailDecision::Allow;
         }
+        let mut last_warn = None;
         for g in &self.input {
             let d = g.evaluate_input(text).await;
-            if !d.is_allow() {
-                return d;
+            match d {
+                GuardrailDecision::Allow => continue,
+                GuardrailDecision::Warn { reason } => {
+                    last_warn = Some(GuardrailDecision::Warn { reason });
+                }
+                _ => return d,
             }
         }
-        GuardrailDecision::Allow
+        last_warn.unwrap_or(GuardrailDecision::Allow)
     }
 
     pub async fn evaluate_output(&self, text: &str) -> GuardrailDecision {
         if !self.is_enabled() || self.output.is_empty() {
             return GuardrailDecision::Allow;
         }
+        let mut last_warn = None;
         for g in &self.output {
             let d = g.evaluate_output(text).await;
-            if !d.is_allow() {
-                return d;
+            match d {
+                GuardrailDecision::Allow => continue,
+                GuardrailDecision::Warn { reason } => {
+                    last_warn = Some(GuardrailDecision::Warn { reason });
+                }
+                _ => return d,
             }
         }
-        GuardrailDecision::Allow
+        last_warn.unwrap_or(GuardrailDecision::Allow)
     }
 
-    pub async fn evaluate_tool_call(&self, tool_name: &str, args: &Value) -> GuardrailDecision {
+    pub async fn evaluate_tool_call(
+        &self,
+        tool_name: &str,
+        args: &Value,
+    ) -> GuardrailDecision {
         if !self.is_enabled() || self.tool_call.is_empty() {
             return GuardrailDecision::Allow;
         }
+        let mut last_warn = None;
         for g in &self.tool_call {
             let d = g.evaluate_tool_call(tool_name, args).await;
-            if !d.is_allow() {
-                return d;
+            match d {
+                GuardrailDecision::Allow => continue,
+                GuardrailDecision::Warn { reason } => {
+                    last_warn = Some(GuardrailDecision::Warn { reason });
+                }
+                _ => return d,
             }
         }
-        GuardrailDecision::Allow
+        last_warn.unwrap_or(GuardrailDecision::Allow)
     }
 }
 

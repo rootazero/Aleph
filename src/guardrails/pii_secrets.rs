@@ -91,7 +91,10 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
     async fn evaluate_tool_call(&self, _tool_name: &str, args: &Value) -> GuardrailDecision {
         let serialized = match serde_json::to_string(args) {
             Ok(s) => s,
-            Err(_) => return GuardrailDecision::Allow,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to serialize tool args for guardrail scan");
+                return GuardrailDecision::Allow;
+            }
         };
         self.evaluate(&serialized)
     }
