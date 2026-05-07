@@ -73,6 +73,7 @@ impl SearchProvider for BingProvider {
             .map(|pages| pages.value)
             .unwrap_or_default()
             .into_iter()
+            .take(options.validated_max_results())
             .map(|page| SearchResult {
                 title: page.name,
                 url: page.url,

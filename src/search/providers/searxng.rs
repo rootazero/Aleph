@@ -75,7 +75,7 @@ impl SearchProvider for SearxngProvider {
         let results = searxng_response
             .results
             .into_iter()
-            .take(options.max_results)
+            .take(options.validated_max_results())
             .map(|r| SearchResult {
                 title: r.title,
                 url: r.url,

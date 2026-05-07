@@ -79,7 +79,7 @@ impl SearchRegistry {
             }
         } else {
             let msg = format!("Default provider '{}' not found", self.default_provider);
-            log::error!("{}", msg);
+            log::warn!("{}", msg);
             errors.push(msg);
         }
 
