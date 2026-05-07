@@ -112,7 +112,7 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
                 if same_char && long_enough && no_info {
                     spans.push(FenceSpan {
                         start: open.start,
-                        end: line_end,
+                        end: line_start,
                         marker: open.marker.clone(),
                         indent: open.indent.clone(),
                         language: open.language.clone(),
@@ -366,13 +366,12 @@ mod tests {
 
     #[test]
     fn test_parse_empty_fence_body() {
-        // Opening marker immediately followed by closing marker
         let text = "```\n```";
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start, 0);
-        assert_eq!(spans[0].end, text.len());
+        assert_eq!(spans[0].end, 4);
         assert_eq!(spans[0].language, None);
     }
 
@@ -432,5 +431,36 @@ mod tests {
         let spans = parse_fence_spans(text);
         assert!(spans.is_empty());
         assert!(get_fence_split(&spans, 5).is_none());
+    }
+
+    #[test]
+    fn test_closing_fence_not_inside_span() {
+        let text = "```rust\ncode\n```";
+        let spans = parse_fence_spans(text);
+        let span = &spans[0];
+
+        assert_eq!(span.start, 0);
+        assert_eq!(span.end, 13);
+
+        assert!(!span.contains(span.start));
+        assert!(!span.contains(span.end));
+        assert!(span.contains(8));
+
+        assert!(!span.contains(13));
+        assert!(!span.contains(14));
+        assert!(!span.contains(15));
+
+        assert!(get_fence_split(&spans, 13).is_none());
+        assert!(get_fence_split(&spans, 14).is_none());
+        assert!(get_fence_split(&spans, 15).is_none());
+    }
+
+    #[test]
+    fn test_language_extracts_first_word_only() {
+        let text = "```rust ignore\ncode\n```";
+        let spans = parse_fence_spans(text);
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].language, Some("rust".to_string()));
     }
 }
