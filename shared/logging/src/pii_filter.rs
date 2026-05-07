@@ -106,10 +106,10 @@ impl Visit for StringVisitor {
         if !self.message.is_empty() {
             self.message.push_str(", ");
         }
-        if field.name() == "message" {
-            write!(&mut self.message, "{:?}", value).unwrap();
+        let _ = if field.name() == "message" {
+            write!(&mut self.message, "{:?}", value)
         } else {
-            write!(&mut self.message, "{}={:?}", field.name(), value).unwrap();
-        }
+            write!(&mut self.message, "{}={:?}", field.name(), value)
+        };
     }
 }

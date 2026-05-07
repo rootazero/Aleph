@@ -30,7 +30,8 @@ fn get_patterns() -> &'static PiiPatterns {
         api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-]{20,})\b").unwrap(),
         china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").unwrap(),
         china_id: Regex::new(r"\b\d{17}[\dXx]\b").unwrap(),
-        bank_card: Regex::new(r"\b\d{16,19}\b").unwrap(),
+        // Covers major card networks: Visa (4...), Mastercard (51-55...), Amex (34/37...), UnionPay (62...), Discover (6...)
+        bank_card: Regex::new(r"\b(?:4\d{15}|5[1-5]\d{14}|3[47]\d{13}|6\d{15}|62\d{14,17})\b").unwrap(),
     })
 }
 

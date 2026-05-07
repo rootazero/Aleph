@@ -42,8 +42,19 @@ pub fn cleanup_old_logs(
 
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        let prefix = component_prefix.unwrap_or("aleph");
-        if !file_name.starts_with(prefix) || !file_name.contains(".log") {
+        let prefix = component_prefix.unwrap_or("aleph-");
+        if !file_name.starts_with(prefix) {
+            continue;
+        }
+        // Only match actual log files: "prefix.log" or "prefix.log.YYYY-MM-DD"
+        let is_log_file = file_name == format!("{}.log", prefix)
+            || (file_name.starts_with(&format!("{}.log.", prefix)) && {
+                let suffix = &file_name[format!("{}.log.", prefix).len()..];
+                suffix.len() == 10
+                    && suffix.chars().nth(4) == Some('-')
+                    && suffix.chars().nth(7) == Some('-')
+            });
+        if !is_log_file {
             continue;
         }
 
@@ -133,6 +144,22 @@ mod tests {
 
         assert!(log_dir.join("aleph-desktop.log.2025-01-01").exists());
         assert!(log_dir.join("aleph-cli.log.2025-01-01").exists());
+    }
+
+    #[test]
+    fn test_cleanup_skips_backup_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_dir = temp_dir.path();
+
+        create_test_log_file(log_dir, "aleph-server.log.2025-01-01", 10).unwrap();
+        create_test_log_file(log_dir, "aleph-server.log.backup", 10).unwrap();
+        create_test_log_file(log_dir, "aleph.log.backup", 10).unwrap();
+
+        let deleted = cleanup_old_logs(log_dir, 7, Some("aleph-server")).unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(log_dir.join("aleph-server.log.backup").exists());
+        assert!(log_dir.join("aleph.log.backup").exists());
     }
 
     #[test]

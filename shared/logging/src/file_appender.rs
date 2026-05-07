@@ -3,15 +3,12 @@
 /// Sets up file-based logging with daily rotation and automatic PII scrubbing.
 /// Log files are written to `~/.aleph/logs/aleph-{component}.log.YYYY-MM-DD`.
 use std::path::PathBuf;
-use std::sync::{Once, OnceLock};
+use std::sync::OnceLock;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-/// Global initialization guard
-static INIT: Once = Once::new();
-
-/// Guard to keep the non-blocking writer alive
-static GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
+/// Guard to keep the non-blocking writer alive, plus initialization result
+static GUARD: OnceLock<Result<tracing_appender::non_blocking::WorkerGuard, String>> = OnceLock::new();
 
 /// Initialize file + console logging for a named component.
 ///
@@ -39,22 +36,15 @@ pub fn init_component_logging(
     retention_days: u32,
     default_filter: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let component = component.to_owned();
-    let default_filter = default_filter.to_owned();
-    let mut result = Ok(());
+    let result = GUARD.get_or_init(|| {
+        setup_logging(component, retention_days, default_filter)
+            .map_err(|e| e.to_string())
+    });
 
-    INIT.call_once(
-        || match setup_logging(&component, retention_days, &default_filter) {
-            Ok(guard) => {
-                let _ = GUARD.set(guard);
-            }
-            Err(e) => {
-                result = Err(e);
-            }
-        },
-    );
-
-    result
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e.clone().into()),
+    }
 }
 
 /// Internal function to set up logging infrastructure
@@ -62,10 +52,10 @@ fn setup_logging(
     component: &str,
     retention_days: u32,
     default_filter: &str,
-) -> Result<tracing_appender::non_blocking::WorkerGuard, Box<dyn std::error::Error>> {
-    let log_dir = get_log_directory()?;
+) -> Result<tracing_appender::non_blocking::WorkerGuard, String> {
+    let log_dir = get_log_directory().map_err(|e| e.to_string())?;
 
-    std::fs::create_dir_all(&log_dir)?;
+    std::fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
 
     // Creates files like: aleph-server.log.2026-03-03
     let file_prefix = format!("aleph-{}.log", component);
@@ -125,7 +115,7 @@ fn setup_logging(
 }
 
 /// Get the log directory path: `~/.aleph/logs/`
-pub fn get_log_directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub fn get_log_directory() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     Ok(home.join(".aleph").join("logs"))
 }
