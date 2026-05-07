@@ -161,12 +161,19 @@ impl TokenRefreshManager {
     /// Check if token should be refreshed
     fn should_refresh(&self, tokens: &OAuthTokens) -> bool {
         if let Some(expires_at) = tokens.expires_at {
-            let now = std::time::SystemTime::now()
+            let now: i64 = match std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
+            {
+                Ok(d) => d.as_secs().try_into().unwrap_or(i64::MAX),
+                Err(_) => return false,
+            };
 
-            let refresh_threshold = self.config.refresh_before_expiry.as_secs() as i64;
+            let refresh_threshold: i64 = self
+                .config
+                .refresh_before_expiry
+                .as_secs()
+                .try_into()
+                .unwrap_or(i64::MAX);
             expires_at.saturating_sub(refresh_threshold) < now
         } else {
             false // No expiration = no need to refresh

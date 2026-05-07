@@ -146,7 +146,10 @@ impl OAuthProvider {
             .map_err(|e| AlephError::IoError(format!("Client registration failed: {}", e)))?;
 
         if !response.status().is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to read client registration error response body");
+                format!("<failed to read body: {}>", e)
+            });
             return Err(AlephError::IoError(format!(
                 "Client registration failed: {}",
                 body
@@ -293,7 +296,10 @@ impl OAuthProvider {
             .map_err(|e| AlephError::IoError(format!("Token exchange failed: {}", e)))?;
 
         if !response.status().is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to read token exchange error response body");
+                format!("<failed to read body: {}>", e)
+            });
             return Err(AlephError::IoError(format!(
                 "Token exchange failed: {}",
                 body
@@ -365,7 +371,10 @@ impl OAuthProvider {
             .map_err(|e| AlephError::IoError(format!("Token refresh failed: {}", e)))?;
 
         if !response.status().is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to read token refresh error response body");
+                format!("<failed to read body: {}>", e)
+            });
             return Err(AlephError::IoError(format!(
                 "Token refresh failed: {}",
                 body

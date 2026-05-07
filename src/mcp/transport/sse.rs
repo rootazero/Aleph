@@ -281,7 +281,9 @@ impl SseTransport {
                     params: notif.params,
                 };
 
-                let handler = notification_handler.lock().unwrap();
+                let handler = notification_handler
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(ref handler) = *handler {
                     handler(json_notif);
                 }
@@ -295,7 +297,7 @@ impl SseTransport {
                 );
 
                 // Handle server-initiated requests like sampling/createMessage
-                let handler = request_handler.lock().unwrap();
+                let handler = request_handler.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref handler) = *handler {
                     handler(req.id, &req.method, req.params);
                 } else {
@@ -448,7 +450,10 @@ impl McpTransport for SseTransport {
             "Setting SSE notification handler"
         );
 
-        let mut h = self.notification_handler.lock().unwrap();
+        let mut h = self
+            .notification_handler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *h = Some(handler);
     }
 
@@ -476,7 +481,10 @@ impl SseTransport {
             "Setting SSE request handler"
         );
 
-        let mut h = self.request_handler.lock().unwrap();
+        let mut h = self
+            .request_handler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *h = Some(handler);
     }
 

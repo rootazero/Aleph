@@ -249,7 +249,9 @@ impl McpClient {
         // Clone Arc refs under lock, then release lock before awaiting network I/O
         let connections: Vec<_> = {
             let servers = self.external_servers.read().await;
-            servers.values().cloned().collect()
+            let mut conns: Vec<_> = servers.values().cloned().collect();
+            conns.sort_by(|a, b| a.name().cmp(b.name()));
+            conns
         };
 
         let mut tools = Vec::new();
@@ -261,10 +263,11 @@ impl McpClient {
 
     /// List all available resources from external servers
     pub async fn list_resources(&self) -> Vec<crate::mcp::types::McpResource> {
-        // Clone Arc refs under lock, then release lock before awaiting network I/O
         let connections: Vec<_> = {
             let servers = self.external_servers.read().await;
-            servers.values().cloned().collect()
+            let mut conns: Vec<_> = servers.values().cloned().collect();
+            conns.sort_by(|a, b| a.name().cmp(b.name()));
+            conns
         };
 
         let mut resources = Vec::new();
@@ -278,7 +281,9 @@ impl McpClient {
     pub async fn list_prompts(&self) -> Vec<crate::mcp::prompts::McpPrompt> {
         let connections: Vec<_> = {
             let servers = self.external_servers.read().await;
-            servers.values().cloned().collect()
+            let mut conns: Vec<_> = servers.values().cloned().collect();
+            conns.sort_by(|a, b| a.name().cmp(b.name()));
+            conns
         };
 
         let mut prompts = Vec::new();
@@ -289,16 +294,14 @@ impl McpClient {
     }
 
     /// Collect instructions from all connected MCP servers.
-    ///
-    /// Returns `McpServerInstruction` pairs for prompt injection via
-    /// `McpInstructionsLayer`. Only includes servers that provided
-    /// instructions during initialization.
     pub async fn collect_instructions(
         &self,
     ) -> Vec<crate::thinker::prompt_layer::McpServerInstruction> {
         let connections: Vec<_> = {
             let servers = self.external_servers.read().await;
-            servers.values().cloned().collect()
+            let mut conns: Vec<_> = servers.values().cloned().collect();
+            conns.sort_by(|a, b| a.name().cmp(b.name()));
+            conns
         };
 
         let mut result = Vec::new();
@@ -337,8 +340,9 @@ impl McpClient {
             return connection.read_resource(uri).await;
         }
 
-        // Try all servers
-        for connection in &all_connections {
+        let mut sorted: Vec<_> = all_connections.iter().collect();
+        sorted.sort_by(|a, b| a.name().cmp(b.name()));
+        for connection in sorted {
             let resources = connection.list_resources().await;
             if resources.iter().any(|r| r.uri == uri) {
                 return connection.read_resource(uri).await;
@@ -400,7 +404,9 @@ impl McpClient {
             return connection.get_prompt(name, arguments).await;
         }
 
-        for connection in &all_connections {
+        let mut sorted: Vec<_> = all_connections.iter().collect();
+        sorted.sort_by(|a, b| a.name().cmp(b.name()));
+        for connection in sorted {
             let prompts = connection.list_prompts().await;
             if prompts.iter().any(|p| p.name == name) {
                 return connection.get_prompt(name, arguments.clone()).await;
@@ -452,7 +458,9 @@ impl McpClient {
             return Ok(McpToolResult::success(result));
         }
 
-        for connection in &all_connections {
+        let mut sorted: Vec<_> = all_connections.iter().collect();
+        sorted.sort_by(|a, b| a.name().cmp(b.name()));
+        for connection in sorted {
             if connection.has_tool(name).await {
                 let result = connection.call_tool(name, args).await?;
                 return Ok(McpToolResult::success(result));
@@ -465,7 +473,9 @@ impl McpClient {
     /// Get list of registered external server names
     pub async fn service_names(&self) -> Vec<String> {
         let servers = self.external_servers.read().await;
-        servers.keys().cloned().collect()
+        let mut names: Vec<String> = servers.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     /// Check if any external servers are connected

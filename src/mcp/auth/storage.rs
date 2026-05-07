@@ -131,7 +131,8 @@ impl OAuthStorage {
     /// - Windows: %APPDATA%\aleph\mcp-auth.json
     pub fn default_path() -> PathBuf {
         dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("aleph")
             .join("mcp-auth.json")
     }

@@ -72,8 +72,8 @@ impl ApprovalHandler {
         let request_id = request.request_id.clone();
         let timeout_secs = request
             .timeout_seconds
-            .unwrap_or(self.default_timeout.as_secs() as u32);
-        let timeout_duration = Duration::from_secs(timeout_secs as u64);
+            .unwrap_or_else(|| self.default_timeout.as_secs().try_into().unwrap_or(u32::MAX));
+        let timeout_duration = Duration::from_secs(timeout_secs.into());
 
         // Create response channel
         let (tx, rx) = oneshot::channel();
