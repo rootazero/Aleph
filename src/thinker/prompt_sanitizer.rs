@@ -140,9 +140,20 @@ fn strip_injection_markers(value: &str) -> String {
         }
     }
 
-    // Sort by start position and remove in reverse to keep indices stable.
+    // Merge overlapping/adjacent intervals so removing one doesn't shift the
+    // indices of another. Then remove in reverse order to keep indices stable.
     removals.sort_by_key(|(start, _)| *start);
-    for (start, end) in removals.iter().rev() {
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (s, e) in removals {
+        if let Some(last) = merged.last_mut() {
+            if s <= last.1 {
+                last.1 = last.1.max(e);
+                continue;
+            }
+        }
+        merged.push((s, e));
+    }
+    for (start, end) in merged.iter().rev() {
         result.replace_range(*start..*end, "");
     }
 

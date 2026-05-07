@@ -67,7 +67,7 @@ pub struct MemoryContextProvider {
     injection_mode: MemoryInjectionMode,
     /// Plugin-contributed enhancements to the retrieved envelope.
     /// Default-empty registry means no plugins registered = no-op.
-    extensions: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+    extensions: crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     /// Optional wiki orientation provider for injecting structural context.
     orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Token budget for orientation snapshots.
@@ -138,7 +138,7 @@ impl MemoryContextProvider {
             assembler,
             config,
             injection_mode: MemoryInjectionMode::default(),
-            extensions: std::sync::Arc::new(
+            extensions: crate::sync_primitives::Arc::new(
                 crate::memory::extensions::MemoryExtensionRegistry::new(),
             ),
             orientation: None,
@@ -161,7 +161,7 @@ impl MemoryContextProvider {
     /// Set the extension registry on an existing provider (builder-style).
     pub fn with_extensions(
         mut self,
-        extensions: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+        extensions: crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     ) -> Self {
         self.extensions = extensions;
         self
@@ -210,7 +210,7 @@ impl MemoryContextProvider {
             assembler: Arc::new(EmptyAssembler),
             config: MemoryContextConfig::default(),
             injection_mode: mode,
-            extensions: std::sync::Arc::new(
+            extensions: crate::sync_primitives::Arc::new(
                 crate::memory::extensions::MemoryExtensionRegistry::new(),
             ),
             orientation: None,
@@ -289,7 +289,7 @@ impl MemoryContextProvider {
             assembler,
             config,
             injection_mode: MemoryInjectionMode::default(),
-            extensions: std::sync::Arc::new(
+            extensions: crate::sync_primitives::Arc::new(
                 crate::memory::extensions::MemoryExtensionRegistry::new(),
             ),
             orientation: None,
@@ -574,6 +574,7 @@ impl MemoryContextProvider {
             MemoryInjectionMode::Context | MemoryInjectionMode::Hybrid => {}
         }
 
+        // Approximate token count (4 chars ≈ 1 token for English; CJK may be 1–2 chars/token).
         let budget = AssemblyBudget {
             total_tokens: (self.config.max_output_chars / 4) as u32,
         };
@@ -754,7 +755,7 @@ mod spec3_tests {
         use crate::memory::extensions::traits::MemoryExtension;
         use crate::memory::extensions::{MemoryExtensionRegistry, RetrieveCtx};
         use async_trait::async_trait;
-        use std::sync::{Arc, Mutex};
+        use crate::sync_primitives::{Arc, Mutex};
 
         struct Recorder(Mutex<u32>);
         #[async_trait]
@@ -767,7 +768,7 @@ mod spec3_tests {
                 _ctx: &RetrieveCtx,
                 _env: &mut crate::memory::assembler::envelope::MemoryEnvelope,
             ) -> Result<(), crate::error::AlephError> {
-                *self.0.lock().unwrap() += 1;
+                *self.0.lock().unwrap_or_else(|e| e.into_inner()) += 1;
                 Ok(())
             }
         }
@@ -781,7 +782,7 @@ mod spec3_tests {
 
         // Empty envelope → still invokes on_retrieve before the emptiness check.
         let _ = provider.build_memory_user_message("a1", "q").await.unwrap();
-        assert_eq!(*rec.0.lock().unwrap(), 1, "on_retrieve must be dispatched");
+        assert_eq!(*rec.0.lock().unwrap_or_else(|e| e.into_inner()), 1, "on_retrieve must be dispatched");
     }
 
     #[tokio::test]
@@ -790,7 +791,7 @@ mod spec3_tests {
         use crate::memory::extensions::traits::MemoryExtension;
         use crate::memory::extensions::{MemoryExtensionRegistry, RetrieveCtx};
         use async_trait::async_trait;
-        use std::sync::{Arc, Mutex};
+        use crate::sync_primitives::{Arc, Mutex};
 
         struct Recorder(Mutex<u32>);
         #[async_trait]
@@ -803,7 +804,7 @@ mod spec3_tests {
                 _ctx: &RetrieveCtx,
                 _env: &mut crate::memory::assembler::envelope::MemoryEnvelope,
             ) -> Result<(), crate::error::AlephError> {
-                *self.0.lock().unwrap() += 1;
+                *self.0.lock().unwrap_or_else(|e| e.into_inner()) += 1;
                 Ok(())
             }
         }
@@ -818,7 +819,7 @@ mod spec3_tests {
         let out = provider.build_memory_user_message("a1", "q").await.unwrap();
         assert!(out.is_none());
         assert_eq!(
-            *rec.0.lock().unwrap(),
+            *rec.0.lock().unwrap_or_else(|e| e.into_inner()),
             0,
             "Tools mode must not call on_retrieve"
         );

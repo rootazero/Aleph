@@ -222,15 +222,19 @@ impl ThinkingTagParser {
     /// Check for code fence and update state
     fn check_code_fence(&mut self) -> bool {
         if self.buffer.starts_with("```") {
-            // Find end of fence line
+            // Find end of fence line (including the newline)
             let fence_end = self
                 .buffer
                 .get(3..)
                 .unwrap_or_default()
                 .find('\n')
                 .map(|p| p + 4)
-                .unwrap_or(3);
-            let _fence = self.buffer.get(..fence_end).unwrap_or_default().to_string();
+                .unwrap_or(self.buffer.len());
+            let fence_line = self.buffer.get(..fence_end).unwrap_or_default().to_string();
+            // Emit the fence opener as content and remove it from the buffer
+            // so the next search for "```" finds the closing fence, not this one.
+            self.accumulated_content.push_str(&fence_line);
+            self.buffer = self.buffer.get(fence_end..).unwrap_or_default().to_string();
             self.code_fence_pattern = Some("```".to_string());
             self.state = BlockState::FencedCode;
             true

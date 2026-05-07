@@ -359,14 +359,11 @@ impl ProviderRegistry for MultiProviderRegistry {
                 // rather than panicking to keep the system running.
                 tracing::error!("MultiProviderRegistry has no providers — returning dummy");
                 self.get("dummy").unwrap_or_else(|| {
-                    // Last resort: we have no providers at all. This is a
-                    // catastrophic configuration error, but we still avoid
-                    // panicking so the caller can handle it gracefully.
+                    // Last resort: we have no providers at all. Return a
+                    // DummyProvider so the caller gets a recoverable error
+                    // instead of a process crash.
                     tracing::error!("No providers registered in MultiProviderRegistry");
-                    // We cannot construct a real provider here, but the Arc
-                    // allows us to avoid the panic. Callers should check
-                    // list_providers() before using default_provider().
-                    panic!("MultiProviderRegistry has no providers — check configuration")
+                    Arc::new(DummyProvider) as Arc<dyn AiProvider>
                 })
             })
     }
@@ -462,6 +459,39 @@ impl ProviderRegistry for MultiProviderRegistry {
         if let Some(health) = state.health.get_mut(provider_name) {
             health.reset();
         }
+    }
+}
+
+/// Dummy provider returned when [`MultiProviderRegistry`] has no registered providers.
+///
+/// `process()` returns an error so callers get a recoverable failure instead of a panic.
+/// This is a last-resort fallback — callers should check [`ProviderRegistry::list_providers()`]
+/// before using [`ProviderRegistry::default_provider()`].
+struct DummyProvider;
+
+impl crate::providers::AiProvider for DummyProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: crate::providers::adapter::RequestPayload<'a>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async {
+            Err(crate::error::AlephError::provider(
+                "No providers registered in MultiProviderRegistry",
+            ))
+        })
+    }
+    fn name(&self) -> &str {
+        "dummy"
+    }
+    fn color(&self) -> &str {
+        "#000"
     }
 }
 

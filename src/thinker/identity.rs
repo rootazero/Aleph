@@ -57,13 +57,15 @@ impl IdentityResolver {
 
     /// Create resolver with default paths
     pub fn with_defaults() -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| {
-            tracing::warn!("HOME directory not available, using current directory for config");
-            std::env::current_dir().unwrap_or_else(|e| {
-                tracing::error!("Failed to get current directory: {e}, using '/' as last resort");
-                PathBuf::from("/")
+        let home = dirs::home_dir()
+            .or_else(|| {
+                tracing::warn!("HOME directory not available, using current directory for config");
+                std::env::current_dir().ok()
             })
-        });
+            .unwrap_or_else(|| {
+                tracing::error!("Failed to get current directory, using '/' as last resort");
+                PathBuf::from("/")
+            });
         Self::new(home.join(".aleph").join("soul.md"))
     }
 

@@ -78,7 +78,9 @@ pub fn truncate_with_head_tail(
     head_ratio: f64,
     tail_ratio: f64,
 ) -> String {
-    if content.len() <= max_chars {
+    // Compare character count (not byte length) so CJK/multi-byte text is
+    // truncated at the correct visual boundary.
+    if content.chars().count() <= max_chars {
         return content.to_string();
     }
 
