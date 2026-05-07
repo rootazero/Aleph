@@ -50,6 +50,36 @@ fn contains_unquoted_subshell(command: &str) -> bool {
     false
 }
 
+fn contains_unquoted_redirect(command: &str) -> bool {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+
+    for ch in command.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if !in_single => {
+                escaped = true;
+            }
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            '>' | '<' if !in_single && !in_double => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Analyze a shell command
 pub fn analyze_shell_command(
     command: &str,
@@ -64,6 +94,10 @@ pub fn analyze_shell_command(
     // Check for subshell substitution $(...) and process substitution <(...) >(...)
     if contains_unquoted_subshell(command) {
         return CommandAnalysis::error("subshell or process substitution is not allowed");
+    }
+
+    if contains_unquoted_redirect(command) {
+        return CommandAnalysis::error("shell redirection is not allowed");
     }
 
     // Split by chain operators (&&, ||, ;)
@@ -521,5 +555,46 @@ mod tests {
     fn test_process_substitution_in_single_quotes_allowed() {
         let analysis = analyze_shell_command("echo '<(safe)'", None, None);
         assert!(analysis.ok);
+    }
+
+    #[test]
+    fn test_redirect_blocked() {
+        let analysis = analyze_shell_command("echo hello > file.txt", None, None);
+        assert!(!analysis.ok);
+        assert!(analysis.reason.as_deref().unwrap().contains("redirection"));
+    }
+
+    #[test]
+    fn test_append_redirect_blocked() {
+        let analysis = analyze_shell_command("echo hello >> file.txt", None, None);
+        assert!(!analysis.ok);
+    }
+
+    #[test]
+    fn test_input_redirect_blocked() {
+        let analysis = analyze_shell_command("cat < file.txt", None, None);
+        assert!(!analysis.ok);
+    }
+
+    #[test]
+    fn test_redirect_in_quotes_allowed() {
+        let analysis = analyze_shell_command("echo 'hello > world'", None, None);
+        assert!(analysis.ok);
+    }
+
+    #[test]
+    fn test_redirect_in_single_quotes_allowed() {
+        let analysis = analyze_shell_command("echo 'safe > file'", None, None);
+        assert!(analysis.ok);
+    }
+
+    #[test]
+    fn test_contains_unquoted_redirect() {
+        assert!(contains_unquoted_redirect("echo hello > file.txt"));
+        assert!(contains_unquoted_redirect("cat < input.txt"));
+        assert!(contains_unquoted_redirect("echo hello >> file.txt"));
+        assert!(!contains_unquoted_redirect("echo 'hello > world'"));
+        assert!(!contains_unquoted_redirect("echo 'safe < file'"));
+        assert!(!contains_unquoted_redirect("echo hello"));
     }
 }

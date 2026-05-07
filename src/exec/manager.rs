@@ -250,7 +250,11 @@ impl ExecApprovalManager {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
         if let Some(entry) = pending.get_mut(id) {
-            // Update record
+            if entry.sender.is_none() {
+                warn!(id = %id, "Approval already resolved");
+                return false;
+            }
+
             entry.record.decision = Some(decision);
             entry.record.resolved_by = resolved_by;
             entry.record.resolved_at_ms = Some(
@@ -260,7 +264,6 @@ impl ExecApprovalManager {
                     .as_millis() as u64,
             );
 
-            // Send decision to waiter
             if let Some(sender) = entry.sender.take() {
                 let _ = sender.send(Some(decision));
             }
@@ -495,6 +498,7 @@ mod tests {
 
         // Spawn wait task
         let manager_clone = ExecApprovalManager::with_storage(manager.storage.clone());
+        let (tx, _rx) = tokio::sync::oneshot::channel();
         manager_clone
             .pending
             .write()
@@ -503,7 +507,7 @@ mod tests {
                 id.clone(),
                 PendingEntry {
                     record: record.clone(),
-                    sender: None,
+                    sender: Some(tx),
                     created_at: Instant::now(),
                 },
             );
