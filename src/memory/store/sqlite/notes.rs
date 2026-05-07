@@ -27,7 +27,7 @@ macro_rules! lock_conn {
         $self
             .conn
             .lock()
-            .map_err(|e| AlephError::config(format!("Lock: {}", e)))
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))
     };
 }
 

@@ -5,7 +5,7 @@ use crate::utils::atomic_write::atomic_write_file;
 use fs2::FileExt;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 use tokio::fs;
 
 use super::format::serialize;
