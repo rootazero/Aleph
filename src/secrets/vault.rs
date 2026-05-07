@@ -81,19 +81,21 @@ impl SecretVault {
         // Atomic temp+fsync+rename serialised via fs2 fcntl lock on
         // `secrets.vault.lock`. Defense-in-depth even if the singleton lock
         // is bypassed.
-        Self::io_for(&self.path).write(&bytes)?;
+        let io = Self::io_for(&self.path);
+        io.write(&bytes)?;
 
-        // Restrict vault file permissions on Unix (owner-only read/write)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            if let Err(e) = std::fs::set_permissions(&self.path, perms) {
-                tracing::warn!(
-                    path = %self.path.display(),
+            let actual_path = io.path();
+            if let Err(e) = std::fs::set_permissions(actual_path, perms) {
+                tracing::error!(
+                    path = %actual_path.display(),
                     error = %e,
                     "Failed to set vault file permissions"
                 );
+                return Err(SecretError::Io(e));
             }
         }
 
@@ -111,10 +113,13 @@ impl SecretVault {
 
     /// Store a pre-encrypted entry. Preserves `created_at` if overwriting.
     pub fn set(&mut self, name: &str, mut entry: EncryptedEntry) -> Result<(), SecretError> {
+        let now = chrono::Utc::now().timestamp();
+
         // Preserve created_at from existing entry if overwriting
         if let Some(existing) = self.data.entries.get(name) {
             entry.created_at = existing.created_at;
         }
+        entry.updated_at = now;
 
         self.data.entries.insert(name.to_string(), entry);
         self.save()?;

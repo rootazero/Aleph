@@ -97,6 +97,9 @@ pub enum SecretError {
     #[error("Decryption failed: vault may be corrupted or master key is wrong")]
     DecryptionFailed,
 
+    #[error("Decrypted data is not valid UTF-8")]
+    InvalidUtf8,
+
     #[error("Encryption failed: {0}")]
     EncryptionFailed(String),
 

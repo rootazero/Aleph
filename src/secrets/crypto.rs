@@ -108,7 +108,7 @@ impl SecretsCrypto {
         // Zeroize derived key on stack
         key.zeroize();
 
-        String::from_utf8(plaintext).map_err(|_| SecretError::DecryptionFailed)
+        String::from_utf8(plaintext).map_err(|_| SecretError::InvalidUtf8)
     }
 }
 
@@ -195,5 +195,22 @@ mod tests {
             .decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt)
             .unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_decrypt_invalid_utf8_returns_error() {
+        let crypto = SecretsCrypto::new("test-key");
+
+        let salt = [0u8; 32];
+        let nonce_bytes = [0u8; 12];
+        let key = crypto.derive_key(&salt).unwrap();
+        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let plaintext = vec![0xFF, 0xFE];
+        let ciphertext = cipher.encrypt(nonce, plaintext.as_ref()).unwrap();
+
+        let result = crypto.decrypt(&ciphertext, &nonce_bytes, &salt);
+        assert!(matches!(result, Err(SecretError::InvalidUtf8)));
     }
 }
