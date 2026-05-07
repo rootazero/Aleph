@@ -374,11 +374,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // across the whole process tree.
 
     // Ensure ~/.aleph/ directory structure exists
-    if let Ok(config_dir) = alephcore::utils::paths::get_config_dir() {
-        let _ = std::fs::create_dir_all(&config_dir);
-        // Deploy config guide files for LLM self-management
-        if let Err(e) = alephcore::deploy_guides(&config_dir) {
-            tracing::warn!("Failed to deploy config guides: {}", e);
+    match alephcore::utils::paths::get_config_dir() {
+        Ok(config_dir) => {
+            if let Err(e) = std::fs::create_dir_all(&config_dir) {
+                eprintln!("Error: cannot create config directory {}: {}", config_dir.display(), e);
+                std::process::exit(1);
+            }
+            // Deploy config guide files for LLM self-management
+            if let Err(e) = alephcore::deploy_guides(&config_dir) {
+                tracing::warn!("Failed to deploy config guides: {}", e);
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: cannot resolve config directory: {}", e);
+            std::process::exit(1);
         }
     }
 
@@ -653,8 +662,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // SQLite log lives in a separate DB from the main SessionStore; there
     // is no reason to couple them. (Prior code gated the build behind
     // `sqlite_sm`, which left `file` deployments without an Orchestrator.)
-    let session_service_for_orchestrator =
-        build_sqlite_session_service(&alephcore::gateway::SessionManagerConfig::default().db_path);
+    let session_service_for_orchestrator = build_sqlite_session_service(
+        &alephcore::gateway::SessionManagerConfig::default().db_path,
+    );
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
         let mut sm = sm
             .with_raw_memory_writer(
@@ -993,19 +1003,26 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.artifact_store.clone(),
         agent_result.event_store.clone(),
     ) {
-        use alephcore::event::{
-            AlephEvent, EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
-        };
-        use alephcore::teams::events::TeamEventLogger;
-        use alephcore::teams::kanban::unblocker::KanbanAutoUnblocker;
+        let _ = (|| -> () {
+            use alephcore::event::{
+                AlephEvent, EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
+            };
+            use alephcore::teams::events::TeamEventLogger;
+            use alephcore::teams::kanban::unblocker::KanbanAutoUnblocker;
 
-        let artifact_store_concrete =
-            Arc::downcast::<alephcore::teams::artifacts::SqliteArtifactStore>(artifact_store)
-                .expect("artifact_store must be SqliteArtifactStore");
-        let kanban_handler = Arc::new(KanbanAutoUnblocker::new(artifact_store_concrete));
-        let team_logger = Arc::new(TeamEventLogger::new(event_store));
-        let dummy_bus = EventBus::new();
-        let ctx = EventContext::new(dummy_bus);
+            let artifact_store_concrete =
+                match Arc::downcast::<alephcore::teams::artifacts::SqliteArtifactStore>(artifact_store)
+                {
+                    Ok(s) => s,
+                    Err(_) => {
+                        tracing::error!("artifact_store is not SqliteArtifactStore; skipping KanbanAutoUnblocker registration");
+                        return;
+                    }
+                };
+            let kanban_handler = Arc::new(KanbanAutoUnblocker::new(artifact_store_concrete));
+            let team_logger = Arc::new(TeamEventLogger::new(event_store));
+            let dummy_bus = EventBus::new();
+            let ctx = EventContext::new(dummy_bus);
 
         let kanban_handler_clone = kanban_handler.clone();
         let ctx_kanban = ctx.clone();
@@ -1055,6 +1072,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .await;
 
         tracing::info!("Team event handlers registered (KanbanAutoUnblocker, TeamEventLogger)");
+        })();
     }
 
     // Wire OpenAI-compatible API dependencies into GatewayServer

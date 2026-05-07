@@ -245,19 +245,24 @@ pub(in crate::commands::start) async fn initialize_channels(
         // iMessage uses its own constructor (no id parameter)
         #[cfg(target_os = "macos")]
         if inst.channel_type == "imessage" {
-            let imessage_config = serde_json::from_value::<IMessageConfig>(inst.config.clone())
-                .unwrap_or_else(|e| {
+            match serde_json::from_value::<IMessageConfig>(inst.config.clone()) {
+                Ok(imessage_config) => {
+                    let imessage_channel = IMessageChannel::new(imessage_config);
+                    let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
+                    if !daemon {
+                        println!("Registered channel: {} (iMessage)", channel_id);
+                    }
+                }
+                Err(e) => {
                     tracing::warn!(
-                        "Failed to parse imessage config '{}': {}, using default",
+                        "Failed to parse imessage config '{}': {}, skipping channel",
                         inst.id,
                         e
                     );
-                    IMessageConfig::default()
-                });
-            let imessage_channel = IMessageChannel::new(imessage_config);
-            let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
-            if !daemon {
-                println!("Registered channel: {} (iMessage)", channel_id);
+                    if !daemon {
+                        eprintln!("Warning: iMessage channel '{}' has invalid config and was skipped", inst.id);
+                    }
+                }
             }
             continue;
         }

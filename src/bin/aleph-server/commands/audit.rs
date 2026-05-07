@@ -69,7 +69,8 @@ fn format_timestamp(timestamp: i64) -> String {
     use chrono::{Local, TimeZone};
     match Local.timestamp_opt(timestamp, 0) {
         chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-        _ => "<invalid timestamp>".to_string(),
+        chrono::LocalResult::None => "<out-of-range timestamp>".to_string(),
+        chrono::LocalResult::Ambiguous(_, _) => "<ambiguous timestamp>".to_string(),
     }
 }
 

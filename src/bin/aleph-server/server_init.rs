@@ -10,7 +10,9 @@ use alephcore::sync_primitives::Arc;
 
 use alephcore::gateway::event_bus::GatewayEventBus;
 use alephcore::gateway::router::AgentRouter;
-use alephcore::gateway::{AgentRegistry, ExecutionEngine, GatewayEventEmitter};
+use alephcore::gateway::{
+    AgentRegistry, EventEmitter, ExecutionEngine, GatewayEventEmitter, StreamEvent,
+};
 
 /// Serve WebChat static files
 pub async fn serve_webchat(
@@ -28,10 +30,17 @@ pub async fn serve_webchat(
         .append_index_html_on_directories(true)
         .fallback(ServeFile::new(&index_path));
 
-    // Build router with restricted CORS for self-hosted deployment
+    let allowed_origins = tower_http::cors::AllowOrigin::predicate(|origin, _| {
+        origin.as_bytes().starts_with(b"http://127.")
+            || origin.as_bytes().starts_with(b"https://127.")
+            || origin.as_bytes().starts_with(b"http://localhost")
+            || origin.as_bytes().starts_with(b"https://localhost")
+            || origin.as_bytes().starts_with(b"http://[::1]")
+            || origin.as_bytes().starts_with(b"https://[::1]")
+    });
     let app = Router::new().fallback_service(serve_dir).layer(
         tower_http::cors::CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
+            .allow_origin(allowed_origins)
             .allow_methods([
                 axum::http::Method::GET,
                 axum::http::Method::HEAD,
@@ -200,7 +209,7 @@ where
     let run_id_clone = run_id.clone();
     tokio::spawn(async move {
         match engine_clone
-            .execute(run_request, agent, emitter_clone)
+            .execute(run_request, agent, emitter_clone.clone())
             .await
         {
             Ok(()) => {
@@ -208,6 +217,14 @@ where
             }
             Err(e) => {
                 tracing::error!(run_id = %run_id_clone, error = %e, "Agent run failed");
+                let _ = emitter_clone
+                    .emit(StreamEvent::RunError {
+                        run_id: run_id_clone.clone(),
+                        seq: 0,
+                        error: e.to_string(),
+                        error_code: Some("EXECUTION_FAILED".to_string()),
+                    })
+                    .await;
             }
         }
     });
@@ -411,7 +428,7 @@ where
     let run_id_clone = run_id.clone();
     tokio::spawn(async move {
         match engine_clone
-            .execute(run_request, agent, emitter_clone)
+            .execute(run_request, agent, emitter_clone.clone())
             .await
         {
             Ok(()) => {
@@ -419,6 +436,14 @@ where
             }
             Err(e) => {
                 tracing::error!(run_id = %run_id_clone, error = %e, "Chat run failed");
+                let _ = emitter_clone
+                    .emit(StreamEvent::RunError {
+                        run_id: run_id_clone.clone(),
+                        seq: 0,
+                        error: e.to_string(),
+                        error_code: Some("EXECUTION_FAILED".to_string()),
+                    })
+                    .await;
             }
         }
     });

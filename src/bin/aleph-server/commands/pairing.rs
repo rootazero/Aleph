@@ -136,13 +136,28 @@ fn approve_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     device_store.approve_device(&device)?;
 
+    // Derive a deterministic public-key placeholder from the device_id so
+    // the fingerprint is unique and stable for this device.  This is still a
+    // placeholder — real key-pair generation should replace it.
+    let pk_placeholder = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        device_id.hash(&mut h);
+        let hash = h.finish();
+        let mut buf = [0u8; 32];
+        buf[..8].copy_from_slice(&hash.to_le_bytes());
+        buf[8..16].copy_from_slice(&(hash.wrapping_mul(0x9e3779b97f4a7c15)).to_le_bytes());
+        buf
+    };
+
     // Register device in security store for token generation
     security_store.upsert_device(&alephcore::gateway::security::store::DeviceUpsertData {
         device_id: &device_id,
         device_name: &device_name,
         device_type: None,
-        public_key: &[0u8; 32], // placeholder public key
-        fingerprint: &device_id[..device_id.len().min(16)], // use device_id prefix as fingerprint
+        public_key: &pk_placeholder,
+        fingerprint: &device_id[..device_id.len().min(16)],
         role: "operator",
         scopes: &["*".to_string()],
     })?;

@@ -71,8 +71,12 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
         std::fs::create_dir_all(&plugins_dir)?;
     }
 
-    // Extract repo name from URL
     let repo_name = url
+        .split_once('?')
+        .or_else(|| url.split_once('#'))
+        .map(|(path, _)| path)
+        .unwrap_or(url)
+        .trim_end_matches('/')
         .split('/')
         .next_back()
         .unwrap_or("plugin")

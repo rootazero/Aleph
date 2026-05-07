@@ -5,12 +5,15 @@
 
 use std::path::PathBuf;
 
-/// Expand ~ to home directory
+/// Expand ~ to home directory.
+/// Falls back to `/tmp` only when `dirs::home_dir()` returns `None`,
+/// after logging a warning so operators know the path is insecure.
 pub fn expand_path(path: &str) -> PathBuf {
     if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
             return home.join(stripped);
         }
+        eprintln!("Warning: cannot determine home directory; using /tmp as fallback");
     }
     PathBuf::from(path)
 }
@@ -80,7 +83,9 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(unix)]
             {
                 println!("Sending SIGTERM to gateway process (PID {})", pid);
-                unsafe { libc::kill(pid, libc::SIGTERM) };
+                if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+                    eprintln!("Warning: failed to send SIGTERM to PID {}: {}", pid, std::io::Error::last_os_error());
+                }
 
                 // Wait for process to exit (max 5 seconds)
                 for _ in 0..50 {
@@ -93,7 +98,9 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 println!("Gateway did not stop gracefully, sending SIGKILL");
-                unsafe { libc::kill(pid, libc::SIGKILL) };
+                if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+                    eprintln!("Warning: failed to send SIGKILL to PID {}: {}", pid, std::io::Error::last_os_error());
+                }
             }
 
             #[cfg(not(unix))]

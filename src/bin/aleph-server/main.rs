@@ -84,7 +84,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Start) | None => {
             use std::path::PathBuf;
             let data_dir = dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .unwrap_or_else(|| {
+                    eprintln!("Warning: cannot determine home directory; using /tmp/.aleph/data");
+                    PathBuf::from("/tmp")
+                })
                 .join(".aleph/data");
             match alephcore::utils::instance_lock::try_acquire(&data_dir)? {
                 alephcore::utils::instance_lock::AcquireOutcome::Acquired(lock) => Some(lock),
