@@ -38,7 +38,9 @@ pub fn extract_bundled_content(aleph_home: &Path) {
             // First run or upgrade from old version — reconcile existing skills first
             info!("No skills manifest found, performing initial reconcile");
             let mut m = SkillManifest::new("");
-            m.reconcile(&skills_dir);
+            if let Err(e) = m.reconcile(&skills_dir) {
+                warn!(error = %e, "Failed to reconcile skills directory, will retry on next startup");
+            }
             m
         }
     };
@@ -47,7 +49,9 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     if manifest.bundled_version == BUNDLED_VERSION {
         debug!(version = BUNDLED_VERSION, "Bundled content is up to date");
         // Still reconcile to catch manually added skills
-        manifest.reconcile(&skills_dir);
+        if let Err(e) = manifest.reconcile(&skills_dir) {
+            warn!(error = %e, "Failed to reconcile skills directory");
+        }
         if let Err(e) = manifest.save(&skills_dir) {
             warn!(error = %e, "Failed to save manifest after reconcile");
         }
@@ -78,7 +82,9 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     }
 
     // Reconcile and save
-    manifest.reconcile(&skills_dir);
+    if let Err(e) = manifest.reconcile(&skills_dir) {
+        warn!(error = %e, "Failed to reconcile skills directory, manifest may be stale");
+    }
     if let Err(e) = manifest.save(&skills_dir) {
         warn!(error = %e, "Failed to save manifest");
     }
@@ -140,23 +146,33 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut SkillManifest
 }
 
 /// Extract bundled plugins to the marketplace cache directory.
-/// Overwrites the entire cache directory.
+///
+/// Uses an atomic swap: extracts to a temporary directory first, then renames
+/// it into place. This ensures the cache is never in a partially-extracted
+/// state if the process crashes mid-extraction.
 fn extract_plugins(bundled: &Dir, cache_dir: &Path) -> bool {
-    // Remove existing cache and recreate
-    if cache_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(cache_dir) {
-            warn!(error = %e, "Failed to remove old plugin cache");
+    let tmp_dir = cache_dir.with_extension("tmp");
+
+    // Clean up any leftover temp directory from a previous crash
+    if tmp_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&tmp_dir) {
+            warn!(error = %e, "Failed to remove old plugin cache temp directory");
             return false;
         }
     }
-    if let Err(e) = std::fs::create_dir_all(cache_dir) {
-        warn!(error = %e, "Failed to create plugin cache directory");
+    if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
+        warn!(error = %e, "Failed to create plugin cache temp directory");
         return false;
     }
 
-    // Extract all files and directories
-    match extract_dir_contents(bundled, cache_dir) {
+    // Extract all files and directories into the temp directory
+    match extract_dir_contents(bundled, &tmp_dir) {
         Ok(()) => {
+            // Atomically swap the old cache for the new one
+            if let Err(e) = std::fs::rename(&tmp_dir, cache_dir) {
+                warn!(error = %e, "Failed to atomically swap plugin cache");
+                return false;
+            }
             info!("Extracted bundled plugins to marketplace cache");
             true
         }
@@ -189,30 +205,34 @@ fn prune_stale_entries(dir: &Dir, target: &Path) -> std::io::Result<()> {
         }
     }
 
-    let mut read_err = None;
-    if let Ok(entries) = std::fs::read_dir(target) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let name = entry.file_name();
-            if !bundle_names.contains(&name) {
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Err(e) = std::fs::remove_dir_all(&path) {
-                        warn!(path = %path.display(), error = %e, "Failed to remove stale directory");
-                    }
-                } else if let Err(e) = std::fs::remove_file(&path) {
+    let entries = std::fs::read_dir(target)?;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let name = entry.file_name();
+        if !bundle_names.contains(&name) {
+            let path = entry.path();
+            // Use file_type (no follow) so we don't traverse symlinks — prevents
+            // accidental deletion outside the target directory.
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(path = %path.display(), error = %e, "Failed to stat entry, skipping");
+                    continue;
+                }
+            };
+            if ft.is_dir() {
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    warn!(path = %path.display(), error = %e, "Failed to remove stale directory");
+                }
+            } else if ft.is_file() || ft.is_symlink() {
+                if let Err(e) = std::fs::remove_file(&path) {
                     warn!(path = %path.display(), error = %e, "Failed to remove stale file");
                 }
+            } else {
+                warn!(path = %path.display(), "Skipping unknown file type during pruning");
             }
         }
-    } else {
-        read_err = Some(std::io::Error::other(
-            "Failed to read target directory for pruning",
-        ));
     }
 
-    if let Some(e) = read_err {
-        return Err(e);
-    }
     Ok(())
 }
 
@@ -227,8 +247,18 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
             continue;
         };
         let dest = target.join(name);
-        // Atomic write: write to temp file, then rename
-        let tmp = target.join(format!(".{}.tmp", name.to_string_lossy()));
+        // Atomic write: write to a uniquely-named temp file, then rename.
+        // The temp name includes a nanosecond timestamp so concurrent extractors
+        // (e.g. rapid server restart) cannot collide on the same temp file.
+        let tmp_name = format!(
+            ".{}.tmp.{}",
+            name.to_string_lossy(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let tmp = target.join(&tmp_name);
         std::fs::write(&tmp, file.contents())?;
         std::fs::rename(&tmp, &dest)?;
     }
@@ -249,10 +279,24 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
 /// Remove legacy `~/.aleph/skills-official/` directory if it exists.
 fn cleanup_legacy_dir(aleph_home: &Path) {
     let legacy = aleph_home.join("skills-official");
-    if legacy.exists() {
+    // Use symlink_metadata so we don't follow symlinks.
+    let meta = match legacy.symlink_metadata() {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            warn!(error = %e, "Failed to stat legacy skills-official path");
+            return;
+        }
+    };
+    if meta.is_dir() {
         info!("Removing legacy skills-official directory");
         if let Err(e) = std::fs::remove_dir_all(&legacy) {
             warn!(error = %e, "Failed to remove legacy skills-official directory");
         }
+    } else {
+        warn!(
+            path = %legacy.display(),
+            "Legacy skills-official exists but is not a directory, skipping removal"
+        );
     }
 }

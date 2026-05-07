@@ -53,11 +53,15 @@ impl SkillManifest {
             Ok(content) => match serde_json::from_str(&content) {
                 Ok(manifest) => Some(manifest),
                 Err(e) => {
-                    warn!(error = %e, "Corrupt manifest.json, will recreate");
+                    warn!(error = %e, path = %path.display(), "Corrupt manifest.json, will recreate");
                     None
                 }
             },
-            Err(_) => None,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                warn!(error = %e, path = %path.display(), "Failed to read manifest.json");
+                None
+            }
         }
     }
 
@@ -81,19 +85,24 @@ impl SkillManifest {
     /// Reconcile manifest with actual directory contents.
     /// - Directories not in manifest → add as Local
     /// - Manifest entries without directories → remove
-    pub fn reconcile(&mut self, skills_dir: &Path) {
+    ///
+    /// Returns `Err` if the skills directory could not be read (caller should
+    /// avoid saving a potentially stale manifest).
+    pub fn reconcile(&mut self, skills_dir: &Path) -> std::io::Result<()> {
         // Find directories on disk
-        let on_disk: HashSet<String> = match std::fs::read_dir(skills_dir) {
-            Ok(entries) => entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_dir())
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .collect(),
-            Err(e) => {
-                warn!(error = %e, "Failed to read skills directory");
-                return;
-            }
-        };
+        let entries = std::fs::read_dir(skills_dir)?;
+        let on_disk: HashSet<String> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                // Use symlink_metadata so we don't follow symlinks — a symlink
+                // pointing outside the skills dir should not be treated as a skill.
+                e.path()
+                    .symlink_metadata()
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false)
+            })
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
 
         // Add missing directories as Local
         for name in &on_disk {
@@ -113,6 +122,7 @@ impl SkillManifest {
 
         // Remove manifest entries for deleted directories
         self.skills.retain(|name, _| on_disk.contains(name));
+        Ok(())
     }
 
     /// Check if a skill is official.
