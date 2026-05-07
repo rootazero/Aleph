@@ -18,6 +18,15 @@ impl EmailRule {
     pub fn new() -> Self {
         Self
     }
+
+    /// Check word boundary: the match should not be part of a longer
+    /// alphanumeric sequence to avoid matching substrings inside file paths
+    /// or other non-email tokens.
+    fn has_word_boundary(text: &str, start: usize, end: usize) -> bool {
+        let before_ok = start == 0 || !text.as_bytes()[start - 1].is_ascii_alphanumeric();
+        let after_ok = end >= text.len() || !text.as_bytes()[end].is_ascii_alphanumeric();
+        before_ok && after_ok
+    }
 }
 
 impl PiiRule for EmailRule {
@@ -36,10 +45,15 @@ impl PiiRule for EmailRule {
         let mut results = Vec::new();
 
         for m in re.find_iter(text) {
+            let start = m.start();
+            let end = m.end();
+            if !Self::has_word_boundary(text, start, end) {
+                continue;
+            }
             results.push(PiiMatch {
                 rule_name: self.name().to_string(),
-                start: m.start(),
-                end: m.end(),
+                start,
+                end,
                 matched_text: m.as_str().to_string(),
                 severity: self.severity(),
                 placeholder: self.placeholder().to_string(),
@@ -80,6 +94,16 @@ mod tests {
     #[test]
     fn test_no_match_missing_tld() {
         let matches = rule().detect("user@domain");
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn test_no_match_substring_in_larger_token() {
+        // Email should not match when embedded in a larger alphanumeric token.
+        // The regex may greedily consume trailing letters as part of the TLD,
+        // but word-boundary filtering must still reject emails that are
+        // immediately followed by alphanumeric characters.
+        let matches = rule().detect("Contact user@example.com1z");
         assert_eq!(matches.len(), 0);
     }
 }
