@@ -104,6 +104,12 @@ const RESTRICTED_NETWORK_POLICY: &str = r#"
 #[derive(Debug, Clone)]
 pub struct SeatbeltDriver;
 
+/// Escape a string for safe inclusion in SBPL (Sandbox Profile Language).
+/// SBPL uses double quotes for string literals; backslash and quote must be escaped.
+fn escape_sbpl(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 impl SeatbeltDriver {
     pub fn new() -> Self {
         Self
@@ -146,9 +152,9 @@ impl SeatbeltDriver {
         fs: &FsPolicy,
         cwd: &Path,
     ) -> Result<(), SandboxError> {
-        let cwd_str = cwd.to_str().ok_or_else(|| {
+        let cwd_str = escape_sbpl(cwd.to_str().ok_or_else(|| {
             SandboxError::ProfileGeneration("workspace path contains invalid UTF-8".into())
-        })?;
+        })?);
 
         match fs {
             FsPolicy::WorkspaceOnly => {
@@ -167,12 +173,12 @@ impl SeatbeltDriver {
                     cwd_str, cwd_str
                 ));
                 for path in paths {
-                    let path_str = path.to_str().ok_or_else(|| {
+                    let path_str = escape_sbpl(path.to_str().ok_or_else(|| {
                         SandboxError::ProfileGeneration(format!(
                             "path contains invalid UTF-8: {}",
                             path.display()
                         ))
-                    })?;
+                    })?);
                     profile.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", path_str));
                 }
             }
@@ -184,12 +190,12 @@ impl SeatbeltDriver {
                     cwd_str, cwd_str
                 ));
                 for path in paths {
-                    let path_str = path.to_str().ok_or_else(|| {
+                    let path_str = escape_sbpl(path.to_str().ok_or_else(|| {
                         SandboxError::ProfileGeneration(format!(
                             "path contains invalid UTF-8: {}",
                             path.display()
                         ))
-                    })?;
+                    })?);
                     profile.push_str(&format!(
                         "(allow file-read* file-write* (subpath \"{}\"))\n",
                         path_str
@@ -199,24 +205,24 @@ impl SeatbeltDriver {
             FsPolicy::FullRead { exclude } => {
                 profile.push_str("; full read access\n(allow file-read*)\n");
                 for path in exclude {
-                    let path_str = path.to_str().ok_or_else(|| {
+                    let path_str = escape_sbpl(path.to_str().ok_or_else(|| {
                         SandboxError::ProfileGeneration(format!(
                             "path contains invalid UTF-8: {}",
                             path.display()
                         ))
-                    })?;
+                    })?);
                     profile.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", path_str));
                 }
             }
             FsPolicy::FullWrite { exclude } => {
                 profile.push_str("; full read/write access\n(allow file-read* file-write*)\n");
                 for path in exclude {
-                    let path_str = path.to_str().ok_or_else(|| {
+                    let path_str = escape_sbpl(path.to_str().ok_or_else(|| {
                         SandboxError::ProfileGeneration(format!(
                             "path contains invalid UTF-8: {}",
                             path.display()
                         ))
-                    })?;
+                    })?);
                     profile.push_str(&format!(
                         "(deny file-read* file-write* (subpath \"{}\"))\n",
                         path_str
@@ -238,9 +244,10 @@ impl SeatbeltDriver {
             NetworkPolicy::AllowHosts(hosts) => {
                 profile.push_str(RESTRICTED_NETWORK_POLICY);
                 for host in hosts {
+                    let escaped = escape_sbpl(host);
                     profile.push_str(&format!(
                         "(allow network-outbound (remote ip \"{}\"))\n",
-                        host
+                        escaped
                     ));
                 }
             }

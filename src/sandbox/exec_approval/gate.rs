@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -28,7 +28,7 @@ impl ApprovalOutcome {
 pub struct ApprovalGate {
     config: ApprovalConfig,
     requester: Option<Arc<dyn ApprovalRequester>>,
-    retry_count: u8,
+    retry_counts: HashMap<String, u8>,
 }
 
 impl ApprovalGate {
@@ -36,7 +36,7 @@ impl ApprovalGate {
         Self {
             config,
             requester,
-            retry_count: 0,
+            retry_counts: HashMap::new(),
         }
     }
 
@@ -82,7 +82,7 @@ impl ApprovalGate {
     pub fn should_request_approval(&self, decision: &ApprovalDecision) -> bool {
         match decision.action {
             ApprovalAction::AskUser => true,
-            ApprovalAction::Block { action: _ } => true,
+            ApprovalAction::Block { action: _ } => false,
             ApprovalAction::AutoExecute => false,
         }
     }
@@ -101,25 +101,25 @@ impl ApprovalGate {
         }
     }
 
-    pub fn should_retry(&self, decision: &ApprovalDecision) -> bool {
+    pub fn should_retry(&self, tool_name: &str, decision: &ApprovalDecision) -> bool {
         matches!(
             decision.action,
             ApprovalAction::Block {
                 action: crate::sandbox::exec_approval::types::BlockAction::Retry
             }
-        ) && self.retry_count < 2
+        ) && self.retry_counts.get(tool_name).copied().unwrap_or(0) < 2
     }
 
-    pub fn record_retry(&mut self) {
-        self.retry_count += 1;
+    pub fn record_retry(&mut self, tool_name: &str) {
+        *self.retry_counts.entry(tool_name.to_string()).or_insert(0) += 1;
     }
 
-    pub fn reset_retry(&mut self) {
-        self.retry_count = 0;
+    pub fn reset_retry(&mut self, tool_name: &str) {
+        self.retry_counts.remove(tool_name);
     }
 
-    pub fn retry_count(&self) -> u8 {
-        self.retry_count
+    pub fn retry_count(&self, tool_name: &str) -> u8 {
+        self.retry_counts.get(tool_name).copied().unwrap_or(0)
     }
 }
 
@@ -186,18 +186,18 @@ mod tests {
             r#"<exec-approval>{"action":"block","block_action":"retry","reason":"alternative"}</exec-approval>"#,
         );
         let decision = gate.parse_and_decide(&response, &[]);
-        assert!(gate.should_retry(&decision));
-        assert_eq!(gate.retry_count(), 0);
-        gate.record_retry();
-        assert_eq!(gate.retry_count(), 1);
-        assert!(gate.should_retry(&decision));
-        gate.record_retry();
-        assert_eq!(gate.retry_count(), 2);
-        assert!(!gate.should_retry(&decision));
+        assert!(gate.should_retry("test_tool", &decision));
+        assert_eq!(gate.retry_count("test_tool"), 0);
+        gate.record_retry("test_tool");
+        assert_eq!(gate.retry_count("test_tool"), 1);
+        assert!(gate.should_retry("test_tool", &decision));
+        gate.record_retry("test_tool");
+        assert_eq!(gate.retry_count("test_tool"), 2);
+        assert!(!gate.should_retry("test_tool", &decision));
     }
 
     #[test]
-    fn block_notify_triggers_approval() {
+    fn block_notify_does_not_trigger_approval() {
         let config = ApprovalConfig::default();
         let gate = ApprovalGate::new(config, None);
         let response = make_response_with_approval(
@@ -210,7 +210,7 @@ mod tests {
                 action: BlockAction::Notify
             }
         ));
-        assert!(gate.should_request_approval(&decision));
+        assert!(!gate.should_request_approval(&decision));
     }
 
     #[test]
