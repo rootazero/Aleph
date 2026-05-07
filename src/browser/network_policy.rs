@@ -79,10 +79,10 @@ impl From<ssrf::SsrfError> for PolicyViolation {
                 PolicyViolation::InvalidUrl(err.to_string())
             }
             ssrf::SsrfError::BlockedAddress(addr) => {
-                // Distinguish private-network blocks from domain blocks by checking
-                // if the address looks like an IP or hostname.
-                if addr.contains("blocklist") {
-                    PolicyViolation::BlockedDomain(addr.clone())
+                // Distinguish private-network blocks from domain blocks.
+                // The core engine prefixes blocklist hits with "host in blocklist: ".
+                if let Some(domain) = addr.strip_prefix("host in blocklist: ") {
+                    PolicyViolation::BlockedDomain(domain.to_string())
                 } else {
                     PolicyViolation::PrivateNetwork(addr.clone())
                 }

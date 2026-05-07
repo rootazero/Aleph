@@ -161,19 +161,27 @@ impl BrowserBackend for PlaywrightCliBackend {
     async fn screenshot(
         &self,
         _tab_id: &str,
-        _opts: ScreenshotOpts,
+        opts: ScreenshotOpts,
     ) -> Result<ScreenshotOutput, BrowserError> {
         let mut path = std::env::temp_dir();
         let fname = format!("aleph-ss-{}.png", uuid::Uuid::new_v4());
         path.push(fname);
         let path_str = path.to_string_lossy().to_string();
-        let _ = self
-            .run(
-                &["screenshot", "--filename", &path_str],
-                Duration::from_secs(15),
-            )
-            .await?;
-        let png_bytes = tokio::fs::read(&path).await.map_err(BrowserError::Io)?;
+
+        let mut args: Vec<String> =
+            vec!["screenshot".to_string(), "--filename".to_string(), path_str];
+        if opts.full_page {
+            args.push("--full-page".to_string());
+        }
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let result = self.run(&arg_refs, Duration::from_secs(15)).await;
+        let png_bytes = match result {
+            Ok(_) => tokio::fs::read(&path).await.map_err(BrowserError::Io)?,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(e);
+            }
+        };
         let _ = tokio::fs::remove_file(&path).await;
         Ok(ScreenshotOutput { png_bytes })
     }

@@ -217,10 +217,21 @@ impl ChromeMcpDriver {
                 .map(|s| s.success())
                 .unwrap_or(false)
         }
-        #[cfg(not(unix))]
-        {
-            false
-        }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("tasklist")
+            .arg("/FI")
+            .arg("IMAGENAME eq chrome.exe")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        false
+    }
     }
 
     /// Destroy a session (for cleanup after transport errors).

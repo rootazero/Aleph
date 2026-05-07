@@ -115,7 +115,12 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
-        let page_id: u32 = tab_id.parse().unwrap_or(1);
+        let page_id: u32 = tab_id.parse().map_err(|_| {
+            BrowserError::TabNotFound(format!(
+                "Invalid tab ID '{}': expected numeric page ID",
+                tab_id
+            ))
+        })?;
         self.call("close_page", json!({ "pageId": page_id }))
             .await?;
         Ok(())
@@ -200,13 +205,14 @@ impl BrowserBackend for ChromeMcpBackend {
         if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
             for item in content {
                 if item.get("type").and_then(|v| v.as_str()) == Some("image") {
-                    let data = item.get("data").and_then(|v| v.as_str()).unwrap_or("");
-                    let png_bytes = base64::engine::general_purpose::STANDARD
-                        .decode(data)
-                        .map_err(|e| {
-                            BrowserError::ScreenshotFailed(format!("base64 decode: {e}"))
-                        })?;
-                    return Ok(ScreenshotOutput { png_bytes });
+                    if let Some(data) = item.get("data").and_then(|v| v.as_str()) {
+                        let png_bytes = base64::engine::general_purpose::STANDARD
+                            .decode(data)
+                            .map_err(|e| {
+                                BrowserError::ScreenshotFailed(format!("base64 decode: {e}"))
+                            })?;
+                        return Ok(ScreenshotOutput { png_bytes });
+                    }
                 }
             }
         }
