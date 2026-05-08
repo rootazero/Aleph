@@ -316,7 +316,7 @@ Stage 3 (Prompt) ──────┴─> Stage 4 (Subagent) ─────┘
 
 ### Stage 6 — Verification & Feedback Loop (#10)
 
-**Status**: 🟡 6a Shipped on 2026-05-06 · 6b Pending · 6a plan: docs/superpowers/specs/2026-05-06-harness-stage6a-turn-verifier-plan.md · 6a ships TurnVerifier trait + StopHookVerifier (1:1 migration) + ToolLoopVerifier (default threshold 5) at a single Think→Act callsite; closes the § 1.4 P1 fix. 6b (JudgeVerifier + ComputationalVerifier) explicitly gated on a redline waiver in `src/verification/mod.rs` to lift the post-P4 "no Rust-level verifier/judge/critic" prohibition (R8 + R10).
+**Status**: 🟢 6a Shipped on 2026-05-06 · 6b **Permanently Deferred (R7+R8+R10 incompatible)** on 2026-05-08 · 6a plan: docs/superpowers/specs/2026-05-06-harness-stage6a-turn-verifier-plan.md · 6a ships TurnVerifier trait + StopHookVerifier (1:1 migration) + ToolLoopVerifier (default threshold 5) at a single Think→Act callsite; closes the § 1.4 P1 fix. 6b (JudgeVerifier + ComputationalVerifier) was reviewed against R7 (LLM Sovereignty) / R8 (Everything-is-a-Tool) / R10 笨循环 5 个不 #3 (no Rust completion judgment) + #4 (no Rust content review) and rejected — cognitive judgment lives in the prompt (`VERDICT: PASS|FAIL|PARTIAL` at `src/thinker/layers/agent_role.rs`), not in `src/verification/`. Re-opening 6b requires rewriting the redline in `src/verification/mod.rs` first.
 **Depends on**: Stage 1, Stage 3, Stage 4, Stage 5
 **Risk class**: high
 
@@ -355,10 +355,9 @@ Stage 3 (Prompt) ──────┴─> Stage 4 (Subagent) ─────┘
 **Future-proof note**
 - 验证策略集合可扩展（trait + `Vec<Box<dyn TurnVerifier>>`），新模型对应新策略时不需要改 agent.rs 主循环。R10 通过。
 
-**Sub-stage 拆分预案**
-- 实施时若实测 ≥600 行，按以下边界拆：
-  - 6a：TurnVerifier trait + StopHookVerifier 迁移 + tool_use 死循环检测
-  - 6b：JudgeVerifier + ComputationalVerifier
+**Sub-stage 实测结果**
+- 6a：TurnVerifier trait + StopHookVerifier 迁移 + tool_use 死循环检测 — ✅ Shipped 2026-05-06
+- 6b：JudgeVerifier + ComputationalVerifier — ❌ Permanently deferred 2026-05-08（R7+R8+R10 不可兼容；详见 Status 字段及 `src/verification/mod.rs` 红线注释）
 
 ---
 

@@ -10,21 +10,26 @@
 //!   detecting N consecutive identical tool calls with no thinking
 //!   text — vetoes mid-turn and injects feedback.
 //!
-//! R8 / R10 redline scope clarification (post Stage 6a):
+//! R7 / R8 / R10 redline (permanent, post Stage 6a):
 //! - 6a verifiers are *structural watchdogs*, not cognitive judges.
 //!   They encode patterns (exit code, repetition count) a stronger
 //!   model would never trigger and require zero LLM calls of their
 //!   own. This satisfies R10's Future-Proof Test.
-//! - **No JudgeVerifier or ComputationalVerifier ships in 6a.** The
-//!   prompt-driven verification model (`VERDICT: PASS|FAIL|PARTIAL`
-//!   in `src/thinker/layers/agent_role.rs`) remains the source of
-//!   truth for completion judgment, per R8 (LLM Sovereignty) and R10
-//!   (Intelligence Lives in the Prompt). Stage 6b is gated on an
-//!   explicit redline waiver.
+//! - **JudgeVerifier and ComputationalVerifier are permanently
+//!   prohibited.** The prompt-driven verification model
+//!   (`VERDICT: PASS|FAIL|PARTIAL` in `src/thinker/layers/agent_role.rs`)
+//!   is the sole source of truth for completion judgment, per R7
+//!   (LLM Sovereignty: no deterministic code replacing LLM reasoning),
+//!   R8 (Everything-is-a-Tool), and R10 笨循环 5 个不 #3 (no
+//!   completion judgment in Rust) + #4 (no content review in Rust).
+//!   Stage 6b in the 12-module roadmap is **permanently deferred**;
+//!   any future need for cognitive judgment must be expressed in the
+//!   prompt, not in this module.
 //! - Historical note: a `VerifyStopHook` Rust struct existed from
 //!   April 2026 through P0 but was deleted in P4 (2026-04-24) as
 //!   YAGNI. Retrievable from git history at commit b54877d7f if
-//!   future work needs a reference implementation.
+//!   future work needs a reference implementation. Re-introducing it
+//!   in any form requires a R7/R8/R10 redline rewrite first.
 
 pub mod stop_hooks;
 
