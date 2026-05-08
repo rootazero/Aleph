@@ -77,6 +77,20 @@ pub struct SpawnerBase {
     /// as the spawning harness. `None` for harness instances without a
     /// configured registry.
     pub guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
+    /// Stage A (P1) — fallback LLM from `[fallback_provider]`. `None` when
+    /// not configured or when self-referencing the primary. Inherited
+    /// identically from main runner.
+    pub fallback_llm: Option<Arc<dyn AiProvider>>,
+    /// Stage A (P1) — stall watchdog config from `[stability]`. `None` when
+    /// `stall_timeout_secs` is unset.
+    pub stall_config: Option<crate::harness::StallConfig>,
+    /// Stage A (P1) — bounded consecutive-failure cap from `[stability]`.
+    pub consecutive_failure_cap: Option<usize>,
+    /// Stage A (P1) — per-turn wall-clock timeout from `[stability]`.
+    pub turn_timeout: Option<std::time::Duration>,
+    /// Stage A (P1) — trace sink, cloned from parent's HarnessDeps.
+    /// Subagent run events flow into the same sink as the main runner.
+    pub trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -206,7 +220,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,
-        trace_sink: None,
+        // Stage A (P1) — was None; now inherited from parent SpawnerBase.
+        trace_sink: base.trace_sink.clone(),
         system_prompt: Some(system_prompt),
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         // Stage 4 (#11): stamp the descended child chain on the inner harness
@@ -216,12 +231,14 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         // Stage 5a (#9): inherit parent guardrails so the subagent enforces
         // the same Input/Output/ToolCall checks as the spawning harness.
         guardrails: base.guardrails.clone(),
-        fallback_llm: None,
+        // Stage A (P1) — was None; now inherited from parent SpawnerBase.
+        fallback_llm: base.fallback_llm.clone(),
         max_iterations: max_iter,
         power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
+        // Stage A (P1) — was None for all three; now inherited from parent.
+        stall_config: base.stall_config.clone(),
+        consecutive_failure_cap: base.consecutive_failure_cap,
+        turn_timeout: base.turn_timeout,
     };
     let harness = Arc::new(AgentHarness::new(deps));
 
@@ -637,6 +654,12 @@ mod tests {
             parent_agent_id: None,
             parent_session_id: None,
             guardrails: None,
+            // Stage A (P1):
+            fallback_llm: None,
+            stall_config: None,
+            consecutive_failure_cap: None,
+            turn_timeout: None,
+            trace_sink: None,
         }
     }
 

@@ -2,6 +2,7 @@
 //!
 //! See docs/superpowers/specs/2026-04-19-orchestrator-flow-composition-design.md
 
+pub mod deps_builder;
 pub mod dispatch;
 pub mod errors;
 pub mod flow_registry;
@@ -14,6 +15,8 @@ pub mod presets;
 pub mod resolver;
 pub mod retry;
 pub mod sandbox_factory;
+
+pub use deps_builder::{build_fallback_llm, build_stability_triple, StabilityTriple};
 
 pub use dispatch::{
     FlowHandle, FlowOutcome, FlowRequest, FlowStreamEvent, HarnessRunner, Orchestrator,

@@ -124,6 +124,17 @@ pub struct AgentRuntime {
     /// `None` keeps the legacy "no guardrails" path; `Some(_)` propagates
     /// to every `SpawnerBase` built by `spawn_subagent`.
     guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
+    /// Stage A (P1) — fallback LLM threaded into SpawnerBase. `None` keeps
+    /// legacy "no fallback" behavior.
+    fallback_llm: Option<Arc<dyn AiProvider>>,
+    /// Stage A (P1) — stall watchdog config threaded into SpawnerBase.
+    stall_config: Option<crate::harness::StallConfig>,
+    /// Stage A (P1) — consecutive-failure cap threaded into SpawnerBase.
+    consecutive_failure_cap: Option<usize>,
+    /// Stage A (P1) — per-turn timeout threaded into SpawnerBase.
+    turn_timeout: Option<std::time::Duration>,
+    /// Stage A (P1) — trace sink threaded into SpawnerBase.
+    trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
 }
 
 impl AgentRuntime {
@@ -149,12 +160,60 @@ impl AgentRuntime {
             parent_agent_id: None,
             parent_session_id: None,
             guardrails: None,
+            fallback_llm: None,
+            stall_config: None,
+            consecutive_failure_cap: None,
+            turn_timeout: None,
+            trace_sink: None,
         }
     }
 
     /// Stage 5a (#9) — wire a guardrail registry that subagents inherit.
     pub fn with_guardrails(mut self, registry: Arc<crate::guardrails::GuardrailRegistry>) -> Self {
         self.guardrails = Some(registry);
+        self
+    }
+
+    // -------------------------------------------------------------------------
+    // Stage A (P1, 2026-05-08): These 5 with_* builders are reachable from the
+    // SpawnerBase → HarnessDeps inheritance chain (verified by
+    // tests/subagent_deps_inherit.rs). Production wiring of values into the
+    // builder chain lives at the SubagentTool construction site in
+    // src/gateway/execution_engine/run_loop.rs (currently passes None defaults).
+    // Threading the parent harness's fallback_llm/stall_config/cap/timeout/
+    // trace_sink values through SubagentTool is a follow-up; tracked in roadmap
+    // docs/superpowers/specs/2026-05-08-subagent-uplift-roadmap-design.md as a
+    // P2 deliverable. The builders + fields ship now to lock the data path; the
+    // orchestration plumbing closes the loop in P2.
+    // -------------------------------------------------------------------------
+
+    /// Stage A (P1) — wire the fallback LLM. Subagents inherit it identically.
+    pub fn with_fallback_llm(mut self, fallback: Arc<dyn AiProvider>) -> Self {
+        self.fallback_llm = Some(fallback);
+        self
+    }
+
+    /// Stage A (P1) — wire the stall watchdog config.
+    pub fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
+        self.stall_config = Some(config);
+        self
+    }
+
+    /// Stage A (P1) — wire the consecutive-failure cap.
+    pub fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
+        self.consecutive_failure_cap = Some(cap);
+        self
+    }
+
+    /// Stage A (P1) — wire the per-turn wall-clock timeout.
+    pub fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.turn_timeout = Some(timeout);
+        self
+    }
+
+    /// Stage A (P1) — wire the trace sink. Subagents emit into the same sink.
+    pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
+        self.trace_sink = Some(sink);
         self
     }
 
@@ -290,6 +349,12 @@ impl AgentRuntime {
             parent_agent_id: self.parent_agent_id.clone(),
             parent_session_id: self.parent_session_id.clone(),
             guardrails: self.guardrails.clone(),
+            // Stage A (P1):
+            fallback_llm: self.fallback_llm.clone(),
+            stall_config: self.stall_config.clone(),
+            consecutive_failure_cap: self.consecutive_failure_cap,
+            turn_timeout: self.turn_timeout,
+            trace_sink: self.trace_sink.clone(),
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

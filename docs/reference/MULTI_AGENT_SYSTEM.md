@@ -52,6 +52,19 @@ recursion), token budget, and timeout. It returns a result and is destroyed.
 
 **Swarm integration**: Sub-agent events are NOT published to the Event Bus (ephemeral, not a named agent).
 
+### HarnessDeps inheritance (Stage 5a / Stage A, 2026-05-08)
+
+Subagents inherit the following from their parent via `SpawnerBase`:
+
+- `guardrails` (Stage 5a) — Input/Output/ToolCall checks
+- `fallback_llm` (Stage A, 2026-05-08) — Stage 5b single-step fallback
+- `stall_config`, `consecutive_failure_cap`, `turn_timeout` (Stage A) — P0 stability triple
+- `trace_sink` (Stage A) — observability sink
+
+Per the P1 zero-override decision, subagents do not currently support per-agent overrides for these fields. `AgentDef` may be extended with `Option<T>` overrides in P4 if needed, with full backward compatibility.
+
+The shared assembly path lives in `src/orchestrator/deps_builder.rs` (`build_fallback_llm`, `build_stability_triple`); both the main runner (`aleph-server` boot) and the subagent spawner consume the same builders so wiring stays consistent.
+
 ## Mode 2: Delegate (Peer Communication)
 
 **Tool**: `session_send`

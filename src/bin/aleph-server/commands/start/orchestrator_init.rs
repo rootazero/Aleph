@@ -181,53 +181,21 @@ fn build_guardrail_registry(
 }
 
 /// Build the optional Stage 5b single-step fallback provider from
-/// `[fallback_provider]`. Phase-6 wiring. Behaviors:
-/// - Missing section, or `provider` matches `primary_provider_key` ASCII-case-insensitively
-///   (self-reference),
-///   yields `None`.
-/// - `provider` not present in `[providers]` map yields `None` + warn log.
-/// - `create_provider` failure yields `None` + warn log (e.g. unknown protocol).
+/// `[fallback_provider]`. Forwarding wrapper around the shared assembly
+/// module (`alephcore::orchestrator::deps_builder`); preserves the existing
+/// caller surface and unit-test names while letting the subagent path
+/// (Stage A, P1) reuse the same logic.
 fn build_fallback_llm(
     config: &Config,
     primary_provider_key: &str,
 ) -> Option<Arc<dyn alephcore::providers::AiProvider>> {
-    let fb = config.fallback_provider.as_ref()?;
-    if fb.provider.eq_ignore_ascii_case(primary_provider_key) {
-        tracing::warn!(
-            provider = %fb.provider,
-            "fallback_provider self-reference; disabling"
-        );
-        return None;
-    }
-    let pc = match config.providers.get(&fb.provider) {
-        Some(c) => c.clone(),
-        None => {
-            tracing::warn!(
-                provider = %fb.provider,
-                "fallback_provider not found in [providers]; disabling"
-            );
-            return None;
-        }
-    };
-    match alephcore::providers::create_provider(&fb.provider, pc) {
-        Ok(p) => Some(p),
-        Err(e) => {
-            tracing::warn!(
-                provider = %fb.provider,
-                error = %e,
-                "fallback_provider create_provider failed; disabling"
-            );
-            None
-        }
-    }
+    alephcore::orchestrator::build_fallback_llm(config, primary_provider_key)
 }
 
-/// Build the P0 rescue triple from `[stability]`. Phase-6 wiring. Each of the
-/// three returned `Option`s is independent:
-/// - `StallConfig` only constructed when `stall_timeout_secs` is `Some`;
-///   `stall_check_interval_secs` falls back to `StallConfig::default()` (30s).
-/// - `consecutive_failure_cap` is a bare `Option<usize>` (no derived state).
-/// - `turn_timeout` wraps `turn_timeout_secs` in `Duration::from_secs`.
+/// Build the P0 rescue triple from `[stability]`. Forwarding wrapper around
+/// the shared assembly module; the wrapper unpacks the `StabilityTriple`
+/// struct back into the historical 3-tuple so existing callers (and the
+/// 13 builder + 4 init_audit tests) keep working unchanged.
 fn build_stability_triple(
     config: &Config,
 ) -> (
@@ -235,21 +203,11 @@ fn build_stability_triple(
     Option<usize>,
     Option<std::time::Duration>,
 ) {
-    let Some(s) = config.stability.as_ref() else {
-        return (None, None, None);
-    };
-    let stall_config = s.stall_timeout_secs.map(|secs| {
-        let mut sc = alephcore::harness::StallConfig::default()
-            .with_timeout(std::time::Duration::from_secs(secs));
-        if let Some(ci) = s.stall_check_interval_secs {
-            sc = sc.with_check_interval(std::time::Duration::from_secs(ci));
-        }
-        sc
-    });
+    let triple = alephcore::orchestrator::build_stability_triple(config);
     (
-        stall_config,
-        s.consecutive_failure_cap,
-        s.turn_timeout_secs.map(std::time::Duration::from_secs),
+        triple.stall_config,
+        triple.consecutive_failure_cap,
+        triple.turn_timeout,
     )
 }
 
