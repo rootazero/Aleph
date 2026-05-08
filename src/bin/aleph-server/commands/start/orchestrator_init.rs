@@ -31,12 +31,17 @@ use alephcore::verification::{
 };
 use alephcore::StopHookConfig;
 
+#[allow(unused_imports)]
+use alephcore::{Config, FallbackProviderToml, GuardrailsToml, StabilityToml};
+
 /// Assemble the Phase 5 Orchestrator from already-constructed boot services.
 ///
 /// Returns `Arc<Orchestrator>` — callers typically park it on
 /// `GatewayServer.orchestrator` so downstream RPC handlers (Task 10) can
 /// dispatch flows without plumbing an extra argument.
 pub(in crate::commands::start) async fn initialize_orchestrator(
+    config: &Config,
+    primary_provider_key: &str,
     agent_registry: Arc<alephcore::agents::AgentRegistry>,
     session_service: Arc<dyn alephcore::session::service::SessionService>,
     tool_service: Arc<dyn alephcore::tools::service::ToolService>,
@@ -114,6 +119,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         }
     };
 
+    let _ = primary_provider_key;
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),
@@ -127,7 +133,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // Stage 7 (#12) wiring placeholders — PHASE-6 will load these from
         // aleph.toml. Path is now plumbed end-to-end; defaults stay None
         // so behavior matches pre-Stage-7 main exactly.
-        guardrails: None,
+        guardrails: build_guardrail_registry(config),
         fallback_llm: None,
         stall_config: None,
         consecutive_failure_cap: None,
@@ -148,4 +154,64 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
 
     tracing::info!("Orchestrator assembled (Phase 5)");
     Ok(Arc::new(orchestrator))
+}
+
+// =============================================================================
+// Phase-6 wiring helpers (Stage 7 init audit closure)
+// =============================================================================
+
+/// Build the optional `GuardrailRegistry` from `[guardrails]`. Phase-6 wiring
+/// for Stage 5a/5b. Missing section, or `enabled = false`, returns `None`.
+/// When `enabled = true`, wires the single existing `PiiSecretsGuardrail`
+/// onto Input + Output + ToolCall surfaces (one struct, three traits).
+fn build_guardrail_registry(
+    config: &Config,
+) -> Option<Arc<alephcore::guardrails::GuardrailRegistry>> {
+    let g = config.guardrails.as_ref()?;
+    if !g.enabled {
+        return None;
+    }
+    let pii = Arc::new(alephcore::guardrails::PiiSecretsGuardrail::from_globals());
+    Some(Arc::new(
+        alephcore::guardrails::GuardrailRegistry::builder()
+            .with_input(pii.clone())
+            .with_output(pii.clone())
+            .with_tool_call(pii)
+            .build(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_with_guardrails(g: Option<GuardrailsToml>) -> Config {
+        Config {
+            guardrails: g,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn guardrails_missing_section_returns_none() {
+        let cfg = Config::default();
+        let r = build_guardrail_registry(&cfg);
+        assert!(r.is_none(), "missing [guardrails] should yield None");
+    }
+
+    #[test]
+    fn guardrails_disabled_returns_none() {
+        let cfg = cfg_with_guardrails(Some(GuardrailsToml { enabled: false }));
+        let r = build_guardrail_registry(&cfg);
+        assert!(r.is_none(), "[guardrails] enabled=false should yield None");
+    }
+
+    #[test]
+    fn guardrails_enabled_wires_pii_secrets() {
+        let cfg = cfg_with_guardrails(Some(GuardrailsToml { enabled: true }));
+        let r = build_guardrail_registry(&cfg).expect("enabled=true should yield Some");
+        assert_eq!(r.input_count(), 1);
+        assert_eq!(r.output_count(), 1);
+        assert_eq!(r.tool_call_count(), 1);
+    }
 }
