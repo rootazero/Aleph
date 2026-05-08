@@ -6,13 +6,13 @@ use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-/// The 6 canonical identity files, displayed in this order.
+/// The 5 canonical identity files, displayed in this order.
+/// MEMORY.md is owned by the curated memory module, not loaded as an identity file.
 const IDENTITY_FILES: &[&str] = &[
     "SOUL.md",
     "IDENTITY.md",
     "AGENTS.md",
     "TOOLS.md",
-    "MEMORY.md",
     "HEARTBEAT.md",
 ];
 
@@ -80,7 +80,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
 
     view! {
         <div class="flex gap-6 min-h-[400px]">
-            // File list panel — fixed 7 identity files
+            // File list panel — fixed 5 identity files
             <div class="w-64 flex-shrink-0 bg-surface-raised border border-border rounded-xl overflow-hidden">
                 <div class="p-3 border-b border-border">
                     <h3 class="text-sm font-medium text-text-primary">{t!(i18n, agents.files.identity_files)}</h3>

@@ -33,16 +33,19 @@ emoji = "🧠"
 description = "General-purpose assistant"
 ```
 
-## Workspace Files
+## Identity Files
 
-Each agent has a workspace at `~/.aleph/workspaces/{agent_id}/`:
+Each agent has identity files at `~/.aleph/agents/{agent_id}/`:
 
 | File | Format | Purpose |
 |------|--------|---------|
 | `SOUL.md` | Markdown + YAML frontmatter | Core persona (SoulManifest) |
-| `AGENTS.md` | Markdown | Operating manual |
-| `MEMORY.md` | Markdown | Long-term memory (max 20K chars) |
 | `IDENTITY.md` | Markdown | Name, role, vibe |
+| `AGENTS.md` | Markdown | Operating manual |
+| `TOOLS.md` | Markdown | Custom tool definitions |
+| `HEARTBEAT.md` | Markdown | Scheduled task definitions |
+
+> `MEMORY.md` is no longer an identity file — it is owned by the curated memory module. Use the `remember` tool for memory edits.
 
 ## SOUL.md Format (SoulManifest)
 
@@ -79,7 +82,7 @@ I am an expert systems programmer...
 ### Modify agent personality
 Edit `~/.aleph/agents/{agent_id}/SOUL.md` directly.
 
-> Identity files (SOUL.md / IDENTITY.md / AGENTS.md / MEMORY.md / TOOLS.md / HEARTBEAT.md)
+> Identity files (SOUL.md / IDENTITY.md / AGENTS.md / TOOLS.md / HEARTBEAT.md)
 > live under `~/.aleph/agents/{agent_id}/`. The `~/.aleph/workspaces/{agent_id}/`
 > directory is only the agent's runtime working directory (tool output,
 > scratch files) — it does NOT hold any identity data.
@@ -88,7 +91,8 @@ Edit `~/.aleph/agents/{agent_id}/SOUL.md` directly.
 Edit `model` field in the agent's `[[agents.list]]` entry in config.toml.
 
 ### Add agent memory
-Edit `~/.aleph/agents/{agent_id}/MEMORY.md` (keep under 20K chars).
+Use the `remember` tool with action=add/replace/remove for entry-level memory edits.
+MEMORY.md is managed by the curated memory module, not as a static identity file.
 
 ## Caveats
 - Model resolution: agent.model > defaults.model > profile.model > "claude-opus-4-6"

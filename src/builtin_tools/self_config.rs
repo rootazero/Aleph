@@ -37,7 +37,7 @@ pub enum SelfConfigArgs {
     ListFiles,
     /// Read an identity file by name
     ReadFile {
-        /// File name: MEMORY.md, SOUL.md, AGENTS.md, IDENTITY.md, TOOLS.md, or HEARTBEAT.md
+        /// File name: SOUL.md, AGENTS.md, IDENTITY.md, TOOLS.md, or HEARTBEAT.md
         file_name: String,
     },
     /// Write content to an identity file (creates if not exists)
@@ -501,14 +501,14 @@ mod tests {
         assert!(result.success);
         let data = result.data.unwrap();
         let arr = data.as_array().unwrap();
-        assert_eq!(arr.len(), 6); // All IDENTITY_FILE_NAMES
+        assert_eq!(arr.len(), 5); // All IDENTITY_FILE_NAMES
 
         let soul = arr.iter().find(|e| e["name"] == "SOUL.md").unwrap();
         assert_eq!(soul["exists"], true);
         assert!(soul["size"].as_u64().unwrap() > 0);
 
-        let memory = arr.iter().find(|e| e["name"] == "MEMORY.md").unwrap();
-        assert_eq!(memory["exists"], false);
+        let heartbeat = arr.iter().find(|e| e["name"] == "HEARTBEAT.md").unwrap();
+        assert_eq!(heartbeat["exists"], false);
     }
 
     #[tokio::test]
@@ -639,7 +639,7 @@ mod tests {
         let result = AlephTool::call(
             &tool,
             SelfConfigArgs::ReadFile {
-                file_name: "MEMORY.md".to_string(),
+                file_name: "HEARTBEAT.md".to_string(),
             },
         )
         .await
