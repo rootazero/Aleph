@@ -84,6 +84,10 @@ impl SecretVault {
         let io = Self::io_for(&self.path);
         io.write(&bytes)?;
 
+        // Restrict vault file permissions on Unix (owner-only read/write).
+        // Use `io.path()` (the actual file VaultIo wrote to) rather than
+        // `self.path`, because VaultIo always writes `secrets.vault` in
+        // the parent directory even if `self.path` has a different filename.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -93,7 +97,7 @@ impl SecretVault {
                 tracing::error!(
                     path = %actual_path.display(),
                     error = %e,
-                    "Failed to set vault file permissions"
+                    "Failed to set vault file permissions — vault may be readable by other users"
                 );
                 return Err(SecretError::Io(e));
             }

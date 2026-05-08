@@ -170,6 +170,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "block2 0.6.2",
+ "chrono",
  "core-foundation 0.10.1",
  "core-graphics 0.25.0",
  "dirs 6.0.0",
@@ -210,6 +211,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "block2 0.6.2",
+ "chrono",
  "core-foundation 0.10.1",
  "dirs 6.0.0",
  "image",
@@ -277,6 +279,7 @@ dependencies = [
 name = "aleph-protocol"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "schemars",
  "serde",
  "serde_json",
@@ -10047,6 +10050,7 @@ version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
 dependencies = [
+ "chrono",
  "dyn-clone",
  "schemars_derive",
  "serde",

@@ -18,6 +18,7 @@ tracing = "0.1"
 dirs = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true }
+chrono = { workspace = true }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = [
     "NSString", "NSArray", "NSDictionary", "NSProcessInfo", "NSURL",

@@ -48,12 +48,13 @@ pub fn cleanup_old_logs(
         }
         // Only match actual log files: "prefix.log" or "prefix.log.YYYY-MM-DD"
         let is_log_file = file_name == format!("{}.log", prefix)
-            || (file_name.starts_with(&format!("{}.log.", prefix)) && {
-                let suffix = &file_name[format!("{}.log.", prefix).len()..];
-                suffix.len() == 10
-                    && suffix.chars().nth(4) == Some('-')
-                    && suffix.chars().nth(7) == Some('-')
-            });
+            || (file_name.starts_with(&format!("{}.log.", prefix))
+                && {
+                    let suffix = &file_name[format!("{}.log.", prefix).len()..];
+                    suffix.len() == 10
+                        && suffix.chars().nth(4) == Some('-')
+                        && suffix.chars().nth(7) == Some('-')
+                });
         if !is_log_file {
             continue;
         }
@@ -158,6 +159,7 @@ mod tests {
         let deleted = cleanup_old_logs(log_dir, 7, Some("aleph-server")).unwrap();
         assert_eq!(deleted, 1);
 
+        // Backup files should NOT be deleted
         assert!(log_dir.join("aleph-server.log.backup").exists());
         assert!(log_dir.join("aleph.log.backup").exists());
     }

@@ -37,19 +37,19 @@ pub struct PimArgs {
 
     /// Start of date range for calendar_list (ISO 8601).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
+    pub from: Option<chrono::DateTime<chrono::Utc>>,
 
     /// End of date range for calendar_list (ISO 8601).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub to: Option<String>,
+    pub to: Option<chrono::DateTime<chrono::Utc>>,
 
     /// Event start time (ISO 8601).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub start: Option<String>,
+    pub start: Option<chrono::DateTime<chrono::Utc>>,
 
     /// Event end time (ISO 8601).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub end: Option<String>,
+    pub end: Option<chrono::DateTime<chrono::Utc>>,
 
     /// Calendar ID to filter or assign events.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,7 +69,7 @@ pub struct PimArgs {
 
     /// Reminder due date (ISO 8601).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub due_date: Option<String>,
+    pub due_date: Option<chrono::DateTime<chrono::Utc>>,
 
     /// Reminder priority (0=none, 1=high, 5=medium, 9=low).
     #[serde(skip_serializing_if = "Option::is_none")]

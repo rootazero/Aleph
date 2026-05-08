@@ -129,10 +129,8 @@ impl<'a, R: SecretResolver> EvmSigner<'a, R> {
 
 fn parse_private_key(hex_key: &str) -> Result<SigningKey, SecretError> {
     let key_str = hex_key.strip_prefix("0x").unwrap_or(hex_key);
-    let key_bytes =
-        zeroize::Zeroizing::new(hex::decode(key_str).map_err(|e| {
-            SecretError::EncryptionFailed(format!("Invalid hex private key: {}", e))
-        })?);
+    let key_bytes = zeroize::Zeroizing::new(hex::decode(key_str)
+        .map_err(|e| SecretError::EncryptionFailed(format!("Invalid hex private key: {}", e)))?);
     SigningKey::from_bytes((&key_bytes[..]).into())
         .map_err(|e| SecretError::EncryptionFailed(format!("Invalid secp256k1 private key: {}", e)))
 }

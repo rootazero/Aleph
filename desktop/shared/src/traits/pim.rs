@@ -40,12 +40,11 @@ pub trait PimCapability: Send + Sync {
 
     /// List events within a date range.
     ///
-    /// `from` and `to` are ISO 8601 datetime strings.
     /// `calendar_id` optionally filters to a specific calendar.
     async fn calendar_list_events(
         &self,
-        from: &str,
-        to: &str,
+        from: chrono::DateTime<chrono::Utc>,
+        to: chrono::DateTime<chrono::Utc>,
         calendar_id: Option<&str>,
     ) -> Result<Vec<CalendarEvent>>;
 
@@ -98,4 +97,15 @@ pub trait PimCapability: Send + Sync {
 
     /// List contact groups.
     async fn contacts_groups(&self) -> Result<Vec<ContactGroup>>;
+
+    // ── Mail ──────────────────────────────────────────────────────
+
+    /// Search mail messages by query string.
+    async fn mail_search(&self, query: &str, folder: Option<&str>, limit: u32) -> Result<Vec<crate::pim_types::MailMessage>>;
+
+    /// Get a single mail message by ID.
+    async fn mail_get(&self, message_id: &str) -> Result<crate::pim_types::MailMessageDetail>;
+
+    /// List available mail folders.
+    async fn mail_folders(&self) -> Result<Vec<crate::pim_types::MailFolder>>;
 }

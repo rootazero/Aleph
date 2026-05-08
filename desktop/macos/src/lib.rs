@@ -88,7 +88,7 @@ impl MacOSPlatform {
             automation: MacOSAutomation::new(),
             escape: EscapeListener::new(),
             permission: MacOSPermission::new(Arc::clone(&bridge)),
-            pim: MacOSPim::new(),
+            pim: MacOSPim::new(Arc::clone(&bridge)),
             system: MacOSSystem::new(),
             ax: BridgeAccessibility::new(Arc::clone(&bridge)),
             power: MacosPower::new(),

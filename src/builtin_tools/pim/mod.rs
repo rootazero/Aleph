@@ -133,8 +133,8 @@ impl PimTool {
 
                 // ── Calendar ────────────────────────────────────
                 "calendar_list" => {
-                    let from = args.from.as_deref()?;
-                    let to = args.to.as_deref()?;
+                    let from = args.from?;
+                    let to = args.to?;
                     pim.calendar_list_events(from, to, args.calendar_id.as_deref())
                         .await
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
@@ -147,13 +147,13 @@ impl PimTool {
                 }
                 "calendar_create" => {
                     let title = args.title.as_deref()?;
-                    let start = args.start.as_deref()?;
-                    let end = args.end.as_deref()?;
+                    let start = args.start?;
+                    let end = args.end?;
                     let event = NewCalendarEvent {
                         title: title.to_string(),
                         calendar_id: args.calendar_id.clone().unwrap_or_default(),
-                        start: start.to_string(),
-                        end: end.to_string(),
+                        start,
+                        end,
                         all_day: args.all_day.unwrap_or(false),
                         location: args.location.clone(),
                         notes: args.notes.clone(),
@@ -167,8 +167,8 @@ impl PimTool {
                     let event = NewCalendarEvent {
                         title: args.title.clone().unwrap_or_default(),
                         calendar_id: args.calendar_id.clone().unwrap_or_default(),
-                        start: args.start.clone().unwrap_or_default(),
-                        end: args.end.clone().unwrap_or_default(),
+                        start: args.start.unwrap_or_else(|| chrono::Utc::now()),
+                        end: args.end.unwrap_or_else(|| chrono::Utc::now()),
                         all_day: args.all_day.unwrap_or(false),
                         location: args.location.clone(),
                         notes: args.notes.clone(),
@@ -516,8 +516,8 @@ mod tests {
 
         let mut args = make_args("calendar_create");
         args.title = Some("Test".into());
-        args.start = Some("2026-02-27T09:00:00Z".into());
-        args.end = Some("2026-02-27T10:00:00Z".into());
+        args.start = Some("2026-02-27T09:00:00Z".parse().unwrap());
+        args.end = Some("2026-02-27T10:00:00Z".parse().unwrap());
         let output = AlephTool::call(&tool, args).await.unwrap();
         assert!(!output.success);
         assert!(output.message.as_deref().unwrap().contains("Action denied"));
@@ -556,8 +556,8 @@ mod tests {
         let tool = PimTool::new().with_approval_policy(policy);
 
         let mut args = make_args("calendar_list");
-        args.from = Some("2026-02-27T00:00:00Z".into());
-        args.to = Some("2026-02-28T00:00:00Z".into());
+        args.from = Some("2026-02-27T00:00:00Z".parse().unwrap());
+        args.to = Some("2026-02-28T00:00:00Z".parse().unwrap());
         let output = AlephTool::call(&tool, args).await.unwrap();
         // Should NOT be "Action denied". It will fail because this plain test
         // instance does not wire a platform capability.

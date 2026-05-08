@@ -201,6 +201,7 @@ mod tests {
     fn test_decrypt_invalid_utf8_returns_error() {
         let crypto = SecretsCrypto::new("test-key");
 
+        // Manually encrypt non-UTF-8 bytes (0xFF 0xFE is invalid UTF-8)
         let salt = [0u8; 32];
         let nonce_bytes = [0u8; 12];
         let key = crypto.derive_key(&salt).unwrap();

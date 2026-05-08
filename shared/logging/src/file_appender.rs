@@ -38,7 +38,8 @@ pub fn init_component_logging(
     default_filter: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let result = GUARD.get_or_init(|| {
-        setup_logging(component, retention_days, default_filter).map_err(|e| e.to_string())
+        setup_logging(component, retention_days, default_filter)
+            .map_err(|e| e.to_string())
     });
 
     match result {
