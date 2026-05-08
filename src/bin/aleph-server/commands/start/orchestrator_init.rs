@@ -32,7 +32,7 @@ use alephcore::verification::{
 use alephcore::StopHookConfig;
 
 #[allow(unused_imports)]
-use alephcore::{Config, FallbackProviderToml, GuardrailsToml, StabilityToml};
+use alephcore::{Config, FallbackProviderToml, GuardrailsToml, ProviderConfig, StabilityToml};
 
 /// Assemble the Phase 5 Orchestrator from already-constructed boot services.
 ///
@@ -119,7 +119,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         }
     };
 
-    let _ = primary_provider_key;
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),
@@ -134,7 +133,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // aleph.toml. Path is now plumbed end-to-end; defaults stay None
         // so behavior matches pre-Stage-7 main exactly.
         guardrails: build_guardrail_registry(config),
-        fallback_llm: None,
+        fallback_llm: build_fallback_llm(config, primary_provider_key),
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
@@ -181,6 +180,47 @@ fn build_guardrail_registry(
     ))
 }
 
+/// Build the optional Stage 5b single-step fallback provider from
+/// `[fallback_provider]`. Phase-6 wiring. Behaviors:
+/// - Missing section, or `provider == primary_provider_key` (self-reference),
+///   yields `None`.
+/// - `provider` not present in `[providers]` map yields `None` + warn log.
+/// - `create_provider` failure yields `None` + warn log (e.g. unknown protocol).
+fn build_fallback_llm(
+    config: &Config,
+    primary_provider_key: &str,
+) -> Option<Arc<dyn alephcore::providers::AiProvider>> {
+    let fb = config.fallback_provider.as_ref()?;
+    if fb.provider == primary_provider_key {
+        tracing::warn!(
+            provider = %fb.provider,
+            "fallback_provider self-reference; disabling"
+        );
+        return None;
+    }
+    let pc = match config.providers.get(&fb.provider) {
+        Some(c) => c.clone(),
+        None => {
+            tracing::warn!(
+                provider = %fb.provider,
+                "fallback_provider not found in [providers]; disabling"
+            );
+            return None;
+        }
+    };
+    match alephcore::providers::create_provider(&fb.provider, pc) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::warn!(
+                provider = %fb.provider,
+                error = %e,
+                "fallback_provider create_provider failed; disabling"
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +253,87 @@ mod tests {
         assert_eq!(r.input_count(), 1);
         assert_eq!(r.output_count(), 1);
         assert_eq!(r.tool_call_count(), 1);
+    }
+
+    use std::collections::HashMap;
+
+    fn mock_provider_config() -> ProviderConfig {
+        let mut pc = ProviderConfig::test_config("mock-model");
+        pc.protocol = Some("mock".to_string());
+        pc
+    }
+
+    fn cfg_with_fallback(
+        fb: Option<FallbackProviderToml>,
+        providers: Vec<(&str, ProviderConfig)>,
+    ) -> Config {
+        let mut providers_map: HashMap<String, ProviderConfig> = HashMap::new();
+        for (k, v) in providers {
+            providers_map.insert(k.to_string(), v);
+        }
+        Config {
+            fallback_provider: fb,
+            providers: providers_map,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn fallback_missing_section_returns_none() {
+        let cfg = Config::default();
+        assert!(build_fallback_llm(&cfg, "anthropic").is_none());
+    }
+
+    #[test]
+    fn fallback_self_reference_returns_none() {
+        let cfg = cfg_with_fallback(
+            Some(FallbackProviderToml {
+                provider: "anthropic".to_string(),
+            }),
+            vec![("anthropic", mock_provider_config())],
+        );
+        assert!(
+            build_fallback_llm(&cfg, "anthropic").is_none(),
+            "self-reference must yield None"
+        );
+    }
+
+    #[test]
+    fn fallback_unknown_name_returns_none() {
+        let cfg = cfg_with_fallback(
+            Some(FallbackProviderToml {
+                provider: "ghost".to_string(),
+            }),
+            vec![],
+        );
+        assert!(build_fallback_llm(&cfg, "anthropic").is_none());
+    }
+
+    #[test]
+    fn fallback_valid_name_returns_some() {
+        let cfg = cfg_with_fallback(
+            Some(FallbackProviderToml {
+                provider: "mock".to_string(),
+            }),
+            vec![("mock", mock_provider_config())],
+        );
+        let r = build_fallback_llm(&cfg, "anthropic");
+        assert!(r.is_some(), "valid by-name reference must yield Some");
+    }
+
+    #[test]
+    fn fallback_create_provider_failure_returns_none() {
+        // Construct a ProviderConfig that create_provider rejects:
+        // protocol = Some("__bogus_protocol__") falls through every match arm
+        // and ends in "Unknown protocol" Err.
+        let mut bad = ProviderConfig::test_config("bad");
+        bad.protocol = Some("__bogus_protocol__".to_string());
+        let cfg = cfg_with_fallback(
+            Some(FallbackProviderToml {
+                provider: "bad".to_string(),
+            }),
+            vec![("bad", bad)],
+        );
+        assert!(build_fallback_llm(&cfg, "anthropic").is_none());
     }
 }
