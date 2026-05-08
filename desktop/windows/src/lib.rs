@@ -2,11 +2,13 @@
 
 mod automation;
 mod escape_listener;
+mod pim;
 mod sleep_inhibitor;
 mod system;
 
 pub use automation::WindowsAutomation;
 pub use escape_listener::WindowsEscapeListener;
+pub use pim::WindowsPim;
 pub use sleep_inhibitor::WindowsPower;
 pub use system::WindowsSystem;
 
@@ -24,6 +26,7 @@ pub struct WindowsPlatform {
     system: WindowsSystem,
     automation: WindowsAutomation,
     escape: WindowsEscapeListener,
+    pim: WindowsPim,
 }
 
 impl WindowsPlatform {
@@ -35,6 +38,7 @@ impl WindowsPlatform {
             system: WindowsSystem::new(),
             automation: WindowsAutomation::new(),
             escape: WindowsEscapeListener::new(),
+            pim: WindowsPim::new(),
         }
     }
 }
@@ -55,7 +59,7 @@ impl DesktopPlatform for WindowsPlatform {
     }
 
     fn pim(&self) -> Option<&dyn PimCapability> {
-        None
+        Some(&self.pim)
     }
 
     fn system(&self) -> Option<&dyn SystemCapability> {
@@ -101,7 +105,7 @@ mod tests {
         assert!(platform.automation().is_some());
         assert!(platform.power().is_some());
         assert!(platform.escape_listener().is_some());
-        assert!(platform.pim().is_none());
+        assert!(platform.pim().is_some());
         assert!(platform.permission().is_none());
         assert!(platform.media().is_none());
     }

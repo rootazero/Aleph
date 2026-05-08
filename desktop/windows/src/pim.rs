@@ -1,0 +1,413 @@
+use aleph_desktop::pim_types::*;
+use aleph_desktop::traits::PimCapability;
+use aleph_desktop::{DesktopError, Result};
+use async_trait::async_trait;
+use chrono::{DateTime, TimeZone, Utc};
+
+pub struct WindowsPim;
+
+impl WindowsPim {
+    pub fn new() -> Self {
+        Self
+    }
+
+    async fn run_powershell(&self,
+        script: &str,
+    ) -> Result<std::process::Output> {
+        let output = tokio::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .output()
+            .await
+            .map_err(|e| {
+                DesktopError::PlatformError(format!(
+                    "Failed to run PowerShell (Outlook integration requires PowerShell): {e}"
+                ))
+            })?;
+        Ok(output)
+    }
+}
+
+impl Default for WindowsPim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl PimCapability for WindowsPim {
+    async fn mail_folders(&self) -> Result<Vec<MailFolder>> {
+        let script = r#"
+            try {
+                $outlook = New-Object -ComObject Outlook.Application
+                $ns = $outlook.GetNamespace("MAPI")
+                $folders = @()
+                function Get-Folders($folder, $path) {
+                    $fullPath = if ($path) { "$path\$($folder.Name)" } else { $folder.Name }
+                    $count = $folder.Items.Count
+                    $folders += [PSCustomObject]@{id=$fullPath;name=$folder.Name;count=$count}
+                    foreach ($sub in $folder.Folders) {
+                        Get-Folders $sub $fullPath
+                    }
+                }
+                foreach ($store in $ns.Folders) {
+                    Get-Folders $store ""
+                }
+                $folders | ConvertTo-Json -Compress
+            } catch {
+                Write-Error "Outlook error: $_"
+                exit 1
+            }
+        "#;
+
+        let output = self.run_powershell(script).await?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(DesktopError::PlatformError(format!(
+                "Outlook mail_folders failed: {}",
+                stderr.trim()
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if stdout.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let folders: Vec<serde_json::Value> = serde_json::from_str(&stdout)
+            .or_else(|_| {
+                let single: serde_json::Value = serde_json::from_str(&stdout)?;
+                Ok::<_, serde_json::Error>(vec![single])
+            })
+            .map_err(|e| {
+                DesktopError::PlatformError(format!("Failed to parse Outlook folders: {e}"))
+            })?;
+
+        let result = folders
+            .into_iter()
+            .filter_map(|v| {
+                Some(MailFolder {
+                    id: v.get("id")?.as_str()?.to_string(),
+                    name: v.get("name")?.as_str()?.to_string(),
+                    count: v.get("count")?.as_u64()? as u32,
+                })
+            })
+            .collect();
+
+        Ok(result)
+    }
+
+    async fn mail_search(
+        &self,
+        query: &str,
+        folder: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<MailMessage>> {
+        let folder_path = folder.unwrap_or("Inbox");
+        let escaped_query = query.replace('"', "\"\"");
+        let script = format!(
+            r#"
+            try {{
+                $outlook = New-Object -ComObject Outlook.Application
+                $ns = $outlook.GetNamespace("MAPI")
+                $targetFolder = $null
+                foreach ($store in $ns.Folders) {{
+                    $stack = New-Object System.Collections.Generic.Stack[object]
+                    $stack.Push($store)
+                    while ($stack.Count -gt 0) {{
+                        $f = $stack.Pop()
+                        if ($f.Name -eq "{folder_path}") {{
+                            $targetFolder = $f
+                            break
+                        }}
+                        foreach ($sub in $f.Folders) {{ $stack.Push($sub) }}
+                    }}
+                    if ($targetFolder) {{ break }}
+                }}
+                if (-not $targetFolder) {{
+                    $targetFolder = $ns.GetDefaultFolder(6)
+                }}
+                $items = $targetFolder.Items
+                $items.Sort("[ReceivedTime]", $true)
+                $messages = @()
+                $count = 0
+                foreach ($item in $items) {{
+                    if ($count -ge {limit}) {{ break }}
+                    $subject = $item.Subject
+                    $sender = $item.SenderName
+                    $body = $item.Body
+                    if ($subject -like "*{query}*" -or $sender -like "*{query}*" -or $body -like "*{query}*") {{
+                        $date = $item.ReceivedTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                        $messages += [PSCustomObject]@{{
+                            id=$item.EntryID
+                            subject=$subject
+                            sender=$sender
+                            recipients=@($item.To)
+                            date=$date
+                            body_preview=$body.Substring(0, [Math]::Min(200, $body.Length))
+                            is_read=$item.UnRead -eq $false
+                        }}
+                        $count++
+                    }}
+                }}
+                $messages | ConvertTo-Json -Compress
+            }} catch {{
+                Write-Error "Outlook error: $_"
+                exit 1
+            }}
+            "#,
+            folder_path = folder_path,
+            query = escaped_query,
+            limit = limit
+        );
+
+        let output = self.run_powershell(&script).await?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(DesktopError::PlatformError(format!(
+                "Outlook mail_search failed: {}",
+                stderr.trim()
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if stdout.is_empty() || stdout == "null" {
+            return Ok(Vec::new());
+        }
+
+        let messages: Vec<serde_json::Value> = serde_json::from_str(&stdout)
+            .or_else(|_| {
+                let single: serde_json::Value = serde_json::from_str(&stdout)?;
+                Ok::<_, serde_json::Error>(vec![single])
+            })
+            .map_err(|e| {
+                DesktopError::PlatformError(format!("Failed to parse Outlook messages: {e}"))
+            })?;
+
+        let result = messages
+            .into_iter()
+            .filter_map(|v| {
+                let date_str = v.get("date")?.as_str()?;
+                let date = DateTime::parse_from_rfc3339(date_str)
+                    .ok()
+                    .map(|d| d.with_timezone(&Utc))?;
+
+                let recipients = v
+                    .get("recipients")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(|r| r.as_str().map(|s| s.to_string()))
+                    .collect();
+
+                Some(MailMessage {
+                    id: v.get("id")?.as_str()?.to_string(),
+                    subject: v.get("subject").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    sender: v.get("sender").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    recipients,
+                    date,
+                    body_preview: v
+                        .get("body_preview")?
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string(),
+                    is_read: v.get("is_read")?.as_bool().unwrap_or(true),
+                })
+            })
+            .collect();
+
+        Ok(result)
+    }
+
+    async fn mail_get(&self, message_id: &str) -> Result<MailMessageDetail> {
+        let escaped_id = message_id.replace('"', "\"\"");
+        let script = format!(
+            r#"
+            try {{
+                $outlook = New-Object -ComObject Outlook.Application
+                $ns = $outlook.GetNamespace("MAPI")
+                $item = $ns.GetItemFromID("{id}")
+                $date = $item.ReceivedTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                $recipients = @($item.To -split ';' | ForEach-Object {{ $_.Trim() }})
+                $cc = @($item.CC -split ';' | ForEach-Object {{ $_.Trim() }})
+                $attachments = @()
+                foreach ($att in $item.Attachments) {{
+                    $attachments += [PSCustomObject]@{{
+                        filename=$att.FileName
+                        mime_type="application/octet-stream"
+                        size=$att.Size
+                    }}
+                }}
+                [PSCustomObject]@{{
+                    id=$item.EntryID
+                    subject=$item.Subject
+                    sender=$item.SenderName
+                    recipients=$recipients
+                    cc=$cc
+                    bcc=@()
+                    date=$date
+                    body=$item.Body
+                    is_read=$item.UnRead -eq $false
+                    attachments=$attachments
+                }} | ConvertTo-Json -Compress
+            }} catch {{
+                Write-Error "Outlook error: $_"
+                exit 1
+            }}
+            "#,
+            id = escaped_id
+        );
+
+        let output = self.run_powershell(&script).await?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(DesktopError::PlatformError(format!(
+                "Outlook mail_get failed: {}",
+                stderr.trim()
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let v: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
+            DesktopError::PlatformError(format!("Failed to parse Outlook message detail: {e}"))
+        })?;
+
+        let date_str = v.get("date").and_then(|d| d.as_str()).unwrap_or("1970-01-01T00:00:00Z");
+        let date = DateTime::parse_from_rfc3339(date_str)
+            .ok()
+            .map(|d| d.with_timezone(&Utc))
+            .unwrap_or_else(|| Utc.timestamp_opt(0, 0).single().unwrap_or(Utc::now()));
+
+        let recipients = v
+            .get("recipients")
+            .and_then(|r| r.as_array())
+            .map(|arr| arr.iter().filter_map(|r| r.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
+        let cc = v
+            .get("cc")
+            .and_then(|r| r.as_array())
+            .map(|arr| arr.iter().filter_map(|r| r.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
+        let attachments = v
+            .get("attachments")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|att| {
+                        Some(MailAttachment {
+                            filename: att.get("filename")?.as_str()?.to_string(),
+                            mime_type: att
+                                .get("mime_type")?
+                                .as_str()
+                                .unwrap_or("application/octet-stream")
+                                .to_string(),
+                            size: att.get("size")?.as_u64().unwrap_or(0),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(MailMessageDetail {
+            id: message_id.to_string(),
+            subject: v
+                .get("subject")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string(),
+            sender: v
+                .get("sender")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string(),
+            recipients,
+            cc,
+            bcc: Vec::new(),
+            date,
+            body: v.get("body").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+            is_read: v.get("is_read").and_then(|b| b.as_bool()).unwrap_or(true),
+            attachments,
+        })
+    }
+
+    async fn notes_list(&self, _folder: Option<&str>) -> Result<Vec<NoteInfo>> {
+        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+    }
+    async fn notes_read(&self, _note_id: &str) -> Result<NoteContent> {
+        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+    }
+    async fn notes_create(&self, _folder: &str, _title: &str, _body: &str) -> Result<String> {
+        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+    }
+    async fn notes_update(&self, _note_id: &str, _title: Option<&str>, _body: Option<&str>) -> Result<()> {
+        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+    }
+    async fn notes_delete(&self, _note_id: &str) -> Result<()> {
+        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+    }
+    async fn notes_folders(&self) -> Result<Vec<String>> {
+        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+    }
+
+    async fn calendar_list_events(&self,
+        _from: DateTime<Utc>,
+        _to: DateTime<Utc>,
+        _calendar_id: Option<&str>,
+    ) -> Result<Vec<CalendarEvent>> {
+        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+    }
+    async fn calendar_get_event(&self, _event_id: &str) -> Result<CalendarEvent> {
+        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+    }
+    async fn calendar_create_event(&self, _event: NewCalendarEvent) -> Result<String> {
+        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+    }
+    async fn calendar_update_event(&self, _event_id: &str, _event: NewCalendarEvent) -> Result<()> {
+        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+    }
+    async fn calendar_delete_event(&self, _event_id: &str) -> Result<()> {
+        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+    }
+    async fn calendar_calendars(&self) -> Result<Vec<CalendarInfo>> {
+        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+    }
+
+    async fn reminders_list(&self, _list_id: Option<&str>, _include_completed: bool) -> Result<Vec<Reminder>> {
+        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+    }
+    async fn reminders_get(&self, _reminder_id: &str) -> Result<Reminder> {
+        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+    }
+    async fn reminders_create(&self, _reminder: NewReminder) -> Result<String> {
+        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+    }
+    async fn reminders_complete(&self, _reminder_id: &str) -> Result<()> {
+        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+    }
+    async fn reminders_delete(&self, _reminder_id: &str) -> Result<()> {
+        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+    }
+    async fn reminders_lists(&self) -> Result<Vec<ReminderList>> {
+        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+    }
+
+    async fn contacts_search(&self, _query: &str) -> Result<Vec<Contact>> {
+        Err(DesktopError::NotImplemented("Contacts not available on Windows".into()))
+    }
+    async fn contacts_get(&self, _contact_id: &str) -> Result<ContactDetail> {
+        Err(DesktopError::NotImplemented("Contacts not available on Windows".into()))
+    }
+    async fn contacts_groups(&self) -> Result<Vec<ContactGroup>> {
+        Err(DesktopError::NotImplemented("Contacts not available on Windows".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_default() {
+        let _pim = WindowsPim::default();
+    }
+}
