@@ -105,9 +105,9 @@ mod tests {
         assert_eq!(main_quota.token_budget_per_min, 0);
         assert_eq!(main_quota.priority, 10);
 
-        // Subagent lane: 8 concurrent, 500k tokens/min, priority 5
+        // Subagent lane: 4 concurrent (P1 Stage C), 500k tokens/min, priority 5
         let subagent_quota = config.get_quota(&Lane::Subagent).unwrap();
-        assert_eq!(subagent_quota.max_concurrent, 8);
+        assert_eq!(subagent_quota.max_concurrent, 4);
         assert_eq!(subagent_quota.token_budget_per_min, 500_000);
         assert_eq!(subagent_quota.priority, 5);
 

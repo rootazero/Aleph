@@ -22,7 +22,7 @@ impl Lane {
     pub fn default_max_concurrent(&self) -> usize {
         match self {
             Lane::Main => 2,
-            Lane::Subagent => 8,
+            Lane::Subagent => 4, // P1 Stage C: was 8; per Q6a sweet spot for personal AI scenarios
             Lane::Cron => 2,
             Lane::Nested => 4,
         }

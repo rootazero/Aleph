@@ -91,6 +91,9 @@ pub struct SpawnerBase {
     /// Stage A (P1) — trace sink, cloned from parent's HarnessDeps.
     /// Subagent run events flow into the same sink as the main runner.
     pub trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+    /// Stage C (P1) — lane budget enforcement. `None` skips lane checks
+    /// (legacy behavior); `Some(_)` reserves on entry, releases on exit.
+    pub lane_scheduler: Option<Arc<crate::scheduler::LaneScheduler>>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -130,181 +133,217 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         .child()
         .ok_or_else(|| "chain depth exceeded".to_string())?;
 
-    // 2. Unique ephemeral session key for this sub-agent.
-    let child_id = ephemeral_for(&req.agent_def.id);
+    // Stage C (P1) — lane budget reservation (fail-fast). Skipped when
+    // `base.lane_scheduler` is None (legacy callers / tests).
+    let lane_run_id = format!("subagent-{}", uuid::Uuid::new_v4());
+    let parent_run_id = base.chain.chain_id.clone();
+    let lane_guard = if let Some(scheduler) = base.lane_scheduler.as_ref() {
+        // Defense-in-depth recursion check (third layer; ChainContext + mode
+        // deny are layers 1-2). Free win since the tracker exists.
+        scheduler
+            .check_recursion_depth(&parent_run_id)
+            .await
+            .map_err(|e| format!("sub-agent failed: recursion depth exceeded: {e}"))?;
 
-    // 3. Attach the child session and seed the initial Turn + UserMessage.
-    //    Any failure here surfaces immediately — the harness never runs.
-    base.session
-        .attach(child_id.clone())
-        .await
-        .map_err(|e| format!("sub-agent failed: attach session: {e}"))?;
+        let guard = scheduler
+            .try_reserve(lane_run_id.clone(), crate::scheduler::Lane::Subagent)
+            .await
+            .map_err(|e| format!("sub-agent failed: subagent lane budget exhausted: {e}"))?;
 
-    let turn = uuid::Uuid::new_v4();
-    base.session
-        .emit_event(
-            &child_id,
-            SessionEvent::TurnStarted {
-                turn_id: turn,
-                trigger: TurnTrigger::SubagentRequest,
-                at: now_ms(),
-            },
-        )
-        .await
-        .map_err(|e| format!("sub-agent failed: emit TurnStarted: {e}"))?;
+        // Track parent→child for recursion accounting.
+        scheduler.record_spawn(&parent_run_id, &lane_run_id).await;
 
-    let effective_task = match req.context_summary {
-        Some(summary) => format!(
-            "## Context from parent agent\n\n{}\n\n---\n\n{}",
-            summary, req.task
-        ),
-        None => req.task.to_string(),
+        Some((scheduler.clone(), guard))
+    } else {
+        None
     };
-    base.session
-        .emit_event(
-            &child_id,
-            SessionEvent::UserMessage {
-                turn_id: turn,
-                content: MessageContent {
-                    text: effective_task,
-                    blocks: Vec::new(),
-                    thinking: None,
-                    thinking_signature: None,
+
+    let result: Result<LoopRunResult, String> = async {
+        // 2. Unique ephemeral session key for this sub-agent.
+        let child_id = ephemeral_for(&req.agent_def.id);
+
+        // 3. Attach the child session and seed the initial Turn + UserMessage.
+        //    Any failure here surfaces immediately — the harness never runs.
+        base.session
+            .attach(child_id.clone())
+            .await
+            .map_err(|e| format!("sub-agent failed: attach session: {e}"))?;
+
+        let turn = uuid::Uuid::new_v4();
+        base.session
+            .emit_event(
+                &child_id,
+                SessionEvent::TurnStarted {
+                    turn_id: turn,
+                    trigger: TurnTrigger::SubagentRequest,
+                    at: now_ms(),
                 },
-                at: now_ms(),
-            },
-        )
-        .await
-        .map_err(|e| format!("sub-agent failed: emit UserMessage: {e}"))?;
+            )
+            .await
+            .map_err(|e| format!("sub-agent failed: emit TurnStarted: {e}"))?;
 
-    // 4. Build the agent-scoped system prompt. `PromptBuilder::with_agent`
-    //    pulls in the AgentRoleLayer; `build_system_prompt(&[])` is fine —
-    //    tool schemas are delivered via native tool_use, not the prompt.
-    let system_prompt = PromptBuilder::new(PromptConfig::default())
-        .with_agent(req.agent_def.clone())
-        .build_system_prompt(&[]);
+        let effective_task = match req.context_summary {
+            Some(summary) => format!(
+                "## Context from parent agent\n\n{}\n\n---\n\n{}",
+                summary, req.task
+            ),
+            None => req.task.to_string(),
+        };
+        base.session
+            .emit_event(
+                &child_id,
+                SessionEvent::UserMessage {
+                    turn_id: turn,
+                    content: MessageContent {
+                        text: effective_task,
+                        blocks: Vec::new(),
+                        thinking: None,
+                        thinking_signature: None,
+                    },
+                    at: now_ms(),
+                },
+            )
+            .await
+            .map_err(|e| format!("sub-agent failed: emit UserMessage: {e}"))?;
 
-    // 5. Resolve the model override: explicit > model_hint > native.
-    let resolved_model: Option<String> = req
-        .model
-        .map(str::to_string)
-        .or_else(|| req.agent_def.model_hint.clone());
-    let llm: Arc<dyn AiProvider> = match resolved_model {
-        Some(m) => Arc::new(ModelOverrideProvider {
-            inner: base.provider.clone(),
-            model: m,
-        }),
-        None => base.provider.clone(),
-    };
+        // 4. Build the agent-scoped system prompt. `PromptBuilder::with_agent`
+        //    pulls in the AgentRoleLayer; `build_system_prompt(&[])` is fine —
+        //    tool schemas are delivered via native tool_use, not the prompt.
+        let system_prompt = PromptBuilder::new(PromptConfig::default())
+            .with_agent(req.agent_def.clone())
+            .build_system_prompt(&[]);
 
-    // 6. Wrap the parent's tool service with the allowlist gate.
-    let agent_def_arc = Arc::new(req.agent_def.clone());
-    let scoped_tools: Arc<dyn ToolService> = Arc::new(AllowlistToolService::new(
-        base.parent_tools.clone(),
-        agent_def_arc.clone(),
-    ));
+        // 5. Resolve the model override: explicit > model_hint > native.
+        let resolved_model: Option<String> = req
+            .model
+            .map(str::to_string)
+            .or_else(|| req.agent_def.model_hint.clone());
+        let llm: Arc<dyn AiProvider> = match resolved_model {
+            Some(m) => Arc::new(ModelOverrideProvider {
+                inner: base.provider.clone(),
+                model: m,
+            }),
+            None => base.provider.clone(),
+        };
 
-    let max_iter = req
-        .agent_def
-        .max_iterations
-        .map(usize::try_from)
-        .transpose()
-        .map_err(|_| "max_iterations exceeds platform limit".to_string())?;
+        // 6. Wrap the parent's tool service with the allowlist gate.
+        let agent_def_arc = Arc::new(req.agent_def.clone());
+        let scoped_tools: Arc<dyn ToolService> = Arc::new(AllowlistToolService::new(
+            base.parent_tools.clone(),
+            agent_def_arc.clone(),
+        ));
 
-    let deps = HarnessDeps {
-        session: base.session.clone(),
-        tools: scoped_tools,
-        sandbox: base.sandbox.clone(),
-        llm,
-        verifier_chain: None,
-        context_budget: None,
-        context_compactor: None,
-        skill_prefetcher: None,
-        // Stage A (P1) — was None; now inherited from parent SpawnerBase.
-        trace_sink: base.trace_sink.clone(),
-        system_prompt: Some(system_prompt),
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
-        // Stage 4 (#11): stamp the descended child chain on the inner harness
-        // so its `chain_context()` accessor reports the correct depth/chain_id
-        // instead of falling back to a fresh root.
-        chain_context: child_chain.clone(),
-        // Stage 5a (#9): inherit parent guardrails so the subagent enforces
-        // the same Input/Output/ToolCall checks as the spawning harness.
-        guardrails: base.guardrails.clone(),
-        // Stage A (P1) — was None; now inherited from parent SpawnerBase.
-        fallback_llm: base.fallback_llm.clone(),
-        max_iterations: max_iter,
-        power: None,
-        // Stage A (P1) — was None for all three; now inherited from parent.
-        stall_config: base.stall_config.clone(),
-        consecutive_failure_cap: base.consecutive_failure_cap,
-        turn_timeout: base.turn_timeout,
-    };
-    let harness = Arc::new(AgentHarness::new(deps));
+        let max_iter = req
+            .agent_def
+            .max_iterations
+            .map(usize::try_from)
+            .transpose()
+            .map_err(|_| "max_iterations exceeds platform limit".to_string())?;
 
-    // 7. Run the harness with wall-clock timeout + panic isolation.
-    //    AssertUnwindSafe is used because the harness internals (provider
-    //    closures, channels) are not `UnwindSafe` but we intentionally
-    //    catch panics to synthesize a clean error rather than unwind
-    //    into the parent actor.
-    //
-    //    The harness is held via `Arc` so we retain a handle after the
-    //    async closure completes — this lets us query `hit_limit()`
-    //    directly instead of reconstructing it from the event log.
-    let timeout = std::time::Duration::from_secs(req.timeout_secs);
-    let cancel = req.cancel.clone();
-    let sid = child_id.clone();
-    let harness_for_run = harness.clone();
-    let run_fut = async move {
-        let mut cb = NoopHarnessCallback;
-        harness_for_run.run(&sid, &mut cb, &cancel).await
-    };
-    let outcome = tokio::time::timeout(timeout, AssertUnwindSafe(run_fut).catch_unwind()).await;
+        let deps = HarnessDeps {
+            session: base.session.clone(),
+            tools: scoped_tools,
+            sandbox: base.sandbox.clone(),
+            llm,
+            verifier_chain: None,
+            context_budget: None,
+            context_compactor: None,
+            skill_prefetcher: None,
+            // Stage A (P1) — was None; now inherited from parent SpawnerBase.
+            trace_sink: base.trace_sink.clone(),
+            system_prompt: Some(system_prompt),
+            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+            // Stage 4 (#11): stamp the descended child chain on the inner harness
+            // so its `chain_context()` accessor reports the correct depth/chain_id
+            // instead of falling back to a fresh root.
+            chain_context: child_chain.clone(),
+            // Stage 5a (#9): inherit parent guardrails so the subagent enforces
+            // the same Input/Output/ToolCall checks as the spawning harness.
+            guardrails: base.guardrails.clone(),
+            // Stage A (P1) — was None; now inherited from parent SpawnerBase.
+            fallback_llm: base.fallback_llm.clone(),
+            max_iterations: max_iter,
+            power: None,
+            // Stage A (P1) — was None for all three; now inherited from parent.
+            stall_config: base.stall_config.clone(),
+            consecutive_failure_cap: base.consecutive_failure_cap,
+            turn_timeout: base.turn_timeout,
+        };
+        let harness = Arc::new(AgentHarness::new(deps));
 
-    match outcome {
-        Err(_elapsed) => {
-            return Err(format!("Sub-agent timed out after {}s", req.timeout_secs));
+        // 7. Run the harness with wall-clock timeout + panic isolation.
+        //    AssertUnwindSafe is used because the harness internals (provider
+        //    closures, channels) are not `UnwindSafe` but we intentionally
+        //    catch panics to synthesize a clean error rather than unwind
+        //    into the parent actor.
+        //
+        //    The harness is held via `Arc` so we retain a handle after the
+        //    async closure completes — this lets us query `hit_limit()`
+        //    directly instead of reconstructing it from the event log.
+        let timeout = std::time::Duration::from_secs(req.timeout_secs);
+        let cancel = req.cancel.clone();
+        let sid = child_id.clone();
+        let harness_for_run = harness.clone();
+        let run_fut = async move {
+            let mut cb = NoopHarnessCallback;
+            harness_for_run.run(&sid, &mut cb, &cancel).await
+        };
+        let outcome =
+            tokio::time::timeout(timeout, AssertUnwindSafe(run_fut).catch_unwind()).await;
+
+        match outcome {
+            Err(_elapsed) => Err(format!("Sub-agent timed out after {}s", req.timeout_secs)),
+            Ok(Err(panic_payload)) => {
+                let msg = panic_message(&panic_payload);
+                Err(format!("sub-agent panicked: {msg}"))
+            }
+            Ok(Ok(Err(e))) => Err(format!("sub-agent failed: {e}")),
+            Ok(Ok(Ok(()))) => {
+                // 8. Query the harness directly for the `hit_limit` signal. The
+                //    previous implementation reconstructed this from the event log
+                //    because the harness had been moved into the async closure; with
+                //    `Arc<AgentHarness>` we just read the flag.
+                let hit_limit = harness.hit_limit();
+
+                let result =
+                    extract_run_result(base.session.as_ref(), &child_id, &child_chain, hit_limit)
+                        .await?;
+
+                // 9. Spec 1 G2 — fire-and-forget Delegation emit so CompressionService
+                //    can distil parent-side lessons. Skipped silently when no writer is
+                //    threaded through (legacy callers, tests, off-by-config).
+                if let Some(writer) = base.raw_memory_writer.clone() {
+                    let summary = result.final_text.clone().unwrap_or_default();
+                    let parent_id = base
+                        .parent_agent_id
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string());
+                    crate::a2a::sub_agent::emit_delegation_primitives(
+                        writer,
+                        req.task.to_string(),
+                        summary,
+                        parent_id,
+                        base.parent_session_id.clone(),
+                        req.agent_def.id.clone(),
+                        base.capture_registry.clone(),
+                    );
+                }
+
+                Ok(result)
+            }
         }
-        Ok(Err(panic_payload)) => {
-            let msg = panic_message(&panic_payload);
-            return Err(format!("sub-agent panicked: {msg}"));
-        }
-        Ok(Ok(Err(e))) => {
-            return Err(format!("sub-agent failed: {e}"));
-        }
-        Ok(Ok(Ok(()))) => {}
+    }
+    .await;
+
+    // Stage C (P1) — release lane permit + clear lane state on every exit
+    // path (Ok / Err / panic-rescued).
+    if let Some((scheduler, guard)) = lane_guard {
+        scheduler
+            .on_run_complete(&lane_run_id, crate::scheduler::Lane::Subagent, Some(guard))
+            .await;
     }
 
-    // 8. Query the harness directly for the `hit_limit` signal. The
-    //    previous implementation reconstructed this from the event log
-    //    because the harness had been moved into the async closure; with
-    //    `Arc<AgentHarness>` we just read the flag.
-    let hit_limit = harness.hit_limit();
-
-    let result =
-        extract_run_result(base.session.as_ref(), &child_id, &child_chain, hit_limit).await?;
-
-    // 9. Spec 1 G2 — fire-and-forget Delegation emit so CompressionService
-    //    can distil parent-side lessons. Skipped silently when no writer is
-    //    threaded through (legacy callers, tests, off-by-config).
-    if let Some(writer) = base.raw_memory_writer.clone() {
-        let summary = result.final_text.clone().unwrap_or_default();
-        let parent_id = base
-            .parent_agent_id
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
-        crate::a2a::sub_agent::emit_delegation_primitives(
-            writer,
-            req.task.to_string(),
-            summary,
-            parent_id,
-            base.parent_session_id.clone(),
-            req.agent_def.id.clone(),
-            base.capture_registry.clone(),
-        );
-    }
-
-    Ok(result)
+    result
 }
 
 /// Walk the child session event log and synthesize a `LoopRunResult`.
@@ -660,6 +699,8 @@ mod tests {
             consecutive_failure_cap: None,
             turn_timeout: None,
             trace_sink: None,
+            // Stage C (P1):
+            lane_scheduler: None,
         }
     }
 

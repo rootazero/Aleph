@@ -135,6 +135,10 @@ pub struct AgentRuntime {
     turn_timeout: Option<std::time::Duration>,
     /// Stage A (P1) — trace sink threaded into SpawnerBase.
     trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+    /// Stage C (P1) — lane budget enforcement for subagent spawns.
+    /// `None` keeps the legacy "no lane wiring" behavior; `Some(_)` enforces
+    /// the configured Subagent lane cap with fail-fast semantics.
+    lane_scheduler: Option<Arc<crate::scheduler::LaneScheduler>>,
 }
 
 impl AgentRuntime {
@@ -165,6 +169,7 @@ impl AgentRuntime {
             consecutive_failure_cap: None,
             turn_timeout: None,
             trace_sink: None,
+            lane_scheduler: None,
         }
     }
 
@@ -214,6 +219,17 @@ impl AgentRuntime {
     /// Stage A (P1) — wire the trace sink. Subagents emit into the same sink.
     pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
         self.trace_sink = Some(sink);
+        self
+    }
+
+    /// Stage C (P1) — wire the lane scheduler. Subagent spawns reserve
+    /// `Lane::Subagent` budget; on exhaustion, spawn returns
+    /// `ToolError::Execution`.
+    pub fn with_lane_scheduler(
+        mut self,
+        scheduler: Arc<crate::scheduler::LaneScheduler>,
+    ) -> Self {
+        self.lane_scheduler = Some(scheduler);
         self
     }
 
@@ -355,6 +371,8 @@ impl AgentRuntime {
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,
             trace_sink: self.trace_sink.clone(),
+            // Stage C (P1):
+            lane_scheduler: self.lane_scheduler.clone(),
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

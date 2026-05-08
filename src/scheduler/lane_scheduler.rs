@@ -20,6 +20,10 @@ pub enum SchedulerError {
     /// The requested lane has no configured quota
     #[error("unknown lane: {0:?}")]
     UnknownLane(Lane),
+    /// Lane budget exhausted — no permits available without queueing.
+    /// Used by `try_reserve` for fail-fast semantics.
+    #[error("lane {lane:?} budget exhausted (max={max})")]
+    LaneBudgetExhausted { lane: Lane, max: usize },
 }
 
 /// RAII guard for scheduled run permits.
@@ -27,6 +31,7 @@ pub enum SchedulerError {
 /// Holds references to both the global and lane semaphores.
 /// On drop, automatically releases one permit to each semaphore.
 /// This ensures permits are returned even if the task panics.
+#[derive(Debug)]
 #[must_use = "ScheduleGuard must be held for the duration of the run and passed to on_run_complete"]
 pub struct ScheduleGuard {
     global_semaphore: Arc<Semaphore>,
@@ -95,6 +100,73 @@ impl LaneScheduler {
         }
     }
 
+    /// Atomically attempt to reserve a lane slot without queueing.
+    ///
+    /// Unlike `enqueue` + `try_schedule_next`, this is **fail-fast**:
+    /// if global capacity or lane capacity is exhausted, returns
+    /// `SchedulerError::LaneBudgetExhausted` immediately. The caller is
+    /// responsible for translating this to a domain-appropriate error
+    /// (e.g., spawner → `ToolError::Execution`).
+    ///
+    /// On success, returns a `ScheduleGuard` whose `Drop` releases permits
+    /// via RAII. Caller MUST also invoke `on_run_complete` on all exit
+    /// paths to clear lane state tracking (the guard handles permits;
+    /// `on_run_complete` handles state).
+    ///
+    /// # Errors
+    /// - `UnknownLane` — lane not configured in `LaneConfig::quotas`
+    /// - `LaneBudgetExhausted` — global or lane capacity exhausted
+    pub async fn try_reserve(
+        &self,
+        run_id: String,
+        lane: Lane,
+    ) -> Result<ScheduleGuard, SchedulerError> {
+        let state = self
+            .lanes
+            .get(&lane)
+            .ok_or(SchedulerError::UnknownLane(lane))?;
+
+        // Acquire global permit first (matches try_schedule_next ordering).
+        let global_permit = self.global_semaphore.try_acquire().map_err(|_| {
+            SchedulerError::LaneBudgetExhausted {
+                lane,
+                max: self.config.global_max_concurrent,
+            }
+        })?;
+
+        // Acquire lane permit; on failure, release global to avoid leaking.
+        let lane_max = self
+            .config
+            .quotas
+            .get(&lane)
+            .map(|q| q.max_concurrent)
+            .unwrap_or(0);
+        let lane_permit = match state.try_acquire_permit() {
+            Some(permit) => permit,
+            None => {
+                drop(global_permit);
+                return Err(SchedulerError::LaneBudgetExhausted {
+                    lane,
+                    max: lane_max,
+                });
+            }
+        };
+
+        // Mark running; permits become RAII responsibility of ScheduleGuard.
+        state.mark_running(run_id.clone()).await;
+        // SAFETY: ScheduleGuard takes ownership of permit release via its
+        // own Drop impl, ensuring permits are returned exactly once even
+        // if the caller panics. We forget the SemaphorePermits here so
+        // their own Drop does not run.
+        std::mem::forget(global_permit);
+        std::mem::forget(lane_permit);
+
+        Ok(ScheduleGuard {
+            global_semaphore: Arc::clone(&self.global_semaphore),
+            lane_semaphore: Arc::clone(state.semaphore()),
+        })
+    }
+
     /// Try to schedule the next run from any lane
     ///
     /// Returns the run_id and lane if a run was scheduled, None otherwise.
@@ -110,7 +182,6 @@ impl LaneScheduler {
         }
 
         // Sort lanes by priority (highest first), applying anti-starvation boosts
-        // TODO: In future, we can apply per-run priority boosts here
         let mut lanes_by_priority: Vec<_> = self
             .config
             .quotas
@@ -605,5 +676,112 @@ mod tests {
 
         // p3 is at depth 3 (at limit), cannot spawn more
         assert!(scheduler.check_recursion_depth("p3").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn try_reserve_succeeds_with_capacity() {
+        let config = LaneConfig::default();
+        let scheduler = LaneScheduler::new(config);
+
+        // Subagent default after Stage C is 4; reserve 4 should succeed.
+        let mut guards = vec![];
+        for i in 0..4 {
+            let guard = scheduler
+                .try_reserve(format!("sub-{i}"), Lane::Subagent)
+                .await
+                .expect("reserve should succeed within capacity");
+            guards.push(guard);
+        }
+        assert_eq!(guards.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn try_reserve_fails_when_lane_exhausted() {
+        let config = LaneConfig::default();
+        let scheduler = LaneScheduler::new(config);
+
+        // Fill the Subagent lane (default cap 4).
+        let mut _guards = vec![];
+        for i in 0..4 {
+            _guards.push(
+                scheduler
+                    .try_reserve(format!("sub-{i}"), Lane::Subagent)
+                    .await
+                    .expect("first 4 reserves should succeed"),
+            );
+        }
+        // 5th must fail with LaneBudgetExhausted.
+        let err = scheduler
+            .try_reserve("sub-5".to_string(), Lane::Subagent)
+            .await
+            .expect_err("5th reserve should fail");
+        match err {
+            SchedulerError::LaneBudgetExhausted { lane, max } => {
+                assert_eq!(lane, Lane::Subagent);
+                assert_eq!(max, 4);
+            }
+            other => panic!("expected LaneBudgetExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn try_reserve_fails_when_global_exhausted() {
+        // Global cap 1; lane has plenty of room.
+        let config = LaneConfig {
+            global_max_concurrent: 1,
+            ..LaneConfig::default()
+        };
+        let scheduler = LaneScheduler::new(config);
+
+        let _guard = scheduler
+            .try_reserve("first".to_string(), Lane::Subagent)
+            .await
+            .expect("first reserve uses the only global slot");
+
+        let err = scheduler
+            .try_reserve("second".to_string(), Lane::Subagent)
+            .await
+            .expect_err("second reserve should fail (global exhausted)");
+        assert!(matches!(err, SchedulerError::LaneBudgetExhausted { .. }));
+    }
+
+    #[tokio::test]
+    async fn try_reserve_unknown_lane() {
+        // Build config without Cron quota.
+        let mut config = LaneConfig::default();
+        config.quotas.remove(&Lane::Cron);
+        let scheduler = LaneScheduler::new(config);
+
+        let err = scheduler
+            .try_reserve("x".to_string(), Lane::Cron)
+            .await
+            .expect_err("unknown lane must fail");
+        assert!(matches!(err, SchedulerError::UnknownLane(Lane::Cron)));
+    }
+
+    #[tokio::test]
+    async fn guard_drop_releases_permit() {
+        let config = LaneConfig::default();
+        let scheduler = LaneScheduler::new(config);
+
+        // Fill Subagent lane (default 4).
+        let mut held = vec![];
+        for i in 0..4 {
+            held.push(
+                scheduler
+                    .try_reserve(format!("sub-{i}"), Lane::Subagent)
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        // Drop one guard; permit should be released.
+        drop(held.pop().unwrap());
+
+        // Now we can reserve again.
+        let _guard = scheduler
+            .try_reserve("sub-replacement".to_string(), Lane::Subagent)
+            .await
+            .expect("after drop, reserve should succeed");
     }
 }
