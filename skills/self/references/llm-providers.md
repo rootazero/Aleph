@@ -79,6 +79,9 @@ thinking_level = "HIGH"                 # Gemini 3 only: "LOW" | "HIGH"
 media_resolution = "HIGH"               # Gemini only: "LOW" | "MEDIUM" | "HIGH"
 repeat_penalty = 1.1                    # Ollama only
 system_prompt_mode = "prepend"          # "prepend" (default) | "standard"
+
+# Model behavior override (optional)
+model_behavior = "anthropic"            # Use a specific behavior file in ~/.aleph/model_behaviors/{name}.md
 ```
 
 ## Field Pitfalls
@@ -89,3 +92,4 @@ system_prompt_mode = "prepend"          # "prepend" (default) | "standard"
 | `models = ["gpt-4o"]` | ~~`model = "gpt-4o"`~~ (works as alias but array is canonical) |
 | `enabled = true` | (omitting it = disabled by default!) |
 | `base_url = "https://..."` | ~~`url = "..."`~~, ~~`endpoint = "..."`~~ |
+| `model_behavior = "anthropic"` | ~~`behavior = "..."`~~, ~~`model_behaviour = "..."`~~ |
