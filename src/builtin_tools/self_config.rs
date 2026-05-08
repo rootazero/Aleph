@@ -1,7 +1,7 @@
 //! SelfConfigTool — structured access to identity files and config.toml
 //!
 //! Gives the LLM the ability to list, read, and write identity files
-//! (SOUL.md, IDENTITY.md, AGENTS.md, TOOLS.md, MEMORY.md, HEARTBEAT.md)
+//! (SOUL.md, IDENTITY.md, AGENTS.md, TOOLS.md, HEARTBEAT.md)
 //! and to read/update config.toml sections via the ConfigPatcher pipeline.
 
 use async_trait::async_trait;
@@ -412,7 +412,7 @@ fn value_to_string(value: &serde_json::Value) -> String {
 #[async_trait]
 impl AlephTool for SelfConfigTool {
     const NAME: &'static str = "self_config";
-    const DESCRIPTION: &'static str = "Read and write Aleph identity files (MEMORY.md, SOUL.md, AGENTS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md) and modify config.toml with validation. Identity files live in the agent directory and are injected into your context on each turn. For config updates, use dot-path syntax (e.g. 'memory', 'providers.openai').";
+    const DESCRIPTION: &'static str = "Read and write Aleph identity files (SOUL.md, AGENTS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md) and modify config.toml with validation. Identity files live in the agent directory and are injected into your context on each turn. For config updates, use dot-path syntax (e.g. 'memory', 'providers.openai').";
 
     type Args = SelfConfigArgs;
     type Output = SelfConfigOutput;

@@ -21,12 +21,31 @@ description: "Aleph self-management mode — configure LLM providers, generation
 | Tool | Use for |
 |------|---------|
 | `vault_store` | Store/delete/list API keys |
-| `self_config` | Read/update identity files and config.toml with validation + preview |
-| `bash` | Raw file read, python3 edits, system commands |
+| `self_config` | Read/write identity files and config.toml with validation + preview |
+| `agent_create` / `agent_delete` / `agent_list` / `agent_info` | Agent lifecycle management |
+| `channel_pairing` | Generate/list pairing codes for Telegram/Discord |
+| `remember` | Add/replace/remove entries in MEMORY.md (curated memory) |
 | `read_config_guide` | Load detailed guide for a domain |
+| `bash` | Raw file read, python3 edits, system commands |
 | `web_fetch` / `search` | External docs for plugin/skill installs only |
 
 **Never use**: `file_ops` (denied_paths), `image_generate`, `generate_video`.
+
+---
+
+## Identity Files
+
+Stored in `~/.aleph/agents/{agent_id}/`, injected into the agent's system prompt on each turn.
+
+| File | Read | Write | Purpose |
+|------|------|-------|---------|
+| `SOUL.md` | self_config | self_config | Core persona |
+| `IDENTITY.md` | self_config | self_config | Identity definition |
+| `AGENTS.md` | self_config | self_config | Agent behavior guide |
+| `TOOLS.md` | self_config | self_config | Tool usage guide |
+| `HEARTBEAT.md` | self_config | self_config | Health check guide |
+
+> **Note**: `MEMORY.md` is managed by the `remember` tool (action=`add`/`replace`/`remove`). It is **not** accessible via `self_config`. Use `remember` for all MEMORY.md operations.
 
 ---
 
@@ -48,8 +67,6 @@ Read an identity file by name.
 self_config(action="ReadFile", file_name="SOUL.md")
 ```
 Allowed files: `SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`
-
-> **Note**: `MEMORY.md` is managed by the curated memory module, not identity files. Use the `remember` tool for memory operations.
 
 #### WriteFile
 Write content to an identity file (creates if not exists). Changes take effect on the next turn.
@@ -149,7 +166,38 @@ When `dry_run=true`, the response includes a `preview_message` in Chinese:
 | `policies` | Behavioral policies (tool safety, retry, intent, etc.) |
 | `sandbox` | Sandbox runtime config (workspace root, timeout, output cap) |
 | `agents` | Agent definitions and global defaults |
+| `agent` (alias `cowork`) | Agent task orchestration settings |
 | `bindings` | Channel → Agent routing bindings |
+
+---
+
+## Agent Management Tools
+
+| Tool | Purpose | Confirmation |
+|------|---------|-------------|
+| `agent_create` | Create a new agent with workspace and memory | No |
+| `agent_delete` | Delete an agent (cannot delete "main") | **Yes** |
+| `agent_list` | List all agents, show active one | No |
+| `agent_info` | Get agent capabilities, config, tools | No |
+
+### Agent Creation Example
+```
+agent_create(id="trader", name="Trading Assistant", description="Stock analysis", model="claude-sonnet-4-5")
+```
+
+> After creating an agent, bind it to channels via `bindings` in config.toml or the Gateway routing system.
+
+---
+
+## Channel Pairing
+
+```
+channel_pairing(action="generate")                    # Generate pairing code
+channel_pairing(action="generate", channel_id="telegram")
+channel_pairing(action="list")                        # List active codes
+```
+
+Use when the user wants to link a Telegram/Discord account to Aleph.
 
 ---
 
@@ -183,6 +231,7 @@ All top-level sections available in `config.toml`:
 | `group_chat` | Multi-agent chat | `enabled`, `personas`, `rotation_strategy` |
 | `cron` | Scheduled tasks | `jobs` array with `name`, `schedule`, `command` |
 | `heartbeat` | Health monitoring | `enabled`, `interval_seconds`, `endpoints` |
+| `personas` | Preset persona definitions | `name`, `system_prompt`, `model` |
 | `evolution` | Skill evolution | `enabled`, `auto_generate`, `threshold` |
 | `media` | Media pipeline | `enabled`, `providers`, `cache_ttl` |
 | `privacy` | PII filtering | `enabled`, `redaction_level`, `allowed_entities` |
@@ -201,6 +250,8 @@ All top-level sections available in `config.toml`:
 | `bindings` | Route bindings | `channel`, `pattern`, `agent_id` |
 | `plugin_marketplaces.*` | Plugin sources | `source`, `type` (`github` or `local`) |
 | `stop_hooks` | Stop hooks | `name`, `command`, `timeout_secs` |
+
+> **Important**: `[agent]` (task orchestration) and `[agents]` (agent definitions) are **different sections**. Do not confuse them.
 
 ---
 
@@ -242,6 +293,22 @@ vault_store(action="list")
 | Generation providers | `gen:{name}` | `gen:stability` |
 | Channels | `channel:{type}:{id}` | `channel:telegram:bot1` |
 | Embedding | `embedding:{name}` | `embedding:openai` |
+
+---
+
+## Curated Memory (MEMORY.md)
+
+Use the `remember` tool for entry-level edits:
+
+```
+remember(action="add", content="User prefers concise responses")
+remember(action="replace", old_text="concise", content="User prefers detailed responses")
+remember(action="remove", old_text="concise")
+```
+
+- `remember(action="add", ...)` — append new fact
+- `remember(action="replace", ...)` — replace existing entry
+- `remember(action="remove", ...)` — remove entry
 
 ---
 
