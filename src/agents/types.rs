@@ -138,8 +138,21 @@ impl AgentDef {
         self
     }
 
-    /// Check if a tool is allowed for this agent
+    /// Check if a tool is allowed for this agent.
+    ///
+    /// **Recursion guard**: agents in `AgentMode::SubAgent` are denied the
+    /// `subagent` tool unconditionally — this rule overrides the allowlist
+    /// (including wildcard `"*"`) and any explicit `"subagent"` entry. This
+    /// prevents a subagent from spawning further subagents and triggering
+    /// unbounded recursion. Primary-mode agents retain full subagent
+    /// spawning capability subject to the normal allow/deny lists.
     pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
+        // Recursion guard: SubAgent-mode agents may never invoke the
+        // `subagent` tool, regardless of allowlist contents.
+        if matches!(self.mode, AgentMode::SubAgent) && tool_name == "subagent" {
+            return false;
+        }
+
         // Check denied list first
         if self.denied_tools.iter().any(|t| t == tool_name) {
             return false;
@@ -277,5 +290,39 @@ mod tests {
         let agent =
             AgentDef::new("test", AgentMode::SubAgent).with_when_to_use("When you need testing");
         assert_eq!(agent.when_to_use.as_deref(), Some("When you need testing"));
+    }
+
+    // -- Recursion guard (Stage B, P1 subagent uplift) -----------------------
+
+    #[test]
+    fn subagent_mode_denies_subagent_tool_even_with_wildcard() {
+        let agent = AgentDef::new("child", AgentMode::SubAgent)
+            .with_allowed_tools(vec!["*".into()]);
+
+        // Wildcard would normally allow everything, but the recursion guard
+        // must override it for the `subagent` tool name.
+        assert!(!agent.is_tool_allowed("subagent"));
+        // Other tools are unaffected by the guard.
+        assert!(agent.is_tool_allowed("read"));
+    }
+
+    #[test]
+    fn subagent_mode_denies_subagent_tool_with_explicit_entry() {
+        let agent = AgentDef::new("child", AgentMode::SubAgent)
+            .with_allowed_tools(vec!["subagent".into(), "read".into()]);
+
+        // Explicit allowlist entry must not bypass the recursion guard.
+        assert!(!agent.is_tool_allowed("subagent"));
+        // Unrelated explicit entries still pass.
+        assert!(agent.is_tool_allowed("read"));
+    }
+
+    #[test]
+    fn primary_mode_allows_subagent_tool() {
+        let agent = AgentDef::new("primary", AgentMode::Primary)
+            .with_allowed_tools(vec!["subagent".into()]);
+
+        // Primary-mode agents retain full subagent spawning capability.
+        assert!(agent.is_tool_allowed("subagent"));
     }
 }

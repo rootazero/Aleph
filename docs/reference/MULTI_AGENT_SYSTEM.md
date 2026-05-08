@@ -65,6 +65,21 @@ Per the P1 zero-override decision, subagents do not currently support per-agent 
 
 The shared assembly path lives in `src/orchestrator/deps_builder.rs` (`build_fallback_llm`, `build_stability_triple`); both the main runner (`aleph-server` boot) and the subagent spawner consume the same builders so wiring stays consistent.
 
+### Recursion Protection
+
+SubAgent-mode agents are structurally denied from invoking the `subagent`
+tool. Enforcement lives in `AgentDef::is_tool_allowed`
+(`src/agents/types.rs`), which overrides any explicit allowlist entry
+(including wildcard `"*"`). Primary-mode agents retain full subagent
+spawning capability.
+
+Two additional defense layers exist:
+- `ChainContext::child()` depth guard (`subagent_spawner.rs:114-117`)
+  returns `None` when `max_depth` is reached, surfacing as a `"chain
+  depth exceeded"` error.
+- `LaneScheduler::check_recursion_depth` (`scheduler/lane_scheduler.rs`)
+  tracks parent→child relationships across the run lifetime.
+
 ## Mode 2: Delegate (Peer Communication)
 
 **Tool**: `session_send`

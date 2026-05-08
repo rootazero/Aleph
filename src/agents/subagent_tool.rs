@@ -3,8 +3,9 @@
 //! When the parent agent needs to run a complex sub-task autonomously,
 //! it calls the `subagent` tool. `AgentRuntime::execute_via_harness` spawns a
 //! fresh `AgentHarness` (via `subagent_spawner`) with its parent tool service
-//! wrapped by `AllowlistToolService` (which excludes the `subagent` tool to
-//! prevent infinite recursion) and runs the task to completion.
+//! wrapped by `AllowlistToolService`. SubAgent-mode agents are denied
+//! invocation of this tool via `AgentDef::is_tool_allowed` (recursion
+//! guard); see `agents/types.rs` for the rule.
 //!
 //! Supports agent role selection via `agent_type`, optional context
 //! injection via `context_summary`, and background execution via
