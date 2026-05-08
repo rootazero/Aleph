@@ -8,6 +8,8 @@ supersedes: none
 follows: 2026-05-08-phase6-config-wiring-design.md
 ---
 
+✅ P1 Shipped: <local-only, no PR url> on 2026-05-08
+
 # Aleph Subagent Uplift Roadmap — Master Spec
 
 > **目标**：Phase-6（commit `4aa1c0f6d`，2026-05-08）把主 runner 的 5 个 HarnessDeps
@@ -160,7 +162,7 @@ Solution sketch / Allowed seams / Old code to retire / Acceptance / Future-proof
 
 ### Stage A — HarnessDeps 同步至主 runner 水平
 
-**Status**: 📋 Planned · plan: TBD（P1 phase 时认领）
+**Status**: ✅ Shipped: 70c3f1480 on 2026-05-08
 **Depends on**: 无
 **Risk class**: low
 **Phase**: P1（还债）
@@ -205,7 +207,7 @@ builder 是 boot-time 装配 + opt-in `Option<T>` 模式，不依赖具体模型
 
 ### Stage B — 显式递归 guard
 
-**Status**: 📋 Planned · plan: TBD
+**Status**: ✅ Shipped: 61ce09a96 on 2026-05-08
 **Depends on**: 无
 **Risk class**: low
 **Phase**: P1（还债）
@@ -249,7 +251,7 @@ builder 是 boot-time 装配 + opt-in `Option<T>` 模式，不依赖具体模型
 
 ### Stage C — LaneScheduler 接入 spawner
 
-**Status**: 📋 Planned · plan: TBD
+**Status**: ✅ Shipped: 5f9f155f1 on 2026-05-08
 **Depends on**: 无
 **Risk class**: medium（并发治理 wiring 影响所有 spawn 路径）
 **Phase**: P1（还债）
@@ -295,7 +297,7 @@ builder 是 boot-time 装配 + opt-in `Option<T>` 模式，不依赖具体模型
 
 ### Stage D — 父→子 cancellation 传播测试 + 修补
 
-**Status**: 📋 Planned · plan: TBD
+**Status**: ✅ Shipped: 7c062b548 on 2026-05-08
 **Depends on**: 无（独立验证 + 可能修补）
 **Risk class**: low（验证为主，修补量预算 ≤80 行）
 **Phase**: P1（还债）

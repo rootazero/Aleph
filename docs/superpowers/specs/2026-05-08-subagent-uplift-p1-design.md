@@ -78,7 +78,7 @@ phase: P1 (还债 — Stage A/B/C/D)
 
 ## 2. Stage A — Shared `deps_builder` Module
 
-**Status**: 📋 Planned · plan: TBD
+**Status**: ✅ Shipped: 70c3f1480
 **Risk class**: low
 
 ### 2.1 模块结构
@@ -169,7 +169,7 @@ HarnessDeps {
 
 ## 3. Stage B — Recursion Guard
 
-**Status**: 📋 Planned · plan: TBD
+**Status**: ✅ Shipped: 61ce09a96
 **Risk class**: low
 
 ### 3.1 改动核心：`AgentDef::is_tool_allowed`
@@ -242,7 +242,7 @@ impl AgentDef {
 
 ## 4. Stage C — LaneScheduler 接入 Spawner
 
-**Status**: 📋 Planned · plan: TBD
+**Status**: ✅ Shipped: 5f9f155f1
 **Risk class**: medium
 
 ### 4.1 新 API：`LaneScheduler::try_reserve`
@@ -369,7 +369,7 @@ pub async fn spawn(&self, ..., parent_run_id: &str) -> Result<..., ToolError> {
 
 ## 5. Stage D — Cancellation Propagation Tests + Fix
 
-**Status**: 📋 Planned · plan: TBD
+**Status**: ✅ Shipped: 7c062b548
 **Risk class**: low（测试为主；修补范围 unknown until tests run）
 
 ### 5.1 范围声明
