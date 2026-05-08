@@ -238,10 +238,10 @@ fn build_stability_triple(
         return (None, None, None);
     };
     let stall_config = s.stall_timeout_secs.map(|secs| {
-        let mut sc = alephcore::harness::StallConfig::default();
-        sc.timeout = std::time::Duration::from_secs(secs);
+        let mut sc = alephcore::harness::StallConfig::default()
+            .with_timeout(std::time::Duration::from_secs(secs));
         if let Some(ci) = s.stall_check_interval_secs {
-            sc.check_interval = std::time::Duration::from_secs(ci);
+            sc = sc.with_check_interval(std::time::Duration::from_secs(ci));
         }
         sc
     });
