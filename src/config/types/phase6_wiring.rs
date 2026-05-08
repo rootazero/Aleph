@@ -42,6 +42,7 @@ pub struct StabilityToml {
 /// existing `[providers.<provider>]` entry by toml key; `ProviderConfig`
 /// is *not* inlined here. Self-reference (provider == primary toml key)
 /// is detected at build time and yields `None` with a warn log.
+// Intentionally no `Default` — `provider` is required so users can't silently configure an empty fallback target.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct FallbackProviderToml {
     pub provider: String,
@@ -51,21 +52,22 @@ pub struct FallbackProviderToml {
 mod tests {
     use super::*;
 
+    #[derive(Deserialize)]
+    struct Probe {
+        #[serde(default)]
+        guardrails: Option<GuardrailsToml>,
+        #[serde(default)]
+        stability: Option<StabilityToml>,
+        #[serde(default)]
+        fallback_provider: Option<FallbackProviderToml>,
+    }
+
     #[test]
     fn empty_toml_yields_none_for_three_sections() {
         // Phase-6 acceptance #2: missing section → None for the matching
         // AgentHarnessRunner field. We assert at the schema level here:
         // an empty toml string deserializes the three Option<XxxToml>
         // fields on Config to None.
-        #[derive(Deserialize)]
-        struct Probe {
-            #[serde(default)]
-            guardrails: Option<GuardrailsToml>,
-            #[serde(default)]
-            stability: Option<StabilityToml>,
-            #[serde(default)]
-            fallback_provider: Option<FallbackProviderToml>,
-        }
         let p: Probe = toml::from_str("").expect("empty toml parses");
         assert!(p.guardrails.is_none());
         assert!(p.stability.is_none());
@@ -87,15 +89,6 @@ turn_timeout_secs = 300
 [fallback_provider]
 provider = "openai-mini"
 "#;
-        #[derive(Deserialize)]
-        struct Probe {
-            #[serde(default)]
-            guardrails: Option<GuardrailsToml>,
-            #[serde(default)]
-            stability: Option<StabilityToml>,
-            #[serde(default)]
-            fallback_provider: Option<FallbackProviderToml>,
-        }
         let p: Probe = toml::from_str(toml_str).expect("toml parses");
         assert_eq!(p.guardrails, Some(GuardrailsToml { enabled: true }));
         assert_eq!(
