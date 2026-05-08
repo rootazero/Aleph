@@ -28,6 +28,7 @@ cron_manage(action="create", name="Morning Report",
 
 cron_manage(action="list")
 
+cron_manage(action="run", job_id="abc-123")      # Trigger immediately
 cron_manage(action="delete", job_id="abc-123")
 
 cron_manage(action="enable", job_id="abc-123")
@@ -41,6 +42,16 @@ cron_manage(action="disable", job_id="abc-123")
 | `cron` | Standard cron expression | `{"type":"cron","expr":"0 9 * * *"}` |
 | `every` | Interval-based | `{"type":"every","interval_ms":3600000}` |
 | `at` | One-shot at specific time | `{"type":"at","at_ms":1711944000000}` |
+
+## Manual Execution
+
+You can trigger a job to run immediately without waiting for its schedule:
+
+```
+cron_manage(action="run", job_id="abc-123")
+```
+
+This sets the job's next execution time to "now". The job will run on the next timer tick (within 60 seconds). The job must be enabled and not already running.
 
 ## Caveats
 - Jobs are stored in runtime state, not in config.toml

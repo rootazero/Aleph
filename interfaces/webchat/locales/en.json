@@ -1187,6 +1187,7 @@
     "btn_save": "Save",
     "btn_saving": "Saving...",
     "btn_run_now": "Run Now",
+    "run_triggered": "Job triggered successfully — it will execute on the next check cycle",
     "btn_delete": "Delete",
     "btn_confirm_delete": "Confirm Delete?",
     "btn_cancel": "Cancel",

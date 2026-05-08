@@ -170,6 +170,25 @@ impl CronService {
         Ok(result)
     }
 
+    /// Trigger a job to run immediately by setting its next_run_at_ms to now.
+    /// The timer loop will pick it up on the next tick.
+    pub async fn run_job(&self, id: &str) -> Result<(), String> {
+        let mut store = self.state.store.lock().await;
+        let job = store
+            .get_job_mut(id)
+            .ok_or_else(|| format!("job not found: {id}"))?;
+        if !job.enabled {
+            return Err(format!("job '{}' is disabled, enable it first", id));
+        }
+        if job.state.running_at_ms.is_some() {
+            return Err(format!("job '{}' is already running", id));
+        }
+        let now = self.state.clock.now_ms();
+        job.state.next_run_at_ms = Some(now);
+        store.persist()?;
+        Ok(())
+    }
+
     /// Access the internal service state (for advanced use cases like timer loops).
     pub fn state(&self) -> &Arc<ServiceState<SystemClock>> {
         &self.state

@@ -521,8 +521,8 @@ fn JobEditor(
     let form_alert_channel = RwSignal::new(String::new());
     let form_alert_expanded = RwSignal::new(false);
 
-    // Run history for existing jobs
     let runs = RwSignal::new(Vec::<JobRunInfo>::new());
+    let run_success = RwSignal::new(Option::<String>::None);
 
     let is_new = move || selected.get() == Some(usize::MAX);
     let is_editing = move || selected.get().is_some();
@@ -826,16 +826,24 @@ fn JobEditor(
 
             if let Some(job) = jobs.get().get(idx).cloned() {
                 let job_id = job.id.clone();
+                let state_for_spawn = state.clone();
+                let runs_for_spawn = runs.clone();
+                let error_for_spawn = error.clone();
+                let success_for_spawn = run_success.clone();
                 spawn_local(async move {
-                    match CronApi::run_now(&state, &job_id).await {
+                    match CronApi::run_now(&state_for_spawn, &job_id).await {
                         Ok(_) => {
+                            error_for_spawn.set(None);
+                            success_for_spawn.set(Some(t_string!(i18n, cron.run_triggered).to_string()));
                             // Reload runs after triggering
-                            if let Ok(list) = CronApi::runs(&state, &job_id, 20).await {
-                                runs.set(list);
+                            if let Ok(list) = CronApi::runs(&state_for_spawn, &job_id, 20).await {
+                                runs_for_spawn.set(list);
                             }
+                            gloo_timers::future::sleep(std::time::Duration::from_secs(3)).await;
+                            success_for_spawn.set(None);
                         }
                         Err(e) => {
-                            error.set(Some(format!("Failed to trigger run: {}", e)));
+                            error_for_spawn.set(Some(format!("Failed to trigger run: {}", e)));
                         }
                     }
                 });
@@ -883,6 +891,18 @@ fn JobEditor(
                                     view! {
                                         <div class="mb-4 p-4 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">
                                             {err}
+                                        </div>
+                                    }.into_any()
+                                } else {
+                                    view! { <div></div> }.into_any()
+                                }
+                            }}
+
+                            {move || {
+                                if let Some(msg) = run_success.get() {
+                                    view! {
+                                        <div class="mb-4 p-4 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">
+                                            {msg}
                                         </div>
                                     }.into_any()
                                 } else {

@@ -36,6 +36,8 @@ pub enum CronAction {
     Disable,
     /// Toggle a task's enabled state
     Toggle,
+    /// Trigger a task to run immediately (manual execution)
+    Run,
 }
 
 /// Schedule definition for creating a cron job.
@@ -204,10 +206,11 @@ impl CronManageTool {
 impl AlephTool for CronManageTool {
     const NAME: &'static str = "cron_manage";
     const DESCRIPTION: &'static str =
-        "Manage scheduled tasks (cron jobs). Create, list, delete, enable, or disable \
-         recurring or one-shot tasks. Use this when the user wants to schedule something \
-         for a specific time or interval — e.g., 'remind me tomorrow at 9am', \
+        "Manage scheduled tasks (cron jobs). Create, list, delete, enable, disable, \
+         or manually trigger recurring or one-shot tasks. Use this when the user wants \
+         to schedule something for a specific time or interval — e.g., 'remind me tomorrow at 9am', \
          'check the server every hour', 'send a report every Monday at 10am'. \
+         Also use action='run' to manually trigger a job immediately (e.g., 'run the daily report now'). \
          For one-shot 'at' scheduling, compute at_ms from current system time (check __current_time_ms). \
          Tip: 1h = 3600000ms, 1d = 86400000ms. Asia/Shanghai = UTC+8.";
 
@@ -219,6 +222,7 @@ impl AlephTool for CronManageTool {
             r#"cron.manage(action="create", name="晨间汇报", prompt="生成今日待办清单", schedule={"type":"cron","expr":"0 0 9 * * *","timezone":"Asia/Shanghai"})"#.to_string(),
             r#"cron.manage(action="create", name="发送合同邮件", prompt="给王总发合同回复邮件", schedule={"type":"at","at_ms":1711944000000})"#.to_string(),
             r#"cron.manage(action="list")"#.to_string(),
+            r#"cron.manage(action="run", job_id="abc-123")"#.to_string(),
             r#"cron.manage(action="delete", job_id="abc-123")"#.to_string(),
         ])
     }
@@ -371,6 +375,24 @@ impl AlephTool for CronManageTool {
                 let state_str = if new_state { "启用" } else { "禁用" };
                 Ok(CronManageOutput {
                     message: format!("定时任务 {} 已{}", id, state_str),
+                    job_id: Some(id),
+                    jobs: None,
+                    job: None,
+                })
+            }
+
+            CronAction::Run => {
+                let id = args.job_id.ok_or_else(|| {
+                    crate::error::AlephError::tool("cron_manage run: 'job_id' is required")
+                })?;
+                service.run_job(&id).await.map_err(|e| {
+                    crate::error::AlephError::tool(format!("Failed to trigger cron job: {}", e))
+                })?;
+
+                info!(job_id = %id, "Cron job triggered manually via tool");
+
+                Ok(CronManageOutput {
+                    message: format!("定时任务 {} 已手动触发，将在下一次检查周期内执行", id),
                     job_id: Some(id),
                     jobs: None,
                     job: None,
