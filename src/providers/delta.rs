@@ -119,8 +119,8 @@ impl DeltaCollector {
     ///
     /// Malformed tool arguments are handled gracefully: if `serde_json::from_str` fails,
     /// a warning is logged and the raw string is stored as `Value::String(raw)`.
-    pub fn finish(self) -> ProviderResponse {
-        let tool_calls: Vec<NativeToolCall> = self
+    pub fn finish(mut self) -> ProviderResponse {
+        let mut tool_calls: Vec<NativeToolCall> = self
             .tool_calls
             .into_iter()
             .map(|(id, name, raw_args)| {
@@ -151,6 +151,13 @@ impl DeltaCollector {
             })
             .collect();
 
+        if tool_calls.is_empty() && !self.text.is_empty() {
+            if let Some(tc) = Self::parse_json_tool_call(&self.text) {
+                tool_calls.push(tc);
+                self.text.clear();
+            }
+        }
+
         ProviderResponse {
             text: if self.text.is_empty() {
                 None
@@ -171,6 +178,41 @@ impl DeltaCollector {
             usage: self.usage,
             stop_reason: self.stop_reason,
         }
+    }
+
+    /// Parse a JSON action wrapper (used by non-native-tool providers) into a
+    /// [`NativeToolCall`].  The expected shape is:
+    /// ```json
+    /// {"reasoning": "...", "action": {"type": "tool", "tool_name": "...", "arguments": {...}}}
+    /// ```
+    fn parse_json_tool_call(text: &str) -> Option<NativeToolCall> {
+        let trimmed = text.trim();
+        // Strip markdown code fence if present
+        let json_str = if trimmed.starts_with("```") {
+            trimmed
+                .lines()
+                .skip(1)
+                .take_while(|l| !l.trim_start().starts_with("```"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            trimmed.to_string()
+        };
+        let json_trimmed = json_str.trim_start();
+        if !json_trimmed.starts_with('{') && !json_trimmed.starts_with('[') {
+            return None;
+        }
+        let value: Value = serde_json::from_str(&json_str).ok()?;
+        let action = value.get("action")?;
+        if action.get("type").and_then(Value::as_str) != Some("tool") {
+            return None;
+        }
+        let name = action.get("tool_name").and_then(Value::as_str)?.to_string();
+        let arguments = action.get("arguments").cloned().unwrap_or(Value::Object(serde_json::Map::new()));
+        // Generate a deterministic synthetic id from the tool name so the
+        // harness can correlate tool results on subsequent turns.
+        let id = format!("json_{}", name);
+        Some(NativeToolCall { id, name, arguments })
     }
 }
 

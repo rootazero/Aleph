@@ -399,9 +399,9 @@ impl CronJob {
         }
     }
 
-    /// Default timeout in milliseconds (5 minutes)
+    /// Default timeout in milliseconds (10 minutes)
     pub fn timeout_ms(&self) -> i64 {
-        300_000
+        600_000
     }
 
     /// Construct a generic `DeliveryPayload` from this job and its output.
