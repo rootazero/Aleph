@@ -9,6 +9,8 @@
 //! All functions are synchronous and should be called via
 //! `tokio::task::spawn_blocking` from async contexts.
 
+#[cfg(target_os = "linux")]
+mod ocr_linux;
 mod ocr_windows;
 mod screen_record;
 mod screenshot;
@@ -29,9 +31,9 @@ use crate::OcrResult;
 /// # Platform support
 ///
 /// - **Windows**: Uses WinRT `OcrEngine` API (prefers zh-Hans, fallback to en-US).
+/// - **Linux**: Uses Tesseract CLI (requires `tesseract-ocr` package).
 /// - **macOS**: Returns [`DesktopError::NotImplemented`] — macOS OCR is routed
 ///   through the Swift helper via `screen.ocr` RPC in `desktop/macos/src/screen.rs`.
-/// - **Other**: Returns [`DesktopError::NotImplemented`].
 ///
 /// # Errors
 ///
@@ -43,11 +45,16 @@ pub fn perform_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
         ocr_windows::windows_ocr(png_bytes)
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        ocr_linux::linux_ocr(png_bytes)
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         let _ = png_bytes;
         Err(DesktopError::NotImplemented(
-            "OCR not implemented on this platform (macOS routes OCR through SwiftBridge; non-Windows non-macOS have no native implementation)".into(),
+            "OCR not implemented on this platform".into(),
         ))
     }
 }
