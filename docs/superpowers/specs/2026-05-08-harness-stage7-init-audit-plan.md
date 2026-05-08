@@ -294,3 +294,24 @@ git commit -m "docs(harness): Stage 7 shipped — init audit complete"
 | Future-Proof | trait 可扩 | wiring 与模型无关 |
 
 **为什么 Stage 7 行为是零变化**：本 stage 只打通路径（None → 仍是 None，但来源从 hardcoded 变为 config-driven），并加 trace。**真正的 production 行为切换在未来 Phase-6 通过 `aleph.toml` 提供 config**。这是 master spec § Stage 7 "Allowed seams: 无（纯 wiring + trace 字段补充）" 的字面含义。
+
+
+---
+
+## 12. Phase-6 Closed (2026-05-08)
+
+Stage 7 left five `AgentHarnessRunner` fields hardcoded to `None` with a `PHASE-6` marker. Phase-6 closed those gaps in 6 commits:
+
+| Commit | Subject |
+|--------|---------|
+| `2969b3ef8` | P6-1 plan doc |
+| (P6-2)     | Schema — three toml sections in `src/config/types/phase6_wiring.rs` |
+| `a30d16fed` | P6-3 wire `[guardrails]` → `guardrails` |
+| `5f02c1480` | P6-4 wire `[fallback_provider]` → `fallback_llm` |
+| `95a356aab` | P6-5 wire `[stability]` → `stall_config` + `consecutive_failure_cap` + `turn_timeout` |
+| `dbe87fbd7` | P6-5 fixup — StallConfig builder methods (clippy `field_reassign_with_default`) |
+| `a3bd091` | `build_fallback_llm` case-insensitive self-reference (`eq_ignore_ascii_case`) |
+
+Three private boot-time builders in `src/bin/aleph-server/commands/start/orchestrator_init.rs` (`build_guardrail_registry`, `build_fallback_llm`, `build_stability_triple`) translate three opt-in `aleph.toml` sections into the five live `Option<T>` fields on `AgentHarnessRunner`. Missing section preserves Stage 7 ship behavior exactly. R10 holds at 1520 lines on `src/harness/agent.rs`.
+
+See `docs/superpowers/specs/2026-05-08-phase6-config-wiring-design.md` for design and `docs/superpowers/specs/2026-05-08-phase6-config-wiring-plan.md` for the task-by-task implementation plan.

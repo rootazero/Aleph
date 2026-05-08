@@ -363,7 +363,7 @@ Stage 3 (Prompt) ──────┴─> Stage 4 (Subagent) ─────┘
 
 ### Stage 7 — Initialization Audit (#12)
 
-**Status**: 🟢 Shipped on 2026-05-08 · plan: docs/superpowers/specs/2026-05-08-harness-stage7-init-audit-plan.md · audit: docs/superpowers/specs/2026-05-08-harness-stage7-audit-report.md · 6 commits T1-T6 (`f13f355c6` plan + 6b permanent defer → `fae84fe9c` audit report → `83b26848c` 5 wiring gaps patched → `319bc4572` `TraceSink::on_init_seam` trait method + 9 emit calls → `ca6bc5f9b` 3 integration tests in `src/orchestrator/tests/init_audit.rs` → docs ship). Closes the 12-module roadmap. Production behavior unchanged (5 new `AgentHarnessRunner` fields default `None`); Phase-6 wires from `aleph.toml`.
+**Status**: 🟢 Shipped on 2026-05-08 · plan: docs/superpowers/specs/2026-05-08-harness-stage7-init-audit-plan.md · audit: docs/superpowers/specs/2026-05-08-harness-stage7-audit-report.md · 6 commits T1-T6 (`f13f355c6` plan + 6b permanent defer → `fae84fe9c` audit report → `83b26848c` 5 wiring gaps patched → `319bc4572` `TraceSink::on_init_seam` trait method + 9 emit calls → `ca6bc5f9b` 3 integration tests in `src/orchestrator/tests/init_audit.rs` → docs ship). Closes the 12-module roadmap. Production behavior unchanged at Stage 7 ship (5 new `AgentHarnessRunner` fields default `None`). **Phase-6 closed 2026-05-08** — three top-level toml sections ([guardrails] / [stability] / [fallback_provider]) drive the five fields via three boot-time builders in `orchestrator_init.rs`; missing section preserves Stage 7 behavior. Plan: `docs/superpowers/specs/2026-05-08-phase6-config-wiring-plan.md`.
 **Depends on**: Stage 1-6 全部
 **Risk class**: medium
 
