@@ -89,8 +89,10 @@ Aleph loads agent definitions from three tiers (highest precedence first):
 3. **Builtin tier** — hardcoded in `crate::agents::registry::builtin_agents()`
 
 Higher tiers shadow lower tiers silently when an `id` collision occurs.
-A `LoopTraceEvent::AgentDefShadowed` event records each shadow for
-diagnostics, observable through any registered trace sink.
+Shadow events are logged at `tracing::info!` level during startup
+(no global `trace_sink` is available at init time — sinks are per-session
+on `HarnessDeps`). The `id`, `winner_source`, and `shadowed_source` appear
+as structured fields on the log record.
 
 #### User-Authored Markdown Schema
 
