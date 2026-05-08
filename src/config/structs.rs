@@ -183,6 +183,19 @@ pub struct Config {
     /// terminate; exit code 2 blocks the stop with stdout as the reason.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stop_hooks: Vec<StopHookConfig>,
+    /// Phase-6 wiring (#12) — single-switch guardrails section. When `Some`
+    /// and `enabled = true`, the orchestrator wires `PiiSecretsGuardrail`
+    /// onto Input + Output + ToolCall surfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardrails: Option<GuardrailsToml>,
+    /// Phase-6 wiring (#12) — P0 rescue knobs (stall / consecutive failure
+    /// cap / per-turn timeout). Each sub-field is independently optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stability: Option<StabilityToml>,
+    /// Phase-6 wiring (#12) — Stage 5b single-step fallback provider. Refers
+    /// to an existing `[providers.<key>]` entry by toml key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_provider: Option<FallbackProviderToml>,
     /// Presets override loaded from ~/.aleph/presets.toml
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
@@ -374,6 +387,9 @@ impl Default for Config {
             bindings: Vec::new(),
             plugin_marketplaces: HashMap::new(),
             stop_hooks: Vec::new(),
+            guardrails: None,
+            stability: None,
+            fallback_provider: None,
             presets_override: crate::config::presets_override::PresetsOverride::default(),
             prompts_override: crate::config::prompts_override::PromptsOverride::default(),
             defaults_override: crate::config::defaults_override::DefaultsOverride::default(),
