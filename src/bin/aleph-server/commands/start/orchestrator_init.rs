@@ -31,8 +31,7 @@ use alephcore::verification::{
 };
 use alephcore::StopHookConfig;
 
-#[allow(unused_imports)]
-use alephcore::{Config, FallbackProviderToml, GuardrailsToml, ProviderConfig, StabilityToml};
+use alephcore::Config;
 
 /// Assemble the Phase 5 Orchestrator from already-constructed boot services.
 ///
@@ -119,6 +118,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         }
     };
 
+    let (stall_cfg, failure_cap, turn_to) = build_stability_triple(config);
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),
@@ -134,9 +134,9 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // so behavior matches pre-Stage-7 main exactly.
         guardrails: build_guardrail_registry(config),
         fallback_llm: build_fallback_llm(config, primary_provider_key),
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
+        stall_config: stall_cfg,
+        consecutive_failure_cap: failure_cap,
+        turn_timeout: turn_to,
         power,
         memory_context_provider,
     });
@@ -221,9 +221,42 @@ fn build_fallback_llm(
     }
 }
 
+/// Build the P0 rescue triple from `[stability]`. Phase-6 wiring. Each of the
+/// three returned `Option`s is independent:
+/// - `StallConfig` only constructed when `stall_timeout_secs` is `Some`;
+///   `stall_check_interval_secs` falls back to `StallConfig::default()` (30s).
+/// - `consecutive_failure_cap` is a bare `Option<usize>` (no derived state).
+/// - `turn_timeout` wraps `turn_timeout_secs` in `Duration::from_secs`.
+fn build_stability_triple(
+    config: &Config,
+) -> (
+    Option<alephcore::harness::StallConfig>,
+    Option<usize>,
+    Option<std::time::Duration>,
+) {
+    let Some(s) = config.stability.as_ref() else {
+        return (None, None, None);
+    };
+    let stall_config = s.stall_timeout_secs.map(|secs| {
+        let mut sc = alephcore::harness::StallConfig::default();
+        sc.timeout = std::time::Duration::from_secs(secs);
+        if let Some(ci) = s.stall_check_interval_secs {
+            sc.check_interval = std::time::Duration::from_secs(ci);
+        }
+        sc
+    });
+    (
+        stall_config,
+        s.consecutive_failure_cap,
+        s.turn_timeout_secs.map(std::time::Duration::from_secs),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alephcore::{FallbackProviderToml, GuardrailsToml, ProviderConfig, StabilityToml};
+    use std::time::Duration;
 
     fn cfg_with_guardrails(g: Option<GuardrailsToml>) -> Config {
         Config {
@@ -335,5 +368,64 @@ mod tests {
             vec![("bad", bad)],
         );
         assert!(build_fallback_llm(&cfg, "anthropic").is_none());
+    }
+
+    fn cfg_with_stability(s: Option<StabilityToml>) -> Config {
+        Config {
+            stability: s,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn stability_missing_section_all_none() {
+        let cfg = Config::default();
+        let (sc, cap, tt) = build_stability_triple(&cfg);
+        assert!(sc.is_none());
+        assert!(cap.is_none());
+        assert!(tt.is_none());
+    }
+
+    #[test]
+    fn stability_partial_only_turn_timeout() {
+        let cfg = cfg_with_stability(Some(StabilityToml {
+            turn_timeout_secs: Some(60),
+            ..StabilityToml::default()
+        }));
+        let (sc, cap, tt) = build_stability_triple(&cfg);
+        assert!(sc.is_none(), "no stall_timeout_secs → no StallConfig");
+        assert!(cap.is_none());
+        assert_eq!(tt, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn stability_stall_uses_default_check_interval() {
+        let cfg = cfg_with_stability(Some(StabilityToml {
+            stall_timeout_secs: Some(120),
+            ..StabilityToml::default()
+        }));
+        let (sc, cap, tt) = build_stability_triple(&cfg);
+        let sc = sc.expect("stall_timeout_secs=120 → Some(StallConfig)");
+        assert_eq!(sc.timeout, Duration::from_secs(120));
+        // missing stall_check_interval_secs → falls back to default (30s)
+        assert_eq!(sc.check_interval, alephcore::harness::StallConfig::default().check_interval);
+        assert!(cap.is_none());
+        assert!(tt.is_none());
+    }
+
+    #[test]
+    fn stability_full_section_all_some() {
+        let cfg = cfg_with_stability(Some(StabilityToml {
+            stall_timeout_secs: Some(300),
+            stall_check_interval_secs: Some(15),
+            consecutive_failure_cap: Some(8),
+            turn_timeout_secs: Some(180),
+        }));
+        let (sc, cap, tt) = build_stability_triple(&cfg);
+        let sc = sc.expect("full section → Some(StallConfig)");
+        assert_eq!(sc.timeout, Duration::from_secs(300));
+        assert_eq!(sc.check_interval, Duration::from_secs(15));
+        assert_eq!(cap, Some(8));
+        assert_eq!(tt, Some(Duration::from_secs(180)));
     }
 }
