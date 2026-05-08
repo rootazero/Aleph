@@ -86,7 +86,6 @@ pub mod tools;
 pub mod utils;
 pub mod verification;
 pub mod vision;
-pub mod wizard;
 
 pub mod daemon;
 pub mod resilience;
@@ -214,16 +213,6 @@ pub use crate::exec::{
 
 // =============================================================================
 // Supervisor Exports
-// =============================================================================
-
-// =============================================================================
-// Wizard Exports
-// =============================================================================
-
-pub use crate::wizard::{
-    WizardFlow, WizardPrompter, WizardSession, WizardSessionError, WizardStatus,
-};
-
 // =============================================================================
 // Resilient Task Exports
 // =============================================================================

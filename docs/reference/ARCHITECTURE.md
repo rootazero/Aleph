@@ -760,7 +760,7 @@ let result = builder.build_with_budget(&tools, &soul, profile, PromptMode::Compa
 | 1700 | `InboundContextLayer` | Sender, channel, session metadata |
 | 1710 | `VoiceModeLayer` | Voice-specific response instructions |
 | 1720 | `RuntimeContextLayer` | Current time, session info |
-| 1730 | `IdentityFilesLayer` | SOUL.md, IDENTITY.md workspace files |
+| 1730 | `IdentityFilesLayer` | SOUL.md, IDENTITY.md, AGENTS.md, TOOLS.md, HEARTBEAT.md identity files |
 | 1740 | `MemoryAugmentationLayer` | Dual-path memory injection (ENHANCED) |
 | 1750 | `SessionContextGuideLayer` | Compressed session context guidance |
 
