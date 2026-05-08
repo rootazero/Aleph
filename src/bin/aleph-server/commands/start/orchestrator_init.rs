@@ -182,7 +182,8 @@ fn build_guardrail_registry(
 
 /// Build the optional Stage 5b single-step fallback provider from
 /// `[fallback_provider]`. Phase-6 wiring. Behaviors:
-/// - Missing section, or `provider == primary_provider_key` (self-reference),
+/// - Missing section, or `provider` matches `primary_provider_key` ASCII-case-insensitively
+///   (self-reference),
 ///   yields `None`.
 /// - `provider` not present in `[providers]` map yields `None` + warn log.
 /// - `create_provider` failure yields `None` + warn log (e.g. unknown protocol).
@@ -191,7 +192,7 @@ fn build_fallback_llm(
     primary_provider_key: &str,
 ) -> Option<Arc<dyn alephcore::providers::AiProvider>> {
     let fb = config.fallback_provider.as_ref()?;
-    if fb.provider == primary_provider_key {
+    if fb.provider.eq_ignore_ascii_case(primary_provider_key) {
         tracing::warn!(
             provider = %fb.provider,
             "fallback_provider self-reference; disabling"
@@ -427,5 +428,22 @@ mod tests {
         assert_eq!(sc.check_interval, Duration::from_secs(15));
         assert_eq!(cap, Some(8));
         assert_eq!(tt, Some(Duration::from_secs(180)));
+    }
+
+    #[test]
+    fn fallback_self_reference_case_insensitive_returns_none() {
+        // Regression: primary key "Anthropic" and fallback "anthropic" must
+        // be detected as self-reference. ASCII case differences alone must
+        // not bypass the safety check.
+        let cfg = cfg_with_fallback(
+            Some(FallbackProviderToml {
+                provider: "anthropic".to_string(),
+            }),
+            vec![("anthropic", mock_provider_config())],
+        );
+        assert!(
+            build_fallback_llm(&cfg, "Anthropic").is_none(),
+            "ASCII case-difference must still trigger self-reference disable"
+        );
     }
 }
