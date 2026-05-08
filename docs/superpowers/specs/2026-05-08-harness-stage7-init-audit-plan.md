@@ -1,6 +1,6 @@
 # Stage 7 Plan — Initialization Audit (#12)
 
-**Status**: 📝 Draft (2026-05-08)
+**Status**: 🟢 Shipped on 2026-05-08 (commits T1-T6: `f13f355c6 → fae84fe9c → 83b26848c → 319bc4572 → ca6bc5f9b → docs-ship`)
 **Master spec**: [`2026-05-05-harness-12-module-roadmap-design.md`](2026-05-05-harness-12-module-roadmap-design.md) § Stage 7
 **Module**: #12 Initialization Audit
 **Risk class**: medium（按 master spec 分级）

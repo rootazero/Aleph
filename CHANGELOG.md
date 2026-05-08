@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Harness Stage 7 — Initialization Audit (#12)** — closes the 12-module roadmap. A static audit of `HarnessDeps` producers + consumers found 5 production wiring gaps on the gateway path: `harness_bridge.rs` was hardcoding `None` for `guardrails`, `fallback_llm`, `stall_config`, `consecutive_failure_cap`, and `turn_timeout` despite Stage 5a/5b/P0 rescue having shipped the seams. `AgentHarnessRunner` now exposes 5 new `pub` fields plumbing those values from boot to `HarnessDeps`; production behavior is unchanged (defaults stay `None`) but Phase-6 can now wire from `aleph.toml` without touching `harness_bridge.rs`. New `TraceSink::on_init_seam(stage, seam, configured)` trait method (default no-op, strictly additive — `NoopTraceSink` / `GatewayTraceSink` / test sinks compile unchanged) emits 9 events per session-start in declared order: `PromptBuilder`, `ChainContext`, `GuardrailRegistry`, `FallbackLLM`, `VerifierChain`, `StallConfig`, `ConsecutiveFailureCap`, `TurnTimeout`, `SkillPrefetcher`. `tracing::info!` adds production telemetry alongside. Three integration tests in `src/orchestrator/tests/init_audit.rs` lock the cold-start contract (event set, declared order, configured-flag truth table). Stage 6b (`JudgeVerifier` + `ComputationalVerifier`) now **permanently deferred** per R7 (LLM Sovereignty) + R8 (Everything-is-a-Tool) + R10 dumb-loop "5 nos" #3 + #4 — `src/verification/mod.rs` preamble hardened from "gated on waiver" to permanent prohibition. Master spec § Stage 7 / plan: `docs/superpowers/specs/2026-05-08-harness-stage7-init-audit-plan.md` / audit report: `docs/superpowers/specs/2026-05-08-harness-stage7-audit-report.md`.
+
 ## [2026.05.07]
 
 ### Added
