@@ -80,6 +80,61 @@ Two additional defense layers exist:
 - `LaneScheduler::check_recursion_depth` (`scheduler/lane_scheduler.rs`)
   tracks parent→child relationships across the run lifetime.
 
+### Filesystem Agent Loading (P2 Stage E)
+
+Aleph loads agent definitions from three tiers (highest precedence first):
+
+1. **Project tier** — `<project>/.aleph/agents/*.md`
+2. **User tier** — `~/.aleph/data/agents/*.md`
+3. **Builtin tier** — hardcoded in `crate::agents::registry::builtin_agents()`
+
+Higher tiers shadow lower tiers silently when an `id` collision occurs.
+A `LoopTraceEvent::AgentDefShadowed` event records each shadow for
+diagnostics, observable through any registered trace sink.
+
+#### User-Authored Markdown Schema
+
+User and project agents declare configuration in YAML frontmatter:
+
+```yaml
+---
+id: my-research-agent           # required, must match filename stem
+description: Researches topics  # required
+when_to_use: When ...           # required
+model_hint: claude-sonnet-4-6   # optional
+allowed_tools: [glob, grep]     # optional
+allowed_tool_sets: [INVESTIGATION]  # optional, see "Named Tool Sets"
+denied_tools: []                # optional
+max_iterations: 20              # optional
+token_budget: 50000             # optional
+context_mode: standalone        # optional
+---
+
+System prompt body...
+```
+
+#### System-Forced Fields
+
+| Field    | Forced to                                  |
+|----------|--------------------------------------------|
+| `mode`   | `SubAgent` (writing `Primary` → schema error) |
+| `source` | `User` or `Project` (auto, based on tier)  |
+
+#### Failure Modes
+
+- Malformed frontmatter / YAML parse error → file skipped, `tracing::warn` emitted
+- Missing required field → file skipped, `tracing::warn` emitted
+- File stem ≠ frontmatter `id` → file skipped, `tracing::warn` emitted
+- `mode: Primary` declared → file skipped, `tracing::warn` emitted
+
+Aleph-server continues startup with successfully-loaded agents only;
+one bad file does not abort startup.
+
+#### Reload
+
+Filesystem agents are loaded once at startup. Modifying a markdown file
+requires restarting `aleph-server`.
+
 ### Lane Budget Enforcement
 
 Subagent spawns reserve a `Lane::Subagent` permit via

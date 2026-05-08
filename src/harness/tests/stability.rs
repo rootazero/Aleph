@@ -296,6 +296,7 @@ async fn recording_sink_captures_full_lifecycle() {
             LoopTraceEvent::ToolSummary { .. } => "ToolSummary",
             LoopTraceEvent::TurnCompleted { .. } => "TurnCompleted",
             LoopTraceEvent::SessionCompleted { .. } => "SessionCompleted",
+            LoopTraceEvent::AgentDefShadowed { .. } => "AgentDefShadowed",
         })
         .collect();
     // 2 turns: tool turn + final text turn. Then SessionCompleted.

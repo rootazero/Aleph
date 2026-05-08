@@ -51,6 +51,12 @@ pub enum LoopTraceEvent {
         hit_limit: bool,
         final_text: Option<String>,
     },
+    /// Startup-only: a filesystem AgentDef shadowed a lower-tier definition.
+    AgentDefShadowed {
+        id: String,
+        winner_source: crate::agents::AgentSource,
+        shadowed_source: crate::agents::AgentSource,
+    },
 }
 
 /// Kind of text stream
@@ -202,6 +208,10 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 hit_limit,
                 final_text,
             },
+            // Startup-only: no protocol wire format.
+            LoopTraceEvent::AgentDefShadowed { .. } => {
+                unreachable!("AgentDefShadowed is a startup-only diagnostic event")
+            }
         }
     }
 }

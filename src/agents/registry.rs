@@ -67,6 +67,26 @@ impl AgentRegistry {
         result
     }
 
+    /// Load agents from filesystem tiers and register non-builtin ones.
+    ///
+    /// Returns shadow events (id collisions where a higher-tier definition
+    /// replaced a lower-tier one). Builtin-source agents in the merged set
+    /// are skipped — they are already registered via `with_builtins()`.
+    pub fn register_from_dirs(
+        &self,
+        home_dir: &std::path::Path,
+        project_dir: Option<&std::path::Path>,
+    ) -> Result<Vec<crate::agents::loader::ShadowEvent>, crate::agents::loader::LoaderError> {
+        let (agents, shadows) = crate::agents::loader::load_agents(home_dir, project_dir)?;
+        for agent in agents
+            .into_iter()
+            .filter(|a| a.source != crate::agents::types::AgentSource::Builtin)
+        {
+            self.register(agent);
+        }
+        Ok(shadows)
+    }
+
     /// Remove an agent by ID
     pub fn unregister(&self, id: &str) -> Option<AgentDef> {
         let mut agents = self.agents.write().unwrap_or_else(|e| e.into_inner());

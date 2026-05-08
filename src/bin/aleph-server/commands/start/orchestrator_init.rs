@@ -54,6 +54,37 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // memory-driven prompt sections; AgentRoleLayer still renders.
     memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
 ) -> anyhow::Result<Arc<Orchestrator>> {
+    // P2 Stage E: load user/project agent definitions from filesystem.
+    // Shadow events (higher-tier overrides) are logged at info level; the
+    // trace_sink is not yet available at this point in startup.
+    {
+        let aleph_home = alephcore::discovery::aleph_home_dir().ok();
+        let project_dir = std::env::current_dir().ok();
+        if let Some(home) = aleph_home.as_deref() {
+            match agent_registry.register_from_dirs(home, project_dir.as_deref()) {
+                Ok(shadows) => {
+                    for shadow in &shadows {
+                        tracing::info!(
+                            id = %shadow.id,
+                            winner = ?shadow.winner_source,
+                            shadowed = ?shadow.shadowed_source,
+                            "agent definition shadowed at startup"
+                        );
+                    }
+                    if !shadows.is_empty() {
+                        tracing::info!(count = shadows.len(), "filesystem agent loading complete");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "filesystem agent loading failed; using builtins only"
+                    );
+                }
+            }
+        }
+    }
+
     // Presets only — PHASE-6: load user flows from ~/.aleph/flows/.
     let presets =
         load_presets().map_err(|e| anyhow::anyhow!("failed to load orchestrator presets: {e}"))?;

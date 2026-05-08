@@ -19,6 +19,8 @@
 mod registry;
 mod types;
 
+pub mod loader;
+
 pub mod allowlist_tool_service;
 pub mod background_tracker;
 pub mod runtime;
@@ -43,7 +45,7 @@ pub mod swarm;
 
 pub use registry::{builtin_agents, AgentRegistry};
 pub use runtime::{AgentRuntime, AgentRuntimeConfig, SubagentTranscript, TranscriptOutcome};
-pub use types::{AgentDef, AgentMode, ContextMode};
+pub use types::{AgentDef, AgentMode, AgentSource, ContextMode};
 
 // Re-export rig module types for convenience
 #[allow(deprecated)]

@@ -2,6 +2,22 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Origin of an AgentDef. Set by `crate::agents::loader` based on load source;
+/// hardcoded `builtin_agents()` entries default to `Builtin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSource {
+    Builtin,
+    User,
+    Project,
+}
+
+impl Default for AgentSource {
+    fn default() -> Self {
+        Self::Builtin
+    }
+}
+
 /// Mode of an agent
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentMode {
@@ -64,6 +80,9 @@ pub struct AgentDef {
     pub model_hint: Option<String>,
     /// Context mode: whether sub-agent gets parent context
     pub context_mode: ContextMode,
+    /// Where this definition was loaded from
+    #[serde(default)]
+    pub source: AgentSource,
 }
 
 impl AgentDef {
@@ -81,6 +100,7 @@ impl AgentDef {
             token_budget: None,
             model_hint: None,
             context_mode: ContextMode::default(),
+            source: AgentSource::default(),
         }
     }
 
@@ -290,6 +310,28 @@ mod tests {
         let agent =
             AgentDef::new("test", AgentMode::SubAgent).with_when_to_use("When you need testing");
         assert_eq!(agent.when_to_use.as_deref(), Some("When you need testing"));
+    }
+
+    // -- AgentSource (Stage E, P2 subagent uplift) ---------------------------
+
+    #[test]
+    fn agent_source_defaults_to_builtin() {
+        assert_eq!(AgentSource::default(), AgentSource::Builtin);
+    }
+
+    #[test]
+    fn agent_def_default_source_is_builtin() {
+        let def = AgentDef::new("foo", AgentMode::SubAgent);
+        assert_eq!(def.source, AgentSource::Builtin);
+    }
+
+    #[test]
+    fn agent_source_serde_roundtrip() {
+        for variant in [AgentSource::Builtin, AgentSource::User, AgentSource::Project] {
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: AgentSource = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, back);
+        }
     }
 
     // -- Recursion guard (Stage B, P1 subagent uplift) -----------------------
