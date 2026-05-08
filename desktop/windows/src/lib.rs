@@ -1,8 +1,14 @@
 //! Windows platform implementation for Aleph desktop capabilities.
 
+mod automation;
+mod escape_listener;
 mod sleep_inhibitor;
+mod system;
 
+pub use automation::WindowsAutomation;
+pub use escape_listener::WindowsEscapeListener;
 pub use sleep_inhibitor::WindowsPower;
+pub use system::WindowsSystem;
 
 use aleph_desktop::traits::{
     AutomationCapability, MediaCapability, PermissionCapability, PimCapability, PowerCapability,
@@ -15,6 +21,9 @@ use aleph_desktop::NativeScreen;
 pub struct WindowsPlatform {
     screen: NativeScreen,
     power: WindowsPower,
+    system: WindowsSystem,
+    automation: WindowsAutomation,
+    escape: WindowsEscapeListener,
 }
 
 impl WindowsPlatform {
@@ -23,6 +32,9 @@ impl WindowsPlatform {
         Self {
             screen: NativeScreen::new(),
             power: WindowsPower::new(),
+            system: WindowsSystem::new(),
+            automation: WindowsAutomation::new(),
+            escape: WindowsEscapeListener::new(),
         }
     }
 }
@@ -47,11 +59,11 @@ impl DesktopPlatform for WindowsPlatform {
     }
 
     fn system(&self) -> Option<&dyn SystemCapability> {
-        None
+        Some(&self.system)
     }
 
     fn automation(&self) -> Option<&dyn AutomationCapability> {
-        None
+        Some(&self.automation)
     }
 
     fn permission(&self) -> Option<&dyn PermissionCapability> {
@@ -64,6 +76,10 @@ impl DesktopPlatform for WindowsPlatform {
 
     fn power(&self) -> Option<&dyn PowerCapability> {
         Some(&self.power)
+    }
+
+    fn escape_listener(&self) -> Option<&dyn aleph_desktop::platform::EscapeAbort> {
+        Some(&self.escape)
     }
 }
 
@@ -81,9 +97,12 @@ mod tests {
     fn screen_is_some() {
         let platform = WindowsPlatform::new();
         assert!(platform.screen().is_some());
+        assert!(platform.system().is_some());
+        assert!(platform.automation().is_some());
+        assert!(platform.power().is_some());
+        assert!(platform.escape_listener().is_some());
         assert!(platform.pim().is_none());
-        assert!(platform.system().is_none());
-        assert!(platform.automation().is_none());
         assert!(platform.permission().is_none());
+        assert!(platform.media().is_none());
     }
 }
