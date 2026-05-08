@@ -28,8 +28,7 @@ pub trait LoopCallback: Send {
             LoopTraceEvent::TurnStarted { .. }
             | LoopTraceEvent::TurnStateEntered { .. }
             | LoopTraceEvent::TurnCompleted { .. }
-            | LoopTraceEvent::SessionCompleted { .. }
-            | LoopTraceEvent::AgentDefShadowed { .. } => {}
+            | LoopTraceEvent::SessionCompleted { .. } => {}
         }
     }
     fn on_text(&mut self, _text: &str) {}
