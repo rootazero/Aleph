@@ -173,6 +173,43 @@ impl HarnessRunner for AgentHarnessRunner {
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,
         };
+        // Stage 7 (#12): emit init-seam visibility before the harness
+        // starts its Think→Act loop. Order mirrors HarnessDeps field
+        // declaration so trace consumers can correlate event index ↔
+        // deps.rs line number. `configured = false` means the seam is on
+        // a deliberate `None` path (Phase-6 stub or subagent skip), not
+        // that wiring is missing.
+        if let Some(sink) = trace_sink.as_ref() {
+            sink.on_init_seam("stage3-prompt", "PromptBuilder", true);
+            sink.on_init_seam("stage4-chain", "ChainContext", true);
+            sink.on_init_seam("stage5a-guardrails", "GuardrailRegistry", deps.guardrails.is_some());
+            sink.on_init_seam("stage5b-fallback", "FallbackLLM", deps.fallback_llm.is_some());
+            sink.on_init_seam("stage6a-verifier", "VerifierChain", deps.verifier_chain.is_some());
+            sink.on_init_seam("p0-rescue-stall", "StallConfig", deps.stall_config.is_some());
+            sink.on_init_seam(
+                "p0-rescue-cap",
+                "ConsecutiveFailureCap",
+                deps.consecutive_failure_cap.is_some(),
+            );
+            sink.on_init_seam("p0-rescue-timeout", "TurnTimeout", deps.turn_timeout.is_some());
+            sink.on_init_seam(
+                "skill-prefetcher",
+                "SkillPrefetcher",
+                deps.skill_prefetcher.is_some(),
+            );
+        }
+        // Production telemetry path — operators read these via the
+        // existing tracing subscriber regardless of TraceSink wiring.
+        tracing::info!(
+            guardrails = deps.guardrails.is_some(),
+            fallback_llm = deps.fallback_llm.is_some(),
+            verifier_chain = deps.verifier_chain.is_some(),
+            stall_config = deps.stall_config.is_some(),
+            consecutive_failure_cap = deps.consecutive_failure_cap.is_some(),
+            turn_timeout = deps.turn_timeout.is_some(),
+            skill_prefetcher = deps.skill_prefetcher.is_some(),
+            "harness deps assembled"
+        );
         let harness = AgentHarness::new(deps);
         // Fans HarnessCallback events onto the FlowStreamEvent broadcast
         // channel so downstream Gateway sinks see delta / tool_call cadence
