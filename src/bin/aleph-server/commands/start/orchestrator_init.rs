@@ -124,6 +124,14 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,
+        // Stage 7 (#12) wiring placeholders — PHASE-6 will load these from
+        // aleph.toml. Path is now plumbed end-to-end; defaults stay None
+        // so behavior matches pre-Stage-7 main exactly.
+        guardrails: None,
+        fallback_llm: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
         power,
         memory_context_provider,
     });

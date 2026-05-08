@@ -59,6 +59,16 @@ pub struct AgentHarnessRunner {
     pub context_compactor: Option<Arc<ContextCompactor>>,
     pub skill_prefetcher: Option<Arc<SkillPrefetcher>>,
 
+    // -- Stage 7 (init audit) — production wiring for Stage 5a/5b + P0 rescue
+    //    seams. Each field defaults to None on the gateway path; PHASE-6
+    //    will load values from `aleph.toml` and wire them here so HarnessDeps
+    //    receives the configured impls instead of hardcoded None.
+    pub guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
+    pub fallback_llm: Option<Arc<dyn AiProvider>>,
+    pub stall_config: Option<crate::harness::deps::StallConfig>,
+    pub consecutive_failure_cap: Option<usize>,
+    pub turn_timeout: Option<std::time::Duration>,
+
     /// Platform-specific power-management capability. Injected at boot so the
     /// core never directly imports platform crates (R1: Brain–Limb separation).
     pub power: Option<Arc<dyn aleph_desktop::traits::PowerCapability>>,
@@ -155,13 +165,13 @@ impl HarnessRunner for AgentHarnessRunner {
             system_prompt,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
-            guardrails: None,
-            fallback_llm: None,
+            guardrails: self.guardrails.clone(),
+            fallback_llm: self.fallback_llm.clone(),
             max_iterations: None,
             power,
-            stall_config: None,
-            consecutive_failure_cap: None,
-            turn_timeout: None,
+            stall_config: self.stall_config.clone(),
+            consecutive_failure_cap: self.consecutive_failure_cap,
+            turn_timeout: self.turn_timeout,
         };
         let harness = AgentHarness::new(deps);
         // Fans HarnessCallback events onto the FlowStreamEvent broadcast
