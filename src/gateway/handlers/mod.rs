@@ -32,7 +32,6 @@
 //! | chat | Chat control |
 //! | cron | Cron job management |
 //! | exec_approvals | Exec approval management |
-//! | wizard | Wizard session management |
 //! | supervisor | Process supervision via PTY |
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
@@ -112,7 +111,6 @@ pub mod tools_invoke;
 pub mod tools_visibility;
 pub mod trace_replay;
 pub mod version;
-pub mod wizard;
 pub mod workspace;
 
 pub use config::{handle_get_full_config, handle_patch_config};

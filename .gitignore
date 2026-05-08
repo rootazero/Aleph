@@ -80,7 +80,7 @@ icons/
 !apps/desktop/src-tauri/icons/
 Aleph.dmg
 apps/macos-native/Aleph/Resources/aleph-server
-archive/
+# archive/  - intentionally tracked for preserved modules
 bridges/
 clients/
 platforms/
@@ -93,7 +93,7 @@ examples/*
 
 # UI node artifacts
 core/ui/
-archive/
+# archive/  - intentionally tracked for preserved modules
 .superpowers/
 .omc/
 graphify-out/
