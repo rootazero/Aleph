@@ -199,7 +199,10 @@ version = "0.1.0"
 dependencies = [
  "aleph-desktop",
  "async-trait",
+ "chrono",
+ "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -233,7 +236,9 @@ version = "0.1.0"
 dependencies = [
  "aleph-desktop",
  "async-trait",
+ "chrono",
  "clipboard-win",
+ "serde_json",
  "tokio",
  "windows 0.58.0",
 ]
