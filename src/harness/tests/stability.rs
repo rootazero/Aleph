@@ -300,6 +300,7 @@ async fn recording_sink_captures_full_lifecycle() {
             LoopTraceEvent::WorktreeCleanedUp { .. } => "WorktreeCleanedUp",
             LoopTraceEvent::McpScopeAttached { .. } => "McpScopeAttached",
             LoopTraceEvent::McpScopeCleaned { .. } => "McpScopeCleaned",
+            LoopTraceEvent::ProviderUsage { .. } => "ProviderUsage",
         })
         .collect();
     // 2 turns: tool turn + final text turn. Then SessionCompleted.

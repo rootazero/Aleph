@@ -61,6 +61,17 @@ pub enum LoopTraceEvent {
     /// Per-agent MCP scope cleaned up; `leaked = true` means cleanup was via
     /// Drop safety-net rather than explicit `shutdown()` (P3 Stage I).
     McpScopeCleaned { agent_id: String, leaked: bool },
+    /// Per-call provider usage (Stage J-pre cache observability).
+    /// `agent_id` is "root" for the top-level harness or the subagent_id
+    /// when emitted from within a spawned subagent.
+    ProviderUsage {
+        agent_id: String,
+        input_tokens: u32,
+        output_tokens: u32,
+        cache_read_tokens: Option<u32>,
+        cache_creation_tokens: Option<u32>,
+        thinking_tokens: Option<u32>,
+    },
 }
 
 /// Kind of text stream
@@ -230,6 +241,21 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
             LoopTraceEvent::McpScopeCleaned { agent_id, leaked } => {
                 aleph_protocol::AgentTraceEvent::McpScopeCleaned { agent_id, leaked }
             }
+            LoopTraceEvent::ProviderUsage {
+                agent_id,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+                thinking_tokens,
+            } => aleph_protocol::AgentTraceEvent::ProviderUsage {
+                agent_id,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+                thinking_tokens,
+            },
         }
     }
 }
@@ -295,6 +321,23 @@ impl From<LoopTraceTurnMetrics> for aleph_protocol::AgentTraceTurnMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_usage_serializes_with_agent_id_and_token_split() {
+        let event = LoopTraceEvent::ProviderUsage {
+            agent_id: "subagent-foo".into(),
+            input_tokens: 250,
+            output_tokens: 75,
+            cache_read_tokens: Some(100),
+            cache_creation_tokens: Some(30),
+            thinking_tokens: None,
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains(r#""type":"provider_usage""#));
+        assert!(json.contains(r#""agent_id":"subagent-foo""#));
+        assert!(json.contains(r#""cache_creation_tokens":30"#));
+        assert!(json.contains(r#""cache_read_tokens":100"#));
+    }
 
     #[test]
     fn mcp_scope_attached_serializes_with_agent_id_and_counts() {

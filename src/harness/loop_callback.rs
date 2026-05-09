@@ -32,7 +32,8 @@ pub trait LoopCallback: Send {
             | LoopTraceEvent::WorktreeCreated { .. }
             | LoopTraceEvent::WorktreeCleanedUp { .. }
             | LoopTraceEvent::McpScopeAttached { .. }
-            | LoopTraceEvent::McpScopeCleaned { .. } => {}
+            | LoopTraceEvent::McpScopeCleaned { .. }
+            | LoopTraceEvent::ProviderUsage { .. } => { /* observability passthrough */ }
         }
     }
     fn on_text(&mut self, _text: &str) {}

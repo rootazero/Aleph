@@ -283,6 +283,15 @@ pub enum AgentTraceEvent {
         agent_id: String,
         leaked: bool,
     },
+    /// Per-call provider usage (Stage J-pre cache observability).
+    ProviderUsage {
+        agent_id: String,
+        input_tokens: u32,
+        output_tokens: u32,
+        cache_read_tokens: Option<u32>,
+        cache_creation_tokens: Option<u32>,
+        thinking_tokens: Option<u32>,
+    },
 }
 
 impl AgentTraceEvent {
@@ -300,6 +309,7 @@ impl AgentTraceEvent {
             Self::WorktreeCleanedUp { .. } => "worktree_cleaned_up",
             Self::McpScopeAttached { .. } => "mcp_scope_attached",
             Self::McpScopeCleaned { .. } => "mcp_scope_cleaned",
+            Self::ProviderUsage { .. } => "provider_usage",
         }
     }
 }
