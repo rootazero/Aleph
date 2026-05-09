@@ -112,15 +112,35 @@ impl Drop for InlineMcpHandle {
             return;
         }
         // Safety net: process leaked through cancel/panic/timeout. Log via
-        // tracing; do NOT panic from Drop. The actual kill happens in Task 7
-        // once the McpServerConnection field is wired through provision().
+        // tracing; do NOT panic from Drop.
         tracing::error!(
             name = %self.name,
             "InlineMcpHandle leaked — Drop safety-net firing"
         );
-        if let Some(_proc) = self.process.take() {
-            // Placeholder: Task 7 swaps this for a sync kill path
-            // (std::thread::spawn → connection.shutdown()).
+        if let Some(proc) = self.process.take() {
+            let name = self.name.clone();
+            // Sync OS thread + ad-hoc tokio runtime — Drop has no async context.
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build();
+                match rt {
+                    Ok(rt) => {
+                        if let Err(e) = rt.block_on(proc.close()) {
+                            tracing::error!(
+                                name = %name,
+                                error = %e,
+                                "inline MCP shutdown via Drop safety-net failed"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::error!(
+                        name = %name,
+                        error = %e,
+                        "failed to build runtime in Drop safety-net"
+                    ),
+                }
+            });
         }
     }
 }
@@ -213,16 +233,28 @@ impl McpScope {
     }
 }
 
-/// Spawn a single inline MCP server. Stub for Task 6 — Task 7 wires up the
-/// real `crate::mcp::external::McpServerConnection::connect` call. For now
-/// returns an `InlineMcpHandle` with `process: None`.
+/// Spawn a single inline MCP server via `McpServerConnection::connect`.
 async fn spawn_inline(
     name: String,
-    _config: crate::agents::McpInlineConfig,
+    config: crate::agents::McpInlineConfig,
 ) -> Result<InlineMcpHandle, McpScopeError> {
+    let connection = crate::mcp::external::McpServerConnection::connect(
+        name.clone(),
+        &config.command,
+        &config.args,
+        &config.env,
+        None,
+        None,
+    )
+    .await
+    .map_err(|e| McpScopeError::InlineStartup {
+        name: name.clone(),
+        reason: e.to_string(),
+    })?;
+
     Ok(InlineMcpHandle {
         name,
-        process: None,
+        process: Some(connection),
         cleaned_up: Arc::new(AtomicBool::new(false)),
     })
 }
@@ -414,5 +446,56 @@ mod tests {
             .await
             .expect_err("should fail");
         assert!(matches!(err, McpScopeError::ReferenceNotFound(ref n) if n == "missing"));
+    }
+
+    #[tokio::test]
+    async fn mcp_scope_provision_inline_name_conflict_at_spawn_time() {
+        use crate::agents::{AgentDef, AgentMode, McpInlineConfig, McpServerSpec};
+        use std::sync::Arc;
+
+        let registry = make_registry_with_plugin("github");
+        let global = Arc::new(registry);
+
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
+            .with_mcp_servers(vec![McpServerSpec::Inline {
+                name: "github".into(),
+                config: McpInlineConfig {
+                    command: "node".into(),
+                    args: vec!["server.js".into()],
+                    env: Default::default(),
+                },
+            }]);
+
+        let err = McpScope::provision(&agent, global, None)
+            .await
+            .expect_err("name conflict must fail at spawn time");
+        assert!(matches!(err, McpScopeError::NameConflict(ref n) if n == "github"));
+    }
+
+    #[tokio::test]
+    async fn mcp_scope_provision_inline_failed_start_returns_inline_startup() {
+        use crate::agents::{AgentDef, AgentMode, McpInlineConfig, McpServerSpec};
+        use std::sync::Arc;
+
+        let registry = PluginRegistry::new();
+        let global = Arc::new(registry);
+
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
+            .with_mcp_servers(vec![McpServerSpec::Inline {
+                name: "broken".into(),
+                config: McpInlineConfig {
+                    command: "/definitely/not/a/real/binary/aleph-stage-i".into(),
+                    args: vec![],
+                    env: Default::default(),
+                },
+            }]);
+
+        let err = McpScope::provision(&agent, global, None)
+            .await
+            .expect_err("nonexistent binary must fail to start");
+        assert!(
+            matches!(err, McpScopeError::InlineStartup { ref name, .. } if name == "broken"),
+            "got {err:?}"
+        );
     }
 }
