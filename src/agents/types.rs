@@ -453,10 +453,10 @@ mod tests {
     fn is_tool_allowed_via_set_only() {
         let def = AgentDef::new("test", AgentMode::SubAgent)
             .with_allowed_tool_sets(vec!["READ_ONLY".into()]);
-        assert!(def.is_tool_allowed("read_file"));
-        assert!(def.is_tool_allowed("grep"));
+        assert!(def.is_tool_allowed("file_read"));
+        assert!(def.is_tool_allowed("file_ops"));
         assert!(!def.is_tool_allowed("bash"));
-        assert!(!def.is_tool_allowed("write_file"));
+        assert!(!def.is_tool_allowed("file_write"));
     }
 
     #[test]
@@ -467,7 +467,7 @@ mod tests {
         // Flat list contributes:
         assert!(def.is_tool_allowed("custom_tool"));
         // Set contributes:
-        assert!(def.is_tool_allowed("read_file"));
+        assert!(def.is_tool_allowed("file_read"));
         // Neither contributes:
         assert!(!def.is_tool_allowed("bash"));
     }
@@ -481,7 +481,7 @@ mod tests {
         assert!(!def.is_tool_allowed("web_fetch"));
         // Other INVESTIGATION tools still allowed:
         assert!(def.is_tool_allowed("search"));
-        assert!(def.is_tool_allowed("read_file"));
+        assert!(def.is_tool_allowed("file_read"));
     }
 
     #[test]

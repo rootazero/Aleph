@@ -114,7 +114,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             )
             .with_prompt_sections(vec!["explore_constraints".into()])
             .with_allowed_tool_sets(vec!["INVESTIGATION".into()])
-            .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
+            .with_denied_tools(vec!["file_write".into(), "file_edit".into(), "bash".into()])
             .with_max_iterations(20),
         // Coder agent - file operations
         AgentDef::new("coder", AgentMode::SubAgent)
@@ -260,9 +260,13 @@ mod tests {
         let explore = registry.get("explore").unwrap();
 
         assert_eq!(explore.mode, AgentMode::SubAgent);
-        assert!(explore.is_tool_allowed("glob"));
-        assert!(explore.is_tool_allowed("grep"));
-        assert!(!explore.is_tool_allowed("write_file"));
+        // INVESTIGATION set members (canonical builtin names):
+        assert!(explore.is_tool_allowed("file_read"));
+        assert!(explore.is_tool_allowed("file_ops"));
+        assert!(explore.is_tool_allowed("search"));
+        // denied_tools entries — write-side builtins must be blocked:
+        assert!(!explore.is_tool_allowed("file_write"));
+        assert!(!explore.is_tool_allowed("file_edit"));
         assert!(!explore.is_tool_allowed("bash"));
         assert_eq!(explore.max_iterations, Some(20));
     }

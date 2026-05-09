@@ -9,25 +9,41 @@
 //! `crate::builtin_tools::register_*`). This file's 3 constants are the only
 //! place tool sets are defined; AgentDef.allowed_tool_sets references them by name.
 
+// Tool names below MUST match the names registered in
+// `src/builtin_tools/` (see each tool's `AlephTool::NAME`). Earlier values
+// referenced legacy stubs ("glob", "grep", "read_file") that never existed
+// in the dispatcher, leaving INVESTIGATION-mode agents with effectively
+// 1–2 visible tools and forcing them to give up after one think turn.
+//
+// Current canonical builtin names in this category:
+//   file_read   — single-file read
+//   file_ops    — list/search/read/write/edit/move/copy/delete/mkdir
+//   search      — remote web search
+//   web_fetch   — remote URL fetch
+//   subagent    — sub-agent spawn (gated for SubAgent mode by Stage B guard)
+
 /// Pure read-only filesystem inspection tools.
-pub const READ_ONLY: &[&str] = &["glob", "grep", "read_file"];
+pub const READ_ONLY: &[&str] = &["file_read", "file_ops"];
 
 /// READ_ONLY ∪ remote read tools ∪ subagent (Primary-only via Stage B guard).
 /// SubAgent-mode agents that include INVESTIGATION still cannot spawn subagent
 /// (Stage B `is_tool_allowed` mode-aware deny).
+///
+/// Note: `file_ops` is admitted for its `list`/`search`/`read` operations.
+/// Its write-side operations are gated separately by the agent's
+/// `denied_tools` and the sandbox's `denied_paths` policy.
 pub const INVESTIGATION: &[&str] = &[
-    "glob",
-    "grep",
-    "read_file",
+    "file_read",
+    "file_ops",
     "search",
     "web_fetch",
     "subagent",
 ];
 
 /// Subset of INVESTIGATION safe for autonomous background execution: no
-/// side effects, no exfiltration risk (no web_fetch). Excludes subagent
-/// to defend against background recursion misuse beyond Stage B guarantees.
-pub const ASYNC_SAFE: &[&str] = &["glob", "grep", "read_file", "search"];
+/// exfiltration risk (no web_fetch). Excludes subagent to defend against
+/// background recursion misuse beyond Stage B guarantees.
+pub const ASYNC_SAFE: &[&str] = &["file_read", "file_ops", "search"];
 
 /// Resolve a set name to its tool list. Returns None for unknown names so
 /// callers can warn (loader) or treat as empty allowance (is_tool_allowed)
@@ -48,11 +64,43 @@ mod tests {
     #[test]
     fn read_only_set_resolves_to_known_tools() {
         let tools = resolve("READ_ONLY").expect("READ_ONLY exists");
-        assert!(tools.contains(&"read_file"));
-        assert!(tools.contains(&"grep"));
-        assert!(tools.contains(&"glob"));
+        assert!(tools.contains(&"file_read"));
+        assert!(tools.contains(&"file_ops"));
         assert!(!tools.contains(&"web_fetch"));
         assert!(!tools.contains(&"bash"));
+        assert!(!tools.contains(&"file_write"));
+        assert!(!tools.contains(&"file_edit"));
+    }
+
+    /// Regression: tool names referenced here drifted out of sync with the
+    /// actual dispatcher names ("glob"/"grep"/"read_file" were never
+    /// registered; the real builtins are "file_read"/"file_ops"). This
+    /// test pins the set membership to canonical builtin names so future
+    /// renames either update both ends or fail loudly.
+    #[test]
+    fn tool_sets_reference_only_canonical_builtin_names() {
+        // Names match the `AlephTool::NAME` constants in `src/builtin_tools/`.
+        const KNOWN_BUILTINS: &[&str] = &[
+            "file_read",
+            "file_ops",
+            "file_write",
+            "file_edit",
+            "search",
+            "web_fetch",
+            "subagent",
+        ];
+        for (set_name, set) in [
+            ("READ_ONLY", READ_ONLY),
+            ("INVESTIGATION", INVESTIGATION),
+            ("ASYNC_SAFE", ASYNC_SAFE),
+        ] {
+            for tool in set {
+                assert!(
+                    KNOWN_BUILTINS.contains(tool),
+                    "tool '{tool}' in set '{set_name}' is not a canonical builtin name"
+                );
+            }
+        }
     }
 
     #[test]
