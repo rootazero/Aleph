@@ -131,6 +131,10 @@ pub struct AgentDef {
     /// Where this definition was loaded from
     #[serde(default)]
     pub source: AgentSource,
+    /// Per-agent MCP server scope (P3 Stage I). `#[serde(default)]` for
+    /// schema back-compat; legacy agent files have no `mcp_servers` key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<McpServerSpec>,
 }
 
 impl AgentDef {
@@ -150,6 +154,7 @@ impl AgentDef {
             model_hint: None,
             context_mode: ContextMode::default(),
             source: AgentSource::default(),
+            mcp_servers: vec![],
         }
     }
 
@@ -219,6 +224,12 @@ impl AgentDef {
     /// Set prompt sections this agent needs
     pub fn with_prompt_sections(mut self, sections: Vec<String>) -> Self {
         self.prompt_sections = sections;
+        self
+    }
+
+    /// Set per-agent MCP server scope (P3 Stage I).
+    pub fn with_mcp_servers(mut self, specs: Vec<McpServerSpec>) -> Self {
+        self.mcp_servers = specs;
         self
     }
 
@@ -534,5 +545,29 @@ mod tests {
         assert_eq!(json, r#"{"type":"reference","name":"github"}"#);
         let parsed: McpServerSpec = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, spec);
+    }
+
+    #[test]
+    fn agent_def_default_mcp_servers_is_empty() {
+        let def = AgentDef::new("test", AgentMode::SubAgent);
+        assert!(def.mcp_servers.is_empty(), "default mcp_servers should be empty");
+    }
+
+    #[test]
+    fn agent_def_with_mcp_servers_roundtrip() {
+        let specs = vec![
+            McpServerSpec::Reference { name: "global-mcp".into() },
+            McpServerSpec::Inline {
+                name: "fresh".into(),
+                config: McpInlineConfig {
+                    command: "echo".into(),
+                    args: vec!["hi".into()],
+                    env: Default::default(),
+                },
+            },
+        ];
+        let def = AgentDef::new("test", AgentMode::SubAgent)
+            .with_mcp_servers(specs.clone());
+        assert_eq!(def.mcp_servers, specs);
     }
 }
