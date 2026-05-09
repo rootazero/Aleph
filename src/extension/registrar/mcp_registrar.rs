@@ -223,11 +223,48 @@ impl McpScope {
         Ok(scope)
     }
 
-    /// Explicit shutdown. Marks each `InlineMcpHandle` as cleaned and drops
-    /// the scope. Trace event will be added in Task 9.
+    /// Tools visible to the child harness:
+    /// - All tools from the global registry whose plugin name is in `references`.
+    /// - **Inline tool surfacing is deferred to a follow-up** — see concern below.
+    ///
+    /// Result is layered UNDER `AllowlistToolService` by the spawner.
+    pub fn tools(&self) -> Vec<crate::extension::registry::ToolRegistration> {
+        let mut out = Vec::new();
+        for plugin_id in &self.references {
+            for tool in self.global.list_tools_for_plugin(plugin_id) {
+                out.push(tool.clone());
+            }
+        }
+        // NOTE: Inline-server tool surfacing requires async list_tools() +
+        // McpTool→ToolRegistration conversion. Snapshotting at provision
+        // time would be cleanest. Deferred to Stage I follow-up; Task 12
+        // I-T2 will reveal whether this matters for the integration test.
+        out
+    }
+
+    /// Explicit shutdown. Marks each `InlineMcpHandle` as cleaned, then calls
+    /// `proc.close()` on each inline handle. First failure surfaces as
+    /// `InlineShutdown`; all handles still have `mark_cleaned()` called first
+    /// to suppress Drop safety-net log spam. Trace event added in Task 9.
     pub async fn shutdown(self) -> Result<(), McpScopeError> {
+        let agent_id = self.agent_id.clone();
+        let trace_sink = self.trace_sink.clone();
+        let mut shutdown_errors: Vec<(String, String)> = Vec::new();
+
         for h in &self.inline_handles {
             h.mark_cleaned();
+            if let Some(proc) = h.process.as_ref() {
+                if let Err(e) = proc.close().await {
+                    shutdown_errors.push((h.name.clone(), e.to_string()));
+                }
+            }
+        }
+
+        // Trace event added in Task 9.
+        let _ = (trace_sink, agent_id);
+
+        if let Some((name, reason)) = shutdown_errors.into_iter().next() {
+            return Err(McpScopeError::InlineShutdown { name, reason });
         }
         Ok(())
     }
@@ -470,6 +507,36 @@ mod tests {
             .await
             .expect_err("name conflict must fail at spawn time");
         assert!(matches!(err, McpScopeError::NameConflict(ref n) if n == "github"));
+    }
+
+    #[tokio::test]
+    async fn mcp_scope_tools_includes_referenced_global_tools() {
+        use crate::agents::{AgentDef, AgentMode, McpServerSpec};
+        use std::sync::Arc;
+
+        let mut registry = make_registry_with_plugin("global-mcp");
+        registry.register_tool(ToolRegistration {
+            name: "global-tool".into(),
+            description: "from global".into(),
+            parameters: serde_json::json!({}),
+            handler: "h".into(),
+            plugin_id: "global-mcp".into(),
+        });
+        let global = Arc::new(registry);
+
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
+            .with_mcp_servers(vec![McpServerSpec::Reference {
+                name: "global-mcp".into(),
+            }]);
+        let scope = McpScope::provision(&agent, global, None)
+            .await
+            .expect("provision");
+
+        let tools = scope.tools();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"global-tool"), "tools() must include the referenced tool: {names:?}");
+
+        scope.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]
