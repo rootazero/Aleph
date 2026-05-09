@@ -276,6 +276,7 @@ filetime = "0.2"
 serial_test = "3.0"
 aleph-protocol = { path = "shared/protocol" }
 proptest = "1.4"
+rand = "0.8"
 http-body-util = "0.1"
 wiremock = "0.6"
 insta = "1"

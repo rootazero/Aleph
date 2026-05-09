@@ -14,6 +14,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use serial_test::serial;
 use tokio_util::sync::CancellationToken;
 
 use alephcore::agents::subagent_spawner::{spawn, SpawnRequest, SpawnerBase};
@@ -133,6 +134,7 @@ impl TraceSink for CapturingSink {
 // -- Test ---------------------------------------------------------------------
 
 #[tokio::test]
+#[serial]
 async fn h_t1_worktree_isolation_happy_path() {
     // Skip if git is unavailable or cwd is not inside a git repo.
     if !is_git_repo() {
@@ -243,4 +245,121 @@ async fn h_t1_worktree_isolation_happy_path() {
         !created_path.exists(),
         "worktree dir {created_path:?} must be removed after successful spawn"
     );
+}
+
+#[tokio::test]
+#[serial]
+async fn h_t2_cancel_path_still_cleans_up() {
+    if !is_git_repo() {
+        eprintln!("h_t2_cancel_path_still_cleans_up: skipped (not a git repo)");
+        return;
+    }
+
+    let sink = Arc::new(CapturingSink::default());
+    let arc_sink: Arc<dyn TraceSink> = sink.clone();
+    let repo = std::env::current_dir().unwrap();
+
+    let path = {
+        let h = alephcore::sandbox::worktree::create(&repo, "h-t2", Some(arc_sink.clone()))
+            .await
+            .expect("create");
+        h.path().to_path_buf()
+        // h dropped here — Drop safety-net cleans up
+    };
+    for _ in 0..50 {
+        if !path.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(!path.exists(), "Drop safety-net must clean up cancelled worktree");
+}
+
+#[tokio::test]
+#[serial]
+async fn h_t3_panic_path_emits_leaked_true_event() {
+    if !is_git_repo() {
+        eprintln!("h_t3_panic_path_emits_leaked_true_event: skipped (not a git repo)");
+        return;
+    }
+
+    let sink = Arc::new(CapturingSink::default());
+    let arc_sink: Arc<dyn TraceSink> = sink.clone();
+    let repo = std::env::current_dir().unwrap();
+
+    let path = {
+        let h = alephcore::sandbox::worktree::create(&repo, "h-t3", Some(arc_sink.clone()))
+            .await
+            .expect("create");
+        h.path().to_path_buf()
+        // h dropped here without calling cleanup() — triggers leaked=true path
+    };
+    for _ in 0..50 {
+        if !path.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let events = sink.events.lock().unwrap().clone();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            LoopTraceEvent::WorktreeCleanedUp { leaked: true, .. }
+        )),
+        "expected WorktreeCleanedUp(leaked=true) on Drop path; got events: {events:?}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn h_t4_no_leaked_dirs_after_10_random_cancellations() {
+    use rand::Rng;
+
+    if !is_git_repo() {
+        eprintln!("h_t4_no_leaked_dirs_after_10_random_cancellations: skipped (not a git repo)");
+        return;
+    }
+
+    let repo = std::env::current_dir().unwrap();
+    let mut paths = Vec::new();
+    for i in 0..10 {
+        let h = alephcore::sandbox::worktree::create(&repo, &format!("h-t4-{i}"), None)
+            .await
+            .expect("create");
+        paths.push(h.path().to_path_buf());
+        if rand::thread_rng().gen_bool(0.5) {
+            h.cleanup().await.expect("explicit cleanup");
+        }
+        // h dropped here if not explicitly cleaned up — Drop safety-net fires
+    }
+    for _ in 0..100 {
+        let any_remaining = paths.iter().any(|p| p.exists());
+        if !any_remaining {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let leftover: Vec<_> = paths.iter().filter(|p| p.exists()).collect();
+    assert!(leftover.is_empty(), "leaked worktrees: {leftover:?}");
+}
+
+#[tokio::test]
+#[serial]
+async fn h_t5_create_and_cleanup_within_perf_budget() {
+    if !is_git_repo() {
+        eprintln!("h_t5_create_and_cleanup_within_perf_budget: skipped (not a git repo)");
+        return;
+    }
+
+    let repo = std::env::current_dir().unwrap();
+    let t0 = std::time::Instant::now();
+    let h = alephcore::sandbox::worktree::create(&repo, "h-t5", None)
+        .await
+        .expect("create");
+    let create_ms = t0.elapsed().as_millis();
+    let t1 = std::time::Instant::now();
+    h.cleanup().await.expect("cleanup");
+    let cleanup_ms = t1.elapsed().as_millis();
+    assert!(create_ms < 800, "create took {create_ms}ms, budget 200ms (4× CI headroom)");
+    assert!(cleanup_ms < 400, "cleanup took {cleanup_ms}ms, budget 100ms (4× CI headroom)");
 }
