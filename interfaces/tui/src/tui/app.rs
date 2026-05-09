@@ -613,6 +613,12 @@ impl AppState {
             }
             AgentTraceEvent::ToolCallStarted { .. } | AgentTraceEvent::ToolCallCompleted { .. } => {
             }
+            // Observability passthrough — no TUI rendering for these schema variants.
+            AgentTraceEvent::WorktreeCreated { .. }
+            | AgentTraceEvent::WorktreeCleanedUp { .. }
+            | AgentTraceEvent::McpScopeAttached { .. }
+            | AgentTraceEvent::McpScopeCleaned { .. }
+            | AgentTraceEvent::ProviderUsage { .. } => {}
         }
     }
 
@@ -1367,14 +1373,12 @@ mod tests {
                 last_event_kind: Some("session_completed".into()),
             },
             traces: vec![
-                aleph_protocol::AgentTraceRecord {
-                    step_index: 0,
-                    timestamp: 11,
+                aleph_protocol::AgentTraceReplayEntry {
+                    step: 0,
                     event: AgentTraceEvent::TurnStarted { iteration: 1 },
                 },
-                aleph_protocol::AgentTraceRecord {
-                    step_index: 1,
-                    timestamp: 19,
+                aleph_protocol::AgentTraceReplayEntry {
+                    step: 1,
                     event: AgentTraceEvent::SessionCompleted {
                         outcome: AgentTraceSessionOutcome::Completed,
                         iterations: 1,

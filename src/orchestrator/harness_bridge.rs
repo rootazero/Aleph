@@ -149,6 +149,16 @@ impl HarnessRunner for AgentHarnessRunner {
 
         // Step 3: brain pick.
         let llm = pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?;
+        // Stage J-pre: wrap the root provider with MeteringProvider so every
+        // LLM call emits a LoopTraceEvent::ProviderUsage event labelled "root".
+        // The trace_sink is available here (per-run, passed in from the gateway)
+        // and flows into the same sink as all other harness trace events.
+        let llm: Arc<dyn crate::providers::AiProvider> =
+            Arc::new(crate::providers::MeteringProvider::new(
+                llm,
+                trace_sink.clone(),
+                "root",
+            ));
         // Remember the provider name so transient error classification below
         // can attach it to FlowError::Transient (Gateway's outer retry loop
         // reads this to call `report_outcome(&provider_name, ...)`).
