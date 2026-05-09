@@ -162,6 +162,8 @@ async fn h_t1_worktree_isolation_happy_path() {
         turn_timeout: None,
         trace_sink: Some(sink_for_base),
         lane_scheduler: None,
+        // P3 Stage I:
+        plugin_registry: None,
     };
 
     let agent_def = AgentDef::new("worktree-probe", AgentMode::SubAgent)

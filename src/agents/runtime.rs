@@ -373,6 +373,9 @@ impl AgentRuntime {
             trace_sink: self.trace_sink.clone(),
             // Stage C (P1):
             lane_scheduler: self.lane_scheduler.clone(),
+            // P3 Stage I — plugin_registry not threaded through AgentRuntime yet;
+            // None disables MCP scope for runtime-spawned subagents until wired.
+            plugin_registry: None,
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

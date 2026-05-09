@@ -159,6 +159,8 @@ async fn subagent_base_carries_5_p1_fields() {
         trace_sink: Some(trace_sink.clone()),
         // Stage C (P1):
         lane_scheduler: None,
+        // P3 Stage I:
+        plugin_registry: None,
     };
 
     // Structural assertions — the 5 P1 fields are populated as expected.

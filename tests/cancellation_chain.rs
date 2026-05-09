@@ -192,6 +192,8 @@ fn base_with_hanging_llm(cancel: CancellationToken) -> SpawnerBase {
         turn_timeout: None,
         trace_sink: None,
         lane_scheduler: None,
+        // P3 Stage I:
+        plugin_registry: None,
     }
 }
 
@@ -226,6 +228,8 @@ fn base_with_hanging_tool(cancel: CancellationToken) -> SpawnerBase {
         turn_timeout: Some(Duration::from_secs(2)),
         trace_sink: None,
         lane_scheduler: None,
+        // P3 Stage I:
+        plugin_registry: None,
     }
 }
 

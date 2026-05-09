@@ -57,6 +57,7 @@ pub mod facade;
 pub mod handlers;
 pub mod middleware;
 pub mod registry;
+pub mod mcp_scope_view;
 pub mod scoped;
 pub mod service;
 pub use scoped::ScopedToolService;

@@ -94,6 +94,11 @@ pub struct SpawnerBase {
     /// Stage C (P1) — lane budget enforcement. `None` skips lane checks
     /// (legacy behavior); `Some(_)` reserves on entry, releases on exit.
     pub lane_scheduler: Option<Arc<crate::scheduler::LaneScheduler>>,
+    /// P3 Stage I — global plugin registry. Used by `McpScope::provision`
+    /// for per-agent MCP scope lookups. `None` means MCP scope is disabled
+    /// (legacy callers + tests with no `mcp_servers`); a non-empty
+    /// `agent_def.mcp_servers` will fail-loud if this is `None`.
+    pub plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -182,6 +187,27 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         None => None,
     };
 
+    // P3 Stage I — provision per-agent MCP scope. Held in outer scope so Drop
+    // fires as a safety net on cancel/panic/timeout/error. Explicit
+    // shutdown() happens on the success path (after harness completes Ok).
+    let mcp_scope: Option<crate::extension::registrar::mcp_registrar::McpScope> =
+        if !req.agent_def.mcp_servers.is_empty() {
+            let registry = base.plugin_registry.as_ref().ok_or_else(|| {
+                "sub-agent failed: mcp scope: SpawnerBase.plugin_registry is None but agent_def.mcp_servers is non-empty".to_string()
+            })?;
+            Some(
+                crate::extension::registrar::mcp_registrar::McpScope::provision(
+                    req.agent_def,
+                    registry.clone(),
+                    base.trace_sink.clone(),
+                )
+                .await
+                .map_err(|e| format!("sub-agent failed: mcp scope: {e}"))?,
+            )
+        } else {
+            None
+        };
+
     let result: Result<LoopRunResult, String> = async {
         // 2. Unique ephemeral session key for this sub-agent.
         let child_id = ephemeral_for(&req.agent_def.id);
@@ -251,9 +277,19 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         };
 
         // 6. Wrap the parent's tool service with the allowlist gate.
+        // P3 Stage I — if an McpScope was provisioned, layer its tools UNDER
+        // AllowlistToolService so the allowlist gate remains the authority on
+        // what the child harness can call.
         let agent_def_arc = Arc::new(req.agent_def.clone());
+        let parent_tools_with_scope: Arc<dyn ToolService> = match mcp_scope.as_ref() {
+            Some(scope) => Arc::new(crate::tools::mcp_scope_view::McpScopedToolService::new(
+                base.parent_tools.clone(),
+                scope.tools(),
+            )),
+            None => base.parent_tools.clone(),
+        };
         let scoped_tools: Arc<dyn ToolService> = Arc::new(AllowlistToolService::new(
-            base.parent_tools.clone(),
+            parent_tools_with_scope,
             agent_def_arc.clone(),
         ));
 
@@ -375,6 +411,19 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         scheduler
             .on_run_complete(&lane_run_id, crate::scheduler::Lane::Subagent, Some(guard))
             .await;
+    }
+
+    // P3 Stage I — explicit MCP scope shutdown on the success path. Errors and
+    // cancels leak the scope to the Drop safety net (which logs `leaked: true`).
+    if result.is_ok() {
+        if let Some(scope) = mcp_scope {
+            if let Err(e) = scope.shutdown().await {
+                tracing::error!(
+                    error = %e,
+                    "subagent mcp scope shutdown failed; Drop safety net will retry"
+                );
+            }
+        }
     }
 
     // P3 Stage H — explicit cleanup on the success path. Errors and cancels
@@ -750,6 +799,8 @@ mod tests {
             trace_sink: None,
             // Stage C (P1):
             lane_scheduler: None,
+            // P3 Stage I:
+            plugin_registry: None,
         }
     }
 
@@ -1187,5 +1238,46 @@ mod tests {
             .expect("extract ok");
         assert_eq!(result.final_text.as_deref(), Some("final answer"));
         assert!(!result.hit_limit);
+    }
+
+    // -- P3 Stage I: McpScope provision tests ---------------------------------
+
+    /// Spawn with a non-empty `mcp_servers` referencing an unknown name must
+    /// fail loud with an error containing "mcp scope" and the missing name.
+    /// This also validates the fail-loud path when `plugin_registry` is
+    /// `Some(empty)` — every reference lookup will fail as "not found".
+    #[tokio::test]
+    async fn spawn_mcp_scope_unknown_reference_fails_loud() {
+        use crate::agents::McpServerSpec;
+
+        let agent = agent_with_allowed("scoped", vec!["*"])
+            .with_mcp_servers(vec![McpServerSpec::Reference {
+                name: "missing".into(),
+            }]);
+
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only(
+            "should not reach".to_string(),
+        )]);
+        let mut base = make_base(provider);
+        // Provide an empty registry — every reference lookup returns "not found".
+        base.plugin_registry = Some(Arc::new(
+            crate::extension::registry::PluginRegistry::new(),
+        ));
+
+        let cancel = CancellationToken::new();
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "noop",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel,
+            isolation: None,
+        };
+        let err = spawn(&base, req).await.expect_err("must fail loud");
+        assert!(
+            err.contains("mcp scope") && err.contains("missing"),
+            "got error: {err}"
+        );
     }
 }
