@@ -74,6 +74,41 @@ impl WorktreeHandle {
     }
 }
 
+impl Drop for WorktreeHandle {
+    fn drop(&mut self) {
+        if self.cleaned_up.load(Ordering::Acquire) {
+            return;
+        }
+        // Safety net: spawn blocking task to run `git worktree remove --force`.
+        // Errors are logged via tracing; we never panic from Drop.
+        let repo_root = self.repo_root.clone();
+        let path = self.path.clone();
+        tracing::error!(
+            path = %path.display(),
+            "WorktreeHandle leaked — Drop safety-net removing"
+        );
+        // Variant added in Task 6.
+        let _sink = self.trace_sink.clone();
+        std::thread::spawn(move || {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo_root)
+                .arg("worktree")
+                .arg("remove")
+                .arg("--force")
+                .arg(&path)
+                .status();
+            if let Err(e) = status {
+                tracing::error!(
+                    path = %path.display(),
+                    error = %e,
+                    "Drop safety-net cleanup failed"
+                );
+            }
+        });
+    }
+}
+
 /// Create a fresh detached-HEAD worktree under `$TMPDIR/aleph-subagent-<label>-<uuid>/`.
 ///
 /// Performance contract: ≤ 200ms typical (git worktree add).
@@ -195,6 +230,29 @@ mod tests {
         assert!(
             matches!(err, WorktreeError::NotAGitRepo(_)),
             "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn drop_without_cleanup_logs_and_removes_dir() {
+        let repo_root = std::env::current_dir().expect("cwd");
+        let path = {
+            let h = create(&repo_root, "task5-drop", None)
+                .await
+                .expect("create");
+            h.path().to_path_buf()
+            // h dropped here without cleanup() called
+        };
+        // Drop spawns blocking removal; allow time for it.
+        for _ in 0..50 {
+            if !path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(
+            !path.exists(),
+            "Drop safety-net must remove leaked worktree at {path:?}"
         );
     }
 }
