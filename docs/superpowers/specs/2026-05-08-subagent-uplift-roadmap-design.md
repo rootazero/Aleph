@@ -12,6 +12,7 @@ follows: 2026-05-08-phase6-config-wiring-design.md
 ✅ P2 Shipped: 37c5bb759 on 2026-05-09 (Stage E: cb5317474 + 99613bcb1 + 344a9623f · Stage F: 3a9b7abd5 · Stage G: d0223dd4c + 37c5bb759 polish)
 ✅ P3 Stage H Shipped: cfb2b358722089768d1c5f358b3525f9f4f94d62 on 2026-05-09
 ✅ P3 Stage I Shipped: 864f0e53a40d7fa4eaac883ed3665197aef8382a on 2026-05-09
+✅ Stage J-pre Shipped: c56c5d014 on 2026-05-09 — cache observability pipeline; reassess Stage J fork branch on 2026-05-23 (≥2 weeks of trace data)
 
 # Aleph Subagent Uplift Roadmap — Master Spec
 
@@ -594,6 +595,7 @@ MCP 协议是稳定接口，不依赖模型语义。R10 Future-Proof Test 通过
 ### Stage J — Fork-subagent prompt cache 复用
 
 **Status**: 📋 Planned · plan: TBD
+· J-pre (cache observability) shipped 2026-05-09; fork-branch decision deferred to 2026-05-23 review
 **Depends on**: A（trace_sink 验证 cache 命中），E（agent 定义可声明 inherit_parent_prompt）
 **Risk class**: high（prompt 字节稳定性 + cache 命中验证 + LLM 协议依赖）
 **Phase**: P3（超越）

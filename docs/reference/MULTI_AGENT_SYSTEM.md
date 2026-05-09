@@ -742,3 +742,32 @@ declared scope is honored or the spawn fails loudly (per design § 3 Q8).
 - Inline-server tool surfacing (deferred — Task 8 known concern: `tools()` only includes Reference-projected globals at this stage; `McpServerConnection::list_tools()` is async and requires a snapshot-at-provision-time mechanism that is a follow-up)
 
 These are deferred per design § 5.
+
+## Cache Observability Pipeline (Stage J-pre)
+
+The `MeteringProvider` decorator (`src/providers/metering.rs`) wraps every
+LLM-facing `Arc<dyn AiProvider>` and emits a `LoopTraceEvent::ProviderUsage`
+event after each `process()` call. The event carries:
+
+- `agent_id` — `"root"` for the top-level harness, or the subagent's
+  `agent_def.id` when emitted from within a spawned subagent
+- `input_tokens` / `output_tokens` — total tokens charged
+- `cache_read_tokens` / `cache_creation_tokens` — Anthropic prompt-cache
+  fields (other providers leave these `None` until they extend their
+  protocols)
+- `thinking_tokens` — Gemini extended-thinking tokens (where applicable)
+
+The decorator is wrapped at exactly two sites:
+
+- `src/bin/aleph-server/commands/start/orchestrator_init.rs` — root
+  provider, label `"root"`
+- `src/agents/subagent_spawner.rs` — per-spawn, label `req.agent_def.id`
+
+This gives every consumer of the trace stream (gateway, log sink, future
+cost dashboard) the data needed to compute root vs subagent cache-hit
+ratios. Stage J's "fork branch" decision is gated on collecting ≥2 weeks
+of this data starting from the J-pre ship date — see roadmap § 1.2 Stage J.
+
+R10 redline preserved: the decorator does not touch `src/harness/agent.rs`;
+the `LoopTraceEvent::ProviderUsage` variant is schema-only (mirrors into
+`AgentTraceEvent`). The harness loop remains unchanged.
