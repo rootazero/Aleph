@@ -61,6 +61,60 @@ pub enum McpScopeError {
     InlineShutdown { name: String, reason: String },
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+/// RAII handle for a single inline MCP server process spawned for one
+/// subagent's lifetime (P3 Stage I).
+///
+/// Production callers should construct via `McpScope::provision`; the
+/// `new_for_test` constructor is `pub(crate)` and exists only for unit
+/// tests of the Drop safety-net wiring (Task 5). The real `process`
+/// field is an `Option<crate::mcp::external::McpServerConnection>` — see
+/// Task 7 for the full implementation.
+pub struct InlineMcpHandle {
+    pub(crate) name: String,
+    /// `None` in `new_for_test`; `Some(_)` after a successful spawn.
+    pub(crate) process: Option<crate::mcp::external::McpServerConnection>,
+    pub(crate) cleaned_up: Arc<AtomicBool>,
+}
+
+impl InlineMcpHandle {
+    #[cfg(test)]
+    pub(crate) fn new_for_test(name: String) -> Self {
+        Self {
+            name,
+            process: None,
+            cleaned_up: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Mark the handle as already cleaned up so `Drop` skips the safety-net.
+    /// Called by `McpScope::shutdown` on the explicit-cleanup path.
+    pub(crate) fn mark_cleaned(&self) {
+        self.cleaned_up.store(true, Ordering::Release);
+    }
+}
+
+impl Drop for InlineMcpHandle {
+    fn drop(&mut self) {
+        if self.cleaned_up.load(Ordering::Acquire) {
+            return;
+        }
+        // Safety net: process leaked through cancel/panic/timeout. Log via
+        // tracing; do NOT panic from Drop. The actual kill happens in Task 7
+        // once the McpServerConnection field is wired through provision().
+        tracing::error!(
+            name = %self.name,
+            "InlineMcpHandle leaked — Drop safety-net firing"
+        );
+        if let Some(_proc) = self.process.take() {
+            // Placeholder: Task 7 swaps this for a sync kill path
+            // (std::thread::spawn → connection.shutdown()).
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +235,24 @@ mod tests {
             reason: "kill -TERM timed out".into(),
         };
         assert!(format!("{e}").contains("failed to shut down"));
+    }
+
+    #[test]
+    fn inline_mcp_handle_drop_without_cleanup_logs_leak() {
+        use std::sync::atomic::Ordering;
+        let handle = InlineMcpHandle::new_for_test("zombie".into());
+        let cleaned = handle.cleaned_up.clone();
+        drop(handle);
+        assert!(!cleaned.load(Ordering::Acquire), "no explicit cleanup → flag stays false");
+    }
+
+    #[test]
+    fn inline_mcp_handle_mark_cleaned_skips_drop_safety_net() {
+        use std::sync::atomic::Ordering;
+        let handle = InlineMcpHandle::new_for_test("clean".into());
+        let cleaned = handle.cleaned_up.clone();
+        handle.mark_cleaned();
+        drop(handle);
+        assert!(cleaned.load(Ordering::Acquire), "explicit cleanup must flip the flag");
     }
 }
