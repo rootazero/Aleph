@@ -275,6 +275,15 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             }),
             None => base.provider.clone(),
         };
+        // Stage J-pre: wrap with MeteringProvider so every LLM call from this
+        // subagent emits a LoopTraceEvent::ProviderUsage labelled with the
+        // subagent's agent_def.id (distinct from "root" label used at the
+        // top-level harness wrap site in orchestrator_init.rs).
+        let llm: Arc<dyn AiProvider> = Arc::new(crate::providers::MeteringProvider::new(
+            llm,
+            base.trace_sink.clone(),
+            req.agent_def.id.clone(),
+        ));
 
         // 6. Wrap the parent's tool service with the allowlist gate.
         // P3 Stage I — if an McpScope was provisioned, layer its tools UNDER
@@ -1279,5 +1288,90 @@ mod tests {
             err.contains("mcp scope") && err.contains("missing"),
             "got error: {err}"
         );
+    }
+
+    // -- Stage J-pre: MeteringProvider wrap -----------------------------------
+
+    /// A provider that returns a `ProviderResponse` with `usage: Some(...)`.
+    /// Used to verify that the MeteringProvider wrap in `spawn()` emits a
+    /// `LoopTraceEvent::ProviderUsage` event labelled with the subagent id.
+    struct UsageProvider;
+
+    impl AiProvider for UsageProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: Some("done".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: Some(crate::providers::adapter::TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        cache_read_tokens: Some(7),
+                        cache_creation_tokens: Some(3),
+                        thinking_tokens: None,
+                    }),
+                })
+            })
+        }
+
+        fn name(&self) -> &str { "usage-provider" }
+        fn color(&self) -> &str { "#000000" }
+    }
+
+    struct CapturingSink(std::sync::Mutex<Vec<crate::harness::trace::LoopTraceEvent>>);
+
+    impl crate::harness::TraceSink for CapturingSink {
+        fn on_trace(&self, event: &crate::harness::trace::LoopTraceEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+        fn flush(&self) {}
+    }
+
+    #[tokio::test]
+    async fn subagent_spawn_emits_provider_usage_with_agent_id() {
+        let provider: Arc<dyn AiProvider> = Arc::new(UsageProvider);
+        let sink = Arc::new(CapturingSink(std::sync::Mutex::new(vec![])));
+        let mut base = make_base(provider);
+        base.trace_sink = Some(sink.clone() as Arc<dyn crate::harness::TraceSink>);
+
+        let agent = agent_with_allowed("test-subagent-id", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "say hi",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+
+        spawn(&base, req).await.expect("spawn ok");
+
+        let events = sink.0.lock().unwrap();
+        let usage_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                crate::harness::trace::LoopTraceEvent::ProviderUsage {
+                    agent_id,
+                    cache_read_tokens,
+                    ..
+                } => Some((agent_id.clone(), *cache_read_tokens)),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            !usage_events.is_empty(),
+            "expected at least one ProviderUsage event, got none"
+        );
+        let (agent_id, cache_read) = &usage_events[0];
+        assert_eq!(agent_id, "test-subagent-id", "agent_id label mismatch");
+        assert_eq!(*cache_read, Some(7), "cache_read_tokens mismatch");
     }
 }
