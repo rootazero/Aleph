@@ -70,8 +70,11 @@ pub struct AgentDef {
     pub prompt_sections: Vec<String>,
     /// Tools this agent is allowed to use ("*" for all)
     pub allowed_tools: Vec<String>,
-    /// Named tool sets (P2 Stage G). Resolved via crate::agents::tool_sets::resolve.
-    /// Unknown set names are silently empty; explicit `allowed_tools` still applies.
+    /// Named tool sets for declarative agent allowlists. Resolved via
+    /// `crate::agents::tool_sets::resolve`; unknown names contribute nothing
+    /// (silent skip at runtime; the loader emits a warning at startup).
+    /// `allowed_tools` is unioned on top — a tool is allowed if it appears
+    /// in any resolved set OR in the flat list.
     #[serde(default)]
     pub allowed_tool_sets: Vec<String>,
     /// Tools this agent is denied from using
@@ -127,13 +130,15 @@ impl AgentDef {
         self
     }
 
-    /// Set named tool sets (P2 Stage G).
-    /// Clears the default wildcard `allowed_tools` so that tool resolution
-    /// comes from named sets only (plus any subsequent `with_allowed_tools` call).
+    /// Set named tool sets.
+    ///
+    /// If `allowed_tools` is still at its constructor default `["*"]`, the
+    /// wildcard is cleared so the named sets actually govern access. If the
+    /// caller has already called `with_allowed_tools(...)` with a non-wildcard
+    /// list, that flat list is preserved and unioned with the resolved sets.
+    /// Callers wanting both should chain `with_allowed_tools` after this method.
     pub fn with_allowed_tool_sets(mut self, sets: Vec<String>) -> Self {
         self.allowed_tool_sets = sets;
-        // Clear the default ["*"] wildcard so named sets govern access.
-        // Callers that want both sets and a flat list chain with_allowed_tools after.
         if self.allowed_tools == vec!["*".to_string()] {
             self.allowed_tools = vec![];
         }

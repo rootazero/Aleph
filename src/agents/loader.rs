@@ -151,6 +151,15 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
         def = def.with_context_mode(cm);
     }
     if !fm.allowed_tool_sets.is_empty() {
+        for name in &fm.allowed_tool_sets {
+            if crate::agents::tool_sets::resolve(name).is_none() {
+                tracing::warn!(
+                    agent_id = %fm.id,
+                    set_name = %name,
+                    "unknown tool set name — agent will treat it as empty allowance"
+                );
+            }
+        }
         def = def.with_allowed_tool_sets(fm.allowed_tool_sets);
     }
     def.source = source;
