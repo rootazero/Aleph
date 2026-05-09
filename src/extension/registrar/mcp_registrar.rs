@@ -96,6 +96,16 @@ impl InlineMcpHandle {
     }
 }
 
+impl std::fmt::Debug for InlineMcpHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InlineMcpHandle")
+            .field("name", &self.name)
+            .field("process", &self.process.is_some())
+            .field("cleaned_up", &self.cleaned_up)
+            .finish()
+    }
+}
+
 impl Drop for InlineMcpHandle {
     fn drop(&mut self) {
         if self.cleaned_up.load(Ordering::Acquire) {
@@ -113,6 +123,108 @@ impl Drop for InlineMcpHandle {
             // (std::thread::spawn → connection.shutdown()).
         }
     }
+}
+
+use std::collections::HashSet;
+use crate::agents::{AgentDef, McpServerSpec};
+#[allow(unused_imports)]
+use crate::harness::TraceSink;
+
+/// Per-agent MCP server scope (P3 Stage I).
+///
+/// Composed of:
+/// - `references`: names whitelisted from the global registry (read-only view).
+/// - `inline_handles`: fresh process handles owned by this single subagent.
+pub struct McpScope {
+    pub(crate) references: HashSet<String>,
+    pub(crate) inline_handles: Vec<InlineMcpHandle>,
+    pub(crate) trace_sink: Option<Arc<dyn TraceSink>>,
+    pub(crate) agent_id: String,
+    /// Read-only view of the parent global registry (for tools() lookups).
+    pub(crate) global: Arc<PluginRegistry>,
+}
+
+impl std::fmt::Debug for McpScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpScope")
+            .field("agent_id", &self.agent_id)
+            .field("references", &self.references)
+            .field("inline_handles", &self.inline_handles)
+            .field("trace_sink", &self.trace_sink.as_ref().map(|_| "<dyn TraceSink>"))
+            .finish()
+    }
+}
+
+impl McpScope {
+    /// Build scope from agent def. Validates inline-name collisions against
+    /// `global` BEFORE starting any process; then starts inline servers
+    /// eagerly + in parallel via `futures::future::try_join_all`.
+    pub async fn provision(
+        agent_def: &AgentDef,
+        global: Arc<PluginRegistry>,
+        trace_sink: Option<Arc<dyn TraceSink>>,
+    ) -> Result<Self, McpScopeError> {
+        let mut references: HashSet<String> = HashSet::new();
+        let mut inline_specs: Vec<(String, crate::agents::McpInlineConfig)> = Vec::new();
+
+        // Phase 1: classify specs + validate collisions BEFORE spawning anything.
+        for spec in &agent_def.mcp_servers {
+            match spec {
+                McpServerSpec::Reference { name } => {
+                    if global.get_plugin(name).is_none() {
+                        return Err(McpScopeError::ReferenceNotFound(name.clone()));
+                    }
+                    references.insert(name.clone());
+                }
+                McpServerSpec::Inline { name, config } => {
+                    if global.get_plugin(name).is_some() {
+                        return Err(McpScopeError::NameConflict(name.clone()));
+                    }
+                    inline_specs.push((name.clone(), config.clone()));
+                }
+            }
+        }
+
+        // Phase 2: spawn all inline servers eagerly in parallel.
+        let spawn_futures = inline_specs.into_iter().map(|(name, config)| async move {
+            spawn_inline(name, config).await
+        });
+        let inline_handles: Vec<InlineMcpHandle> =
+            futures::future::try_join_all(spawn_futures).await?;
+
+        let scope = McpScope {
+            references,
+            inline_handles,
+            trace_sink,
+            agent_id: agent_def.id.clone(),
+            global,
+        };
+
+        Ok(scope)
+    }
+
+    /// Explicit shutdown. Marks each `InlineMcpHandle` as cleaned and drops
+    /// the scope. Trace event will be added in Task 9.
+    pub async fn shutdown(self) -> Result<(), McpScopeError> {
+        for h in &self.inline_handles {
+            h.mark_cleaned();
+        }
+        Ok(())
+    }
+}
+
+/// Spawn a single inline MCP server. Stub for Task 6 — Task 7 wires up the
+/// real `crate::mcp::external::McpServerConnection::connect` call. For now
+/// returns an `InlineMcpHandle` with `process: None`.
+async fn spawn_inline(
+    name: String,
+    _config: crate::agents::McpInlineConfig,
+) -> Result<InlineMcpHandle, McpScopeError> {
+    Ok(InlineMcpHandle {
+        name,
+        process: None,
+        cleaned_up: Arc::new(AtomicBool::new(false)),
+    })
 }
 
 #[cfg(test)]
@@ -254,5 +366,53 @@ mod tests {
         handle.mark_cleaned();
         drop(handle);
         assert!(cleaned.load(Ordering::Acquire), "explicit cleanup must flip the flag");
+    }
+
+    #[tokio::test]
+    async fn mcp_scope_provision_reference_resolves_from_global() {
+        use crate::agents::{AgentDef, AgentMode, McpServerSpec};
+        use std::sync::Arc;
+
+        let mut registry = make_registry_with_plugin("global-mcp");
+        let tool = ToolRegistration {
+            name: "global-tool".into(),
+            description: "from global mcp".into(),
+            parameters: serde_json::json!({}),
+            handler: "global_handler".into(),
+            plugin_id: "global-mcp".into(),
+        };
+        registry.register_tool(tool);
+        let global = Arc::new(registry);
+
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
+            .with_mcp_servers(vec![McpServerSpec::Reference {
+                name: "global-mcp".into(),
+            }]);
+
+        let scope = McpScope::provision(&agent, global, None)
+            .await
+            .expect("provision succeeds");
+        assert_eq!(scope.references.len(), 1);
+        assert!(scope.references.contains("global-mcp"));
+        assert_eq!(scope.inline_handles.len(), 0);
+        scope.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn mcp_scope_provision_reference_not_found_fails_loud() {
+        use crate::agents::{AgentDef, AgentMode, McpServerSpec};
+        use std::sync::Arc;
+
+        let registry = make_registry_with_plugin("only-this");
+        let global = Arc::new(registry);
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
+            .with_mcp_servers(vec![McpServerSpec::Reference {
+                name: "missing".into(),
+            }]);
+
+        let err = McpScope::provision(&agent, global, None)
+            .await
+            .expect_err("should fail");
+        assert!(matches!(err, McpScopeError::ReferenceNotFound(ref n) if n == "missing"));
     }
 }
