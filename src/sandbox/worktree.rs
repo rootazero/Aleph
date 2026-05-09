@@ -57,6 +57,21 @@ impl WorktreeHandle {
     pub fn repo_root(&self) -> &Path {
         &self.repo_root
     }
+
+    /// Explicit cleanup. Removes the worktree via `git worktree remove --force`,
+    /// then marks the handle as cleaned up so `Drop` skips its safety-net work.
+    /// Performance contract: ≤ 100ms typical.
+    pub async fn cleanup(self) -> Result<(), WorktreeError> {
+        let result = remove_worktree(&self.repo_root, &self.path).await;
+        self.cleaned_up.store(true, Ordering::Release);
+
+        if let Some(sink) = self.trace_sink.as_ref() {
+            // Variant added in Task 6.
+            let _ = sink;
+        }
+
+        result
+    }
 }
 
 /// Create a fresh detached-HEAD worktree under `$TMPDIR/aleph-subagent-<label>-<uuid>/`.
@@ -107,6 +122,32 @@ pub async fn create(
     })
 }
 
+async fn remove_worktree(repo_root: &Path, path: &Path) -> Result<(), WorktreeError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("worktree")
+        .arg("remove")
+        .arg("--force")
+        .arg(path)
+        .output()
+        .await
+        .map_err(|e| WorktreeError::Cleanup {
+            path: path.to_path_buf(),
+            message: format!("spawn git: {e}"),
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(WorktreeError::Cleanup {
+            path: path.to_path_buf(),
+            message: stderr,
+        });
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,17 +171,19 @@ mod tests {
             h.path().join(".git").exists(),
             "worktree must have .git pointer"
         );
-        // Cleanup so this test does not leak.
-        // We don't have cleanup() yet (Task 4); use raw git command for now.
-        let _ = tokio::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo_root)
-            .arg("worktree")
-            .arg("remove")
-            .arg("--force")
-            .arg(h.path())
-            .output()
-            .await;
+        h.cleanup().await.expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_worktree_dir() {
+        let repo_root = std::env::current_dir().expect("cwd");
+        let h = create(&repo_root, "task4-cleanup", None)
+            .await
+            .expect("create");
+        let path = h.path().to_path_buf();
+        assert!(path.exists(), "precondition: dir exists");
+        h.cleanup().await.expect("cleanup");
+        assert!(!path.exists(), "cleanup must remove worktree dir");
     }
 
     #[tokio::test]
