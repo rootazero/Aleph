@@ -612,3 +612,57 @@ older agent definitions.
 
 Other builtins still use flat `allowed_tools`; migrations are incremental
 and require behavior-equivalence verification (see `tests/tool_sets.rs`).
+
+## Worktree Isolation (P3 Stage H)
+
+Subagent spawns can opt into git worktree isolation:
+
+```rust
+let req = SpawnRequest {
+    agent_def: &agent_def,
+    task: "refactor module X",
+    context_summary: None,
+    model: None,
+    timeout_secs: 600,
+    cancel: cancel_token,
+    isolation: Some(IsolationMode::Worktree), // P3 Stage H
+};
+```
+
+When set to `Worktree`, the spawner creates a fresh detached-HEAD git
+worktree at `$TMPDIR/aleph-subagent-<safe_label>-<uuid>/` before running
+the child harness. The child's `Sandbox` is replaced with `WorktreeSandbox`,
+which executes commands at the worktree path and injects `CARGO_TARGET_DIR`
+for strict build isolation.
+
+Cleanup is RAII-guaranteed:
+- **Success path**: explicit `cleanup().await` after harness returns.
+- **Error/timeout/panic path**: `Drop` safety-net spawns a blocking
+  `git worktree remove --force` and emits
+  `LoopTraceEvent::WorktreeCleanedUp { leaked: true }`.
+
+### Scope
+
+`WorktreeSandbox` provides **workspace isolation only** — it does not apply
+seatbelt or capability baseline. For seatbelt-protected subagents, omit
+`isolation` (or set to `None`) and trust the parent's `WorkspaceSandbox`.
+This is a deliberate Stage H scope choice; combining seatbelt + worktree
+is a follow-up.
+
+### Trace events
+
+`LoopTraceEvent::WorktreeCreated { path }` and
+`LoopTraceEvent::WorktreeCleanedUp { path, leaked: bool }` flow into
+the parent's `trace_sink`. Use `leaked` to distinguish explicit cleanup
+from Drop safety-net cleanup in monitoring dashboards.
+
+### Performance contract
+
+- `create`: ≤ 200ms typical (`git worktree add` cost)
+- `cleanup`: ≤ 100ms typical (`git worktree remove --force` cost)
+
+### Failure mode
+
+Worktree creation failure is **fail-loud**: spawner returns
+`"sub-agent failed: worktree create: ..."`. There is no fallback to shared
+cwd — isolation declared must be isolation honored.
