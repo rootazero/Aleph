@@ -23,6 +23,8 @@ pub mod loader;
 
 pub mod allowlist_tool_service;
 pub mod background_tracker;
+pub mod forwarding_trace_sink;
+pub mod progress;
 pub mod runtime;
 pub mod subagent_spawner;
 pub mod subagent_tool;
@@ -43,6 +45,7 @@ pub mod sub_agents;
 /// Swarm intelligence for horizontal agent collaboration.
 pub mod swarm;
 
+pub use forwarding_trace_sink::ForwardingTraceSink;
 pub use registry::{builtin_agents, AgentRegistry};
 pub use runtime::{AgentRuntime, AgentRuntimeConfig, SubagentTranscript, TranscriptOutcome};
 pub use types::{AgentDef, AgentMode, AgentSource, ContextMode};

@@ -90,6 +90,10 @@ pub struct SubagentTool {
     /// Parent session id stamped onto emitted Delegation rows. `None` leaves
     /// the row untagged for session-level lookups.
     parent_session_id: Option<String>,
+    /// Stage F (P2) — parent trace sink threaded into background subagent
+    /// runtimes wrapped by ForwardingTraceSink for progress observation.
+    /// Sync subagents do NOT receive this wrapper (Stage A inheritance suffices).
+    trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
 }
 
 impl SubagentTool {
@@ -124,6 +128,7 @@ impl SubagentTool {
             raw_memory_writer: None,
             capture_registry: None,
             parent_session_id: None,
+            trace_sink: None,
         }
     }
 
@@ -172,6 +177,13 @@ impl SubagentTool {
     /// Spec 1 G2 — set the parent session id stamped onto Delegation rows.
     pub fn with_parent_session_id(mut self, sid: impl Into<String>) -> Self {
         self.parent_session_id = Some(sid.into());
+        self
+    }
+
+    /// Stage F (P2) — thread the parent trace sink so background subagents can
+    /// be observed via ForwardingTraceSink. Only wired on the background path.
+    pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
+        self.trace_sink = Some(sink);
         self
     }
 }
@@ -528,10 +540,12 @@ impl LoopTool for SubagentTool {
                 // Check running first
                 let running = self.background_tracker.list_running();
                 if running.iter().any(|(id, _, _)| id == &request_id) {
+                    let progress = self.background_tracker.progress_snapshot(&request_id, 10);
                     return ToolResult::Success {
                         output: json!({
                             "status": "running",
                             "request_id": request_id,
+                            "progress": progress,
                         }),
                     };
                 }
@@ -668,6 +682,9 @@ impl LoopTool for SubagentTool {
             let capture_registry = self.capture_registry.clone();
             let parent_agent_id = self.parent_agent_id.clone();
             let parent_session_id = self.parent_session_id.clone();
+            let parent_trace_sink = self.trace_sink.clone();
+            let tracker_for_wrapper = self.background_tracker.clone();
+            let request_id_for_wrapper = request_id.clone();
 
             tokio::spawn(async move {
                 let runtime_config = AgentRuntimeConfig {
@@ -695,6 +712,16 @@ impl LoopTool for SubagentTool {
                 }
                 if let Some(sid) = parent_session_id {
                     runtime = runtime.with_parent_session_id(sid);
+                }
+                if let Some(parent_sink) = parent_trace_sink {
+                    let wrapper: Arc<dyn crate::harness::TraceSink> = Arc::new(
+                        crate::agents::forwarding_trace_sink::ForwardingTraceSink::new(
+                            parent_sink,
+                            tracker_for_wrapper,
+                            request_id_for_wrapper,
+                        ),
+                    );
+                    runtime = runtime.with_trace_sink(wrapper);
                 }
 
                 let result = AssertUnwindSafe(runtime.run(runtime_config))
@@ -1217,5 +1244,52 @@ mod tests {
             ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
             _ => panic!("expected ToolResult::Success"),
         }
+    }
+
+    /// Stage F — check_status returns a `progress` array for running agents.
+    #[tokio::test]
+    async fn check_status_returns_progress_array_when_running() {
+        use crate::agents::progress::{ProgressKind, SubagentProgress};
+        use std::time::SystemTime;
+        use tokio_util::sync::CancellationToken;
+
+        let tracker = make_tracker();
+        let token = CancellationToken::new();
+        tracker.register("rid".into(), token, "task".into());
+        tracker.push_progress(
+            "rid",
+            SubagentProgress {
+                step: 1,
+                timestamp: SystemTime::now(),
+                kind: ProgressKind::ToolCalled,
+                tool_name: Some("read_file".into()),
+                latency_ms: None,
+                preview: None,
+            },
+        );
+
+        // Build a tool wired to the same tracker.
+        let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tool = SubagentTool::new(
+            provider,
+            chain,
+            make_registry(),
+            tracker,
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        );
+
+        let result = tool
+            .execute(serde_json::json!({"action": "check_status", "request_id": "rid"}))
+            .await;
+        let output = match result {
+            crate::tools::runtime::ToolResult::Success { output } => output,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        let progress = output.get("progress").expect("progress field present");
+        assert!(progress.is_array());
+        assert_eq!(progress.as_array().unwrap().len(), 1);
     }
 }

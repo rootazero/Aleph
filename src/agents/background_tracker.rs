@@ -1,8 +1,9 @@
 //! BackgroundAgentTracker — tracks sub-agents running in background tokio tasks.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use crate::agents::progress::SubagentProgress;
 use crate::sync_primitives::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -15,6 +16,8 @@ struct RunningAgent {
     cancel_token: CancellationToken,
     task_description: String,
     started_at: Instant,
+    /// FIFO-capped progress events; capacity 50.
+    progress: VecDeque<SubagentProgress>,
 }
 
 struct CompletedAgent {
@@ -44,6 +47,7 @@ impl BackgroundAgentTracker {
                 cancel_token,
                 task_description,
                 started_at: Instant::now(),
+                progress: VecDeque::with_capacity(50),
             },
         );
     }
@@ -93,6 +97,33 @@ impl BackgroundAgentTracker {
                 )
             })
             .collect()
+    }
+
+    /// Append a progress event to the running agent's queue.
+    /// Capped at 50 events FIFO. Silently no-ops if request_id is unknown
+    /// (race condition: tracker may have moved entry to completed).
+    pub fn push_progress(&self, request_id: &str, event: SubagentProgress) {
+        let mut running = self.running.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(agent) = running.get_mut(request_id) {
+            if agent.progress.len() >= 50 {
+                agent.progress.pop_front();
+            }
+            agent.progress.push_back(event);
+        }
+    }
+
+    /// Return up to `limit` most-recent progress events (chronological order).
+    /// Returns empty Vec if request_id is unknown or already completed.
+    pub fn progress_snapshot(&self, request_id: &str, limit: usize) -> Vec<SubagentProgress> {
+        let running = self.running.read().unwrap_or_else(|e| e.into_inner());
+        match running.get(request_id) {
+            Some(agent) => {
+                let total = agent.progress.len();
+                let start = total.saturating_sub(limit);
+                agent.progress.iter().skip(start).cloned().collect()
+            }
+            None => Vec::new(),
+        }
     }
 
     /// Remove completed entries older than `ttl`.
@@ -156,5 +187,58 @@ mod tests {
         tracker.mark_completed("old", Ok("old result".to_string()));
         tracker.cleanup(std::time::Duration::ZERO);
         assert!(tracker.take_result("old").is_none());
+    }
+
+    use crate::agents::progress::{ProgressKind, SubagentProgress};
+    use std::time::SystemTime;
+
+    fn fake_progress(step: usize) -> SubagentProgress {
+        SubagentProgress {
+            step,
+            timestamp: SystemTime::now(),
+            kind: ProgressKind::ToolCalled,
+            tool_name: Some(format!("tool_{step}")),
+            latency_ms: None,
+            preview: None,
+        }
+    }
+
+    #[test]
+    fn tracker_push_progress_caps_at_50() {
+        let tracker = BackgroundAgentTracker::new();
+        let token = CancellationToken::new();
+        tracker.register("rid".into(), token, "task".into());
+
+        for i in 0..51 {
+            tracker.push_progress("rid", fake_progress(i));
+        }
+
+        let snap = tracker.progress_snapshot("rid", 100);
+        assert_eq!(snap.len(), 50, "cap enforced at 50");
+        assert_eq!(snap.first().unwrap().step, 1, "step 0 evicted FIFO");
+        assert_eq!(snap.last().unwrap().step, 50);
+    }
+
+    #[test]
+    fn tracker_progress_snapshot_returns_last_n() {
+        let tracker = BackgroundAgentTracker::new();
+        let token = CancellationToken::new();
+        tracker.register("rid".into(), token, "task".into());
+
+        for i in 0..5 {
+            tracker.push_progress("rid", fake_progress(i));
+        }
+
+        let snap = tracker.progress_snapshot("rid", 3);
+        assert_eq!(snap.len(), 3);
+        assert_eq!(snap[0].step, 2);
+        assert_eq!(snap[2].step, 4);
+    }
+
+    #[test]
+    fn tracker_push_unknown_id_no_op() {
+        let tracker = BackgroundAgentTracker::new();
+        tracker.push_progress("never-registered", fake_progress(0));
+        assert!(tracker.progress_snapshot("never-registered", 10).is_empty());
     }
 }

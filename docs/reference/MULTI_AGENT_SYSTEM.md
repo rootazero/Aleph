@@ -498,3 +498,63 @@ Key design decisions for Team mode:
 See also:
 - [AGENT_SYSTEM.md](AGENT_SYSTEM.md) — Single-agent internals (loop, guards, state machine)
 - [TOOL_SYSTEM.md](TOOL_SYSTEM.md) — Tool registration and execution
+
+## Subagent Progress Streaming (P2 Stage F)
+
+Background subagents emit a structured progress trail observable to the parent
+through the `subagent` tool's `check_status` action. Sync (foreground) subagents
+do NOT participate in this mechanism — their final result is the only signal.
+
+### Progress Event Schema
+
+```rust
+struct SubagentProgress {
+    step: usize,                    // child harness iteration
+    timestamp: SystemTime,          // wall-clock at translation
+    kind: ProgressKind,             // ToolCalled | ToolReturned | LlmThinking | Cancelled
+    tool_name: Option<String>,      // Some for ToolCalled / ToolReturned
+    latency_ms: Option<u64>,        // Some for ToolReturned (call duration)
+    preview: Option<String>,        // Some for ToolReturned (200-char truncation)
+}
+```
+
+### Wiring (R10-Safe Decorator)
+
+`ForwardingTraceSink` (in `src/agents/forwarding_trace_sink.rs`) wraps the
+parent-inherited `trace_sink` exclusively for background subagents. It:
+
+1. Translates `LoopTraceEvent::ToolCallStarted` / `ToolCallCompleted` /
+   `TurnStateEntered{Think}` / `SessionCompleted{Cancelled}` into
+   `SubagentProgress`
+2. Pushes the translated event onto `BackgroundAgentTracker.progress` (FIFO,
+   capped at 50)
+3. Always forwards the original event to the inner sink (preserves
+   gateway/disk trace flow)
+
+Other LoopTraceEvent variants pass through untranslated. Adding new translation
+cases does not require harness changes.
+
+### check_status Output Shape
+
+When status == "running", the response includes a `progress` field:
+
+```json
+{
+  "status": "running",
+  "request_id": "...",
+  "progress": [
+    { "step": 0, "kind": "llm_thinking", ... },
+    { "step": 1, "kind": "tool_called", "tool_name": "grep", ... },
+    { "step": 1, "kind": "tool_returned", "latency_ms": 42, "preview": "...", ... }
+  ]
+}
+```
+
+Up to 10 most-recent events are returned. The buffer caps at 50 internally;
+older events are evicted FIFO.
+
+### Why cap=50?
+
+This is a designed memory/observability tradeoff (P2 Q6, hardcoded). For
+long-running background subagents (>50 tool calls), only the most recent 50
+steps remain visible. Configurable cap is a future stage if needed.
