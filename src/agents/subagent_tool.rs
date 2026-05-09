@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agents::background_tracker::BackgroundAgentTracker;
 use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
 use crate::agents::teammates::TeammateManager;
+use crate::agents::AgentDef;
 use crate::agents::AgentRegistry;
 use crate::providers::AiProvider;
 use crate::sandbox::Sandbox;
@@ -48,6 +49,15 @@ enum SubagentAction {
     ReadInbox { team_name: String },
 }
 
+/// A single task within a batch execution.
+#[derive(Debug)]
+struct BatchTask {
+    task: String,
+    agent_type: Option<String>,
+    model: Option<String>,
+    timeout_secs: Option<u64>,
+}
+
 #[derive(Debug)]
 struct RunArgs {
     task: String,
@@ -60,6 +70,9 @@ struct RunArgs {
     name: Option<String>,
     /// Optional team name — enables shared tasks and messages.
     team_name: Option<String>,
+    /// Batch tasks for parallel execution. When provided, all tasks run in
+    /// background automatically and a list of request_ids is returned.
+    batch_tasks: Option<Vec<BatchTask>>,
 }
 
 /// A LoopTool that delegates tasks to a temporary AgentLoop.
@@ -185,6 +198,91 @@ impl SubagentTool {
     pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
         self.trace_sink = Some(sink);
         self
+    }
+
+    fn spawn_background(
+        &self,
+        agent_def: AgentDef,
+        task: String,
+        context_summary: Option<String>,
+        model: Option<String>,
+        timeout_secs: u64,
+        child_chain: crate::harness::chain_context::ChainContext,
+    ) -> String {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let cancel_token = CancellationToken::new();
+
+        self.background_tracker.register(
+            request_id.clone(),
+            cancel_token.clone(),
+            task.clone(),
+        );
+
+        let provider = self.provider.clone();
+        let tracker = self.background_tracker.clone();
+        let rid = request_id.clone();
+        let session = self.session.clone();
+        let parent_tools = self.parent_tools.clone();
+        let sandbox = self.sandbox.clone();
+        let raw_memory_writer = self.raw_memory_writer.clone();
+        let capture_registry = self.capture_registry.clone();
+        let parent_agent_id = self.parent_agent_id.clone();
+        let parent_session_id = self.parent_session_id.clone();
+        let parent_trace_sink = self.trace_sink.clone();
+        let tracker_for_wrapper = self.background_tracker.clone();
+        let request_id_for_wrapper = request_id.clone();
+
+        tokio::spawn(async move {
+            let runtime_config = AgentRuntimeConfig {
+                agent_def,
+                task,
+                context_summary,
+                model,
+                timeout_secs,
+            };
+
+            let mut runtime = AgentRuntime::new(
+                provider,
+                child_chain,
+                cancel_token,
+                session,
+                parent_tools,
+                sandbox,
+            )
+            .with_parent_agent_id(parent_agent_id);
+            if let Some(w) = raw_memory_writer {
+                runtime = runtime.with_raw_memory_writer(w);
+            }
+            if let Some(reg) = capture_registry {
+                runtime = runtime.with_capture_registry(reg);
+            }
+            if let Some(sid) = parent_session_id {
+                runtime = runtime.with_parent_session_id(sid);
+            }
+            if let Some(parent_sink) = parent_trace_sink {
+                let wrapper: Arc<dyn crate::harness::TraceSink> = Arc::new(
+                    crate::agents::forwarding_trace_sink::ForwardingTraceSink::new(
+                        parent_sink,
+                        tracker_for_wrapper,
+                        request_id_for_wrapper,
+                    ),
+                );
+                runtime = runtime.with_trace_sink(wrapper);
+            }
+
+            let result = AssertUnwindSafe(runtime.run(runtime_config))
+                .catch_unwind()
+                .await;
+
+            let outcome = match result {
+                Ok(Ok(r)) => Ok(r.final_text.unwrap_or_else(|| "(no output)".to_string())),
+                Ok(Err(e)) => Err(e),
+                Err(_panic) => Err("Sub-agent panicked".to_string()),
+            };
+            tracker.mark_completed(&rid, outcome);
+        });
+
+        request_id
     }
 }
 
@@ -321,6 +419,33 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         run_in_background
     };
 
+    let batch_tasks = input.get("batch_tasks").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|item| {
+                let task = item.get("task")?.as_str()?.to_string();
+                if task.trim().is_empty() {
+                    return None;
+                }
+                Some(BatchTask {
+                    task,
+                    agent_type: item.get("agent_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    model: item.get("model").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    timeout_secs: item.get("timeout_secs").and_then(|v| v.as_u64()),
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let has_batch = batch_tasks.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+    let run_in_background = if has_batch && !run_in_background {
+        tracing::info!(
+            "batch_tasks provided — overriding run_in_background to true for parallel execution"
+        );
+        true
+    } else {
+        run_in_background
+    };
+
     Ok(SubagentAction::Run(RunArgs {
         task,
         agent_type,
@@ -330,6 +455,7 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         context_summary,
         name,
         team_name,
+        batch_tasks,
     }))
 }
 
@@ -340,9 +466,10 @@ impl LoopTool for SubagentTool {
     }
 
     fn description(&self) -> &str {
-        "Delegate a task to an autonomous sub-agent. The sub-agent runs independently \
-         with its own tool access and returns the result when complete. Use this for \
-         complex sub-tasks that require multiple steps."
+        "Delegate tasks to autonomous sub-agents. For simple single tasks, use 'task'. \
+         For complex goals that can be broken into independent sub-tasks, use 'batch_tasks' \
+         to launch multiple sub-agents in parallel — the system automatically runs them \
+         in background and returns request_ids for status polling."
     }
 
     fn schema(&self) -> Value {
@@ -356,7 +483,33 @@ impl LoopTool for SubagentTool {
                 },
                 "task": {
                     "type": "string",
-                    "description": "A clear description of the task for the sub-agent to complete."
+                    "description": "A clear description of the task for the sub-agent to complete. Use this for single tasks."
+                },
+                "batch_tasks": {
+                    "type": "array",
+                    "description": "Array of independent sub-tasks to execute in parallel. Use this when the overall goal can be decomposed into multiple independent sub-tasks. Each item can specify its own task, agent_type, model, and timeout_secs. When provided, all tasks run in background automatically.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "task": {
+                                "type": "string",
+                                "description": "Description of this sub-task."
+                            },
+                            "agent_type": {
+                                "type": "string",
+                                "description": "Agent type for this sub-task. Inherits from top-level agent_type if not set."
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "Model hint for this sub-task. Inherits from top-level model if not set."
+                            },
+                            "timeout_secs": {
+                                "type": "integer",
+                                "description": "Timeout for this sub-task. Inherits from top-level timeout_secs if not set."
+                            }
+                        },
+                        "required": ["task"]
+                    }
                 },
                 "agent_type": {
                     "type": "string",
@@ -580,6 +733,86 @@ impl LoopTool for SubagentTool {
             SubagentAction::Run(run_args) => run_args,
         };
 
+        if let Some(ref batch) = args.batch_tasks {
+            if !batch.is_empty() {
+                let child_chain = match self.chain.child() {
+                    Some(c) => c,
+                    None => {
+                        return ToolResult::Error {
+                            error: format!(
+                                "Maximum subagent nesting depth ({}) exceeded",
+                                self.chain.max_depth
+                            ),
+                            retryable: false,
+                        };
+                    }
+                };
+
+                let mut request_ids = Vec::new();
+                for (idx, batch_task) in batch.iter().enumerate() {
+                    let agent_def = if let Some(ref agent_type) = batch_task.agent_type {
+                        match self.agent_registry.get(agent_type) {
+                            Some(def) => def,
+                            None => {
+                                let available = self.agent_registry.list_ids().join(", ");
+                                return ToolResult::Error {
+                                    error: format!(
+                                        "batch task {}: Unknown agent_type '{}'. Available agents: {}",
+                                        idx, agent_type, available
+                                    ),
+                                    retryable: false,
+                                };
+                            }
+                        }
+                    } else if let Some(ref agent_type) = args.agent_type {
+                        match self.agent_registry.get(agent_type) {
+                            Some(def) => def,
+                            None => {
+                                let available = self.agent_registry.list_ids().join(", ");
+                                return ToolResult::Error {
+                                    error: format!(
+                                        "batch task {}: Unknown agent_type '{}'. Available agents: {}",
+                                        idx, agent_type, available
+                                    ),
+                                    retryable: false,
+                                };
+                            }
+                        }
+                    } else {
+                        match self.agent_registry.get("default") {
+                            Some(def) => def,
+                            None => {
+                                return ToolResult::Error {
+                                    error: "No default agent registered in AgentRegistry"
+                                        .to_string(),
+                                    retryable: false,
+                                };
+                            }
+                        }
+                    };
+
+                    let rid = self.spawn_background(
+                        agent_def,
+                        batch_task.task.clone(),
+                        args.context_summary.clone(),
+                        batch_task.model.clone().or_else(|| args.model.clone()),
+                        batch_task.timeout_secs.unwrap_or(args.timeout_secs),
+                        child_chain.clone(),
+                    );
+                    request_ids.push(rid);
+                }
+
+                return ToolResult::Success {
+                    output: json!({
+                        "status": "batch_running_in_background",
+                        "request_ids": request_ids,
+                        "count": request_ids.len(),
+                        "message": format!("{} sub-agents started in background. Use check_status with each request_id to retrieve results.", request_ids.len())
+                    }),
+                };
+            }
+        }
+
         tracing::info!(
             task = %args.task,
             agent_type = ?args.agent_type,
@@ -659,82 +892,14 @@ impl LoopTool for SubagentTool {
 
         // 5. Foreground vs background execution
         if args.run_in_background {
-            let request_id = uuid::Uuid::new_v4().to_string();
-            let cancel_token = CancellationToken::new();
-
-            self.background_tracker.register(
-                request_id.clone(),
-                cancel_token.clone(),
+            let request_id = self.spawn_background(
+                agent_def,
                 args.task.clone(),
+                args.context_summary,
+                args.model,
+                args.timeout_secs,
+                child_chain,
             );
-
-            let provider = self.provider.clone();
-            let task = args.task.clone();
-            let context_summary = args.context_summary;
-            let model = args.model.clone();
-            let timeout_secs = args.timeout_secs;
-            let tracker = self.background_tracker.clone();
-            let rid = request_id.clone();
-            let session = self.session.clone();
-            let parent_tools = self.parent_tools.clone();
-            let sandbox = self.sandbox.clone();
-            let raw_memory_writer = self.raw_memory_writer.clone();
-            let capture_registry = self.capture_registry.clone();
-            let parent_agent_id = self.parent_agent_id.clone();
-            let parent_session_id = self.parent_session_id.clone();
-            let parent_trace_sink = self.trace_sink.clone();
-            let tracker_for_wrapper = self.background_tracker.clone();
-            let request_id_for_wrapper = request_id.clone();
-
-            tokio::spawn(async move {
-                let runtime_config = AgentRuntimeConfig {
-                    agent_def,
-                    task,
-                    context_summary,
-                    model,
-                    timeout_secs,
-                };
-
-                let mut runtime = AgentRuntime::new(
-                    provider,
-                    child_chain,
-                    cancel_token,
-                    session,
-                    parent_tools,
-                    sandbox,
-                )
-                .with_parent_agent_id(parent_agent_id);
-                if let Some(w) = raw_memory_writer {
-                    runtime = runtime.with_raw_memory_writer(w);
-                }
-                if let Some(reg) = capture_registry {
-                    runtime = runtime.with_capture_registry(reg);
-                }
-                if let Some(sid) = parent_session_id {
-                    runtime = runtime.with_parent_session_id(sid);
-                }
-                if let Some(parent_sink) = parent_trace_sink {
-                    let wrapper: Arc<dyn crate::harness::TraceSink> = Arc::new(
-                        crate::agents::forwarding_trace_sink::ForwardingTraceSink::new(
-                            parent_sink,
-                            tracker_for_wrapper,
-                            request_id_for_wrapper,
-                        ),
-                    );
-                    runtime = runtime.with_trace_sink(wrapper);
-                }
-
-                let result = AssertUnwindSafe(runtime.run(runtime_config))
-                    .catch_unwind()
-                    .await;
-
-                let outcome = match result {
-                    Ok(Ok(r)) => Ok(r.final_text.unwrap_or_else(|| "(no output)".to_string())),
-                    Ok(Err(e)) => Err(e),
-                    Err(_panic) => Err("Sub-agent panicked".to_string()),
-                };
-                tracker.mark_completed(&rid, outcome);
-            });
 
             ToolResult::Success {
                 output: json!({
