@@ -196,6 +196,8 @@ pub struct AnthropicUsage {
     pub output_tokens: u32,
     #[serde(default)]
     pub cache_read_input_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u32>,
 }
 
 /// Error response
@@ -362,5 +364,17 @@ mod tests {
         }"#;
         let resp: MessagesResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.content.len(), 3);
+    }
+
+    #[test]
+    fn anthropic_usage_parses_cache_creation_input_tokens() {
+        let json = serde_json::json!({
+            "input_tokens": 200,
+            "output_tokens": 100,
+            "cache_read_input_tokens": 150,
+            "cache_creation_input_tokens": 50
+        });
+        let usage: AnthropicUsage = serde_json::from_value(json).unwrap();
+        assert_eq!(usage.cache_creation_input_tokens, Some(50));
     }
 }
