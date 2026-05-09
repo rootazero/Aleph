@@ -49,7 +49,9 @@ pub mod swarm;
 pub use forwarding_trace_sink::ForwardingTraceSink;
 pub use registry::{builtin_agents, AgentRegistry};
 pub use runtime::{AgentRuntime, AgentRuntimeConfig, SubagentTranscript, TranscriptOutcome};
-pub use types::{AgentDef, AgentMode, AgentSource, ContextMode, IsolationMode};
+pub use types::{
+    AgentDef, AgentMode, AgentSource, ContextMode, IsolationMode, McpInlineConfig, McpServerSpec,
+};
 
 // Re-export rig module types for convenience
 #[allow(deprecated)]
