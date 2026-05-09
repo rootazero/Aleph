@@ -103,20 +103,17 @@ pub fn builtin_agents() -> Vec<AgentDef> {
         AgentDef::new("main", AgentMode::Primary)
             .with_description("Primary agent that responds directly to user")
             .with_allowed_tools(vec!["*".into(), "flow_run".into()]),
-        // Explore agent - read-only tools
+        // Explore agent — INVESTIGATION named set (P2 Stage G demo migration).
+        // Effective behavior unchanged: Stage B recursion guard blocks subagent
+        // for SubAgent mode; denied_tools preserved. Default wildcard cleared so
+        // only INVESTIGATION tools are allowed.
         AgentDef::new("explore", AgentMode::SubAgent)
             .with_description("Read-only codebase exploration specialist")
             .with_when_to_use(
                 "When you need to search, read, or understand code without modifying anything",
             )
             .with_prompt_sections(vec!["explore_constraints".into()])
-            .with_allowed_tools(vec![
-                "glob".into(),
-                "grep".into(),
-                "read_file".into(),
-                "web_fetch".into(),
-                "search".into(),
-            ])
+            .with_allowed_tool_sets(vec!["INVESTIGATION".into()])
             .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
             .with_max_iterations(20),
         // Coder agent - file operations

@@ -20,6 +20,7 @@ mod registry;
 mod types;
 
 pub mod loader;
+pub mod tool_sets;
 
 pub mod allowlist_tool_service;
 pub mod background_tracker;

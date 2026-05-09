@@ -70,6 +70,10 @@ pub struct AgentDef {
     pub prompt_sections: Vec<String>,
     /// Tools this agent is allowed to use ("*" for all)
     pub allowed_tools: Vec<String>,
+    /// Named tool sets (P2 Stage G). Resolved via crate::agents::tool_sets::resolve.
+    /// Unknown set names are silently empty; explicit `allowed_tools` still applies.
+    #[serde(default)]
+    pub allowed_tool_sets: Vec<String>,
     /// Tools this agent is denied from using
     pub denied_tools: Vec<String>,
     /// Maximum iterations (overrides default loop limit)
@@ -95,6 +99,7 @@ impl AgentDef {
             mode,
             prompt_sections: vec![],
             allowed_tools: vec!["*".into()],
+            allowed_tool_sets: vec![],
             denied_tools: vec![],
             max_iterations: None,
             token_budget: None,
@@ -119,6 +124,19 @@ impl AgentDef {
     /// Set allowed tools
     pub fn with_allowed_tools(mut self, tools: Vec<String>) -> Self {
         self.allowed_tools = tools;
+        self
+    }
+
+    /// Set named tool sets (P2 Stage G).
+    /// Clears the default wildcard `allowed_tools` so that tool resolution
+    /// comes from named sets only (plus any subsequent `with_allowed_tools` call).
+    pub fn with_allowed_tool_sets(mut self, sets: Vec<String>) -> Self {
+        self.allowed_tool_sets = sets;
+        // Clear the default ["*"] wildcard so named sets govern access.
+        // Callers that want both sets and a flat list chain with_allowed_tools after.
+        if self.allowed_tools == vec!["*".to_string()] {
+            self.allowed_tools = vec![];
+        }
         self
     }
 
@@ -167,23 +185,27 @@ impl AgentDef {
     /// unbounded recursion. Primary-mode agents retain full subagent
     /// spawning capability subject to the normal allow/deny lists.
     pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
-        // Recursion guard: SubAgent-mode agents may never invoke the
-        // `subagent` tool, regardless of allowlist contents.
+        // Stage B (P1): recursion guard — system invariant, overrides everything
         if matches!(self.mode, AgentMode::SubAgent) && tool_name == "subagent" {
             return false;
         }
 
-        // Check denied list first
+        // Explicit deny short-circuits (after recursion guard, before allows)
         if self.denied_tools.iter().any(|t| t == tool_name) {
             return false;
         }
 
-        // Check allowed list
-        if self.allowed_tools.iter().any(|t| t == "*") {
-            return true;
+        // Stage G (P2): named allowed_tool_sets
+        for set_name in &self.allowed_tool_sets {
+            if let Some(tools) = crate::agents::tool_sets::resolve(set_name) {
+                if tools.iter().any(|t| *t == tool_name) {
+                    return true;
+                }
+            }
         }
 
-        self.allowed_tools.iter().any(|t| t == tool_name)
+        // Existing flat allowlist with "*" wildcard support
+        self.allowed_tools.iter().any(|t| t == "*" || t == tool_name)
     }
 }
 
@@ -366,5 +388,70 @@ mod tests {
 
         // Primary-mode agents retain full subagent spawning capability.
         assert!(agent.is_tool_allowed("subagent"));
+    }
+
+    // -- Named tool sets (Stage G, P2 subagent uplift) -----------------------
+
+    #[test]
+    fn is_tool_allowed_via_set_only() {
+        let def = AgentDef::new("test", AgentMode::SubAgent)
+            .with_allowed_tool_sets(vec!["READ_ONLY".into()]);
+        assert!(def.is_tool_allowed("read_file"));
+        assert!(def.is_tool_allowed("grep"));
+        assert!(!def.is_tool_allowed("bash"));
+        assert!(!def.is_tool_allowed("write_file"));
+    }
+
+    #[test]
+    fn is_tool_allowed_set_and_flat_union() {
+        let def = AgentDef::new("test", AgentMode::SubAgent)
+            .with_allowed_tool_sets(vec!["READ_ONLY".into()])
+            .with_allowed_tools(vec!["custom_tool".into()]);
+        // Flat list contributes:
+        assert!(def.is_tool_allowed("custom_tool"));
+        // Set contributes:
+        assert!(def.is_tool_allowed("read_file"));
+        // Neither contributes:
+        assert!(!def.is_tool_allowed("bash"));
+    }
+
+    #[test]
+    fn denied_tools_overrides_set() {
+        let def = AgentDef::new("test", AgentMode::SubAgent)
+            .with_allowed_tool_sets(vec!["INVESTIGATION".into()])
+            .with_denied_tools(vec!["web_fetch".into()]);
+        // INVESTIGATION includes web_fetch but denied_tools wins:
+        assert!(!def.is_tool_allowed("web_fetch"));
+        // Other INVESTIGATION tools still allowed:
+        assert!(def.is_tool_allowed("search"));
+        assert!(def.is_tool_allowed("read_file"));
+    }
+
+    #[test]
+    fn subagent_mode_denies_subagent_even_in_investigation_set() {
+        let def = AgentDef::new("nested", AgentMode::SubAgent)
+            .with_allowed_tool_sets(vec!["INVESTIGATION".into()]);
+        // INVESTIGATION's "subagent" entry is overridden by Stage B mode-aware deny:
+        assert!(!def.is_tool_allowed("subagent"));
+        // Other INVESTIGATION members still allowed:
+        assert!(def.is_tool_allowed("search"));
+    }
+
+    #[test]
+    fn primary_mode_with_investigation_set_can_subagent() {
+        let def = AgentDef::new("main", AgentMode::Primary)
+            .with_allowed_tool_sets(vec!["INVESTIGATION".into()]);
+        // Primary mode + INVESTIGATION → subagent allowed:
+        assert!(def.is_tool_allowed("subagent"));
+    }
+
+    #[test]
+    fn unknown_set_name_silently_empty() {
+        let def = AgentDef::new("test", AgentMode::SubAgent)
+            .with_allowed_tool_sets(vec!["NONEXISTENT_SET".into()])
+            .with_allowed_tools(vec!["read_file".into()]);
+        // Unknown set contributes nothing; flat list still works:
+        assert!(def.is_tool_allowed("read_file"));
+        assert!(!def.is_tool_allowed("grep"));
     }
 }

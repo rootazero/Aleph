@@ -150,8 +150,9 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
     if let Some(cm) = fm.context_mode {
         def = def.with_context_mode(cm);
     }
-    // allowed_tool_sets wiring lands in Stage G (Task G2)
-    let _ = fm.allowed_tool_sets;
+    if !fm.allowed_tool_sets.is_empty() {
+        def = def.with_allowed_tool_sets(fm.allowed_tool_sets);
+    }
     def.source = source;
 
     let _ = body;

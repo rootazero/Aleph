@@ -558,3 +558,57 @@ older events are evicted FIFO.
 This is a designed memory/observability tradeoff (P2 Q6, hardcoded). For
 long-running background subagents (>50 tool calls), only the most recent 50
 steps remain visible. Configurable cap is a future stage if needed.
+
+## Named Tool Sets (P2 Stage G)
+
+`AgentDef.allowed_tool_sets: Vec<String>` lets agent definitions reference named
+tool collections instead of (or alongside) flat allowlists. Three sets are
+predefined:
+
+| Name           | Tools                                                  | Purpose                                       |
+|----------------|--------------------------------------------------------|-----------------------------------------------|
+| `READ_ONLY`    | glob, grep, read_file                                  | Pure filesystem inspection                    |
+| `INVESTIGATION`| glob, grep, read_file, search, web_fetch, subagent     | Read-only research with remote sources        |
+| `ASYNC_SAFE`   | glob, grep, read_file, search                          | Background-safe (no side effects, no exfil)   |
+
+### Composition Rules
+
+`AgentDef::is_tool_allowed(tool)` evaluates in this precedence:
+
+1. **Recursion guard** (Stage B): SubAgent mode → `subagent` tool denied
+   regardless of allowlist
+2. **Explicit deny**: tool in `denied_tools` → denied
+3. **Set match**: tool in any resolved `allowed_tool_sets` member → allowed
+4. **Flat match**: tool in `allowed_tools` (with `"*"` wildcard) → allowed
+5. **Default**: denied
+
+`denied_tools` always wins over set membership; this lets agents use a broad
+named set then selectively exclude.
+
+### Example
+
+```yaml
+---
+id: my-research-agent
+allowed_tool_sets: [INVESTIGATION]
+denied_tools: [web_fetch]   # narrow the broad set
+---
+```
+
+Effective allowed: glob, grep, read_file, search (web_fetch denied; subagent
+denied via mode guard since this is a SubAgent).
+
+### Unknown Set Names
+
+`resolve` returns `None` for unknown names; the loader emits a warning
+but doesn't fail. This allows future named sets to be added without breaking
+older agent definitions.
+
+### Builtin Agents Using Named Sets
+
+| Agent     | Migration                                  |
+|-----------|--------------------------------------------|
+| `explore` | `INVESTIGATION` (P2 Stage G demo)          |
+
+Other builtins still use flat `allowed_tools`; migrations are incremental
+and require behavior-equivalence verification (see `tests/tool_sets.rs`).
