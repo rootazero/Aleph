@@ -51,6 +51,11 @@ pub enum LoopTraceEvent {
         hit_limit: bool,
         final_text: Option<String>,
     },
+    /// Subagent worktree isolation primitive created (P3 Stage H).
+    WorktreeCreated { path: std::path::PathBuf },
+    /// Subagent worktree cleaned up; `leaked = true` means cleanup was via
+    /// Drop safety-net rather than explicit `cleanup()` (P3 Stage H).
+    WorktreeCleanedUp { path: std::path::PathBuf, leaked: bool },
 }
 
 /// Kind of text stream
@@ -202,6 +207,12 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 hit_limit,
                 final_text,
             },
+            LoopTraceEvent::WorktreeCreated { path } => {
+                aleph_protocol::AgentTraceEvent::WorktreeCreated { path }
+            }
+            LoopTraceEvent::WorktreeCleanedUp { path, leaked } => {
+                aleph_protocol::AgentTraceEvent::WorktreeCleanedUp { path, leaked }
+            }
         }
     }
 }
@@ -261,5 +272,32 @@ impl From<LoopTraceTurnMetrics> for aleph_protocol::AgentTraceTurnMetrics {
             consecutive_errors: metrics.consecutive_errors,
             total_tokens: metrics.total_tokens,
         }
+    }
+}
+
+#[cfg(test)]
+mod p3_stage_h_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn worktree_created_serializes_with_path() {
+        let event = LoopTraceEvent::WorktreeCreated {
+            path: PathBuf::from("/tmp/aleph-subagent-x"),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains(r#""type":"worktree_created""#));
+        assert!(json.contains(r#""path":"/tmp/aleph-subagent-x""#));
+    }
+
+    #[test]
+    fn worktree_cleaned_up_serializes_with_leaked_flag() {
+        let event = LoopTraceEvent::WorktreeCleanedUp {
+            path: PathBuf::from("/tmp/aleph-subagent-y"),
+            leaked: true,
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains(r#""type":"worktree_cleaned_up""#));
+        assert!(json.contains(r#""leaked":true"#));
     }
 }

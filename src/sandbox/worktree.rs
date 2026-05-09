@@ -66,8 +66,10 @@ impl WorktreeHandle {
         self.cleaned_up.store(true, Ordering::Release);
 
         if let Some(sink) = self.trace_sink.as_ref() {
-            // Variant added in Task 6.
-            let _ = sink;
+            sink.on_trace(&crate::harness::trace::LoopTraceEvent::WorktreeCleanedUp {
+                path: self.path.clone(),
+                leaked: false,
+            });
         }
 
         result
@@ -87,8 +89,12 @@ impl Drop for WorktreeHandle {
             path = %path.display(),
             "WorktreeHandle leaked — Drop safety-net removing"
         );
-        // Variant added in Task 6.
-        let _sink = self.trace_sink.clone();
+        if let Some(sink) = self.trace_sink.as_ref() {
+            sink.on_trace(&crate::harness::trace::LoopTraceEvent::WorktreeCleanedUp {
+                path: self.path.clone(),
+                leaked: true,
+            });
+        }
         std::thread::spawn(move || {
             let status = std::process::Command::new("git")
                 .arg("-C")
@@ -146,8 +152,11 @@ pub async fn create(
         return Err(WorktreeError::Create(stderr));
     }
 
-    // Trace event added in Task 6; placeholder here keeps signature stable.
-    let _ = trace_sink.as_ref();
+    if let Some(sink) = trace_sink.as_ref() {
+        sink.on_trace(&crate::harness::trace::LoopTraceEvent::WorktreeCreated {
+            path: path.clone(),
+        });
+    }
 
     Ok(WorktreeHandle {
         path,

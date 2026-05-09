@@ -28,7 +28,9 @@ pub trait LoopCallback: Send {
             LoopTraceEvent::TurnStarted { .. }
             | LoopTraceEvent::TurnStateEntered { .. }
             | LoopTraceEvent::TurnCompleted { .. }
-            | LoopTraceEvent::SessionCompleted { .. } => {}
+            | LoopTraceEvent::SessionCompleted { .. }
+            | LoopTraceEvent::WorktreeCreated { .. }
+            | LoopTraceEvent::WorktreeCleanedUp { .. } => {}
         }
     }
     fn on_text(&mut self, _text: &str) {}

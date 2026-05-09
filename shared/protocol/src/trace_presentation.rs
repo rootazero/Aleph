@@ -353,6 +353,28 @@ pub fn present_agent_trace_event(
                 duration_ms: None,
             })
         }
+
+        AgentTraceEvent::WorktreeCreated { path } => Some(AgentTracePresentation {
+            kind: event.kind().into(),
+            status: AgentTracePresentationStatus::Info,
+            content: format!("worktree created: {}", path.display()),
+            duration_ms: None,
+        }),
+
+        AgentTraceEvent::WorktreeCleanedUp { path, leaked } => Some(AgentTracePresentation {
+            kind: event.kind().into(),
+            status: if *leaked {
+                AgentTracePresentationStatus::Failed
+            } else {
+                AgentTracePresentationStatus::Info
+            },
+            content: format!(
+                "worktree cleaned up{}: {}",
+                if *leaked { " (leaked)" } else { "" },
+                path.display()
+            ),
+            duration_ms: None,
+        }),
     }
 }
 
