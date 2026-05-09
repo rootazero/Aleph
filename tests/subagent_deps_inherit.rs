@@ -208,6 +208,7 @@ async fn subagent_base_carries_5_p1_fields() {
         model: None,
         timeout_secs: 5,
         cancel: CancellationToken::new(),
+        isolation: None,
     };
 
     let result = spawn(&base, req).await.expect("spawn should succeed");

@@ -242,6 +242,7 @@ async fn run_subagent_with_hanging_llm(cancel: CancellationToken) -> Result<Loop
         // should win first.
         timeout_secs: 30,
         cancel,
+        isolation: None,
     };
     spawn(&base, req).await
 }
@@ -257,6 +258,7 @@ async fn run_subagent_with_hanging_tool(cancel: CancellationToken) -> Result<Loo
         model: None,
         timeout_secs: 30,
         cancel,
+        isolation: None,
     };
     spawn(&base, req).await
 }

@@ -113,6 +113,10 @@ pub struct SpawnRequest<'a> {
     pub timeout_secs: u64,
     /// Cancellation token observed between turns by the harness.
     pub cancel: CancellationToken,
+    /// Strict isolation mode (P3 Stage H). `None` = inherit parent's
+    /// HarnessDeps (legacy / default). `Some(IsolationMode::Worktree)`
+    /// will provision a detached-HEAD git worktree in Task 9.
+    pub isolation: Option<crate::agents::IsolationMode>,
 }
 
 /// Build a child ephemeral session, run the harness, and synthesize the
@@ -778,6 +782,7 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            isolation: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -817,6 +822,7 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            isolation: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -843,6 +849,7 @@ mod tests {
             model: None,
             timeout_secs: 10,
             cancel: CancellationToken::new(),
+            isolation: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -865,6 +872,7 @@ mod tests {
             model: None,
             timeout_secs: 1,
             cancel: CancellationToken::new(),
+            isolation: None,
         };
 
         let err = spawn(&base, req).await.expect_err("spawn should time out");
@@ -897,6 +905,7 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            isolation: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -944,6 +953,7 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            isolation: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");
@@ -1011,6 +1021,7 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            isolation: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -1018,6 +1029,27 @@ mod tests {
         // No assertion on captured rows — the absence of a writer is the
         // contract, and if any silent default fires the test above will catch
         // it (single row expected) before this test would.
+    }
+
+    // -- Stage H Task 8: isolation field API surface lock-in ------------------
+
+    /// Compile-time lock: `SpawnRequest.isolation` exists and defaults to
+    /// `None` at every construction site.  If the field is removed or renamed
+    /// this test will not compile, catching the regression immediately.
+    #[test]
+    fn spawn_request_isolation_field_exists_and_defaults_none() {
+        let agent = agent_with_allowed("isolation-probe", vec!["*"]);
+        let cancel = CancellationToken::new();
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "noop",
+            context_summary: None,
+            model: None,
+            timeout_secs: 1,
+            cancel,
+            isolation: None,
+        };
+        assert!(req.isolation.is_none());
     }
 
     // -- extract_run_result edge-case regression tests ------------------------
