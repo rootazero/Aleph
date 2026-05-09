@@ -42,6 +42,25 @@ impl McpRegistrar {
     }
 }
 
+// -- P3 Stage I — per-agent MCP scope ----------------------------------------
+
+/// Errors raised while provisioning or tearing down an [`McpScope`].
+///
+/// All variants are fail-loud: `subagent_spawner::spawn` maps any
+/// `McpScopeError` to `"sub-agent failed: mcp scope: {err}"` and returns
+/// `Err` (no fallback to global-only behavior).
+#[derive(Debug, thiserror::Error)]
+pub enum McpScopeError {
+    #[error("name '{0}' is reserved by global registry; inline servers must use a fresh name")]
+    NameConflict(String),
+    #[error("reference '{0}' not found in global registry")]
+    ReferenceNotFound(String),
+    #[error("inline server '{name}' failed to start: {reason}")]
+    InlineStartup { name: String, reason: String },
+    #[error("inline server '{name}' failed to shut down: {reason}")]
+    InlineShutdown { name: String, reason: String },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +147,39 @@ mod tests {
         let registrar = McpRegistrar::new("test-mcp".into(), vec![]);
         // Empty capability list should succeed with no changes
         assert!(registrar.batch_register(vec![], &mut registry).is_ok());
+    }
+
+    #[test]
+    fn mcp_scope_error_displays_name_conflict() {
+        let e = McpScopeError::NameConflict("github".into());
+        let s = format!("{e}");
+        assert!(s.contains("name 'github'"));
+        assert!(s.contains("global registry"));
+    }
+
+    #[test]
+    fn mcp_scope_error_displays_reference_not_found() {
+        let e = McpScopeError::ReferenceNotFound("missing".into());
+        assert!(format!("{e}").contains("reference 'missing' not found"));
+    }
+
+    #[test]
+    fn mcp_scope_error_displays_inline_startup() {
+        let e = McpScopeError::InlineStartup {
+            name: "fresh".into(),
+            reason: "exec failed: ENOENT".into(),
+        };
+        let s = format!("{e}");
+        assert!(s.contains("inline server 'fresh'"));
+        assert!(s.contains("ENOENT"));
+    }
+
+    #[test]
+    fn mcp_scope_error_displays_inline_shutdown() {
+        let e = McpScopeError::InlineShutdown {
+            name: "fresh".into(),
+            reason: "kill -TERM timed out".into(),
+        };
+        assert!(format!("{e}").contains("failed to shut down"));
     }
 }
