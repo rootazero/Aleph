@@ -56,6 +56,11 @@ pub enum LoopTraceEvent {
     /// Subagent worktree cleaned up; `leaked = true` means cleanup was via
     /// Drop safety-net rather than explicit `cleanup()` (P3 Stage H).
     WorktreeCleanedUp { path: std::path::PathBuf, leaked: bool },
+    /// Per-agent MCP scope attached (P3 Stage I).
+    McpScopeAttached { agent_id: String, references: Vec<String>, inline_count: usize },
+    /// Per-agent MCP scope cleaned up; `leaked = true` means cleanup was via
+    /// Drop safety-net rather than explicit `shutdown()` (P3 Stage I).
+    McpScopeCleaned { agent_id: String, leaked: bool },
 }
 
 /// Kind of text stream
@@ -213,6 +218,18 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
             LoopTraceEvent::WorktreeCleanedUp { path, leaked } => {
                 aleph_protocol::AgentTraceEvent::WorktreeCleanedUp { path, leaked }
             }
+            LoopTraceEvent::McpScopeAttached {
+                agent_id,
+                references,
+                inline_count,
+            } => aleph_protocol::AgentTraceEvent::McpScopeAttached {
+                agent_id,
+                references,
+                inline_count,
+            },
+            LoopTraceEvent::McpScopeCleaned { agent_id, leaked } => {
+                aleph_protocol::AgentTraceEvent::McpScopeCleaned { agent_id, leaked }
+            }
         }
     }
 }
@@ -272,6 +289,35 @@ impl From<LoopTraceTurnMetrics> for aleph_protocol::AgentTraceTurnMetrics {
             consecutive_errors: metrics.consecutive_errors,
             total_tokens: metrics.total_tokens,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_scope_attached_serializes_with_agent_id_and_counts() {
+        let event = LoopTraceEvent::McpScopeAttached {
+            agent_id: "git-research".into(),
+            references: vec!["github".into()],
+            inline_count: 2,
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains(r#""type":"mcp_scope_attached""#));
+        assert!(json.contains(r#""agent_id":"git-research""#));
+        assert!(json.contains(r#""inline_count":2"#));
+    }
+
+    #[test]
+    fn mcp_scope_cleaned_serializes_with_leaked_flag() {
+        let event = LoopTraceEvent::McpScopeCleaned {
+            agent_id: "git-research".into(),
+            leaked: true,
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains(r#""type":"mcp_scope_cleaned""#));
+        assert!(json.contains(r#""leaked":true"#));
     }
 }
 

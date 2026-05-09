@@ -147,8 +147,8 @@ impl Drop for InlineMcpHandle {
 
 use std::collections::HashSet;
 use crate::agents::{AgentDef, McpServerSpec};
-#[allow(unused_imports)]
 use crate::harness::TraceSink;
+use crate::harness::trace::LoopTraceEvent;
 
 /// Per-agent MCP server scope (P3 Stage I).
 ///
@@ -220,6 +220,14 @@ impl McpScope {
             global,
         };
 
+        if let Some(sink) = scope.trace_sink.as_ref() {
+            sink.on_trace(&LoopTraceEvent::McpScopeAttached {
+                agent_id: scope.agent_id.clone(),
+                references: scope.references.iter().cloned().collect(),
+                inline_count: scope.inline_handles.len(),
+            });
+        }
+
         Ok(scope)
     }
 
@@ -260,13 +268,40 @@ impl McpScope {
             }
         }
 
-        // Trace event added in Task 9.
-        let _ = (trace_sink, agent_id);
+        if let Some(sink) = trace_sink.as_ref() {
+            sink.on_trace(&LoopTraceEvent::McpScopeCleaned {
+                agent_id: agent_id.clone(),
+                leaked: false,
+            });
+        }
 
         if let Some((name, reason)) = shutdown_errors.into_iter().next() {
             return Err(McpScopeError::InlineShutdown { name, reason });
         }
         Ok(())
+    }
+}
+
+impl Drop for McpScope {
+    fn drop(&mut self) {
+        let any_leaked = self
+            .inline_handles
+            .iter()
+            .any(|h| !h.cleaned_up.load(Ordering::Acquire));
+        if !any_leaked {
+            return;
+        }
+        if let Some(sink) = self.trace_sink.as_ref() {
+            sink.on_trace(&LoopTraceEvent::McpScopeCleaned {
+                agent_id: self.agent_id.clone(),
+                leaked: true,
+            });
+        }
+        tracing::error!(
+            agent_id = %self.agent_id,
+            leaked_handles = self.inline_handles.iter().filter(|h| !h.cleaned_up.load(Ordering::Acquire)).count(),
+            "McpScope leaked — relying on InlineMcpHandle Drops for kill"
+        );
     }
 }
 

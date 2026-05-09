@@ -272,6 +272,17 @@ pub enum AgentTraceEvent {
     WorktreeCreated { path: std::path::PathBuf },
     /// Subagent worktree cleaned up (P3 Stage H).
     WorktreeCleanedUp { path: std::path::PathBuf, leaked: bool },
+    /// Per-agent MCP scope attached (P3 Stage I).
+    McpScopeAttached {
+        agent_id: String,
+        references: Vec<String>,
+        inline_count: usize,
+    },
+    /// Per-agent MCP scope cleaned up (P3 Stage I).
+    McpScopeCleaned {
+        agent_id: String,
+        leaked: bool,
+    },
 }
 
 impl AgentTraceEvent {
@@ -287,6 +298,8 @@ impl AgentTraceEvent {
             Self::SessionCompleted { .. } => "session_completed",
             Self::WorktreeCreated { .. } => "worktree_created",
             Self::WorktreeCleanedUp { .. } => "worktree_cleaned_up",
+            Self::McpScopeAttached { .. } => "mcp_scope_attached",
+            Self::McpScopeCleaned { .. } => "mcp_scope_cleaned",
         }
     }
 }

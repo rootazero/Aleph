@@ -375,6 +375,34 @@ pub fn present_agent_trace_event(
             ),
             duration_ms: None,
         }),
+
+        AgentTraceEvent::McpScopeAttached {
+            agent_id,
+            references,
+            inline_count,
+        } => Some(AgentTracePresentation {
+            kind: event.kind().into(),
+            status: AgentTracePresentationStatus::Info,
+            content: format!(
+                "mcp scope attached: agent={agent_id} references={} inline={inline_count}",
+                references.len()
+            ),
+            duration_ms: None,
+        }),
+
+        AgentTraceEvent::McpScopeCleaned { agent_id, leaked } => Some(AgentTracePresentation {
+            kind: event.kind().into(),
+            status: if *leaked {
+                AgentTracePresentationStatus::Failed
+            } else {
+                AgentTracePresentationStatus::Info
+            },
+            content: format!(
+                "mcp scope cleaned{}: agent={agent_id}",
+                if *leaked { " (leaked)" } else { "" }
+            ),
+            duration_ms: None,
+        }),
     }
 }
 

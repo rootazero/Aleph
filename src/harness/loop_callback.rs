@@ -30,7 +30,9 @@ pub trait LoopCallback: Send {
             | LoopTraceEvent::TurnCompleted { .. }
             | LoopTraceEvent::SessionCompleted { .. }
             | LoopTraceEvent::WorktreeCreated { .. }
-            | LoopTraceEvent::WorktreeCleanedUp { .. } => {}
+            | LoopTraceEvent::WorktreeCleanedUp { .. }
+            | LoopTraceEvent::McpScopeAttached { .. }
+            | LoopTraceEvent::McpScopeCleaned { .. } => {}
         }
     }
     fn on_text(&mut self, _text: &str) {}
