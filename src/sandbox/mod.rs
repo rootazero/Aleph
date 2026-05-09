@@ -21,6 +21,7 @@ pub mod platforms;
 pub mod policy;
 pub mod rate_limit;
 pub mod workspace;
+pub mod worktree;
 
 pub use capabilities::{NetworkPolicy, SandboxCapabilities};
 pub use command::{SandboxCommand, SandboxError, SandboxOutput};
