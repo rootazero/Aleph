@@ -1,0 +1,170 @@
+//! `MeteringProvider` — decorator that emits `LoopTraceEvent::ProviderUsage`
+//! after each `process()` call (Stage J-pre cache observability pipeline).
+//!
+//! Decorator-only: no harness diff. Composes with any `AiProvider` (anthropic,
+//! mock, failover, etc.). Non-Anthropic providers will populate `cache_*` as
+//! `None` until their protocols extend.
+//!
+//! See: docs/superpowers/plans/2026-05-09-subagent-uplift-stage-j-pre-plan.md
+
+use crate::error::Result;
+use crate::harness::trace::LoopTraceEvent;
+use crate::harness::TraceSink;
+use crate::providers::adapter::{ProviderResponse, RequestPayload};
+use crate::providers::AiProvider;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+pub struct MeteringProvider {
+    inner: Arc<dyn AiProvider>,
+    sink: Option<Arc<dyn TraceSink>>,
+    agent_id: String,
+}
+
+impl MeteringProvider {
+    pub fn new(
+        inner: Arc<dyn AiProvider>,
+        sink: Option<Arc<dyn TraceSink>>,
+        agent_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            inner,
+            sink,
+            agent_id: agent_id.into(),
+        }
+    }
+}
+
+impl AiProvider for MeteringProvider {
+    fn process<'a>(
+        &'a self,
+        req: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        let fut = self.inner.process(req);
+        let sink = self.sink.clone();
+        let agent_id = self.agent_id.clone();
+        Box::pin(async move {
+            let resp = fut.await?;
+            if let (Some(sink), Some(usage)) = (sink, resp.usage.as_ref()) {
+                sink.on_trace(&LoopTraceEvent::ProviderUsage {
+                    agent_id,
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cache_read_tokens: usage.cache_read_tokens,
+                    cache_creation_tokens: usage.cache_creation_tokens,
+                    thinking_tokens: usage.thinking_tokens,
+                });
+            }
+            Ok(resp)
+        })
+    }
+
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn color(&self) -> &str {
+        self.inner.color()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::providers::adapter::TokenUsage;
+    use std::sync::Mutex;
+
+    struct FakeProvider {
+        usage: TokenUsage,
+    }
+    impl AiProvider for FakeProvider {
+        fn process<'a>(
+            &'a self,
+            _req: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            let usage = self.usage.clone();
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    usage: Some(usage),
+                    ..Default::default()
+                })
+            })
+        }
+        fn name(&self) -> &str { "fake" }
+        fn color(&self) -> &str { "#000" }
+    }
+
+    struct CapturingSink(Mutex<Vec<LoopTraceEvent>>);
+    impl TraceSink for CapturingSink {
+        fn on_trace(&self, event: &LoopTraceEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+        fn flush(&self) {}
+    }
+
+    #[tokio::test]
+    async fn emits_provider_usage_with_agent_id_and_full_token_split() {
+        let inner = Arc::new(FakeProvider {
+            usage: TokenUsage {
+                input_tokens: 200,
+                output_tokens: 50,
+                cache_read_tokens: Some(150),
+                cache_creation_tokens: Some(20),
+                thinking_tokens: None,
+            },
+        });
+        let sink = Arc::new(CapturingSink(Mutex::new(Vec::new())));
+        let metering = MeteringProvider::new(
+            inner,
+            Some(sink.clone() as Arc<dyn TraceSink>),
+            "subagent-test",
+        );
+
+        let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+        let req = RequestPayload::new(&msgs);
+        let _ = metering.process(req).await.expect("process");
+
+        let events = sink.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            LoopTraceEvent::ProviderUsage {
+                agent_id,
+                input_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+                ..
+            } => {
+                assert_eq!(agent_id, "subagent-test");
+                assert_eq!(*input_tokens, 200);
+                assert_eq!(*cache_read_tokens, Some(150));
+                assert_eq!(*cache_creation_tokens, Some(20));
+            }
+            other => panic!("expected ProviderUsage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn no_event_when_response_lacks_usage() {
+        struct EmptyProvider;
+        impl AiProvider for EmptyProvider {
+            fn process<'a>(
+                &'a self,
+                _req: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+                Box::pin(async { Ok(ProviderResponse::default()) })
+            }
+            fn name(&self) -> &str { "empty" }
+            fn color(&self) -> &str { "#000" }
+        }
+        let sink = Arc::new(CapturingSink(Mutex::new(Vec::new())));
+        let metering = MeteringProvider::new(
+            Arc::new(EmptyProvider),
+            Some(sink.clone() as Arc<dyn TraceSink>),
+            "x",
+        );
+        let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+        let _ = metering.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert!(sink.0.lock().unwrap().is_empty());
+    }
+}

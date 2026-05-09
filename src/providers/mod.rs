@@ -67,6 +67,7 @@ pub mod gemini;
 pub mod health;
 pub mod http_provider;
 pub mod llm_retry;
+pub mod metering;
 pub mod message;
 pub mod mock;
 pub mod model_behaviors;
@@ -102,6 +103,7 @@ pub use delta::{
 pub use failover::{FailoverConfig, FailoverProvider, ProviderEntry};
 pub use health::{ModelInfo, ProviderError, ProviderHealth, ResolvedModel};
 pub use http_provider::HttpProvider;
+pub use metering::MeteringProvider;
 pub use mock::{MockError, MockProvider};
 pub use ollama::OllamaProvider;
 pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};
