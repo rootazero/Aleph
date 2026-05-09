@@ -823,11 +823,15 @@ pub(crate) fn parse_anthropic_sse_event(
                     .get("cache_read_input_tokens")
                     .and_then(|t| t.as_u64())
                     .and_then(|t| t.try_into().ok());
+                let cache_creation = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(|t| t.as_u64())
+                    .and_then(|t| t.try_into().ok());
                 out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
                     input_tokens: 0, // input usage is in message_start, not message_delta
                     output_tokens: output,
                     cache_read_tokens: cache_read,
-                    cache_creation_tokens: None,
+                    cache_creation_tokens: cache_creation,
                     thinking_tokens: None,
                 })));
             }
@@ -858,10 +862,37 @@ pub(crate) fn parse_anthropic_sse_event(
             out.push_back(Ok(ProviderDelta::Error(message.to_string())));
         }
 
-        // ── message_start / ping / other ──────────────────────────────────────
-        _ => {
-            // message_start contains initial usage; currently not extracted
+        // ── message_start ─────────────────────────────────────────────────────
+        "message_start" => {
+            // Extract initial usage: input_tokens, cache_read_input_tokens,
+            // and cache_creation_input_tokens are only present here, not in
+            // message_delta.
+            if let Some(usage) = v.get("message").and_then(|m| m.get("usage")) {
+                let input = usage
+                    .get("input_tokens")
+                    .and_then(|t| t.as_u64())
+                    .and_then(|t| t.try_into().ok())
+                    .unwrap_or(0);
+                let cache_read = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(|t| t.as_u64())
+                    .and_then(|t| t.try_into().ok());
+                let cache_creation = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(|t| t.as_u64())
+                    .and_then(|t| t.try_into().ok());
+                out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
+                    input_tokens: input,
+                    output_tokens: 0,
+                    cache_read_tokens: cache_read,
+                    cache_creation_tokens: cache_creation,
+                    thinking_tokens: None,
+                })));
+            }
         }
+
+        // ── ping / other ───────────────────────────────────────────────────────
+        _ => {}
     }
 }
 
@@ -1616,6 +1647,41 @@ mod stream_tests {
     }
 
     // ── Test 9: beta header in built request ────────────────────────────────
+
+    // ── Test 10: message_start emits input tokens + cache_creation ──────────
+
+    #[test]
+    fn message_start_emits_input_tokens_and_cache_creation() {
+        let data = r#"{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":150,"output_tokens":0,"cache_read_input_tokens":80,"cache_creation_input_tokens":30}}}"#;
+        let deltas = parse(data);
+
+        let usage = deltas.iter().find_map(|d| match d {
+            ProviderDelta::Usage(u) => Some(u),
+            _ => None,
+        });
+        assert!(usage.is_some(), "expected a Usage delta from message_start");
+        let u = usage.unwrap();
+        assert_eq!(u.input_tokens, 150);
+        assert_eq!(u.cache_read_tokens, Some(80));
+        assert_eq!(u.cache_creation_tokens, Some(30));
+    }
+
+    // ── Test 11: message_delta carries cache_creation_input_tokens ───────────
+
+    #[test]
+    fn message_delta_emits_cache_creation_tokens() {
+        let data = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10,"cache_creation_input_tokens":25}}"#;
+        let deltas = parse(data);
+
+        let usage = deltas.iter().find_map(|d| match d {
+            ProviderDelta::Usage(u) => Some(u),
+            _ => None,
+        });
+        assert!(usage.is_some(), "expected a Usage delta from message_delta");
+        let u = usage.unwrap();
+        assert_eq!(u.output_tokens, 10);
+        assert_eq!(u.cache_creation_tokens, Some(25));
+    }
 
     #[test]
     fn test_build_request_beta_header_present() {
