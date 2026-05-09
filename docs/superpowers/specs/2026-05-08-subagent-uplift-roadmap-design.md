@@ -10,6 +10,7 @@ follows: 2026-05-08-phase6-config-wiring-design.md
 
 ✅ P1 Shipped: <local-only, no PR url> on 2026-05-08
 ✅ P2 Shipped: 37c5bb759 on 2026-05-09 (Stage E: cb5317474 + 99613bcb1 + 344a9623f · Stage F: 3a9b7abd5 · Stage G: d0223dd4c + 37c5bb759 polish)
+✅ P3 Stage H Shipped: cfb2b358722089768d1c5f358b3525f9f4f94d62 on 2026-05-09
 
 # Aleph Subagent Uplift Roadmap — Master Spec
 
@@ -487,7 +488,7 @@ tool sets 是配置组织模式，不参与认知；新模型 / 新工具加入�
 
 ### Stage H — Worktree isolation
 
-**Status**: 📋 Planned · plan: TBD（P3 phase 时认领）
+**Status**: ✅ Shipped: cfb2b358722089768d1c5f358b3525f9f4f94d62 on 2026-05-09 · plan: docs/superpowers/plans/2026-05-09-subagent-uplift-p3-stage-h-plan.md
 **Depends on**: A（trace_sink 可观测 worktree 生命周期）, D（cancellation 传播 — 清理 hook 依赖）
 **Risk class**: high（文件系统副作用 + 清理可靠性 + 并发隔离）
 **Phase**: P3（超越）
