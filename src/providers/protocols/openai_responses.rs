@@ -476,6 +476,7 @@ fn parse_sse_event_multi(
                     input_tokens: u.input_tokens,
                     output_tokens: u.output_tokens,
                     cache_read_tokens: None,
+                    cache_creation_tokens: None,
                     thinking_tokens: None,
                 })));
             }

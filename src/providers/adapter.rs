@@ -269,6 +269,10 @@ pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub cache_read_tokens: Option<u32>,
+    /// Anthropic `cache_creation_input_tokens`: tokens written *into* the
+    /// prompt cache on this call. Cost-relevant for Stage J fork-branch
+    /// decision-making.
+    pub cache_creation_tokens: Option<u32>,
     /// Thinking/reasoning tokens consumed (Gemini `thoughtsTokenCount`)
     pub thinking_tokens: Option<u32>,
 }
@@ -368,5 +372,17 @@ mod tests {
         let msgs = [UnifiedMessage::user("test")];
         let payload = RequestPayload::new(&msgs).with_tool_choice(Some(ToolChoice::Required));
         assert_eq!(payload.tool_choice, Some(ToolChoice::Required));
+    }
+
+    #[test]
+    fn token_usage_carries_cache_creation_tokens() {
+        let usage = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_tokens: Some(80),
+            cache_creation_tokens: Some(20),
+            thinking_tokens: None,
+        };
+        assert_eq!(usage.cache_creation_tokens, Some(20));
     }
 }

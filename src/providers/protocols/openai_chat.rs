@@ -599,6 +599,7 @@ fn parse_chat_sse_event(
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: None,
+            cache_creation_tokens: None,
             thinking_tokens: None,
         })));
     }

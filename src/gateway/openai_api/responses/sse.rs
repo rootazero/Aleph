@@ -405,6 +405,7 @@ mod tests {
                 input_tokens: 10,
                 output_tokens: 5,
                 cache_read_tokens: None,
+                cache_creation_tokens: None,
                 thinking_tokens: None,
             })),
             Ok(ProviderDelta::Done(StopReason::EndTurn)),

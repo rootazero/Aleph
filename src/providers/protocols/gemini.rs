@@ -594,6 +594,7 @@ fn parse_gemini_sse_chunk(
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: None,
+            cache_creation_tokens: None,
             thinking_tokens: usage
                 .get("thoughtsTokenCount")
                 .and_then(|v| v.as_u64())
