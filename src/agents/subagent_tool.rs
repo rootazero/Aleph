@@ -357,15 +357,49 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         }
     }
 
-    // Run action — task is required
-    let task = task.ok_or_else(|| {
-        "missing required field: task (or provide request_id to check background status)"
-            .to_string()
-    })?;
+    // Parse batch_tasks early — when present, top-level `task` is optional
+    // since each sub-task carries its own.
+    let batch_tasks = input
+        .get("batch_tasks")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    let task = item.get("task")?.as_str()?.to_string();
+                    if task.trim().is_empty() {
+                        return None;
+                    }
+                    Some(BatchTask {
+                        task,
+                        agent_type: item
+                            .get("agent_type")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        model: item
+                            .get("model")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        timeout_secs: item.get("timeout_secs").and_then(|v| v.as_u64()),
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
+    let has_batch = batch_tasks.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
 
-    if task.trim().is_empty() {
-        return Err("task must not be empty".to_string());
-    }
+    // Run action — top-level `task` is required UNLESS batch_tasks supplies
+    // the actual sub-task descriptions.
+    let task = match task {
+        Some(t) if !t.trim().is_empty() => t,
+        Some(_) if has_batch => String::new(),
+        Some(_) => return Err("task must not be empty".to_string()),
+        None if has_batch => String::new(),
+        None => {
+            return Err(
+                "missing required field: task (or provide request_id to check background status)"
+                    .to_string(),
+            )
+        }
+    };
 
     let agent_type = input
         .get("agent_type")
@@ -419,32 +453,13 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         run_in_background
     };
 
-    let batch_tasks = input.get("batch_tasks").and_then(|v| v.as_array()).map(|arr| {
-        arr.iter()
-            .filter_map(|item| {
-                let task = item.get("task")?.as_str()?.to_string();
-                if task.trim().is_empty() {
-                    return None;
-                }
-                Some(BatchTask {
-                    task,
-                    agent_type: item.get("agent_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    model: item.get("model").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    timeout_secs: item.get("timeout_secs").and_then(|v| v.as_u64()),
-                })
-            })
-            .collect::<Vec<_>>()
-    });
-
-    let has_batch = batch_tasks.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
-    let run_in_background = if has_batch && !run_in_background {
-        tracing::info!(
-            "batch_tasks provided — overriding run_in_background to true for parallel execution"
-        );
-        true
-    } else {
-        run_in_background
-    };
+    // batch_tasks honors `run_in_background` exactly as the user provides it:
+    // - false (default / explicit): run all sub-tasks in parallel, await all,
+    //   return aggregated results. This matches the natural Think→Act loop
+    //   expectation that a tool call returns its result.
+    // - true: fire-and-forget — spawn all sub-tasks in background and return
+    //   a list of request_ids. The caller is then responsible for polling
+    //   `check_status` on each one. (Useful for very long-running batches.)
 
     Ok(SubagentAction::Run(RunArgs {
         task,
@@ -487,7 +502,7 @@ impl LoopTool for SubagentTool {
                 },
                 "batch_tasks": {
                     "type": "array",
-                    "description": "Array of independent sub-tasks to execute in parallel. Use this when the overall goal can be decomposed into multiple independent sub-tasks. Each item can specify its own task, agent_type, model, and timeout_secs. When provided, all tasks run in background automatically.",
+                    "description": "Array of independent sub-tasks to execute in parallel. Use this when the overall goal can be decomposed into multiple independent sub-tasks. Each item can specify its own task, agent_type, model, and timeout_secs. By default (run_in_background=false), all tasks run in parallel and the call awaits every one; the response carries the aggregated results array (no polling needed). Set run_in_background=true only if you want fire-and-forget request_ids to poll later via check_status.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -748,7 +763,10 @@ impl LoopTool for SubagentTool {
                     }
                 };
 
-                let mut request_ids = Vec::new();
+                // Resolve agent_def + per-task overrides up-front so we can
+                // share a single error path between the sync/async branches.
+                let mut prepared: Vec<(AgentDef, String, Option<String>, u64)> =
+                    Vec::with_capacity(batch.len());
                 for (idx, batch_task) in batch.iter().enumerate() {
                     let agent_def = if let Some(ref agent_type) = batch_task.agent_type {
                         match self.agent_registry.get(agent_type) {
@@ -790,24 +808,122 @@ impl LoopTool for SubagentTool {
                             }
                         }
                     };
+                    let model = batch_task.model.clone().or_else(|| args.model.clone());
+                    let timeout = batch_task.timeout_secs.unwrap_or(args.timeout_secs);
+                    prepared.push((agent_def, batch_task.task.clone(), model, timeout));
+                }
 
-                    let rid = self.spawn_background(
+                if args.run_in_background {
+                    // Async batch — spawn and return request_ids for later polling.
+                    let mut request_ids = Vec::with_capacity(prepared.len());
+                    for (agent_def, task, model, timeout) in prepared {
+                        let rid = self.spawn_background(
+                            agent_def,
+                            task,
+                            args.context_summary.clone(),
+                            model,
+                            timeout,
+                            child_chain.clone(),
+                        );
+                        request_ids.push(rid);
+                    }
+                    return ToolResult::Success {
+                        output: json!({
+                            "status": "batch_running_in_background",
+                            "request_ids": request_ids,
+                            "count": request_ids.len(),
+                            "message": format!(
+                                "{} sub-agents started in background. Use check_status with each request_id to retrieve results.",
+                                request_ids.len()
+                            )
+                        }),
+                    };
+                }
+
+                // Sync batch — fan out in parallel, await all, return aggregate.
+                tracing::info!(
+                    count = prepared.len(),
+                    "subagent: starting batch (sync parallel)"
+                );
+                let mut handles = Vec::with_capacity(prepared.len());
+                for (idx, (agent_def, task, model, timeout)) in prepared.into_iter().enumerate() {
+                    let runtime_config = AgentRuntimeConfig {
                         agent_def,
-                        batch_task.task.clone(),
-                        args.context_summary.clone(),
-                        batch_task.model.clone().or_else(|| args.model.clone()),
-                        batch_task.timeout_secs.unwrap_or(args.timeout_secs),
-                        child_chain.clone(),
-                    );
-                    request_ids.push(rid);
+                        task,
+                        context_summary: args.context_summary.clone(),
+                        model,
+                        timeout_secs: timeout,
+                    };
+
+                    let provider = self.provider.clone();
+                    let session = self.session.clone();
+                    let parent_tools = self.parent_tools.clone();
+                    let sandbox = self.sandbox.clone();
+                    let raw_memory_writer = self.raw_memory_writer.clone();
+                    let capture_registry = self.capture_registry.clone();
+                    let parent_agent_id = self.parent_agent_id.clone();
+                    let parent_session_id = self.parent_session_id.clone();
+                    let chain_for_task = child_chain.clone();
+
+                    handles.push(tokio::spawn(async move {
+                        let mut runtime = AgentRuntime::new(
+                            provider,
+                            chain_for_task,
+                            CancellationToken::new(),
+                            session,
+                            parent_tools,
+                            sandbox,
+                        )
+                        .with_parent_agent_id(parent_agent_id);
+                        if let Some(w) = raw_memory_writer {
+                            runtime = runtime.with_raw_memory_writer(w);
+                        }
+                        if let Some(reg) = capture_registry {
+                            runtime = runtime.with_capture_registry(reg);
+                        }
+                        if let Some(sid) = parent_session_id {
+                            runtime = runtime.with_parent_session_id(sid);
+                        }
+                        let outcome = AssertUnwindSafe(runtime.run(runtime_config))
+                            .catch_unwind()
+                            .await;
+                        (idx, outcome)
+                    }));
+                }
+
+                let mut results: Vec<Value> = Vec::with_capacity(handles.len());
+                for h in handles {
+                    let item = match h.await {
+                        Ok((idx, Ok(Ok(r)))) => json!({
+                            "index": idx,
+                            "status": "completed",
+                            "result": r.final_text.unwrap_or_else(|| "(no output)".to_string()),
+                            "iterations": r.iterations,
+                            "tool_calls_made": r.tool_calls_made,
+                        }),
+                        Ok((idx, Ok(Err(e)))) => json!({
+                            "index": idx,
+                            "status": "failed",
+                            "error": e,
+                        }),
+                        Ok((idx, Err(_panic))) => json!({
+                            "index": idx,
+                            "status": "panicked",
+                            "error": "sub-agent panicked",
+                        }),
+                        Err(join_err) => json!({
+                            "status": "join_error",
+                            "error": join_err.to_string(),
+                        }),
+                    };
+                    results.push(item);
                 }
 
                 return ToolResult::Success {
                     output: json!({
-                        "status": "batch_running_in_background",
-                        "request_ids": request_ids,
-                        "count": request_ids.len(),
-                        "message": format!("{} sub-agents started in background. Use check_status with each request_id to retrieve results.", request_ids.len())
+                        "status": "batch_completed",
+                        "count": results.len(),
+                        "results": results,
                     }),
                 };
             }
@@ -1456,5 +1572,104 @@ mod tests {
         let progress = output.get("progress").expect("progress field present");
         assert!(progress.is_array());
         assert_eq!(progress.as_array().unwrap().len(), 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // batch_tasks: parse + execute (sync vs background)
+    // -------------------------------------------------------------------------
+
+    /// `batch_tasks` must NOT silently force run_in_background=true.
+    /// Regression for an earlier behavior where batches always ran async,
+    /// causing the parent LLM to receive request_ids it didn't poll and
+    /// hallucinate sub-task results.
+    #[test]
+    fn batch_tasks_default_keeps_foreground() {
+        let action = parse_args(&json!({
+            "batch_tasks": [{"task": "a"}, {"task": "b"}]
+        }))
+        .unwrap();
+        match action {
+            SubagentAction::Run(args) => {
+                assert!(
+                    !args.run_in_background,
+                    "batch_tasks must respect default run_in_background=false"
+                );
+                assert_eq!(args.batch_tasks.as_ref().unwrap().len(), 2);
+            }
+            _ => panic!("expected SubagentAction::Run"),
+        }
+    }
+
+    /// Explicit `run_in_background=true` is preserved alongside batch_tasks.
+    #[test]
+    fn batch_tasks_explicit_background_preserved() {
+        let action = parse_args(&json!({
+            "batch_tasks": [{"task": "a"}],
+            "run_in_background": true
+        }))
+        .unwrap();
+        match action {
+            SubagentAction::Run(args) => assert!(args.run_in_background),
+            _ => panic!("expected SubagentAction::Run"),
+        }
+    }
+
+    /// Sync batch path: tasks fan out in parallel, all complete, response
+    /// carries an aggregated `results` array (no request_ids, no polling).
+    #[tokio::test]
+    async fn execute_batch_sync_returns_aggregated_results() {
+        let tool = make_tool();
+        let result = tool
+            .execute(json!({
+                "batch_tasks": [
+                    {"task": "first task", "agent_type": "explore"},
+                    {"task": "second task", "agent_type": "explore"}
+                ]
+            }))
+            .await;
+
+        match result {
+            ToolResult::Success { output } => {
+                assert_eq!(output["status"], "batch_completed");
+                assert_eq!(output["count"], 2);
+                let results = output["results"].as_array().expect("results is array");
+                assert_eq!(results.len(), 2);
+                for (i, r) in results.iter().enumerate() {
+                    assert_eq!(r["status"], "completed", "task {i} should be completed");
+                    assert_eq!(r["index"], i);
+                    assert!(r["result"].is_string(), "task {i} result must be string");
+                }
+            }
+            ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
+            _ => panic!("expected ToolResult::Success"),
+        }
+    }
+
+    /// Async batch path: explicit run_in_background=true returns request_ids
+    /// without awaiting sub-task completion.
+    #[tokio::test]
+    async fn execute_batch_background_returns_request_ids() {
+        let tool = make_tool();
+        let result = tool
+            .execute(json!({
+                "batch_tasks": [{"task": "x"}, {"task": "y"}],
+                "run_in_background": true
+            }))
+            .await;
+
+        match result {
+            ToolResult::Success { output } => {
+                assert_eq!(output["status"], "batch_running_in_background");
+                assert_eq!(output["count"], 2);
+                let ids = output["request_ids"].as_array().expect("request_ids is array");
+                assert_eq!(ids.len(), 2);
+                for id in ids {
+                    let s = id.as_str().expect("request_id is string");
+                    assert!(!s.is_empty());
+                }
+            }
+            ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
+            _ => panic!("expected ToolResult::Success"),
+        }
     }
 }

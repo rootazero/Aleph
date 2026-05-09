@@ -105,6 +105,19 @@ impl ScopedToolService {
     // -------------------------------------------------------------------------
 
     fn is_allowed(&self, name: &str) -> bool {
+        // Attached SubagentTool always passes the allow filter. It is appended
+        // to listings independently of `allowed` (which is derived from the
+        // builtin tool registry — subagent isn't registered there), so without
+        // this exception `list()` / `dispatcher_schema()` / `execute()` would
+        // hide subagent from the LLM whenever a non-empty allow set was
+        // configured (i.e. every real gateway path).
+        if self
+            .subagent_tool
+            .as_ref()
+            .is_some_and(|st| st.name() == name)
+        {
+            return true;
+        }
         self.allowed.is_empty() || self.allowed.contains(name)
     }
 
@@ -180,9 +193,11 @@ impl ToolService for ScopedToolService {
             defs.push(Self::subagent_definition(st.as_ref()));
         }
 
-        // Apply allowed-set filter.
+        // Apply allowed-set filter. `is_allowed` exempts the attached
+        // subagent so it survives the retain even when `allowed` is non-empty
+        // and doesn't list "subagent" (which it never does — see is_allowed).
         if !self.allowed.is_empty() {
-            defs.retain(|d| self.allowed.contains(&d.name));
+            defs.retain(|d| self.is_allowed(&d.name));
         }
 
         defs
@@ -280,7 +295,8 @@ impl ToolService for ScopedToolService {
             defs.push(Self::subagent_definition(st.as_ref()));
         }
         if !self.allowed.is_empty() {
-            defs.retain(|d| self.allowed.contains(&d.name));
+            // Mirror list() — subagent is exempt from allow-filter via is_allowed.
+            defs.retain(|d| self.is_allowed(&d.name));
         }
         let schema = to_dispatcher_form(&defs);
         self.schema_cache
@@ -475,6 +491,96 @@ mod tests {
             names.contains(&"subagent"),
             "subagent must be in list; got: {:?}",
             names
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 2b: subagent survives a non-empty allow set (production path).
+    //
+    // Regression for the gateway run_loop wiring: `allowed_names` is built
+    // from the builtin tool registry's tool definitions, which never contains
+    // "subagent" (SubagentTool is attached on top of the registry). Before
+    // the is_allowed exemption, list / describe / execute / dispatcher_schema
+    // all silently dropped subagent whenever the allow set was non-empty —
+    // i.e. every real LLM-facing call.
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn subagent_survives_non_empty_allow_set() {
+        use crate::agents::background_tracker::BackgroundAgentTracker;
+        use crate::agents::AgentRegistry;
+        use crate::harness::chain_context::ChainContext;
+        use crate::providers::adapter::{ProviderResponse, RequestPayload};
+        use crate::providers::AiProvider;
+        use std::future::Future;
+        use std::pin::Pin;
+
+        struct MockProvider;
+        impl AiProvider for MockProvider {
+            fn process<'a>(
+                &'a self,
+                _p: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
+            }
+            fn name(&self) -> &str {
+                "mock"
+            }
+            fn color(&self) -> &str {
+                "#000"
+            }
+        }
+
+        let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
+        let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
+            provider,
+            ChainContext::new(),
+            Arc::new(AgentRegistry::with_builtins()),
+            Arc::new(BackgroundAgentTracker::new()),
+            in_mem_session(),
+            Arc::new(NoopParentTools),
+            Arc::new(crate::sandbox::NoopSandbox),
+        ));
+
+        // Production-shaped allow set: only registry-known tool names, no
+        // "subagent" entry — exactly what gateway run_loop produces.
+        let registry = make_registry(&["read_file", "write_file"]);
+        let allowed: BTreeSet<String> = ["read_file".into(), "write_file".into()].into();
+        let svc = ScopedToolService::new(registry, allowed).with_subagent_tool(st);
+
+        // (1) list() exposes subagent
+        let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+        assert!(
+            names.iter().any(|n| n == "subagent"),
+            "list() must expose subagent under non-empty allow set; got {:?}",
+            names
+        );
+
+        // (2) describe() returns subagent (used when LLM probes the schema)
+        assert!(
+            svc.describe("subagent").await.is_some(),
+            "describe(subagent) must return Some under non-empty allow set"
+        );
+
+        // (3) dispatcher_schema (LLM-facing) includes subagent
+        let schema_names: Vec<String> = svc
+            .dispatcher_schema()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert!(
+            schema_names.iter().any(|n| n == "subagent"),
+            "dispatcher_schema must include subagent; got {:?}",
+            schema_names
+        );
+
+        // (4) execute("subagent", …) is not rejected as NotFound by the
+        //     allow-filter (mock provider lets the call complete).
+        let result = svc.execute("subagent", json!({ "task": "ping" })).await;
+        assert!(
+            !matches!(&result, Err(ToolError::NotFound { name }) if name == "subagent"),
+            "execute(subagent) must not be NotFound under non-empty allow set; got {:?}",
+            result
         );
     }
 
