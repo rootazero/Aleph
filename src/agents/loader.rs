@@ -74,6 +74,8 @@ struct UserFrontmatter {
     mode: Option<String>,
     #[serde(default)]
     source: Option<String>,
+    #[serde(default)]
+    mcp_servers: Vec<crate::agents::McpServerSpec>,
 }
 
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
@@ -161,6 +163,11 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
             }
         }
         def = def.with_allowed_tool_sets(fm.allowed_tool_sets);
+    }
+    if !fm.mcp_servers.is_empty() {
+        // Per design § 3.2.3: name-conflict detection deferred to spawn time
+        // (when global registry is stable). Loader only validates schema.
+        def = def.with_mcp_servers(fm.mcp_servers);
     }
     def.source = source;
 
@@ -327,5 +334,74 @@ mod tests {
         let agents = scan_dir(tmp.path(), AgentSource::User).unwrap();
         assert_eq!(agents.len(), 1, "only good.md should load");
         assert_eq!(agents[0].id, "good");
+    }
+}
+
+#[cfg(test)]
+mod stage_i_tests {
+    use super::*;
+    use crate::agents::{McpInlineConfig, McpServerSpec};
+    use std::io::Write;
+
+    fn write_agent_md(dir: &std::path::Path, id: &str, body: &str) -> std::path::PathBuf {
+        let path = dir.join(format!("{id}.md"));
+        let mut f = std::fs::File::create(&path).expect("create");
+        f.write_all(body.as_bytes()).expect("write");
+        path
+    }
+
+    #[test]
+    fn parse_file_picks_up_mcp_servers_inline_and_reference() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let yaml = r#"---
+id: scoped
+description: scoped agent
+when_to_use: when scoped MCP needed
+mcp_servers:
+  - type: reference
+    name: github
+  - type: inline
+    name: fresh
+    config:
+      command: node
+      args: ["server.js"]
+      env: {}
+---
+body
+"#;
+        let path = write_agent_md(tmp.path(), "scoped", yaml);
+        let def = parse_file(&path, AgentSource::User).expect("parse");
+
+        assert_eq!(def.mcp_servers.len(), 2);
+        assert_eq!(
+            def.mcp_servers[0],
+            McpServerSpec::Reference { name: "github".into() }
+        );
+        assert_eq!(
+            def.mcp_servers[1],
+            McpServerSpec::Inline {
+                name: "fresh".into(),
+                config: McpInlineConfig {
+                    command: "node".into(),
+                    args: vec!["server.js".into()],
+                    env: Default::default(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn parse_file_default_no_mcp_servers_is_back_compat() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let yaml = r#"---
+id: legacy
+description: legacy agent
+when_to_use: legacy
+---
+body
+"#;
+        let path = write_agent_md(tmp.path(), "legacy", yaml);
+        let def = parse_file(&path, AgentSource::User).expect("parse");
+        assert!(def.mcp_servers.is_empty());
     }
 }
