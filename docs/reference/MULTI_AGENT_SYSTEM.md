@@ -666,3 +666,79 @@ from Drop safety-net cleanup in monitoring dashboards.
 Worktree creation failure is **fail-loud**: spawner returns
 `"sub-agent failed: worktree create: ..."`. There is no fallback to shared
 cwd — isolation declared must be isolation honored.
+
+## Per-Agent MCP Scope (P3 Stage I)
+
+Subagents can declare which MCP servers they need:
+
+```yaml
+---
+id: git-research
+description: explores the local git repo
+when_to_use: when investigating commit history
+mcp_servers:
+  - type: reference
+    name: github
+  - type: inline
+    name: local-git-mcp
+    config:
+      command: /usr/local/bin/local-git-mcp
+      args: ["--readonly"]
+      env:
+        GIT_PAGER: cat
+---
+```
+
+`Reference` reuses a server already registered in the global `McpRegistry`.
+`Inline` spawns a fresh process owned by **only this subagent's lifetime** —
+not shared across agents, not warm-pooled.
+
+### Provisioning model
+
+When `mcp_servers` is non-empty, the spawner runs `McpScope::provision`
+**before** building `HarnessDeps`:
+
+1. Phase 1 — classify specs; validate `Inline { name }` does not collide
+   with a name already in the global registry (`McpScopeError::NameConflict`).
+2. Phase 2 — spawn all inline servers eagerly + in parallel via
+   `try_join_all`. Performance soft contract: ≤ 500ms.
+
+The scope's tools are layered **under** `AllowlistToolService`, so the
+recursion guard (Stage B) and per-agent denylist still apply on top.
+
+### Cleanup
+
+- **Success path**: explicit `scope.shutdown().await` after harness returns Ok.
+- **Error/timeout/panic**: `Drop` safety-net emits
+  `LoopTraceEvent::McpScopeCleaned { leaked: true }` and triggers
+  `InlineMcpHandle::Drop` for each inline process (sync OS thread → kill).
+
+### Trace events
+
+- `LoopTraceEvent::McpScopeAttached { agent_id, references, inline_count }`
+- `LoopTraceEvent::McpScopeCleaned { agent_id, leaked }`
+
+Both bridge to `aleph_protocol::AgentTraceEvent` with the same field shape.
+
+### Failure modes
+
+| Path | Mapping |
+|---|---|
+| Inline name vs global collision | `McpScopeError::NameConflict` → `"sub-agent failed: mcp scope: ..."` |
+| Reference name not in global | `McpScopeError::ReferenceNotFound` → same |
+| Inline process startup failure | `McpScopeError::InlineStartup` → same |
+| Inline process shutdown failure | `McpScopeError::InlineShutdown` → logged via `tracing::error`, harness Ok preserved |
+
+There is no fallback to "global-only" tools when scope provisioning fails —
+declared scope is honored or the spawn fails loudly (per design § 3 Q8).
+
+### Out of scope (P3 Stage I)
+
+- Inter-agent inline server sharing
+- Warm-pool / pre-spawn
+- Per-tool execution budgets
+- Health monitoring / heartbeat / restart
+- Seatbelt enforcement on inline processes
+- Inline-server tool surfacing (deferred — Task 8 known concern: `tools()` only includes Reference-projected globals at this stage; `McpServerConnection::list_tools()` is async and requires a snapshot-at-provision-time mechanism that is a follow-up)
+
+These are deferred per design § 5.
