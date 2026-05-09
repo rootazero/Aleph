@@ -31,6 +31,7 @@ pub use driver::{OsSandboxDriverTrait, OsSandboxProfile};
 pub use factory::{build_sandbox, NoopSandbox};
 pub use hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
 pub use platforms::{create_platform_driver, create_platform_driver_from_config};
+pub use worktree::{WorktreeError, WorktreeHandle, WorktreeSandbox};
 pub use policy::{
     EnvPolicy, FsPolicy, NetworkPolicy as PolicyNetworkPolicy, ProcessPolicy, SandboxPolicy,
 };

@@ -1,0 +1,246 @@
+//! P3 Stage H Task 9 — H-T1 happy-path integration test.
+//!
+//! Verifies that when `SpawnRequest.isolation == Some(IsolationMode::Worktree)`,
+//! `spawn()` provisions a fresh git worktree, runs the harness inside it, emits
+//! `WorktreeCreated` + `WorktreeCleanedUp{leaked:false}` trace events, and
+//! removes the worktree directory on successful exit.
+//!
+//! The test is skipped gracefully when `git` is unavailable or the working
+//! directory is not a git repository.
+
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
+
+use alephcore::agents::subagent_spawner::{spawn, SpawnRequest, SpawnerBase};
+use alephcore::agents::{AgentDef, AgentMode, IsolationMode};
+use alephcore::harness::chain_context::ChainContext;
+use alephcore::harness::trace::LoopTraceEvent;
+use alephcore::harness::TraceSink;
+use alephcore::providers::adapter::{ProviderResponse, RequestPayload};
+use alephcore::providers::AiProvider;
+use alephcore::sandbox::{Sandbox, SandboxCommand, SandboxError, SandboxOutput};
+use alephcore::session::events::ToolOutput;
+use alephcore::session::in_process::InProcessActorSessionService;
+use alephcore::session::service::SessionService;
+use alephcore::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+use alephcore::tools::service::{ToolDefinition, ToolError, ToolService};
+use alephcore::Result as AlephResult;
+
+// -- Helpers ------------------------------------------------------------------
+
+fn is_git_repo() -> bool {
+    std::process::Command::new("git")
+        .arg("rev-parse")
+        .arg("--git-dir")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn fresh_session_service() -> Arc<dyn SessionService> {
+    let conn = rusqlite::Connection::open_in_memory().expect("open in-memory sqlite");
+    migrate_add_session_events(&conn).expect("migrate session_events");
+    let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+    Arc::new(InProcessActorSessionService::new(store))
+}
+
+// -- Mocks --------------------------------------------------------------------
+
+struct InertSandbox;
+
+#[async_trait]
+impl Sandbox for InertSandbox {
+    async fn execute(&self, _cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
+        Ok(SandboxOutput {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            exit_code: Some(0),
+            signal: None,
+            truncated: false,
+            duration_ms: 0,
+        })
+    }
+}
+
+struct NoopTools;
+
+#[async_trait]
+impl ToolService for NoopTools {
+    async fn execute(
+        &self,
+        _name: &str,
+        _input: serde_json::Value,
+    ) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput {
+            value: serde_json::json!({}),
+            metadata: Default::default(),
+        })
+    }
+
+    async fn list(&self) -> Vec<ToolDefinition> {
+        Vec::new()
+    }
+
+    async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
+        None
+    }
+
+    fn dispatcher_schema(&self) -> Arc<[alephcore::dispatcher::ToolDefinition]> {
+        Arc::from(Vec::<alephcore::dispatcher::ToolDefinition>::new())
+    }
+}
+
+/// Returns a single terminal text response immediately so the harness exits
+/// after one Think turn.
+struct OneShotProvider;
+
+impl AiProvider for OneShotProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move { Ok(ProviderResponse::text_only("worktree-ok".to_string())) })
+    }
+
+    fn name(&self) -> &str {
+        "one-shot-worktree"
+    }
+
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+/// Captures every `LoopTraceEvent` emitted during the run.
+#[derive(Default)]
+struct CapturingSink {
+    events: Mutex<Vec<LoopTraceEvent>>,
+}
+
+impl TraceSink for CapturingSink {
+    fn on_trace(&self, event: &LoopTraceEvent) {
+        self.events.lock().unwrap().push(event.clone());
+    }
+
+    fn flush(&self) {}
+}
+
+// -- Test ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn h_t1_worktree_isolation_happy_path() {
+    // Skip if git is unavailable or cwd is not inside a git repo.
+    if !is_git_repo() {
+        eprintln!("h_t1_worktree_isolation_happy_path: skipped (not a git repo)");
+        return;
+    }
+
+    let sink = Arc::new(CapturingSink::default());
+    let sink_for_base: Arc<dyn TraceSink> = sink.clone();
+
+    let base = SpawnerBase {
+        session: fresh_session_service(),
+        parent_tools: Arc::new(NoopTools),
+        sandbox: Arc::new(InertSandbox),
+        provider: Arc::new(OneShotProvider),
+        chain: ChainContext::new(),
+        raw_memory_writer: None,
+        capture_registry: None,
+        parent_agent_id: None,
+        parent_session_id: None,
+        guardrails: None,
+        fallback_llm: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        trace_sink: Some(sink_for_base),
+        lane_scheduler: None,
+    };
+
+    let agent_def = AgentDef::new("worktree-probe", AgentMode::SubAgent)
+        .with_allowed_tools(vec!["*".into()]);
+
+    let req = SpawnRequest {
+        agent_def: &agent_def,
+        task: "worktree isolation test",
+        context_summary: None,
+        model: None,
+        timeout_secs: 30,
+        cancel: CancellationToken::new(),
+        isolation: Some(IsolationMode::Worktree),
+    };
+
+    let result = spawn(&base, req).await;
+    assert!(result.is_ok(), "spawn should succeed: {:?}", result.err());
+    assert_eq!(result.unwrap().final_text.as_deref(), Some("worktree-ok"));
+
+    // Inspect captured trace events.
+    let events = sink.events.lock().unwrap();
+
+    // Exactly one WorktreeCreated event.
+    let created_paths: Vec<PathBuf> = events
+        .iter()
+        .filter_map(|e| {
+            if let LoopTraceEvent::WorktreeCreated { path } = e {
+                Some(path.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(
+        created_paths.len(),
+        1,
+        "must emit exactly one WorktreeCreated event; got events: {events:?}"
+    );
+    let created_path = &created_paths[0];
+
+    // Exactly one WorktreeCleanedUp event, with leaked=false.
+    let cleaned_up: Vec<(PathBuf, bool)> = events
+        .iter()
+        .filter_map(|e| {
+            if let LoopTraceEvent::WorktreeCleanedUp { path, leaked } = e {
+                Some((path.clone(), *leaked))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(
+        cleaned_up.len(),
+        1,
+        "must emit exactly one WorktreeCleanedUp event; got events: {events:?}"
+    );
+    let (cleanup_path, leaked) = &cleaned_up[0];
+    assert!(
+        !leaked,
+        "WorktreeCleanedUp must have leaked=false on happy path"
+    );
+
+    // Both path fields must match.
+    assert_eq!(
+        created_path, cleanup_path,
+        "WorktreeCreated.path must equal WorktreeCleanedUp.path"
+    );
+
+    // The worktree dir name must contain "aleph-subagent-".
+    let dir_name = created_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    assert!(
+        dir_name.contains("aleph-subagent-"),
+        "worktree dir name {dir_name:?} should contain 'aleph-subagent-'"
+    );
+
+    // The worktree directory must no longer exist on disk.
+    assert!(
+        !created_path.exists(),
+        "worktree dir {created_path:?} must be removed after successful spawn"
+    );
+}

@@ -162,6 +162,26 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         None
     };
 
+    // P3 Stage H — provision worktree if requested. The handle is held in the
+    // outer scope so Drop fires as a safety net on cancel/panic/timeout/error.
+    // Explicit cleanup happens on the success path (after harness completes Ok).
+    let worktree_handle: Option<crate::sandbox::WorktreeHandle> = match req.isolation {
+        Some(crate::agents::IsolationMode::Worktree) => {
+            let repo_root = std::env::current_dir()
+                .map_err(|e| format!("sub-agent failed: cwd: {e}"))?;
+            let label = &req.agent_def.id;
+            let handle = crate::sandbox::worktree::create(
+                &repo_root,
+                label,
+                base.trace_sink.clone(),
+            )
+            .await
+            .map_err(|e| format!("sub-agent failed: worktree create: {e}"))?;
+            Some(handle)
+        }
+        None => None,
+    };
+
     let result: Result<LoopRunResult, String> = async {
         // 2. Unique ephemeral session key for this sub-agent.
         let child_id = ephemeral_for(&req.agent_def.id);
@@ -244,10 +264,20 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .transpose()
             .map_err(|_| "max_iterations exceeds platform limit".to_string())?;
 
+        // P3 Stage H — isolation override: when a worktree is provisioned for
+        // this child, swap in a WorktreeSandbox so all command execution runs
+        // at the worktree path with CARGO_TARGET_DIR redirected.
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> = match worktree_handle.as_ref() {
+            Some(h) => Arc::new(crate::sandbox::WorktreeSandbox::new(
+                h.path().to_path_buf(),
+            )),
+            None => base.sandbox.clone(),
+        };
+
         let deps = HarnessDeps {
             session: base.session.clone(),
             tools: scoped_tools,
-            sandbox: base.sandbox.clone(),
+            sandbox,
             llm,
             verifier_chain: None,
             context_budget: None,
@@ -345,6 +375,21 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         scheduler
             .on_run_complete(&lane_run_id, crate::scheduler::Lane::Subagent, Some(guard))
             .await;
+    }
+
+    // P3 Stage H — explicit cleanup on the success path. Errors and cancels
+    // leak the handle to the Drop safety net (which logs `leaked: true` via
+    // TraceSink). Lane is already released above so cleanup does not extend
+    // lane occupancy.
+    if result.is_ok() {
+        if let Some(h) = worktree_handle {
+            if let Err(e) = h.cleanup().await {
+                tracing::error!(
+                    error = %e,
+                    "subagent worktree cleanup failed; Drop safety net will retry"
+                );
+            }
+        }
     }
 
     result
