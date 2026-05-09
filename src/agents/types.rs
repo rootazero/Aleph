@@ -46,6 +46,37 @@ pub enum IsolationMode {
     Worktree,
 }
 
+/// Inline MCP server config carried in `McpServerSpec::Inline` (P3 Stage I).
+///
+/// Spawned fresh for the subagent's lifetime; not shared across agents.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct McpInlineConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+}
+
+/// Per-agent MCP server scope (P3 Stage I).
+///
+/// `Inline` spawns a fresh process owned by this subagent. `Reference`
+/// reuses a server already registered in the global `McpRegistry`.
+/// Name-conflict detection (Inline name vs global) happens at spawn
+/// time (`McpScope::provision`), not at loader time — see design § 3
+/// Q2 for the rationale.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum McpServerSpec {
+    Inline {
+        name: String,
+        config: McpInlineConfig,
+    },
+    Reference {
+        name: String,
+    },
+}
+
 /// Context mode for sub-agents
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ContextMode {
@@ -477,5 +508,31 @@ mod tests {
         assert_eq!(json, r#"{"kind":"worktree"}"#);
         let parsed: IsolationMode = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, IsolationMode::Worktree);
+    }
+
+    #[test]
+    fn mcp_server_spec_inline_serde_round_trip() {
+        let spec = McpServerSpec::Inline {
+            name: "my-server".into(),
+            config: McpInlineConfig {
+                command: "node".into(),
+                args: vec!["server.js".into()],
+                env: std::collections::HashMap::new(),
+            },
+        };
+        let json = serde_json::to_string(&spec).expect("serialize");
+        assert!(json.contains(r#""type":"inline""#));
+        assert!(json.contains(r#""name":"my-server""#));
+        let parsed: McpServerSpec = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, spec);
+    }
+
+    #[test]
+    fn mcp_server_spec_reference_serde_round_trip() {
+        let spec = McpServerSpec::Reference { name: "github".into() };
+        let json = serde_json::to_string(&spec).expect("serialize");
+        assert_eq!(json, r#"{"type":"reference","name":"github"}"#);
+        let parsed: McpServerSpec = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, spec);
     }
 }
