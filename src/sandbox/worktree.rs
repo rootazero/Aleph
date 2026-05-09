@@ -192,6 +192,69 @@ async fn remove_worktree(repo_root: &Path, path: &Path) -> Result<(), WorktreeEr
     Ok(())
 }
 
+/// Minimal Sandbox impl for Stage H — runs commands at worktree path with
+/// `CARGO_TARGET_DIR=<worktree>/target` injected. No seatbelt, no capability
+/// enforcement (Stage H scope is workspace isolation only — see § 2.2.1
+/// Architectural Scope Lock).
+pub struct WorktreeSandbox {
+    worktree_path: std::path::PathBuf,
+}
+
+impl WorktreeSandbox {
+    pub fn new(worktree_path: std::path::PathBuf) -> Self {
+        Self { worktree_path }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::sandbox::Sandbox for WorktreeSandbox {
+    async fn execute(
+        &self,
+        command: crate::sandbox::SandboxCommand,
+    ) -> Result<crate::sandbox::SandboxOutput, crate::sandbox::SandboxError> {
+        let started = std::time::Instant::now();
+
+        let mut cmd = tokio::process::Command::new(&command.program);
+        cmd.args(&command.args)
+            .current_dir(&self.worktree_path)
+            .envs(command.env.iter())
+            .env("CARGO_TARGET_DIR", self.worktree_path.join("target"));
+
+        let exec = if let Some(timeout) = command.timeout {
+            match tokio::time::timeout(timeout, cmd.output()).await {
+                Ok(Ok(out)) => out,
+                Ok(Err(e)) => return Err(crate::sandbox::SandboxError::Io(e.to_string())),
+                Err(_) => {
+                    return Err(crate::sandbox::SandboxError::Timeout {
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                    });
+                }
+            }
+        } else {
+            cmd.output()
+                .await
+                .map_err(|e| crate::sandbox::SandboxError::Io(e.to_string()))?
+        };
+
+        #[cfg(unix)]
+        let signal = {
+            use std::os::unix::process::ExitStatusExt;
+            exec.status.signal()
+        };
+        #[cfg(not(unix))]
+        let signal: Option<i32> = None;
+
+        Ok(crate::sandbox::SandboxOutput {
+            stdout: exec.stdout,
+            stderr: exec.stderr,
+            exit_code: exec.status.code(),
+            signal,
+            truncated: false,
+            duration_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +326,41 @@ mod tests {
             !path.exists(),
             "Drop safety-net must remove leaked worktree at {path:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn worktree_sandbox_executes_at_worktree_path() {
+        let repo_root = std::env::current_dir().expect("cwd");
+        let h = create(&repo_root, "task7-sandbox", None)
+            .await
+            .expect("create");
+        let expected_path = h.path().to_path_buf();
+        let sandbox = WorktreeSandbox::new(expected_path.clone());
+
+        let cmd = crate::sandbox::SandboxCommand {
+            session_id: crate::session::service::SessionId::main("task7-sandbox-test"),
+            program: "pwd".into(),
+            args: vec![],
+            env: std::collections::HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: crate::sandbox::SandboxCapabilities::default(),
+            timeout: None,
+        };
+        use crate::sandbox::Sandbox as _;
+        let out = sandbox.execute(cmd).await.expect("execute");
+
+        let stdout_str = String::from_utf8_lossy(&out.stdout);
+        let actual = stdout_str.trim();
+        // The test fixture passes if pwd's output ends with the worktree
+        // dirname OR exactly equals the canonicalized path. macOS resolves
+        // /var/.../T to /private/var/.../T so we accept both shapes.
+        let expected_basename = expected_path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            actual.ends_with(expected_basename) || actual == expected_path.to_string_lossy(),
+            "pwd output {actual:?} should match worktree path {expected_path:?}"
+        );
+
+        h.cleanup().await.expect("cleanup");
     }
 }
