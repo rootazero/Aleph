@@ -9,6 +9,7 @@ follows: 2026-05-08-phase6-config-wiring-design.md
 ---
 
 ✅ P1 Shipped: <local-only, no PR url> on 2026-05-08
+✅ P2 Shipped: 37c5bb759 on 2026-05-09 (Stage E: cb5317474 + 99613bcb1 + 344a9623f · Stage F: 3a9b7abd5 · Stage G: d0223dd4c + 37c5bb759 polish)
 
 # Aleph Subagent Uplift Roadmap — Master Spec
 
@@ -344,7 +345,7 @@ cancellation 是基础设施可靠性，不依赖模型推理。R10 Future-Proof
 
 ### Stage E — 文件系统 agent 定义加载
 
-**Status**: 📋 Planned · plan: TBD（P2 phase 时认领）
+**Status**: ✅ Shipped: cb5317474 on 2026-05-09 (+ 99613bcb1 R10-restore revert · 344a9623f doc fix) · plan: docs/superpowers/plans/2026-05-09-subagent-uplift-p2-plan.md
 **Depends on**: B（递归 guard 必须就绪 — 外部加载的 agent 可能 misconfig allowlist）
 **Risk class**: medium（新加载路径 + frontmatter 解析）
 **Phase**: P2（补齐）
@@ -394,7 +395,7 @@ markdown frontmatter 是稳定数据格式，不依赖模型语义。R10 Future-
 
 ### Stage F — Subagent 流式进度事件
 
-**Status**: 📋 Planned · plan: TBD
+**Status**: ✅ Shipped: 3a9b7abd5 on 2026-05-09 · plan: docs/superpowers/plans/2026-05-09-subagent-uplift-p2-plan.md
 **Depends on**: A（trace_sink wiring 必须就绪 — F 仅消费）
 **Risk class**: medium（事件流量观测 + 父子转发链）
 **Phase**: P2（补齐）
@@ -439,7 +440,7 @@ progress 事件是基础设施可观测性，不参与认知。R10 Future-Proof 
 
 ### Stage G — 每 agent 工具集语义命名
 
-**Status**: 📋 Planned · plan: TBD
+**Status**: ✅ Shipped: d0223dd4c on 2026-05-09 (+ 37c5bb759 review polish) · plan: docs/superpowers/plans/2026-05-09-subagent-uplift-p2-plan.md
 **Depends on**: B（allowlist 改造同一份代码）
 **Risk class**: low（配置组织 refactor + 兼容字段）
 **Phase**: P2（补齐）
