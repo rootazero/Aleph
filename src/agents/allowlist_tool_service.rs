@@ -53,7 +53,19 @@ impl ToolService for AllowlistToolService {
     }
 
     fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
-        std::sync::Arc::from([])
+        // Filter the parent's dispatcher schema down to what this child agent
+        // is allowed to see. Returning an empty slice here (the previous
+        // behavior) silently hid every tool from the child LLM — `list()` /
+        // `describe()` / `execute()` were properly filtered, but the LLM-facing
+        // schema served by Orchestrator goes through `dispatcher_schema()`,
+        // so subagents got an empty tool catalog and gave up after one turn.
+        let inner = self.inner.dispatcher_schema();
+        let filtered: Vec<crate::dispatcher::ToolDefinition> = inner
+            .iter()
+            .filter(|d| self.agent_def.is_tool_allowed(&d.name))
+            .cloned()
+            .collect();
+        std::sync::Arc::from(filtered)
     }
 }
 
@@ -94,7 +106,20 @@ mod tests {
             self.list().await.into_iter().find(|d| d.name == name)
         }
         fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
-            std::sync::Arc::from([])
+            // Mirror list() so tests can verify the AllowlistToolService
+            // wrapper passes its own filter through dispatcher_schema().
+            let defs: Vec<crate::dispatcher::ToolDefinition> = ["read", "write", "exec"]
+                .iter()
+                .map(|n| {
+                    crate::dispatcher::ToolDefinition::new(
+                        *n,
+                        "fake",
+                        json!({}),
+                        crate::dispatcher::ToolCategory::Builtin,
+                    )
+                })
+                .collect();
+            std::sync::Arc::from(defs)
         }
     }
 
@@ -156,5 +181,31 @@ mod tests {
         let svc = AllowlistToolService::new(Arc::new(FakeTools), def);
         assert!(svc.describe("read").await.is_some());
         assert!(svc.describe("exec").await.is_none());
+    }
+
+    /// Regression — `dispatcher_schema` previously returned an empty slice,
+    /// hiding every tool from the LLM-facing dispatcher pipeline. The wrapper
+    /// must filter the inner schema using the same allowlist as `list()` /
+    /// `describe()` / `execute()`.
+    #[test]
+    fn dispatcher_schema_filters_to_allowed_subset() {
+        let def = agent_with_allowed(vec!["read", "write"]);
+        let svc = AllowlistToolService::new(Arc::new(FakeTools), def);
+        let schema = svc.dispatcher_schema();
+        let names: Vec<&str> = schema.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["read", "write"],
+            "dispatcher_schema must surface the allowed subset, not the empty slice"
+        );
+    }
+
+    /// Wildcard agent should see every parent tool through dispatcher_schema.
+    #[test]
+    fn dispatcher_schema_wildcard_passes_everything_through() {
+        let def = agent_with_allowed(vec!["*"]);
+        let svc = AllowlistToolService::new(Arc::new(FakeTools), def);
+        let schema = svc.dispatcher_schema();
+        assert_eq!(schema.len(), 3);
     }
 }
