@@ -36,6 +36,16 @@ impl std::fmt::Display for AgentMode {
     }
 }
 
+/// Subagent execution isolation mode (P3 Stage H).
+///
+/// `Worktree` runs the subagent in a fresh git worktree under `$TMPDIR`
+/// with a separate `target/` dir; cleanup is guaranteed on every exit path.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IsolationMode {
+    Worktree,
+}
+
 /// Context mode for sub-agents
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ContextMode {
@@ -458,5 +468,14 @@ mod tests {
         // Unknown set contributes nothing; flat list still works:
         assert!(def.is_tool_allowed("read_file"));
         assert!(!def.is_tool_allowed("grep"));
+    }
+
+    #[test]
+    fn isolation_mode_serde_round_trip_worktree() {
+        let mode = IsolationMode::Worktree;
+        let json = serde_json::to_string(&mode).expect("serialize");
+        assert_eq!(json, r#"{"kind":"worktree"}"#);
+        let parsed: IsolationMode = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, IsolationMode::Worktree);
     }
 }
