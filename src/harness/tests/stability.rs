@@ -559,10 +559,14 @@ async fn consecutive_total_failure_caps_loop() {
     assert!(harness.hit_limit(), "hit_limit should be true after cap");
 }
 
-use crate::harness::trait_def::TurnPhase;
+// Phase-2: per-turn timeouts (Think + Act) and the cross-turn stall watchdog
+// route through Ok(HitLimit) instead of Err(HarnessError::StalledTurn|Stalled)
+// so the gateway maps them to a friendly i18n ErrLoopExhausted reply rather
+// than a FlowError::Internal red banner. Phase + tool_name detail is now
+// emitted via tracing::warn! at the watchdog trip site, not the public API.
 
 #[tokio::test]
-async fn think_timeout_fires_with_phase_think() {
+async fn think_phase_timeout_terminates_via_hit_limit() {
     let provider: Arc<dyn AiProvider> = Arc::new(HangingProvider);
     let (session, sid) = fresh_session("think-timeout").await;
     let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
@@ -581,16 +585,11 @@ async fn think_timeout_fires_with_phase_think() {
     .await
     .expect("must return within 2s");
 
-    match result {
-        Err(HarnessError::StalledTurn { phase, elapsed }) => {
-            assert_eq!(phase, TurnPhase::Think, "phase must be Think");
-            assert!(
-                elapsed >= std::time::Duration::from_millis(150),
-                "elapsed {elapsed:?}"
-            );
-        }
-        other => panic!("expected StalledTurn(Think), got {other:?}"),
-    }
+    result.expect("Phase-2: Think-phase timeout must surface as Ok(HitLimit), not Err(StalledTurn)");
+    assert!(
+        harness.hit_limit(),
+        "hit_limit must be true after Think turn timeout",
+    );
     assert!(
         started.elapsed() < std::time::Duration::from_millis(800),
         "harness must abort within ~3× timeout, took {:?}",
@@ -599,7 +598,7 @@ async fn think_timeout_fires_with_phase_think() {
 }
 
 #[tokio::test]
-async fn act_timeout_fires_with_phase_act_and_tool_name() {
+async fn act_phase_timeout_terminates_via_hit_limit() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let provider: Arc<dyn AiProvider> = Arc::new(OneShotToolProvider {
         name: "slow_tool".into(),
@@ -621,15 +620,11 @@ async fn act_timeout_fires_with_phase_act_and_tool_name() {
     .await
     .expect("must return within 2s");
 
-    match result {
-        Err(HarnessError::StalledTurn { phase, .. }) => match phase {
-            TurnPhase::Act { tool_name } => {
-                assert_eq!(tool_name, "slow_tool");
-            }
-            other => panic!("expected Act phase, got {other:?}"),
-        },
-        other => panic!("expected StalledTurn(Act), got {other:?}"),
-    }
+    result.expect("Phase-2: Act-phase timeout must surface as Ok(HitLimit), not Err(StalledTurn)");
+    assert!(
+        harness.hit_limit(),
+        "hit_limit must be true after Act turn timeout (slow_tool)",
+    );
 }
 
 #[tokio::test]
@@ -693,10 +688,12 @@ async fn outcome_mapping_for_stalled_turn() {
             _ => None,
         })
         .expect("SessionCompleted must be emitted");
+    // Phase-2: StalledTurn now maps to HitLimit (not Cancelled) so the
+    // gateway can render the friendly i18n ErrLoopExhausted reply.
     assert_eq!(
         session_completed,
-        crate::harness::trace::LoopTraceSessionOutcome::Cancelled,
-        "StalledTurn should map to Cancelled outcome",
+        crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
+        "Phase-2: StalledTurn must map to HitLimit outcome",
     );
 }
 
@@ -752,9 +749,12 @@ async fn cross_turn_stall_still_works() {
     .await
     .expect("must return within 2s");
 
+    // Phase-2: cross-turn stall now routes through Ok(HitLimit) so the
+    // gateway maps it to friendly i18n ErrLoopExhausted, not a fatal banner.
+    result.expect("Phase-2: stall must surface as Ok(HitLimit), not Err(Stalled)");
     assert!(
-        matches!(result, Err(HarnessError::Stalled { .. })),
-        "expected Stalled, got {result:?}"
+        harness.hit_limit(),
+        "hit_limit must be true after cross-turn stall trip",
     );
 }
 

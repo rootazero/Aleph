@@ -856,7 +856,19 @@ impl Harness for AgentHarness {
             if let Some(ref tracker) = self.stall_tracker {
                 if tracker.is_stalled() {
                     let elapsed = tracker.elapsed().await;
-                    break Err(HarnessError::Stalled { elapsed });
+                    // Phase-2: stall is a soft termination, not a fatal error.
+                    // Surfacing as HarnessError::Stalled would route to
+                    // FlowError::Internal → DispatchFailure::Fatal (red banner).
+                    // Convert to Ok(HitLimit) so gateway maps to friendly i18n
+                    // ErrLoopExhausted parity with consecutive_failure_cap.
+                    tracing::warn!(
+                        ?session_id,
+                        ?elapsed,
+                        "stall watchdog tripped; forcing Done with hit_limit",
+                    );
+                    self.hit_limit.store(true, Ordering::Relaxed);
+                    callback.on_complete();
+                    break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
             }
             match self
@@ -870,6 +882,20 @@ impl Harness for AgentHarness {
                 )
                 .await
             {
+                // Phase-2: per-turn timeout (StalledTurn) is a soft termination,
+                // mirror the top-of-loop stall handling so it lands in the
+                // friendly Ok(HitLimit) path instead of FlowError::Internal.
+                Err(HarnessError::StalledTurn { phase, elapsed }) => {
+                    tracing::warn!(
+                        ?session_id,
+                        ?phase,
+                        ?elapsed,
+                        "per-turn timeout tripped; forcing Done with hit_limit",
+                    );
+                    self.hit_limit.store(true, Ordering::Relaxed);
+                    callback.on_complete();
+                    break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
+                }
                 Err(e) => break Err(e),
                 Ok((TurnState::Continue, executed, is_veto)) => {
                     if let Some(ref tracker) = self.stall_tracker {
@@ -1515,6 +1541,147 @@ mod tests {
             calls.load(std::sync::atomic::Ordering::SeqCst),
             5,
             "provider should run 4 tool turns + 1 final text turn = 5 calls",
+        );
+    }
+
+    /// Phase-2 regression: stall watchdog must route through `Ok(HitLimit)`
+    /// so the gateway maps it to friendly i18n `ErrLoopExhausted`. Pre-Phase-2
+    /// this returned `Err(HarnessError::Stalled)`, which surfaced as
+    /// `FlowError::Internal` → `DispatchFailure::Fatal` (red error banner).
+    #[tokio::test]
+    async fn stall_watchdog_returns_ok_with_hit_limit_not_err() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider: Arc<dyn AiProvider> = Arc::new(LoopingProvider {
+            calls: calls.clone(),
+        });
+
+        let (session, sid) = fresh_session("test-stall-ok-path").await;
+        let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
+
+        let deps = HarnessDeps {
+            session,
+            tools,
+            sandbox,
+            llm: provider,
+            verifier_chain: None,
+            context_budget: None,
+            context_compactor: None,
+            skill_prefetcher: None,
+            trace_sink: None,
+            system_prompt: None,
+            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+            chain_context: crate::harness::chain_context::ChainContext::default(),
+            guardrails: None,
+            fallback_llm: None,
+            max_iterations: None,
+            power: None,
+            stall_config: Some(crate::harness::StallConfig {
+                timeout: std::time::Duration::from_nanos(1),
+                check_interval: std::time::Duration::from_nanos(1),
+            }),
+            consecutive_failure_cap: None,
+            turn_timeout: None,
+        };
+        let harness = super::AgentHarness::new(deps);
+        let mut cb = NoopHarnessCallback;
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        // Sleep > timeout so iter 0's top-of-loop check definitely trips.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            harness.run(&sid, &mut cb, &cancel),
+        )
+        .await
+        .expect("harness.run exceeded 2s timeout — stall path didn't terminate");
+
+        outcome.expect("stall must surface as Ok(HitLimit), not Err(Stalled)");
+        assert!(
+            harness.hit_limit(),
+            "hit_limit must be true after stall watchdog trip",
+        );
+    }
+
+    /// Provider that sleeps for `sleep` duration before responding. Used to
+    /// trip the per-turn `turn_timeout` watchdog.
+    struct SleepingProvider {
+        sleep: std::time::Duration,
+    }
+
+    impl AiProvider for SleepingProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let sleep = self.sleep;
+            Box::pin(async move {
+                tokio::time::sleep(sleep).await;
+                Ok(ProviderResponse::text_only("done".to_string()))
+            })
+        }
+
+        fn name(&self) -> &str {
+            "sleeping"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Phase-2 regression: per-turn `turn_timeout` must route through
+    /// `Ok(HitLimit)` like stall — pre-Phase-2 it returned
+    /// `Err(HarnessError::StalledTurn)` and surfaced as a fatal banner.
+    #[tokio::test]
+    async fn turn_timeout_returns_ok_with_hit_limit_not_err() {
+        let provider: Arc<dyn AiProvider> = Arc::new(SleepingProvider {
+            sleep: std::time::Duration::from_millis(200),
+        });
+
+        let (session, sid) = fresh_session("test-turn-timeout-ok-path").await;
+        let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
+
+        let deps = HarnessDeps {
+            session,
+            tools,
+            sandbox,
+            llm: provider,
+            verifier_chain: None,
+            context_budget: None,
+            context_compactor: None,
+            skill_prefetcher: None,
+            trace_sink: None,
+            system_prompt: None,
+            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+            chain_context: crate::harness::chain_context::ChainContext::default(),
+            guardrails: None,
+            fallback_llm: None,
+            max_iterations: None,
+            power: None,
+            stall_config: None,
+            consecutive_failure_cap: None,
+            // Provider sleeps 200ms; turn budget 20ms guarantees the LLM
+            // call wraps with `tokio::time::timeout` and trips StalledTurn.
+            turn_timeout: Some(std::time::Duration::from_millis(20)),
+        };
+        let harness = super::AgentHarness::new(deps);
+        let mut cb = NoopHarnessCallback;
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            harness.run(&sid, &mut cb, &cancel),
+        )
+        .await
+        .expect("harness.run exceeded 2s timeout — turn_timeout path didn't terminate");
+
+        outcome.expect("turn_timeout must surface as Ok(HitLimit), not Err(StalledTurn)");
+        assert!(
+            harness.hit_limit(),
+            "hit_limit must be true after per-turn timeout trip",
         );
     }
 }
