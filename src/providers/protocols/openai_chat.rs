@@ -278,6 +278,11 @@ impl ProtocolAdapter for OpenAiProtocol {
                     let mut params = td.parameters.clone();
                     if let Some(obj) = params.as_object_mut() {
                         obj.entry("type").or_insert_with(|| json!("object"));
+                        // Strict OpenAI-compatible backends (T8Star, etc.) reject
+                        // object schemas that omit `properties`. schemars elides
+                        // the field entirely when every struct field is hidden
+                        // via #[schemars(skip)] (e.g. AgentListArgs).
+                        obj.entry("properties").or_insert_with(|| json!({}));
                     }
                     // Migrate schemars draft-07 schemas to draft 2020-12 for
                     // Bedrock and other strict backends.
