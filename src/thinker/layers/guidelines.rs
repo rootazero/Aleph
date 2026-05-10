@@ -38,7 +38,9 @@ impl PromptLayer for GuidelinesLayer {
         output.push_str("6. Always close the loop — every turn ends with a reply to your caller; never finish on a tool call alone\n");
         output.push_str("7. 2-strike rule — if the same class of error repeats twice (same path missing, same query empty, same command failing), stop and report what you tried plus your best guess at the cause\n");
         output.push_str("8. Subagent error/timeout → report, never spawn replacement subagents on your own; summarize all sub-results (success + errors + timeouts) back to your caller\n");
-        output.push_str("9. Suspected typo > silent search — if a caller-supplied path/identifier doesn't exist on first lookup, list nearby candidates and ask, don't fan out tool calls guessing\n\n");
+        output.push_str("9. Suspected typo > silent search — if a caller-supplied path/identifier doesn't exist on first lookup, list nearby candidates and ask, don't fan out tool calls guessing\n");
+        output.push_str("10. No-repeat rule — before issuing a tool call, scan THIS turn's tool_results for an identical (tool_name, arguments) pair; if you already have the answer in context, use it directly instead of re-calling. The harness will short-circuit duplicates anyway, so re-issuing wastes a turn\n");
+        output.push_str("11. Aggregate before iterating — for \"count lines / files / bytes in directory\" use `file_ops` operation `stats` (one call returns per-file + total); do NOT loop over `file_read` to count\n\n");
     }
 }
 
@@ -67,6 +69,8 @@ mod tests {
         assert!(out.contains("2-strike rule"));
         assert!(out.contains("Subagent error/timeout"));
         assert!(out.contains("Suspected typo"));
+        assert!(out.contains("No-repeat rule"));
+        assert!(out.contains("Aggregate before iterating"));
     }
 
     #[test]

@@ -1,0 +1,96 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DreamingConfig {
+    #[serde(default = "super::defaults::default_dreaming_enabled")]
+    pub enabled: bool,
+    #[serde(default = "super::defaults::default_dreaming_idle_threshold_seconds")]
+    pub idle_threshold_seconds: u32,
+    #[serde(default = "super::defaults::default_dreaming_window_start")]
+    pub window_start_local: String,
+    #[serde(default = "super::defaults::default_dreaming_window_end")]
+    pub window_end_local: String,
+    #[serde(default = "super::defaults::default_dreaming_max_duration_seconds")]
+    pub max_duration_seconds: u32,
+    #[serde(default = "super::defaults::default_weekly_enabled")]
+    pub weekly_enabled: bool,
+    #[serde(default = "super::defaults::default_weekly_interval_days")]
+    pub weekly_interval_days: u32,
+    #[serde(default = "super::defaults::default_drift_max_pairs_per_run")]
+    pub drift_max_pairs_per_run: usize,
+    #[serde(default = "super::defaults::default_synthesis_min_cluster_size")]
+    pub synthesis_min_cluster_size: usize,
+    #[serde(default = "super::defaults::default_synthesis_max_insights")]
+    pub synthesis_max_insights: usize,
+    #[serde(default = "super::defaults::default_skill_distill_max_per_cycle")]
+    pub skill_distill_max_per_cycle: usize,
+    #[serde(default = "super::defaults::default_feedback_distill_max_per_cycle")]
+    pub feedback_distill_max_per_cycle: usize,
+    #[serde(default = "super::defaults::default_feedback_distill_min_candidates")]
+    pub feedback_distill_min_candidates: usize,
+    #[serde(default = "super::defaults::default_feedback_lookback")]
+    pub feedback_lookback: usize,
+}
+
+impl Default for DreamingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: super::defaults::default_dreaming_enabled(),
+            idle_threshold_seconds: super::defaults::default_dreaming_idle_threshold_seconds(),
+            window_start_local: super::defaults::default_dreaming_window_start(),
+            window_end_local: super::defaults::default_dreaming_window_end(),
+            max_duration_seconds: super::defaults::default_dreaming_max_duration_seconds(),
+            weekly_enabled: super::defaults::default_weekly_enabled(),
+            weekly_interval_days: super::defaults::default_weekly_interval_days(),
+            drift_max_pairs_per_run: super::defaults::default_drift_max_pairs_per_run(),
+            synthesis_min_cluster_size: super::defaults::default_synthesis_min_cluster_size(),
+            synthesis_max_insights: super::defaults::default_synthesis_max_insights(),
+            skill_distill_max_per_cycle: super::defaults::default_skill_distill_max_per_cycle(),
+            feedback_distill_max_per_cycle: super::defaults::default_feedback_distill_max_per_cycle(),
+            feedback_distill_min_candidates: super::defaults::default_feedback_distill_min_candidates(),
+            feedback_lookback: super::defaults::default_feedback_lookback(),
+        }
+    }
+}
+
+impl DreamingConfig {
+    pub fn weekly_enabled(&self) -> bool {
+        self.weekly_enabled
+    }
+    pub fn weekly_interval_days(&self) -> u32 {
+        self.weekly_interval_days
+    }
+    pub fn drift_max_pairs_per_run(&self) -> usize {
+        self.drift_max_pairs_per_run
+    }
+    pub fn synthesis_min_cluster_size(&self) -> usize {
+        self.synthesis_min_cluster_size
+    }
+    pub fn synthesis_max_insights(&self) -> usize {
+        self.synthesis_max_insights
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MemoryDecayPolicy {
+    #[serde(default = "super::defaults::default_memory_decay_half_life_days")]
+    pub half_life_days: f32,
+    #[serde(default = "super::defaults::default_memory_decay_access_boost")]
+    pub access_boost: f32,
+    #[serde(default = "super::defaults::default_memory_decay_min_strength")]
+    pub min_strength: f32,
+    #[serde(default = "super::defaults::default_memory_decay_protected_types")]
+    pub protected_types: Vec<String>,
+}
+
+impl Default for MemoryDecayPolicy {
+    fn default() -> Self {
+        Self {
+            half_life_days: super::defaults::default_memory_decay_half_life_days(),
+            access_boost: super::defaults::default_memory_decay_access_boost(),
+            min_strength: super::defaults::default_memory_decay_min_strength(),
+            protected_types: super::defaults::default_memory_decay_protected_types(),
+        }
+    }
+}

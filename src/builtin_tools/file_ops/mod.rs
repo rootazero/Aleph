@@ -10,6 +10,7 @@ mod path_utils;
 pub(crate) mod read;
 mod search;
 mod state;
+mod stats;
 mod tool;
 mod types;
 pub(crate) mod write;

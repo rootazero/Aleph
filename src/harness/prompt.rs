@@ -62,17 +62,64 @@ impl PromptBuilder for DefaultPromptBuilder {
         // its own tool_use request in context.
         if tail_start > 0 {
             if let SessionEvent::AssistantMessage { content, .. } = &events[tail_start - 1].event {
+                // Pre-compute the set of call_ids that have a matching
+                // ToolResult or ToolError in the tail. Tool_use blocks
+                // without one are "orphans" — typically caused by the
+                // previous turn being interrupted (turn timeout, cancel,
+                // crash) before `act()` could persist a result. Anthropic
+                // and Anthropic-compatible backends reject orphans with
+                // HTTP 400 ("tool_call_ids did not have response messages"),
+                // and every subsequent turn replays the same broken state.
+                // Drop orphans so the next turn can proceed cleanly.
+                let resolved: std::collections::HashSet<&str> = events[tail_start..]
+                    .iter()
+                    .filter_map(|r| match &r.event {
+                        SessionEvent::ToolResult { call_id, .. }
+                        | SessionEvent::ToolError { call_id, .. } => Some(call_id.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+
+                // Partition tool_use blocks into kept vs. orphan first, so
+                // we can decide whether the paired thinking block should be
+                // included (signed thinking only makes sense alongside a
+                // surviving tool_use intent).
+                let mut tool_blocks: Vec<ContentBlock> = Vec::new();
+                let mut dropped_orphans: Vec<String> = Vec::new();
+                for raw in &content.blocks {
+                    if let Some(tc) = parse_tool_use_block(raw) {
+                        if let ContentBlock::ToolCall { id, .. } = &tc {
+                            if !resolved.contains(id.as_str()) {
+                                dropped_orphans.push(id.clone());
+                                continue;
+                            }
+                        }
+                        tool_blocks.push(tc);
+                    }
+                }
+                if !dropped_orphans.is_empty() {
+                    tracing::warn!(
+                        orphans = ?dropped_orphans,
+                        "dropping orphan tool_use blocks from replayed assistant message \
+                         (no matching tool_result/tool_error in session log)",
+                    );
+                }
+
                 let mut blocks: Vec<ContentBlock> = Vec::new();
                 // Reconstruct signed thinking block first so tool_use blocks
                 // that follow it receive reasoning_content in convert_messages.
-                if let (Some(ref thinking), Some(ref sig)) =
-                    (&content.thinking, &content.thinking_signature)
-                {
-                    if !thinking.is_empty() {
-                        blocks.push(ContentBlock::Thinking {
-                            thinking: thinking.clone(),
-                            signature: Some(sig.clone()),
-                        });
+                // Skip when no tool_use survived: a lone signed thinking block
+                // (without any subsequent action) is rejected by Anthropic.
+                if !tool_blocks.is_empty() {
+                    if let (Some(ref thinking), Some(ref sig)) =
+                        (&content.thinking, &content.thinking_signature)
+                    {
+                        if !thinking.is_empty() {
+                            blocks.push(ContentBlock::Thinking {
+                                thinking: thinking.clone(),
+                                signature: Some(sig.clone()),
+                            });
+                        }
                     }
                 }
                 if !content.text.is_empty() {
@@ -81,11 +128,7 @@ impl PromptBuilder for DefaultPromptBuilder {
                         cache_control: None,
                     });
                 }
-                for raw in &content.blocks {
-                    if let Some(tc) = parse_tool_use_block(raw) {
-                        blocks.push(tc);
-                    }
-                }
+                blocks.extend(tool_blocks);
                 if !blocks.is_empty() {
                     messages.push(UnifiedMessage::Assistant { content: blocks });
                 }
@@ -183,6 +226,24 @@ fn resolve_tool_name<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::message::ContentBlock;
+    use crate::session::events::{
+        now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput,
+        ToolOutputMetadata, TurnTrigger,
+    };
+    use serde_json::json;
+
+    /// Tests construct events with monotonic seq counters; the prompt
+    /// builder doesn't read `seq` itself but the type requires the field.
+    fn mk_record(event: SessionEvent) -> SessionEventRecord {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(1);
+        SessionEventRecord {
+            seq: SEQ.fetch_add(1, Ordering::Relaxed),
+            event,
+            created_at_ms: now_ms(),
+        }
+    }
 
     #[tokio::test]
     async fn default_builder_compiles_and_runs() {
@@ -191,5 +252,153 @@ mod tests {
         let builder = DefaultPromptBuilder;
         let out = builder.assemble(&ctx).await.expect("assemble ok");
         assert!(out.is_empty(), "empty events → empty output");
+    }
+
+    /// Regression: when the previous assistant turn emitted tool_use blocks
+    /// but `act()` was interrupted before persisting a ToolResult/ToolError
+    /// for one of them, the prompt builder must drop the orphan. Anthropic
+    /// (and Anthropic-compatible) APIs reject orphan tool_use blocks with
+    /// HTTP 400 ("tool_call_ids did not have response messages"), and the
+    /// orphan is otherwise replayed on every subsequent turn — bricking the
+    /// session.
+    #[tokio::test]
+    async fn drops_orphan_tool_use_blocks_from_replayed_assistant() {
+        let turn = uuid::Uuid::new_v4();
+        let events: Vec<SessionEventRecord> = vec![
+            mk_record(SessionEvent::TurnStarted {
+                turn_id: turn,
+                trigger: TurnTrigger::UserMessage,
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "first".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::AssistantMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "Let me check.".into(),
+                    blocks: vec![
+                        json!({"type": "tool_use", "id": "kept_id", "name": "tool_a", "input": {}}),
+                        json!({"type": "tool_use", "id": "orphan_id", "name": "tool_b", "input": {}}),
+                    ],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::ToolCallRequested {
+                turn_id: turn,
+                call_id: "kept_id".into(),
+                name: "tool_a".into(),
+                input: json!({}),
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::ToolResult {
+                turn_id: turn,
+                call_id: "kept_id".into(),
+                output: ToolOutput {
+                    value: json!("ok"),
+                    metadata: ToolOutputMetadata::default(),
+                },
+                at: now_ms(),
+            }),
+            // Note: NO ToolResult/ToolError for "orphan_id" — this is the bug shape.
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "another query".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            }),
+        ];
+
+        // Tail starts after the AssistantMessage (index 2 → tail_start = 3).
+        let ctx = TurnContext::new(&events, 3);
+        let messages = DefaultPromptBuilder
+            .assemble(&ctx)
+            .await
+            .expect("assemble ok");
+
+        let assistant_blocks = messages
+            .iter()
+            .find_map(|m| match m {
+                UnifiedMessage::Assistant { content } => Some(content),
+                _ => None,
+            })
+            .expect("assistant message present");
+        let tool_use_ids: Vec<&str> = assistant_blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolCall { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_use_ids,
+            vec!["kept_id"],
+            "orphan tool_use must be filtered; only matched call survives",
+        );
+        // The text block is preserved even though one tool_use was dropped.
+        assert!(assistant_blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text, .. } if text == "Let me check.")));
+    }
+
+    /// Boundary case: when ALL tool_use blocks in the previous assistant
+    /// turn are orphans AND the assistant has no text, the entire assistant
+    /// message must be elided (no empty placeholder pushed). The signed
+    /// thinking block, if any, is also dropped because it would otherwise
+    /// stand alone — Anthropic rejects a thinking block without a paired
+    /// action.
+    #[tokio::test]
+    async fn drops_entire_assistant_when_only_orphans_remain() {
+        let turn = uuid::Uuid::new_v4();
+        let events: Vec<SessionEventRecord> = vec![
+            mk_record(SessionEvent::AssistantMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: String::new(),
+                    blocks: vec![
+                        json!({"type": "tool_use", "id": "orphan_only", "name": "tool_x", "input": {}}),
+                    ],
+                    thinking: Some("planning...".into()),
+                    thinking_signature: Some("sig_z".into()),
+                },
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "next".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            }),
+        ];
+
+        let ctx = TurnContext::new(&events, 1);
+        let messages = DefaultPromptBuilder
+            .assemble(&ctx)
+            .await
+            .expect("assemble ok");
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m, UnifiedMessage::Assistant { .. })),
+            "no assistant message should be emitted when only orphans + thinking remain",
+        );
+        assert_eq!(messages.len(), 1, "expected only the new user message");
     }
 }

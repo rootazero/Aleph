@@ -72,6 +72,7 @@ pub async fn execute_batch_move(
                                 extension: path
                                     .extension()
                                     .map(|e| e.to_string_lossy().to_string()),
+                                lines: None,
                             });
                         }
                         Err(e) => {
@@ -118,6 +119,7 @@ pub async fn execute_batch_move(
         content: None,
         bytes_written: None,
         items_affected: Some(count),
+    summary: None,
     })
 }
 
@@ -243,6 +245,7 @@ pub async fn execute_organize(
                     is_dir: false,
                     size: 0,
                     extension: Some(ext),
+                    lines: None,
                 });
             }
             Err(e) => {
@@ -282,5 +285,6 @@ pub async fn execute_organize(
         content: None,
         bytes_written: None,
         items_affected: Some(count),
+    summary: None,
     })
 }

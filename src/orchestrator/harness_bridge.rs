@@ -24,20 +24,25 @@ use crate::agents::AgentRegistry;
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
 use crate::harness::agent::AgentHarness;
-use crate::harness::callback::HarnessCallback;
+
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::Harness;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
 use crate::orchestrator::errors::FlowError;
-use crate::orchestrator::flow_spec::{BrainRef, FlowHistoryTurn, FlowInput, FlowSpec};
+use crate::orchestrator::flow_spec::{FlowInput, FlowSpec};
 use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;
 use crate::sandbox::Sandbox;
-use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
+use crate::session::events::SessionEvent;
 use crate::session::service::{SessionId, SessionService};
 use crate::skill::prefetch::SkillPrefetcher;
 use crate::tools::service::ToolService;
 use crate::verification::VerifierChain;
+
+mod callback;
+mod error;
+mod llm;
+mod session_seed;
 
 /// Stage 7 (#12): emit one `TraceSink::on_init_seam` event per Stage 1-6
 /// seam. Extracted from `AgentHarnessRunner::run` so tests can assert the
@@ -148,7 +153,7 @@ impl HarnessRunner for AgentHarnessRunner {
         }
 
         // Step 3: brain pick.
-        let llm = pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?;
+        let llm = llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?;
         // Stage J-pre: wrap the root provider with MeteringProvider so every
         // LLM call emits a LoopTraceEvent::ProviderUsage event labelled "root".
         // The trace_sink is available here (per-run, passed in from the gateway)
@@ -180,7 +185,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // Capture the user's last query before moving `input` so step 5b can
         // ask MemoryContextProvider for retrieval-relevant facts.
         let user_query = last_user_query(&input);
-        seed_session(self.session_service.as_ref(), &session_id, input).await?;
+        session_seed::seed_session(self.session_service.as_ref(), &session_id, input).await?;
 
         // Step 5b (BUG-2/BUG-3 fix, Phase 6 follow-up): assemble the system
         // prompt from per-agent curated memory + hybrid retrieval before the
@@ -252,7 +257,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // Fans HarnessCallback events onto the FlowStreamEvent broadcast
         // channel so downstream Gateway sinks see delta / tool_call cadence
         // equivalent to the retiring AgentLoop StreamingSink.
-        let mut cb = BroadcastCallback::new(events.clone());
+        let mut cb = callback::BroadcastCallback::new(events.clone());
         let run_result = harness.run(&session_id, &mut cb, &cancel).await;
         // Flush the trace sink regardless of success or error (no-op when None).
         if let Some(sink) = trace_sink.as_ref() {
@@ -260,7 +265,7 @@ impl HarnessRunner for AgentHarnessRunner {
         }
         run_result.map_err(|e| match e {
             crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
-            other => classify_harness_error(other, &provider_name),
+            other => error::classify_harness_error(other, &provider_name),
         })?;
 
         // Step 7: read final AssistantMessage text + count assistant turns.
@@ -471,326 +476,15 @@ fn last_user_query(input: &FlowInput) -> String {
     }
 }
 
-/// Adapter that fans `HarnessCallback` lifecycle events onto the
-/// orchestrator's `FlowStreamEvent` broadcast channel.
-///
-/// * `on_delta(text)` → `FlowStreamEvent::Delta(text)`
-/// * `on_reasoning(text)` → `FlowStreamEvent::Reasoning(text)`
-/// * `on_tool_call(name)` → `FlowStreamEvent::ToolCallStart { id: "legacy", name, args: null }`
-/// * `on_tool_call_start(id, name, args)` → `FlowStreamEvent::ToolCallStart { id, name, args }`
-/// * `on_tool_call_done(id, result, error)` → `FlowStreamEvent::ToolCallDone { id, result, error }`
-/// * `on_tool_summary(id, text)` → `FlowStreamEvent::ToolSummary { id, text }`
-/// * `on_safety_block(reason)` → `FlowStreamEvent::SafetyBlock { reason }`
-/// * `on_stop_hook_block(reason)` → `FlowStreamEvent::StopHookBlock { reason }`
-/// * `on_model_fallback(reason, fallback_model)` → `FlowStreamEvent::ModelFallback { reason, fallback_model }`
-/// * `on_complete()` → no-op (`Complete(outcome)` is emitted by `AgentHarnessRunner::run`)
-///
-/// `broadcast::Sender::send` returns an error only when there are zero
-/// receivers; we deliberately ignore that since a dropped receiver must not
-/// abort the harness loop. The inner harness still produces session events
-/// as the canonical log.
-struct BroadcastCallback {
-    tx: broadcast::Sender<FlowStreamEvent>,
-}
-
-impl BroadcastCallback {
-    fn new(tx: broadcast::Sender<FlowStreamEvent>) -> Self {
-        Self { tx }
-    }
-}
-
-impl HarnessCallback for BroadcastCallback {
-    fn on_delta(&mut self, text: &str) {
-        let _ = self.tx.send(FlowStreamEvent::Delta(text.to_string()));
-    }
-
-    fn on_reasoning(&mut self, text: &str) {
-        let _ = self.tx.send(FlowStreamEvent::Reasoning(text.to_string()));
-    }
-
-    /// Legacy compatibility shim — fires `ToolCallStart` with a synthetic id.
-    /// Prefer `on_tool_call_start` for structured tool events.
-    fn on_tool_call(&mut self, name: &str) {
-        let _ = self.tx.send(FlowStreamEvent::ToolCallStart {
-            id: "legacy".to_string(),
-            name: name.to_string(),
-            args: serde_json::Value::Null,
-        });
-    }
-
-    fn on_tool_call_start(&mut self, id: &str, name: &str, args: &serde_json::Value) {
-        let _ = self.tx.send(FlowStreamEvent::ToolCallStart {
-            id: id.to_string(),
-            name: name.to_string(),
-            args: args.clone(),
-        });
-    }
-
-    fn on_tool_call_done(
-        &mut self,
-        id: &str,
-        result: Option<&serde_json::Value>,
-        error: Option<&str>,
-    ) {
-        let _ = self.tx.send(FlowStreamEvent::ToolCallDone {
-            id: id.to_string(),
-            result: result.cloned(),
-            error: error.map(|s| s.to_string()),
-        });
-    }
-
-    fn on_tool_summary(&mut self, id: &str, text: &str) {
-        let _ = self.tx.send(FlowStreamEvent::ToolSummary {
-            id: id.to_string(),
-            text: text.to_string(),
-        });
-    }
-
-    fn on_safety_block(&mut self, reason: &str) {
-        let _ = self.tx.send(FlowStreamEvent::SafetyBlock {
-            reason: reason.to_string(),
-        });
-    }
-
-    fn on_stop_hook_block(&mut self, reason: &str) {
-        let _ = self.tx.send(FlowStreamEvent::StopHookBlock {
-            reason: reason.to_string(),
-        });
-    }
-
-    fn on_model_fallback(&mut self, reason: &str, fallback_model: &str) {
-        let _ = self.tx.send(FlowStreamEvent::ModelFallback {
-            reason: reason.to_string(),
-            fallback_model: fallback_model.to_string(),
-        });
-    }
-
-    // `on_complete` is intentionally a no-op here.
-    // `AgentHarnessRunner::run` emits `Complete(outcome)` after synthesising
-    // the full `FlowOutcome`, ensuring it is always the last event on the
-    // broadcast channel (see Task 1 plan §Step 3).
-    fn on_complete(&mut self) {}
-}
-
-/// Pick the `AiProvider` for a given [`BrainRef`]. `Strict` returns
-/// `ProviderUnavailable` when the named provider is not registered; model
-/// matching is deferred to Phase 6.
-fn pick_llm(
-    brain: &BrainRef,
-    default_provider: &Arc<dyn AiProvider>,
-    named: &HashMap<String, Arc<dyn AiProvider>>,
-) -> Result<Arc<dyn AiProvider>, FlowError> {
-    match brain {
-        BrainRef::Default => Ok(default_provider.clone()),
-        BrainRef::Preferred { provider } => {
-            if let Some(llm) = named.get(provider) {
-                Ok(llm.clone())
-            } else {
-                // Silent fallback is intentional — Preferred means "use this if
-                // available, otherwise default." A debug log signals the mismatch
-                // so operators can spot misconfigured preferred providers.
-                tracing::debug!(
-                    provider = %provider,
-                    "preferred provider not registered, falling back to default"
-                );
-                Ok(default_provider.clone())
-            }
-        }
-        BrainRef::Strict { provider, .. } => named
-            .get(provider)
-            .cloned()
-            .ok_or_else(|| FlowError::ProviderUnavailable(provider.clone())),
-    }
-}
-
-/// Seed the session log with the events required for the given [`FlowInput`].
-///
-/// * `Prompt` — one `UserMessage` event.
-/// * `Messages` — one `UserMessage` event per entry.
-/// * `History` — each turn replayed in order as the role-appropriate event,
-///   then the `prompt` as a trailing `UserMessage`.
-/// * `Multimodal` — one `UserMessage` event per entry (each may carry
-///   non-text `blocks` that the LLM layer interprets).
-///
-/// Every emitted event shares a fresh `turn_id` except the trailing
-/// `UserMessage` of `History`, which also emits a `TurnStarted` event so the
-/// harness loop identifies the new user turn correctly.
-async fn seed_session(
-    service: &dyn SessionService,
-    session_id: &SessionId,
-    input: FlowInput,
-) -> Result<(), FlowError> {
-    match input {
-        FlowInput::Prompt(text) => {
-            emit_message(
-                service,
-                session_id,
-                MessageContent {
-                    text,
-                    blocks: Vec::new(),
-                    thinking: None,
-                    thinking_signature: None,
-                },
-                true,
-            )
-            .await?;
-        }
-        FlowInput::Messages(msgs) => {
-            for content in msgs {
-                emit_message(service, session_id, content, true).await?;
-            }
-        }
-        FlowInput::History { turns, prompt } => {
-            for turn in turns {
-                match turn {
-                    FlowHistoryTurn::User(content) => {
-                        emit_message(service, session_id, content, true).await?;
-                    }
-                    FlowHistoryTurn::Assistant(content) => {
-                        emit_message(service, session_id, content, false).await?;
-                    }
-                }
-            }
-            // Announce a new user turn so the harness scans from the right
-            // tail boundary (see `tail_start_index` in agent.rs).
-            let turn_id = uuid::Uuid::new_v4();
-            service
-                .emit_event(
-                    session_id,
-                    SessionEvent::TurnStarted {
-                        turn_id,
-                        trigger: TurnTrigger::UserMessage,
-                        at: now_ms(),
-                    },
-                )
-                .await
-                .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
-            service
-                .emit_event(
-                    session_id,
-                    SessionEvent::UserMessage {
-                        turn_id,
-                        content: MessageContent {
-                            text: prompt,
-                            blocks: Vec::new(),
-                            thinking: None,
-                            thinking_signature: None,
-                        },
-                        at: now_ms(),
-                    },
-                )
-                .await
-                .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
-        }
-        FlowInput::Multimodal(msgs) => {
-            for content in msgs {
-                emit_message(service, session_id, content, true).await?;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn emit_message(
-    service: &dyn SessionService,
-    session_id: &SessionId,
-    content: MessageContent,
-    is_user: bool,
-) -> Result<(), FlowError> {
-    let event = if is_user {
-        SessionEvent::UserMessage {
-            turn_id: uuid::Uuid::new_v4(),
-            content,
-            at: now_ms(),
-        }
-    } else {
-        SessionEvent::AssistantMessage {
-            turn_id: uuid::Uuid::new_v4(),
-            content,
-            at: now_ms(),
-        }
-    };
-    service
-        .emit_event(session_id, event)
-        .await
-        .map(|_| ())
-        .map_err(|e| FlowError::Internal(format!("session seed: {e}")))
-}
-
-/// Classify a non-cancelled `HarnessError` as either a provider-transient
-/// failure (retryable by Gateway's outer fallback loop) or an internal error.
-///
-/// Transient indicators (per Gateway's existing classification in the
-/// retiring `run_loop.rs::run_agent_loop`): HTTP 5xx (500/502/503), network
-/// failures, connection drops, timeouts, and 401/403 auth errors that the
-/// fallback loop used to treat as "try another provider".
-///
-/// Intentionally message-based — `HarnessError` wraps `AlephError` but the
-/// specific AlephError variant isn't propagated structurally through
-/// `HarnessError::Llm(AlephError)` in a way that survives the async trait
-/// boundary without widening the public API. Message matching here mirrors
-/// the exact classification the retiring run_loop did (see §5 behaviour
-/// parity in the resolution design).
-///
-/// TODO(phase6c): replace with structural matching once HarnessError
-/// surfaces a `Transient(AlephError)` variant directly.
-fn classify_harness_error(
-    err: crate::harness::trait_def::HarnessError,
-    provider: &str,
-) -> FlowError {
-    let msg = err.to_string();
-    if is_transient_harness_message(&msg) {
-        FlowError::Transient {
-            provider: provider.to_string(),
-            message: msg,
-        }
-    } else {
-        FlowError::Internal(format!("harness: {msg}"))
-    }
-}
-
-fn is_transient_harness_message(msg: &str) -> bool {
-    // Network / connection.
-    let is_network = msg.contains("Network error")
-        || msg.contains("error sending request")
-        || msg.contains("connection")
-        || msg.contains("dns")
-        || msg.contains("timed out");
-    // Auth — Gateway treats 401/403 as retryable (switch provider).
-    let is_auth = msg.contains("401") || msg.contains("403") || msg.contains("Unauthorized");
-    // Server — match 500/502/503 with word boundaries to avoid matching "4500".
-    let is_server = contains_http_status(msg, 500)
-        || contains_http_status(msg, 502)
-        || contains_http_status(msg, 503);
-    // Rate-limited responses are NOT treated as retryable here (mirrors the
-    // retiring run_loop.rs which explicitly skips retry for rate limits).
-    is_network || is_auth || is_server
-}
-
-fn contains_http_status(msg: &str, code: u16) -> bool {
-    let code_str = code.to_string();
-    let mut search_from = 0;
-    while let Some(pos) = msg[search_from..].find(&code_str) {
-        let abs_pos = search_from + pos;
-        let before_ok = abs_pos == 0 || !msg.as_bytes()[abs_pos - 1].is_ascii_digit();
-        let after_pos = abs_pos + code_str.len();
-        let after_ok = after_pos >= msg.len() || !msg.as_bytes()[after_pos].is_ascii_digit();
-        if before_ok && after_ok {
-            return true;
-        }
-        search_from = abs_pos + code_str.len();
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::events::{MessageContent, TurnTrigger};
 
     #[test]
     fn broadcast_callback_fans_lifecycle_events() {
         let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(16);
-        let mut cb = BroadcastCallback::new(tx);
+        let mut cb = super::callback::BroadcastCallback::new(tx);
 
         cb.on_delta("hello ");
         cb.on_delta("world");
@@ -825,7 +519,7 @@ mod tests {
         let err = crate::harness::trait_def::HarnessError::Llm(crate::error::AlephError::network(
             "connection reset mid-stream",
         ));
-        let out = classify_harness_error(err, "anthropic");
+        let out = super::error::classify_harness_error(err, "anthropic");
         assert!(matches!(out, FlowError::Transient { .. }));
     }
 
@@ -834,7 +528,7 @@ mod tests {
         let err = crate::harness::trait_def::HarnessError::Llm(crate::error::AlephError::network(
             "upstream returned 500",
         ));
-        let out = classify_harness_error(err, "anthropic");
+        let out = super::error::classify_harness_error(err, "anthropic");
         assert!(matches!(out, FlowError::Transient { .. }));
     }
 
@@ -844,7 +538,7 @@ mod tests {
             message: "opaque failure".into(),
             suggestion: None,
         });
-        let out = classify_harness_error(err, "anthropic");
+        let out = super::error::classify_harness_error(err, "anthropic");
         assert!(matches!(out, FlowError::Internal(_)));
     }
 
@@ -855,7 +549,7 @@ mod tests {
             message: "processed 4500 items then gave up".into(),
             suggestion: None,
         });
-        let out = classify_harness_error(err, "anthropic");
+        let out = super::error::classify_harness_error(err, "anthropic");
         assert!(matches!(out, FlowError::Internal(_)));
     }
 
@@ -865,7 +559,7 @@ mod tests {
         // BroadcastCallback swallows it so the harness loop is unaffected.
         let (tx, _rx) = broadcast::channel::<FlowStreamEvent>(1);
         drop(_rx);
-        let mut cb = BroadcastCallback::new(tx);
+        let mut cb = super::callback::BroadcastCallback::new(tx);
         cb.on_delta("nobody is listening");
         cb.on_tool_call("read_file");
         cb.on_complete();
@@ -890,7 +584,7 @@ mod tests {
     async fn seed_session_prompt_emits_one_user_message() {
         let service = fresh_service();
         let sid = SessionKey::ephemeral("seed-prompt");
-        seed_session(service.as_ref(), &sid, FlowInput::Prompt("hello".into()))
+        super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Prompt("hello".into()))
             .await
             .expect("seed Prompt");
 
@@ -989,7 +683,7 @@ mod tests {
                 thinking_signature: None,
             },
         ];
-        seed_session(service.as_ref(), &sid, FlowInput::Multimodal(msgs))
+        super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Multimodal(msgs))
             .await
             .expect("seed Multimodal");
 

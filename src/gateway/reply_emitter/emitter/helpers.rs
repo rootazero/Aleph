@@ -1,0 +1,484 @@
+use crate::sync_primitives::Ordering;
+use tracing::{debug, error, info, warn};
+
+use crate::gateway::channel::OutboundMessage;
+use super::ReplyEmitter;
+use super::super::sanitize::sanitize_llm_output;
+
+impl ReplyEmitter {
+    /// Returns true when voice output should be attempted.
+    /// Dynamically check if voice output should be used.
+    ///
+    /// Re-reads VoiceState from ChannelRegistry on every call so that
+    /// mid-request voice_mode_set tool calls take effect immediately
+    /// (e.g. the confirmation message itself is voiced).
+    pub(crate) async fn should_voice(&self) -> bool {
+        // Static hint: user sent an audio message
+        if self.config.voice_reply_hint {
+            debug!("should_voice=true (voice_reply_hint)");
+            return true;
+        }
+        // Dynamic check: read current voice state from registry
+        // Check both the specific channel and "default" (fallback when
+        // voice_mode_set tool is called without explicit channel_id)
+        let channel_id = self.route.channel_id.as_str();
+        let live_state = self.channel_registry.get_voice_state(channel_id).await;
+        debug!(
+            "should_voice: channel={}, enabled={}",
+            channel_id,
+            live_state.is_active()
+        );
+        if live_state.is_active() {
+            return true;
+        }
+        // Fallback: check "default" key (used when tool doesn't know channel)
+        if channel_id != "default" {
+            let default_state = self.channel_registry.get_voice_state("default").await;
+            debug!(
+                "should_voice: fallback 'default' enabled={}, has_gen_registry={}",
+                default_state.is_active(),
+                self.generation_registry.is_some()
+            );
+            if default_state.is_active() {
+                debug!("should_voice => TRUE (default fallback)");
+                return true;
+            }
+        }
+        debug!("should_voice => FALSE");
+        false
+    }
+
+    /// Try to generate TTS audio and send as a voice message.
+    ///
+    /// On success the message includes both text and an audio attachment.
+    /// On failure it records the failure on `voice_state` and falls back to
+    /// plain text via `send_to_channel`.
+    pub(crate) async fn send_as_voice(&self, text: &str) {
+        let sanitized = sanitize_llm_output(text);
+        let text: &str = &sanitized;
+        if text.is_empty() {
+            return;
+        }
+        debug!(
+            "send_as_voice called, text_len={}, has_gen_registry={}",
+            text.len(),
+            self.generation_registry.is_some()
+        );
+        if let Some(ref registry) = self.generation_registry {
+            // Read live voice state from registry (not the stale local copy)
+            // Check channel-specific first, then "default" fallback
+            let channel_id = self.route.channel_id.as_str();
+            let mut voice_state = self.channel_registry.get_voice_state(channel_id).await;
+            if !voice_state.is_active() && channel_id != "default" {
+                voice_state = self.channel_registry.get_voice_state("default").await;
+            }
+            let gen_config = match self.generation_config {
+                Some(ref cfg) => cfg.read().await.clone(),
+                None => {
+                    self.send_to_channel(text).await;
+                    return;
+                }
+            };
+
+            if let Some(attachment) =
+                crate::gateway::voice::outbound::generate_tts(text, &voice_state, registry, &gen_config)
+                    .await
+            {
+                // Success — reset failure counter
+                self.voice_state.lock().await.record_success();
+
+                // Send voice-only message (no text — voice replaces text)
+                let message = OutboundMessage {
+                    conversation_id: self.route.conversation_id.clone(),
+                    text: String::new(),
+                    attachments: vec![attachment],
+                    reply_to: self.route.reply_to.clone(),
+                    inline_keyboard: None,
+                    metadata: Default::default(),
+                };
+
+                match self
+                    .channel_registry
+                    .send(&self.route.channel_id, message)
+                    .await
+                {
+                    Ok(result) => {
+                        debug!(
+                            "Sent voice reply to channel {} (message_id: {})",
+                            self.route.channel_id,
+                            result.message_id.as_str(),
+                        );
+                        self.has_sent.store(true, Ordering::SeqCst);
+                    }
+                    Err(e) => {
+                        error!("Failed to send voice reply: {}", e);
+                        // Fall back to text
+                        self.send_to_channel(text).await;
+                    }
+                }
+            } else {
+                // TTS generation failed — record and maybe auto-disable
+                let auto_disabled = self.voice_state.lock().await.record_failure();
+                if auto_disabled {
+                    warn!(
+                        "Voice auto-disabled for channel {} after 3 consecutive TTS failures",
+                        self.route.channel_id
+                    );
+                }
+                // Fallback to plain text
+                self.send_to_channel(text).await;
+            }
+        } else {
+            // No generation registry — fall back to text
+            self.send_to_channel(text).await;
+        }
+
+        let media_attachments = self.drain_and_send_media().await;
+        self.send_media_standalone(media_attachments).await;
+    }
+
+    /// Drain accumulated explicit reasoning text, returning None if empty.
+    pub(crate) async fn take_reasoning_buffer(&self) -> Option<String> {
+        let mut buf = self.reasoning_buffer.lock().await;
+        let content = std::mem::take(&mut *buf);
+        if content.is_empty() {
+            None
+        } else {
+            Some(content)
+        }
+    }
+
+    /// Drain pending media, download in parallel via MediaCache, return Attachments.
+    pub(crate) async fn drain_and_send_media(&self,
+    ) -> Vec<crate::gateway::channel::Attachment> {
+        let pending_count = self.pending_media.lock().await.len();
+        debug!(run_id = %self.run_id, pending_count = pending_count, "drain_and_send_media called");
+        let media_items = std::mem::take(&mut *self.pending_media.lock().await);
+        if media_items.is_empty() {
+            return vec![];
+        }
+
+        info!(
+            run_id = %self.run_id,
+            count = media_items.len(),
+            urls = ?media_items.iter().map(|i| &i.url).collect::<Vec<_>>(),
+            "Draining pending media for download"
+        );
+
+        let attachments = futures::future::join_all(
+            media_items
+                .iter()
+                .map(|item| self.media_cache.download_media_item(item, &self.run_id)),
+        )
+        .await;
+
+        for att in &attachments {
+            info!(
+                run_id = %self.run_id,
+                mime = %att.mime_type,
+                has_path = att.path.is_some(),
+                has_url = att.url.is_some(),
+                size = ?att.size,
+                "Media attachment ready"
+            );
+        }
+
+        attachments
+    }
+
+    /// Send media as a separate standalone message.
+    pub(crate) async fn send_media_standalone(
+        &self,
+        attachments: Vec<crate::gateway::channel::Attachment>,
+    ) {
+        if attachments.is_empty() {
+            return;
+        }
+        let count = attachments.len();
+        info!(
+            run_id = %self.run_id,
+            channel = %self.route.channel_id,
+            count = count,
+            "Sending media standalone message"
+        );
+        let message = OutboundMessage {
+            conversation_id: self.route.conversation_id.clone(),
+            text: String::new(),
+            attachments,
+            reply_to: None,
+            inline_keyboard: None,
+            metadata: Default::default(),
+        };
+        match self
+            .channel_registry
+            .send(&self.route.channel_id, message)
+            .await
+        {
+            Ok(_) => {
+                info!(run_id = %self.run_id, count = count, "Media standalone message sent successfully")
+            }
+            Err(e) => warn!(error = %e, "Failed to send media standalone message"),
+        }
+    }
+
+    pub(crate) fn format_content(&self, content: &str, _is_first: bool) -> String {
+        content.to_string()
+    }
+
+    // ── Shared helpers ──────────────────────────────────────────────────
+
+    const MAX_MESSAGE_LENGTH: usize = 4000;
+
+    /// Send content to the channel, sanitizing first and splitting into chunks.
+    pub(crate) async fn send_to_channel(&self, content: &str) {
+        if content.is_empty() {
+            return;
+        }
+
+        let content = sanitize_llm_output(content);
+        self.send_to_channel_sanitized(&content, None).await;
+    }
+
+    /// Send content to the channel, extracting embedded reasoning, sanitizing,
+    /// and splitting into chunks if too long.
+    pub(crate) async fn send_to_channel_with_reasoning(
+        &self,
+        content: &str,
+        reasoning: Option<&str>,
+    ) {
+        if content.is_empty() && reasoning.is_none_or(|r| r.is_empty()) {
+            return;
+        }
+
+        let (embedded_reasoning, answer) = super::super::sanitize::split_reasoning(content);
+        let final_reasoning = match (reasoning, embedded_reasoning) {
+            (Some(r), Some(e)) if !r.is_empty() && !e.is_empty() => Some(format!("{}\n\n{}", r, e)),
+            (Some(r), _) if !r.is_empty() => Some(r.to_string()),
+            (None, Some(e)) => Some(e),
+            _ => None,
+        };
+
+        let sanitized = sanitize_llm_output(&answer);
+        self.send_to_channel_sanitized(&sanitized, final_reasoning.as_deref())
+            .await;
+    }
+
+    /// Send pre-sanitized content to the channel, splitting into chunks if too long.
+    ///
+    /// Callers that have already called `sanitize_llm_output` should use this
+    /// to avoid redundant sanitization passes.
+    pub(crate) async fn send_to_channel_sanitized(
+        &self,
+        content: &str,
+        reasoning: Option<&str>,
+    ) {
+        if content.is_empty() && reasoning.is_none_or(|r| r.is_empty()) {
+            return;
+        }
+
+        let is_first_send = !self.has_sent.load(Ordering::SeqCst);
+        self.has_sent.store(true, Ordering::SeqCst);
+
+        let content = self.format_content(content, is_first_send);
+
+        let chunks = Self::split_message(&content, Self::MAX_MESSAGE_LENGTH);
+        let total_chunks = chunks.len();
+
+        let metadata = reasoning
+            .filter(|r| !r.is_empty())
+            .map(|r| {
+                let mut m = std::collections::HashMap::new();
+                m.insert("reasoning".to_string(), r.to_string());
+                m
+            })
+            .unwrap_or_default();
+
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            let message = OutboundMessage {
+                conversation_id: self.route.conversation_id.clone(),
+                text: chunk,
+                attachments: vec![],
+                reply_to: if i == 0 {
+                    self.route.reply_to.clone()
+                } else {
+                    None
+                },
+                inline_keyboard: None,
+                metadata: metadata.clone(),
+            };
+
+            match self
+                .channel_registry
+                .send(&self.route.channel_id, message)
+                .await
+            {
+                Ok(result) => {
+                    debug!(
+                        "Sent reply to channel {} (message_id: {}, chunk {}/{})",
+                        self.route.channel_id,
+                        result.message_id.as_str(),
+                        i + 1,
+                        total_chunks
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to send reply to channel {} (chunk {}/{}): {}",
+                        self.route.channel_id,
+                        i + 1,
+                        total_chunks,
+                        e
+                    );
+                    break;
+                }
+            }
+        }
+
+        let media_attachments = self.drain_and_send_media().await;
+        self.send_media_standalone(media_attachments).await;
+    }
+
+    pub(crate) fn split_message(content: &str, max_len: usize) -> Vec<String> {
+        if content.len() <= max_len {
+            return vec![content.to_string()];
+        }
+
+        let mut chunks = Vec::new();
+        let mut buf = content.to_string();
+        let mut open_fence: Option<String> = None; // e.g. "```rust"
+
+        while !buf.is_empty() {
+            if buf.len() <= max_len {
+                chunks.push(buf);
+                break;
+            }
+
+            let split_at = Self::find_split_point(&buf, max_len);
+            let chunk_raw = buf[..split_at].trim_end().to_string();
+            let rest = buf[split_at..].trim_start_matches('\n').to_string();
+
+            // Track code fence state through this chunk
+            for line in chunk_raw.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("```") {
+                    if open_fence.is_some() {
+                        open_fence = None;
+                    } else {
+                        open_fence = Some(trimmed.to_string());
+                    }
+                }
+            }
+
+            // If we're splitting inside an open code block, close + reopen
+            if let Some(ref fence) = open_fence {
+                let mut chunk_closed = chunk_raw;
+                chunk_closed.push_str("\n```");
+                chunks.push(chunk_closed);
+                buf = format!("{}\n{}", fence, rest);
+            } else {
+                chunks.push(chunk_raw);
+                buf = rest;
+            }
+        }
+
+        chunks
+    }
+
+    pub(crate) fn find_split_point(text: &str, max_len: usize) -> usize {
+        let mut safe_max = max_len;
+        while safe_max > 0 && !text.is_char_boundary(safe_max) {
+            safe_max -= 1;
+        }
+
+        let search_range = &text[..safe_max];
+
+        // Check if we're inside a code block (odd number of ``` before split point)
+        let fence_count = search_range.matches("```").count();
+        if fence_count % 2 == 1 {
+            // Inside a code block — try to split before the opening fence
+            if let Some(last_fence) = search_range.rfind("```") {
+                if last_fence > 0 {
+                    if let Some(nl) = text[..last_fence].rfind('\n') {
+                        return nl + 1;
+                    }
+                    return last_fence;
+                }
+            }
+        }
+
+        // Check for partial HTML entities at the split point
+        let entity_start = search_range[..safe_max].rfind('&');
+        if let Some(amp_pos) = entity_start {
+            let after_amp = &search_range[amp_pos..safe_max];
+            if !after_amp.contains(';') && after_amp.len() <= 8 {
+                safe_max = amp_pos;
+            }
+        }
+
+        // Existing logic: prefer paragraph boundary, then newline
+        let search_range = &text[..safe_max];
+        if let Some(pos) = search_range.rfind("\n\n") {
+            if pos > safe_max / 4 {
+                return pos + 1;
+            }
+        }
+        if let Some(pos) = search_range.rfind('\n') {
+            if pos > safe_max / 4 {
+                return pos + 1;
+            }
+        }
+        safe_max
+    }
+
+    pub(crate) async fn send_error(&self, error: &str) {
+        let error_message = format!("Error: {}", error);
+        self.send_to_channel(&error_message).await;
+    }
+
+    /// Spawn a background task that sends typing indicators every 4 seconds
+    /// until the cancellation token is triggered.
+    pub(crate) fn start_typing_indicator(&self) {
+        let registry = self.channel_registry.clone();
+        let channel_id = self.route.channel_id.clone();
+        let conversation_id = self.route.conversation_id.clone();
+        let cancel = self.typing_cancel.clone();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
+            interval.tick().await; // Skip first immediate tick
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let _ = registry.send_typing(&channel_id, &conversation_id).await;
+                    }
+                    _ = cancel.cancelled() => {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    /// React on the original inbound message (best-effort, non-blocking)
+    pub(crate) async fn react_on_inbound(&self, emoji: &str) {
+        if let Some(ref msg_id) = self.route.inbound_message_id {
+            tracing::info!(
+                target: "multimodal",
+                probe = "P7_reaction",
+                run_id = %self.run_id,
+                emoji = %emoji,
+                message_id = %msg_id.as_str(),
+                "Processing status reaction"
+            );
+            let _ = self
+                .channel_registry
+                .react(
+                    &self.route.channel_id,
+                    &self.route.conversation_id,
+                    msg_id,
+                    emoji,
+                )
+                .await;
+        }
+    }
+}

@@ -9,6 +9,7 @@ use super::batch::{execute_batch_move, execute_organize};
 use super::ops::{execute_copy, execute_delete, execute_list, execute_mkdir, execute_move};
 use super::path_utils::{check_and_resolve_path, get_denied_paths};
 use super::search::execute_search;
+use super::stats::execute_stats;
 use super::types::{FileOperation, FileOpsArgs, FileOpsOutput};
 use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
@@ -36,6 +37,7 @@ impl FileOpsTool {
 - delete: Delete file or directory
 - mkdir: Create directory
 - search: Search files by glob pattern (e.g., "*.pdf", "**/*.jpg")
+- stats: Recursive line/byte counts. Returns per-file FileInfo {size, lines} plus an aggregate {total_files, total_lines, total_bytes}. Use this to answer "how many lines / files / bytes are in this directory" — DO NOT loop over file_read for that.
 - batch_move: Move ALL files matching a pattern to destination (e.g., pattern="*.jpg" moves all JPGs)
 - organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Others)
 
@@ -97,6 +99,7 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             FileOperation::Search => "搜索文件",
             FileOperation::BatchMove => "批量移动",
             FileOperation::Organize => "整理文件",
+            FileOperation::Stats => "统计行数",
         };
 
         // Notify tool start with operation details
@@ -191,6 +194,10 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                 )
                 .await
             }
+            FileOperation::Stats => {
+                execute_stats(path, args.pattern.as_deref(), &self.denied_paths, output_dir_ref)
+                    .await
+            }
         };
 
         // Notify result
@@ -235,6 +242,7 @@ impl AlephTool for FileOpsTool {
 - delete: Delete file or directory
 - mkdir: Create directory
 - search: Search files by glob pattern
+- stats: Recursive line/byte counts (per-file FileInfo + aggregate summary). Use this for "count lines / files" instead of looping over file_read.
 - batch_move: Move ALL files matching a pattern to destination
 - organize: Auto-organize files by type into categorized folders"#;
 

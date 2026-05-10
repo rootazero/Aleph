@@ -1,0 +1,199 @@
+//! `impl OpenAiProtocol` — construction and internal helpers.
+
+use crate::agents::thinking::ThinkLevel;
+use crate::config::ProviderConfig;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::openai::{
+    ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent, OpenAiFunction, OpenAiTool,
+};
+use crate::providers::openai::{OpenAiFunctionCall, OpenAiToolCall};
+use crate::providers::openai::types::{OpenAiFunctionCallOut, OpenAiToolCallOut};
+use crate::providers::message::ContentBlock as UCB;
+
+use super::{sanitize_tool_name, OpenAiProtocol};
+
+impl OpenAiProtocol {
+    /// Create a new OpenAI protocol adapter with the given HTTP client
+    pub fn new(client: reqwest::Client) -> Self {
+        Self { client }
+    }
+
+    /// Build the endpoint URL from provider configuration
+    pub(super) fn build_endpoint(config: &ProviderConfig) -> String {
+        let raw_base_url = config
+            .base_url
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+
+        // Detect API version from the URL (v1 or v3)
+        let is_v3_api = raw_base_url.contains("/v3") || raw_base_url.contains("/api/v3");
+
+        // Normalize URL: remove trailing slashes and version suffixes
+        let base_url = raw_base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/v3")
+            .trim_end_matches('/')
+            .trim_end_matches("/v1")
+            .trim_end_matches('/')
+            .to_string();
+
+        // Build endpoint with appropriate API version
+        if is_v3_api {
+            format!("{}/v3/chat/completions", base_url)
+        } else {
+            format!("{}/v1/chat/completions", base_url)
+        }
+    }
+
+    /// Convert UnifiedMessages to OpenAI Messages
+    pub(super) fn convert_messages(messages: &[UnifiedMessage], system_prompt: Option<&str>) -> Vec<Message> {
+        let mut result = Vec::new();
+
+        // Add system message if provided
+        if let Some(prompt) = system_prompt {
+            result.push(Message::text("system", prompt.to_string()));
+        }
+
+        for msg in messages {
+            match msg {
+                UnifiedMessage::User { content } => {
+                    let has_images = content.iter().any(|b| matches!(b, UCB::Image { .. }));
+
+                    if has_images {
+                        // Use OpenAI's multimodal content array format
+                        let blocks: Vec<OaiContentBlock> = content
+                            .iter()
+                            .filter_map(|b| match b {
+                                UCB::Text { text, .. } => {
+                                    Some(OaiContentBlock::Text { text: text.clone() })
+                                }
+                                UCB::Image { data, mime_type } => Some(OaiContentBlock::ImageUrl {
+                                    image_url: ImageUrl {
+                                        url: format!("data:{};base64,{}" , mime_type, data),
+                                        detail: Some("auto".to_string()),
+                                    },
+                                }),
+                                _ => None,
+                            })
+                            .collect();
+                        let image_count = blocks
+                            .iter()
+                            .filter(|b| matches!(b, OaiContentBlock::ImageUrl { .. }))
+                            .count();
+                        tracing::info!(
+                            target: "multimodal",
+                            probe = "P6_provider",
+                            role = "user",
+                            content_type = "multimodal",
+                            image_count = image_count,
+                            "OpenAI multimodal message converted"
+                        );
+                        result.push(Message {
+                            role: "user".to_string(),
+                            tool_call_id: None,
+                            tool_calls: None,
+                            content: MessageContent::Multimodal { content: blocks },
+                        });
+                    } else {
+                        // Text-only path
+                        let text = content
+                            .iter()
+                            .filter_map(|b| b.as_text())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        result.push(Message::text("user", text));
+                    }
+                }
+                UnifiedMessage::Assistant { content } => {
+                    let text: String = content
+                        .iter()
+                        .filter_map(|b| match b {
+                            crate::providers::message::ContentBlock::Text { text, .. } => {
+                                Some(text.as_str())
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    // Extract tool calls
+                    let tool_calls: Vec<_> = content
+                        .iter()
+                        .filter_map(|b| match b {
+                            crate::providers::message::ContentBlock::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            } => {
+                                Some(OpenAiToolCall {
+                                    id: id.clone(),
+                                    call_type: Some("function".to_string()),
+                                    function: OpenAiFunctionCall {
+                                        name: sanitize_tool_name(name),
+                                        arguments: serde_json::to_string(arguments)
+                                            .unwrap_or_default(),
+                                    },
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect();
+
+                    let msg_content = if text.is_empty() { None } else { Some(text) };
+
+                    if tool_calls.is_empty() {
+                        result.push(Message::text("assistant", msg_content.unwrap_or_default()));
+                    } else {
+                        // Convert to serializable tool call format
+                        let tc_out: Vec<OpenAiToolCallOut> = tool_calls
+                            .into_iter()
+                            .map(|tc| OpenAiToolCallOut {
+                                id: tc.id,
+                                call_type: "function".to_string(),
+                                function: OpenAiFunctionCallOut {
+                                    name: tc.function.name,
+                                    arguments: tc.function.arguments,
+                                },
+                            })
+                            .collect();
+                        result.push(Message::assistant_with_tool_calls(msg_content, tc_out));
+                    }
+                }
+                UnifiedMessage::ToolResult {
+                    tool_call_id,
+                    content,
+                    ..
+                } => {
+                    let output = content
+                        .iter()
+                        .map(|b| match b {
+                            crate::providers::message::ContentBlock::Text { text, .. } => {
+                                text.clone()
+                            }
+                            crate::providers::message::ContentBlock::Json { value } => {
+                                serde_json::to_string(value).unwrap_or_default()
+                            }
+                            _ => String::new(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    // Each ToolResult as separate tool message with required tool_call_id
+                    result.push(Message::tool_result(tool_call_id.clone(), output));
+                }
+            }
+        }
+        result
+    }
+
+    /// Map ThinkLevel to OpenAI reasoning_effort
+    pub(super) fn map_think_level(level: &ThinkLevel) -> Option<String> {
+        match level {
+            ThinkLevel::Off | ThinkLevel::Minimal => None,
+            ThinkLevel::Low => Some("low".to_string()),
+            ThinkLevel::Medium => Some("medium".to_string()),
+            ThinkLevel::High | ThinkLevel::XHigh => Some("high".to_string()),
+        }
+    }
+}

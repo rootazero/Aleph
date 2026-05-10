@@ -1,0 +1,793 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::sync_primitives::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::agents::{AgentDef, AgentMode};
+    use crate::providers::adapter::{NativeToolCall, ProviderResponse, StopReason};
+    use crate::session::events::{ToolOutput, ToolOutputMetadata};
+    use crate::session::in_process::InProcessActorSessionService;
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+    use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
+    use serde_json::json;
+
+    // -- Providers --------------------------------------------------------
+
+    /// Returns scripted responses in sequence, panicking if called past the
+    /// script. Used to drive multi-turn behaviour deterministically.
+    struct ScriptedProvider {
+        responses: Mutex<Vec<ProviderResponse>>,
+        calls: AtomicUsize,
+    }
+
+    impl ScriptedProvider {
+        fn new(responses: Vec<ProviderResponse>) -> Arc<Self> {
+            Arc::new(Self {
+                responses: Mutex::new(responses),
+                calls: AtomicUsize::new(0),
+            })
+        }
+    }
+
+    impl AiProvider for ScriptedProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut guard = self.responses.lock().unwrap();
+            let resp = if guard.is_empty() {
+                // Safety net — an exhausted script usually means the test
+                // forgot to stop the loop. Return a terminal text response.
+                ProviderResponse::text_only("(scripted provider exhausted)".to_string())
+            } else {
+                guard.remove(0)
+            };
+            Box::pin(async move { Ok(resp) })
+        }
+
+        fn name(&self) -> &str {
+            "scripted"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Always returns the same tool_call, forcing the harness to spin until
+    /// `max_iterations` cuts it off.
+    struct AlwaysToolCallProvider {
+        calls: AtomicUsize,
+    }
+
+    impl AiProvider for AlwaysToolCallProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: format!("call-{n}"),
+                        name: "noop".into(),
+                        arguments: json!({}),
+                    }],
+                    thinking: None,
+                    thinking_signature: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                })
+            })
+        }
+
+        fn name(&self) -> &str {
+            "always-tool"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Sleeps for `delay` before returning a terminal text — drives the
+    /// timeout test.
+    struct SlowProvider {
+        delay: std::time::Duration,
+    }
+
+    impl AiProvider for SlowProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let delay = self.delay;
+            Box::pin(async move {
+                tokio::time::sleep(delay).await;
+                Ok(ProviderResponse::text_only("eventually".to_string()))
+            })
+        }
+
+        fn name(&self) -> &str {
+            "slow"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Returns a tool_call targeting `tool_name`. Used by the allowlist
+    /// test — if the name isn't in the agent's allowlist, the
+    /// AllowlistToolService will short-circuit with PermissionDenied.
+    struct SingleCallProvider {
+        tool_name: String,
+        called: AtomicUsize,
+    }
+
+    impl AiProvider for SingleCallProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let n = self.called.fetch_add(1, Ordering::SeqCst);
+            let tool_name = self.tool_name.clone();
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: format!("call-{n}"),
+                        name: tool_name,
+                        arguments: json!({}),
+                    }],
+                    thinking: None,
+                    thinking_signature: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                })
+            })
+        }
+
+        fn name(&self) -> &str {
+            "single-call"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    // -- Tool services ----------------------------------------------------
+
+    /// Tool service whose `execute` always succeeds with an empty payload.
+    struct AlwaysOkTools;
+
+    #[async_trait::async_trait]
+    impl ToolService for AlwaysOkTools {
+        async fn execute(
+            &self,
+            _name: &str,
+            _input: serde_json::Value,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                value: json!({}),
+                metadata: ToolOutputMetadata::default(),
+            })
+        }
+
+        async fn list(&self) -> Vec<ToolDefinition> {
+            vec![ToolDefinition {
+                name: "noop".into(),
+                description: "fake noop".into(),
+                input_schema: json!({}),
+                source: ToolSource::Builtin,
+                metadata: Default::default(),
+            }]
+        }
+
+        async fn describe(&self, name: &str) -> Option<ToolDefinition> {
+            self.list().await.into_iter().find(|d| d.name == name)
+        }
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+            std::sync::Arc::from([])
+        }
+    }
+
+    // -- Fixtures ---------------------------------------------------------
+
+    fn make_base(provider: Arc<dyn AiProvider>) -> SpawnerBase {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
+
+        SpawnerBase {
+            session,
+            parent_tools: Arc::new(AlwaysOkTools),
+            sandbox: Arc::new(crate::sandbox::NoopSandbox),
+            provider,
+            chain: ChainContext::new(),
+            raw_memory_writer: None,
+            capture_registry: None,
+            parent_agent_id: None,
+            parent_session_id: None,
+            guardrails: None,
+            // Stage A (P1):
+            fallback_llm: None,
+            stall_config: None,
+            consecutive_failure_cap: None,
+            turn_timeout: None,
+            trace_sink: None,
+            // Stage C (P1):
+            lane_scheduler: None,
+            // P3 Stage I:
+            plugin_registry: None,
+        }
+    }
+
+    fn agent_with_allowed(id: &str, tools: Vec<&str>) -> AgentDef {
+        AgentDef::new(id, AgentMode::SubAgent)
+            .with_allowed_tools(tools.into_iter().map(String::from).collect())
+    }
+
+    // -- Fake RawMemoryStore (used by the G2 emit test) -------------------
+
+    /// In-memory `RawMemoryStore` capturing every insert for assertions.
+    /// Mirrors the pattern in `a2a::sub_agent::spec1_tests::FakeWriter` and
+    /// `components::session_compactor::tests::pre_compress_tests::FakeWriter`.
+    #[derive(Default)]
+    struct FakeWriter(tokio::sync::Mutex<Vec<crate::memory::store::raw_memory::RawMemory>>);
+
+    #[async_trait::async_trait]
+    impl crate::memory::store::raw_memory::RawMemoryStore for FakeWriter {
+        async fn insert_raw_memory(
+            &self,
+            raw: &crate::memory::store::raw_memory::RawMemory,
+        ) -> Result<(), crate::error::AlephError> {
+            self.0.lock().await.push(raw.clone());
+            Ok(())
+        }
+
+        async fn get_unprocessed_raw_memories(
+            &self,
+            _agent_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<crate::memory::store::raw_memory::RawMemory>, crate::error::AlephError>
+        {
+            Ok(vec![])
+        }
+
+        async fn mark_raw_as_processed(
+            &self,
+            _ids: &[String],
+        ) -> Result<usize, crate::error::AlephError> {
+            Ok(0)
+        }
+
+        async fn count_unprocessed(
+            &self,
+            _agent_id: &str,
+        ) -> Result<usize, crate::error::AlephError> {
+            Ok(0)
+        }
+
+        async fn get_raw_by_path_prefix(
+            &self,
+            _path_prefix: &str,
+            _agent_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<crate::memory::store::raw_memory::RawMemory>, crate::error::AlephError>
+        {
+            Ok(vec![])
+        }
+    }
+
+    // -- Tests ------------------------------------------------------------
+
+    #[tokio::test]
+    async fn spawn_single_turn_returns_final_text() {
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only(
+            "hi from child".to_string(),
+        )]);
+        let base = make_base(provider);
+
+        let agent = agent_with_allowed("echo", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "say hi",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert_eq!(result.final_text.as_deref(), Some("hi from child"));
+        assert_eq!(result.iterations, 1);
+        assert_eq!(result.tool_calls_made, 0);
+        assert_eq!(result.depth, 1); // child of root (depth=0) → depth=1
+        assert!(!result.hit_limit);
+    }
+
+    #[tokio::test]
+    async fn spawn_multi_turn_counts_iterations_and_tool_calls() {
+        let provider = ScriptedProvider::new(vec![
+            // Turn 1: the agent calls a tool.
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: "call-1".into(),
+                    name: "noop".into(),
+                    arguments: json!({}),
+                }],
+                thinking: None,
+                thinking_signature: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // Turn 2: terminal text.
+            ProviderResponse::text_only("all done".to_string()),
+        ]);
+        let base = make_base(provider);
+
+        let agent = agent_with_allowed("worker", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "do two things",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert_eq!(result.final_text.as_deref(), Some("all done"));
+        assert_eq!(result.iterations, 2);
+        assert_eq!(result.tool_calls_made, 1);
+        assert!(!result.hit_limit);
+    }
+
+    #[tokio::test]
+    async fn spawn_max_iter_sets_hit_limit() {
+        let provider: Arc<dyn AiProvider> = Arc::new(AlwaysToolCallProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let base = make_base(provider);
+
+        let agent = AgentDef::new("capped", AgentMode::SubAgent)
+            .with_allowed_tools(vec!["*".into()])
+            .with_max_iterations(3);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "loop forever",
+            context_summary: None,
+            model: None,
+            timeout_secs: 10,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert!(result.hit_limit, "expected hit_limit=true when cap fires");
+        assert_eq!(result.iterations, 3);
+    }
+
+    #[tokio::test]
+    async fn spawn_timeout_returns_timed_out_error() {
+        let provider: Arc<dyn AiProvider> = Arc::new(SlowProvider {
+            delay: std::time::Duration::from_secs(3),
+        });
+        let base = make_base(provider);
+
+        let agent = agent_with_allowed("slow", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "take your time",
+            context_summary: None,
+            model: None,
+            timeout_secs: 1,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+
+        let err = spawn(&base, req).await.expect_err("spawn should time out");
+        assert!(
+            err.contains("timed out"),
+            "expected timeout error, got: {err}",
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_tool_allowlist_enforced_via_harness() {
+        // Provider always calls `forbidden_tool`. The agent's allowlist
+        // only contains `noop`, so the allowlist decorator returns
+        // PermissionDenied on every turn. The harness records the error
+        // as a ToolError event and continues looping until max_iterations
+        // is reached (harness design: tool failures are non-fatal).
+        let provider: Arc<dyn AiProvider> = Arc::new(SingleCallProvider {
+            tool_name: "forbidden_tool".into(),
+            called: AtomicUsize::new(0),
+        });
+        let base = make_base(provider);
+
+        let agent = AgentDef::new("gated", AgentMode::SubAgent)
+            .with_allowed_tools(vec!["noop".into()])
+            .with_max_iterations(2);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "please don't call forbidden_tool",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert!(
+            result.hit_limit,
+            "expected hit_limit=true when allowlist blocks every tool call"
+        );
+        assert_eq!(
+            result.iterations, 2,
+            "expected max_iterations to cap the loop"
+        );
+        assert!(
+            result.tool_calls_made > 0,
+            "expected at least one attempted tool call"
+        );
+    }
+
+    // -- G2 delegation hook regression test ---------------------------------
+
+    /// Spec 1 G2 — when `SpawnerBase.raw_memory_writer` is set, a successful
+    /// spawn must fire-and-forget a `RawMemory(Delegation { child_agent_id })`
+    /// row stamped with parent agent + session ids. Without this hook the
+    /// post-phase7 intra-process subagent path silently loses every
+    /// delegation lesson, regressing the work shipped under spec 1.
+    #[tokio::test]
+    async fn spawn_emits_delegation_raw_when_writer_set() {
+        use crate::memory::store::raw_memory::RawMemorySource;
+
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only(
+            "child summary text".to_string(),
+        )]);
+        let mut base = make_base(provider);
+
+        let fake = Arc::new(FakeWriter::default());
+        base.raw_memory_writer =
+            Some(fake.clone() as Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>);
+        base.parent_agent_id = Some("parent-007".to_string());
+        base.parent_session_id = Some("agent:parent-007:peer:user".to_string());
+
+        let agent = agent_with_allowed("delegated-child", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "summarise the quarterly report",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+
+        spawn(&base, req).await.expect("spawn ok");
+
+        // Emit is fire-and-forget on a tokio task; give it a moment.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let captured = fake.0.lock().await;
+        assert_eq!(
+            captured.len(),
+            1,
+            "expected exactly one Delegation RawMemory row, got {}",
+            captured.len()
+        );
+        let row = &captured[0];
+
+        match &row.source {
+            RawMemorySource::Delegation { child_agent_id } => {
+                assert_eq!(child_agent_id, "delegated-child");
+            }
+            other => panic!("expected Delegation source, got {:?}", other),
+        }
+        assert!(
+            row.content.contains("DELEGATION_PROMPT:"),
+            "content missing DELEGATION_PROMPT marker: {}",
+            row.content
+        );
+        assert!(
+            row.content.contains("summarise the quarterly report"),
+            "content missing task text: {}",
+            row.content
+        );
+        assert!(
+            row.content.contains("DELEGATION_RESULT:"),
+            "content missing DELEGATION_RESULT marker: {}",
+            row.content
+        );
+        assert!(
+            row.content.contains("child summary text"),
+            "content missing child summary: {}",
+            row.content
+        );
+        assert_eq!(row.agent_id, "parent-007");
+        assert_eq!(
+            row.session_id,
+            Some("agent:parent-007:peer:user".to_string()),
+        );
+    }
+
+    /// Negative control — when no writer is wired, spawn must succeed without
+    /// emitting anything. Guards against regressions where a default writer
+    /// is silently injected by the harness.
+    #[tokio::test]
+    async fn spawn_does_not_emit_delegation_when_writer_unset() {
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only(
+            "no writer here".to_string(),
+        )]);
+        let base = make_base(provider); // raw_memory_writer left as None
+
+        let agent = agent_with_allowed("orphan", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "ignored",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert_eq!(result.final_text.as_deref(), Some("no writer here"));
+        // No assertion on captured rows — the absence of a writer is the
+        // contract, and if any silent default fires the test above will catch
+        // it (single row expected) before this test would.
+    }
+
+    // -- Stage H Task 8: isolation field API surface lock-in ------------------
+
+    /// Compile-time lock: `SpawnRequest.isolation` exists and defaults to
+    /// `None` at every construction site.  If the field is removed or renamed
+    /// this test will not compile, catching the regression immediately.
+    #[test]
+    fn spawn_request_isolation_field_exists_and_defaults_none() {
+        let agent = agent_with_allowed("isolation-probe", vec!["*"]);
+        let cancel = CancellationToken::new();
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "noop",
+            context_summary: None,
+            model: None,
+            timeout_secs: 1,
+            cancel,
+            isolation: None,
+        };
+        assert!(req.isolation.is_none());
+    }
+
+    // -- extract_run_result edge-case regression tests ------------------------
+
+    /// Seed a session with the given sequence of `AssistantMessage` text
+    /// variants (Some("…") = non-empty text turn, None = pure tool_use turn).
+    async fn seed_session_with_assistant_texts(
+        session: &Arc<dyn SessionService>,
+        child_id: &SessionId,
+        texts: &[Option<&str>],
+    ) {
+        session.attach(child_id.clone()).await.unwrap();
+        let turn = uuid::Uuid::new_v4();
+        session
+            .emit_event(
+                child_id,
+                SessionEvent::TurnStarted {
+                    turn_id: turn,
+                    trigger: TurnTrigger::SubagentRequest,
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+        for text in texts {
+            session
+                .emit_event(
+                    child_id,
+                    SessionEvent::AssistantMessage {
+                        turn_id: turn,
+                        content: MessageContent {
+                            text: text.unwrap_or("").to_string(),
+                            blocks: Vec::new(),
+                            thinking: None,
+                            thinking_signature: None,
+                        },
+                        at: now_ms(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    /// When the final AssistantMessage has empty text but earlier turns had
+    /// text, `final_text` must be cleared so the gateway surfaces
+    /// `ErrLoopExhausted` instead of echoing the stale earlier message.
+    #[tokio::test]
+    async fn final_text_cleared_when_last_assistant_is_empty() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
+        let child_id = ephemeral_for("edge");
+
+        // Turn 1: "thinking..." (real text). Turn 2: pure tool_use (empty).
+        seed_session_with_assistant_texts(&session, &child_id, &[Some("thinking..."), None]).await;
+
+        let chain = ChainContext::new();
+        let result = extract_run_result(session.as_ref(), &child_id, &chain, true)
+            .await
+            .expect("extract ok");
+
+        assert_eq!(result.iterations, 2, "should count both assistant turns");
+        assert!(
+            result.final_text.is_none(),
+            "final_text must be None when the last assistant turn is empty (got {:?})",
+            result.final_text
+        );
+        assert!(result.hit_limit, "hit_limit must propagate from caller");
+    }
+
+    /// Control case: when the final AssistantMessage has non-empty text,
+    /// `final_text` is that text — confirming the clearing logic is guarded
+    /// on the last-assistant-empty condition.
+    #[tokio::test]
+    async fn final_text_kept_when_last_assistant_has_text() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
+        let child_id = ephemeral_for("happy");
+
+        // Turn 1: pure tool_use (empty). Turn 2: terminal text.
+        seed_session_with_assistant_texts(&session, &child_id, &[None, Some("final answer")]).await;
+
+        let chain = ChainContext::new();
+        let result = extract_run_result(session.as_ref(), &child_id, &chain, false)
+            .await
+            .expect("extract ok");
+        assert_eq!(result.final_text.as_deref(), Some("final answer"));
+        assert!(!result.hit_limit);
+    }
+
+    // -- P3 Stage I: McpScope provision tests ---------------------------------
+
+    /// Spawn with a non-empty `mcp_servers` referencing an unknown name must
+    /// fail loud with an error containing "mcp scope" and the missing name.
+    /// This also validates the fail-loud path when `plugin_registry` is
+    /// `Some(empty)` — every reference lookup will fail as "not found".
+    #[tokio::test]
+    async fn spawn_mcp_scope_unknown_reference_fails_loud() {
+        use crate::agents::McpServerSpec;
+
+        let agent = agent_with_allowed("scoped", vec!["*"])
+            .with_mcp_servers(vec![McpServerSpec::Reference {
+                name: "missing".into(),
+            }]);
+
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only(
+            "should not reach".to_string(),
+        )]);
+        let mut base = make_base(provider);
+        // Provide an empty registry — every reference lookup returns "not found".
+        base.plugin_registry = Some(Arc::new(
+            crate::extension::registry::PluginRegistry::new(),
+        ));
+
+        let cancel = CancellationToken::new();
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "noop",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel,
+            isolation: None,
+        };
+        let err = spawn(&base, req).await.expect_err("must fail loud");
+        assert!(
+            err.contains("mcp scope") && err.contains("missing"),
+            "got error: {err}"
+        );
+    }
+
+    // -- Stage J-pre: MeteringProvider wrap -----------------------------------
+
+    /// A provider that returns a `ProviderResponse` with `usage: Some(...)`.
+    /// Used to verify that the MeteringProvider wrap in `spawn()` emits a
+    /// `LoopTraceEvent::ProviderUsage` event labelled with the subagent id.
+    struct UsageProvider;
+
+    impl AiProvider for UsageProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: Some("done".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: Some(crate::providers::adapter::TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        cache_read_tokens: Some(7),
+                        cache_creation_tokens: Some(3),
+                        thinking_tokens: None,
+                    }),
+                })
+            })
+        }
+
+        fn name(&self) -> &str { "usage-provider" }
+        fn color(&self) -> &str { "#000000" }
+    }
+
+    struct CapturingSink(std::sync::Mutex<Vec<crate::harness::trace::LoopTraceEvent>>);
+
+    impl crate::harness::TraceSink for CapturingSink {
+        fn on_trace(&self, event: &crate::harness::trace::LoopTraceEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+        fn flush(&self) {}
+    }
+
+    #[tokio::test]
+    async fn subagent_spawn_emits_provider_usage_with_agent_id() {
+        let provider: Arc<dyn AiProvider> = Arc::new(UsageProvider);
+        let sink = Arc::new(CapturingSink(std::sync::Mutex::new(vec![])));
+        let mut base = make_base(provider);
+        base.trace_sink = Some(sink.clone() as Arc<dyn crate::harness::TraceSink>);
+
+        let agent = agent_with_allowed("test-subagent-id", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "say hi",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+
+        spawn(&base, req).await.expect("spawn ok");
+
+        let events = sink.0.lock().unwrap();
+        let usage_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                crate::harness::trace::LoopTraceEvent::ProviderUsage {
+                    agent_id,
+                    cache_read_tokens,
+                    ..
+                } => Some((agent_id.clone(), *cache_read_tokens)),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            !usage_events.is_empty(),
+            "expected at least one ProviderUsage event, got none"
+        );
+        let (agent_id, cache_read) = &usage_events[0];
+        assert_eq!(agent_id, "test-subagent-id", "agent_id label mismatch");
+        assert_eq!(*cache_read, Some(7), "cache_read_tokens mismatch");
+    }
+}

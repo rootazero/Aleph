@@ -51,6 +51,7 @@ pub async fn execute_list(
             extension: entry_path
                 .extension()
                 .map(|e| e.to_string_lossy().to_string()),
+            lines: None,
         });
     }
 
@@ -72,6 +73,7 @@ pub async fn execute_list(
         content: None,
         bytes_written: None,
         items_affected: Some(count),
+    summary: None,
     })
 }
 
@@ -122,6 +124,7 @@ pub async fn execute_read(
         content: Some(content),
         bytes_written: None,
         items_affected: None,
+    summary: None,
     })
 }
 
@@ -164,6 +167,7 @@ pub async fn execute_write(
         content: None,
         bytes_written: Some(bytes),
         items_affected: None,
+    summary: None,
     })
 }
 
@@ -213,6 +217,7 @@ pub async fn execute_move(
         content: None,
         bytes_written: None,
         items_affected: Some(1),
+    summary: None,
     })
 }
 
@@ -271,6 +276,7 @@ pub async fn execute_copy(
         content: None,
         bytes_written: Some(bytes),
         items_affected: Some(1),
+    summary: None,
     })
 }
 
@@ -341,6 +347,7 @@ pub async fn execute_delete(
         content: None,
         bytes_written: None,
         items_affected: Some(items_deleted),
+    summary: None,
     })
 }
 
@@ -363,6 +370,7 @@ pub async fn execute_mkdir(
                 content: None,
                 bytes_written: None,
                 items_affected: Some(0),
+            summary: None,
             });
         } else {
             return Err(ToolError::InvalidArgs(format!(
@@ -390,5 +398,6 @@ pub async fn execute_mkdir(
         content: None,
         bytes_written: None,
         items_affected: Some(1),
+    summary: None,
     })
 }

@@ -51,6 +51,7 @@ pub async fn execute_search(
                         is_dir: metadata.is_dir(),
                         size: metadata.len(),
                         extension: path.extension().map(|e| e.to_string_lossy().to_string()),
+                        lines: None,
                     });
                 }
             }
@@ -76,5 +77,6 @@ pub async fn execute_search(
         content: None,
         bytes_written: None,
         items_affected: Some(count),
+    summary: None,
     })
 }

@@ -93,7 +93,7 @@ impl SharedTokenManager {
         let hash = hmac_sign(&self.secret, &token);
 
         self.store
-            .set_shared_token_with_secret(&hash, &self.secret, &token)
+            .set_shared_token_with_secret(&hash, &self.secret, Some(&token))
             .map_err(|e| SharedTokenError::Storage(e.to_string()))?;
 
         let mut current = self.current_token.lock().unwrap_or_else(|e| e.into_inner());

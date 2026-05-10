@@ -23,6 +23,9 @@ pub enum FileOperation {
     BatchMove,
     /// Auto-organize files by type into categorized folders
     Organize,
+    /// Recursive stats: per-file line/byte counts plus an aggregate summary.
+    /// Use this instead of looping over `read` to count lines.
+    Stats,
 }
 
 /// Arguments for file operations tool
@@ -35,7 +38,7 @@ pub struct FileOpsArgs {
     /// Destination path (for move/copy operations)
     #[serde(default)]
     pub destination: Option<String>,
-    /// Search pattern (for search operation, glob syntax)
+    /// Search pattern (for search/stats operation, glob syntax). Stats defaults to "**/*".
     #[serde(default)]
     pub pattern: Option<String>,
     /// Create parent directories if they don't exist
@@ -56,6 +59,20 @@ pub struct FileInfo {
     pub size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extension: Option<String>,
+    /// Newline-terminated line count. Only populated by `stats`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lines: Option<u64>,
+}
+
+/// Aggregate counts produced by the `stats` operation.
+#[derive(Debug, Clone, Serialize)]
+pub struct StatsSummary {
+    pub total_files: usize,
+    pub total_lines: u64,
+    pub total_bytes: u64,
+    /// Files that matched the pattern but were skipped for line counting
+    /// (binary, too large, or unreadable).
+    pub skipped_files: usize,
 }
 
 /// Output from file operations tool
@@ -72,4 +89,7 @@ pub struct FileOpsOutput {
     pub bytes_written: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items_affected: Option<usize>,
+    /// Aggregate summary, populated only by `stats`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<StatsSummary>,
 }

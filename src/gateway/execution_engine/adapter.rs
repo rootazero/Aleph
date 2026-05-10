@@ -1,0 +1,46 @@
+//! ExecutionAdapter trait implementation for ExecutionEngine.
+
+use async_trait::async_trait;
+use crate::sync_primitives::Arc;
+
+use crate::gateway::agent_instance::AgentInstance;
+use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter};
+use crate::gateway::execution_adapter::ExecutionAdapter;
+use super::{engine::ExecutionEngine, ExecutionError, RunRequest, RunStatus};
+use crate::executor::ToolRegistry;
+use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
+
+/// Implement ExecutionAdapter for the ExecutionEngine.
+///
+/// This allows InboundMessageRouter to use ExecutionEngine via a trait object,
+/// enabling routing without being generic over provider and tool registry types.
+#[async_trait]
+impl<P, R> ExecutionAdapter for ExecutionEngine<P, R>
+where
+    P: ThinkerProviderRegistry + Send + Sync + 'static,
+    R: ToolRegistry + Send + Sync + 'static,
+{
+    async fn execute(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        // Wrap the dyn trait object in DynEventEmitter to make it Sized,
+        // then delegate to the existing generic execute method
+        let wrapper = Arc::new(DynEventEmitter::new(emitter));
+        ExecutionEngine::execute(self, request, agent, wrapper).await
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        ExecutionEngine::cancel(self, run_id).await
+    }
+
+    async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+        ExecutionEngine::get_status(self, run_id).await
+    }
+
+    async fn active_run_count(&self) -> usize {
+        ExecutionEngine::active_run_count(self).await
+    }
+}

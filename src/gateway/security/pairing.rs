@@ -173,6 +173,7 @@ impl PairingManager {
                 channel: None,
                 sender_id: None,
                 remote_addr: remote_addr.as_deref(),
+                metadata: None,
                 expires_at,
             })
             .map_err(|e| PairingError::DatabaseError(e.to_string()))?;
@@ -223,6 +224,7 @@ impl PairingManager {
                 channel: Some(&channel),
                 sender_id: Some(&sender_id),
                 remote_addr: None,
+                metadata: None,
                 expires_at,
             })
             .map_err(|e| PairingError::DatabaseError(e.to_string()))?;

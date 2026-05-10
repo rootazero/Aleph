@@ -1,0 +1,226 @@
+use super::*;
+
+
+// ─── register_session_handlers ───────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_session_handlers(
+    server: &mut GatewayServer,
+    session_store: &Arc<dyn alephcore::gateway::session_store::SessionStore>,
+    memory_db: &MemoryBackend,
+    daemon: bool,
+) {
+    register_handler!(
+        server,
+        "sessions.list",
+        session_handlers::handle_list_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.history",
+        session_handlers::handle_history_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.reset",
+        session_handlers::handle_reset_db,
+        session_store
+    );
+    // sessions.delete is wired with the raw_memory writer so the SessionEnd
+    // capture path fires before the transcript is dropped (G4 fix).
+    {
+        let store = Arc::clone(session_store);
+        let writer: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore> =
+            Arc::clone(memory_db) as _;
+        server.handlers_mut().register("sessions.delete", move |req| {
+            let store = Arc::clone(&store);
+            let writer = Arc::clone(&writer);
+            async move {
+                session_handlers::handle_delete_db_with_capture(req, store, writer).await
+            }
+        });
+    }
+    register_handler!(
+        server,
+        "session.create",
+        session_handlers::handle_create_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "session.usage",
+        session_handlers::handle_usage_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "session.compact",
+        session_handlers::handle_compact_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.new",
+        session_handlers::handle_new_session_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.set_topic",
+        session_handlers::handle_set_topic_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.patch",
+        session_handlers::handle_patch_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.preview",
+        session_handlers::handle_preview_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.compaction.list",
+        session_handlers::handle_list_checkpoints_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.compaction.restore",
+        session_handlers::handle_restore_checkpoint_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.compaction.branch",
+        session_handlers::handle_branch_checkpoint_db,
+        session_store
+    );
+
+    if !daemon {
+        println!("Session methods:");
+        println!("  - sessions.list      : List all sessions");
+        println!("  - sessions.history   : Get session message history");
+        println!("  - sessions.reset     : Clear session messages");
+        println!("  - sessions.delete    : Delete a session");
+        println!("  - sessions.new       : Close current session and start new one");
+        println!("  - sessions.set_topic : Set session topic/title");
+        println!("  - sessions.patch     : Patch session metadata");
+        println!("  - sessions.preview   : Preview session with recent messages");
+        println!("  - session.create     : Create a new session");
+        println!("  - session.usage      : Get session token/message stats");
+        println!("  - session.compact    : Compact session history");
+        println!("  - sessions.compaction.list    : List compaction checkpoints");
+        println!("  - sessions.compaction.restore : Restore session to checkpoint");
+        println!("  - sessions.compaction.branch  : Branch new session from checkpoint");
+        println!();
+    }
+}
+
+// ─── register_channel_handlers ───────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_channel_handlers(
+    server: &mut GatewayServer,
+    channel_registry: &Arc<ChannelRegistry>,
+    app_config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
+    vault: &Arc<alephcore::gateway::security::SharedTokenManager>,
+) {
+    register_handler!(
+        server,
+        "channels.list",
+        channel_handlers::handle_list,
+        channel_registry,
+        app_config
+    );
+    register_handler!(
+        server,
+        "channels.status",
+        channel_handlers::handle_status,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "channel.start",
+        channel_handlers::handle_start,
+        channel_registry,
+        app_config,
+        vault
+    );
+    register_handler!(
+        server,
+        "channel.stop",
+        channel_handlers::handle_stop,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "channel.pairing_data",
+        channel_handlers::handle_pairing_data,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "channel.send",
+        channel_handlers::handle_send,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "channel.create",
+        channel_handlers::handle_create,
+        channel_registry,
+        app_config,
+        vault
+    );
+    register_handler!(
+        server,
+        "channel.delete",
+        channel_handlers::handle_delete,
+        channel_registry,
+        app_config
+    );
+
+    // ---- Discord Control Plane panel handlers ----
+    register_handler!(
+        server,
+        "discord.validate_token",
+        discord_panel_handlers::handle_validate_token
+    );
+    register_handler!(
+        server,
+        "discord.save_config",
+        discord_panel_handlers::handle_save_config
+    );
+    register_handler!(
+        server,
+        "discord.list_guilds",
+        discord_panel_handlers::handle_list_guilds,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "discord.list_channels",
+        discord_panel_handlers::handle_list_channels,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "discord.audit_permissions",
+        discord_panel_handlers::handle_audit_permissions,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "discord.update_allowlists",
+        discord_panel_handlers::handle_update_allowlists,
+        channel_registry
+    );
+}
+
+// ─── setup_config_watcher ────────────────────────────────────────────────────
+

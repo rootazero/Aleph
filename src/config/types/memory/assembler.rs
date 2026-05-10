@@ -1,0 +1,74 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AssemblerConfig {
+    #[serde(default = "super::defaults::default_assembler_enabled")]
+    pub enabled: bool,
+    #[serde(default = "super::defaults::default_total_budget")]
+    pub total_budget_tokens: u32,
+    #[serde(default = "super::defaults::default_pool_limit")]
+    pub candidate_pool_limit: usize,
+    #[serde(default = "super::defaults::default_rerank_timeout")]
+    pub rerank_timeout_ms: u64,
+    #[serde(default)]
+    pub rerank_model: Option<String>,
+    #[serde(default)]
+    pub render_style: crate::memory::assembler::render::RenderStyle,
+    #[serde(default)]
+    pub force_fallback: bool,
+    #[serde(default)]
+    pub fallback_skeleton: FallbackSkeleton,
+    #[serde(default)]
+    pub assembly_log: AssemblyLogConfig,
+}
+
+impl Default for AssemblerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: super::defaults::default_assembler_enabled(),
+            total_budget_tokens: super::defaults::default_total_budget(),
+            candidate_pool_limit: super::defaults::default_pool_limit(),
+            rerank_timeout_ms: super::defaults::default_rerank_timeout(),
+            rerank_model: None,
+            render_style: crate::memory::assembler::render::RenderStyle::default(),
+            force_fallback: false,
+            fallback_skeleton: FallbackSkeleton::default(),
+            assembly_log: AssemblyLogConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FallbackSkeleton {
+    #[serde(default = "super::defaults::default_user_profile_tokens")]
+    pub user_profile_tokens: u32,
+    #[serde(default = "super::defaults::default_session_recent_tokens")]
+    pub session_recent_tokens: u32,
+    #[serde(default = "super::defaults::default_relevant_notes_tokens")]
+    pub relevant_notes_tokens: u32,
+    #[serde(default = "super::defaults::default_raw_fragments_tokens")]
+    pub raw_fragments_tokens: u32,
+    #[serde(default)]
+    pub nudges_tokens: u32,
+}
+
+impl Default for FallbackSkeleton {
+    fn default() -> Self {
+        Self {
+            user_profile_tokens: super::defaults::default_user_profile_tokens(),
+            session_recent_tokens: super::defaults::default_session_recent_tokens(),
+            relevant_notes_tokens: super::defaults::default_relevant_notes_tokens(),
+            raw_fragments_tokens: super::defaults::default_raw_fragments_tokens(),
+            nudges_tokens: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct AssemblyLogConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "super::defaults::default_assembly_retention_days")]
+    pub retention_days: u32,
+}

@@ -283,3 +283,45 @@ async fn test_wait_for_deadline_multiple_extensions() {
         elapsed
     );
 }
+
+// =============================================================================
+// Stream callback trace persistence
+// =============================================================================
+
+#[tokio::test]
+async fn stream_callback_persists_agent_trace_events() {
+    use crate::gateway::execution_engine::callback::{StreamCallbackState, TracePersistence};
+    use crate::harness::trace::LoopTraceEvent;
+    use crate::resilience::{AgentTask, RiskLevel};
+
+    let db = Arc::new(crate::resilience::StateDatabase::in_memory().unwrap());
+    db.insert_agent_task(&AgentTask::new(
+        "run-1",
+        "session-1",
+        "coder",
+        "persist trace",
+        RiskLevel::High,
+    ))
+    .await
+    .unwrap();
+    db.update_task_status("run-1", crate::resilience::TaskStatus::Running)
+        .await
+        .unwrap();
+
+    let shared = Arc::new(StreamCallbackState::new(Some(Arc::new(
+        TracePersistence::new(db.clone(), "run-1".to_string()),
+    ))));
+
+    // Test persistence directly via StreamCallbackState (post-flip: StreamCallback
+    // is dead code; the production path uses GatewayTraceSink/CallbackStateFlushHandle).
+    shared.persist_trace(&LoopTraceEvent::TurnStarted { iteration: 1 });
+    shared.flush_trace_persistence().await;
+
+    let traces = db.get_traces_by_task("run-1").await.unwrap();
+    assert_eq!(traces.len(), 1);
+    assert_eq!(traces[0].event.kind(), "turn_started");
+    assert_eq!(
+        traces[0].event,
+        aleph_protocol::AgentTraceEvent::TurnStarted { iteration: 1 }
+    );
+}

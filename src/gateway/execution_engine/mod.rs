@@ -8,12 +8,21 @@
 //! - `engine` - Full `ExecutionEngine<P,R>` with AgentLoop integration
 //! - `simple` - `SimpleExecutionEngine` for when providers/tools are not available
 
+mod adapter;
+mod callback;
+mod deadline;
 mod engine;
 pub(crate) mod event_drain;
+mod execute;
+mod fast_path;
 pub mod helpers;
+mod history;
+mod orchestrator;
+mod persistence;
 mod run_loop;
 mod simple;
 mod slash_command;
+mod tool_refresh;
 mod tool_service_builder;
 mod trace_sink_adapter;
 
