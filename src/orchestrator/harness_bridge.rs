@@ -411,7 +411,17 @@ impl AgentHarnessRunner {
             return None;
         }
 
-        let mut builder = PromptBuilder::new(PromptConfig::default());
+        // The harness path delivers tool schemas via native tool_use
+        // (`with_tools(tools_ref)` in agent.rs). When `native_tools_enabled` is
+        // false (the default), `ToolsLayer` injects the literal string
+        // "No tools available" and `ResponseFormatLayer` mandates the legacy
+        // `{reasoning, action}` JSON envelope — both of which contradict the
+        // native-tool-use API the harness actually drives. Force the flag on
+        // here so the assembled prompt matches the runtime contract.
+        let mut builder = PromptBuilder::new(PromptConfig {
+            native_tools_enabled: true,
+            ..PromptConfig::default()
+        });
         let role_present = agent_def.is_some();
         if let Some(def) = agent_def {
             builder = builder.with_agent(def);
@@ -1057,4 +1067,65 @@ mod tests {
     // Adding a unit test here would require a heavy fixture stack (provider,
     // session_service, tool_service, agent registry) that the surrounding
     // file already builds via `fresh_service` for `seed_session` only.
+
+    /// Regression: harness_bridge must build the system prompt with
+    /// `native_tools_enabled = true`. Otherwise `ToolsLayer` injects
+    /// "No tools available" (the harness still passes tools via native
+    /// tool_use, so the prompt would be lying to the LLM) and
+    /// `ResponseFormatLayer` mandates the legacy `{reasoning, action}` JSON
+    /// envelope (which then leaks raw to clients because the harness no
+    /// longer expects it).
+    ///
+    /// This test exercises the exact `PromptConfig` shape used at
+    /// `harness_bridge.rs::build_system_prompt`, decoupled from the
+    /// `MemoryContextProvider` fixture, so a future refactor that drops the
+    /// flag fails fast.
+    #[test]
+    fn harness_bridge_prompt_config_skips_tools_and_response_format_layers() {
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+
+        let prompt = PromptBuilder::new(PromptConfig {
+            native_tools_enabled: true,
+            ..PromptConfig::default()
+        })
+        .build_system_prompt(&[]);
+
+        assert!(
+            !prompt.contains("No tools available"),
+            "ToolsLayer leaked the empty-tools sentinel into a native-tool-use prompt:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("## Response Format"),
+            "ResponseFormatLayer leaked the JSON-envelope mandate into a native-tool-use prompt:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("\"reasoning\""),
+            "Prompt still references the {{reasoning, action}} envelope schema:\n{prompt}"
+        );
+    }
+
+    /// Companion check: with `native_tools_enabled = false` the ToolsLayer
+    /// must still announce empty tools when called with `&[]`. The harness
+    /// path opts out via `native_tools_enabled = true` (above); other paths
+    /// that still rely on prompt-injected tool listings (e.g. providers
+    /// without native tool_use) must keep getting that section.
+    ///
+    /// ResponseFormatLayer is intentionally not asserted here — it was
+    /// unregistered from the default pipeline on 2026-05-10 and is no longer
+    /// expected on any path.
+    #[test]
+    fn legacy_prompt_config_still_emits_tools_layer() {
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+
+        let prompt = PromptBuilder::new(PromptConfig::default()).build_system_prompt(&[]);
+
+        assert!(
+            prompt.contains("No tools available"),
+            "ToolsLayer should still announce empty tools on the legacy path"
+        );
+        assert!(
+            !prompt.contains("## Response Format"),
+            "ResponseFormatLayer is unregistered; no path should still emit it"
+        );
+    }
 }

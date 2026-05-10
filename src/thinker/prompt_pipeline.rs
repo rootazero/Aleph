@@ -220,7 +220,6 @@ impl PromptPipeline {
     /// 1000  GenerationModelsLayer
     /// 1050  SkillInstructionsLayer
     /// 1100  SpecialActionsLayer
-    /// 1200  ResponseFormatLayer
     /// 1300  GuidelinesLayer
     /// 1350  ThinkingGuidanceLayer
     /// 1400  SkillModeLayer
@@ -265,7 +264,12 @@ impl PromptPipeline {
             Box::new(GenerationModelsLayer),
             Box::new(SkillInstructionsLayer),
             Box::new(SpecialActionsLayer),
-            Box::new(ResponseFormatLayer),
+            // ResponseFormatLayer (deprecated 2026-05-10): mandated the legacy
+            // `{reasoning, action}` JSON envelope, which had no live consumer
+            // — the harness uses native `with_tools(tools_ref)` for dispatch.
+            // Unregistering eliminates the envelope at its source. The struct
+            // is kept temporarily for one observation cycle; safe to delete
+            // entirely after no regressions are observed.
             Box::new(GuidelinesLayer),
             Box::new(ThinkingGuidanceLayer),
             Box::new(SkillModeLayer),
@@ -468,7 +472,9 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 35);
+        // 34 after ResponseFormatLayer was unregistered (2026-05-10) — see
+        // `default_layers` for rationale.
+        assert_eq!(pipeline.layer_count(), 34);
     }
 
     #[test]
@@ -552,11 +558,15 @@ mod mode_tests {
     #[test]
     fn minimal_mode_only_core_layers() {
         let pipeline = PromptPipeline::default_layers();
+        // 2026-05-10: `response_format` removed (ResponseFormatLayer is no
+        // longer registered). `curated_memory` added to align with reality —
+        // CuratedMemoryLayer (commit a89af2844) inherits the default
+        // `supports_mode = true`, so it implicitly participates in Minimal.
         let included_in_minimal = [
             "soul",
+            "curated_memory",
             "tools",
             "hydrated_tools",
-            "response_format",
             "language",
         ];
         for layer in &pipeline.layers {

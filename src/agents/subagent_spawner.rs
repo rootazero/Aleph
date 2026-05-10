@@ -259,9 +259,17 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         // 4. Build the agent-scoped system prompt. `PromptBuilder::with_agent`
         //    pulls in the AgentRoleLayer; `build_system_prompt(&[])` is fine —
         //    tool schemas are delivered via native tool_use, not the prompt.
-        let system_prompt = PromptBuilder::new(PromptConfig::default())
-            .with_agent(req.agent_def.clone())
-            .build_system_prompt(&[]);
+        //    `native_tools_enabled = true` skips ToolsLayer and
+        //    ResponseFormatLayer so the prompt does not (a) lie to the LLM
+        //    that no tools exist, nor (b) mandate the legacy
+        //    `{reasoning, action}` JSON envelope which contradicts native
+        //    tool_use.
+        let system_prompt = PromptBuilder::new(PromptConfig {
+            native_tools_enabled: true,
+            ..PromptConfig::default()
+        })
+        .with_agent(req.agent_def.clone())
+        .build_system_prompt(&[]);
 
         // 5. Resolve the model override: explicit > model_hint > native.
         let resolved_model: Option<String> = req

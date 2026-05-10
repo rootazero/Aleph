@@ -42,67 +42,6 @@ fn has_soft_boundary(s: &str) -> bool {
     s.ends_with('\n') && !s.ends_with("\n\n")
 }
 
-/// True when the LLM output looks like a `{reasoning, action}` JSON envelope
-/// (with optional ```json fence). Used to suppress streaming flushes — the
-/// raw JSON would render as garbage in chat clients, so we wait for `Done`
-/// and emit `action.summary` as a single chunk.
-fn looks_like_envelope_prefix(accumulated: &str, buffer: &str) -> bool {
-    let mut probe = String::with_capacity(accumulated.len() + buffer.len());
-    probe.push_str(accumulated);
-    probe.push_str(buffer);
-    let s = probe.trim_start();
-    let s = s
-        .strip_prefix("```json")
-        .or_else(|| s.strip_prefix("```"))
-        .unwrap_or(s)
-        .trim_start();
-    s.starts_with('{') || s.starts_with('[')
-}
-
-/// Try to parse `text` as a structured action envelope and return the
-/// user-facing payload (prefers `action.summary`, falls back through the
-/// same candidate ladder used by `orchestrator::harness_bridge`). Returns
-/// `None` when the text isn't a parseable envelope.
-fn unwrap_envelope(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    let payload = if trimmed.starts_with("```") {
-        trimmed
-            .lines()
-            .skip(1)
-            .take_while(|l| !l.trim_start().starts_with("```"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        trimmed.to_string()
-    };
-    let json_trimmed = payload.trim_start();
-    if !(json_trimmed.starts_with('{') || json_trimmed.starts_with('[')) {
-        return None;
-    }
-    let json: serde_json::Value = serde_json::from_str(&payload).ok()?;
-    let candidates = [
-        json.get("action")
-            .and_then(|a| a.get("summary"))
-            .and_then(|v| v.as_str()),
-        json.get("action")
-            .and_then(|a| a.get("content"))
-            .and_then(|v| v.as_str()),
-        json.get("action")
-            .and_then(|a| a.get("text"))
-            .and_then(|v| v.as_str()),
-        json.get("summary").and_then(|v| v.as_str()),
-        json.get("content").and_then(|v| v.as_str()),
-        json.get("message").and_then(|v| v.as_str()),
-        json.get("text").and_then(|v| v.as_str()),
-        json.get("reasoning").and_then(|v| v.as_str()),
-    ];
-    candidates
-        .iter()
-        .filter_map(|c| *c)
-        .max_by_key(|s| s.len())
-        .map(|s| s.to_string())
-}
-
 /// Bridges ProviderDelta events to the Gateway EventEmitter for real-time text streaming.
 ///
 /// Created per-run by ExecutionEngine and injected into AgentLoop via with_delta_sink().
@@ -162,19 +101,6 @@ impl DeltaSink for StreamingDeltaSink {
                 let mut buf = self.buffer.lock().await;
                 buf.push_str(text);
 
-                // Envelope-mode suppression: when the entire LLM output starts
-                // with `{` (or a ```json fence), the model is producing the
-                // structured `{reasoning, action}` envelope. Streaming raw JSON
-                // tokens would render as garbage in chat clients, so we hold
-                // every chunk in `buffer` until `Done` and emit only the
-                // unwrapped `action.summary`.
-                {
-                    let acc = self.accumulated.lock().await;
-                    if looks_like_envelope_prefix(&acc, &buf) {
-                        return;
-                    }
-                }
-
                 let last = self.last_emit.lock().await;
                 let elapsed = last.elapsed().as_millis() as u64;
                 drop(last);
@@ -212,8 +138,8 @@ impl DeltaSink for StreamingDeltaSink {
             ProviderDelta::Done(stop_reason) => {
                 let is_intermediate = matches!(stop_reason, StopReason::ToolUse);
 
-                // Drain any remaining buffered text (in envelope mode, this
-                // contains the entire LLM payload since flushes were suppressed).
+                // Drain any remaining buffered text — semantic-boundary flushes
+                // may leave a tail when the LLM stops mid-sentence.
                 let mut buf = self.buffer.lock().await;
                 let remaining = std::mem::take(&mut *buf);
                 drop(buf);
@@ -222,35 +148,10 @@ impl DeltaSink for StreamingDeltaSink {
                 if !remaining.is_empty() {
                     acc.push_str(&remaining);
                 }
-                let raw_full_text = acc.clone();
+                let full_text = acc.clone();
                 drop(acc);
 
-                // Try to unwrap the structured envelope; if successful,
-                // downstream renderers see only the user-facing summary.
-                let unwrapped = unwrap_envelope(&raw_full_text);
-                let was_envelope = unwrapped.is_some();
-                let full_text = unwrapped.unwrap_or_else(|| raw_full_text.clone());
-
-                if was_envelope {
-                    // Envelope mode flushed nothing during streaming. Emit the
-                    // entire unwrapped summary as a single content chunk so
-                    // clients that render `delta` (Telegram, webchat) receive
-                    // the cleaned text exactly once.
-                    if !full_text.is_empty() {
-                        let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
-                        self.emitter
-                            .emit_response_chunk(
-                                &self.run_id,
-                                &full_text,
-                                &full_text,
-                                idx,
-                                false,
-                                false,
-                            )
-                            .await;
-                        self.has_emitted_text.store(true, Ordering::Release);
-                    }
-                } else if !remaining.is_empty() {
+                if !remaining.is_empty() {
                     let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
                     self.emitter
                         .emit_response_chunk(
@@ -607,78 +508,4 @@ mod tests {
         }
     }
 
-    /// Regression: when the LLM emits a `{reasoning, action}` envelope token
-    /// by token, no chunk should leak the raw JSON to the client. The Done
-    /// handler must emit the unwrapped `action.summary` exactly once.
-    #[tokio::test]
-    async fn test_envelope_chunks_unwrap_to_summary() {
-        let flag = Arc::new(AtomicBool::new(false));
-        let (sink, emitter) = make_sink("run-env", flag.clone());
-
-        let envelope = r#"{"reasoning":"r","action":{"type":"complete","summary":"clean summary"}}"#;
-        for piece in envelope.as_bytes().chunks(8) {
-            let s = std::str::from_utf8(piece).unwrap_or("").to_string();
-            if s.is_empty() {
-                continue;
-            }
-            sink.on_delta(&ProviderDelta::TextDelta(s)).await;
-        }
-        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))
-            .await;
-
-        let events = emitter.events().await;
-        for e in &events {
-            if let StreamEvent::ResponseChunk {
-                content, full_text, ..
-            } = e
-            {
-                assert!(
-                    !content.contains("\"reasoning\""),
-                    "raw envelope leaked into delta: {content}"
-                );
-                assert!(
-                    !full_text.contains("\"reasoning\""),
-                    "raw envelope leaked into full_text: {full_text}"
-                );
-            }
-        }
-
-        let final_chunk = events.iter().find_map(|e| match e {
-            StreamEvent::ResponseChunk {
-                content,
-                is_final: true,
-                full_text,
-                ..
-            } => Some((content.clone(), full_text.clone())),
-            _ => None,
-        });
-        assert!(final_chunk.is_some(), "missing final ResponseChunk");
-        let (_content, full_text) = final_chunk.unwrap();
-        assert_eq!(full_text, "clean summary");
-    }
-
-    #[test]
-    fn test_unwrap_envelope_picks_summary() {
-        let envelope =
-            r#"{"reasoning":"r","action":{"type":"complete","summary":"hi user"}}"#;
-        assert_eq!(unwrap_envelope(envelope).as_deref(), Some("hi user"));
-    }
-
-    #[test]
-    fn test_unwrap_envelope_strips_code_fence() {
-        let envelope = "```json\n{\"action\":{\"summary\":\"x\"}}\n```";
-        assert_eq!(unwrap_envelope(envelope).as_deref(), Some("x"));
-    }
-
-    #[test]
-    fn test_unwrap_envelope_returns_none_for_plain_text() {
-        assert_eq!(unwrap_envelope("hello world"), None);
-    }
-
-    #[test]
-    fn test_looks_like_envelope_prefix_detects_open_brace() {
-        assert!(looks_like_envelope_prefix("", "  {"));
-        assert!(looks_like_envelope_prefix("", "```json\n{"));
-        assert!(!looks_like_envelope_prefix("", "Hello "));
-    }
 }
