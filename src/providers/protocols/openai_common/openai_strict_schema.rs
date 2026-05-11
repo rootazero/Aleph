@@ -21,6 +21,93 @@ pub enum StrictResult {
     },
 }
 
+/// Inject `"type": "object"` at the top level of a tool parameters schema when
+/// it's missing but `oneOf` / `anyOf` is present (e.g., schemars output for
+/// internally-tagged enums). OpenAI's tool schema validator requires top-level
+/// `type: "object"` and rejects type-less roots with
+/// `schema must be a JSON Schema of 'type: "object"', got 'type: "None"'`.
+///
+/// Does nothing if `type` is already set. Non-recursive (top-level only).
+pub fn ensure_openai_tool_envelope(schema: &mut Value) {
+    if let Value::Object(map) = schema {
+        if !map.contains_key("type")
+            && (map.contains_key("oneOf") || map.contains_key("anyOf"))
+        {
+            map.insert("type".to_string(), Value::String("object".to_string()));
+        }
+    }
+}
+
+/// Lenient multi-type rewriter for OpenAI's non-strict tool path.
+///
+/// OpenAI's tool schema validator rejects `type: [...]` arrays even in
+/// non-strict mode. This function rewrites them in-place:
+/// - `["null", X]` (length 2, one null) → `{"anyOf": [{"type":"null"}, {..., "type": X}]}`
+///   preserves the schema lossless-ly.
+/// - Any other multi-type shape → strip the `type` keyword.
+///   The field becomes any-value (lossy but accepted).
+///
+/// Idempotent. Use in the non-strict `build_tools` path where the
+/// stricter `normalize_strict_schema` returns Incompatible.
+pub fn lenient_multi_type_rewrite(schema: &mut Value) {
+    lenient_rewrite_node(schema);
+}
+
+fn lenient_rewrite_node(node: &mut Value) {
+    if let Value::Object(map) = node {
+        let type_array = map.get("type").and_then(|v| v.as_array()).cloned();
+        if let Some(types) = type_array {
+            if types.len() == 2 {
+                let null_idx = types.iter().position(|t| t.as_str() == Some("null"));
+                let other_idx = types
+                    .iter()
+                    .position(|t| t.as_str().is_some_and(|s| s != "null"));
+                if let (Some(_), Some(other)) = (null_idx, other_idx) {
+                    let other_type = types[other].clone();
+                    let mut non_null_branch: serde_json::Map<String, Value> = map
+                        .iter()
+                        .filter(|(k, _)| k.as_str() != "type")
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    non_null_branch.insert("type".to_string(), other_type);
+                    map.clear();
+                    map.insert(
+                        "anyOf".to_string(),
+                        Value::Array(vec![
+                            serde_json::json!({"type": "null"}),
+                            Value::Object(non_null_branch),
+                        ]),
+                    );
+                    if let Some(Value::Array(arr)) = map.get_mut("anyOf") {
+                        if let Some(non_null) = arr.get_mut(1) {
+                            lenient_rewrite_node(non_null);
+                        }
+                    }
+                    return; // map is now {"anyOf": [...]}, no other keys to recurse
+                }
+            }
+            // Any other multi-type → strip type
+            map.remove("type");
+        }
+
+        if let Some(Value::Object(props)) = map.get_mut("properties") {
+            for (_, prop_schema) in props.iter_mut() {
+                lenient_rewrite_node(prop_schema);
+            }
+        }
+        if let Some(items) = map.get_mut("items") {
+            lenient_rewrite_node(items);
+        }
+        for key in &["anyOf", "allOf", "oneOf"] {
+            if let Some(Value::Array(variants)) = map.get_mut(*key) {
+                for variant in variants.iter_mut() {
+                    lenient_rewrite_node(variant);
+                }
+            }
+        }
+    }
+}
+
 /// Recursively normalize a JSON schema for OpenAI strict mode.
 ///
 /// - Injects `additionalProperties: false` on all object schemas
@@ -302,6 +389,77 @@ mod tests {
         });
         let result = normalize_strict_schema(&mut schema, false);
         assert!(matches!(result, StrictResult::Incompatible { .. }));
+    }
+
+    #[test]
+    fn ensure_envelope_injects_type_object_for_top_level_oneof() {
+        let mut schema = serde_json::json!({
+            "oneOf": [
+                {"type": "object", "properties": {"action": {"const": "add"}}},
+                {"type": "object", "properties": {"action": {"const": "remove"}}}
+            ]
+        });
+        ensure_openai_tool_envelope(&mut schema);
+        assert_eq!(schema["type"], "object");
+        assert!(schema["oneOf"].is_array());
+    }
+
+    #[test]
+    fn ensure_envelope_skips_when_type_already_present() {
+        let mut schema = serde_json::json!({
+            "type": "string",
+            "oneOf": [{"const": "a"}, {"const": "b"}]
+        });
+        ensure_openai_tool_envelope(&mut schema);
+        assert_eq!(schema["type"], "string", "should not overwrite");
+    }
+
+    #[test]
+    fn ensure_envelope_skips_when_no_oneof_or_anyof() {
+        let mut schema = serde_json::json!({"properties": {"a": {"type": "string"}}});
+        ensure_openai_tool_envelope(&mut schema);
+        assert!(schema.get("type").is_none(), "no oneOf/anyOf → no injection");
+    }
+
+    #[test]
+    fn lenient_rewrite_null_pair_becomes_anyof() {
+        let mut schema = serde_json::json!({
+            "type": ["null", "string"],
+            "description": "optional label"
+        });
+        lenient_multi_type_rewrite(&mut schema);
+        assert!(schema["anyOf"].is_array());
+        assert_eq!(schema["anyOf"][1]["type"], "string");
+        assert_eq!(schema["anyOf"][1]["description"], "optional label");
+    }
+
+    #[test]
+    fn lenient_rewrite_any_value_strips_type() {
+        let mut schema = serde_json::json!({
+            "type": ["boolean", "object", "array", "number", "string", "integer", "null"],
+            "description": "raw value"
+        });
+        lenient_multi_type_rewrite(&mut schema);
+        assert!(schema.get("type").is_none(), "type stripped for non-null multi");
+        assert_eq!(schema["description"], "raw value", "sibling keys preserved");
+    }
+
+    #[test]
+    fn lenient_rewrite_recurses_through_nesting() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "type": ["boolean", "object", "array", "number", "string", "integer", "null"]
+                    }
+                }
+            }
+        });
+        lenient_multi_type_rewrite(&mut schema);
+        let items = &schema["properties"]["actions"]["items"];
+        assert!(items.get("type").is_none(), "deep type stripped");
     }
 
     #[test]

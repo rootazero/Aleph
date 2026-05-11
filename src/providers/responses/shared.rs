@@ -156,7 +156,8 @@ pub(crate) fn build_tools(
     enable_strict: bool,
 ) -> Option<Vec<FunctionToolDef>> {
     use crate::providers::protocols::openai_common::openai_strict_schema::{
-        normalize_strict_schema, StrictResult,
+        ensure_openai_tool_envelope, lenient_multi_type_rewrite, normalize_strict_schema,
+        StrictResult,
     };
     tools.map(|tool_defs| {
         tool_defs
@@ -167,6 +168,10 @@ pub(crate) fn build_tools(
                     obj.remove("$schema");
                     obj.remove("title");
                 }
+                // Apply envelope injection unconditionally — required for both strict and
+                // non-strict (OpenAI parser validates top-level `type: "object"` either way).
+                ensure_openai_tool_envelope(&mut params);
+
                 let strict = if enable_strict {
                     match normalize_strict_schema(&mut params, true) {
                         StrictResult::Ok => Some(true),
@@ -184,11 +189,15 @@ pub(crate) fn build_tools(
                                 obj.remove("$schema");
                                 obj.remove("title");
                             }
+                            ensure_openai_tool_envelope(&mut params);
+                            lenient_multi_type_rewrite(&mut params);
                             ensure_properties_recursive(&mut params);
                             None
                         }
                     }
                 } else {
+                    // Lenient rewriter handles multi-types so OpenAI parser accepts.
+                    lenient_multi_type_rewrite(&mut params);
                     ensure_properties_recursive(&mut params);
                     None
                 };
@@ -653,6 +662,41 @@ mod tests {
         let out = build_tools(Some(&[td]), true).expect("Some tools");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].strict, Some(true));
+    }
+
+    #[test]
+    fn build_tools_sanitizes_enum_tagged_tool_top_level() {
+        // Mimic `RememberArgs` schemars output: top-level oneOf without type
+        let td = make_tool(
+            "enum_tool",
+            serde_json::json!({
+                "oneOf": [
+                    {"type": "object", "properties": {"action": {"const": "add"}, "content": {"type": "string"}}, "required": ["action", "content"]},
+                    {"type": "object", "properties": {"action": {"const": "remove"}}, "required": ["action"]}
+                ]
+            }),
+        );
+        let out = build_tools(Some(&[td]), false).expect("Some tools");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].parameters["type"], "object", "envelope injected");
+        assert!(out[0].parameters["oneOf"].is_array());
+    }
+
+    #[test]
+    fn build_tools_lenient_rewrites_multi_type_in_non_strict_mode() {
+        let td = make_tool(
+            "lenient_target",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "field": {"type": ["null", "string"]}
+                }
+            }),
+        );
+        let out = build_tools(Some(&[td]), false).expect("Some tools");
+        assert_eq!(out[0].strict, None);
+        let field = &out[0].parameters["properties"]["field"];
+        assert!(field["anyOf"].is_array(), "null-pair rewritten to anyOf");
     }
 
     #[test]
