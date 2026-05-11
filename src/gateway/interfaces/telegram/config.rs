@@ -255,6 +255,8 @@ impl TelegramConfig {
                 },
                 streaming: Some(self.streaming.clone()),
                 error_policy: None,
+                proxy_url: None,
+                html_fallback: None,
                 groups: Vec::new(),
             }],
             coalescing: self.coalescing.clone(),
@@ -272,18 +274,28 @@ impl TelegramConfig {
 pub fn parse_telegram_channel_config(
     value: serde_json::Value,
 ) -> Result<TelegramConfigV2, serde_json::Error> {
-    match serde_json::from_value::<TelegramConfigV2>(value.clone()) {
-        Ok(v2) => Ok(v2),
+    let config = match serde_json::from_value::<TelegramConfigV2>(value.clone()) {
+        Ok(v2) => v2,
         Err(v2_err) => match serde_json::from_value::<TelegramConfig>(value) {
             Ok(v1) => {
                 tracing::debug!(
                     "Telegram channel config: auto-upgraded legacy v1 (flat) format to v2"
                 );
-                Ok(v1.upgrade_to_v2())
+                v1.upgrade_to_v2()
             }
-            Err(_) => Err(v2_err),
+            Err(_) => return Err(v2_err),
         },
+    };
+
+    // Run validation and log warnings for any issues
+    let validation_errors = config.validate();
+    if !validation_errors.is_empty() {
+        for err in &validation_errors {
+            tracing::warn!("Telegram config validation: {}", err);
+        }
     }
+
+    Ok(config)
 }
 
 #[cfg(test)]

@@ -26,11 +26,12 @@ impl StreamOrchestrator {
         delivery: TelegramDelivery,
         config: StreamingOptions,
     ) -> (Self, mpsc::Sender<StreamEvent>) {
-        let (event_tx, event_rx) = mpsc::channel(256);
+        let (event_tx, event_rx) = mpsc::channel(config.buffer_size);
         let (chat_id, thread_id) =
             crate::gateway::interfaces::telegram::delivery::parse_conversation_id(
                 &delivery.conversation_id,
-            );
+            )
+            .expect("Invalid conversation_id in TelegramDelivery");
         let tracker = Arc::new(Mutex::new(LaneDeliveryTracker::new(
             chat_id.0,
             thread_id.map(|t| t as i64),
