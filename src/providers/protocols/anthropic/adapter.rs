@@ -16,6 +16,8 @@ use crate::providers::anthropic::{
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::{CacheControl, EphemeralTtl, UnifiedMessage};
 use crate::sync_primitives::{Arc, RwLock};
+use super::sse::parse_anthropic_sse_event;
+use super::{sanitize_anthropic_tool_name, AnthropicProtocol, ToolNameMap, ANTHROPIC_VERSION};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -143,8 +145,6 @@ fn inject_cache_control_into_last_user_message(
     }
 }
 
-use super::{sanitize_anthropic_tool_name, AnthropicProtocol, ToolNameMap, ANTHROPIC_VERSION};
-use super::sse::parse_anthropic_sse_event;
 #[async_trait]
 impl ProtocolAdapter for AnthropicProtocol {
     fn build_request(
