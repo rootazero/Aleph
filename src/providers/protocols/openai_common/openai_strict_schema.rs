@@ -21,20 +21,124 @@ pub enum StrictResult {
     },
 }
 
-/// Inject `"type": "object"` at the top level of a tool parameters schema when
-/// it's missing but `oneOf` / `anyOf` is present (e.g., schemars output for
-/// internally-tagged enums). OpenAI's tool schema validator requires top-level
-/// `type: "object"` and rejects type-less roots with
-/// `schema must be a JSON Schema of 'type: "object"', got 'type: "None"'`.
+/// Sanitize the top-level envelope of a tool parameters schema for OpenAI's
+/// tool schema validator.
 ///
-/// Does nothing if `type` is already set. Non-recursive (top-level only).
+/// OpenAI's parser rejects top-level schemas that:
+/// - lack `type: "object"` (`schema must be a JSON Schema of 'type: "object"', got 'type: "None"'`)
+/// - contain top-level `oneOf` / `anyOf` / `allOf` / `enum` / `not`
+///   (`schema must have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/'enum'/'not' at the top level`)
+///
+/// This function rewrites the root in-place:
+/// 1. Injects `type: "object"` if absent.
+/// 2. Flattens top-level `oneOf` / `anyOf` branches into root `properties`:
+///    each branch's `properties` is merged in (first-branch-wins on key collision),
+///    `required` becomes the intersection of all branches' required sets, and
+///    the union keyword is removed.
+/// 3. Strips top-level `allOf` / `enum` / `not` (rare; no flatten attempt).
+/// 4. Ensures root `properties: {}` exists even if empty.
+///
+/// The flatten is lossy on discriminator constraints but preserves all
+/// field-level type info — accepted by OpenAI's parser. Tool descriptions
+/// carry the discriminator semantics for LLM guidance.
+///
+/// Non-recursive (top-level only). Idempotent.
 pub fn ensure_openai_tool_envelope(schema: &mut Value) {
-    if let Value::Object(map) = schema {
-        if !map.contains_key("type")
-            && (map.contains_key("oneOf") || map.contains_key("anyOf"))
-        {
-            map.insert("type".to_string(), Value::String("object".to_string()));
+    let map = match schema.as_object_mut() {
+        Some(m) => m,
+        None => return,
+    };
+
+    // 1. Inject type:object if absent.
+    if !map.contains_key("type") {
+        map.insert("type".to_string(), Value::String("object".to_string()));
+    }
+
+    // 2. Flatten top-level oneOf / anyOf into root properties.
+    for union_key in ["oneOf", "anyOf"] {
+        let branches = match map.remove(union_key) {
+            Some(Value::Array(arr)) => arr,
+            Some(other) => {
+                // Not an array — put back; nothing to flatten.
+                map.insert(union_key.to_string(), other);
+                continue;
+            }
+            None => continue,
+        };
+
+        let mut merged_props: serde_json::Map<String, Value> = serde_json::Map::new();
+        let mut required_sets: Vec<std::collections::HashSet<String>> = Vec::new();
+
+        for branch in &branches {
+            let branch_obj = match branch.as_object() {
+                Some(o) => o,
+                None => continue,
+            };
+            if let Some(Value::Object(props)) = branch_obj.get("properties") {
+                for (k, v) in props {
+                    merged_props
+                        .entry(k.clone())
+                        .or_insert_with(|| v.clone());
+                }
+            }
+            if let Some(Value::Array(req)) = branch_obj.get("required") {
+                let set: std::collections::HashSet<String> = req
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                required_sets.push(set);
+            }
         }
+
+        // Merge flattened properties into root properties (first-branch wins).
+        if !merged_props.is_empty() {
+            let root_props = map
+                .entry("properties".to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Value::Object(p) = root_props {
+                for (k, v) in merged_props {
+                    p.entry(k).or_insert(v);
+                }
+            }
+        }
+
+        // Intersection of `required` across all branches.
+        if !required_sets.is_empty() {
+            let mut iter = required_sets.into_iter();
+            let mut intersection = iter.next().unwrap_or_default();
+            for set in iter {
+                intersection = intersection.intersection(&set).cloned().collect();
+            }
+            if !intersection.is_empty() {
+                let root_req = map
+                    .entry("required".to_string())
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(arr) = root_req {
+                    let existing: std::collections::HashSet<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                    for r in intersection {
+                        if !existing.contains(&r) {
+                            arr.push(Value::String(r));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Strip top-level allOf / enum / not (rare; no flatten attempt).
+    map.remove("allOf");
+    map.remove("enum");
+    map.remove("not");
+
+    // 4. Ensure root properties exists.
+    if !map.contains_key("properties") {
+        map.insert(
+            "properties".to_string(),
+            Value::Object(serde_json::Map::new()),
+        );
     }
 }
 
@@ -401,24 +505,104 @@ mod tests {
         });
         ensure_openai_tool_envelope(&mut schema);
         assert_eq!(schema["type"], "object");
-        assert!(schema["oneOf"].is_array());
+        assert!(schema.get("oneOf").is_none(), "oneOf flattened + removed");
+        assert!(schema["properties"]["action"].is_object());
     }
 
     #[test]
-    fn ensure_envelope_skips_when_type_already_present() {
+    fn envelope_skips_when_type_already_present() {
         let mut schema = serde_json::json!({
-            "type": "string",
-            "oneOf": [{"const": "a"}, {"const": "b"}]
+            "type": "object",
+            "oneOf": [{"properties": {"a": {"type":"string"}}, "required":["a"]}]
         });
         ensure_openai_tool_envelope(&mut schema);
-        assert_eq!(schema["type"], "string", "should not overwrite");
+        assert_eq!(schema["type"], "object", "type preserved");
+        assert!(schema.get("oneOf").is_none(), "oneOf still flattened");
+        assert!(schema["properties"]["a"].is_object());
     }
 
     #[test]
-    fn ensure_envelope_skips_when_no_oneof_or_anyof() {
+    fn envelope_injects_type_object_unconditionally_when_absent() {
         let mut schema = serde_json::json!({"properties": {"a": {"type": "string"}}});
         ensure_openai_tool_envelope(&mut schema);
-        assert!(schema.get("type").is_none(), "no oneOf/anyOf → no injection");
+        assert_eq!(schema["type"], "object", "always inject when missing");
+    }
+
+    #[test]
+    fn envelope_flattens_top_level_oneof_into_properties() {
+        // Mimic RememberArgs schemars output
+        let mut schema = serde_json::json!({
+            "oneOf": [
+                {"type": "object", "properties": {"action": {"type":"string","const":"add"}, "content": {"type":"string"}}, "required": ["action","content"]},
+                {"type": "object", "properties": {"action": {"type":"string","const":"remove"}, "old_text":{"type":"string"}}, "required":["action","old_text"]}
+            ]
+        });
+        ensure_openai_tool_envelope(&mut schema);
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("oneOf").is_none(), "oneOf removed");
+        let props = schema["properties"].as_object().expect("properties");
+        assert!(props.contains_key("action"));
+        assert!(props.contains_key("content"));
+        assert!(props.contains_key("old_text"));
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(
+            required,
+            vec!["action"],
+            "intersection of required across branches"
+        );
+    }
+
+    #[test]
+    fn envelope_flattens_anyof_same_as_oneof() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "anyOf": [
+                {"properties": {"a": {"type":"string"}}, "required":["a"]},
+                {"properties": {"b": {"type":"integer"}}, "required":["b"]}
+            ]
+        });
+        ensure_openai_tool_envelope(&mut schema);
+        assert!(schema.get("anyOf").is_none(), "anyOf removed");
+        let props = schema["properties"].as_object().expect("properties");
+        assert!(props.contains_key("a"));
+        assert!(props.contains_key("b"));
+        // Intersection of disjoint required sets is empty — `required` key may
+        // be absent or empty array; both acceptable.
+        match schema.get("required") {
+            None => {}
+            Some(Value::Array(arr)) => {
+                assert!(arr.is_empty(), "disjoint intersection should be empty");
+            }
+            other => panic!("unexpected required: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn envelope_strips_top_level_allof_enum_not() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "allOf": [{"type": "object"}],
+            "enum": ["a", "b"],
+            "not": {"type": "null"}
+        });
+        ensure_openai_tool_envelope(&mut schema);
+        assert!(schema.get("allOf").is_none());
+        assert!(schema.get("enum").is_none());
+        assert!(schema.get("not").is_none());
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"].is_object());
+    }
+
+    #[test]
+    fn envelope_ensures_properties_exists() {
+        let mut schema = serde_json::json!({"type": "object"});
+        ensure_openai_tool_envelope(&mut schema);
+        assert!(schema["properties"].is_object());
     }
 
     #[test]

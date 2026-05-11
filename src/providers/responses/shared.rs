@@ -666,7 +666,8 @@ mod tests {
 
     #[test]
     fn build_tools_sanitizes_enum_tagged_tool_top_level() {
-        // Mimic `RememberArgs` schemars output: top-level oneOf without type
+        // Mimic `RememberArgs` schemars output: top-level oneOf without type.
+        // Envelope now flattens oneOf into root properties + strips the keyword.
         let td = make_tool(
             "enum_tool",
             serde_json::json!({
@@ -679,7 +680,15 @@ mod tests {
         let out = build_tools(Some(&[td]), false).expect("Some tools");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].parameters["type"], "object", "envelope injected");
-        assert!(out[0].parameters["oneOf"].is_array());
+        assert!(
+            out[0].parameters.get("oneOf").is_none(),
+            "oneOf flattened + removed"
+        );
+        let props = out[0].parameters["properties"]
+            .as_object()
+            .expect("properties");
+        assert!(props.contains_key("action"));
+        assert!(props.contains_key("content"));
     }
 
     #[test]
