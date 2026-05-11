@@ -126,6 +126,7 @@ mod tests {
                 cache_read_tokens: Some(150),
                 cache_creation_tokens: Some(20),
                 thinking_tokens: None,
+                cost: None,
             },
         });
         let sink = Arc::new(CapturingSink(Mutex::new(Vec::new())));

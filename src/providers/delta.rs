@@ -505,6 +505,7 @@ mod tests {
             cache_read_tokens: Some(5),
             cache_creation_tokens: None,
             thinking_tokens: None,
+            cost: None,
         }));
         c.push(ProviderDelta::Done(StopReason::EndTurn));
 
@@ -587,6 +588,7 @@ mod tests {
                 cache_read_tokens: None,
                 cache_creation_tokens: None,
                 thinking_tokens: None,
+                cost: None,
             }),
             thinking: None,
         };

@@ -418,6 +418,7 @@ mod tests {
             cache_read_tokens: Some(80),
             cache_creation_tokens: Some(20),
             thinking_tokens: None,
+            cost: None,
         };
         assert_eq!(usage.cache_creation_tokens, Some(20));
     }

@@ -56,6 +56,7 @@ async fn root_label_emits_provider_usage_event() {
             cache_read_tokens: Some(800),
             cache_creation_tokens: Some(50),
             thinking_tokens: None,
+            cost: None,
         },
     });
     let sink = Arc::new(CapturingSink(Mutex::new(Vec::new())));
@@ -89,6 +90,7 @@ async fn subagent_label_distinguishes_from_root() {
             cache_read_tokens: None,
             cache_creation_tokens: None,
             thinking_tokens: None,
+            cost: None,
         },
     });
     let sink = Arc::new(CapturingSink(Mutex::new(Vec::new())));
@@ -117,6 +119,7 @@ async fn no_sink_means_no_panic_no_event() {
             cache_read_tokens: None,
             cache_creation_tokens: None,
             thinking_tokens: None,
+            cost: None,
         },
     });
     let metering = MeteringProvider::new(inner, None, "root");

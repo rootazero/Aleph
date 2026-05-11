@@ -1,17 +1,30 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::*;
+    use super::super::{ephemeral_for, extract_run_result};
 
     use crate::sync_primitives::Mutex;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     use crate::agents::{AgentDef, AgentMode};
-    use crate::providers::adapter::{NativeToolCall, ProviderResponse, StopReason};
-    use crate::session::events::{ToolOutput, ToolOutputMetadata};
+    use crate::error::Result as AlephResult;
+    use crate::gateway::cancellation::CancellationToken;
+    use crate::harness::chain_context::ChainContext;
+    use crate::providers::adapter::{
+        NativeToolCall, ProviderResponse, RequestPayload, StopReason,
+    };
+    use crate::providers::AiProvider;
+    use crate::session::events::{
+        now_ms, MessageContent, SessionEvent, ToolOutput, ToolOutputMetadata, TurnTrigger,
+    };
     use crate::session::in_process::InProcessActorSessionService;
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+    use crate::session::{SessionId, SessionService};
     use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     // -- Providers --------------------------------------------------------
 
@@ -731,6 +744,7 @@ mod tests {
                         cache_read_tokens: Some(7),
                         cache_creation_tokens: Some(3),
                         thinking_tokens: None,
+                        cost: None,
                     }),
                 })
             })
