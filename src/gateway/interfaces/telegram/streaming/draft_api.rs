@@ -24,10 +24,30 @@ impl DraftStreamHandler {
     /// * `bot_token` - Telegram bot token
     /// * `chat_id` - Target chat ID
     pub fn new(bot_token: impl Into<String>, chat_id: i64) -> Self {
-        let http_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .unwrap_or_default();
+        Self::new_with_proxy(bot_token, chat_id, None)
+    }
+
+    pub fn new_with_proxy(
+        bot_token: impl Into<String>,
+        chat_id: i64,
+        proxy_url: Option<&str>,
+    ) -> Self {
+        let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
+
+        if let Some(url) = proxy_url {
+            if !url.is_empty() {
+                match reqwest::Proxy::all(url) {
+                    Ok(proxy) => {
+                        builder = builder.proxy(proxy);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Invalid proxy URL '{}': {}", url, e);
+                    }
+                }
+            }
+        }
+
+        let http_client = builder.build().unwrap_or_default();
 
         Self {
             bot_token: bot_token.into(),

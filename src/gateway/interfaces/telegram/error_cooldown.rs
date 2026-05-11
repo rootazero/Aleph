@@ -8,7 +8,7 @@
 //! the breaker trips, then automatically enters half-open state after 5 minutes
 //! to allow a probe request.
 
-use super::config_v2::ErrorPolicy;
+use super::config_v2::{ErrorPolicy, ErrorPolicyMode};
 use crate::sync_primitives::Mutex;
 use dashmap::DashMap;
 use std::time::{Duration, Instant};
@@ -215,20 +215,34 @@ impl ErrorCooldown {
     /// Determine whether an error message should be sent to the user based on
     /// the configured `ErrorPolicy`.
     ///
-    /// - `ErrorPolicy::Silent` → always `false`.
-    /// - `ErrorPolicy::Reply` → always `true`.
-    /// - `ErrorPolicy::Once` → `true` only if no error has been sent to this
+    /// - `ErrorPolicyMode::Silent` → always `false`.
+    /// - `ErrorPolicyMode::Reply` → always `true`.
+    /// - `ErrorPolicyMode::Once` → `true` only if no error has been sent to this
     ///   `scope_key` within the last 60 seconds.
+    /// - `ErrorPolicyMode::AdminOnly` → `true` only if the user is in the allowed list.
     pub fn should_send_error(
         &self,
         scope_key: &str,
         policy: &ErrorPolicy,
         _error_message: &str,
     ) -> bool {
-        match policy {
-            ErrorPolicy::Silent => false,
-            ErrorPolicy::Reply => true,
-            ErrorPolicy::Once => {
+        match policy.mode {
+            ErrorPolicyMode::Silent => false,
+            ErrorPolicyMode::Reply => true,
+            ErrorPolicyMode::Once => {
+                let now = Instant::now();
+                if let Some(last) = self.error_policy_cooldowns.get(scope_key) {
+                    if now.duration_since(*last) < Duration::from_secs(60) {
+                        return false;
+                    }
+                }
+                self.error_policy_cooldowns
+                    .insert(scope_key.to_owned(), now);
+                true
+            }
+            ErrorPolicyMode::AdminOnly => {
+                // AdminOnly: same as Once but only for admin users
+                // (caller should check admin status before calling this)
                 let now = Instant::now();
                 if let Some(last) = self.error_policy_cooldowns.get(scope_key) {
                     if now.duration_since(*last) < Duration::from_secs(60) {
@@ -527,41 +541,66 @@ mod tests {
     #[test]
     fn error_policy_silent_blocks_all() {
         let ec = ErrorCooldown::new();
-        assert!(!ec.should_send_error("conv-1", &ErrorPolicy::Silent, "any error"));
-        assert!(!ec.should_send_error("conv-1", &ErrorPolicy::Silent, "another error"));
+        let policy = ErrorPolicy {
+            mode: ErrorPolicyMode::Silent,
+            template: None,
+            max_retries: 3,
+        };
+        assert!(!ec.should_send_error("conv-1", &policy, "any error"));
+        assert!(!ec.should_send_error("conv-1", &policy, "another error"));
     }
 
     #[test]
     fn error_policy_reply_allows_all() {
         let ec = ErrorCooldown::new();
-        assert!(ec.should_send_error("conv-1", &ErrorPolicy::Reply, "error 1"));
-        assert!(ec.should_send_error("conv-1", &ErrorPolicy::Reply, "error 2"));
+        let policy = ErrorPolicy {
+            mode: ErrorPolicyMode::Reply,
+            template: None,
+            max_retries: 3,
+        };
+        assert!(ec.should_send_error("conv-1", &policy, "error 1"));
+        assert!(ec.should_send_error("conv-1", &policy, "error 2"));
     }
 
     #[test]
     fn error_policy_once_allows_first_then_blocks() {
         let ec = ErrorCooldown::new();
-        assert!(ec.should_send_error("conv-1", &ErrorPolicy::Once, "error 1"));
-        assert!(!ec.should_send_error("conv-1", &ErrorPolicy::Once, "error 2"));
+        let policy = ErrorPolicy {
+            mode: ErrorPolicyMode::Once,
+            template: None,
+            max_retries: 3,
+        };
+        assert!(ec.should_send_error("conv-1", &policy, "error 1"));
+        assert!(!ec.should_send_error("conv-1", &policy, "error 2"));
     }
 
     #[test]
     fn error_policy_once_resets_after_60s() {
         let ec = ErrorCooldown::new();
-        assert!(ec.should_send_error("conv-1", &ErrorPolicy::Once, "error 1"));
+        let policy = ErrorPolicy {
+            mode: ErrorPolicyMode::Once,
+            template: None,
+            max_retries: 3,
+        };
+        assert!(ec.should_send_error("conv-1", &policy, "error 1"));
         // Back-date the cooldown entry to 61 seconds ago
         ec.error_policy_cooldowns.insert(
             "conv-1".to_owned(),
             Instant::now() - Duration::from_secs(61),
         );
-        assert!(ec.should_send_error("conv-1", &ErrorPolicy::Once, "error 2"));
+        assert!(ec.should_send_error("conv-1", &policy, "error 2"));
     }
 
     #[test]
     fn error_policy_once_is_per_conversation() {
         let ec = ErrorCooldown::new();
-        assert!(ec.should_send_error("conv-a", &ErrorPolicy::Once, "error a"));
-        assert!(ec.should_send_error("conv-b", &ErrorPolicy::Once, "error b"));
-        assert!(!ec.should_send_error("conv-a", &ErrorPolicy::Once, "error a2"));
+        let policy = ErrorPolicy {
+            mode: ErrorPolicyMode::Once,
+            template: None,
+            max_retries: 3,
+        };
+        assert!(ec.should_send_error("conv-a", &policy, "error a"));
+        assert!(ec.should_send_error("conv-b", &policy, "error b"));
+        assert!(!ec.should_send_error("conv-a", &policy, "error a2"));
     }
 }

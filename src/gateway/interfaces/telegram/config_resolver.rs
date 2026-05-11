@@ -18,6 +18,7 @@ pub struct ResolvedConfig {
     pub streaming: StreamingOptions,
     pub error_policy: ErrorPolicy,
     pub max_retries: u32,
+    pub html_fallback: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +76,7 @@ impl ConfigResolver {
             streaming: account.streaming.clone().unwrap_or_default(),
             error_policy: account.error_policy.clone().unwrap_or_default(),
             max_retries: 3,
+            html_fallback: account.html_fallback.unwrap_or(true),
         }
     }
 
@@ -101,6 +103,7 @@ impl ConfigResolver {
                 .clone()
                 .unwrap_or_else(|| base.error_policy.clone()),
             max_retries: base.max_retries,
+            html_fallback: base.html_fallback,
         }
     }
 
@@ -130,6 +133,7 @@ impl ConfigResolver {
                 .clone()
                 .unwrap_or_else(|| base.error_policy.clone()),
             max_retries: base.max_retries,
+            html_fallback: base.html_fallback,
         }
     }
 }
@@ -153,14 +157,18 @@ mod tests {
                 allowed_users: Some(vec![1]),
                 allowed_groups: Some(vec![-1]),
                 streaming: None,
-                error_policy: Some(ErrorPolicy::Silent),
+                error_policy: Some(ErrorPolicy {
+                    mode: ErrorPolicyMode::Silent,
+                    template: None,
+                    max_retries: 3,
+                }),
                 groups: vec![],
             }],
         };
         let resolver = ConfigResolver::from_v2(&v2);
         let resolved = resolver.resolve("main", 0, None).unwrap();
         assert_eq!(resolved.default_agent, Some("default".to_string()));
-        assert_eq!(resolved.error_policy, ErrorPolicy::Silent);
+        assert_eq!(resolved.error_policy.mode, ErrorPolicyMode::Silent);
         assert!(!resolved.send_typing);
     }
 
@@ -179,13 +187,21 @@ mod tests {
                 allowed_users: None,
                 allowed_groups: None,
                 streaming: None,
-                error_policy: Some(ErrorPolicy::Reply),
+                error_policy: Some(ErrorPolicy {
+                    mode: ErrorPolicyMode::Reply,
+                    template: None,
+                    max_retries: 3,
+                }),
                 groups: vec![TelegramGroupConfig {
                     id: "g1".to_string(),
                     chat_id: -1001,
                     agent: Some("group_agent".to_string()),
                     block_streaming: None,
-                    error_policy: Some(ErrorPolicy::Once),
+                    error_policy: Some(ErrorPolicy {
+                        mode: ErrorPolicyMode::Once,
+                        template: None,
+                        max_retries: 3,
+                    }),
                     group_policy: None,
                     send_typing: None,
                     allowed_users: None,
@@ -194,7 +210,11 @@ mod tests {
                         thread_id: 42,
                         agent: Some("topic_agent".to_string()),
                         block_streaming: None,
-                        error_policy: Some(ErrorPolicy::Silent),
+                        error_policy: Some(ErrorPolicy {
+                            mode: ErrorPolicyMode::Silent,
+                            template: None,
+                            max_retries: 3,
+                        }),
                         dm_policy: None,
                         group_policy: None,
                         send_typing: None,
@@ -206,11 +226,11 @@ mod tests {
         let resolver = ConfigResolver::from_v2(&v2);
         let topic = resolver.resolve("main", -1001, Some(42)).unwrap();
         assert_eq!(topic.default_agent, Some("topic_agent".to_string()));
-        assert_eq!(topic.error_policy, ErrorPolicy::Silent);
+        assert_eq!(topic.error_policy.mode, ErrorPolicyMode::Silent);
         assert!(topic.send_typing); // inherited from account
 
         let group = resolver.resolve("main", -1001, None).unwrap();
         assert_eq!(group.default_agent, Some("group_agent".to_string()));
-        assert_eq!(group.error_policy, ErrorPolicy::Once);
+        assert_eq!(group.error_policy.mode, ErrorPolicyMode::Once);
     }
 }

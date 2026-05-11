@@ -9,10 +9,12 @@
 //! This header value must match the configured secret token.
 
 use crate::gateway::channel::{
-    CallbackQuery, ChannelError, ChannelId, ChannelResult, ConversationId, InboundMessage,
-    MessageId, MessageMeta, UserId,
+    ChannelError, ChannelId, ChannelResult, ConversationId, InboundMessage, MessageId, MessageMeta,
+    UserId,
 };
+use crate::gateway::interfaces::telegram::access::{AccessController, AccessDecision};
 use crate::gateway::webhook_receiver::WebhookHandler;
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use axum::http::{HeaderMap, StatusCode};
 use chrono::{TimeZone, Utc};
@@ -39,25 +41,17 @@ pub struct TelegramWebhookHandler {
     secret_token: Option<String>,
     /// Inbound message sender (forward parsed messages here)
     inbound_tx: mpsc::Sender<InboundMessage>,
-    /// Callback query sender
-    callback_tx: mpsc::Sender<CallbackQuery>,
-    /// Access control config
-    allowed_users: Vec<i64>,
-    /// Access control config
-    allowed_groups: Vec<i64>,
+    access: Arc<AccessController>,
 }
 
 impl TelegramWebhookHandler {
-    /// Create a new TelegramWebhookHandler
     pub fn new(
         bot_token: String,
         channel_id: ChannelId,
         path: String,
         secret_token: Option<String>,
         inbound_tx: mpsc::Sender<InboundMessage>,
-        callback_tx: mpsc::Sender<CallbackQuery>,
-        allowed_users: Vec<i64>,
-        allowed_groups: Vec<i64>,
+        access: Arc<AccessController>,
     ) -> Self {
         Self {
             bot_token,
@@ -65,27 +59,7 @@ impl TelegramWebhookHandler {
             path,
             secret_token,
             inbound_tx,
-            callback_tx,
-            allowed_users,
-            allowed_groups,
-        }
-    }
-
-    /// Check if a user is allowed to send messages
-    fn is_user_allowed(&self, user_id: i64) -> bool {
-        if self.allowed_users.is_empty() {
-            true
-        } else {
-            self.allowed_users.contains(&user_id)
-        }
-    }
-
-    /// Check if a group is allowed
-    fn is_group_allowed(&self, chat_id: i64) -> bool {
-        if self.allowed_groups.is_empty() {
-            true
-        } else {
-            self.allowed_groups.contains(&chat_id)
+            access,
         }
     }
 }
@@ -187,16 +161,15 @@ impl TelegramWebhookHandler {
         let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
         let chat_id = msg.chat.id.0;
 
-        // Access control - check user and group allowlists
         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
-
-        if is_group && !self.is_group_allowed(chat_id) {
-            tracing::debug!(chat_id = %chat_id, "Ignoring message from disallowed group");
-            return Ok(vec![]);
-        }
-
-        if !self.is_user_allowed(user_id) {
-            tracing::debug!(user_id = %user_id, "Ignoring message from disallowed user");
+        let decision = self.access.check_message(user_id, chat_id, is_group).await;
+        if decision != AccessDecision::Allowed {
+            tracing::debug!(
+                user_id = %user_id,
+                chat_id = %chat_id,
+                ?decision,
+                "Access denied for webhook message"
+            );
             return Ok(vec![]);
         }
 
@@ -291,36 +264,17 @@ impl TelegramWebhookHandler {
             raw_chat_id.to_string()
         };
 
-        let msg_id_str = query
-            .message
-            .as_ref()
-            .map(|m| m.id.0.to_string())
-            .unwrap_or_default();
-
-        // Access check
         let is_group = raw_chat_id < 0;
-        if is_group && !self.is_group_allowed(raw_chat_id) {
-            return Ok(());
-        }
-        if !self.is_user_allowed(query.from.id.0 as i64) {
+        let user_id = query.from.id.0 as i64;
+        let decision = self
+            .access
+            .check_message(user_id, raw_chat_id, is_group)
+            .await;
+        if decision != AccessDecision::Allowed {
             return Ok(());
         }
 
-        // Send callback query
         if let Some(data) = &query.data {
-            let callback_query = CallbackQuery {
-                id: query.id.clone(),
-                user_id: UserId::new(query.from.id.to_string()),
-                chat_id: ConversationId::new(conv_id_str.clone()),
-                message_id: MessageId::new(msg_id_str),
-                data: data.clone(),
-            };
-
-            if let Err(e) = self.callback_tx.send(callback_query).await {
-                tracing::warn!("Failed to send callback query to channel: {}", e);
-            }
-
-            // Also send as inbound message for routing
             let inbound = InboundMessage {
                 id: MessageId::new(format!("cb_{}", query.id)),
                 channel_id: self.channel_id.clone(),
@@ -449,6 +403,81 @@ struct TelegramMessage {
     reply_to_message: Option<Box<TelegramMessage>>,
     #[serde(default)]
     kind: TelegramMessageKind,
+    #[serde(default)]
+    photo: Option<Vec<TelegramPhotoSize>>,
+    #[serde(default)]
+    document: Option<TelegramDocumentInfo>,
+    #[serde(default)]
+    video: Option<TelegramVideoInfo>,
+    #[serde(default)]
+    audio: Option<TelegramAudioInfo>,
+    #[serde(default)]
+    voice: Option<TelegramVoiceInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TelegramPhotoSize {
+    file_id: String,
+    file_unique_id: String,
+    width: i32,
+    height: i32,
+    #[serde(default)]
+    file_size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TelegramDocumentInfo {
+    file_id: String,
+    file_unique_id: String,
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    mime_type: Option<String>,
+    #[serde(default)]
+    file_size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TelegramVideoInfo {
+    file_id: String,
+    file_unique_id: String,
+    width: i32,
+    height: i32,
+    duration: i32,
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    mime_type: Option<String>,
+    #[serde(default)]
+    file_size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TelegramAudioInfo {
+    file_id: String,
+    file_unique_id: String,
+    duration: i32,
+    #[serde(default)]
+    performer: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    mime_type: Option<String>,
+    #[serde(default)]
+    file_size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TelegramVoiceInfo {
+    file_id: String,
+    file_unique_id: String,
+    duration: i32,
+    #[serde(default)]
+    mime_type: Option<String>,
+    #[serde(default)]
+    file_size: Option<u64>,
 }
 
 /// Simplified user type
@@ -679,79 +708,103 @@ fn extract_message_text(msg: &TelegramMessage) -> String {
     }
 }
 
-/// Extract attachments from a Telegram message (webhook mode - no URL resolution)
 fn extract_attachments_webhook(msg: &TelegramMessage) -> Vec<crate::gateway::channel::Attachment> {
     use crate::gateway::channel::Attachment;
 
-    match &msg.kind {
-        TelegramMessageKind::Photo { .. } => {
-            // For webhook, we don't have the full file object
-            // Return a placeholder - URL resolution can happen later
-            vec![Attachment {
-                id: "photo_placeholder".to_string(),
+    let mut attachments = Vec::new();
+
+    if let Some(photo_sizes) = &msg.photo {
+        if let Some(largest) = photo_sizes.iter().max_by_key(|p| p.file_size.unwrap_or(0)) {
+            attachments.push(Attachment {
+                id: largest.file_id.clone(),
                 mime_type: "image/jpeg".to_string(),
                 filename: None,
-                size: None,
+                size: largest.file_size,
                 url: None,
                 path: None,
                 data: None,
-            }]
+            });
         }
-        TelegramMessageKind::Document { caption } => vec![Attachment {
-            id: "document_placeholder".to_string(),
-            mime_type: "application/octet-stream".to_string(),
-            filename: None,
-            size: None,
-            url: None,
-            path: None,
-            data: None,
-        }],
-        TelegramMessageKind::Video { .. } => vec![Attachment {
-            id: "video_placeholder".to_string(),
-            mime_type: "video/mp4".to_string(),
-            filename: None,
-            size: None,
-            url: None,
-            path: None,
-            data: None,
-        }],
-        TelegramMessageKind::Audio { .. } => vec![Attachment {
-            id: "audio_placeholder".to_string(),
-            mime_type: "audio/mpeg".to_string(),
-            filename: None,
-            size: None,
-            url: None,
-            path: None,
-            data: None,
-        }],
-        TelegramMessageKind::Voice { .. } => vec![Attachment {
-            id: "voice_placeholder".to_string(),
-            mime_type: "audio/ogg".to_string(),
-            filename: None,
-            size: None,
-            url: None,
-            path: None,
-            data: None,
-        }],
-        TelegramMessageKind::Sticker { sticker } => {
-            let mime = if sticker.set_name.as_ref().map(|s| s.contains("animated")).unwrap_or(false)
-            {
-                "application/x-tgsticker".to_string()
-            } else {
-                "image/webp".to_string()
-            };
-            vec![Attachment {
-                id: sticker.file_id.clone().unwrap_or_default(),
-                mime_type: mime,
-                filename: None,
-                size: None,
-                url: None,
-                path: None,
-                data: None,
-            }]
-        }
-        _ => Vec::new(),
     }
+
+    if let Some(doc) = &msg.document {
+        attachments.push(Attachment {
+            id: doc.file_id.clone(),
+            mime_type: doc
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| "application/octet-stream".to_string()),
+            filename: doc.file_name.clone(),
+            size: doc.file_size,
+            url: None,
+            path: None,
+            data: None,
+        });
+    }
+
+    if let Some(video) = &msg.video {
+        attachments.push(Attachment {
+            id: video.file_id.clone(),
+            mime_type: video
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| "video/mp4".to_string()),
+            filename: video.file_name.clone(),
+            size: video.file_size,
+            url: None,
+            path: None,
+            data: None,
+        });
+    }
+
+    if let Some(audio) = &msg.audio {
+        attachments.push(Attachment {
+            id: audio.file_id.clone(),
+            mime_type: audio
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| "audio/mpeg".to_string()),
+            filename: audio.file_name.clone(),
+            size: audio.file_size,
+            url: None,
+            path: None,
+            data: None,
+        });
+    }
+
+    if let Some(voice) = &msg.voice {
+        attachments.push(Attachment {
+            id: voice.file_id.clone(),
+            mime_type: voice
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| "audio/ogg".to_string()),
+            filename: None,
+            size: voice.file_size,
+            url: None,
+            path: None,
+            data: None,
+        });
+    }
+
+    if let Some(sticker) = &msg.sticker {
+        let mime = if sticker.set_name.as_ref().map(|s| s.contains("animated")).unwrap_or(false) {
+            "application/x-tgsticker".to_string()
+        } else {
+            "image/webp".to_string()
+        };
+        attachments.push(Attachment {
+            id: sticker.file_id.clone().unwrap_or_default(),
+            mime_type: mime,
+            filename: None,
+            size: None,
+            url: None,
+            path: None,
+            data: None,
+        });
+    }
+
+    attachments
 }
 
 #[cfg(test)]
@@ -853,40 +906,25 @@ mod tests {
     }
 
     #[test]
-    fn test_user_allowed_logic() {
-        let handler = TelegramWebhookHandler::new(
-            "bot_token".to_string(),
-            ChannelId::new("test"),
-            "/webhook/telegram".to_string(),
-            Some("secret".to_string()),
-            mpsc::channel(100).0,
-            mpsc::channel(100).0,
-            vec![1, 2, 3], // allowed users
-            vec![],
-        );
-
-        assert!(handler.is_user_allowed(1));
-        assert!(handler.is_user_allowed(2));
-        assert!(!handler.is_user_allowed(99));
-
-        // Empty allowlist = allow all
-        let open_handler = TelegramWebhookHandler::new(
-            "bot_token".to_string(),
-            ChannelId::new("test"),
-            "/webhook/telegram".to_string(),
-            Some("secret".to_string()),
-            mpsc::channel(100).0,
-            mpsc::channel(100).0,
-            vec![], // empty = allow all
-            vec![],
-        );
-
-        assert!(open_handler.is_user_allowed(999));
-    }
-
-    #[test]
     fn test_webhook_handler_verify() {
         use axum::http::HeaderMap;
+        use crate::gateway::interfaces::telegram::config_resolver::ResolvedConfig;
+
+        let access = Arc::new(AccessController::new(ResolvedConfig {
+            account_id: "test".to_string(),
+            bot_token: "tok".to_string(),
+            bot_username: None,
+            default_agent: None,
+            dm_policy: Default::default(),
+            group_policy: Default::default(),
+            send_typing: true,
+            allowed_users: vec![],
+            allowed_groups: vec![],
+            streaming: Default::default(),
+            error_policy: Default::default(),
+            max_retries: 3,
+            html_fallback: true,
+        }));
 
         let handler = TelegramWebhookHandler::new(
             "bot_token".to_string(),
@@ -894,9 +932,7 @@ mod tests {
             "/webhook/telegram".to_string(),
             Some("my_secret_token".to_string()),
             mpsc::channel(100).0,
-            mpsc::channel(100).0,
-            vec![],
-            vec![],
+            access.clone(),
         );
 
         // No secret configured - should pass
@@ -906,9 +942,7 @@ mod tests {
             "/webhook/telegram".to_string(),
             None,
             mpsc::channel(100).0,
-            mpsc::channel(100).0,
-            vec![],
-            vec![],
+            access,
         );
         let mut headers = HeaderMap::new();
         assert!(no_secret_handler.verify(&headers, &[]));
@@ -935,7 +969,24 @@ mod tests {
         use axum::http::HeaderMap;
 
         let (inbound_tx, mut inbound_rx) = mpsc::channel(100);
-        let (callback_tx, _callback_rx) = mpsc::channel(100);
+
+        let access = Arc::new(AccessController::new(
+            crate::gateway::interfaces::telegram::config_resolver::ResolvedConfig {
+                account_id: "test".to_string(),
+                bot_token: "tok".to_string(),
+                bot_username: None,
+                default_agent: None,
+                dm_policy: Default::default(),
+                group_policy: Default::default(),
+                send_typing: true,
+                allowed_users: vec![],
+                allowed_groups: vec![],
+                streaming: Default::default(),
+                error_policy: Default::default(),
+                max_retries: 3,
+                html_fallback: true,
+            },
+        ));
 
         let handler = TelegramWebhookHandler::new(
             "bot_token".to_string(),
@@ -943,9 +994,7 @@ mod tests {
             "/webhook/telegram".to_string(),
             None,
             inbound_tx,
-            callback_tx,
-            vec![], // allow all users
-            vec![],
+            access,
         );
 
         // Create a simple message update

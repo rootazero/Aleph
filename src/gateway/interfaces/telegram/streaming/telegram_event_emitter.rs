@@ -39,6 +39,7 @@ impl TelegramEventEmitter {
                 streaming: config.clone(),
                 error_policy: Default::default(),
                 max_retries: 3,
+                html_fallback: true,
             },
             Arc::new(ErrorCooldown::new()),
             conversation_id.clone(),

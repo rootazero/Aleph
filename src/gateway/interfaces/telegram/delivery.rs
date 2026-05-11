@@ -33,6 +33,8 @@ pub(crate) enum ErrorClass {
     Rejected(String),
     /// 429 rate limit — wait exact seconds then retry.
     RateLimited(u64),
+    /// HTML parse error — fallback to plain text if enabled.
+    HtmlParseError(String),
 }
 
 /// Classify a teloxide request error for retry decisions.
@@ -59,7 +61,16 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
                 _ => {
                     let msg = api_err.to_string();
                     if msg.contains("Bad Request") {
-                        ErrorClass::Rejected(msg)
+                        // Distinguish HTML parse errors for fallback logic
+                        if msg.contains("can't parse entities")
+                            || msg.contains("parse entities")
+                            || msg.contains("find end of the entity")
+                            || msg.contains("message text is empty")
+                        {
+                            ErrorClass::HtmlParseError(msg)
+                        } else {
+                            ErrorClass::Rejected(msg)
+                        }
                     } else {
                         ErrorClass::PostConnect
                     }
@@ -80,7 +91,7 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
 /// Map an `ErrorClass` to an `ErrorKind` for cooldown purposes.
 fn error_class_to_kind(ec: &ErrorClass) -> ErrorKind {
     match ec {
-        ErrorClass::Rejected(_) => ErrorKind::Permanent,
+        ErrorClass::Rejected(_) | ErrorClass::HtmlParseError(_) => ErrorKind::Permanent,
         ErrorClass::PreConnect | ErrorClass::PostConnect | ErrorClass::RateLimited(_) => {
             ErrorKind::Retryable
         }
@@ -95,11 +106,20 @@ fn error_class_to_kind(ec: &ErrorClass) -> ErrorKind {
 ///
 /// Format: `"{chat_id}"` or `"{chat_id}:topic:{thread_id}"`.
 /// Returns the `ChatId` and an optional raw thread id (i32).
-pub(crate) fn parse_conversation_id(conv_id: &str) -> (ChatId, Option<i32>) {
+pub(crate) fn parse_conversation_id(conv_id: &str) -> ChannelResult<(ChatId, Option<i32>)> {
     if let Some((chat, topic)) = conv_id.split_once(":topic:") {
-        (ChatId(chat.parse().unwrap_or(0)), topic.parse().ok())
+        let chat_id = chat
+            .parse::<i64>()
+            .map_err(|_| ChannelError::Internal(format!("Invalid chat_id in conversation_id: {}", conv_id)))?;
+        let thread_id = topic
+            .parse::<i32>()
+            .map_err(|_| ChannelError::Internal(format!("Invalid thread_id in conversation_id: {}", conv_id)))?;
+        Ok((ChatId(chat_id), Some(thread_id)))
     } else {
-        (ChatId(conv_id.parse().unwrap_or(0)), None)
+        let chat_id = conv_id
+            .parse::<i64>()
+            .map_err(|_| ChannelError::Internal(format!("Invalid conversation_id: {}", conv_id)))?;
+        Ok((ChatId(chat_id), None))
     }
 }
 
@@ -150,7 +170,7 @@ pub(crate) async fn send_message(
     cooldown: &ErrorCooldown,
 ) -> ChannelResult<SendResult> {
     let conv_id = message.conversation_id.as_str();
-    let (chat_id, thread_id) = parse_conversation_id(conv_id);
+    let (chat_id, thread_id) = parse_conversation_id(conv_id)?;
 
     // Check cooldown before attempting to send
     if let Err(cd) = cooldown.check(conv_id) {
@@ -288,7 +308,7 @@ pub(crate) async fn send_message(
                     attempts += 1;
                     match classify_error(&e) {
                         ErrorClass::Rejected(reason) => {
-                            // Permanent rejection — try plain text fallback (strip HTML)
+                            // Permanent rejection — try plain text fallback
                             tracing::warn!(
                                 "HTML send rejected ({}), falling back to plain text",
                                 reason
@@ -313,6 +333,50 @@ pub(crate) async fn send_message(
                                     }
                                     return Err(err);
                                 }
+                            }
+                        }
+                        ErrorClass::HtmlParseError(reason) => {
+                            if config.html_fallback {
+                                tracing::warn!(
+                                    "HTML parse error ({}), falling back to plain text",
+                                    reason
+                                );
+                                match build_request(None, chunk, reply_to_ref, keyboard_ref).await {
+                                    Ok(msg) => break msg,
+                                    Err(fallback_err) => {
+                                        let cls = classify_error(&fallback_err);
+                                        cooldown.record_failure(conv_id, error_class_to_kind(&cls));
+                                        let err = ChannelError::SendFailed(format!(
+                                            "Telegram send error: {}",
+                                            fallback_err
+                                        ));
+                                        if !cooldown.should_send_error(
+                                            conv_id,
+                                            &config.error_policy,
+                                            "",
+                                        ) {
+                                            return Err(ChannelError::SendFailed(
+                                                "Error suppressed by policy".to_string(),
+                                            ));
+                                        }
+                                        return Err(err);
+                                    }
+                                }
+                            } else {
+                                tracing::warn!(
+                                    "HTML parse error ({}) — html_fallback disabled, returning error",
+                                    reason
+                                );
+                                cooldown.record_failure(conv_id, ErrorKind::Permanent);
+                                if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                                    return Err(ChannelError::SendFailed(
+                                        "Error suppressed by policy".to_string(),
+                                    ));
+                                }
+                                return Err(ChannelError::SendFailed(format!(
+                                    "HTML parse error: {}",
+                                    reason
+                                )));
                             }
                         }
                         ErrorClass::RateLimited(secs) => {
@@ -433,7 +497,7 @@ pub(crate) async fn send_typing(
         return Ok(());
     }
 
-    let (chat_id, thread_id) = parse_conversation_id(conversation_id);
+    let (chat_id, thread_id) = parse_conversation_id(conversation_id)?;
 
     let mut req = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing);
     if let Some(tid) = thread_id {
@@ -467,7 +531,7 @@ pub(crate) async fn send_reaction(
     message_id: &MessageId,
     reaction: &str,
 ) -> ChannelResult<()> {
-    let (chat_id, _thread_id) = parse_conversation_id(conversation_id);
+    let (chat_id, _thread_id) = parse_conversation_id(conversation_id)?;
 
     let msg_id = teloxide::types::MessageId(
         message_id
@@ -577,7 +641,7 @@ pub(crate) async fn edit_message(
     new_text: Option<&str>,
     keyboard: Option<&InlineKeyboard>,
 ) -> ChannelResult<()> {
-    let (chat, _thread_id) = parse_conversation_id(conversation_id);
+    let (chat, _thread_id) = parse_conversation_id(conversation_id)?;
 
     let msg_id = teloxide::types::MessageId(
         message_id
@@ -685,7 +749,7 @@ impl TelegramDelivery {
 
     /// Send a plain text message and return its Telegram message ID.
     pub async fn send_text_message(&self, text: &str) -> ChannelResult<i64> {
-        let (chat_id, thread_id) = parse_conversation_id(&self.conversation_id);
+        let (chat_id, thread_id) = parse_conversation_id(&self.conversation_id)?;
         let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
         let req = with_thread!(
             self.bot
@@ -706,7 +770,7 @@ impl TelegramDelivery {
 
     /// Edit an existing message.
     pub async fn edit_text_message(&self, message_id: i64, text: &str) -> ChannelResult<()> {
-        let (chat_id, _thread_id) = parse_conversation_id(&self.conversation_id);
+        let (chat_id, _thread_id) = parse_conversation_id(&self.conversation_id)?;
         let msg_id = teloxide::types::MessageId(message_id as i32);
         let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
         let request = self
@@ -725,7 +789,7 @@ impl TelegramDelivery {
 
     /// Set a reaction on a message.
     pub async fn set_reaction(&self, message_id: i64, emoji: &str) -> ChannelResult<()> {
-        let (chat_id, _thread_id) = parse_conversation_id(&self.conversation_id);
+        let (chat_id, _thread_id) = parse_conversation_id(&self.conversation_id)?;
         let msg_id = teloxide::types::MessageId(message_id as i32);
         let reactions = if emoji.is_empty() {
             vec![]
@@ -770,30 +834,37 @@ mod tests {
 
     #[test]
     fn test_parse_conversation_id_plain() {
-        let (chat_id, thread_id) = parse_conversation_id("-100123456789");
+        let (chat_id, thread_id) = parse_conversation_id("-100123456789").unwrap();
         assert_eq!(chat_id.0, -100123456789);
         assert_eq!(thread_id, None);
     }
 
     #[test]
     fn test_parse_conversation_id_with_topic() {
-        let (chat_id, thread_id) = parse_conversation_id("-100123456789:topic:42");
+        let (chat_id, thread_id) = parse_conversation_id("-100123456789:topic:42").unwrap();
         assert_eq!(chat_id.0, -100123456789);
         assert_eq!(thread_id, Some(42));
     }
 
     #[test]
     fn test_parse_conversation_id_general_topic() {
-        let (chat_id, thread_id) = parse_conversation_id("-100123456789:topic:1");
+        let (chat_id, thread_id) = parse_conversation_id("-100123456789:topic:1").unwrap();
         assert_eq!(chat_id.0, -100123456789);
         assert_eq!(thread_id, Some(1));
     }
 
     #[test]
-    fn test_parse_conversation_id_invalid() {
-        let (chat_id, thread_id) = parse_conversation_id("not_a_number");
-        assert_eq!(chat_id.0, 0);
-        assert_eq!(thread_id, None);
+    fn test_parse_conversation_id_invalid_chat() {
+        let result = parse_conversation_id("not_a_number");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid conversation_id"));
+    }
+
+    #[test]
+    fn test_parse_conversation_id_invalid_thread() {
+        let result = parse_conversation_id("-100123456789:topic:not_a_number");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid thread_id"));
     }
 
     // -----------------------------------------------------------------------

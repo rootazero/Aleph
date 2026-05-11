@@ -120,6 +120,7 @@ impl TelegramChannel {
                     streaming: first.streaming.clone().unwrap_or_default(),
                     error_policy: first.error_policy.clone().unwrap_or_default(),
                     max_retries: 3,
+                    html_fallback: first.html_fallback.unwrap_or(true),
                 })
         } else {
             ResolvedConfig {
@@ -135,6 +136,7 @@ impl TelegramChannel {
                 streaming: Default::default(),
                 error_policy: Default::default(),
                 max_retries: 3,
+                html_fallback: true,
             }
         };
         let access = Arc::new(AccessController::new(access_config));
@@ -262,6 +264,7 @@ impl Channel for TelegramChannel {
                     streaming: account.streaming.clone().unwrap_or_default(),
                     error_policy: account.error_policy.clone().unwrap_or_default(),
                     max_retries: 3,
+                    html_fallback: account.html_fallback.unwrap_or(true),
                 });
 
             let mut instance = BotInstance::new(account, self.callback_tx.clone(), resolved_config);
@@ -420,7 +423,6 @@ impl Channel for TelegramChannel {
             // Build handler closures capturing channel-specific Arc clones
             let inbound_tx = self.channel_state.sender();
             let inbound_tx_for_cb = self.channel_state.sender();
-            let callback_tx = self.callback_tx.clone();
             let channel_id = self.info.id.clone();
             let channel_id_for_cb = self.info.id.clone();
 
@@ -511,7 +513,6 @@ impl Channel for TelegramChannel {
 
             let callback_handler =
                 Update::filter_callback_query().endpoint(move |bot: Bot, q: TgCallbackQuery| {
-                    let tx = callback_tx.clone();
                     let inbound_tx = inbound_tx_for_cb.clone();
                     let channel_id = channel_id_for_cb.clone();
                     let access = access_for_cb.clone();
@@ -537,25 +538,8 @@ impl Channel for TelegramChannel {
                             raw_chat_id.to_string()
                         };
 
-                        let msg_id_str = q
-                            .message
-                            .as_ref()
-                            .map(|m| m.id().to_string())
-                            .unwrap_or_default();
-
                         if let Some(data) = q.data.clone() {
                             let user_id_val = q.from.id.0 as i64;
-
-                            let query = CallbackQuery {
-                                id: q.id.clone(),
-                                user_id: UserId::new(q.from.id.to_string()),
-                                chat_id: ConversationId::new(conv_id_str.clone()),
-                                message_id: MessageId::new(msg_id_str),
-                                data: data.clone(),
-                            };
-                            if let Err(e) = tx.send(query).await {
-                                tracing::error!("Failed to send callback query: {}", e);
-                            }
 
                             let is_group = raw_chat_id < 0;
                             let decision = access
@@ -582,7 +566,7 @@ impl Channel for TelegramChannel {
                                 };
                                 if let Err(e) = inbound_tx.send(inbound) {
                                     tracing::error!(
-                                        "Failed to re-inject callback as inbound message: {:?}",
+                                        "Failed to send callback as inbound message: {:?}",
                                         e
                                     );
                                 }
@@ -680,6 +664,45 @@ impl Channel for TelegramChannel {
             ));
 
             instance.shutdown_tx = Some(shutdown_tx);
+            
+            // Spawn periodic health check for this bot instance
+            {
+                let account_id = instance.account_id.clone();
+                let bot = instance.bot.clone();
+                let is_healthy = instance.is_healthy.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                    loop {
+                        interval.tick().await;
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            bot.get_me(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(_)) => {
+                                is_healthy.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            Ok(Err(e)) => {
+                                tracing::warn!(
+                                    account_id = %account_id,
+                                    error = %e,
+                                    "Telegram bot health check failed"
+                                );
+                                is_healthy.store(false, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            Err(_) => {
+                                tracing::warn!(
+                                    account_id = %account_id,
+                                    "Telegram bot health check timed out"
+                                );
+                                is_healthy.store(false, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    }
+                });
+            }
+            
             self.bot_instances.push(instance);
         }
 
@@ -703,7 +726,7 @@ impl Channel for TelegramChannel {
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
         let (chat_id, thread_id) =
-            delivery::parse_conversation_id(message.conversation_id.as_str());
+            delivery::parse_conversation_id(message.conversation_id.as_str())?;
         let chat_id_i64 = chat_id.0;
 
         let instance = self
@@ -714,8 +737,13 @@ impl Channel for TelegramChannel {
                     .resolve(&inst.account_id, chat_id_i64, thread_id)
                     .is_some()
             })
-            .or(self.bot_instances.first())
-            .ok_or_else(|| ChannelError::NotConnected("No bot instances".to_string()))?;
+            .ok_or_else(|| {
+                ChannelError::ConfigError(format!(
+                    "No Telegram account configured for chat {} (thread: {:?}). \
+                     Ensure the chat_id is covered by allowed_groups or account config",
+                    chat_id_i64, thread_id
+                ))
+            })?;
         delivery::send_message(
             &instance.bot,
             &instance.resolved_config,
@@ -726,7 +754,7 @@ impl Channel for TelegramChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str());
+        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str())?;
         let chat_id_i64 = chat_id.0;
 
         let instance = self
@@ -737,8 +765,13 @@ impl Channel for TelegramChannel {
                     .resolve(&inst.account_id, chat_id_i64, thread_id)
                     .is_some()
             })
-            .or(self.bot_instances.first())
-            .ok_or_else(|| ChannelError::NotConnected("No bot instances".to_string()))?;
+            .ok_or_else(|| {
+                ChannelError::ConfigError(format!(
+                    "No Telegram account configured for chat {} (thread: {:?}). \
+                     Ensure the chat_id is covered by allowed_groups or account config",
+                    chat_id_i64, thread_id
+                ))
+            })?;
         delivery::send_typing(
             &instance.bot,
             conversation_id.as_str(),
@@ -754,7 +787,7 @@ impl Channel for TelegramChannel {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
-        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str());
+        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str())?;
         let chat_id_i64 = chat_id.0;
 
         let instance = self
@@ -765,8 +798,13 @@ impl Channel for TelegramChannel {
                     .resolve(&inst.account_id, chat_id_i64, thread_id)
                     .is_some()
             })
-            .or(self.bot_instances.first())
-            .ok_or_else(|| ChannelError::NotConnected("No bot instances".to_string()))?;
+            .ok_or_else(|| {
+                ChannelError::ConfigError(format!(
+                    "No Telegram account configured for chat {} (thread: {:?}). \
+                     Ensure the chat_id is covered by allowed_groups or account config",
+                    chat_id_i64, thread_id
+                ))
+            })?;
         delivery::send_reaction(
             &instance.bot,
             conversation_id.as_str(),
@@ -782,7 +820,7 @@ impl Channel for TelegramChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str());
+        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str())?;
         let chat_id_i64 = chat_id.0;
 
         let instance = self
@@ -793,8 +831,13 @@ impl Channel for TelegramChannel {
                     .resolve(&inst.account_id, chat_id_i64, thread_id)
                     .is_some()
             })
-            .or(self.bot_instances.first())
-            .ok_or_else(|| ChannelError::NotConnected("No bot instances".to_string()))?;
+            .ok_or_else(|| {
+                ChannelError::ConfigError(format!(
+                    "No Telegram account configured for chat {} (thread: {:?}). \
+                     Ensure the chat_id is covered by allowed_groups or account config",
+                    chat_id_i64, thread_id
+                ))
+            })?;
         delivery::edit_message(
             &instance.bot,
             conversation_id.as_str(),
@@ -829,6 +872,7 @@ impl Channel for TelegramChannel {
             channel_state: ChannelState::new(100),
             offset_tracker: first.offset_tracker.clone(),
             shutdown_tx: None,
+            is_healthy: first.is_healthy.clone(),
         };
         Some(Arc::new(
             crate::gateway::interfaces::telegram::approval::TelegramChannelApprovalCapability::new(
