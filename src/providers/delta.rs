@@ -118,7 +118,10 @@ impl DeltaCollector {
     /// Consume the collector and produce a [`ProviderResponse`].
     ///
     /// Malformed tool arguments are handled gracefully: if `serde_json::from_str` fails,
-    /// a warning is logged and the raw string is stored as `Value::String(raw)`.
+    /// a warning is logged (including the full raw payload for telemetry) and an
+    /// empty object `Value::Object({})` is returned. The dispatcher's schema
+    /// validation then reports the missing fields, producing a structured
+    /// ToolError that the model can react to on the next turn.
     pub fn finish(mut self) -> ProviderResponse {
         let mut tool_calls: Vec<NativeToolCall> = self
             .tool_calls
@@ -137,9 +140,9 @@ impl DeltaCollector {
                                 tool_name = %name,
                                 error = %e,
                                 raw_args = %raw_args,
-                                "Malformed tool arguments — falling back to raw string value"
+                                "Malformed tool arguments — defaulting to empty object (dispatcher will report missing fields)"
                             );
-                            Value::String(raw_args)
+                            Value::Object(serde_json::Map::new())
                         }
                     }
                 };
@@ -430,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collector_malformed_tool_args_fallback() {
+    fn test_collector_malformed_tool_args_returns_empty_object() {
         let mut c = DeltaCollector::new();
         c.push(ProviderDelta::ToolCallStart {
             id: "tc1".to_string(),
@@ -447,10 +450,48 @@ mod tests {
 
         let resp = c.finish();
         assert_eq!(resp.tool_calls.len(), 1);
-        // Malformed args fall back to Value::String
+        // Malformed args MUST fall back to Value::Object({}) — see
+        // malformed_tool_args_becomes_empty_object for the full rationale.
         assert_eq!(
             resp.tool_calls[0].arguments,
-            Value::String("not json{".to_string())
+            Value::Object(serde_json::Map::new())
+        );
+    }
+
+    #[test]
+    fn malformed_tool_args_becomes_empty_object() {
+        // Simulate a streaming tool_use whose partial_json was truncated mid-write.
+        // The collector should not fail; it should fall back to an empty object {}
+        // (NOT a Value::String) so that the dispatcher's schema validation runs
+        // normally and emits a structured "missing field X" ToolError.
+        let mut collector = DeltaCollector::new();
+        collector.push(ProviderDelta::ToolCallStart {
+            id: "call_truncated".to_string(),
+            name: "Read".to_string(),
+        });
+        collector.push(ProviderDelta::ToolCallArgDelta {
+            id: "call_truncated".to_string(),
+            delta: "{\"file_path\":\"/foo".to_string(),
+        });
+        collector.push(ProviderDelta::ToolCallEnd {
+            id: "call_truncated".to_string(),
+        });
+
+        let response = collector.finish();
+        assert_eq!(response.tool_calls.len(), 1, "tool call should be preserved");
+        let call = &response.tool_calls[0];
+        assert_eq!(call.id, "call_truncated");
+        assert_eq!(call.name, "Read");
+        assert!(
+            matches!(call.arguments, Value::Object(_)),
+            "arguments must be Value::Object (the dispatcher invariant), got: {:?}",
+            call.arguments
+        );
+        assert_eq!(
+            call.arguments.as_object().unwrap().len(),
+            0,
+            "expected empty object, got: {:?}",
+            call.arguments
         );
     }
 
