@@ -27,6 +27,12 @@ pub enum StrictResult {
 /// - Ensures `properties` exists (empty object if missing)
 /// - Recursively descends into `properties`, `items`, `anyOf`, `allOf`, `oneOf`
 /// - Optionally sets top-level `strict: true`
+/// - Rewrites `type: ["null", X]` (length 2 with one null) to
+///   `{"anyOf": [{"type":"null"}, {<sibling keys>, "type": X}]}`
+/// - Any other multi-type shape returns `Incompatible` with a
+///   JSON-pointer-prefixed reason (caller should downgrade `strict`)
+/// - Returns `StrictResult::Ok` on success, `StrictResult::Incompatible { reason }`
+///   when a sub-schema can't be expressed in strict mode
 pub fn normalize_strict_schema(schema: &mut Value, set_top_level_strict: bool) -> StrictResult {
     normalize_node(schema, set_top_level_strict, true, "")
 }
@@ -42,22 +48,19 @@ fn normalize_node(
             map.insert("strict".to_string(), Value::Bool(true));
         }
 
-        if let Some(Value::Array(types)) = map.get("type").cloned().as_ref() {
+        let type_array = map.get("type").and_then(|v| v.as_array()).cloned();
+        if let Some(types) = type_array {
             // Case 1: exactly ["null", X] with one non-null type → anyOf transform
             if types.len() == 2 {
                 let null_idx = types.iter().position(|t| t.as_str() == Some("null"));
                 let other_idx = types.iter().position(|t| t.as_str().is_some_and(|s| s != "null"));
                 if let (Some(_), Some(other)) = (null_idx, other_idx) {
                     let other_type = types[other].clone();
-                    let map_clone: serde_json::Map<String, Value> = map.iter()
+                    let mut non_null_branch: serde_json::Map<String, Value> = map.iter()
                         .filter(|(k, _)| k.as_str() != "type")
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
-                    let mut non_null_branch = serde_json::Map::new();
                     non_null_branch.insert("type".to_string(), other_type);
-                    for (k, v) in map_clone {
-                        non_null_branch.insert(k, v);
-                    }
                     map.clear();
                     map.insert(
                         "anyOf".to_string(),
