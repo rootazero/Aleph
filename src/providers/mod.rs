@@ -61,6 +61,7 @@ pub mod auth_profile_registry;
 pub mod auth_profiles;
 pub mod bridge;
 pub mod codex;
+pub mod default_handle;
 pub mod delta;
 pub mod failover;
 pub mod gemini;
@@ -97,6 +98,7 @@ pub use auth_profiles::{
     resolve_profile_order, ApiKeyCredential, AuthProfileCredential, AuthProfileFailureReason,
     AuthProfileStore, CooldownConfig, OAuthCredential, ProfileUsageStats, TokenCredential,
 };
+pub use default_handle::{DefaultProviderHandle, StaticDefault};
 pub use delta::{
     response_to_delta_stream, DeltaCollector, DeltaSink, IndexIdTracker, NoopSink, ProviderDelta,
 };

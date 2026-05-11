@@ -462,6 +462,15 @@ impl ProviderRegistry for MultiProviderRegistry {
     }
 }
 
+/// Live default-provider resolution: each `current()` call reads through the
+/// registry's `RwLock`, so UI-driven `set_default()` swaps are visible on the
+/// very next harness dispatch turn (no restart needed).
+impl crate::providers::DefaultProviderHandle for MultiProviderRegistry {
+    fn current(&self) -> crate::sync_primitives::Arc<dyn crate::providers::AiProvider> {
+        <Self as ProviderRegistry>::default_provider(self)
+    }
+}
+
 /// Dummy provider returned when [`MultiProviderRegistry`] has no registered providers.
 ///
 /// `process()` returns an error so callers get a recoverable failure instead of a panic.
@@ -567,6 +576,19 @@ mod multi_registry_tests {
         r.register("anthropic".into(), p("anthropic"));
         r.set_default("anthropic").unwrap();
         assert_eq!(r.default_provider().name(), "anthropic");
+    }
+
+    /// `DefaultProviderHandle::current()` must reflect a `set_default()` swap
+    /// without rebuilding the handle. This is the load-bearing guarantee for
+    /// UI-driven default-provider changes (Step 5 hot-reload).
+    #[test]
+    fn default_handle_reflects_set_default_swap() {
+        use crate::providers::DefaultProviderHandle;
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+        r.register("anthropic".into(), p("anthropic"));
+        assert_eq!(r.current().name(), "openai");
+        r.set_default("anthropic").unwrap();
+        assert_eq!(r.current().name(), "anthropic");
     }
 
     #[test]
