@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Anthropic protocol: `DeltaCollector::finish` now returns `Value::Object({})` for malformed tool-call JSON instead of `Value::String(raw)`, preserving the dispatcher invariant that tool arguments are JSON objects. Also removes the unused `last_model` field from `AnthropicProtocol`, replaced by `stream_idle_timeout_secs: Arc<AtomicU64>`.
+- OpenAI Responses strict-mode normalizer now handles multi-type JSON schemas. `["null", X]` (Option<T>-shaped) is rewritten to `anyOf` with sibling-keyword preservation; other multi-type shapes (e.g., the 7-type "any-value" emitted by schemars for `serde_json::Value`) trigger a per-tool strict downgrade via `tracing::warn!` audit log. Fixes 400 `invalid_function_parameters` errors on tools containing `serde_json::Value` fields (e.g., `desktop` tool's `actions: Option<Vec<serde_json::Value>>`).
 
 ## [2026.05.07]
 

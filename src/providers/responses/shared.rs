@@ -155,6 +155,9 @@ pub(crate) fn build_tools(
     tools: Option<&[ToolDefinition]>,
     enable_strict: bool,
 ) -> Option<Vec<FunctionToolDef>> {
+    use crate::providers::protocols::openai_common::openai_strict_schema::{
+        normalize_strict_schema, StrictResult,
+    };
     tools.map(|tool_defs| {
         tool_defs
             .iter()
@@ -164,11 +167,31 @@ pub(crate) fn build_tools(
                     obj.remove("$schema");
                     obj.remove("title");
                 }
-                if enable_strict {
-                    let _ = crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema(&mut params, true);
+                let strict = if enable_strict {
+                    match normalize_strict_schema(&mut params, true) {
+                        StrictResult::Ok => Some(true),
+                        StrictResult::Incompatible { reason } => {
+                            tracing::warn!(
+                                tool_name = %td.name,
+                                reason = %reason,
+                                "OpenAI strict mode incompatible — downgrading this tool to non-strict",
+                            );
+                            // Reset params from the original (normalize_strict_schema may
+                            // have partially mutated them before bailing) and apply the
+                            // non-strict normalization path instead.
+                            params = td.parameters.clone();
+                            if let Some(obj) = params.as_object_mut() {
+                                obj.remove("$schema");
+                                obj.remove("title");
+                            }
+                            ensure_properties_recursive(&mut params);
+                            None
+                        }
+                    }
                 } else {
                     ensure_properties_recursive(&mut params);
-                }
+                    None
+                };
                 let desc = td.description.trim();
                 FunctionToolDef {
                     tool_type: "function".to_string(),
@@ -179,7 +202,7 @@ pub(crate) fn build_tools(
                         Some(desc.to_string())
                     },
                     parameters: params,
-                    strict: if enable_strict { Some(true) } else { None },
+                    strict,
                 }
             })
             .collect()
@@ -600,5 +623,57 @@ mod tests {
         // $schema and title should be removed
         assert!(result[0].parameters.get("$schema").is_none());
         assert!(result[0].parameters.get("title").is_none());
+    }
+
+    fn make_tool(name: &str, parameters: serde_json::Value) -> ToolDefinition {
+        use crate::ToolCategory;
+        ToolDefinition {
+            name: name.to_string(),
+            description: "test tool".to_string(),
+            parameters,
+            requires_confirmation: false,
+            category: ToolCategory::Builtin,
+            llm_context: None,
+            strict: false,
+        }
+    }
+
+    #[test]
+    fn build_tools_keeps_strict_for_well_typed_tools() {
+        let td = make_tool(
+            "well_typed",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"}
+                },
+                "required": ["name"]
+            }),
+        );
+        let out = build_tools(Some(&[td]), true).expect("Some tools");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].strict, Some(true));
+    }
+
+    #[test]
+    fn build_tools_downgrades_tool_with_any_value_field() {
+        let td = make_tool(
+            "desktop_like",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "actions": {
+                        "type": "array",
+                        "items": {
+                            "type": ["boolean", "object", "array", "number", "string", "integer", "null"]
+                        }
+                    }
+                }
+            }),
+        );
+        let out = build_tools(Some(&[td]), true).expect("Some tools");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].strict, None, "should downgrade to non-strict");
+        assert!(out[0].parameters["properties"].is_object());
     }
 }
