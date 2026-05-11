@@ -1116,6 +1116,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.default_provider.clone(),
         session_service_for_orchestrator.clone(),
     ) {
+        // Step 5: prefer the live `MultiProviderRegistry` as the default-provider
+        // handle so UI-driven `set_default` swaps reach the harness on the next
+        // turn without a restart. Fall back to a static snapshot for env-only
+        // boot paths that never construct a registry.
+        let default_handle: Arc<dyn alephcore::providers::DefaultProviderHandle> =
+            if let Some(reg) = agent_result.multi_registry.clone() {
+                reg as Arc<dyn alephcore::providers::DefaultProviderHandle>
+            } else {
+                Arc::new(alephcore::providers::StaticDefault::new(default_provider.clone()))
+            };
         // The Orchestrator needs `alephcore::agents::AgentRegistry` (AgentDef
         // catalogue), which is a different type from the
         // `gateway::AgentRegistry` held in `agent_result`. We instantiate a
@@ -1136,7 +1146,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             orchestrator_agent_registry,
             session_service,
             tool_service.clone(),
-            default_provider,
+            default_handle,
             sandbox.clone(),
             &stop_hook_configs,
             agent_result.memory_context_provider.clone(),

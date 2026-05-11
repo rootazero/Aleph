@@ -44,7 +44,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     agent_registry: Arc<alephcore::agents::AgentRegistry>,
     session_service: Arc<dyn alephcore::session::service::SessionService>,
     tool_service: Arc<dyn alephcore::tools::service::ToolService>,
-    default_provider: Arc<dyn alephcore::providers::AiProvider>,
+    default_provider: Arc<dyn alephcore::providers::DefaultProviderHandle>,
     sandbox: Arc<dyn alephcore::sandbox::Sandbox>,
     stop_hook_configs: &[StopHookConfig],
     // Phase 6 follow-up — fixes BUG-2/BUG-3 (gateway path was building

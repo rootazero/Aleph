@@ -30,7 +30,7 @@ use crate::harness::trait_def::Harness;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
 use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::{FlowInput, FlowSpec};
-use crate::providers::AiProvider;
+use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::routing::session_key::SessionKey;
 use crate::sandbox::Sandbox;
 use crate::session::events::SessionEvent;
@@ -84,7 +84,11 @@ pub struct AgentHarnessRunner {
     pub agent_registry: Arc<AgentRegistry>,
     pub session_service: Arc<dyn SessionService>,
     pub tool_service: Arc<dyn ToolService>,
-    pub default_provider: Arc<dyn AiProvider>,
+    /// Live default-provider resolver. Each `pick_llm` call asks the handle
+    /// for the current default so UI-driven `set_default` takes effect on the
+    /// next turn (Step 5 hot-reload). Replaces the boot-time `Arc<dyn AiProvider>`
+    /// snapshot that previously required a restart.
+    pub default_provider: Arc<dyn DefaultProviderHandle>,
     /// Named providers keyed by `ProviderId`. Wired from `AuthProfileRegistry`
     /// by Task 9; empty in early boot.
     pub named_providers: HashMap<String, Arc<dyn AiProvider>>,

@@ -184,7 +184,9 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         agent_registry: Arc::new(AgentRegistry::with_builtins()),
         session_service: session_service.clone(),
         tool_service: Arc::new(NoopToolService) as Arc<dyn ToolService>,
-        default_provider: Arc::new(NeverProvider) as Arc<dyn AiProvider>,
+        default_provider: Arc::new(alephcore::providers::StaticDefault::new(
+            Arc::new(NeverProvider) as Arc<dyn AiProvider>,
+        )) as Arc<dyn alephcore::providers::DefaultProviderHandle>,
         named_providers: HashMap::new(),
         verifier_chain: None,
         context_budget: None,
