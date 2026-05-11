@@ -138,6 +138,7 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
         verified: false,
         service_tier: None,
         stream_idle_timeout_secs: None,
+        cache_retention: None,
     }
 }
 

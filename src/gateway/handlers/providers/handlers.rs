@@ -421,6 +421,7 @@ async fn handle_test_inner(
         verified: false,
         service_tier: None,
         stream_idle_timeout_secs: None,
+        cache_retention: None,
     };
 
     // Create provider instance

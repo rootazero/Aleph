@@ -28,10 +28,23 @@ pub enum UnifiedMessage {
 
 /// Cache control hint for API providers that support prompt caching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum CacheControl {
-    /// Short-lived cache (Anthropic: ~5 min TTL).
-    Ephemeral,
+    /// Ephemeral prompt cache. `ttl: None` = Anthropic default (~5 min).
+    /// `ttl: Some(OneHour)` = 1 hour, requires
+    /// `anthropic-beta: extended-cache-ttl-2025-04-11` header.
+    Ephemeral {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ttl: Option<EphemeralTtl>,
+    },
+}
+
+/// TTL extension tag for ephemeral prompt cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EphemeralTtl {
+    /// 1-hour TTL — Anthropic-only, requires extended-cache-ttl-2025-04-11 beta.
+    #[serde(rename = "1h")]
+    OneHour,
 }
 
 /// Content block — one atomic unit within a message.
@@ -537,7 +550,7 @@ mod tests {
     fn cache_control_serializes_correctly() {
         let block = ContentBlock::Text {
             text: "hello".into(),
-            cache_control: Some(CacheControl::Ephemeral),
+            cache_control: Some(CacheControl::Ephemeral { ttl: None }),
         };
         let json_str = serde_json::to_string(&block).unwrap();
         assert!(
@@ -559,5 +572,21 @@ mod tests {
             "None should be omitted, got: {}",
             json_str
         );
+    }
+
+    #[test]
+    fn cache_control_short_serializes_without_ttl_field() {
+        let cc = CacheControl::Ephemeral { ttl: None };
+        let json = serde_json::to_string(&cc).expect("serialize");
+        assert_eq!(json, r#"{"type":"ephemeral"}"#);
+    }
+
+    #[test]
+    fn cache_control_long_serializes_with_ttl_1h() {
+        let cc = CacheControl::Ephemeral {
+            ttl: Some(EphemeralTtl::OneHour),
+        };
+        let json = serde_json::to_string(&cc).expect("serialize");
+        assert_eq!(json, r#"{"type":"ephemeral","ttl":"1h"}"#);
     }
 }

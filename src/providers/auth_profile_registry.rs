@@ -186,6 +186,7 @@ impl AuthProfileProviderRegistry {
             verified: false,
             service_tier: None,
             stream_idle_timeout_secs: None,
+            cache_retention: None,
         };
 
         create_provider(&self.config.provider_type, provider_config)

@@ -20,6 +20,35 @@ pub struct ProviderConfigEntry {
 }
 
 // =============================================================================
+// CacheRetention
+// =============================================================================
+
+/// Prompt cache retention policy for streaming protocols that support it.
+///
+/// - `Off`: never inject `cache_control` breakpoints.
+/// - `Short` (default): 5-minute ephemeral cache.
+/// - `Long`: 1-hour ephemeral cache; Anthropic-only. Triggers the
+///   `anthropic-beta: extended-cache-ttl-2025-04-11` header.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheRetention {
+    Off,
+    #[default]
+    Short,
+    Long,
+}
+
+// =============================================================================
 // ProviderConfig
 // =============================================================================
 
@@ -63,6 +92,18 @@ pub struct ProviderConfig {
     /// protocols ignore this field.
     #[serde(default)]
     pub stream_idle_timeout_secs: Option<u64>,
+    /// Prompt cache retention policy. Currently honored only by the Anthropic
+    /// protocol adapter; other protocols ignore this field.
+    ///
+    /// `None` (unset) means "use hostname-gated default":
+    ///   - host == api.anthropic.com → Short
+    ///   - host == anything else     → Off (third-party backends require
+    ///     explicit opt-in to avoid breaking custom Anthropic-compatible APIs
+    ///     that may not accept `cache_control`).
+    ///
+    /// An explicit value (`Off` / `Short` / `Long`) is always respected.
+    #[serde(default)]
+    pub cache_retention: Option<CacheRetention>,
     /// Whether the provider is enabled/active
     #[serde(default = "default_provider_enabled")]
     pub enabled: bool,
@@ -198,6 +239,7 @@ impl ProviderConfig {
             verified: false,
             service_tier: None,
             stream_idle_timeout_secs: None,
+            cache_retention: None,
         }
     }
 }
@@ -243,6 +285,8 @@ mod tests {
             model_behavior: None,
             verified: false,
             service_tier: None,
+            stream_idle_timeout_secs: None,
+            cache_retention: None,
         };
         assert_eq!(config.protocol(), "anthropic");
     }
@@ -271,6 +315,8 @@ mod tests {
             model_behavior: None,
             verified: false,
             service_tier: None,
+            stream_idle_timeout_secs: None,
+            cache_retention: None,
         };
         assert_eq!(config.protocol(), "openai");
     }
