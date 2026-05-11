@@ -190,6 +190,11 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,
+        guardrails: None,
+        fallback_llm: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
         power: None,
         memory_context_provider: None,
     };
