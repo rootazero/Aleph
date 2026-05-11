@@ -44,17 +44,31 @@ impl AiProvider for MeteringProvider {
         let fut = self.inner.process(req);
         let sink = self.sink.clone();
         let agent_id = self.agent_id.clone();
+        let provider_name = self.inner.name().to_string();
         Box::pin(async move {
             let resp = fut.await?;
-            if let (Some(sink), Some(usage)) = (sink, resp.usage.as_ref()) {
-                sink.on_trace(&LoopTraceEvent::ProviderUsage {
-                    agent_id,
-                    input_tokens: usage.input_tokens,
-                    output_tokens: usage.output_tokens,
-                    cache_read_tokens: usage.cache_read_tokens,
-                    cache_creation_tokens: usage.cache_creation_tokens,
-                    thinking_tokens: usage.thinking_tokens,
-                });
+            if let Some(usage) = resp.usage.as_ref() {
+                tracing::info!(
+                    target: "aleph::provider_usage",
+                    agent_id = %agent_id,
+                    provider = %provider_name,
+                    input_tokens = usage.input_tokens,
+                    output_tokens = usage.output_tokens,
+                    cache_read_tokens = ?usage.cache_read_tokens,
+                    cache_creation_tokens = ?usage.cache_creation_tokens,
+                    thinking_tokens = ?usage.thinking_tokens,
+                    "LLM call completed"
+                );
+                if let Some(sink) = sink {
+                    sink.on_trace(&LoopTraceEvent::ProviderUsage {
+                        agent_id,
+                        input_tokens: usage.input_tokens,
+                        output_tokens: usage.output_tokens,
+                        cache_read_tokens: usage.cache_read_tokens,
+                        cache_creation_tokens: usage.cache_creation_tokens,
+                        thinking_tokens: usage.thinking_tokens,
+                    });
+                }
             }
             Ok(resp)
         })
