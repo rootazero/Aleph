@@ -11,7 +11,7 @@ mod tests {
 
     use crate::agents::{AgentDef, AgentMode};
     use crate::error::Result as AlephResult;
-    use crate::gateway::cancellation::CancellationToken;
+    use tokio_util::sync::CancellationToken;
     use crate::harness::chain_context::ChainContext;
     use crate::providers::adapter::{
         NativeToolCall, ProviderResponse, RequestPayload, StopReason,

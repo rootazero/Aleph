@@ -67,6 +67,7 @@ mod tests {
                 streaming: Default::default(),
                 error_policy: Default::default(),
                 max_retries: 0,
+                html_fallback: true,
             },
             Arc::new(ErrorCooldown::new()),
             "123",

@@ -51,7 +51,7 @@ fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<NoteIndexEntry> {
 }
 
 /// SHA-256 hex digest of a note's body text — used to gate `notes_fts` rewrites.
-fn body_text_sha256(body: &str) -> String {
+pub(crate) fn body_text_sha256(body: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(body.as_bytes());

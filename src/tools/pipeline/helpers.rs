@@ -65,7 +65,7 @@ pub(super) fn is_file_read_tool(name: &str) -> bool {
 }
 
 /// Default per-tool result budgets.
-pub(super) fn default_result_budget(tool_name: &str) -> usize {
+pub(crate) fn default_result_budget(tool_name: &str) -> usize {
     match tool_name {
         "Read" => 12_000,
         "WebFetch" | "web_fetch" => 10_000,
@@ -76,7 +76,7 @@ pub(super) fn default_result_budget(tool_name: &str) -> usize {
 }
 
 /// Truncate a tool result with head+tail preservation.
-pub(super) fn truncate_tool_result_with_budget(text: &str, budget_tokens: usize) -> String {
+pub(crate) fn truncate_tool_result_with_budget(text: &str, budget_tokens: usize) -> String {
     let estimated = estimate_tokens_smart(text);
     if estimated <= budget_tokens {
         return text.to_string();
@@ -123,7 +123,7 @@ pub(super) fn truncate_tool_result_with_budget(text: &str, budget_tokens: usize)
 }
 
 /// Truncate a tool result string if it exceeds `MAX_TOOL_RESULT_TOKENS`.
-pub(super) fn truncate_tool_result(text: &str) -> String {
+pub(crate) fn truncate_tool_result(text: &str) -> String {
     let estimated = estimate_tokens_smart(text);
     if estimated <= MAX_TOOL_RESULT_TOKENS {
         return text.to_string();

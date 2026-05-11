@@ -86,6 +86,7 @@ fn test_pairing_request_crud() {
             channel: None,
             sender_id: None,
             remote_addr: Some("192.168.1.1"),
+            metadata: None,
             expires_at: expires,
         })
         .unwrap();

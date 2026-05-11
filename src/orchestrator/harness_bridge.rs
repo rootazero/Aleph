@@ -479,7 +479,11 @@ fn last_user_query(input: &FlowInput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::callback::HarnessCallback;
+    use crate::orchestrator::flow_spec::FlowHistoryTurn;
     use crate::session::events::{MessageContent, TurnTrigger};
+    use crate::session::service::SessionService;
+    use session_seed::seed_session;
 
     #[test]
     fn broadcast_callback_fans_lifecycle_events() {

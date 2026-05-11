@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use super::super::*;
+    use crate::memory::store::sqlite::schema::{
+        ddl, drop_obsolete_facts_tables, init_schema, init_vec_tables, migrations,
+        migrate_unify_default_to_main_agent, migrate_notes_links_to_raw,
+    };
     use rusqlite::{Connection, OptionalExtension};
 
     #[test]
@@ -186,8 +189,8 @@ mod tests {
     #[test]
     fn create_query_filed_idempotent() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(super::ddl::CREATE_QUERY_FILED).unwrap();
-        conn.execute_batch(super::ddl::CREATE_QUERY_FILED).unwrap();
+        conn.execute_batch(ddl::CREATE_QUERY_FILED).unwrap();
+        conn.execute_batch(ddl::CREATE_QUERY_FILED).unwrap();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM query_filed", [], |r| r.get(0))
             .unwrap();
@@ -212,10 +215,10 @@ mod tests {
             )",
         )
         .unwrap();
-        super::migrations::migrate_dream_reports_drop_legacy_cols(&conn,
+        migrations::migrate_dream_reports_drop_legacy_cols(&conn,
         )
         .unwrap();
-        super::migrations::migrate_dream_reports_drop_legacy_cols(&conn)
+        migrations::migrate_dream_reports_drop_legacy_cols(&conn)
             .unwrap(); // idempotent
         let cols: Vec<String> = conn
             .prepare("PRAGMA table_info(dream_reports)")

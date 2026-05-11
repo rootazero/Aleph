@@ -1,6 +1,6 @@
 use super::config_v2::{
-    DmPolicy, ErrorPolicy, GroupPolicy, StreamingOptions, TelegramAccountConfig, TelegramConfigV2,
-    TelegramGroupConfig, TelegramTopicConfig,
+    DmPolicy, ErrorPolicy, ErrorPolicyMode, GroupPolicy, StreamingOptions, TelegramAccountConfig,
+    TelegramConfigV2, TelegramGroupConfig, TelegramTopicConfig,
 };
 use std::collections::HashMap;
 
@@ -162,6 +162,8 @@ mod tests {
                     template: None,
                     max_retries: 3,
                 }),
+                html_fallback: None,
+                proxy_url: None,
                 groups: vec![],
             }],
         };
@@ -192,6 +194,8 @@ mod tests {
                     template: None,
                     max_retries: 3,
                 }),
+                html_fallback: None,
+                proxy_url: None,
                 groups: vec![TelegramGroupConfig {
                     id: "g1".to_string(),
                     chat_id: -1001,

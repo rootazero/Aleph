@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn test_build_tools_none() {
-        assert!(build_tools(None).is_none());
+        assert!(build_tools(None, false).is_none());
     }
 
     #[test]
@@ -624,7 +624,7 @@ mod tests {
             llm_context: None,
             strict: false,
         }];
-        let result = build_tools(Some(&tools)).unwrap();
+        let result = build_tools(Some(&tools), false).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].tool_type, "function");
         assert_eq!(result[0].name, "web_search");

@@ -59,7 +59,7 @@ async fn cli_secret_set_forwards_to_admin_endpoint_when_lock_held() {
     {
         let store = SecurityStore::open(&data_dir.join("security.db")).expect("open security db");
         store
-            .set_shared_token_with_secret("hash-1", &[1u8; 32], "test-bearer-token")
+            .set_shared_token_with_secret("hash-1", &[1u8; 32], Some("test-bearer-token"))
             .expect("seed token");
     }
 

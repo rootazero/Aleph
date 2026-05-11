@@ -370,6 +370,8 @@ fn gpt4o_tts_voice_list() -> Vec<crate::generation::VoiceInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::types::generation::GenerationProviderConfig;
+    use crate::gateway::handlers::generation_providers::build_generation_provider_for_persistence;
 
     #[test]
     fn test_build_generation_provider_applies_preset_defaults() {

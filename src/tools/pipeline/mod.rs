@@ -37,9 +37,9 @@ use crate::tools::runtime::{LoopToolRegistry, ToolResult};
 
 /// Maximum tool result size in estimated tokens. Results exceeding this are truncated
 /// to prevent a single tool call from consuming a disproportionate share of the context window.
-const MAX_TOOL_RESULT_TOKENS: usize = 8_000;
+pub(crate) const MAX_TOOL_RESULT_TOKENS: usize = 8_000;
 
-const TRUNCATION_SUFFIX: &str = "\n... [output truncated, showing first ~8000 tokens]";
+pub(crate) const TRUNCATION_SUFFIX: &str = "\n... [output truncated, showing first ~8000 tokens]";
 
 // =============================================================================
 // PipelineOutcome
@@ -589,7 +589,7 @@ impl ToolPipeline {
     }
 }
 
-mod helpers;
+pub(crate) mod helpers;
 use helpers::*;
 
 #[cfg(test)]

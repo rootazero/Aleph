@@ -5,15 +5,21 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::pipeline::{MAX_TOOL_RESULT_TOKENS, TRUNCATION_SUFFIX};
+    use crate::tools::pipeline::helpers::{default_result_budget, truncate_tool_result, truncate_tool_result_with_budget};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::path::PathBuf;
+    use tokio_util::sync::CancellationToken;
+    use serde_json::{json, Value};
+    use async_trait::async_trait;
     use crate::extension::hooks::HookExecutor;
     use crate::extension::{
         HookAction, HookConfig, HookEvent, HookKind, HookPriority, PermissionAction,
     };
+    use crate::session::ingress_safety::SafetyGuard;
+    use crate::tools::pipeline::ToolPipeline;
     use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
-    use async_trait::async_trait;
-    use serde_json::{json, Value};
-    use std::collections::HashMap;
-    use std::path::PathBuf;
 
     struct EchoTool;
 

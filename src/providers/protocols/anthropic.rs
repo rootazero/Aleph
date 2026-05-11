@@ -71,6 +71,14 @@ mod sse;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use crate::agents::thinking::ThinkLevel;
+    use crate::config::ProviderConfig;
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
+    use crate::providers::anthropic::types::{ContentBlock, MessageContent};
+    use crate::providers::delta::{IndexIdTracker, ProviderDelta};
+    use crate::providers::message::UnifiedMessage;
+    use crate::providers::protocols::anthropic::sse::parse_anthropic_sse_event;
 
     #[test]
     fn test_build_endpoint_default() {
@@ -493,7 +501,12 @@ mod tests {
 #[cfg(test)]
 mod stream_tests {
     use super::*;
-    use crate::providers::delta::ProviderDelta;
+    use std::collections::VecDeque;
+    use crate::config::ProviderConfig;
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
+    use crate::providers::delta::{IndexIdTracker, ProviderDelta};
+    use crate::providers::protocols::anthropic::sse::parse_anthropic_sse_event;
+    use crate::providers::anthropic::types::{ContentBlock, MessageContent};
 
     // Helper: run parse_anthropic_sse_event on a raw JSON string (without "data: " prefix)
     fn parse(data: &str) -> Vec<ProviderDelta> {

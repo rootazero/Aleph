@@ -54,7 +54,7 @@ fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<String> {
     super::resolve_vault_secret(&vault_key(name), vault)
 }
 
-fn build_generation_provider_for_persistence(
+pub(crate) fn build_generation_provider_for_persistence(
     provider_name: &str,
     config: GenerationProviderConfig,
     generation_overrides: &crate::config::presets_override::GenerationPresetsOverride,

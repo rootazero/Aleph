@@ -49,7 +49,7 @@ async fn handler(State(state): State<MockState>, headers: HeaderMap) -> (StatusC
         // the CLI's re-read sees a different value and retries.
         let store = SecurityStore::open(&state.security_db).expect("reopen");
         store
-            .set_shared_token_with_secret("hash-2", &[2u8; 32], "rotated-token")
+            .set_shared_token_with_secret("hash-2", &[2u8; 32], Some("rotated-token"))
             .expect("rotate");
         (StatusCode::UNAUTHORIZED, "rotated")
     } else {
@@ -66,7 +66,7 @@ async fn forward_retries_once_on_401_with_rotated_token() {
     {
         let store = SecurityStore::open(&security_db).expect("seed open");
         store
-            .set_shared_token_with_secret("hash-1", &[1u8; 32], "initial-token")
+            .set_shared_token_with_secret("hash-1", &[1u8; 32], Some("initial-token"))
             .expect("seed token");
     }
 

@@ -263,6 +263,7 @@ mod tests {
             allowed_groups: vec![],
             streaming: StreamingOptions::default(),
             error_policy: ErrorPolicy::default(),
+            html_fallback: true,
         }
     }
 
@@ -363,6 +364,7 @@ mod tests {
             allowed_groups: vec![],
             streaming: StreamingOptions::default(),
             error_policy: ErrorPolicy::default(),
+            html_fallback: true,
         };
         let ctrl = AccessController::new(config);
         assert_eq!(
@@ -410,6 +412,7 @@ mod tests {
             allowed_groups: vec![-100111],
             streaming: StreamingOptions::default(),
             error_policy: ErrorPolicy::default(),
+            html_fallback: true,
         };
         let ctrl = AccessController::new(config);
         assert_eq!(

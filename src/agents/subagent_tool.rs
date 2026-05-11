@@ -489,6 +489,7 @@ mod tests {
     use crate::providers::AiProvider;
     use crate::session::in_process::InProcessActorSessionService;
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+    use crate::tools::runtime::LoopTool;
     use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 
     /// Noop tool service stub — never resolves any tool. Used by test helpers

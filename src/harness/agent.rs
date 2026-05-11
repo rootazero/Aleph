@@ -450,16 +450,19 @@ mod tests {
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
 
+    use serde_json::{json, Value};
     use crate::error::Result as AlephResult;
     use crate::harness::callback::NoopHarnessCallback;
     use crate::harness::deps::HarnessDeps;
     use crate::harness::trait_def::Harness;
-    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
     use crate::providers::AiProvider;
     use crate::routing::session_key::SessionKey;
     use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
     use crate::session::in_process::InProcessActorSessionService;
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+    use crate::session::events::ToolOutput;
+    use crate::session::service::{SessionId, SessionService};
 
     struct RecordingProvider {
         captured: Arc<Mutex<Option<String>>>,
@@ -495,14 +498,20 @@ mod tests {
         ) -> Result<ToolOutput, crate::tools::service::ToolError> {
             Ok(ToolOutput {
                 value: Value::String("ok".to_string()),
-                is_error: false,
-                metadata: None,
+                metadata: Default::default(),
             })
         }
 
-        fn dispatcher_schema(&self,
-        ) -> Arc<Vec<crate::dispatcher::ToolDefinition>> {
-            Arc::new(Vec::new())
+        async fn list(&self) -> Vec<crate::tools::service::ToolDefinition> {
+            vec![]
+        }
+
+        async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
+            None
+        }
+
+        fn dispatcher_schema(&self) -> Arc<[crate::dispatcher::ToolDefinition]> {
+            Arc::from(vec![])
         }
     }
 
@@ -518,11 +527,15 @@ mod tests {
             let calls = self.calls.clone();
             Box::pin(async move {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(ProviderResponse::with_tool_calls(vec![NativeToolCall {
-                    id: "loop".to_string(),
-                    name: "echo".to_string(),
-                    arguments: json!({"text": "loop"}),
-                }]))
+                Ok(ProviderResponse {
+                    tool_calls: vec![NativeToolCall {
+                        id: "loop".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({"text": "loop"}),
+                    }],
+                    stop_reason: StopReason::ToolUse,
+                    ..Default::default()
+                })
             })
         }
 
@@ -561,22 +574,21 @@ mod tests {
     }
 
     async fn fresh_session(agent_id: &str) -> (Arc<InProcessActorSessionService>, SessionId) {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("events.db");
-        let store = SqliteEventStore::new(&db_path).await.unwrap();
-        migrate_add_session_events(&store.pool)
-            .await
-            .expect("migrate");
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).expect("migrate");
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
         let session = Arc::new(InProcessActorSessionService::new(store));
-        let sid = SessionId::new(SessionKey::Main {
+        let sid = SessionKey::Main {
             agent_id: agent_id.to_string(),
-        });
+            main_key: "main".to_string(),
+            epoch: 0,
+        };
         session
             .emit_event(
                 &sid,
                 SessionEvent::TurnStarted {
                     turn_id: uuid::Uuid::new_v4(),
-                    trigger: TurnTrigger::User,
+                    trigger: TurnTrigger::UserMessage,
                     at: now_ms(),
                 },
             )
