@@ -115,19 +115,16 @@ impl DesktopTool {
 
     /// Execute a batch of desktop actions sequentially.
     async fn execute_batch(&self, args: &DesktopArgs) -> Result<DesktopOutput> {
-        let actions = match &args.actions {
-            Some(list) if !list.is_empty() => list,
-            _ => {
-                return Ok(DesktopOutput {
-                    success: false,
-                    data: None,
-                    message: Some("batch requires non-empty 'actions' array".into()),
-                })
-            }
-        };
+        if args.actions.is_empty() {
+            return Ok(DesktopOutput {
+                success: false,
+                data: None,
+                message: Some("batch requires non-empty 'actions' array".into()),
+            });
+        }
 
         let mut results = Vec::new();
-        for (i, action_json) in actions.iter().enumerate() {
+        for (i, batch_action) in args.actions.iter().enumerate() {
             // Check escape between actions
             if let Err(out) = self.check_escape() {
                 results.push(serde_json::json!({
@@ -138,19 +135,13 @@ impl DesktopTool {
                 break;
             }
 
-            let sub_args: DesktopArgs = match serde_json::from_value(action_json.clone()) {
-                Ok(a) => a,
-                Err(e) => {
-                    results.push(serde_json::json!({
-                        "index": i,
-                        "success": false,
-                        "message": format!("Invalid action: {e}"),
-                    }));
-                    break;
-                }
-            };
+            let sub_args: DesktopArgs = batch_action.into();
 
-            // Prevent nested batch
+            // Prevent nested batch. The type system already prevents an
+            // inner DesktopBatchAction from carrying its own actions list,
+            // but we still reject `action == "batch"` here to surface a
+            // clearer error than the empty-actions message that would
+            // otherwise come back from a recursive call.
             if sub_args.action == "batch" {
                 results.push(serde_json::json!({
                     "index": i,

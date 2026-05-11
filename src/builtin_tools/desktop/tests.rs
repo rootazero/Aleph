@@ -34,7 +34,7 @@ fn make_args(action: &str) -> DesktopArgs {
         quality: None,
         max_width: None,
         max_height: None,
-        actions: None,
+        actions: Vec::new(),
     }
 }
 
