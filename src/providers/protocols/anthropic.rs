@@ -712,7 +712,8 @@ mod stream_tests {
 
     #[test]
     fn test_beta_headers_standard_model() {
-        let headers = AnthropicProtocol::build_beta_headers("claude-3-5-sonnet-20241022");
+        let headers =
+            AnthropicProtocol::build_beta_headers("claude-3-5-sonnet-20241022", None, false);
         // Should include the two always-on betas
         assert!(headers.contains("interleaved-thinking-2025-05-14"));
         assert!(headers.contains("fine-grained-tool-streaming-2025-05-14"));
@@ -722,14 +723,15 @@ mod stream_tests {
 
     #[test]
     fn test_beta_headers_opus4_model() {
-        let headers = AnthropicProtocol::build_beta_headers("claude-opus-4-20250514");
+        let headers =
+            AnthropicProtocol::build_beta_headers("claude-opus-4-20250514", None, false);
         assert!(headers.contains("interleaved-thinking-2025-05-14"));
         assert!(headers.contains("output-128k-2025-02-19"));
     }
 
     #[test]
     fn test_beta_headers_sonnet4_model() {
-        let headers = AnthropicProtocol::build_beta_headers("claude-sonnet-4-5");
+        let headers = AnthropicProtocol::build_beta_headers("claude-sonnet-4-5", None, false);
         assert!(headers.contains("output-128k-2025-02-19"));
     }
 

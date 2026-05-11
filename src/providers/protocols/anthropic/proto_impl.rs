@@ -280,7 +280,12 @@ impl AnthropicProtocol {
     /// Always includes interleaved-thinking and fine-grained-tool-streaming.
     /// Adds the 128k output beta for large context models (opus-4, sonnet-4).
     /// Adds token-restricted beta for OAuth tokens (sk-ant-oat).
-    pub(super) fn build_beta_headers(model: &str, api_key: Option<&str>) -> String {
+    /// Adds extended-cache-ttl-2025-04-11 when `extended_cache_ttl` is true (Long retention).
+    pub(super) fn build_beta_headers(
+        model: &str,
+        api_key: Option<&str>,
+        extended_cache_ttl: bool,
+    ) -> String {
         let mut betas = vec![
             "interleaved-thinking-2025-05-14",
             "fine-grained-tool-streaming-2025-05-14",
@@ -290,6 +295,9 @@ impl AnthropicProtocol {
         }
         if api_key.map(|k| k.starts_with("sk-ant-oat")).unwrap_or(false) {
             betas.push("token-restricted");
+        }
+        if extended_cache_ttl {
+            betas.push("extended-cache-ttl-2025-04-11");
         }
         betas.join(",")
     }
