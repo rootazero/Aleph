@@ -29,17 +29,7 @@ pub struct ProviderConfigEntry {
 /// - `Short` (default): 5-minute ephemeral cache.
 /// - `Long`: 1-hour ephemeral cache; Anthropic-only. Triggers the
 ///   `anthropic-beta: extended-cache-ttl-2025-04-11` header.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Default,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum CacheRetention {
     Off,

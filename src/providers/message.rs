@@ -554,9 +554,8 @@ mod tests {
         };
         let json_str = serde_json::to_string(&block).unwrap();
         assert!(
-            json_str.contains("ephemeral"),
-            "should serialize cache_control, got: {}",
-            json_str
+            json_str.contains(r#""cache_control":{"type":"ephemeral"}"#),
+            "expected exact cache_control wire shape, got: {json_str}",
         );
     }
 
@@ -575,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_control_short_serializes_without_ttl_field() {
+    fn cache_control_ephemeral_omits_ttl_when_none() {
         let cc = CacheControl::Ephemeral { ttl: None };
         let json = serde_json::to_string(&cc).expect("serialize");
         assert_eq!(json, r#"{"type":"ephemeral"}"#);
@@ -588,5 +587,17 @@ mod tests {
         };
         let json = serde_json::to_string(&cc).expect("serialize");
         assert_eq!(json, r#"{"type":"ephemeral","ttl":"1h"}"#);
+    }
+
+    #[test]
+    fn cache_control_long_deserializes_from_ttl_1h() {
+        let json = r#"{"type":"ephemeral","ttl":"1h"}"#;
+        let cc: CacheControl = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(
+            cc,
+            CacheControl::Ephemeral {
+                ttl: Some(EphemeralTtl::OneHour),
+            },
+        );
     }
 }
