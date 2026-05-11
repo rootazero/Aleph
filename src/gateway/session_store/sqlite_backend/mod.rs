@@ -58,8 +58,11 @@ fn map_session_metadata(
         status,
         identity_meta,
         label: row.get(10)?,
-        input_tokens: row.get(11)?,
-        output_tokens: row.get(12)?,
+        // Legacy rows: ALTER TABLE ADD COLUMN without DEFAULT leaves NULL for
+        // pre-migration data. Coerce to 0 so historical sessions load instead
+        // of panicking on `Invalid column type Null at index: 11`.
+        input_tokens: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
+        output_tokens: row.get::<_, Option<i64>>(12)?.unwrap_or(0),
         model: row.get(13)?,
         model_provider: row.get(14)?,
         parent_session_key: row.get(15)?,

@@ -89,8 +89,11 @@ pub async fn export_legacy_messages(
                 status,
                 identity_meta,
                 label: row.get(10)?,
-                input_tokens: row.get(11)?,
-                output_tokens: row.get(12)?,
+                // Legacy rows: ALTER TABLE ADD COLUMN without DEFAULT leaves
+                // NULL for pre-migration data. Coerce to 0 so the SQLite →
+                // file-based migration doesn't abort on the first legacy row.
+                input_tokens: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
+                output_tokens: row.get::<_, Option<i64>>(12)?.unwrap_or(0),
                 model: row.get(13)?,
                 model_provider: row.get(14)?,
                 parent_session_key: row.get(15)?,
@@ -148,8 +151,10 @@ pub async fn export_legacy_messages(
                     content: row.get(2)?,
                     timestamp: row.get(3)?,
                     metadata,
-                    input_tokens: row.get(5)?,
-                    output_tokens: row.get(6)?,
+                    // Same NULL coercion as the sessions table — legacy
+                    // messages may have NULL token columns.
+                    input_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    output_tokens: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                     model: None,
                     model_provider: None,
                 },
