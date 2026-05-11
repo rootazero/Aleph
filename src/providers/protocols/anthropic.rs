@@ -51,7 +51,16 @@ pub struct AnthropicProtocol {
     /// (so Anthropic accepts the names) and consulted while parsing the
     /// streamed response (so the dispatcher receives the original names).
     name_map: ToolNameMap,
-    last_model: std::sync::Arc<std::sync::RwLock<Option<String>>>,
+    /// Per-event idle timeout (seconds) for streaming responses.
+    /// Written by `build_request` from `ProviderConfig.stream_idle_timeout_secs`
+    /// (default 60); read by `stream_deltas` at stream-construction time.
+    /// A value of 0 disables the idle watchdog.
+    ///
+    /// Uses `AtomicU64` rather than `RwLock<u64>` because the value is a
+    /// single primitive: lock-free load/store is appropriate and avoids
+    /// any contention between concurrent `build_request` and `stream_deltas`
+    /// calls within the same protocol instance.
+    stream_idle_timeout_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 mod proto_impl;

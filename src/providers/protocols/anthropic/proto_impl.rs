@@ -23,7 +23,9 @@ impl AnthropicProtocol {
         Self {
             client,
             name_map: Arc::new(RwLock::new(HashMap::new())),
-            last_model: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            stream_idle_timeout_secs: std::sync::Arc::new(
+                std::sync::atomic::AtomicU64::new(60),
+            ),
         }
     }
 

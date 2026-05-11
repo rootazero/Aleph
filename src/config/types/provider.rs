@@ -50,6 +50,19 @@ pub struct ProviderConfig {
     /// Request timeout in seconds
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
+    /// Per-event idle timeout for streaming responses, in seconds.
+    ///
+    /// Wraps each SSE event read with a watchdog: if no chunk arrives within
+    /// this duration, the stream aborts with `AlephError::Timeout`. This is
+    /// distinct from `timeout_seconds` (which is the total request timeout).
+    ///
+    /// `None` or unset: 60 seconds (default).
+    /// `Some(0)`: idle timeout disabled.
+    ///
+    /// Currently honored only by the Anthropic protocol adapter; other
+    /// protocols ignore this field.
+    #[serde(default)]
+    pub stream_idle_timeout_secs: Option<u64>,
     /// Whether the provider is enabled/active
     #[serde(default = "default_provider_enabled")]
     pub enabled: bool,
@@ -184,6 +197,7 @@ impl ProviderConfig {
             model_behavior: None,
             verified: false,
             service_tier: None,
+            stream_idle_timeout_secs: None,
         }
     }
 }

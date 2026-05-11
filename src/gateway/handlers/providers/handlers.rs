@@ -420,6 +420,7 @@ async fn handle_test_inner(
         model_behavior: None,
         verified: false,
         service_tier: None,
+        stream_idle_timeout_secs: None,
     };
 
     // Create provider instance
