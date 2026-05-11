@@ -165,7 +165,7 @@ pub(crate) fn build_tools(
                     obj.remove("title");
                 }
                 if enable_strict {
-                    crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema(&mut params, true);
+                    let _ = crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema(&mut params, true);
                 } else {
                     ensure_properties_recursive(&mut params);
                 }
