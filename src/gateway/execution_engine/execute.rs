@@ -362,6 +362,7 @@ where
                                 max_tokens: None,
                                 tool_choice: None,
                                 model: None,
+                                metadata: None,
                             };
 
                             let topic_text = match topic_provider.process(payload).await {

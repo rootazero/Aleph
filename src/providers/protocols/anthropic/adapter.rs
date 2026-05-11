@@ -42,34 +42,23 @@ impl ProtocolAdapter for AnthropicProtocol {
             .or(config.max_tokens)
             .unwrap_or(DEFAULT_MAX_TOKENS);
 
-        // Apply Kimi-specific defaults if not explicitly set
-        let temperature = payload
-            .temperature
-            .or_else(|| Self::kimi_default_temperature(actual_model))
-            .or(config.temperature);
+        // Apply temperature with config fallback
+        let temperature = payload.temperature.or(config.temperature);
 
         // Build thinking config if enabled.
         //
         // Signed thinking blocks from prior assistant turns are replayed verbatim
         // by `convert_messages` (see ContentBlock::Thinking handling), so multi-turn
         // tool_use conversations now keep thinking enabled across turns.
-        let thinking = if Self::is_kimi_model(actual_model) && payload.think_level.is_none() {
-            Some(ThinkingBlock {
+        let thinking = payload
+            .think_level
+            .as_ref()
+            .and_then(Self::map_think_level)
+            .map(|budget| ThinkingBlock {
                 thinking_type: "enabled".to_string(),
-                budget_tokens: Some(16_000),
+                budget_tokens: Some(budget),
                 display: None,
-            })
-        } else {
-            payload
-                .think_level
-                .as_ref()
-                .and_then(Self::map_think_level)
-                .map(|budget| ThinkingBlock {
-                    thinking_type: "enabled".to_string(),
-                    budget_tokens: Some(budget),
-                    display: None,
-                })
-        };
+            });
 
         // Convert tool definitions to Anthropic format. Tool names must satisfy
         // Anthropic's regex `^[a-zA-Z][a-zA-Z0-9_-]{0,127}$`; we sanitize on
@@ -168,7 +157,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             .post(&endpoint)
             .header("x-api-key", api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("anthropic-beta", Self::build_beta_headers(actual_model))
+            .header("anthropic-beta", Self::build_beta_headers(actual_model, Some(api_key)))
             .header("Content-Type", "application/json")
             .json(&body))
     }

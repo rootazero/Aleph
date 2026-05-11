@@ -113,7 +113,11 @@ pub enum MessageContent {
 #[serde(rename_all = "snake_case")]
 pub enum ContentBlock {
     /// Text content
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
     /// Image content (base64)
     Image { source: ImageSource },
     /// Extended-thinking block from a prior assistant turn.

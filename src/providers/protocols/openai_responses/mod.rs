@@ -9,6 +9,7 @@ use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
 use crate::providers::delta::ProviderDelta;
+use crate::providers::protocols::openai_common::provider_policy::build_payload_policy;
 use crate::providers::responses::shared;
 use crate::providers::responses::types::{
     ContextManagement, ResponsesRequest, StreamEvent, TextConfig,
@@ -124,26 +125,26 @@ impl OpenAiResponsesProtocol {
         config: &ProviderConfig,
     ) -> ResponsesRequest {
         let input = shared::convert_messages(payload.messages);
-        let tools = shared::build_tools(payload.tools);
+        let policy = build_payload_policy(
+            config.base_url.as_deref(),
+            "openai-responses",
+            variant.store,
+        );
+        let tools = shared::build_tools(
+            payload.tools,
+            policy.capabilities.supports_strict_schema,
+        );
         let tool_choice =
             shared::map_tool_choice(payload.tool_choice.as_ref()).or(Some("auto".to_string()));
 
-        // Determine store and context_management based on variant and endpoint
-        let official = is_openai_official(&config.base_url);
+        let store = policy.explicit_store;
 
-        let (store, context_management) = if let Some(forced) = variant.store {
-            // Variant explicitly sets store — respect it
-            (Some(forced), None)
-        } else if official {
-            // Official OpenAI endpoint: enable server-side storage + compaction
-            (
-                Some(true),
-                Some(ContextManagement {
-                    mgmt_type: "compaction".into(),
-                }),
-            )
+        let context_mgmt = if policy.capabilities.supports_server_compaction {
+            Some(ContextManagement {
+                mgmt_type: "compaction".into(),
+            })
         } else {
-            (None, None)
+            None
         };
 
         ResponsesRequest {
@@ -159,24 +160,17 @@ impl OpenAiResponsesProtocol {
             text: variant.text.clone(),
             max_output_tokens: payload.max_tokens,
             include: variant.include.clone().or_else(|| {
-                if official {
+                if policy.endpoint_class
+                    == crate::providers::protocols::openai_common::provider_policy::EndpointClass::OpenAiPublic
+                {
                     Some(vec!["reasoning.encrypted_content".into()])
                 } else {
                     None
                 }
             }),
             previous_response_id: None,
-            context_management,
+            context_management: context_mgmt,
         }
-    }
-}
-
-/// Returns true when `base_url` is None (implicit OpenAI default) or points to api.openai.com
-fn is_openai_official(base_url: &Option<String>) -> bool {
-    match base_url {
-        None => true,
-        Some(url) if url.is_empty() => true,
-        Some(url) => url.contains("api.openai.com"),
     }
 }
 
@@ -478,6 +472,7 @@ fn parse_sse_event_multi(
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
                     thinking_tokens: None,
+                    cost: None,
                 })));
             }
             out.push_back(Ok(ProviderDelta::Done(stop_reason)));

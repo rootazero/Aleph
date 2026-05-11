@@ -1,6 +1,6 @@
 //! Tests for the execution engine module.
 
-use super::engine::wait_for_deadline;
+use super::deadline::wait_for_deadline;
 use super::*;
 use crate::sync_primitives::{AtomicUsize, Ordering};
 

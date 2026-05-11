@@ -419,6 +419,7 @@ async fn handle_test_inner(
         system_prompt_mode: None,
         model_behavior: None,
         verified: false,
+        service_tier: None,
     };
 
     // Create provider instance

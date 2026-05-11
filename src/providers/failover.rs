@@ -520,6 +520,7 @@ impl AiProvider for FailoverProvider {
                         max_tokens,
                         tool_choice: tool_choice.clone(),
                         model: model.clone(),
+                        metadata: None,
                     };
 
                     let start = Instant::now();

@@ -18,6 +18,9 @@ use tracing::debug;
 use super::{sanitize_tool_name, OpenAiProtocol};
 use super::sse::parse_chat_sse_event;
 
+use crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema;
+use crate::providers::protocols::openai_common::provider_policy::build_payload_policy;
+
 #[async_trait]
 impl ProtocolAdapter for OpenAiProtocol {
     fn build_request(
@@ -59,41 +62,41 @@ impl ProtocolAdapter for OpenAiProtocol {
             }
         }
 
-        // Add tool definitions for function calling
+        let policy = build_payload_policy(
+            config.base_url.as_deref(),
+            "openai-chat",
+            None,
+        );
+
         if let Some(tool_defs) = payload.tools {
             let tools: Vec<OpenAiTool> = tool_defs
                 .iter()
                 .map(|td| {
-                    // Ensure parameters has "type" field — required by strict
-                    // backends like AWS Bedrock, which rejects schemas without it.
                     let mut params = td.parameters.clone();
-                    if let Some(obj) = params.as_object_mut() {
-                        obj.entry("type").or_insert_with(|| json!("object"));
-                        // Strict OpenAI-compatible backends (T8Star, etc.) reject
-                        // object schemas that omit `properties`. schemars elides
-                        // the field entirely when every struct field is hidden
-                        // via #[schemars(skip)] (e.g. AgentListArgs).
-                        obj.entry("properties").or_insert_with(|| json!({}));
+                    if policy.capabilities.supports_strict_schema {
+                        normalize_strict_schema(&mut params, true);
                     }
-                    // Migrate schemars draft-07 schemas to draft 2020-12 for
-                    // Bedrock and other strict backends.
-                    crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut params);
                     OpenAiTool {
                         tool_type: "function".into(),
                         function: OpenAiFunction {
-                            // OpenAI API requires tool names to match ^[a-zA-Z0-9_-]+$
-                            // Aleph tool names now use underscores natively; sanitize
-                            // is kept as a safety net for external/plugin tool names.
                             name: sanitize_tool_name(&td.name),
                             description: td.description.clone(),
                             parameters: params,
-                            strict: if td.strict { Some(true) } else { None },
+                            strict: if policy.capabilities.supports_strict_schema {
+                                Some(true)
+                            } else {
+                                None
+                            },
                         },
                     }
                 })
                 .collect();
             body["tools"] = serde_json::to_value(&tools)
                 .map_err(|e| AlephError::provider(format!("Failed to serialize tools: {}", e)))?;
+        }
+
+        if let Some(obj) = body.as_object_mut() {
+            policy.apply(obj);
         }
 
         // Add tool_choice if specified

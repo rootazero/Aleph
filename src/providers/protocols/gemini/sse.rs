@@ -145,6 +145,7 @@ pub(crate) fn parse_gemini_sse_chunk(
                 .get("thoughtsTokenCount")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32),
+            cost: None,
         }));
 
         if let Some(pos) = done_pos {

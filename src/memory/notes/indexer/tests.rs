@@ -329,7 +329,6 @@
         assert!(out.contains(&"New Name".to_string()));
         assert!(!out.contains(&"Old Name".to_string()));
     }
-}
 
 #[cfg(test)]
 mod reference_hook_tests {
@@ -745,3 +744,4 @@ mod reference_hook_tests {
         // No collision → no bump applied; confidence == as written.
         assert!((after - 0.7).abs() < 1e-5, "got {after}");
     }
+}

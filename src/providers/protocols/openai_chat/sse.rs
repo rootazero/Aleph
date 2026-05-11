@@ -103,6 +103,7 @@ pub(crate) fn parse_chat_sse_event(
             cache_read_tokens: None,
             cache_creation_tokens: None,
             thinking_tokens: None,
+            cost: None,
         })));
     }
 

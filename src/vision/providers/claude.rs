@@ -234,6 +234,7 @@ impl VisionProvider for ClaudeVisionProvider {
         let image_block = self.to_content_block(image)?;
         let text_block = ContentBlock::Text {
             text: prompt.to_string(),
+            cache_control: None,
         };
         let description = self.call_api(vec![image_block, text_block], None).await?;
         Ok(VisionResult {
@@ -247,6 +248,7 @@ impl VisionProvider for ClaudeVisionProvider {
         let image_block = self.to_content_block(image)?;
         let text_block = ContentBlock::Text {
             text: "Extract all text from this image.".to_string(),
+            cache_control: None,
         };
         let text = self.call_api(vec![image_block, text_block], None).await?;
         let lines: Vec<_> = text

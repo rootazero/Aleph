@@ -86,5 +86,6 @@ pub(super) fn build_provider_config_for_persistence(
         system_prompt_mode: None,
         model_behavior: None,
         verified: false,
+        service_tier: None,
     }
 }

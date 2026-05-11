@@ -213,22 +213,6 @@ mod tests {
         assert!(adapter.supports_native_tools());
     }
 
-    // ─── is_openai_official ─────────────────────────────────────────────
-
-    #[test]
-    fn test_is_openai_official() {
-        assert!(is_openai_official(&None));
-        assert!(is_openai_official(&Some(String::new())));
-        assert!(is_openai_official(&Some("https://api.openai.com".into())));
-        assert!(is_openai_official(&Some(
-            "https://api.openai.com/v1".into()
-        )));
-        assert!(!is_openai_official(&Some(
-            "https://openrouter.ai/api/v1".into()
-        )));
-        assert!(!is_openai_official(&Some("https://chatgpt.com".into())));
-    }
-
     // ─── Provider factory and preset tests (from codex.rs) ───────────────
 
     #[test]

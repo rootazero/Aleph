@@ -116,6 +116,7 @@ impl HttpProvider {
             max_tokens: payload.max_tokens,
             tool_choice: payload.tool_choice.clone(),
             model: payload.model.clone(),
+            metadata: None,
         };
 
         let request = self.adapter.build_request(&final_payload, &self.config)?;
@@ -183,6 +184,7 @@ impl HttpProvider {
             max_tokens: payload.max_tokens,
             tool_choice: payload.tool_choice.clone(),
             model: payload.model.clone(),
+            metadata: None,
         };
 
         let request = self

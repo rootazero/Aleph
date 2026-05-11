@@ -110,6 +110,10 @@ pub struct ProviderConfig {
     /// Whether this provider has been verified via a successful test connection
     #[serde(default)]
     pub verified: bool,
+
+    /// Service tier for Anthropic API ("auto" or "default")
+    #[serde(default)]
+    pub service_tier: Option<String>,
 }
 
 pub fn default_provider_color() -> String {
@@ -179,6 +183,7 @@ impl ProviderConfig {
             system_prompt_mode: None,
             model_behavior: None,
             verified: false,
+            service_tier: None,
         }
     }
 }
@@ -223,6 +228,7 @@ mod tests {
             system_prompt_mode: None,
             model_behavior: None,
             verified: false,
+            service_tier: None,
         };
         assert_eq!(config.protocol(), "anthropic");
     }
@@ -250,6 +256,7 @@ mod tests {
             system_prompt_mode: None,
             model_behavior: None,
             verified: false,
+            service_tier: None,
         };
         assert_eq!(config.protocol(), "openai");
     }

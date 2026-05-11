@@ -151,23 +151,27 @@ pub(crate) fn build_reasoning(think_level: Option<ThinkLevel>) -> Option<Reasoni
 ///
 /// Cleans schemars metadata ($schema, title) and ensures object schemas
 /// have a "properties" field for API compatibility.
-pub(crate) fn build_tools(tools: Option<&[ToolDefinition]>) -> Option<Vec<FunctionToolDef>> {
+pub(crate) fn build_tools(
+    tools: Option<&[ToolDefinition]>,
+    enable_strict: bool,
+) -> Option<Vec<FunctionToolDef>> {
     tools.map(|tool_defs| {
         tool_defs
             .iter()
             .map(|td| {
                 let mut params = td.parameters.clone();
-                // Clean schemars metadata + ensure API compatibility
                 if let Some(obj) = params.as_object_mut() {
                     obj.remove("$schema");
                     obj.remove("title");
                 }
-                // Responses API requires every object schema to have "properties"
-                ensure_properties_recursive(&mut params);
+                if enable_strict {
+                    crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema(&mut params, true);
+                } else {
+                    ensure_properties_recursive(&mut params);
+                }
                 let desc = td.description.trim();
                 FunctionToolDef {
                     tool_type: "function".to_string(),
-                    // Responses API requires names matching ^[a-zA-Z0-9_-]+$
                     name: sanitize_tool_name_pub(&td.name),
                     description: if desc.is_empty() {
                         None
@@ -175,7 +179,7 @@ pub(crate) fn build_tools(tools: Option<&[ToolDefinition]>) -> Option<Vec<Functi
                         Some(desc.to_string())
                     },
                     parameters: params,
-                    strict: None,
+                    strict: if enable_strict { Some(true) } else { None },
                 }
             })
             .collect()

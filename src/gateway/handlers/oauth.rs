@@ -136,6 +136,7 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
         system_prompt_mode: None,
         model_behavior: None,
         verified: false,
+        service_tier: None,
     }
 }
 

@@ -184,6 +184,7 @@ impl AuthProfileProviderRegistry {
             system_prompt_mode: None,
             model_behavior: None,
             verified: false,
+            service_tier: None,
         };
 
         create_provider(&self.config.provider_type, provider_config)

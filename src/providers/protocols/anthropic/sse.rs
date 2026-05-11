@@ -140,11 +140,12 @@ pub(crate) fn parse_anthropic_sse_event(
                     .and_then(|t| t.as_u64())
                     .and_then(|t| t.try_into().ok());
                 out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
-                    input_tokens: 0, // input usage is in message_start, not message_delta
+                    input_tokens: 0,
                     output_tokens: output,
                     cache_read_tokens: cache_read,
                     cache_creation_tokens: cache_creation,
                     thinking_tokens: None,
+                    cost: None,
                 })));
             }
 
@@ -199,6 +200,7 @@ pub(crate) fn parse_anthropic_sse_event(
                     cache_read_tokens: cache_read,
                     cache_creation_tokens: cache_creation,
                     thinking_tokens: None,
+                    cost: None,
                 })));
             }
         }

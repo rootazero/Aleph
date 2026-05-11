@@ -23,6 +23,7 @@ impl AnthropicProtocol {
         Self {
             client,
             name_map: Arc::new(RwLock::new(HashMap::new())),
+            last_model: std::sync::Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -55,8 +56,11 @@ impl AnthropicProtocol {
                     let mut blocks = Vec::new();
                     for block in content {
                         match block {
-                            crate::providers::message::ContentBlock::Text { text, .. } => {
-                                blocks.push(ContentBlock::Text { text: text.clone() });
+                            crate::providers::message::ContentBlock::Text { text, cache_control } => {
+                                blocks.push(ContentBlock::Text {
+                                    text: text.clone(),
+                                    cache_control: cache_control.map(|_| crate::thinker::cache::CacheControl::ephemeral()),
+                                });
                             }
                             crate::providers::message::ContentBlock::Image { data, mime_type } => {
                                 blocks.push(ContentBlock::Image {
@@ -91,6 +95,7 @@ impl AnthropicProtocol {
                     if blocks.is_empty() {
                         blocks.push(ContentBlock::Text {
                             text: " ".to_string(),
+                            cache_control: None,
                         });
                     }
                     if blocks.len() == 1 {
@@ -118,13 +123,12 @@ impl AnthropicProtocol {
                     let mut pending_thinking: Option<String> = None;
                     for block in content {
                         match block {
-                            crate::providers::message::ContentBlock::Text { text, .. } => {
-                                // Skip empty / whitespace-only text blocks: Anthropic-compatible
-                                // backends (e.g. Kimi for Coding) reject them with HTTP 400
-                                // "must not be empty". The empty-blocks fallback below inserts
-                                // a placeholder if the entire turn ends up empty.
+                            crate::providers::message::ContentBlock::Text { text, cache_control } => {
                                 if !text.trim().is_empty() {
-                                    blocks.push(ContentBlock::Text { text: text.clone() });
+                                    blocks.push(ContentBlock::Text {
+                                        text: text.clone(),
+                                        cache_control: cache_control.map(|_| crate::thinker::cache::CacheControl::ephemeral()),
+                                    });
                                 }
                             }
                             crate::providers::message::ContentBlock::Thinking {
@@ -202,6 +206,7 @@ impl AnthropicProtocol {
                     if blocks.is_empty() {
                         blocks.push(ContentBlock::Text {
                             text: " ".to_string(),
+                            cache_control: None,
                         });
                     }
                     result.push(Message {
@@ -272,13 +277,17 @@ impl AnthropicProtocol {
     ///
     /// Always includes interleaved-thinking and fine-grained-tool-streaming.
     /// Adds the 128k output beta for large context models (opus-4, sonnet-4).
-    pub(super) fn build_beta_headers(model: &str) -> String {
+    /// Adds token-restricted beta for OAuth tokens (sk-ant-oat).
+    pub(super) fn build_beta_headers(model: &str, api_key: Option<&str>) -> String {
         let mut betas = vec![
             "interleaved-thinking-2025-05-14",
             "fine-grained-tool-streaming-2025-05-14",
         ];
         if Self::is_large_context_model(model) {
             betas.push("output-128k-2025-02-19");
+        }
+        if api_key.map(|k| k.starts_with("sk-ant-oat")).unwrap_or(false) {
+            betas.push("token-restricted");
         }
         betas.join(",")
     }
@@ -301,26 +310,42 @@ impl AnthropicProtocol {
         }
     }
 
-    // =============================================================================
-    // Kimi for Coding model optimizations
-    // =============================================================================
-
-    /// Detect if model is a Kimi for Coding model
-    pub(super) fn is_kimi_model(model: &str) -> bool {
+    pub(crate) fn get_model_cost(model: &str) -> Option<crate::providers::adapter::TokenCost> {
         let m = model.to_lowercase();
-        m.contains("kimi-k2") || m.contains("kimi-k2.5") || m.contains("kimi-k2p5")
-    }
-
-    /// Get default temperature for Kimi models
-    pub(super) fn kimi_default_temperature(model: &str) -> Option<f32> {
-        let m = model.to_lowercase();
-        if m.contains("k2.5") || m.contains("k2p5") || m.contains("k2-5") {
-            Some(1.0)
-        } else if m.contains("kimi-k2") {
-            Some(0.6)
+        if m.contains("claude-3-opus") {
+            Some(crate::providers::adapter::TokenCost {
+                input_cost_per_million: 15.0,
+                output_cost_per_million: 75.0,
+            })
+        } else if m.contains("claude-3-5-sonnet") || m.contains("claude-3.5-sonnet") {
+            Some(crate::providers::adapter::TokenCost {
+                input_cost_per_million: 3.0,
+                output_cost_per_million: 15.0,
+            })
+        } else if m.contains("claude-3-sonnet") {
+            Some(crate::providers::adapter::TokenCost {
+                input_cost_per_million: 3.0,
+                output_cost_per_million: 15.0,
+            })
+        } else if m.contains("claude-3-haiku") {
+            Some(crate::providers::adapter::TokenCost {
+                input_cost_per_million: 0.25,
+                output_cost_per_million: 1.25,
+            })
+        } else if m.contains("claude-4-sonnet") || m.contains("sonnet-4") {
+            Some(crate::providers::adapter::TokenCost {
+                input_cost_per_million: 3.0,
+                output_cost_per_million: 15.0,
+            })
+        } else if m.contains("claude-4-opus") || m.contains("opus-4") {
+            Some(crate::providers::adapter::TokenCost {
+                input_cost_per_million: 15.0,
+                output_cost_per_million: 75.0,
+            })
         } else {
             None
         }
     }
+
 }
 

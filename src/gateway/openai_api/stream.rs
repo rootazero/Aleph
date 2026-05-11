@@ -221,6 +221,10 @@ pub fn provider_deltas_to_sse(
                                         StopReason::EndTurn => "stop",
                                         StopReason::ToolUse => "tool_calls",
                                         StopReason::MaxTokens => "length",
+                                        StopReason::StopSequence => "stop",
+                                        StopReason::PauseTurn => "stop",
+                                        StopReason::Refusal => "content_filter",
+                                        StopReason::Sensitive => "content_filter",
                                         StopReason::Unknown => "stop",
                                     };
                                     let chunk = make_chunk(

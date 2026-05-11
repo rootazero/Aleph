@@ -2,24 +2,10 @@
 //!
 //! Handles Claude Messages API format.
 
-use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
-use crate::dispatcher::DEFAULT_MAX_TOKENS;
-use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
-use crate::providers::anthropic::{
-    AnthropicTool, ContentBlock, ImageSource, Message, MessageContent, MessagesRequest,
-    SystemBlock, ThinkingBlock,
-};
-use crate::providers::delta::{IndexIdTracker, ProviderDelta};
-use crate::providers::message::UnifiedMessage;
 use crate::sync_primitives::{Arc, RwLock};
-use async_trait::async_trait;
-use futures::stream::BoxStream;
-use futures::TryStreamExt;
 use reqwest::Client;
 use std::collections::{HashMap, VecDeque};
-use tracing::{debug, warn};
 
 /// Anthropic API version header value
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -65,6 +51,7 @@ pub struct AnthropicProtocol {
     /// (so Anthropic accepts the names) and consulted while parsing the
     /// streamed response (so the dispatcher receives the original names).
     name_map: ToolNameMap,
+    last_model: std::sync::Arc<std::sync::RwLock<Option<String>>>,
 }
 
 mod proto_impl;

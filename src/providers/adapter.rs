@@ -50,6 +50,8 @@ pub struct RequestPayload<'a> {
     pub tool_choice: Option<ToolChoice>,
     /// Per-request model override (takes precedence over provider config)
     pub model: Option<String>,
+    /// Metadata for provider-specific features (e.g. user_id for Anthropic)
+    pub metadata: Option<std::collections::HashMap<String, String>>,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -64,6 +66,7 @@ impl<'a> Default for RequestPayload<'a> {
             max_tokens: None,
             tool_choice: None,
             model: None,
+            metadata: None,
         }
     }
 }
@@ -116,6 +119,12 @@ impl<'a> RequestPayload<'a> {
     /// Set model override
     pub fn with_model(mut self, model: Option<String>) -> Self {
         self.model = model;
+        self
+    }
+
+    /// Set metadata for provider-specific features
+    pub fn with_metadata(mut self, metadata: Option<std::collections::HashMap<String, String>>) -> Self {
+        self.metadata = metadata;
         self
     }
 }
@@ -259,8 +268,33 @@ pub enum StopReason {
     ToolUse,
     /// Hit max_tokens limit
     MaxTokens,
+    /// Stop sequence encountered
+    StopSequence,
+    /// Turn paused (e.g. for multi-turn reasoning)
+    PauseTurn,
+    /// Content refused (safety/policy)
+    Refusal,
+    /// Sensitive content detected
+    Sensitive,
     /// Unknown or unsupported stop reason
     Unknown,
+}
+
+/// Token cost information
+#[derive(Debug, Clone, Default)]
+pub struct TokenCost {
+    /// Cost per million input tokens
+    pub input_cost_per_million: f64,
+    /// Cost per million output tokens
+    pub output_cost_per_million: f64,
+}
+
+impl TokenCost {
+    pub fn calculate(&self, usage: &TokenUsage) -> f64 {
+        let input_cost = usage.input_tokens as f64 * self.input_cost_per_million / 1_000_000.0;
+        let output_cost = usage.output_tokens as f64 * self.output_cost_per_million / 1_000_000.0;
+        input_cost + output_cost
+    }
 }
 
 /// Token usage statistics
@@ -275,6 +309,8 @@ pub struct TokenUsage {
     pub cache_creation_tokens: Option<u32>,
     /// Thinking/reasoning tokens consumed (Gemini `thoughtsTokenCount`)
     pub thinking_tokens: Option<u32>,
+    /// Cost information (input cost, output cost)
+    pub cost: Option<TokenCost>,
 }
 
 #[cfg(test)]

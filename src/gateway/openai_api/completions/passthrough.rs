@@ -169,6 +169,7 @@ pub async fn handle(
         max_tokens: req.max_tokens,
         tool_choice,
         model: None,
+        metadata: None,
     };
 
     let is_streaming = req.stream.unwrap_or(false);
