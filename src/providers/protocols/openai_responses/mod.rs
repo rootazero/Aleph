@@ -189,6 +189,8 @@ impl OpenAiResponsesProtocol {
             previous_response_id: None,
             context_management: context_mgmt,
             stop,
+            seed: None,         // T10 will wire from config
+            top_logprobs: None, // T11 will wire from config
         }
     }
 }

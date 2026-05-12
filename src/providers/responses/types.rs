@@ -46,6 +46,12 @@ pub struct ResponsesRequest {
     /// Server-side context compaction (OpenAI official endpoints only)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_management: Option<ContextManagement>,
+    /// Deterministic sampling seed (Cycle 3, capability-gated)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    /// Number of top alternative tokens per position (Cycle 3, capability-gated)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<u32>,
 }
 
 /// Function tool definition for the Responses API
@@ -361,4 +367,61 @@ pub enum StreamEvent {
 
     #[serde(rename = "response.failed")]
     Failed { response: ResponseResource },
+}
+
+#[cfg(test)]
+mod cycle3_struct_tests {
+    use super::*;
+
+    #[test]
+    fn responses_request_omits_seed_when_none() {
+        let req = ResponsesRequest {
+            model: "gpt-4o".into(),
+            input: vec![],
+            instructions: None,
+            stream: true,
+            store: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            text: None,
+            max_output_tokens: None,
+            include: None,
+            previous_response_id: None,
+            stop: None,
+            context_management: None,
+            seed: None,
+            top_logprobs: None,
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("seed").is_none());
+        assert!(v.get("top_logprobs").is_none());
+    }
+
+    #[test]
+    fn responses_request_emits_seed_and_top_logprobs_when_some() {
+        let req = ResponsesRequest {
+            model: "gpt-4o".into(),
+            input: vec![],
+            instructions: None,
+            stream: true,
+            store: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            text: None,
+            max_output_tokens: None,
+            include: None,
+            previous_response_id: None,
+            stop: None,
+            context_management: None,
+            seed: Some(42),
+            top_logprobs: Some(3),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v.get("seed"), Some(&serde_json::json!(42)));
+        assert_eq!(v.get("top_logprobs"), Some(&serde_json::json!(3)));
+    }
 }
