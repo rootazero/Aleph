@@ -65,6 +65,7 @@ pub struct AnthropicProtocol {
 mod proto_impl;
 mod adapter;
 mod sse;
+pub mod provider_policy;
 
 
 #[cfg(test)]
