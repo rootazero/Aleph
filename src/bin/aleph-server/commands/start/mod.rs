@@ -1352,7 +1352,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // 8. Wire LLM semantic matcher (if default provider available)
                 let smart_router = if let Some(ref provider) = agent_result.default_provider {
                     use alephcore::a2a::service::SemanticLlmMatcher;
-                    let matcher = Arc::new(SemanticLlmMatcher::new(provider.clone()));
+                    // Step 5 hot-reload: prefer the live registry handle so
+                    // semantic routing tracks UI default-provider swaps; fall
+                    // back to a static snapshot when no registry exists.
+                    let handle: Arc<dyn alephcore::providers::DefaultProviderHandle> =
+                        if let Some(reg) = agent_result.multi_registry.clone() {
+                            reg as Arc<dyn alephcore::providers::DefaultProviderHandle>
+                        } else {
+                            Arc::new(alephcore::providers::StaticDefault::new(provider.clone()))
+                        };
+                    let matcher = Arc::new(SemanticLlmMatcher::new(handle));
                     Arc::new(SmartRouter::new(card_registry).with_llm_matcher(matcher))
                 } else {
                     Arc::new(SmartRouter::new(card_registry))
@@ -1551,9 +1560,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // Create executor with default provider (if available)
         let gc_executor: Option<Arc<GroupChatExecutor>> = if can_create_provider_from_env() {
             create_provider_registry_from_env().ok().map(|reg| {
+                // Env-only path: SingleProviderRegistry is immutable, so a
+                // StaticDefault snapshot matches its semantics. Step 5
+                // hot-reload only meaningfully applies when a multi-registry
+                // exists (file-config webchat path).
+                let snapshot = reg.default_provider();
+                let handle: Arc<dyn alephcore::providers::DefaultProviderHandle> = Arc::new(
+                    alephcore::providers::StaticDefault::new(snapshot),
+                );
                 Arc::new(
-                    GroupChatExecutor::new(reg.default_provider())
-                        .with_coordinator_visible(coordinator_visible),
+                    GroupChatExecutor::new(handle).with_coordinator_visible(coordinator_visible),
                 )
             })
         } else {

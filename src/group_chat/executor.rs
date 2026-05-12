@@ -9,6 +9,7 @@
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
+use crate::providers::DefaultProviderHandle;
 use crate::providers::ProviderRegistry;
 use crate::resilience::database::StateDatabase;
 use crate::sync_primitives::Arc;
@@ -21,18 +22,20 @@ use super::session::GroupChatSession;
 
 /// Executor that drives the coordinator->persona LLM loop for a single round.
 ///
-/// Holds an `Arc<dyn AiProvider>` as the default provider, and an optional
-/// [`ProviderRegistry`] for resolving per-persona provider overrides.
+/// Holds an `Arc<dyn DefaultProviderHandle>` (Step 5 hot-reload) so the
+/// coordinator's default LLM tracks UI-driven default-provider swaps without
+/// a server restart. An optional [`ProviderRegistry`] resolves per-persona
+/// provider overrides.
 pub struct GroupChatExecutor {
-    default_provider: Arc<dyn AiProvider>,
+    default_provider: Arc<dyn DefaultProviderHandle>,
     provider_registry: Option<Arc<ProviderRegistry>>,
     coordinator_visible: bool,
     db: Option<Arc<StateDatabase>>,
 }
 
 impl GroupChatExecutor {
-    /// Create a new executor with the given default AI provider.
-    pub fn new(default_provider: Arc<dyn AiProvider>) -> Self {
+    /// Create a new executor with the given default-provider handle.
+    pub fn new(default_provider: Arc<dyn DefaultProviderHandle>) -> Self {
         Self {
             default_provider,
             provider_registry: None,
@@ -80,7 +83,7 @@ impl GroupChatExecutor {
                 );
             }
         }
-        Arc::clone(&self.default_provider)
+        self.default_provider.current()
     }
 
     /// Persist a conversation turn to the database (best-effort).
@@ -159,6 +162,7 @@ impl GroupChatExecutor {
         let coordinator_raw = {
             let msgs = [UnifiedMessage::user(&coordinator_prompt)];
             self.default_provider
+                .current()
                 .process(RequestPayload::new(&msgs))
                 .await
                 .map_err(|e| GroupChatError::ProviderUnavailable(e.to_string()))?
@@ -367,7 +371,9 @@ mod tests {
             "Users will love this.".to_string(),
         ]));
 
-        let executor = GroupChatExecutor::new(provider);
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
+        ));
         let mut session = make_session();
 
         let messages = executor
@@ -411,7 +417,9 @@ mod tests {
             "Ship it!".to_string(),
         ]));
 
-        let executor = GroupChatExecutor::new(provider);
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
+        ));
         let mut session = make_session();
 
         let messages = executor
@@ -434,7 +442,9 @@ mod tests {
             "PM response via fallback.".to_string(),
         ]));
 
-        let executor = GroupChatExecutor::new(provider);
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
+        ));
         let mut session = make_session();
 
         let messages = executor
@@ -473,7 +483,9 @@ mod tests {
         }
 
         let provider: Arc<dyn AiProvider> = Arc::new(FailingProvider);
-        let executor = GroupChatExecutor::new(provider);
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
+        ));
         let mut session = make_session();
 
         let result = executor.execute_round(&mut session, "Hello?", &[]).await;
@@ -526,7 +538,9 @@ mod tests {
             coordinator_response: coordinator_response.to_string(),
             call_count: AtomicUsize::new(0),
         });
-        let executor = GroupChatExecutor::new(provider);
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
+        ));
         let mut session = make_session();
 
         let result = executor.execute_round(&mut session, "Help me", &[]).await;
@@ -550,7 +564,9 @@ mod tests {
             coordinator_response.to_string()
         ]));
 
-        let executor = GroupChatExecutor::new(provider);
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
+        ));
         let mut session = make_session();
 
         let result = executor
@@ -577,7 +593,9 @@ mod tests {
             "Round 2 response.".to_string(),
         ]));
 
-        let executor = GroupChatExecutor::new(provider);
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
+        ));
         let mut session = make_session();
 
         // Round 1
@@ -641,7 +659,9 @@ mod tests {
             call_count: AtomicUsize::new(0),
         });
 
-        let executor = GroupChatExecutor::new(provider);
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
+        ));
         let mut session = make_session();
 
         let messages = executor
@@ -664,7 +684,10 @@ mod tests {
             "Architect says hi.".to_string(),
         ]));
 
-        let executor = GroupChatExecutor::new(provider).with_coordinator_visible(true);
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
+        ))
+        .with_coordinator_visible(true);
         let mut session = make_session();
 
         let messages = executor
@@ -699,14 +722,17 @@ mod tests {
         // Coordinator returns plan selecting the persona with provider override
         let coordinator_response = r#"{"respondents":[{"persona_id":"custom","order":0,"guidance":""}],"need_summary":false}"#;
 
-        let default_provider = Arc::new(SequentialMockProvider::new(vec![
-            coordinator_response.to_string(),
-            // This should NOT be used for the persona call
-            "Default provider response (should not appear).".to_string(),
-        ]));
+        let default_provider: Arc<dyn AiProvider> =
+            Arc::new(SequentialMockProvider::new(vec![
+                coordinator_response.to_string(),
+                // This should NOT be used for the persona call
+                "Default provider response (should not appear).".to_string(),
+            ]));
 
-        let executor =
-            GroupChatExecutor::new(default_provider).with_provider_registry(Arc::new(registry));
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(default_provider),
+        ))
+        .with_provider_registry(Arc::new(registry));
 
         let mut session = GroupChatSession::new(
             "test-provider".to_string(),
@@ -742,7 +768,9 @@ mod tests {
             "PM goes second.".to_string(),
         ]));
 
-        let executor = GroupChatExecutor::new(provider);
+        let executor = GroupChatExecutor::new(Arc::new(
+            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
+        ));
         let mut session = make_session();
 
         let messages = executor
