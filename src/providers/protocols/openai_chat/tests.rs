@@ -905,7 +905,7 @@ fn chat_response_format_stripped_for_third_party_endpoint() {
     use crate::config::ProviderConfig;
     let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
     let mut config = ProviderConfig::test_config("gpt-4o");
-    config.base_url = Some("https://api.deepseek.com".into());
+    config.base_url = Some("http://localhost:8080".into());
     config.response_format = Some(ResponseFormat::JsonObject);
 
     let payload = RequestPayload {
@@ -926,7 +926,7 @@ fn chat_response_format_stripped_for_third_party_endpoint() {
     );
     assert!(
         body.get("response_format").is_none(),
-        "response_format must be absent for DeepSeek (capability disabled)"
+        "response_format must be absent for Local endpoint (capability disabled)"
     );
 }
 
