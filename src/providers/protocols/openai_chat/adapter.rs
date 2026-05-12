@@ -21,6 +21,7 @@ use super::sse::parse_chat_sse_event;
 use crate::providers::protocols::openai_common::max_tokens::uses_max_completion_tokens;
 use crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema;
 use crate::providers::protocols::openai_common::provider_policy::build_payload_policy;
+use crate::providers::protocols::openai_common::response_format::to_chat_response_format;
 
 #[async_trait]
 impl ProtocolAdapter for OpenAiProtocol {
@@ -91,6 +92,15 @@ impl ProtocolAdapter for OpenAiProtocol {
             None,
         );
 
+        // response_format: emit only when capability-enabled
+        if let Some(ref fmt) = config.response_format {
+            if policy.capabilities.supports_response_format {
+                if let Some(v) = to_chat_response_format(fmt, policy.capabilities.supports_strict_schema) {
+                    body["response_format"] = v;
+                }
+            }
+        }
+
         if let Some(tool_defs) = payload.tools {
             let tools: Vec<OpenAiTool> = tool_defs
                 .iter()
@@ -132,6 +142,11 @@ impl ProtocolAdapter for OpenAiProtocol {
                 }
                 ToolChoice::None => json!("none"),
             };
+        }
+
+        // parallel_tool_calls: emit only when config explicitly sets it
+        if let Some(parallel) = config.parallel_tool_calls {
+            body["parallel_tool_calls"] = json!(parallel);
         }
 
         // Validate API key

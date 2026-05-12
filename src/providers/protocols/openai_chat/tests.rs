@@ -2,6 +2,7 @@ use super::*;
 use std::collections::VecDeque;
 use reqwest::Client;
 use crate::config::ProviderConfig;
+use crate::config::types::provider::ResponseFormat;
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason};
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
@@ -834,4 +835,207 @@ fn chat_omits_max_tokens_when_both_none() {
     let body = build_chat_body_for_max_tokens("gpt-4o", None);
     assert!(body.get("max_tokens").is_none());
     assert!(body.get("max_completion_tokens").is_none());
+}
+
+// ─── Task 6: response_format wiring ───────────────────────────────
+
+#[test]
+fn chat_response_format_json_schema_emits_strict_for_openai() {
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+    use crate::config::ProviderConfig;
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.response_format = Some(ResponseFormat::JsonSchema {
+        name: "answer".into(),
+        schema: serde_json::json!({"type":"object","properties":{"x":{"type":"string"}}}),
+    });
+    // base_url None defaults to OpenAiPublic, which supports response_format.
+
+    let payload = RequestPayload {
+        messages: &[],
+        system_prompt: None,
+        max_tokens: None,
+        temperature: None,
+        think_level: None,
+        tools: None,
+        tool_choice: None,
+        model: None,
+        metadata: None,
+    };
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert_eq!(body["response_format"]["type"], serde_json::json!("json_schema"));
+    assert_eq!(body["response_format"]["json_schema"]["name"], serde_json::json!("answer"));
+    assert_eq!(body["response_format"]["json_schema"]["strict"], serde_json::json!(true));
+}
+
+#[test]
+fn chat_response_format_json_object() {
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+    use crate::config::ProviderConfig;
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.response_format = Some(ResponseFormat::JsonObject);
+
+    let payload = RequestPayload {
+        messages: &[],
+        system_prompt: None,
+        max_tokens: None,
+        temperature: None,
+        think_level: None,
+        tools: None,
+        tool_choice: None,
+        model: None,
+        metadata: None,
+    };
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert_eq!(body["response_format"], serde_json::json!({"type":"json_object"}));
+}
+
+#[test]
+fn chat_response_format_stripped_for_third_party_endpoint() {
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+    use crate::config::ProviderConfig;
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.base_url = Some("https://api.deepseek.com".into());
+    config.response_format = Some(ResponseFormat::JsonObject);
+
+    let payload = RequestPayload {
+        messages: &[],
+        system_prompt: None,
+        max_tokens: None,
+        temperature: None,
+        think_level: None,
+        tools: None,
+        tool_choice: None,
+        model: None,
+        metadata: None,
+    };
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert!(
+        body.get("response_format").is_none(),
+        "response_format must be absent for DeepSeek (capability disabled)"
+    );
+}
+
+#[test]
+fn chat_response_format_none_omits_field() {
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+    use crate::config::ProviderConfig;
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let config = ProviderConfig::test_config("gpt-4o");
+    // response_format: None by default
+
+    let payload = RequestPayload {
+        messages: &[],
+        system_prompt: None,
+        max_tokens: None,
+        temperature: None,
+        think_level: None,
+        tools: None,
+        tool_choice: None,
+        model: None,
+        metadata: None,
+    };
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert!(body.get("response_format").is_none());
+}
+
+// ─── Task 6: parallel_tool_calls wiring ───────────────────────────
+
+#[test]
+fn chat_parallel_tool_calls_some_true() {
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+    use crate::config::ProviderConfig;
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.parallel_tool_calls = Some(true);
+
+    let payload = RequestPayload {
+        messages: &[],
+        system_prompt: None,
+        max_tokens: None,
+        temperature: None,
+        think_level: None,
+        tools: None,
+        tool_choice: None,
+        model: None,
+        metadata: None,
+    };
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert_eq!(body["parallel_tool_calls"], serde_json::json!(true));
+}
+
+#[test]
+fn chat_parallel_tool_calls_some_false() {
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+    use crate::config::ProviderConfig;
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.parallel_tool_calls = Some(false);
+
+    let payload = RequestPayload {
+        messages: &[],
+        system_prompt: None,
+        max_tokens: None,
+        temperature: None,
+        think_level: None,
+        tools: None,
+        tool_choice: None,
+        model: None,
+        metadata: None,
+    };
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert_eq!(body["parallel_tool_calls"], serde_json::json!(false));
+}
+
+#[test]
+fn chat_parallel_tool_calls_none_omits_field() {
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+    use crate::config::ProviderConfig;
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let config = ProviderConfig::test_config("gpt-4o");
+    // parallel_tool_calls: None by default
+
+    let payload = RequestPayload {
+        messages: &[],
+        system_prompt: None,
+        max_tokens: None,
+        temperature: None,
+        think_level: None,
+        tools: None,
+        tool_choice: None,
+        model: None,
+        metadata: None,
+    };
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert!(body.get("parallel_tool_calls").is_none());
 }
