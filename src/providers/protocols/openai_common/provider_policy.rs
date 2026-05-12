@@ -57,6 +57,8 @@ pub struct ProviderCapabilities {
     pub supports_service_tier: bool,
     /// Supports strict JSON schema mode
     pub supports_strict_schema: bool,
+    /// Supports `response_format` (Chat) / `text.format` (Responses) field
+    pub supports_response_format: bool,
     /// Supports server-side context compaction
     pub supports_server_compaction: bool,
     /// Known to reject object schemas without `properties`
@@ -102,6 +104,11 @@ impl PayloadPolicy {
         if self.strip_reasoning {
             payload.remove("reasoning");
             payload.remove("reasoning_effort");
+        }
+
+        // Response format (when capability disabled)
+        if !self.capabilities.supports_response_format {
+            payload.remove("response_format");
         }
 
         // Prompt cache fields
@@ -214,6 +221,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: true,
             supports_service_tier: true,
             supports_strict_schema: true,
+            supports_response_format: true,
             supports_server_compaction: true,
             requires_object_properties: false,
             context_window: Some(128_000),
@@ -224,6 +232,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: true,
+            supports_response_format: true,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(128_000),
@@ -234,6 +243,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: true,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: None,
@@ -244,6 +254,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: true,
             supports_service_tier: false,
             supports_strict_schema: false,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(200_000),
@@ -254,6 +265,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(64_000),
@@ -264,6 +276,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(8_000),
@@ -274,6 +287,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: true,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(128_000),
@@ -284,6 +298,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(128_000),
@@ -294,6 +309,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(128_000),
@@ -304,6 +320,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(128_000),
@@ -314,6 +331,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: None,
@@ -324,6 +342,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: None,
@@ -334,6 +353,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
+            supports_response_format: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: None,
@@ -541,5 +561,79 @@ mod tests {
             detect_endpoint_class(Some("https://example.com")),
             EndpointClass::Custom
         );
+    }
+
+    #[test]
+    fn openai_public_supports_response_format() {
+        let caps = resolve_capabilities(EndpointClass::OpenAiPublic);
+        assert!(caps.supports_response_format);
+    }
+
+    #[test]
+    fn openai_codex_supports_response_format() {
+        let caps = resolve_capabilities(EndpointClass::OpenAiCodex);
+        assert!(caps.supports_response_format);
+    }
+
+    #[test]
+    fn third_party_endpoints_do_not_support_response_format() {
+        for class in [
+            EndpointClass::AzureOpenAi,
+            EndpointClass::AnthropicPublic,
+            EndpointClass::DeepSeekNative,
+            EndpointClass::GroqNative,
+            EndpointClass::MistralPublic,
+            EndpointClass::MoonshotNative,
+            EndpointClass::CerebrasNative,
+            EndpointClass::XAiNative,
+            EndpointClass::OpenRouter,
+            EndpointClass::Local,
+            EndpointClass::Custom,
+        ] {
+            let caps = resolve_capabilities(class);
+            assert!(
+                !caps.supports_response_format,
+                "{:?} unexpectedly supports response_format",
+                class
+            );
+        }
+    }
+
+    #[test]
+    fn apply_strips_response_format_when_unsupported() {
+        let policy = build_payload_policy(
+            Some("https://api.deepseek.com"),
+            "openai-chat",
+            None,
+        );
+        let mut payload = serde_json::Map::new();
+        payload.insert(
+            "response_format".into(),
+            serde_json::json!({"type": "json_object"}),
+        );
+        payload.insert("model".into(), serde_json::Value::String("dsk".into()));
+
+        policy.apply(&mut payload);
+
+        assert!(payload.get("response_format").is_none());
+        assert!(payload.get("model").is_some());
+    }
+
+    #[test]
+    fn apply_keeps_response_format_when_supported() {
+        let policy = build_payload_policy(
+            Some("https://api.openai.com"),
+            "openai-chat",
+            None,
+        );
+        let mut payload = serde_json::Map::new();
+        payload.insert(
+            "response_format".into(),
+            serde_json::json!({"type": "json_object"}),
+        );
+
+        policy.apply(&mut payload);
+
+        assert!(payload.get("response_format").is_some());
     }
 }
