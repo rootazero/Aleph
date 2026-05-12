@@ -583,6 +583,60 @@ mod tests {
             "service_tier must be stripped on Custom endpoint"
         );
     }
+
+    #[test]
+    fn build_request_wires_metadata_user_id_on_official() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.metadata_user_id = Some("u_cycle4".to_string());
+
+        let body = body_of(protocol.build_request(&payload, &config).unwrap());
+        assert_eq!(body["metadata"]["user_id"], "u_cycle4");
+    }
+
+    #[test]
+    fn build_request_strips_metadata_on_custom_host() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.metadata_user_id = Some("u_cycle4".to_string());
+        config.base_url = Some("https://kimi-for-coding.example.com/v1".to_string());
+
+        let body = body_of(protocol.build_request(&payload, &config).unwrap());
+        assert!(body.get("metadata").is_none(), "metadata must be stripped on Custom");
+    }
+
+    #[test]
+    fn build_request_wires_effort_on_official() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.effort = Some("high".to_string());
+
+        let body = body_of(protocol.build_request(&payload, &config).unwrap());
+        assert_eq!(body["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn build_request_strips_output_config_on_custom_host() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.effort = Some("high".to_string());
+        config.base_url = Some("https://kimi-for-coding.example.com/v1".to_string());
+
+        let body = body_of(protocol.build_request(&payload, &config).unwrap());
+        assert!(body.get("output_config").is_none(), "output_config must be stripped on Custom");
+    }
 }
 
 // =============================================================================

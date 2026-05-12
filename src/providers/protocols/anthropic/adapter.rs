@@ -12,6 +12,7 @@ use crate::providers::anthropic::{
     AnthropicTool, MessagesRequest,
     SystemBlock, ThinkingBlock,
 };
+use crate::providers::anthropic::types::{Metadata, OutputConfig};
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::{CacheControl, EphemeralTtl};
 use super::sse::parse_anthropic_sse_event;
@@ -249,6 +250,16 @@ impl ProtocolAdapter for AnthropicProtocol {
             .map(parse_stop_sequences)
             .filter(|v| !v.is_empty());
 
+        // Cycle 4: wire metadata + effort from config
+        let metadata = config
+            .metadata_user_id
+            .as_ref()
+            .map(|uid| Metadata { user_id: Some(uid.clone()) });
+        let output_config = config
+            .effort
+            .as_ref()
+            .map(|e| OutputConfig { effort: Some(e.clone()) });
+
         let request_body = MessagesRequest {
             model: actual_model.to_string(),
             messages,
@@ -262,8 +273,8 @@ impl ProtocolAdapter for AnthropicProtocol {
             thinking,
             tools,
             service_tier: config.service_tier.clone(),
-            metadata: None,          // wired in T8
-            output_config: None,     // wired in T8
+            metadata,
+            output_config,
         };
 
         let api_key = config
