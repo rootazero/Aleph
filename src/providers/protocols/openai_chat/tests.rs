@@ -1,4 +1,12 @@
 use super::*;
+use std::collections::VecDeque;
+use reqwest::Client;
+use crate::config::ProviderConfig;
+use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason};
+use crate::providers::delta::{IndexIdTracker, ProviderDelta};
+use crate::providers::message::UnifiedMessage;
+use crate::providers::openai::{ChatCompletionResponse, OpenAiFunctionCall, OpenAiTool, OpenAiFunction, OpenAiToolCall};
+use crate::providers::protocols::openai_chat::sse::parse_chat_sse_event;
 
 #[test]
 fn openai_chat_usage_deserializes_cache_and_reasoning_tokens() {
@@ -57,14 +65,6 @@ fn openai_chat_usage_handles_missing_details() {
     assert_eq!(usage_delta.cache_read_tokens, None);
     assert_eq!(usage_delta.thinking_tokens, None);
 }
-use std::collections::VecDeque;
-use reqwest::Client;
-use crate::config::ProviderConfig;
-use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason};
-use crate::providers::delta::{IndexIdTracker, ProviderDelta};
-use crate::providers::message::UnifiedMessage;
-use crate::providers::openai::{ChatCompletionResponse, OpenAiFunctionCall, OpenAiTool, OpenAiFunction, OpenAiToolCall};
-use crate::providers::protocols::openai_chat::sse::parse_chat_sse_event;
 
 #[test]
 fn test_build_endpoint_default() {

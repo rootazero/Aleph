@@ -197,14 +197,12 @@ pub struct OpenAiUsage {
 /// Sub-payload: prompt token breakdown.
 #[derive(Debug, Default, Deserialize)]
 pub struct OpenAiPromptTokensDetails {
-    #[serde(default)]
     pub cached_tokens: Option<u32>,
 }
 
 /// Sub-payload: completion token breakdown.
 #[derive(Debug, Default, Deserialize)]
 pub struct OpenAiCompletionTokensDetails {
-    #[serde(default)]
     pub reasoning_tokens: Option<u32>,
 }
 
