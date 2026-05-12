@@ -21,6 +21,16 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use tracing::{debug, warn};
 
+/// Parse a comma-separated stop-sequences string into a Vec<String>.
+/// Splits on `,`, trims each element, and filters out empties.
+fn parse_stop_sequences(csv: &str) -> Vec<String> {
+    csv.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
 /// Resolve the effective prompt-cache retention for a request given the
 /// provider config and the target base URL. See spec §2 decision table.
 ///
@@ -226,15 +236,24 @@ impl ProtocolAdapter for AnthropicProtocol {
             .system_prompt
             .map(|s| vec![SystemBlock::cached_text(s)]);
 
+        // Cycle 4: wire sampling fields from config
+        let top_p = config.top_p;
+        let top_k = config.top_k;
+        let stop_sequences = config
+            .stop_sequences
+            .as_deref()
+            .map(parse_stop_sequences)
+            .filter(|v| !v.is_empty());
+
         let request_body = MessagesRequest {
             model: actual_model.to_string(),
             messages,
             max_tokens,
             system,
             temperature,
-            top_p: None,             // wired in T6
-            top_k: None,             // wired in T6
-            stop_sequences: None,    // wired in T6
+            top_p,
+            top_k,
+            stop_sequences,
             stream: Some(true), // always streaming (stream-first architecture)
             thinking,
             tools,

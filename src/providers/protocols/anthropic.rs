@@ -492,6 +492,66 @@ mod tests {
         assert!(json.get("budget_tokens").is_none());
         assert_eq!(json["display"], "summarized");
     }
+
+    fn body_of(request: reqwest::RequestBuilder) -> serde_json::Value {
+        let built = request.build().unwrap();
+        let body_bytes = built.body().unwrap().as_bytes().unwrap();
+        serde_json::from_slice(body_bytes).unwrap()
+    }
+
+    #[test]
+    fn build_request_wires_top_p_and_top_k_from_config() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.top_p = Some(0.9);
+        config.top_k = Some(40);
+
+        let body = body_of(protocol.build_request(&payload, &config).unwrap());
+        assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-4, "top_p should be ~0.9");
+        assert_eq!(body["top_k"], 40);
+    }
+
+    #[test]
+    fn build_request_wires_stop_sequences_csv_from_config() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.stop_sequences = Some("END, STOP, DONE".to_string());
+
+        let body = body_of(protocol.build_request(&payload, &config).unwrap());
+        assert_eq!(body["stop_sequences"], serde_json::json!(["END", "STOP", "DONE"]));
+    }
+
+    #[test]
+    fn build_request_drops_empty_stop_sequences() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.stop_sequences = Some("".to_string());
+
+        let body = body_of(protocol.build_request(&payload, &config).unwrap());
+        assert!(body.get("stop_sequences").is_none(), "empty CSV should produce no field");
+    }
+
+    #[test]
+    fn build_request_drops_whitespace_only_stop_sequences() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.stop_sequences = Some(" , ,  ".to_string());
+
+        let body = body_of(protocol.build_request(&payload, &config).unwrap());
+        assert!(body.get("stop_sequences").is_none());
+    }
 }
 
 // =============================================================================
