@@ -1,0 +1,190 @@
+//! Wire-shape translators for `ResponseFormat`.
+//!
+//! Chat protocol uses a top-level `response_format` JSON value.
+//! Responses protocol uses the typed `TextFormat` inside `TextConfig`.
+
+use crate::config::types::provider::ResponseFormat;
+use crate::providers::responses::types::{TextConfig, TextFormat};
+use serde_json::{json, Value};
+
+/// Build the Chat protocol's `response_format` JSON value.
+/// Returns `None` when `Text` (omit field).
+///
+/// When `supports_strict` is true and the variant is `JsonSchema`, the wire
+/// includes `"strict": true` inside the `json_schema` block to opt into
+/// OpenAI's strict-mode token mask.
+pub fn to_chat_response_format(
+    fmt: &ResponseFormat,
+    supports_strict: bool,
+) -> Option<Value> {
+    match fmt {
+        ResponseFormat::Text => None,
+        ResponseFormat::JsonObject => Some(json!({"type": "json_object"})),
+        ResponseFormat::JsonSchema { name, schema } => {
+            let mut inner = json!({
+                "name": name,
+                "schema": schema,
+            });
+            if supports_strict {
+                inner["strict"] = json!(true);
+            }
+            Some(json!({
+                "type": "json_schema",
+                "json_schema": inner,
+            }))
+        }
+    }
+}
+
+/// Build the Responses protocol's `text.format` typed value.
+/// Returns `None` when `Text` (omit format slot inside TextConfig).
+pub fn to_responses_text_format(fmt: &ResponseFormat) -> Option<TextFormat> {
+    match fmt {
+        ResponseFormat::Text => None,
+        ResponseFormat::JsonObject => Some(TextFormat::JsonObject),
+        ResponseFormat::JsonSchema { name, schema } => Some(TextFormat::JsonSchema {
+            name: name.clone(),
+            schema: schema.clone(),
+        }),
+    }
+}
+
+/// Merge an explicit `ResponseFormat` config into the variant's `TextConfig`.
+/// Preserves variant's `verbosity` slot; overrides `format` slot only.
+pub fn merge_text_format(
+    base: Option<TextConfig>,
+    fmt: Option<&ResponseFormat>,
+) -> Option<TextConfig> {
+    match (base, fmt) {
+        (existing, None) => existing,
+        (Some(mut t), Some(f)) => {
+            if let Some(rf) = to_responses_text_format(f) {
+                t.format = Some(rf);
+            }
+            Some(t)
+        }
+        (None, Some(f)) => to_responses_text_format(f).map(|rf| TextConfig {
+            format: Some(rf),
+            verbosity: None,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── to_chat_response_format ─────────────────────────────────
+
+    #[test]
+    fn chat_text_returns_none() {
+        assert!(to_chat_response_format(&ResponseFormat::Text, true).is_none());
+        assert!(to_chat_response_format(&ResponseFormat::Text, false).is_none());
+    }
+
+    #[test]
+    fn chat_json_object_emits_type_only() {
+        let v = to_chat_response_format(&ResponseFormat::JsonObject, true).unwrap();
+        assert_eq!(v, json!({"type": "json_object"}));
+    }
+
+    #[test]
+    fn chat_json_schema_strict_includes_strict_true() {
+        let schema = json!({"type": "object", "properties": {"x": {"type": "string"}}});
+        let v = to_chat_response_format(
+            &ResponseFormat::JsonSchema {
+                name: "thing".into(),
+                schema: schema.clone(),
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(v["type"], json!("json_schema"));
+        assert_eq!(v["json_schema"]["name"], json!("thing"));
+        assert_eq!(v["json_schema"]["schema"], schema);
+        assert_eq!(v["json_schema"]["strict"], json!(true));
+    }
+
+    #[test]
+    fn chat_json_schema_without_strict_omits_strict_key() {
+        let v = to_chat_response_format(
+            &ResponseFormat::JsonSchema {
+                name: "t".into(),
+                schema: json!({"type": "object"}),
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(v["json_schema"].get("strict"), None);
+    }
+
+    // ─── to_responses_text_format ────────────────────────────────
+
+    #[test]
+    fn responses_text_returns_none() {
+        assert!(to_responses_text_format(&ResponseFormat::Text).is_none());
+    }
+
+    #[test]
+    fn responses_json_object_returns_typed() {
+        assert!(matches!(
+            to_responses_text_format(&ResponseFormat::JsonObject),
+            Some(TextFormat::JsonObject)
+        ));
+    }
+
+    #[test]
+    fn responses_json_schema_preserves_name_and_schema() {
+        let schema = json!({"type": "object", "properties": {"y": {"type": "number"}}});
+        let result = to_responses_text_format(&ResponseFormat::JsonSchema {
+            name: "config".into(),
+            schema: schema.clone(),
+        })
+        .unwrap();
+        match result {
+            TextFormat::JsonSchema { name, schema: s } => {
+                assert_eq!(name, "config");
+                assert_eq!(s, schema);
+            }
+            other => panic!("expected JsonSchema, got {:?}", other),
+        }
+    }
+
+    // ─── merge_text_format ───────────────────────────────────────
+
+    #[test]
+    fn merge_passes_through_base_when_format_is_none() {
+        let base = Some(TextConfig {
+            format: None,
+            verbosity: Some("medium".to_string()),
+        });
+        let result = merge_text_format(base.clone(), None);
+        assert!(result.is_some());
+        let r = result.unwrap();
+        assert_eq!(r.verbosity, Some("medium".into()));
+        assert!(r.format.is_none());
+    }
+
+    #[test]
+    fn merge_overrides_format_preserves_verbosity() {
+        let base = Some(TextConfig {
+            format: None,
+            verbosity: Some("medium".to_string()),
+        });
+        let result = merge_text_format(base, Some(&ResponseFormat::JsonObject)).unwrap();
+        assert_eq!(result.verbosity, Some("medium".into()));
+        assert!(matches!(result.format, Some(TextFormat::JsonObject)));
+    }
+
+    #[test]
+    fn merge_creates_textconfig_when_base_none() {
+        let result = merge_text_format(None, Some(&ResponseFormat::JsonObject)).unwrap();
+        assert!(result.verbosity.is_none());
+        assert!(matches!(result.format, Some(TextFormat::JsonObject)));
+    }
+
+    #[test]
+    fn merge_returns_none_when_both_none() {
+        assert!(merge_text_format(None, None).is_none());
+    }
+}

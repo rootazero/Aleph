@@ -39,6 +39,33 @@ pub enum CacheRetention {
 }
 
 // =============================================================================
+// ResponseFormat
+// =============================================================================
+
+/// Structured output format for the model response.
+///
+/// Maps to:
+/// - Chat protocol → top-level `response_format` field
+/// - Responses protocol → `text.format` field (already typed as `TextFormat`)
+///
+/// Capability-gated: silently dropped when endpoint doesn't support it
+/// (see `ProviderCapabilities::supports_response_format`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseFormat {
+    /// Free-form text (default; equivalent to no field).
+    Text,
+    /// Force valid JSON output (no schema).
+    JsonObject,
+    /// Force JSON matching the provided schema. Strict mode enabled when
+    /// endpoint supports it.
+    JsonSchema {
+        name: String,
+        schema: serde_json::Value,
+    },
+}
+
+// =============================================================================
 // ProviderConfig
 // =============================================================================
 
