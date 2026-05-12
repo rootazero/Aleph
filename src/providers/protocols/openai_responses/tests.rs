@@ -788,6 +788,93 @@ fn test_include_none_for_third_party() {
     assert!(request.include.is_none());
 }
 
+// ─── Task 7 helpers ───────────────────────────────────────────────────────────
+
+/// Build a bare-bones standard ResponsesVariant for tests.
+fn standard_test_variant() -> ResponsesVariant {
+    ResponsesVariant::default()
+}
+
+/// Build a standard ResponsesVariant for tests, with a chosen verbosity.
+fn standard_variant_with_verbosity(verbosity: &str) -> ResponsesVariant {
+    use crate::providers::responses::types::TextConfig;
+    let mut v = standard_test_variant();
+    v.text = Some(TextConfig {
+        format: None,
+        verbosity: Some(verbosity.to_string()),
+    });
+    v
+}
+
+// ─── Task 7: text fusion + parallel_tool_calls ────────────────────────────────
+
+#[test]
+fn responses_text_merges_format_into_variant_verbosity() {
+    use crate::config::types::provider::ResponseFormat;
+    use crate::providers::responses::types::TextFormat;
+
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.response_format = Some(ResponseFormat::JsonObject);
+
+    let msgs = [];
+    let payload = RequestPayload::new(&msgs);
+    let variant = standard_variant_with_verbosity("medium");
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload, "gpt-4o", &variant, &config,
+    );
+
+    let text = req.text.expect("text should be populated");
+    assert!(matches!(text.format, Some(TextFormat::JsonObject)));
+    assert_eq!(text.verbosity, Some("medium".to_string()));
+}
+
+#[test]
+fn responses_text_passes_through_when_no_response_format() {
+    let config = ProviderConfig::test_config("gpt-4o");
+
+    let msgs = [];
+    let payload = RequestPayload::new(&msgs);
+    let variant = standard_variant_with_verbosity("low");
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload, "gpt-4o", &variant, &config,
+    );
+
+    let text = req.text.expect("text should be the variant's original");
+    assert!(text.format.is_none());
+    assert_eq!(text.verbosity, Some("low".to_string()));
+}
+
+#[test]
+fn responses_parallel_tool_calls_respects_config_some_false() {
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.parallel_tool_calls = Some(false);
+
+    let msgs = [];
+    let payload = RequestPayload::new(&msgs);
+    let variant = standard_test_variant();
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload, "gpt-4o", &variant, &config,
+    );
+
+    assert_eq!(req.parallel_tool_calls, Some(false));
+}
+
+#[test]
+fn responses_parallel_tool_calls_none_omits_field() {
+    let config = ProviderConfig::test_config("gpt-4o");
+
+    let msgs = [];
+    let payload = RequestPayload::new(&msgs);
+    let variant = standard_test_variant();
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload, "gpt-4o", &variant, &config,
+    );
+
+    // Verifies the hardcoded `Some(true)` is gone — when config is None,
+    // the wire field must also be None.
+    assert!(req.parallel_tool_calls.is_none());
+}
+
 // ─── stop_sequences tests ─────────────────────────────────────────────────────
 
 #[test]

@@ -10,6 +10,7 @@ use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
 use crate::providers::delta::ProviderDelta;
 use crate::providers::protocols::openai_common::provider_policy::build_payload_policy;
+use crate::providers::protocols::openai_common::response_format::merge_text_format;
 use crate::providers::responses::shared;
 use crate::providers::responses::types::{
     ContextManagement, ResponsesRequest, StreamEvent, TextConfig,
@@ -169,8 +170,8 @@ impl OpenAiResponsesProtocol {
             reasoning: shared::build_reasoning(payload.think_level),
             tools,
             tool_choice,
-            parallel_tool_calls: Some(true),
-            text: variant.text.clone(),
+            parallel_tool_calls: config.parallel_tool_calls,
+            text: merge_text_format(variant.text.clone(), config.response_format.as_ref()),
             max_output_tokens: payload.max_tokens,
             include: variant.include.clone().or_else(|| {
                 if policy.endpoint_class
