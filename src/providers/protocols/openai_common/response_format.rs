@@ -4,6 +4,7 @@
 //! Responses protocol uses the typed `TextFormat` inside `TextConfig`.
 
 use crate::config::types::provider::ResponseFormat;
+use crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema;
 use crate::providers::responses::types::{TextConfig, TextFormat};
 use serde_json::{json, Value};
 
@@ -13,6 +14,7 @@ use serde_json::{json, Value};
 /// When `supports_strict` is true and the variant is `JsonSchema`, the wire
 /// includes `"strict": true` inside the `json_schema` block to opt into
 /// OpenAI's strict-mode token mask.
+/// Degrades `JsonSchema` to `JsonObject` when `supports_strict` is false.
 pub fn to_chat_response_format(
     fmt: &ResponseFormat,
     supports_strict: bool,
@@ -26,14 +28,19 @@ pub fn to_chat_response_format(
                 // support strict schemas (most third-party OpenAI-compat backends)
                 return Some(json!({"type": "json_object"}));
             }
-            let inner = json!({
-                "name": name,
-                "schema": schema,
-                "strict": true,
-            });
+            let mut normalized = schema.clone();
+            // Cycle 3: run user schema through the same normalizer tool
+            // definitions use (additionalProperties: false + required-all-properties).
+            // set_top_level_strict=false because `strict: true` lives in the
+            // json_schema envelope, not on the schema root.
+            let _ = normalize_strict_schema(&mut normalized, false);
             Some(json!({
                 "type": "json_schema",
-                "json_schema": inner,
+                "json_schema": {
+                    "name": name,
+                    "schema": normalized,
+                    "strict": true,
+                }
             }))
         }
     }
@@ -53,9 +60,11 @@ pub fn to_responses_text_format(
             if !supports_strict {
                 return Some(TextFormat::JsonObject);
             }
+            let mut normalized = schema.clone();
+            let _ = normalize_strict_schema(&mut normalized, false);
             Some(TextFormat::JsonSchema {
                 name: name.clone(),
-                schema: schema.clone(),
+                schema: normalized,
             })
         }
     }
@@ -115,7 +124,10 @@ mod tests {
         .unwrap();
         assert_eq!(v["type"], json!("json_schema"));
         assert_eq!(v["json_schema"]["name"], json!("thing"));
-        assert_eq!(v["json_schema"]["schema"], schema);
+        // Normalization adds additionalProperties: false; check structural fields individually.
+        assert_eq!(v["json_schema"]["schema"]["type"], json!("object"));
+        assert_eq!(v["json_schema"]["schema"]["properties"], schema["properties"]);
+        assert_eq!(v["json_schema"]["schema"]["additionalProperties"], json!(false));
         assert_eq!(v["json_schema"]["strict"], json!(true));
     }
 
@@ -145,7 +157,10 @@ mod tests {
         match result {
             TextFormat::JsonSchema { name, schema: s } => {
                 assert_eq!(name, "config");
-                assert_eq!(s, schema);
+                // Normalization adds additionalProperties: false; check fields individually.
+                assert_eq!(s["type"], json!("object"));
+                assert_eq!(s["properties"], schema["properties"]);
+                assert_eq!(s["additionalProperties"], json!(false));
             }
             other => panic!("expected JsonSchema, got {:?}", other),
         }
@@ -240,5 +255,104 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(result.format, Some(TextFormat::JsonObject)));
+    }
+
+    // ─── Cycle 3: strict-schema normalization ────────────────────────
+
+    #[test]
+    fn chat_json_schema_strict_injects_additional_properties_false() {
+        let v = to_chat_response_format(
+            &ResponseFormat::JsonSchema {
+                name: "n".into(),
+                schema: json!({
+                    "type": "object",
+                    "properties": {"x": {"type": "string"}},
+                }),
+            },
+            true,
+        )
+        .unwrap();
+        let inner_schema = &v["json_schema"]["schema"];
+        assert_eq!(inner_schema["additionalProperties"], json!(false));
+    }
+
+    #[test]
+    fn chat_json_schema_strict_injects_additional_properties_false_multi_prop() {
+        // Verifies normalization works with multiple properties (not just single-prop schemas).
+        let v = to_chat_response_format(
+            &ResponseFormat::JsonSchema {
+                name: "n".into(),
+                schema: json!({
+                    "type": "object",
+                    "properties": {"a": {"type": "string"}, "b": {"type": "number"}},
+                }),
+            },
+            true,
+        )
+        .unwrap();
+        let inner_schema = &v["json_schema"]["schema"];
+        assert_eq!(inner_schema["additionalProperties"], json!(false));
+        assert_eq!(inner_schema["properties"]["a"]["type"], json!("string"));
+        assert_eq!(inner_schema["properties"]["b"]["type"], json!("number"));
+    }
+
+    #[test]
+    fn chat_json_schema_strict_recurses_into_nested_objects() {
+        let v = to_chat_response_format(
+            &ResponseFormat::JsonSchema {
+                name: "n".into(),
+                schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "outer": {
+                            "type": "object",
+                            "properties": {"inner": {"type": "string"}},
+                        }
+                    },
+                }),
+            },
+            true,
+        )
+        .unwrap();
+        let outer = &v["json_schema"]["schema"]["properties"]["outer"];
+        assert_eq!(outer["additionalProperties"], json!(false));
+        assert_eq!(outer["properties"]["inner"]["type"], json!("string"));
+    }
+
+    #[test]
+    fn chat_json_schema_strict_preserves_user_descriptions() {
+        let v = to_chat_response_format(
+            &ResponseFormat::JsonSchema {
+                name: "n".into(),
+                schema: json!({
+                    "type": "object",
+                    "properties": {"x": {"type": "string", "description": "user note"}},
+                }),
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            v["json_schema"]["schema"]["properties"]["x"]["description"],
+            json!("user note")
+        );
+    }
+
+    #[test]
+    fn chat_json_schema_strict_does_not_set_top_level_strict_on_schema() {
+        // strict: true belongs in json_schema block, not at schema root
+        let v = to_chat_response_format(
+            &ResponseFormat::JsonSchema {
+                name: "n".into(),
+                schema: json!({"type": "object", "properties": {"a": {"type": "string"}}}),
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(v["json_schema"]["strict"], json!(true));
+        assert!(
+            v["json_schema"]["schema"].get("strict").is_none(),
+            "the inner schema should not carry a top-level 'strict' key"
+        );
     }
 }
