@@ -1167,3 +1167,24 @@ fn chat_logprobs_omitted_when_config_none() {
     assert!(body.get("logprobs").is_none());
     assert!(body.get("top_logprobs").is_none());
 }
+
+#[test]
+fn chat_logprobs_true_without_top_logprobs_emits_only_logprobs() {
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.logprobs = Some(true);
+    // top_logprobs intentionally left None
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert_eq!(body.get("logprobs"), Some(&serde_json::json!(true)));
+    assert!(
+        body.get("top_logprobs").is_none(),
+        "top_logprobs must not appear when config.top_logprobs is None"
+    );
+}
