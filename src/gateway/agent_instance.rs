@@ -262,6 +262,28 @@ impl AgentInstance {
         *state = new_state;
     }
 
+    /// Atomically transition from Idle to Running.
+    ///
+    /// Closes the TOCTOU window between `is_idle()` and `set_state(Running)`:
+    /// two concurrent executions can no longer both observe Idle before either
+    /// flips the state. Returns true on success, false if the agent is not idle.
+    pub async fn try_start_run(&self, run_id: &str) -> bool {
+        let mut state = self.state.write().await;
+        if matches!(*state, AgentState::Idle) {
+            let new_state = AgentState::Running {
+                run_id: run_id.to_string(),
+            };
+            debug!(
+                "Agent '{}' state change: {:?} -> {:?}",
+                self.config.agent_id, *state, new_state
+            );
+            *state = new_state;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Get or create a session (delegated to session store)
     pub async fn get_or_create_session(&self, key: &SessionKey) -> SessionInfo {
         match self.session_store.get_or_create(key).await {

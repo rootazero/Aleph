@@ -73,8 +73,10 @@ where
             );
         }
 
-        // Check agent state (after registration to reserve the slot)
-        if !agent.is_idle().await {
+        // Atomically check Idle and reserve the slot in one critical section
+        // to close the TOCTOU window between an is_idle() probe and the later
+        // set_state(Running).
+        if !agent.try_start_run(&run_id).await {
             // Remove the just-inserted run since agent is busy
             let mut runs = self.active_runs.write().await;
             runs.remove(&run_id);
@@ -91,13 +93,6 @@ where
                 run_id: run_id.clone(),
                 session_key: request.session_key.to_key_string(),
                 accepted_at: chrono::Utc::now().to_rfc3339(),
-            })
-            .await;
-
-        // Set agent state to running
-        agent
-            .set_state(AgentState::Running {
-                run_id: run_id.clone(),
             })
             .await;
 

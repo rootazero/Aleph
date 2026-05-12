@@ -267,9 +267,20 @@ impl ExecutionContext {
         }
     }
 
-    /// Add knowledge to the context
+    /// Add knowledge to the context.
+    ///
+    /// Replaces any existing fragment with the same key so the knowledge list
+    /// does not grow without bound when the same fact is rediscovered.
     pub fn add_knowledge(&mut self, knowledge: Knowledge) {
-        self.acquired_knowledge.push(knowledge);
+        if let Some(pos) = self
+            .acquired_knowledge
+            .iter()
+            .position(|k| k.key == knowledge.key)
+        {
+            self.acquired_knowledge[pos] = knowledge;
+        } else {
+            self.acquired_knowledge.push(knowledge);
+        }
         self.updated_at = chrono::Utc::now().timestamp();
     }
 

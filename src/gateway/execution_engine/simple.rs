@@ -41,8 +41,9 @@ impl SimpleExecutionEngine {
     ) -> Result<(), ExecutionError> {
         let run_id = request.run_id.clone();
 
-        // Check agent state
-        if !agent.is_idle().await {
+        // Atomically check Idle and transition to Running to close the TOCTOU
+        // window between an is_idle() probe and the later set_state(Running).
+        if !agent.try_start_run(&run_id).await {
             return Err(ExecutionError::AgentBusy(agent.id().to_string()));
         }
 
@@ -74,13 +75,6 @@ impl SimpleExecutionEngine {
                 run_id: run_id.clone(),
                 session_key: request.session_key.to_key_string(),
                 accepted_at: chrono::Utc::now().to_rfc3339(),
-            })
-            .await;
-
-        // Set agent state to running
-        agent
-            .set_state(AgentState::Running {
-                run_id: run_id.clone(),
             })
             .await;
 
