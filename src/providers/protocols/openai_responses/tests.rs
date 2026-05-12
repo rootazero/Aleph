@@ -963,3 +963,85 @@ fn responses_seed_none_when_config_unset() {
     );
     assert!(req.seed.is_none());
 }
+
+// ─── Cycle 3: top_logprobs wiring ────────────────────────────────
+
+#[test]
+fn responses_top_logprobs_emitted_when_logprobs_true() {
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.logprobs = Some(true);
+    config.top_logprobs = Some(5);
+
+    let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+
+    let req = super::OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &standard_test_variant(),
+        &config,
+    );
+    assert_eq!(req.top_logprobs, Some(5));
+}
+
+#[test]
+fn responses_top_logprobs_default_zero_when_logprobs_true_count_unset() {
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.logprobs = Some(true);
+    // config.top_logprobs unset
+
+    let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+
+    let req = super::OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &standard_test_variant(),
+        &config,
+    );
+    assert_eq!(
+        req.top_logprobs,
+        Some(0),
+        "opt-in with no count should emit 0 (Responses has no `logprobs: bool`)"
+    );
+}
+
+#[test]
+fn responses_top_logprobs_none_when_logprobs_false() {
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.logprobs = Some(false);
+    config.top_logprobs = Some(5); // should be ignored
+
+    let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+
+    let req = super::OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &standard_test_variant(),
+        &config,
+    );
+    assert!(req.top_logprobs.is_none());
+}
+
+#[test]
+fn responses_top_logprobs_stripped_for_deepseek() {
+    let mut config = ProviderConfig::test_config("deepseek-reasoner");
+    config.base_url = Some("https://api.deepseek.com".to_string());
+    config.logprobs = Some(true);
+    config.top_logprobs = Some(5);
+
+    let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+
+    let req = super::OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "deepseek-reasoner",
+        &standard_test_variant(),
+        &config,
+    );
+    assert!(
+        req.top_logprobs.is_none(),
+        "DeepSeek has supports_logprobs=false; field must be stripped"
+    );
+}

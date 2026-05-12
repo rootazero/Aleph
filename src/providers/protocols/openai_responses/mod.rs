@@ -190,7 +190,13 @@ impl OpenAiResponsesProtocol {
             context_management: context_mgmt,
             stop,
             seed: config.seed.filter(|_| policy.capabilities.supports_seed),
-            top_logprobs: None, // T11 will wire from config
+            top_logprobs: if config.logprobs == Some(true)
+                && policy.capabilities.supports_logprobs
+            {
+                Some(config.top_logprobs.map(|n| n as u32).unwrap_or(0))
+            } else {
+                None
+            },
         }
     }
 }
