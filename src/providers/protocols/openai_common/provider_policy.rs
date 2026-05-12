@@ -61,6 +61,8 @@ pub struct ProviderCapabilities {
     pub supports_response_format: bool,
     /// Endpoint accepts the `seed` field on Chat/Responses requests
     pub supports_seed: bool,
+    /// Endpoint accepts `logprobs` / `top_logprobs` on Chat/Responses requests
+    pub supports_logprobs: bool,
     /// Supports server-side context compaction
     pub supports_server_compaction: bool,
     /// Known to reject object schemas without `properties`
@@ -116,6 +118,12 @@ impl PayloadPolicy {
         // Seed (when capability disabled)
         if !self.capabilities.supports_seed {
             payload.remove("seed");
+        }
+
+        // Logprobs (when capability disabled)
+        if !self.capabilities.supports_logprobs {
+            payload.remove("logprobs");
+            payload.remove("top_logprobs");
         }
 
         // Prompt cache fields
@@ -230,6 +238,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: true,
             supports_response_format: true,
             supports_seed: true,
+            supports_logprobs: true,
             supports_server_compaction: true,
             requires_object_properties: false,
             context_window: Some(128_000),
@@ -242,6 +251,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: true,
             supports_response_format: true,
             supports_seed: true,
+            supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(128_000),
@@ -254,6 +264,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: true,
             supports_response_format: false,
             supports_seed: true,
+            supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: None,
@@ -266,6 +277,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: false,
             supports_response_format: false,
             supports_seed: false,
+            supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(200_000),
@@ -278,6 +290,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: false,
             supports_response_format: false,
             supports_seed: true,
+            supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(64_000),
@@ -290,6 +303,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: false,
             supports_response_format: false,
             supports_seed: true,
+            supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(8_000),
@@ -302,6 +316,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: true,
             supports_response_format: false,
             supports_seed: true,
+            supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(128_000),
@@ -314,6 +329,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: false,
             supports_response_format: false,
             supports_seed: true,
+            supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(128_000),
@@ -326,6 +342,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: false,
             supports_response_format: false,
             supports_seed: true,
+            supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(128_000),
@@ -338,6 +355,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: false,
             supports_response_format: false,
             supports_seed: true,
+            supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: Some(128_000),
@@ -350,6 +368,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: false,
             supports_response_format: false,
             supports_seed: true,
+            supports_logprobs: true,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: None,
@@ -362,6 +381,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: false,
             supports_response_format: false,
             supports_seed: false,
+            supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: None,
@@ -374,6 +394,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_strict_schema: false,
             supports_response_format: false,
             supports_seed: false,
+            supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
             context_window: None,
@@ -722,5 +743,76 @@ mod tests {
         policy.apply(&mut payload);
 
         assert_eq!(payload.get("seed"), Some(&serde_json::json!(42)));
+    }
+
+    #[test]
+    fn supports_logprobs_matrix_matches_cycle3_spec() {
+        let truthy = [
+            EndpointClass::OpenAiPublic,
+            EndpointClass::OpenAiCodex,
+            EndpointClass::AzureOpenAi,
+            EndpointClass::OpenRouter,
+            EndpointClass::GroqNative,
+            EndpointClass::CerebrasNative,
+            EndpointClass::XAiNative,
+        ];
+        for class in truthy {
+            assert!(
+                resolve_capabilities(class).supports_logprobs,
+                "{:?} should support logprobs",
+                class
+            );
+        }
+        let falsy = [
+            EndpointClass::AnthropicPublic,
+            EndpointClass::DeepSeekNative,
+            EndpointClass::MistralPublic,
+            EndpointClass::MoonshotNative,
+            EndpointClass::Local,
+            EndpointClass::Custom,
+        ];
+        for class in falsy {
+            assert!(
+                !resolve_capabilities(class).supports_logprobs,
+                "{:?} should NOT support logprobs",
+                class
+            );
+        }
+    }
+
+    #[test]
+    fn apply_strips_logprobs_when_unsupported() {
+        let policy = build_payload_policy(
+            Some("https://api.deepseek.com"),
+            "openai-chat",
+            None,
+        );
+        let mut payload = serde_json::Map::new();
+        payload.insert("logprobs".into(), serde_json::json!(true));
+        payload.insert("top_logprobs".into(), serde_json::json!(5));
+        payload.insert("model".into(), serde_json::Value::String("dsk".into()));
+
+        policy.apply(&mut payload);
+
+        assert!(payload.get("logprobs").is_none());
+        assert!(payload.get("top_logprobs").is_none());
+        assert!(payload.get("model").is_some());
+    }
+
+    #[test]
+    fn apply_keeps_logprobs_when_supported() {
+        let policy = build_payload_policy(
+            Some("https://api.groq.com"),
+            "openai-chat",
+            None,
+        );
+        let mut payload = serde_json::Map::new();
+        payload.insert("logprobs".into(), serde_json::json!(true));
+        payload.insert("top_logprobs".into(), serde_json::json!(3));
+
+        policy.apply(&mut payload);
+
+        assert_eq!(payload.get("logprobs"), Some(&serde_json::json!(true)));
+        assert_eq!(payload.get("top_logprobs"), Some(&serde_json::json!(3)));
     }
 }
