@@ -193,7 +193,7 @@ impl OpenAiResponsesProtocol {
             top_logprobs: if config.logprobs == Some(true)
                 && policy.capabilities.supports_logprobs
             {
-                Some(config.top_logprobs.map(|n| n as u32).unwrap_or(0))
+                Some(config.top_logprobs.map(u32::from).unwrap_or(0))
             } else {
                 None
             },
