@@ -18,6 +18,7 @@ use tracing::debug;
 use super::{sanitize_tool_name, OpenAiProtocol};
 use super::sse::parse_chat_sse_event;
 
+use crate::providers::protocols::openai_common::max_tokens::uses_max_completion_tokens;
 use crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema;
 use crate::providers::protocols::openai_common::provider_policy::build_payload_policy;
 
@@ -30,17 +31,27 @@ impl ProtocolAdapter for OpenAiProtocol {
     ) -> Result<reqwest::RequestBuilder> {
         let endpoint = Self::build_endpoint(config);
         let messages = Self::convert_messages(payload.messages, payload.system_prompt);
+        let model_name = payload
+            .model
+            .as_deref()
+            .unwrap_or_else(|| config.default_model())
+            .to_string();
 
         // Build request body — always streaming (stream-first architecture)
         let mut body = json!({
-            "model": payload.model.as_deref().unwrap_or_else(|| config.default_model()),
+            "model": model_name,
             "messages": messages,
             "stream": true,
         });
 
         // Add optional parameters (per-request overrides provider config)
         if let Some(max_tokens) = payload.max_tokens.or(config.max_tokens) {
-            body["max_tokens"] = json!(max_tokens);
+            let field = if uses_max_completion_tokens(&model_name) {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            };
+            body[field] = json!(max_tokens);
         }
         if let Some(temp) = payload.temperature.or(config.temperature) {
             body["temperature"] = json!(temp);
@@ -131,7 +142,7 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         debug!(
             endpoint = %endpoint,
-            model = %payload.model.as_deref().unwrap_or_else(|| config.default_model()),
+            model = %model_name,
             "Building OpenAI request"
         );
 

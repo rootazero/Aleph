@@ -6,6 +6,7 @@ use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason};
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::openai::{ChatCompletionResponse, OpenAiFunctionCall, OpenAiTool, OpenAiFunction, OpenAiToolCall};
+
 use crate::providers::protocols::openai_chat::sse::parse_chat_sse_event;
 
 #[test]
@@ -786,4 +787,51 @@ fn chat_stop_sequences_trims_whitespace() {
     assert_chat_stop_field(Some(" END , STOP "), |body| {
         assert_eq!(body["stop"], serde_json::json!(["END", "STOP"]));
     });
+}
+
+// ─── Task 2: max_completion_tokens field swap ────────────────────
+
+/// Extract the JSON body from a built request for inspection.
+fn extract_chat_body(req: reqwest::RequestBuilder) -> serde_json::Value {
+    let built = req.build().unwrap();
+    let bytes = built.body().unwrap().as_bytes().unwrap();
+    serde_json::from_slice(bytes).unwrap()
+}
+
+/// Build a Chat request body for the given model + max_tokens config.
+fn build_chat_body_for_max_tokens(model: &str, max_tokens: Option<u32>) -> serde_json::Value {
+    let protocol = OpenAiProtocol::new(Client::new());
+    let mut config = ProviderConfig::test_config(model);
+    config.max_tokens = max_tokens;
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+
+    let req = protocol
+        .build_request(&payload, &config)
+        .expect("build_request should succeed");
+    extract_chat_body(req)
+}
+
+#[test]
+fn chat_uses_max_completion_tokens_for_o3_mini() {
+    let body = build_chat_body_for_max_tokens("o3-mini", Some(4096));
+    assert_eq!(body.get("max_completion_tokens"), Some(&serde_json::json!(4096)));
+    assert!(body.get("max_tokens").is_none(),
+        "max_tokens must NOT be present for o3-mini (reasoning model)");
+}
+
+#[test]
+fn chat_uses_max_tokens_for_gpt4o() {
+    let body = build_chat_body_for_max_tokens("gpt-4o", Some(4096));
+    assert_eq!(body.get("max_tokens"), Some(&serde_json::json!(4096)));
+    assert!(body.get("max_completion_tokens").is_none(),
+        "max_completion_tokens must NOT be present for gpt-4o (legacy model)");
+}
+
+#[test]
+fn chat_omits_max_tokens_when_both_none() {
+    let body = build_chat_body_for_max_tokens("gpt-4o", None);
+    assert!(body.get("max_tokens").is_none());
+    assert!(body.get("max_completion_tokens").is_none());
 }
