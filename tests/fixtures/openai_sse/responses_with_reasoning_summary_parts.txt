@@ -1,0 +1,12 @@
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","item_id":"item_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"item_1","output_index":0,"summary_index":0,"delta":"thinking..."}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"item_1","output_index":0,"summary_index":0,"text":"thinking..."}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","item_id":"item_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"thinking..."}}
+

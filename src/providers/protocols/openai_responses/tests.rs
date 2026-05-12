@@ -376,6 +376,48 @@ fn test_convert_s3_assistant_text_and_tool_call() {
     }
 }
 
+// ─── reasoning_summary_* event handling ──────────────────────────────
+
+#[test]
+fn responses_reasoning_summary_part_added_emits_no_delta() {
+    let json = r#"{"type":"response.reasoning_summary_part.added","item_id":"x","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}"#;
+    let mut out = std::collections::VecDeque::new();
+    let mut tracker = Default::default();
+    super::parse_sse_event_multi(json, &mut tracker, &mut out);
+    assert_eq!(out.len(), 0, "part.added should not emit any delta");
+}
+
+#[test]
+fn responses_reasoning_summary_text_delta_emits_thinking() {
+    let json = r#"{"type":"response.reasoning_summary_text.delta","item_id":"x","output_index":0,"summary_index":0,"delta":"abc"}"#;
+    let mut out = std::collections::VecDeque::new();
+    let mut tracker = Default::default();
+    super::parse_sse_event_multi(json, &mut tracker, &mut out);
+    let delta = out.front().expect("expected one delta");
+    match delta {
+        Ok(crate::providers::ProviderDelta::ThinkingDelta(s)) => assert_eq!(s, "abc"),
+        other => panic!("expected ThinkingDelta, got {:?}", other),
+    }
+}
+
+#[test]
+fn responses_reasoning_summary_text_done_emits_no_delta() {
+    let json = r#"{"type":"response.reasoning_summary_text.done","item_id":"x","output_index":0,"summary_index":0,"text":"abc"}"#;
+    let mut out = std::collections::VecDeque::new();
+    let mut tracker = Default::default();
+    super::parse_sse_event_multi(json, &mut tracker, &mut out);
+    assert_eq!(out.len(), 0, "text.done should not emit (already accumulated)");
+}
+
+#[test]
+fn responses_reasoning_summary_part_done_emits_no_delta() {
+    let json = r#"{"type":"response.reasoning_summary_part.done","item_id":"x","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"abc"}}"#;
+    let mut out = std::collections::VecDeque::new();
+    let mut tracker = Default::default();
+    super::parse_sse_event_multi(json, &mut tracker, &mut out);
+    assert_eq!(out.len(), 0, "part.done should not emit");
+}
+
 #[test]
 fn test_convert_s4_tool_result() {
     use crate::providers::message::UnifiedMessage;

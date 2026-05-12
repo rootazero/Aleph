@@ -496,8 +496,26 @@ fn parse_sse_event_multi(
             out.push_back(Ok(ProviderDelta::Error(msg)));
         }
 
+        StreamEvent::ReasoningSummaryPartAdded { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "reasoning_summary_part.added — boundary marker, no canonical delta emitted"
+            );
+        }
         StreamEvent::ReasoningSummaryTextDelta { delta, .. } => {
             out.push_back(Ok(ProviderDelta::ThinkingDelta(delta)));
+        }
+        StreamEvent::ReasoningSummaryTextDone { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "reasoning_summary_text.done — content already accumulated via delta events"
+            );
+        }
+        StreamEvent::ReasoningSummaryPartDone { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "reasoning_summary_part.done — boundary marker, no canonical delta emitted"
+            );
         }
 
         _ => {}
