@@ -51,6 +51,64 @@ fn extract_hostname(url: &str) -> Option<String> {
 }
 
 // =============================================================================
+// AnthropicCapabilities
+// =============================================================================
+
+/// Per-class capability flags for Anthropic-protocol endpoints.
+///
+/// Bits resolve solely from endpoint class (single source of truth).
+/// There is no `ProviderConfig` override for any bit.
+#[derive(Debug, Clone, Default)]
+pub struct AnthropicCapabilities {
+    /// `cache_control` breakpoints in `system` / `messages`.
+    /// Gates `effective_cache_retention` injection in `build_request`.
+    pub supports_cache_control: bool,
+    /// `service_tier` field ("auto" / "standard_only").
+    pub supports_service_tier: bool,
+    /// `metadata.user_id` field.
+    pub supports_metadata_user_id: bool,
+    /// `output_config.effort` field ("low"/"medium"/"high"/"max").
+    pub supports_output_config_effort: bool,
+    /// `top_k` sampling field.
+    pub supports_top_k: bool,
+    /// `top_p` sampling field.
+    pub supports_top_p: bool,
+    /// `stop_sequences` field.
+    pub supports_stop_sequences: bool,
+}
+
+// =============================================================================
+// Capability Resolution
+// =============================================================================
+
+/// Resolve capabilities for a given Anthropic endpoint class.
+pub fn resolve_anthropic_capabilities(class: AnthropicEndpointClass) -> AnthropicCapabilities {
+    match class {
+        AnthropicEndpointClass::Official => AnthropicCapabilities {
+            supports_cache_control: true,
+            supports_service_tier: true,
+            supports_metadata_user_id: true,
+            supports_output_config_effort: true,
+            supports_top_k: true,
+            supports_top_p: true,
+            supports_stop_sequences: true,
+        },
+        AnthropicEndpointClass::Custom => AnthropicCapabilities {
+            // Conservative: only the universally-portable Anthropic-protocol bits.
+            // Premium/Anthropic-only features default OFF — third-party gateways
+            // (kimi-for-coding, bedrock, vertex, etc.) reject them with 400 errors.
+            supports_cache_control: false,
+            supports_service_tier: false,
+            supports_metadata_user_id: false,
+            supports_output_config_effort: false,
+            supports_top_k: true,
+            supports_top_p: true,
+            supports_stop_sequences: true,
+        },
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -101,5 +159,31 @@ mod tests {
             detect_anthropic_endpoint_class(Some("not a url at all !!!")),
             AnthropicEndpointClass::Custom
         );
+    }
+
+    #[test]
+    fn official_capabilities_have_all_bits_true() {
+        let caps = resolve_anthropic_capabilities(AnthropicEndpointClass::Official);
+        assert!(caps.supports_cache_control);
+        assert!(caps.supports_service_tier);
+        assert!(caps.supports_metadata_user_id);
+        assert!(caps.supports_output_config_effort);
+        assert!(caps.supports_top_k);
+        assert!(caps.supports_top_p);
+        assert!(caps.supports_stop_sequences);
+    }
+
+    #[test]
+    fn custom_capabilities_keep_protocol_standard_bits_only() {
+        let caps = resolve_anthropic_capabilities(AnthropicEndpointClass::Custom);
+        // Anthropic-only bits OFF
+        assert!(!caps.supports_cache_control);
+        assert!(!caps.supports_service_tier);
+        assert!(!caps.supports_metadata_user_id);
+        assert!(!caps.supports_output_config_effort);
+        // Protocol-standard bits ON
+        assert!(caps.supports_top_k);
+        assert!(caps.supports_top_p);
+        assert!(caps.supports_stop_sequences);
     }
 }
