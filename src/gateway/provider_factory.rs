@@ -86,6 +86,8 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         service_tier: None,
         stream_idle_timeout_secs: None,
         cache_retention: None,
+        response_format: None,
+        parallel_tool_calls: None,
     };
 
     let provider = create_provider("claude", config)
@@ -150,6 +152,8 @@ pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         service_tier: None,
         stream_idle_timeout_secs: None,
         cache_retention: None,
+        response_format: None,
+        parallel_tool_calls: None,
     };
 
     let provider = create_provider("openai", config)

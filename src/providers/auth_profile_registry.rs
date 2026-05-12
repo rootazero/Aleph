@@ -187,6 +187,8 @@ impl AuthProfileProviderRegistry {
             service_tier: None,
             stream_idle_timeout_secs: None,
             cache_retention: None,
+            response_format: None,
+            parallel_tool_calls: None,
         };
 
         create_provider(&self.config.provider_type, provider_config)

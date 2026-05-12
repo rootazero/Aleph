@@ -185,6 +185,17 @@ pub struct ProviderConfig {
     /// Service tier for Anthropic API ("auto" or "default")
     #[serde(default)]
     pub service_tier: Option<String>,
+
+    // OpenAI Cycle 2 fields
+    /// Structured output format (None = free-form text).
+    /// Capability-gated; silently dropped when endpoint doesn't support it.
+    #[serde(default)]
+    pub response_format: Option<ResponseFormat>,
+
+    /// Whether the model accepts parallel tool calls (None = server default).
+    /// When None, no `parallel_tool_calls` field is sent.
+    #[serde(default)]
+    pub parallel_tool_calls: Option<bool>,
 }
 
 pub fn default_provider_color() -> String {
@@ -257,6 +268,8 @@ impl ProviderConfig {
             service_tier: None,
             stream_idle_timeout_secs: None,
             cache_retention: None,
+            response_format: None,
+            parallel_tool_calls: None,
         }
     }
 }
@@ -304,6 +317,8 @@ mod tests {
             service_tier: None,
             stream_idle_timeout_secs: None,
             cache_retention: None,
+            response_format: None,
+            parallel_tool_calls: None,
         };
         assert_eq!(config.protocol(), "anthropic");
     }
@@ -334,6 +349,8 @@ mod tests {
             service_tier: None,
             stream_idle_timeout_secs: None,
             cache_retention: None,
+            response_format: None,
+            parallel_tool_calls: None,
         };
         assert_eq!(config.protocol(), "openai");
     }

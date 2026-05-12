@@ -89,5 +89,7 @@ pub(super) fn build_provider_config_for_persistence(
         service_tier: None,
         stream_idle_timeout_secs: None,
         cache_retention: None,
+        response_format: None,
+        parallel_tool_calls: None,
     }
 }
