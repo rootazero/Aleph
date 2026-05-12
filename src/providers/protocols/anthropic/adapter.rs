@@ -163,6 +163,10 @@ impl ProtocolAdapter for AnthropicProtocol {
             config.stream_idle_timeout_secs.unwrap_or(60),
             std::sync::atomic::Ordering::Relaxed,
         );
+        // Cycle 4: resolve capability policy once at the top of build_request.
+        let policy = crate::providers::protocols::anthropic::provider_policy::build_anthropic_policy(
+            config.base_url.as_deref(),
+        );
         let actual_model = payload
             .model
             .as_deref()
@@ -257,7 +261,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             stream: Some(true), // always streaming (stream-first architecture)
             thinking,
             tools,
-            service_tier: None,      // un-hardcoded in T7
+            service_tier: config.service_tier.clone(),
             metadata: None,          // wired in T8
             output_config: None,     // wired in T8
         };
@@ -313,6 +317,9 @@ impl ProtocolAdapter for AnthropicProtocol {
             inject_cache_control_into_system_array(&mut body, cc);
             inject_cache_control_into_last_user_message(&mut body, cc);
         }
+
+        // Cycle 4: strip capability-gated fields one last time.
+        policy.apply(&mut body);
 
         Ok(self
             .client

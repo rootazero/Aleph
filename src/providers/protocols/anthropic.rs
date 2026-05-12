@@ -552,6 +552,37 @@ mod tests {
         let body = body_of(protocol.build_request(&payload, &config).unwrap());
         assert!(body.get("stop_sequences").is_none());
     }
+
+    #[test]
+    fn build_request_wires_service_tier_on_official() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.service_tier = Some("auto".to_string());
+        // base_url left None → resolves to Official
+
+        let body = body_of(protocol.build_request(&payload, &config).unwrap());
+        assert_eq!(body["service_tier"], "auto");
+    }
+
+    #[test]
+    fn build_request_strips_service_tier_on_custom_host() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.service_tier = Some("auto".to_string());
+        config.base_url = Some("https://kimi-for-coding.example.com/v1".to_string());
+
+        let body = body_of(protocol.build_request(&payload, &config).unwrap());
+        assert!(
+            body.get("service_tier").is_none(),
+            "service_tier must be stripped on Custom endpoint"
+        );
+    }
 }
 
 // =============================================================================
