@@ -189,7 +189,7 @@ impl OpenAiResponsesProtocol {
             previous_response_id: None,
             context_management: context_mgmt,
             stop,
-            seed: None,         // T10 will wire from config
+            seed: config.seed.filter(|_| policy.capabilities.supports_seed),
             top_logprobs: None, // T11 will wire from config
         }
     }

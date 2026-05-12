@@ -902,3 +902,64 @@ fn responses_stop_sequences_none_omits_field() {
     let body = serde_json::to_value(&req).unwrap();
     assert!(body.get("stop").is_none(), "stop field must be absent");
 }
+
+// ─── Cycle 3: seed wiring ────────────────────────────────────────
+
+#[test]
+fn responses_seed_emitted_for_openai_public() {
+    use crate::providers::message::UnifiedMessage;
+
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.seed = Some(42);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &standard_test_variant(),
+        &config,
+    );
+    assert_eq!(req.seed, Some(42));
+}
+
+#[test]
+fn responses_seed_stripped_for_local() {
+    use crate::providers::message::UnifiedMessage;
+
+    let mut config = ProviderConfig::test_config("local");
+    config.base_url = Some("http://localhost:11434".to_string());
+    config.seed = Some(42);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "local",
+        &standard_test_variant(),
+        &config,
+    );
+    assert!(
+        req.seed.is_none(),
+        "seed must be None when endpoint capability does not support it"
+    );
+}
+
+#[test]
+fn responses_seed_none_when_config_unset() {
+    use crate::providers::message::UnifiedMessage;
+
+    let config = ProviderConfig::test_config("gpt-4o");
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &standard_test_variant(),
+        &config,
+    );
+    assert!(req.seed.is_none());
+}
