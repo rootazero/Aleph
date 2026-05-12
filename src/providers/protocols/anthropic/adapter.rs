@@ -1,27 +1,24 @@
 //! ProtocolAdapter trait implementation for AnthropicProtocol.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use axum::body::Bytes;
 
-use crate::agents::thinking::ThinkLevel;
 use crate::config::types::provider::CacheRetention;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
+use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::anthropic::{
-    AnthropicTool, ContentBlock, ImageSource, Message, MessageContent, MessagesRequest,
+    AnthropicTool, MessagesRequest,
     SystemBlock, ThinkingBlock,
 };
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
-use crate::providers::message::{CacheControl, EphemeralTtl, UnifiedMessage};
-use crate::sync_primitives::{Arc, RwLock};
+use crate::providers::message::{CacheControl, EphemeralTtl};
 use super::sse::parse_anthropic_sse_event;
 use super::{sanitize_anthropic_tool_name, AnthropicProtocol, ToolNameMap, ANTHROPIC_VERSION};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-use reqwest::Client;
 use tracing::{debug, warn};
 
 /// Resolve the effective prompt-cache retention for a request given the
@@ -510,7 +507,7 @@ fn wrap_idle_timeout(
 mod tests {
     use super::*;
     use crate::config::types::provider::CacheRetention;
-    use crate::providers::message::{CacheControl, EphemeralTtl};
+    use crate::providers::message::CacheControl;
 
     // ── effective_cache_retention decision table ──────────────────────────────
 

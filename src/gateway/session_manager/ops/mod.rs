@@ -1,15 +1,10 @@
 //! Session Manager operations: CRUD, query, compaction, and cleanup methods.
 
-use rusqlite::{params, OptionalExtension};
-use tracing::{debug, info};
 
 use super::{
     session_type_str, SessionIdentityMeta, SessionManager, SessionManagerError, SessionMetadata,
     SessionPatch, SessionSearchResult, SessionState,
 };
-use crate::gateway::router::SessionKey;
-use crate::gateway::session_store::types::{MessageRecord, SessionPreview};
-use aleph_protocol::{GuestScope, IdentityContext, Role};
 
 mod crud;
 mod emit;
@@ -19,11 +14,7 @@ mod query;
 #[cfg(test)]
 mod tests;
 
-pub(super) use crud::*;
 pub(crate) use emit::*;
-pub(super) use identity::*;
-pub(super) use modify::*;
-pub(super) use query::*;
 
 fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite::Error> {
     let state_str: Option<String> = row.get(8)?;

@@ -464,6 +464,7 @@ mod tests {
     use crate::session::events::ToolOutput;
     use crate::session::service::{SessionId, SessionService};
 
+    #[allow(dead_code)]
     struct RecordingProvider {
         captured: Arc<Mutex<Option<String>>>,
     }

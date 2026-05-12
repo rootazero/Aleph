@@ -172,7 +172,7 @@ mod tests {
     async fn run_once_persists_produced_memories() {
         let store_inner = Arc::new(FakeStore(Mutex::new(Vec::new())));
         let store: Arc<dyn RawMemoryStore> = store_inner.clone();
-        let mut reg = MemoryExtensionRegistry::new();
+        let reg = MemoryExtensionRegistry::new();
         reg.register(Arc::new(StubProducer(3)));
         let scheduler = MemoryProducerScheduler::new(Arc::new(reg), store.clone());
 
@@ -197,7 +197,7 @@ mod tests {
     async fn blocking_capture_filters_produced_memories() {
         let store_inner = Arc::new(FakeStore(Mutex::new(Vec::new())));
         let store: Arc<dyn RawMemoryStore> = store_inner.clone();
-        let mut reg = MemoryExtensionRegistry::new();
+        let reg = MemoryExtensionRegistry::new();
         reg.register(Arc::new(StubProducer(2)));
         reg.register(Arc::new(BlockingCapture));
         let scheduler = MemoryProducerScheduler::new(Arc::new(reg), store.clone());

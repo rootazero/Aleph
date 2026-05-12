@@ -24,7 +24,7 @@ mod tests {
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
     use crate::session::{SessionId, SessionService};
     use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     // -- Providers --------------------------------------------------------
 

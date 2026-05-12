@@ -132,7 +132,7 @@ mod tests {
     async fn block_extension_prevents_persistence() {
         let store_inner = Arc::new(FakeStore(Mutex::new(Vec::new())));
         let store: Arc<dyn RawMemoryStore> = store_inner.clone();
-        let mut reg = MemoryExtensionRegistry::new();
+        let reg = MemoryExtensionRegistry::new();
         reg.register(Arc::new(BlockExt));
         let reg = Arc::new(reg);
         let d = insert_with_capture_filter(&store, &reg, &ctx(), raw())
@@ -146,7 +146,7 @@ mod tests {
     async fn prefix_extension_mutates_persisted_row() {
         let store_inner = Arc::new(FakeStore(Mutex::new(Vec::new())));
         let store: Arc<dyn RawMemoryStore> = store_inner.clone();
-        let mut reg = MemoryExtensionRegistry::new();
+        let reg = MemoryExtensionRegistry::new();
         reg.register(Arc::new(PrefixExt));
         let reg = Arc::new(reg);
         let d = insert_with_capture_filter(&store, &reg, &ctx(), raw())

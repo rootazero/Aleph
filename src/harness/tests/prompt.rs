@@ -161,13 +161,13 @@ mod prop {
     use super::*;
     use proptest::prelude::*;
 
-    /// Property: regardless of the order/content of UserMessage events
-    /// before the tail boundary, `DefaultPromptBuilder` never panics
-    /// and always produces a `Vec<UnifiedMessage>` whose length is
-    /// `<= events.len() + 1` (the +1 accounts for the optionally
-    /// reconstructed assistant turn — irrelevant here since this case
-    /// has no AssistantMessage events, but kept as the upper bound
-    /// invariant of the assemble function).
+    // Property: regardless of the order/content of UserMessage events
+    // before the tail boundary, `DefaultPromptBuilder` never panics
+    // and always produces a `Vec<UnifiedMessage>` whose length is
+    // `<= events.len() + 1` (the +1 accounts for the optionally
+    // reconstructed assistant turn — irrelevant here since this case
+    // has no AssistantMessage events, but kept as the upper bound
+    // invariant of the assemble function).
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
         #[test]

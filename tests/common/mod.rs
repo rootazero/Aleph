@@ -1,3 +1,8 @@
+// Integration tests are compiled as separate crates; each binary uses
+// only a subset of this shared helper module. Suppress dead-code and
+// unused-import noise for items the current binary doesn't reference.
+#![allow(dead_code, unused_imports)]
+
 pub mod channel_contract;
 pub mod mock_http;
 pub mod mock_tcp;

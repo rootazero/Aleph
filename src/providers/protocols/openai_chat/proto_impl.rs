@@ -4,7 +4,7 @@ use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::providers::message::UnifiedMessage;
 use crate::providers::openai::{
-    ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent, OpenAiFunction, OpenAiTool,
+    ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent,
 };
 use crate::providers::openai::{OpenAiFunctionCall, OpenAiToolCall};
 use crate::providers::openai::types::{OpenAiFunctionCallOut, OpenAiToolCallOut};

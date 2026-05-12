@@ -461,7 +461,6 @@ category: preference
     // -----------------------------------------------------------------
 
     use crate::memory::embedding_provider::EmbeddingProvider;
-    use crate::memory::notes::store::NoteStore as _;
     use crate::memory::notes::{KnowledgeNote, NoteIndexer};
     use crate::memory::store::SqliteMemoryBackend;
     use crate::providers::mock::MockProvider;

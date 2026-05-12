@@ -196,7 +196,7 @@ async fn build_memory_user_message_invokes_on_retrieve_extension() {
     let provider =
         MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Hybrid);
     let rec = Arc::new(Recorder(Mutex::new(0)));
-    let mut reg = MemoryExtensionRegistry::new();
+    let reg = MemoryExtensionRegistry::new();
     reg.register(rec.clone());
     let provider = provider.with_extensions(Arc::new(reg));
 
@@ -235,7 +235,7 @@ async fn tools_mode_skips_on_retrieve_dispatch() {
     let provider =
         MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools);
     let rec = Arc::new(Recorder(Mutex::new(0)));
-    let mut reg = MemoryExtensionRegistry::new();
+    let reg = MemoryExtensionRegistry::new();
     reg.register(rec.clone());
     let provider = provider.with_extensions(Arc::new(reg));
 

@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_wasm_runtime_call_not_loaded() {
-        let mut runtime = WasmRuntime::new();
+        let runtime = WasmRuntime::new();
         let input = WasmToolInput {
             name: "test".to_string(),
             arguments: serde_json::json!({}),

@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
     use super::super::body_text_sha256;
     use crate::memory::notes::store::NoteStore;
     use crate::memory::notes::KnowledgeNote;

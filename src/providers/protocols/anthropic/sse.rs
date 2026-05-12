@@ -1,18 +1,12 @@
 //! SSE event parsing for Anthropic protocol.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::providers::adapter::{StopReason, TokenUsage};
 use crate::providers::delta::ProviderDelta;
-use crate::providers::anthropic::{
-    AnthropicTool, ContentBlock, ImageSource, Message, MessageContent, MessagesRequest,
-    SystemBlock, ThinkingBlock,
-};
 use crate::providers::delta::IndexIdTracker;
-use crate::providers::message::UnifiedMessage;
-use crate::sync_primitives::{Arc, RwLock};
-use tracing::{debug, warn};
+use tracing::warn;
 
 use super::ToolNameMap;
 pub(crate) fn parse_anthropic_sse_event(

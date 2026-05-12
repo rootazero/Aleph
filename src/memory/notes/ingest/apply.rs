@@ -575,7 +575,7 @@ mod tests {
 
     fn op_strategy() -> impl Strategy<Value = PageOp> {
         let name = "[a-z][a-z0-9-]{0,8}";
-        let path = (name.clone(), name.clone()).prop_map(|(c, n)| format!("{c}/{n}"));
+        let path = (name, name).prop_map(|(c, n)| format!("{c}/{n}"));
         prop_oneof![
             path.clone().prop_flat_map(|p| {
                 let p2 = p.clone();

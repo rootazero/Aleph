@@ -25,7 +25,6 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::compact::file_content_tracker::FileContentTracker;
 use crate::extension::hooks::{HookContext, HookExecutor, PermissionDecision};
 use crate::extension::HookEvent;

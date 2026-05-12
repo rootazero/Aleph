@@ -135,6 +135,7 @@ pub async fn download_and_decrypt_media(
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use aes::cipher::BlockCipherEncrypt;

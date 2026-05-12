@@ -1,4 +1,3 @@
-use serde_json::json;
 
 #[test]
 fn test_push_response_fixture() {

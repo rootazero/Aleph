@@ -1,4 +1,3 @@
-use serde_json::json;
 
 #[test]
 fn test_webhook_inbound_message_parsing() {

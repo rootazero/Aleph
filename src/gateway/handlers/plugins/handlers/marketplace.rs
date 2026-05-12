@@ -1,6 +1,6 @@
 use crate::gateway::handlers::parse_params;
-use crate::gateway::handlers::plugins::handlers::{build_marketplace_manager, get_extension_manager};
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::handlers::plugins::handlers::build_marketplace_manager;
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use serde_json::json;
 
 /// List all registered marketplaces (including built-in)

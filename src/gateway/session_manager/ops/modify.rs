@@ -1,7 +1,7 @@
 use rusqlite::{params, OptionalExtension};
 use tracing::{debug, info};
 
-use super::{map_session_metadata, SessionIdentityMeta, SessionManager, SessionManagerError, SessionMetadata, SessionPatch, SessionState};
+use super::{SessionIdentityMeta, SessionManager, SessionManagerError, SessionPatch, SessionState};
 use crate::gateway::router::SessionKey;
 
 impl SessionManager {

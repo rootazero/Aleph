@@ -1,5 +1,4 @@
 use crate::gateway::handlers::parse_params;
-use crate::gateway::handlers::generation_providers::helpers::*;
 use crate::gateway::handlers::generation_providers::resolve_api_key;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::config::Config;
@@ -369,7 +368,7 @@ fn gpt4o_tts_voice_list() -> Vec<crate::generation::VoiceInfo> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
     use crate::config::types::generation::GenerationProviderConfig;
     use crate::gateway::handlers::generation_providers::build_generation_provider_for_persistence;
 

@@ -11,6 +11,7 @@ use alephcore::gateway::channel::{
 use alephcore::gateway::{ChannelId, MessageId};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CapturedReply {
     pub conversation_id: String,
     pub text: String,

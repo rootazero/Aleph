@@ -2,10 +2,9 @@
 //!
 //! Handles Claude Messages API format.
 
-use crate::config::ProviderConfig;
 use crate::sync_primitives::{Arc, RwLock};
 use reqwest::Client;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 /// Anthropic API version header value
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -71,14 +70,14 @@ mod sse;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
+    
     use crate::agents::thinking::ThinkLevel;
     use crate::config::ProviderConfig;
-    use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
-    use crate::providers::anthropic::types::{ContentBlock, MessageContent};
-    use crate::providers::delta::{IndexIdTracker, ProviderDelta};
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+    
+    
     use crate::providers::message::UnifiedMessage;
-    use crate::providers::protocols::anthropic::sse::parse_anthropic_sse_event;
+    
 
     #[test]
     fn test_build_endpoint_default() {

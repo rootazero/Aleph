@@ -8,7 +8,6 @@ use once_cell::sync::OnceCell;
 use crate::extension::ExtensionManager;
 use crate::gateway::protocol::{JsonRpcResponse, INTERNAL_ERROR};
 
-use super::types::*;
 
 mod marketplace;
 mod install;

@@ -772,7 +772,7 @@ mod plan_tests {
 
     #[tokio::test]
     async fn end_to_end_append_on_existing() {
-        use crate::memory::notes::ingest::plan::PageOp;
+        
 
         let (dir, backend, indexer) = mk().await;
 

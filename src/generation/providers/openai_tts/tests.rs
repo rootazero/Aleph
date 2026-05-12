@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn test_url_normalization_with_trailing_slash() {
-        let provider = OpenAiTtsProvider::new(
+        let _provider = OpenAiTtsProvider::new(
             "sk-test-key",
             Some("https://api.example.com/".to_string()),
             None,

@@ -127,6 +127,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     struct TestAfterHook(&'static str);
     #[async_trait]
     impl SandboxAfterHook for TestAfterHook {

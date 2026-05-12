@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_plugin_loader_call_tool_nonexistent() {
-        let mut loader = PluginLoader::new();
+        let loader = PluginLoader::new();
         let result = loader.call_tool("nonexistent", "handler", serde_json::json!({}));
         assert!(result.is_err());
         match result {
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_plugin_loader_execute_hook_nonexistent() {
-        let mut loader = PluginLoader::new();
+        let loader = PluginLoader::new();
         let result = loader.execute_hook("nonexistent", "handler", serde_json::json!({}));
         assert!(result.is_err());
         match result {
@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     fn test_plugin_loader_execute_command_nonexistent() {
-        let mut loader = PluginLoader::new();
+        let loader = PluginLoader::new();
         let result = loader.execute_command("nonexistent", "handler", serde_json::json!({}));
         assert!(result.is_err());
         match result {

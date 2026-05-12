@@ -485,7 +485,7 @@ mod tests {
     use super::*;
     use crate::harness::callback::HarnessCallback;
     use crate::orchestrator::flow_spec::FlowHistoryTurn;
-    use crate::session::events::{MessageContent, TurnTrigger};
+    use crate::session::events::MessageContent;
     use crate::session::service::SessionService;
     use session_seed::seed_session;
 

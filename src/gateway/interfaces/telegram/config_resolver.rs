@@ -1,7 +1,9 @@
 use super::config_v2::{
-    DmPolicy, ErrorPolicy, ErrorPolicyMode, GroupPolicy, StreamingOptions, TelegramAccountConfig,
+    DmPolicy, ErrorPolicy, GroupPolicy, StreamingOptions, TelegramAccountConfig,
     TelegramConfigV2, TelegramGroupConfig, TelegramTopicConfig,
 };
+#[cfg(test)]
+use super::config_v2::ErrorPolicyMode;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

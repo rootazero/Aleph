@@ -8,7 +8,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
 use crate::agents::AgentDef;
-use crate::sync_primitives::Arc;
 use crate::teams::messages::router::SendRequest;
 use crate::teams::messages::types::MessageType;
 use crate::tools::runtime::{LoopTool, ToolResult};

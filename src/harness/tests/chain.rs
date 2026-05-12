@@ -23,7 +23,7 @@ mod stubs {
     use crate::session::in_process::InProcessActorSessionService;
     use crate::session::service::SessionService;
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
-    use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
+    use crate::tools::service::{ToolDefinition, ToolError, ToolService};
     use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;

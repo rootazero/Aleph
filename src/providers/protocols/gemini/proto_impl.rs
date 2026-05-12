@@ -3,7 +3,7 @@
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::providers::gemini::{
-    Content, GeminiFunctionDeclaration, GeminiToolConfig, GenerateContentRequest, GenerationConfig,
+    Content,
     Part, ThinkingConfig,
 };
 use crate::providers::message::UnifiedMessage;

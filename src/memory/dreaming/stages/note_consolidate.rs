@@ -618,7 +618,7 @@ mod tests {
             make_note("reference/rust-ownership-rules", "reference"),
             make_note("reference/python-async", "reference"),
         ];
-        let indices: Vec<usize> = (0..notes.len()).collect();
+        let _indices: Vec<usize> = (0..notes.len()).collect();
 
         // Build a minimal DreamContext-like structure for testing the heuristic
         // We can test is_title_similar directly

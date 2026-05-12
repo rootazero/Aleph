@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use crate::a2a::port::RegisteredAgent;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
-use crate::providers::{AiProvider, DefaultProviderHandle};
+use crate::providers::DefaultProviderHandle;
 
 use super::smart_router::{LlmMatcher, RoutingDecision, RoutingMethod};
 
@@ -154,6 +154,7 @@ mod tests {
     use crate::a2a::port::AgentHealth;
     use crate::error::AlephError;
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::AiProvider;
 
     use chrono::Utc;
     use std::future::Future;

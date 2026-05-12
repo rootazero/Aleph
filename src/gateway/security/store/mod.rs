@@ -5,7 +5,7 @@
 //! Manages devices, tokens, pairing requests, and approved senders.
 
 use crate::sync_primitives::Mutex;
-use rusqlite::{params, Connection, Result as SqliteResult};
+use rusqlite::{Connection, Result as SqliteResult};
 use std::path::Path;
 use tracing::{debug, info};
 

@@ -21,6 +21,10 @@ pub fn migration_needed(base_dir: &Path) -> bool {
 
 /// Export legacy SQLite sessions and messages into the file backend.
 /// Writes a marker file on success so the migration is not re-run.
+///
+/// Resolves the legacy DB path from `get_sessions_db_path()` and delegates to
+/// [`export_legacy_messages_from`]. Integration tests should call the `_from`
+/// variant directly with an explicit fixture path.
 pub async fn export_legacy_messages(
     store: &FileSessionStore,
 ) -> Result<usize, crate::error::AlephError> {
@@ -30,7 +34,16 @@ pub async fn export_legacy_messages(
             suggestion: None,
         }
     })?;
+    export_legacy_messages_from(&legacy_db, store).await
+}
 
+/// Migrate sessions/messages from an explicit legacy SQLite path into `store`.
+/// Split out from [`export_legacy_messages`] so integration tests can drive
+/// migration against fixture databases without depending on `$HOME`.
+pub async fn export_legacy_messages_from(
+    legacy_db: &Path,
+    store: &FileSessionStore,
+) -> Result<usize, crate::error::AlephError> {
     if !legacy_db.exists() {
         info!(
             "No legacy SQLite session database found at {:?}; skipping migration.",
@@ -41,7 +54,7 @@ pub async fn export_legacy_messages(
 
     info!("Starting session migration from {:?} ...", legacy_db);
 
-    let conn = crate::utils::sqlite_open::open_sqlite_safe(&legacy_db).map_err(|e| {
+    let conn = crate::utils::sqlite_open::open_sqlite_safe(legacy_db).map_err(|e| {
         crate::error::AlephError::ConfigError {
             message: format!("Failed to open legacy session DB: {}", e),
             suggestion: None,
@@ -97,7 +110,11 @@ pub async fn export_legacy_messages(
                 model: row.get(13)?,
                 model_provider: row.get(14)?,
                 parent_session_key: row.get(15)?,
-                compaction_count: row.get(16)?,
+                // Same NULL coercion as input_tokens/output_tokens above:
+                // legacy ALTER TABLE ADD COLUMN without DEFAULT left NULL for
+                // pre-migration rows. Coerce to 0 so a single legacy row
+                // doesn't abort the entire SQLite → file-based migration.
+                compaction_count: row.get::<_, Option<i64>>(16)?.unwrap_or(0),
                 ..Default::default()
             })
         })
@@ -303,7 +320,12 @@ fn ensure_sessions_columns(conn: &Connection) -> Result<(), crate::error::AlephE
         ("model", "TEXT"),
         ("model_provider", "TEXT"),
         ("parent_session_key", "TEXT"),
-        ("compaction_count", "INTEGER"),
+        // DEFAULT 0 here means SQLite backfills existing rows with 0 instead
+        // of NULL when this column is added by ALTER TABLE on a legacy DB.
+        // Required because session_metadata.compaction_count is i64 (not
+        // Option<i64>); without the default, the migration SELECT fails on
+        // every legacy row.
+        ("compaction_count", "INTEGER NOT NULL DEFAULT 0"),
     ];
     for (col, ty) in needed {
         if !existing.contains(*col) {

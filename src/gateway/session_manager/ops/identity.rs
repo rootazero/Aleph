@@ -1,7 +1,7 @@
 use rusqlite::{params, OptionalExtension};
 use tracing::info;
 
-use super::{SessionIdentityMeta, SessionManager, SessionManagerError, SessionState};
+use super::{SessionIdentityMeta, SessionManager, SessionManagerError};
 use crate::gateway::router::SessionKey;
 use aleph_protocol::{GuestScope, IdentityContext, Role};
 

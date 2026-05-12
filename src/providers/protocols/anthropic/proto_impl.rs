@@ -1,22 +1,17 @@
 //! AnthropicProtocol implementation — construction and internal helpers.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
-use crate::dispatcher::DEFAULT_MAX_TOKENS;
-use crate::error::{AlephError, Result};
-use crate::providers::adapter::{RequestPayload, StopReason, TokenUsage};
 use crate::providers::anthropic::{
-    AnthropicTool, ContentBlock, ImageSource, Message, MessageContent, MessagesRequest,
-    SystemBlock, ThinkingBlock,
+    ContentBlock, ImageSource, Message, MessageContent,
 };
 use crate::providers::message::UnifiedMessage;
 use crate::sync_primitives::{Arc, RwLock};
 use reqwest::Client;
-use tracing::{debug, warn};
 
-use super::{sanitize_anthropic_tool_name, AnthropicProtocol, ToolNameMap};
+use super::{sanitize_anthropic_tool_name, AnthropicProtocol};
 impl AnthropicProtocol {
     /// Create a new Anthropic protocol adapter
     pub fn new(client: Client) -> Self {
@@ -317,43 +312,6 @@ impl AnthropicProtocol {
             ThinkLevel::Medium => Some(10000),
             ThinkLevel::High => Some(20000),
             ThinkLevel::XHigh => Some(50000),
-        }
-    }
-
-    pub(crate) fn get_model_cost(model: &str) -> Option<crate::providers::adapter::TokenCost> {
-        let m = model.to_lowercase();
-        if m.contains("claude-3-opus") {
-            Some(crate::providers::adapter::TokenCost {
-                input_cost_per_million: 15.0,
-                output_cost_per_million: 75.0,
-            })
-        } else if m.contains("claude-3-5-sonnet") || m.contains("claude-3.5-sonnet") {
-            Some(crate::providers::adapter::TokenCost {
-                input_cost_per_million: 3.0,
-                output_cost_per_million: 15.0,
-            })
-        } else if m.contains("claude-3-sonnet") {
-            Some(crate::providers::adapter::TokenCost {
-                input_cost_per_million: 3.0,
-                output_cost_per_million: 15.0,
-            })
-        } else if m.contains("claude-3-haiku") {
-            Some(crate::providers::adapter::TokenCost {
-                input_cost_per_million: 0.25,
-                output_cost_per_million: 1.25,
-            })
-        } else if m.contains("claude-4-sonnet") || m.contains("sonnet-4") {
-            Some(crate::providers::adapter::TokenCost {
-                input_cost_per_million: 3.0,
-                output_cost_per_million: 15.0,
-            })
-        } else if m.contains("claude-4-opus") || m.contains("opus-4") {
-            Some(crate::providers::adapter::TokenCost {
-                input_cost_per_million: 15.0,
-                output_cost_per_million: 75.0,
-            })
-        } else {
-            None
         }
     }
 

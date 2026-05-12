@@ -86,6 +86,7 @@ impl SqliteMemoryBackend {
     /// write-amplification regression tests that need to read SQLite's
     /// `total_changes()` counter directly.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn conn(&self) -> &Mutex<Connection> {
         &self.conn
     }

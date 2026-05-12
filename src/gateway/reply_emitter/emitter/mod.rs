@@ -1,21 +1,16 @@
 use std::time::Duration;
 
 use crate::sync_primitives::Arc;
-use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
-use async_trait::async_trait;
+use crate::sync_primitives::{AtomicBool, AtomicU64};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
 
-use crate::gateway::channel::OutboundMessage;
 use crate::gateway::channel_registry::ChannelRegistry;
-use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::inbound_context::ReplyRoute;
 use crate::gateway::media::PendingMedia;
-use crate::gateway::streaming::{StreamAction, StreamingConfig, StreamingController};
+use crate::gateway::streaming::{StreamingConfig, StreamingController};
 use crate::media::cache::MediaCache;
 use super::config::ReplyEmitterConfig;
-use super::sanitize::{sanitize_llm_output, split_reasoning};
 
 /// Streaming cursor appended to intermediate edits, removed on final.
 const STREAMING_CURSOR: &str = "▍";

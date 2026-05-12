@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::memory::store::sqlite::schema::{
-        ddl, drop_obsolete_facts_tables, init_schema, init_vec_tables, migrations,
+        ddl, drop_obsolete_facts_tables, init_schema, migrations,
         migrate_unify_default_to_main_agent, migrate_notes_links_to_raw,
     };
     use rusqlite::{Connection, OptionalExtension};

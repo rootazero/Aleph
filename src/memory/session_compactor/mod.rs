@@ -31,10 +31,6 @@ pub mod tool_compactor;
 
 pub use summary_source::SessionSummarySource;
 
-use crate::context::compact::tool_aware_chunker::{parse_semantic_units, ToolAwareChunker};
-use context_window::{estimate_tokens, partition_fresh_tail_pairs};
-use fallback::{deterministic_truncate, FallbackLevel};
-use summary_engine::summary_to_fact;
 
 mod constructor;
 mod helpers;

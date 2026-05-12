@@ -1,4 +1,4 @@
-use alephcore::gateway::channel::{ChannelId, MessageId};
+use alephcore::gateway::channel::ChannelId;
 use alephcore::gateway::interfaces::mattermost::message_ops::MattermostMessageOps;
 use alephcore::gateway::interfaces::mattermost::MattermostConfig;
 

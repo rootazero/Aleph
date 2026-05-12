@@ -2,6 +2,8 @@
 //!
 //! 为所有 Channel 实现提供统一的契约验证，无需连接真实平台实例。
 
+#![allow(dead_code, unused_imports)]
+
 use alephcore::gateway::channel::{
     Channel, ChannelError, ChannelStatus, ConversationId, HealthStatus, MessageId, OutboundMessage,
 };

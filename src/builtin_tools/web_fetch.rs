@@ -719,7 +719,7 @@ mod tests {
         </body></html>"#;
 
         let tool = WebFetchTool::new();
-        let (content, extractor) = tool.extract_content_enhanced(
+        let (content, _extractor) = tool.extract_content_enhanced(
             html,
             "https://example.com/article",
             &ExtractMode::Markdown,

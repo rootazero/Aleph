@@ -11,9 +11,8 @@
 //! injection via `context_summary`, and background execution via
 //! `run_in_background`.
 
-use async_trait::async_trait;
 use futures::FutureExt;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 
@@ -27,10 +26,10 @@ use crate::sandbox::Sandbox;
 use crate::session::service::SessionService;
 use crate::sync_primitives::Arc;
 use crate::teams::messages::inbox::Inbox;
-use crate::teams::messages::router::{MessageRouter, SendRequest};
-use crate::teams::messages::types::MessageType;
-use crate::tools::runtime::ToolResult;
+use crate::teams::messages::router::MessageRouter;
 use crate::tools::service::ToolService;
+#[cfg(test)]
+use crate::tools::runtime::ToolResult;
 
 mod loop_tool;
 

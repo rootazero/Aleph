@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 mod common;
 
 use alephcore::gateway::channel::{Channel, ChannelStatus};

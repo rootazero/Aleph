@@ -1,4 +1,6 @@
-use alephcore::gateway::channel::{Channel, ChannelResult, InboundMessage, OutboundMessage};
+#![allow(deprecated)]
+
+use alephcore::gateway::channel::{Channel, ChannelResult, InboundMessage};
 use alephcore::gateway::interfaces::msteams::{MsTeamsChannel, MsTeamsConfig};
 use alephcore::gateway::WebhookHandler;
 use axum::body::Bytes;
