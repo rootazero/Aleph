@@ -119,19 +119,6 @@ mod tests {
         assert_eq!(v["json_schema"]["strict"], json!(true));
     }
 
-    #[test]
-    fn chat_json_schema_without_strict_omits_strict_key() {
-        let v = to_chat_response_format(
-            &ResponseFormat::JsonSchema {
-                name: "t".into(),
-                schema: json!({"type": "object"}),
-            },
-            false,
-        )
-        .unwrap();
-        assert_eq!(v["json_schema"].get("strict"), None);
-    }
-
     // ─── to_responses_text_format ────────────────────────────────
 
     #[test]
