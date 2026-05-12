@@ -1,4 +1,11 @@
 use super::*;
+use std::collections::HashMap;
+use reqwest::Client;
+use crate::config::ProviderConfig;
+use crate::providers::adapter::{RequestPayload, StopReason};
+use crate::providers::delta::ProviderDelta;
+use crate::providers::responses::shared;
+use crate::providers::responses::types::{InputItem, MessageContent, StreamEvent};
 
 #[test]
 fn openai_responses_usage_deserializes_cache_and_reasoning_tokens() {
@@ -58,13 +65,6 @@ fn openai_responses_usage_handles_missing_details() {
     assert_eq!(usage.cache_read_tokens, None);
     assert_eq!(usage.thinking_tokens, None);
 }
-use std::collections::HashMap;
-use reqwest::Client;
-use crate::config::ProviderConfig;
-use crate::providers::adapter::{RequestPayload, StopReason};
-use crate::providers::delta::ProviderDelta;
-use crate::providers::responses::shared;
-use crate::providers::responses::types::{InputItem, MessageContent, StreamEvent};
 
 // ─── Variant tests ─────────────────────────────────────────────────────
 
