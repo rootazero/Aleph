@@ -109,6 +109,79 @@ pub fn resolve_anthropic_capabilities(class: AnthropicEndpointClass) -> Anthropi
 }
 
 // =============================================================================
+// AnthropicPolicy
+// =============================================================================
+
+/// Resolved Anthropic-protocol policy for a given config.
+#[derive(Debug, Clone)]
+pub struct AnthropicPolicy {
+    pub class: AnthropicEndpointClass,
+    pub capabilities: AnthropicCapabilities,
+}
+
+impl AnthropicPolicy {
+    /// Strip fields from the serialized request body whose capability bit is
+    /// `false`. Called once at the end of `build_request`, after
+    /// `serde_json::to_value(&request_body)`.
+    ///
+    /// `cache_control` is NOT stripped here — it's gated at injection time in
+    /// `build_request` (see `policy.capabilities.supports_cache_control` check).
+    pub fn apply(&self, body: &mut serde_json::Value) {
+        let Some(obj) = body.as_object_mut() else { return };
+        let caps = &self.capabilities;
+        if !caps.supports_service_tier {
+            obj.remove("service_tier");
+        }
+        if !caps.supports_metadata_user_id {
+            strip_metadata_user_id(obj);
+        }
+        if !caps.supports_output_config_effort {
+            strip_output_config_effort(obj);
+        }
+        if !caps.supports_top_k {
+            obj.remove("top_k");
+        }
+        if !caps.supports_top_p {
+            obj.remove("top_p");
+        }
+        if !caps.supports_stop_sequences {
+            obj.remove("stop_sequences");
+        }
+    }
+}
+
+/// Remove `metadata.user_id`. If `metadata` becomes empty afterward, remove it too.
+fn strip_metadata_user_id(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(metadata) = obj.get_mut("metadata") else { return };
+    let Some(map) = metadata.as_object_mut() else { return };
+    map.remove("user_id");
+    if map.is_empty() {
+        obj.remove("metadata");
+    }
+}
+
+/// Remove `output_config.effort`. If `output_config` becomes empty afterward, remove it too.
+fn strip_output_config_effort(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(output_config) = obj.get_mut("output_config") else { return };
+    let Some(map) = output_config.as_object_mut() else { return };
+    map.remove("effort");
+    if map.is_empty() {
+        obj.remove("output_config");
+    }
+}
+
+// =============================================================================
+// Policy Builder
+// =============================================================================
+
+/// Build a complete Anthropic policy from configuration.
+pub fn build_anthropic_policy(base_url: Option<&str>) -> AnthropicPolicy {
+    let class = detect_anthropic_endpoint_class(base_url);
+    let capabilities = resolve_anthropic_capabilities(class);
+    AnthropicPolicy { class, capabilities }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -185,5 +258,99 @@ mod tests {
         assert!(caps.supports_top_k);
         assert!(caps.supports_top_p);
         assert!(caps.supports_stop_sequences);
+    }
+
+    fn body_with_all_anthropic_fields() -> serde_json::Value {
+        serde_json::json!({
+            "model": "claude-3-5-sonnet",
+            "messages": [],
+            "max_tokens": 1024,
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
+            "stop_sequences": ["END", "STOP"],
+            "service_tier": "auto",
+            "metadata": {"user_id": "u_42"},
+            "output_config": {"effort": "high"}
+        })
+    }
+
+    #[test]
+    fn apply_on_custom_strips_service_tier() {
+        let policy = build_anthropic_policy(Some("https://kimi-for-coding.example.com"));
+        let mut body = body_with_all_anthropic_fields();
+        policy.apply(&mut body);
+        assert!(body.get("service_tier").is_none());
+    }
+
+    #[test]
+    fn apply_on_custom_strips_metadata_object_when_user_id_only_field() {
+        let policy = build_anthropic_policy(Some("https://kimi-for-coding.example.com"));
+        let mut body = body_with_all_anthropic_fields();
+        policy.apply(&mut body);
+        assert!(body.get("metadata").is_none(),
+            "metadata object should be removed when only field (user_id) is stripped");
+    }
+
+    #[test]
+    fn apply_on_custom_strips_output_config_when_effort_only_field() {
+        let policy = build_anthropic_policy(Some("https://kimi-for-coding.example.com"));
+        let mut body = body_with_all_anthropic_fields();
+        policy.apply(&mut body);
+        assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn apply_on_custom_keeps_top_k_top_p_stop_sequences() {
+        let policy = build_anthropic_policy(Some("https://kimi-for-coding.example.com"));
+        let mut body = body_with_all_anthropic_fields();
+        policy.apply(&mut body);
+        assert_eq!(body["top_k"], 40);
+        assert_eq!(body["top_p"], 0.9);
+        assert_eq!(body["stop_sequences"], serde_json::json!(["END", "STOP"]));
+    }
+
+    #[test]
+    fn apply_on_official_keeps_all_fields() {
+        let policy = build_anthropic_policy(Some("https://api.anthropic.com/v1/messages"));
+        let mut body = body_with_all_anthropic_fields();
+        policy.apply(&mut body);
+        assert_eq!(body["service_tier"], "auto");
+        assert_eq!(body["metadata"]["user_id"], "u_42");
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert_eq!(body["top_k"], 40);
+        assert_eq!(body["top_p"], 0.9);
+    }
+
+    #[test]
+    fn apply_on_custom_never_touches_unrelated_fields() {
+        let policy = build_anthropic_policy(Some("https://custom.example.com"));
+        let mut body = body_with_all_anthropic_fields();
+        policy.apply(&mut body);
+        assert_eq!(body["model"], "claude-3-5-sonnet");
+        assert_eq!(body["max_tokens"], 1024);
+        assert_eq!(body["temperature"], 0.7);
+        assert!(body.get("messages").is_some());
+    }
+
+    #[test]
+    fn apply_metadata_with_other_keys_keeps_metadata_object() {
+        let policy = build_anthropic_policy(Some("https://custom.example.com"));
+        let mut body = serde_json::json!({
+            "metadata": {"user_id": "u_42", "future_field": "preserved"}
+        });
+        policy.apply(&mut body);
+        // user_id removed, but future_field keeps the object alive
+        assert!(body.get("metadata").is_some());
+        assert!(body["metadata"].get("user_id").is_none());
+        assert_eq!(body["metadata"]["future_field"], "preserved");
+    }
+
+    #[test]
+    fn apply_on_non_object_body_is_no_op() {
+        let policy = build_anthropic_policy(None);
+        let mut body = serde_json::json!("not an object");
+        policy.apply(&mut body);
+        assert_eq!(body, serde_json::json!("not an object"));
     }
 }
