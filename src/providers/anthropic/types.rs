@@ -19,6 +19,15 @@ pub struct MessagesRequest {
     pub system: Option<Vec<SystemBlock>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    /// `top_p` nucleus sampling. Capability-gated (`supports_top_p`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    /// `top_k` sampling. Capability-gated (`supports_top_k`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    /// Anthropic `stop_sequences` (up to 4 sequences). Capability-gated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,9 +37,21 @@ pub struct MessagesRequest {
     /// Service tier for priority or batch processing (e.g. "auto", "flex")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
+    /// Anthropic abuse-detection / rate-limit metadata.
+    /// Capability-gated (`supports_metadata_user_id`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Metadata>,
     /// Output configuration (effort level, structured output format)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_config: Option<OutputConfig>,
+}
+
+/// Anthropic abuse-detection / rate-limit metadata.
+/// Spec: https://docs.anthropic.com/en/api/messages#body-metadata
+#[derive(Debug, Serialize)]
+pub struct Metadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
 }
 
 /// System prompt block (array format for compatibility)
@@ -380,5 +401,71 @@ mod tests {
         });
         let usage: AnthropicUsage = serde_json::from_value(json).unwrap();
         assert_eq!(usage.cache_creation_input_tokens, Some(50));
+    }
+
+    #[test]
+    fn messages_request_serializes_with_all_cycle4_fields() {
+        let req = MessagesRequest {
+            model: "claude-3-5-sonnet".to_string(),
+            messages: vec![],
+            max_tokens: 1024,
+            system: None,
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            top_k: Some(40),
+            stop_sequences: Some(vec!["END".to_string(), "STOP".to_string()]),
+            stream: Some(true),
+            thinking: None,
+            tools: None,
+            service_tier: Some("auto".to_string()),
+            metadata: Some(Metadata { user_id: Some("u_42".to_string()) }),
+            output_config: Some(OutputConfig { effort: Some("high".to_string()) }),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["model"], "claude-3-5-sonnet");
+        assert_eq!(json["max_tokens"], 1024);
+        assert!((json["temperature"].as_f64().unwrap() - 0.7).abs() < 1e-4);
+        assert!((json["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-4);
+        assert_eq!(json["top_k"], 40);
+        assert_eq!(json["stop_sequences"], serde_json::json!(["END", "STOP"]));
+        assert_eq!(json["stream"], true);
+        assert_eq!(json["service_tier"], "auto");
+        assert_eq!(json["metadata"]["user_id"], "u_42");
+        assert_eq!(json["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn messages_request_omits_none_cycle4_fields_on_wire() {
+        let req = MessagesRequest {
+            model: "claude-3-5-sonnet".to_string(),
+            messages: vec![],
+            max_tokens: 1024,
+            system: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            stream: None,
+            thinking: None,
+            tools: None,
+            service_tier: None,
+            metadata: None,
+            output_config: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("top_p").is_none());
+        assert!(json.get("top_k").is_none());
+        assert!(json.get("stop_sequences").is_none());
+        assert!(json.get("metadata").is_none());
+        assert!(json.get("service_tier").is_none());
+        assert!(json.get("output_config").is_none());
+    }
+
+    #[test]
+    fn metadata_omits_user_id_when_none() {
+        let m = Metadata { user_id: None };
+        let json = serde_json::to_value(&m).unwrap();
+        // Object exists but has no fields
+        assert_eq!(json, serde_json::json!({}));
     }
 }

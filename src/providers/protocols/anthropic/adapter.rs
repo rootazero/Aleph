@@ -232,11 +232,15 @@ impl ProtocolAdapter for AnthropicProtocol {
             max_tokens,
             system,
             temperature,
+            top_p: None,             // wired in T6
+            top_k: None,             // wired in T6
+            stop_sequences: None,    // wired in T6
             stream: Some(true), // always streaming (stream-first architecture)
             thinking,
             tools,
-            service_tier: None,
-            output_config: None,
+            service_tier: None,      // un-hardcoded in T7
+            metadata: None,          // wired in T8
+            output_config: None,     // wired in T8
         };
 
         let api_key = config

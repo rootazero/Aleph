@@ -172,10 +172,14 @@ impl ClaudeVisionProvider {
             max_tokens: self.max_tokens,
             system: None,
             temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
             stream: None,
             thinking: None,
             tools: None,
             service_tier: None,
+            metadata: None,
             output_config: None,
         };
 
