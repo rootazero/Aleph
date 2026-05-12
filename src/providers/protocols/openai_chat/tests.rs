@@ -732,3 +732,58 @@ fn chat_finish_reason_unknown_falls_back_to_endturn() {
         "unknown finish_reason must fall back to EndTurn (not None — that hangs the loop)"
     );
 }
+
+// ─── stop_sequences tests ─────────────────────────────────────────────────────
+
+fn assert_chat_stop_field(stop_sequences: Option<&str>, assertion: impl Fn(serde_json::Value)) {
+    let mut cfg = ProviderConfig::test_config("gpt-4o");
+    cfg.stop_sequences = stop_sequences.map(|s| s.to_string());
+    let proto = super::OpenAiProtocol::new(Client::new());
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let req = proto.build_request(&payload, &cfg).unwrap().build().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(req.body().unwrap().as_bytes().unwrap()).unwrap();
+    assertion(body);
+}
+
+#[test]
+fn chat_stop_sequences_serializes_into_request() {
+    assert_chat_stop_field(Some("END,STOP"), |body| {
+        assert_eq!(body["stop"], serde_json::json!(["END", "STOP"]));
+    });
+}
+
+#[test]
+fn chat_stop_sequences_none_omits_field() {
+    assert_chat_stop_field(None, |body| {
+        assert!(body.get("stop").is_none(), "stop field must be absent");
+    });
+}
+
+#[test]
+fn chat_stop_sequences_empty_string_omits_field() {
+    assert_chat_stop_field(Some(""), |body| {
+        assert!(
+            body.get("stop").is_none(),
+            "stop field must be absent when stop_sequences is empty string"
+        );
+    });
+}
+
+#[test]
+fn chat_stop_sequences_only_commas_omits_field() {
+    assert_chat_stop_field(Some(",,"), |body| {
+        assert!(
+            body.get("stop").is_none(),
+            "stop field must be absent when stop_sequences contains only commas"
+        );
+    });
+}
+
+#[test]
+fn chat_stop_sequences_trims_whitespace() {
+    assert_chat_stop_field(Some(" END , STOP "), |body| {
+        assert_eq!(body["stop"], serde_json::json!(["END", "STOP"]));
+    });
+}

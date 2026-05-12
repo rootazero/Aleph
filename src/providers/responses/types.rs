@@ -40,6 +40,9 @@ pub struct ResponsesRequest {
     /// Continue from a previous response (server-side conversation threading)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
+    /// Stop sequences — generation halts when any sequence is produced
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
     /// Server-side context compaction (OpenAI official endpoints only)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_management: Option<ContextManagement>,

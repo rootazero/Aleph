@@ -62,6 +62,18 @@ impl ProtocolAdapter for OpenAiProtocol {
             }
         }
 
+        // stop sequences: parse comma-separated config value, trim, drop empties
+        if let Some(raw) = config.stop_sequences.as_ref() {
+            let sequences: Vec<String> = raw
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !sequences.is_empty() {
+                body["stop"] = json!(sequences);
+            }
+        }
+
         let policy = build_payload_policy(
             config.base_url.as_deref(),
             "openai-chat",

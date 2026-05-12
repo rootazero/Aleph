@@ -147,6 +147,19 @@ impl OpenAiResponsesProtocol {
             None
         };
 
+        let stop = config.stop_sequences.as_ref().and_then(|raw| {
+            let v: Vec<String> = raw
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
+        });
+
         ResponsesRequest {
             model: model.to_string(),
             input,
@@ -170,6 +183,7 @@ impl OpenAiResponsesProtocol {
             }),
             previous_response_id: None,
             context_management: context_mgmt,
+            stop,
         }
     }
 }

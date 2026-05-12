@@ -787,3 +787,31 @@ fn test_include_none_for_third_party() {
     );
     assert!(request.include.is_none());
 }
+
+// ─── stop_sequences tests ─────────────────────────────────────────────────────
+
+#[test]
+fn responses_stop_sequences_serializes_into_request() {
+    use crate::providers::message::UnifiedMessage;
+    let mut cfg = ProviderConfig::test_config("gpt-4o");
+    cfg.stop_sequences = Some("END,STOP".into());
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let variant = ResponsesVariant::default();
+    let req = OpenAiResponsesProtocol::build_responses_request(&payload, "gpt-4o", &variant, &cfg);
+    let body = serde_json::to_value(&req).unwrap();
+    assert_eq!(body["stop"], serde_json::json!(["END", "STOP"]));
+}
+
+#[test]
+fn responses_stop_sequences_none_omits_field() {
+    use crate::providers::message::UnifiedMessage;
+    let mut cfg = ProviderConfig::test_config("gpt-4o");
+    cfg.stop_sequences = None;
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let variant = ResponsesVariant::default();
+    let req = OpenAiResponsesProtocol::build_responses_request(&payload, "gpt-4o", &variant, &cfg);
+    let body = serde_json::to_value(&req).unwrap();
+    assert!(body.get("stop").is_none(), "stop field must be absent");
+}
