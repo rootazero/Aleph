@@ -262,7 +262,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: true,
-            supports_response_format: false,
+            supports_response_format: true,
             supports_seed: true,
             supports_logprobs: true,
             supports_server_compaction: false,
@@ -288,7 +288,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
-            supports_response_format: false,
+            supports_response_format: true,
             supports_seed: true,
             supports_logprobs: false,
             supports_server_compaction: false,
@@ -301,7 +301,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
-            supports_response_format: false,
+            supports_response_format: true,
             supports_seed: true,
             supports_logprobs: true,
             supports_server_compaction: false,
@@ -314,7 +314,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: true,
-            supports_response_format: false,
+            supports_response_format: true,
             supports_seed: true,
             supports_logprobs: false,
             supports_server_compaction: false,
@@ -327,7 +327,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
-            supports_response_format: false,
+            supports_response_format: true,
             supports_seed: true,
             supports_logprobs: false,
             supports_server_compaction: false,
@@ -340,7 +340,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
-            supports_response_format: false,
+            supports_response_format: true,
             supports_seed: true,
             supports_logprobs: true,
             supports_server_compaction: false,
@@ -353,7 +353,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
-            supports_response_format: false,
+            supports_response_format: true,
             supports_seed: true,
             supports_logprobs: true,
             supports_server_compaction: false,
@@ -366,7 +366,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_prompt_cache: false,
             supports_service_tier: false,
             supports_strict_schema: false,
-            supports_response_format: false,
+            supports_response_format: true,
             supports_seed: true,
             supports_logprobs: true,
             supports_server_compaction: false,
@@ -616,34 +616,11 @@ mod tests {
         assert!(caps.supports_response_format);
     }
 
-    #[test]
-    fn third_party_endpoints_do_not_support_response_format() {
-        for class in [
-            EndpointClass::AzureOpenAi,
-            EndpointClass::AnthropicPublic,
-            EndpointClass::DeepSeekNative,
-            EndpointClass::GroqNative,
-            EndpointClass::MistralPublic,
-            EndpointClass::MoonshotNative,
-            EndpointClass::CerebrasNative,
-            EndpointClass::XAiNative,
-            EndpointClass::OpenRouter,
-            EndpointClass::Local,
-            EndpointClass::Custom,
-        ] {
-            let caps = resolve_capabilities(class);
-            assert!(
-                !caps.supports_response_format,
-                "{:?} unexpectedly supports response_format",
-                class
-            );
-        }
-    }
 
     #[test]
     fn apply_strips_response_format_when_unsupported() {
         let policy = build_payload_policy(
-            Some("https://api.deepseek.com"),
+            Some("http://localhost:8080"),
             "openai-chat",
             None,
         );
@@ -652,7 +629,7 @@ mod tests {
             "response_format".into(),
             serde_json::json!({"type": "json_object"}),
         );
-        payload.insert("model".into(), serde_json::Value::String("dsk".into()));
+        payload.insert("model".into(), serde_json::Value::String("local".into()));
 
         policy.apply(&mut payload);
 
@@ -814,5 +791,40 @@ mod tests {
 
         assert_eq!(payload.get("logprobs"), Some(&serde_json::json!(true)));
         assert_eq!(payload.get("top_logprobs"), Some(&serde_json::json!(3)));
+    }
+
+    #[test]
+    fn cycle3_flipped_endpoints_support_response_format() {
+        for class in [
+            EndpointClass::AzureOpenAi,
+            EndpointClass::OpenRouter,
+            EndpointClass::DeepSeekNative,
+            EndpointClass::GroqNative,
+            EndpointClass::MistralPublic,
+            EndpointClass::MoonshotNative,
+            EndpointClass::CerebrasNative,
+            EndpointClass::XAiNative,
+        ] {
+            assert!(
+                resolve_capabilities(class).supports_response_format,
+                "{:?} should support response_format after Cycle 3 flip",
+                class
+            );
+        }
+    }
+
+    #[test]
+    fn anthropic_local_custom_still_skip_response_format() {
+        for class in [
+            EndpointClass::AnthropicPublic,
+            EndpointClass::Local,
+            EndpointClass::Custom,
+        ] {
+            assert!(
+                !resolve_capabilities(class).supports_response_format,
+                "{:?} should NOT support response_format",
+                class
+            );
+        }
     }
 }
