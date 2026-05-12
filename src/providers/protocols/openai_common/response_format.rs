@@ -30,7 +30,7 @@ pub fn to_chat_response_format(
             }
             let mut normalized = schema.clone();
             // Cycle 3: run user schema through the same normalizer tool
-            // definitions use (additionalProperties: false + required-all-properties).
+            // definitions use (injects additionalProperties: false recursively).
             // set_top_level_strict=false because `strict: true` lives in the
             // json_schema envelope, not on the schema root.
             let _ = normalize_strict_schema(&mut normalized, false);
@@ -354,5 +354,23 @@ mod tests {
             v["json_schema"]["schema"].get("strict").is_none(),
             "the inner schema should not carry a top-level 'strict' key"
         );
+    }
+
+    #[test]
+    fn responses_json_schema_strict_injects_additional_properties_false() {
+        let fmt = ResponseFormat::JsonSchema {
+            name: "n".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {"x": {"type": "string"}},
+            }),
+        };
+        let result = to_responses_text_format(&fmt, true).unwrap();
+        match result {
+            TextFormat::JsonSchema { schema, .. } => {
+                assert_eq!(schema["additionalProperties"], json!(false));
+            }
+            other => panic!("expected JsonSchema variant, got {:?}", other),
+        }
     }
 }
