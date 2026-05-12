@@ -1092,3 +1092,78 @@ fn chat_seed_omitted_when_config_none() {
     );
     assert!(body.get("seed").is_none());
 }
+
+// ─── Cycle 3: logprobs / top_logprobs wiring ─────────────────────
+
+#[test]
+fn chat_logprobs_true_with_top_logprobs_emitted_for_openai_public() {
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.logprobs = Some(true);
+    config.top_logprobs = Some(5);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert_eq!(body.get("logprobs"), Some(&serde_json::json!(true)));
+    assert_eq!(body.get("top_logprobs"), Some(&serde_json::json!(5)));
+}
+
+#[test]
+fn chat_logprobs_false_omits_top_logprobs() {
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.logprobs = Some(false);
+    config.top_logprobs = Some(5); // should be ignored
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert_eq!(body.get("logprobs"), Some(&serde_json::json!(false)));
+    assert!(
+        body.get("top_logprobs").is_none(),
+        "top_logprobs must not be sent when logprobs=false"
+    );
+}
+
+#[test]
+fn chat_logprobs_stripped_for_deepseek() {
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("deepseek-chat");
+    config.base_url = Some("https://api.deepseek.com".to_string());
+    config.logprobs = Some(true);
+    config.top_logprobs = Some(3);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert!(body.get("logprobs").is_none());
+    assert!(body.get("top_logprobs").is_none());
+}
+
+#[test]
+fn chat_logprobs_omitted_when_config_none() {
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let config = ProviderConfig::test_config("gpt-4o");
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert!(body.get("logprobs").is_none());
+    assert!(body.get("top_logprobs").is_none());
+}

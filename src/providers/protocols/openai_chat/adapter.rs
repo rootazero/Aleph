@@ -108,6 +108,18 @@ impl ProtocolAdapter for OpenAiProtocol {
             }
         }
 
+        // logprobs + top_logprobs: emit only when capability-enabled
+        if let Some(want_logprobs) = config.logprobs {
+            if policy.capabilities.supports_logprobs {
+                body["logprobs"] = json!(want_logprobs);
+                if want_logprobs {
+                    if let Some(top_n) = config.top_logprobs {
+                        body["top_logprobs"] = json!(top_n);
+                    }
+                }
+            }
+        }
+
         if let Some(tool_defs) = payload.tools {
             let tools: Vec<OpenAiTool> = tool_defs
                 .iter()
