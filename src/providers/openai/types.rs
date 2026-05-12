@@ -185,6 +185,27 @@ pub struct OpenAiUsage {
     pub completion_tokens: u32,
     #[allow(dead_code)] // Deserialized from API response
     pub total_tokens: Option<u32>,
+    /// Breakdown of prompt tokens (cache_read).
+    /// OpenAI returns this on `gpt-4o*` and later when prompt caching applies.
+    #[serde(default)]
+    pub prompt_tokens_details: Option<OpenAiPromptTokensDetails>,
+    /// Breakdown of completion tokens (reasoning for o1/o3).
+    #[serde(default)]
+    pub completion_tokens_details: Option<OpenAiCompletionTokensDetails>,
+}
+
+/// Sub-payload: prompt token breakdown.
+#[derive(Debug, Default, Deserialize)]
+pub struct OpenAiPromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
+}
+
+/// Sub-payload: completion token breakdown.
+#[derive(Debug, Default, Deserialize)]
+pub struct OpenAiCompletionTokensDetails {
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]

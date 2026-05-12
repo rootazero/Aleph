@@ -1,4 +1,62 @@
 use super::*;
+
+#[test]
+fn openai_chat_usage_deserializes_cache_and_reasoning_tokens() {
+    let fixture = include_str!("../../../../tests/fixtures/openai_sse/chat_completion_with_cache.txt");
+
+    let json_line = fixture
+        .lines()
+        .find(|l| l.starts_with("data: {"))
+        .expect("fixture must contain a data: JSON line")
+        .strip_prefix("data: ")
+        .unwrap();
+
+    let mut collected: std::collections::VecDeque<
+        crate::providers::Result<crate::providers::ProviderDelta>,
+    > = Default::default();
+    let mut tracker = crate::providers::delta::IndexIdTracker::default();
+    super::sse::parse_chat_sse_event(json_line, &mut tracker, &mut collected);
+
+    let usage_delta = collected
+        .iter()
+        .find_map(|res| match res {
+            Ok(crate::providers::ProviderDelta::Usage(u)) => Some(u),
+            _ => None,
+        })
+        .expect("expected a ProviderDelta::Usage emission");
+
+    assert_eq!(usage_delta.input_tokens, 100);
+    assert_eq!(usage_delta.output_tokens, 50);
+    assert_eq!(usage_delta.cache_read_tokens, Some(80));
+    assert_eq!(usage_delta.thinking_tokens, Some(30));
+    assert_eq!(usage_delta.cache_creation_tokens, None);
+    // cost is always None on the Chat SSE path (no pricing data in stream)
+    assert!(usage_delta.cost.is_none());
+}
+
+#[test]
+fn openai_chat_usage_handles_missing_details() {
+    let json_line = r#"{"id":"chatcmpl-x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#;
+
+    let mut collected: std::collections::VecDeque<
+        crate::providers::Result<crate::providers::ProviderDelta>,
+    > = Default::default();
+    let mut tracker = crate::providers::delta::IndexIdTracker::default();
+    super::sse::parse_chat_sse_event(json_line, &mut tracker, &mut collected);
+
+    let usage_delta = collected
+        .iter()
+        .find_map(|res| match res {
+            Ok(crate::providers::ProviderDelta::Usage(u)) => Some(u),
+            _ => None,
+        })
+        .expect("usage delta must still be emitted with legacy-shaped payload");
+
+    assert_eq!(usage_delta.input_tokens, 10);
+    assert_eq!(usage_delta.output_tokens, 5);
+    assert_eq!(usage_delta.cache_read_tokens, None);
+    assert_eq!(usage_delta.thinking_tokens, None);
+}
 use std::collections::VecDeque;
 use reqwest::Client;
 use crate::config::ProviderConfig;

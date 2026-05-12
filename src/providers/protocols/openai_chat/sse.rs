@@ -97,12 +97,22 @@ pub(crate) fn parse_chat_sse_event(
             .and_then(|t| t.as_u64())
             .and_then(|t| t.try_into().ok())
             .unwrap_or(0);
+        let cache_read_tokens = usage
+            .get("prompt_tokens_details")
+            .and_then(|d| d.get("cached_tokens"))
+            .and_then(|t| t.as_u64())
+            .and_then(|t| t.try_into().ok());
+        let thinking_tokens = usage
+            .get("completion_tokens_details")
+            .and_then(|d| d.get("reasoning_tokens"))
+            .and_then(|t| t.as_u64())
+            .and_then(|t| t.try_into().ok());
         out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
             input_tokens: input,
             output_tokens: output,
-            cache_read_tokens: None,
-            cache_creation_tokens: None,
-            thinking_tokens: None,
+            cache_read_tokens,
+            cache_creation_tokens: None, // OpenAI Chat does not surface cache-write
+            thinking_tokens,
             cost: None,
         })));
     }
