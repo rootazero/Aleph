@@ -192,6 +192,8 @@ impl AuthProfileProviderRegistry {
             seed: None,
             logprobs: None,
             top_logprobs: None,
+            metadata_user_id: None,
+            effort: None,
         };
 
         create_provider(&self.config.provider_type, provider_config)

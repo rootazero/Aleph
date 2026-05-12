@@ -427,6 +427,8 @@ async fn handle_test_inner(
         seed: None,
         logprobs: None,
         top_logprobs: None,
+        metadata_user_id: None,
+        effort: None,
     };
 
     // Create provider instance

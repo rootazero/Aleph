@@ -94,5 +94,7 @@ pub(super) fn build_provider_config_for_persistence(
         seed: None,
         logprobs: None,
         top_logprobs: None,
+        metadata_user_id: None,
+        effort: None,
     }
 }

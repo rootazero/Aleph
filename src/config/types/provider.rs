@@ -211,6 +211,18 @@ pub struct ProviderConfig {
     /// Only emitted when `logprobs = Some(true)` and capability supports it.
     #[serde(default)]
     pub top_logprobs: Option<u8>,
+
+    // Anthropic-specific parameters (Cycle 4)
+    /// End-user identifier passed in `metadata.user_id` of Anthropic requests.
+    /// Helps Anthropic detect and prevent abuse. None = field omitted.
+    #[serde(default)]
+    pub metadata_user_id: Option<String>,
+
+    /// Extended thinking budget token hint ("low" | "medium" | "high" | numeric string).
+    /// Mapped to `thinking.budget_tokens` when the Anthropic adapter builds the request.
+    /// None = field omitted (thinking disabled).
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 pub fn default_provider_color() -> String {
@@ -288,6 +300,8 @@ impl ProviderConfig {
             seed: None,
             logprobs: None,
             top_logprobs: None,
+            metadata_user_id: None,
+            effort: None,
         }
     }
 }
@@ -340,6 +354,8 @@ mod tests {
             seed: None,
             logprobs: None,
             top_logprobs: None,
+            metadata_user_id: None,
+            effort: None,
         };
         assert_eq!(config.protocol(), "anthropic");
     }
@@ -375,6 +391,8 @@ mod tests {
             seed: None,
             logprobs: None,
             top_logprobs: None,
+            metadata_user_id: None,
+            effort: None,
         };
         assert_eq!(config.protocol(), "openai");
     }
@@ -412,5 +430,36 @@ mod tests {
         assert!(cfg.seed.is_none());
         assert!(cfg.logprobs.is_none());
         assert!(cfg.top_logprobs.is_none());
+    }
+
+    #[test]
+    fn cycle4_anthropic_fields_default_to_none() {
+        let config = ProviderConfig::test_config("claude-opus-4-5");
+        assert!(config.metadata_user_id.is_none());
+        assert!(config.effort.is_none());
+    }
+
+    #[test]
+    fn cycle4_anthropic_fields_deserialize_from_toml() {
+        let toml_str = r#"
+            protocol = "anthropic"
+            models = ["claude-opus-4-5"]
+            metadata_user_id = "user-abc123"
+            effort = "high"
+        "#;
+        let cfg: ProviderConfig = toml::from_str(toml_str).expect("valid TOML");
+        assert_eq!(cfg.metadata_user_id, Some("user-abc123".to_string()));
+        assert_eq!(cfg.effort, Some("high".to_string()));
+    }
+
+    #[test]
+    fn cycle4_anthropic_fields_omit_in_toml_yields_none() {
+        let toml_str = r#"
+            protocol = "anthropic"
+            models = ["claude-opus-4-5"]
+        "#;
+        let cfg: ProviderConfig = toml::from_str(toml_str).expect("valid TOML");
+        assert!(cfg.metadata_user_id.is_none());
+        assert!(cfg.effort.is_none());
     }
 }
