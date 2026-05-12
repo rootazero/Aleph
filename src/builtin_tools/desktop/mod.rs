@@ -304,7 +304,7 @@ impl AlephTool for DesktopTool {
     const DESCRIPTION: &'static str = r#"Control the desktop — see the screen and interact with it.
 
 Actions:
-- screenshot: Capture screen as base64 PNG. Optional region: {x,y,width,height}
+- screenshot: Capture screen as base64. Optional region: {x,y,width,height}. Defaults to PNG; pass format/quality/max_width to re-encode (downscaling above 1920 hurts text legibility — keep max_width at 1920+ when you need to read text on screen).
 - ocr: Extract text from screen with bounding boxes. Optional image_base64.
 - click: Click at (x, y). Optional button (left/right/middle).
 - double_click: Double-click at (x, y). Optional button.
@@ -339,7 +339,7 @@ Examples:
 {"action":"display_list"}
 {"action":"batch","actions":[{"action":"click","x":100,"y":200},{"action":"type_text","text":"hello"}]}
 {"action":"paste","text":"line1\nline2\nline3"}
-{"action":"screenshot","format":"jpeg","quality":0.75,"max_width":1280}"#;
+{"action":"screenshot","format":"jpeg","quality":0.9,"max_width":1920}"#;
 
     type Args = DesktopArgs;
     type Output = DesktopOutput;

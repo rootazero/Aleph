@@ -121,7 +121,7 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
 
-    /// JPEG quality 0.0-1.0 (only when format="jpeg", default 0.75).
+    /// JPEG quality 0.0-1.0 (only when format="jpeg", default 0.9).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<f64>,
 
@@ -245,7 +245,7 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
 
-    /// JPEG quality 0.0-1.0 (only when format="jpeg", default 0.75).
+    /// JPEG quality 0.0-1.0 (only when format="jpeg", default 0.9).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<f64>,
 

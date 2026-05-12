@@ -102,8 +102,12 @@ impl super::DesktopTool {
                                     crate::error::AlephError::other(format!("base64 decode: {e}"))
                                 })?;
                             let out_fmt = fmt.unwrap_or_else(|| "png".to_string());
+                            // Default JPEG quality 0.9 (was 0.75): screenshots
+                            // routinely contain small UI text and 0.75 caused
+                            // legibility complaints from the LLM consumer. PNG
+                            // is unaffected (lossless regardless of quality).
                             let quality_u8 =
-                                (quality.unwrap_or(0.75).clamp(0.0, 1.0) * 100.0) as u8;
+                                (quality.unwrap_or(0.9).clamp(0.0, 1.0) * 100.0) as u8;
                             match tokio::task::spawn_blocking(move || {
                                 aleph_desktop::perception::process_screenshot(
                                     &raw_bytes, max_w, max_h, &out_fmt, quality_u8,
