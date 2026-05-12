@@ -1039,3 +1039,56 @@ fn chat_parallel_tool_calls_none_omits_field() {
     );
     assert!(body.get("parallel_tool_calls").is_none());
 }
+
+// ─── Cycle 3: seed wiring ────────────────────────────────────────
+
+#[test]
+fn chat_seed_emitted_for_openai_public() {
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.seed = Some(42);
+    // base_url None → OpenAiPublic which supports_seed=true
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert_eq!(body.get("seed"), Some(&serde_json::json!(42)));
+}
+
+#[test]
+fn chat_seed_stripped_for_local_endpoint() {
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("local-model");
+    config.base_url = Some("http://localhost:8080".to_string());
+    config.seed = Some(42);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert!(
+        body.get("seed").is_none(),
+        "seed must be absent on Local endpoint (supports_seed=false)"
+    );
+}
+
+#[test]
+fn chat_seed_omitted_when_config_none() {
+    let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
+    let config = ProviderConfig::test_config("gpt-4o");
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let body = extract_chat_body(
+        protocol
+            .build_request(&payload, &config)
+            .expect("build_request should succeed"),
+    );
+    assert!(body.get("seed").is_none());
+}

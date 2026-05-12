@@ -101,6 +101,13 @@ impl ProtocolAdapter for OpenAiProtocol {
             }
         }
 
+        // seed: emit only when capability-enabled
+        if let Some(seed) = config.seed {
+            if policy.capabilities.supports_seed {
+                body["seed"] = json!(seed);
+            }
+        }
+
         if let Some(tool_defs) = payload.tools {
             let tools: Vec<OpenAiTool> = tool_defs
                 .iter()
