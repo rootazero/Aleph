@@ -21,13 +21,16 @@ pub fn to_chat_response_format(
         ResponseFormat::Text => None,
         ResponseFormat::JsonObject => Some(json!({"type": "json_object"})),
         ResponseFormat::JsonSchema { name, schema } => {
-            let mut inner = json!({
+            if !supports_strict {
+                // Cycle 3: degrade to json_object on endpoints that don't
+                // support strict schemas (most third-party OpenAI-compat backends)
+                return Some(json!({"type": "json_object"}));
+            }
+            let inner = json!({
                 "name": name,
                 "schema": schema,
+                "strict": true,
             });
-            if supports_strict {
-                inner["strict"] = json!(true);
-            }
             Some(json!({
                 "type": "json_schema",
                 "json_schema": inner,
@@ -38,32 +41,43 @@ pub fn to_chat_response_format(
 
 /// Build the Responses protocol's `text.format` typed value.
 /// Returns `None` when `Text` (omit format slot inside TextConfig).
-pub fn to_responses_text_format(fmt: &ResponseFormat) -> Option<TextFormat> {
+/// Degrades `JsonSchema` to `JsonObject` when `supports_strict` is false.
+pub fn to_responses_text_format(
+    fmt: &ResponseFormat,
+    supports_strict: bool,
+) -> Option<TextFormat> {
     match fmt {
         ResponseFormat::Text => None,
         ResponseFormat::JsonObject => Some(TextFormat::JsonObject),
-        ResponseFormat::JsonSchema { name, schema } => Some(TextFormat::JsonSchema {
-            name: name.clone(),
-            schema: schema.clone(),
-        }),
+        ResponseFormat::JsonSchema { name, schema } => {
+            if !supports_strict {
+                return Some(TextFormat::JsonObject);
+            }
+            Some(TextFormat::JsonSchema {
+                name: name.clone(),
+                schema: schema.clone(),
+            })
+        }
     }
 }
 
 /// Merge an explicit `ResponseFormat` config into the variant's `TextConfig`.
 /// Preserves variant's `verbosity` slot; overrides `format` slot only.
+/// Honors capability gate: `supports_strict` controls the JsonSchema branch.
 pub fn merge_text_format(
     base: Option<TextConfig>,
     fmt: Option<&ResponseFormat>,
+    supports_strict: bool,
 ) -> Option<TextConfig> {
     match (base, fmt) {
         (existing, None) => existing,
         (Some(mut t), Some(f)) => {
-            if let Some(rf) = to_responses_text_format(f) {
+            if let Some(rf) = to_responses_text_format(f, supports_strict) {
                 t.format = Some(rf);
             }
             Some(t)
         }
-        (None, Some(f)) => to_responses_text_format(f).map(|rf| TextConfig {
+        (None, Some(f)) => to_responses_text_format(f, supports_strict).map(|rf| TextConfig {
             format: Some(rf),
             verbosity: None,
         }),
@@ -122,13 +136,13 @@ mod tests {
 
     #[test]
     fn responses_text_returns_none() {
-        assert!(to_responses_text_format(&ResponseFormat::Text).is_none());
+        assert!(to_responses_text_format(&ResponseFormat::Text, true).is_none());
     }
 
     #[test]
     fn responses_json_object_returns_typed() {
         assert!(matches!(
-            to_responses_text_format(&ResponseFormat::JsonObject),
+            to_responses_text_format(&ResponseFormat::JsonObject, true),
             Some(TextFormat::JsonObject)
         ));
     }
@@ -139,7 +153,7 @@ mod tests {
         let result = to_responses_text_format(&ResponseFormat::JsonSchema {
             name: "config".into(),
             schema: schema.clone(),
-        })
+        }, true)
         .unwrap();
         match result {
             TextFormat::JsonSchema { name, schema: s } => {
@@ -158,7 +172,7 @@ mod tests {
             format: None,
             verbosity: Some("medium".to_string()),
         });
-        let result = merge_text_format(base.clone(), None);
+        let result = merge_text_format(base.clone(), None, true);
         assert!(result.is_some());
         let r = result.unwrap();
         assert_eq!(r.verbosity, Some("medium".into()));
@@ -171,20 +185,73 @@ mod tests {
             format: None,
             verbosity: Some("medium".to_string()),
         });
-        let result = merge_text_format(base, Some(&ResponseFormat::JsonObject)).unwrap();
+        let result = merge_text_format(base, Some(&ResponseFormat::JsonObject), true).unwrap();
         assert_eq!(result.verbosity, Some("medium".into()));
         assert!(matches!(result.format, Some(TextFormat::JsonObject)));
     }
 
     #[test]
     fn merge_creates_textconfig_when_base_none() {
-        let result = merge_text_format(None, Some(&ResponseFormat::JsonObject)).unwrap();
+        let result = merge_text_format(None, Some(&ResponseFormat::JsonObject), true).unwrap();
         assert!(result.verbosity.is_none());
         assert!(matches!(result.format, Some(TextFormat::JsonObject)));
     }
 
     #[test]
     fn merge_returns_none_when_both_none() {
-        assert!(merge_text_format(None, None).is_none());
+        assert!(merge_text_format(None, None, true).is_none());
+    }
+
+    // ─── Cycle 3: JsonSchema degrade on non-strict ───────────────────
+
+    #[test]
+    fn chat_json_schema_degrades_to_json_object_when_not_strict() {
+        let v = to_chat_response_format(
+            &ResponseFormat::JsonSchema {
+                name: "thing".into(),
+                schema: json!({"type": "object", "properties": {"x": {"type": "string"}}}),
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(v, json!({"type": "json_object"}));
+    }
+
+    #[test]
+    fn responses_json_schema_degrades_to_json_object_when_not_strict() {
+        let fmt = ResponseFormat::JsonSchema {
+            name: "thing".into(),
+            schema: json!({"type": "object"}),
+        };
+        let result = to_responses_text_format(&fmt, false).unwrap();
+        assert!(matches!(result, TextFormat::JsonObject));
+    }
+
+    #[test]
+    fn responses_json_schema_preserved_when_strict() {
+        let schema = json!({"type": "object"});
+        let fmt = ResponseFormat::JsonSchema {
+            name: "n".into(),
+            schema: schema.clone(),
+        };
+        let result = to_responses_text_format(&fmt, true).unwrap();
+        match result {
+            TextFormat::JsonSchema { name, .. } => assert_eq!(name, "n"),
+            other => panic!("expected JsonSchema, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn merge_text_format_degrades_json_schema_when_not_strict() {
+        let result = merge_text_format(
+            None,
+            Some(&ResponseFormat::JsonSchema {
+                name: "n".into(),
+                schema: json!({"type": "object"}),
+            }),
+            false,
+        )
+        .unwrap();
+        assert!(matches!(result.format, Some(TextFormat::JsonObject)));
     }
 }

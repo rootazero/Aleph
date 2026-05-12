@@ -171,7 +171,11 @@ impl OpenAiResponsesProtocol {
             tools,
             tool_choice,
             parallel_tool_calls: config.parallel_tool_calls,
-            text: merge_text_format(variant.text.clone(), config.response_format.as_ref()),
+            text: merge_text_format(
+                variant.text.clone(),
+                config.response_format.as_ref(),
+                policy.capabilities.supports_strict_schema,
+            ),
             max_output_tokens: payload.max_tokens,
             include: variant.include.clone().or_else(|| {
                 if policy.endpoint_class
