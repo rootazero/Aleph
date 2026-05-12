@@ -1,4 +1,63 @@
 use super::*;
+
+#[test]
+fn openai_responses_usage_deserializes_cache_and_reasoning_tokens() {
+    let fixture = include_str!(
+        "../../../../tests/fixtures/openai_sse/responses_with_cache_and_reasoning.txt"
+    );
+
+    // parse_sse_event_multi expects raw JSON (no "data: " prefix)
+    let json_line = fixture
+        .lines()
+        .find(|l| l.starts_with("data: {"))
+        .expect("fixture must contain a data: JSON line")
+        .strip_prefix("data: ")
+        .unwrap();
+
+    let mut out: std::collections::VecDeque<
+        crate::providers::Result<crate::providers::ProviderDelta>,
+    > = Default::default();
+    let mut tracker = Default::default();
+    super::parse_sse_event_multi(json_line, &mut tracker, &mut out);
+
+    let usage_delta = out
+        .iter()
+        .find_map(|res| match res {
+            Ok(crate::providers::ProviderDelta::Usage(u)) => Some(u),
+            _ => None,
+        })
+        .expect("Responses Completed should emit Usage delta");
+
+    assert_eq!(usage_delta.input_tokens, 120);
+    assert_eq!(usage_delta.output_tokens, 40);
+    assert_eq!(usage_delta.cache_read_tokens, Some(90));
+    assert_eq!(usage_delta.thinking_tokens, Some(25));
+    assert_eq!(usage_delta.cache_creation_tokens, None);
+}
+
+#[test]
+fn openai_responses_usage_handles_missing_details() {
+    let json_line = r#"{"type":"response.completed","response":{"id":"r","status":"completed","model":"gpt-4o","output":[],"usage":{"input_tokens":12,"output_tokens":6,"total_tokens":18}}}"#;
+
+    let mut out: std::collections::VecDeque<
+        crate::providers::Result<crate::providers::ProviderDelta>,
+    > = Default::default();
+    let mut tracker = Default::default();
+    super::parse_sse_event_multi(json_line, &mut tracker, &mut out);
+
+    let usage = out
+        .iter()
+        .find_map(|res| match res {
+            Ok(crate::providers::ProviderDelta::Usage(u)) => Some(u),
+            _ => None,
+        })
+        .expect("Usage delta should still be present");
+
+    assert_eq!(usage.input_tokens, 12);
+    assert_eq!(usage.output_tokens, 6);
+    assert_eq!(usage.cache_read_tokens, None);
+    assert_eq!(usage.thinking_tokens, None);
+}
 use std::collections::HashMap;
 use reqwest::Client;
 use crate::config::ProviderConfig;

@@ -466,12 +466,21 @@ fn parse_sse_event_multi(
 
             // Emit Usage before Done so consumers can record it
             if let Some(u) = response.usage {
+                let cache_read_tokens = u
+                    .input_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.cached_tokens);
+                let thinking_tokens = u
+                    .output_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.reasoning_tokens);
+
                 out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
                     input_tokens: u.input_tokens,
                     output_tokens: u.output_tokens,
-                    cache_read_tokens: None,
-                    cache_creation_tokens: None,
-                    thinking_tokens: None,
+                    cache_read_tokens,
+                    cache_creation_tokens: None, // Responses API does not surface cache-write
+                    thinking_tokens,
                     cost: None,
                 })));
             }

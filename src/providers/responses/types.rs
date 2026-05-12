@@ -223,6 +223,24 @@ pub struct UsageInfo {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub total_tokens: u32,
+    /// Breakdown of input tokens (cache_read).
+    #[serde(default)]
+    pub input_tokens_details: Option<ResponsesInputTokensDetails>,
+    /// Breakdown of output tokens (reasoning for o1/o3 reasoning models).
+    #[serde(default)]
+    pub output_tokens_details: Option<ResponsesOutputTokensDetails>,
+}
+
+/// Sub-payload: Responses input token breakdown.
+#[derive(Debug, Default, Deserialize)]
+pub struct ResponsesInputTokensDetails {
+    pub cached_tokens: Option<u32>,
+}
+
+/// Sub-payload: Responses output token breakdown.
+#[derive(Debug, Default, Deserialize)]
+pub struct ResponsesOutputTokensDetails {
+    pub reasoning_tokens: Option<u32>,
 }
 
 /// Error detail in a failed response
