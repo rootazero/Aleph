@@ -88,6 +88,9 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         cache_retention: None,
         response_format: None,
         parallel_tool_calls: None,
+        seed: None,
+        logprobs: None,
+        top_logprobs: None,
     };
 
     let provider = create_provider("claude", config)
@@ -154,6 +157,9 @@ pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         cache_retention: None,
         response_format: None,
         parallel_tool_calls: None,
+        seed: None,
+        logprobs: None,
+        top_logprobs: None,
     };
 
     let provider = create_provider("openai", config)

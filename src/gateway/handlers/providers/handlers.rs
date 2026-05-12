@@ -424,6 +424,9 @@ async fn handle_test_inner(
         cache_retention: None,
         response_format: None,
         parallel_tool_calls: None,
+        seed: None,
+        logprobs: None,
+        top_logprobs: None,
     };
 
     // Create provider instance

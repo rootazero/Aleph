@@ -196,6 +196,21 @@ pub struct ProviderConfig {
     /// When None, no `parallel_tool_calls` field is sent.
     #[serde(default)]
     pub parallel_tool_calls: Option<bool>,
+
+    /// Deterministic sampling seed. None = server default.
+    /// Capability-gated; silently dropped when endpoint doesn't support it.
+    #[serde(default)]
+    pub seed: Option<u64>,
+
+    /// Whether to return per-token logprobs. None = no field emitted.
+    /// Capability-gated; silently dropped when endpoint doesn't support it.
+    #[serde(default)]
+    pub logprobs: Option<bool>,
+
+    /// Number of top alternative tokens per position (Chat range: 0..=20).
+    /// Only emitted when `logprobs = Some(true)` and capability supports it.
+    #[serde(default)]
+    pub top_logprobs: Option<u8>,
 }
 
 pub fn default_provider_color() -> String {
@@ -270,6 +285,9 @@ impl ProviderConfig {
             cache_retention: None,
             response_format: None,
             parallel_tool_calls: None,
+            seed: None,
+            logprobs: None,
+            top_logprobs: None,
         }
     }
 }
@@ -319,6 +337,9 @@ mod tests {
             cache_retention: None,
             response_format: None,
             parallel_tool_calls: None,
+            seed: None,
+            logprobs: None,
+            top_logprobs: None,
         };
         assert_eq!(config.protocol(), "anthropic");
     }
@@ -351,7 +372,45 @@ mod tests {
             cache_retention: None,
             response_format: None,
             parallel_tool_calls: None,
+            seed: None,
+            logprobs: None,
+            top_logprobs: None,
         };
         assert_eq!(config.protocol(), "openai");
+    }
+
+    #[test]
+    fn new_cycle3_fields_default_to_none() {
+        let config = ProviderConfig::test_config("gpt-4o");
+        assert!(config.seed.is_none());
+        assert!(config.logprobs.is_none());
+        assert!(config.top_logprobs.is_none());
+    }
+
+    #[test]
+    fn cycle3_fields_deserialize_from_toml() {
+        let toml_str = r#"
+            protocol = "openai"
+            models = ["gpt-4o"]
+            seed = 42
+            logprobs = true
+            top_logprobs = 5
+        "#;
+        let cfg: ProviderConfig = toml::from_str(toml_str).expect("valid TOML");
+        assert_eq!(cfg.seed, Some(42));
+        assert_eq!(cfg.logprobs, Some(true));
+        assert_eq!(cfg.top_logprobs, Some(5));
+    }
+
+    #[test]
+    fn cycle3_fields_default_when_toml_omits_them() {
+        let toml_str = r#"
+            protocol = "openai"
+            models = ["gpt-4o"]
+        "#;
+        let cfg: ProviderConfig = toml::from_str(toml_str).expect("valid TOML");
+        assert!(cfg.seed.is_none());
+        assert!(cfg.logprobs.is_none());
+        assert!(cfg.top_logprobs.is_none());
     }
 }

@@ -189,6 +189,9 @@ impl AuthProfileProviderRegistry {
             cache_retention: None,
             response_format: None,
             parallel_tool_calls: None,
+            seed: None,
+            logprobs: None,
+            top_logprobs: None,
         };
 
         create_provider(&self.config.provider_type, provider_config)

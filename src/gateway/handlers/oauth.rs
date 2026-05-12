@@ -141,6 +141,9 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
         cache_retention: None,
         response_format: None,
         parallel_tool_calls: None,
+        seed: None,
+        logprobs: None,
+        top_logprobs: None,
     }
 }
 

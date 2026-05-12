@@ -91,5 +91,8 @@ pub(super) fn build_provider_config_for_persistence(
         cache_retention: None,
         response_format: None,
         parallel_tool_calls: None,
+        seed: None,
+        logprobs: None,
+        top_logprobs: None,
     }
 }
