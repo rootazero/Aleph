@@ -70,6 +70,18 @@ pub fn default_embedding_batch_size() -> u32 {
     32
 }
 
+/// Conservative per-input character ceiling before the embedding API call.
+///
+/// Reasoning: most embedding providers cap input at 8192 tokens. With BPE
+/// tokenization English averages ~4 chars/token, CJK ~1.5 chars/token. A
+/// 24000-char ceiling keeps English inputs well under the limit while
+/// allowing roughly 16000 Chinese characters (still under 8192 tokens).
+/// Texts exceeding this are truncated UTF-8-safely before the API call
+/// instead of failing the whole batch.
+pub fn default_embedding_max_input_chars() -> usize {
+    24000
+}
+
 pub fn default_embedding_providers() -> Vec<super::embed::EmbeddingProviderConfig> {
     Vec::new()
 }

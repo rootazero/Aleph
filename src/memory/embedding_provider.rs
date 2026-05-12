@@ -56,6 +56,10 @@ pub struct RemoteEmbeddingProvider {
     model: String,
     dimension: usize,
     batch_size: usize,
+    /// UTF-8-safe per-input character ceiling. Texts exceeding this are
+    /// truncated at a char boundary before the API call to prevent
+    /// 8192-token-limit failures on long compound-ingest inputs.
+    max_input_chars: usize,
     provider_id: String,
 }
 
@@ -77,8 +81,26 @@ impl RemoteEmbeddingProvider {
             model: config.default_model().to_string(),
             dimension: config.dimensions as usize,
             batch_size: config.batch_size as usize,
+            max_input_chars: config.max_input_chars,
             provider_id: config.id.clone(),
         })
+    }
+
+    /// UTF-8-safe truncation to at most `max_input_chars` chars.
+    /// Returns a `Cow::Borrowed` for in-bounds inputs (zero-alloc fast path).
+    fn truncate_input<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        if text.chars().count() <= self.max_input_chars {
+            return std::borrow::Cow::Borrowed(text);
+        }
+        let truncated: String = text.chars().take(self.max_input_chars).collect();
+        tracing::debug!(
+            target: "aleph::embedding",
+            provider = %self.provider_id,
+            original_chars = text.chars().count(),
+            truncated_chars = truncated.chars().count(),
+            "embedding input truncated to fit provider input limit"
+        );
+        std::borrow::Cow::Owned(truncated)
     }
 
     /// Test connectivity by embedding a short text
@@ -105,8 +127,16 @@ impl RemoteEmbeddingProvider {
         };
         let url = format!("{}/embeddings", normalized);
 
+        // Truncate each input UTF-8-safely to stay under the provider's
+        // token cap (8192 for T8Star/OpenAI text-embedding-3-*). Without
+        // this, long compound-ingest concatenations fail the whole batch
+        // and surface as `compound ingest failed` WARNs.
+        let truncated: Vec<std::borrow::Cow<'_, str>> =
+            texts.iter().map(|t| self.truncate_input(t)).collect();
+        let payload: Vec<&str> = truncated.iter().map(|c| c.as_ref()).collect();
+
         let mut body = serde_json::json!({
-            "input": texts,
+            "input": payload,
             "model": self.model,
         });
 
@@ -276,6 +306,39 @@ pub(crate) mod tests {
         let embedding = vec![0.0, 0.0, 0.0, 0.0];
         let result = truncate_and_normalize(embedding, 2);
         assert_eq!(result, vec![0.0, 0.0]);
+    }
+
+    fn make_provider_for_truncation(max_input_chars: usize) -> RemoteEmbeddingProvider {
+        RemoteEmbeddingProvider {
+            client: reqwest::Client::new(),
+            api_base: "http://localhost/v1".to_string(),
+            api_key: String::new(),
+            model: "test".to_string(),
+            dimension: 8,
+            batch_size: 1,
+            max_input_chars,
+            provider_id: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn truncate_input_passthrough_when_under_limit() {
+        let provider = make_provider_for_truncation(100);
+        let result = provider.truncate_input("hello world");
+        // Borrowed = zero-alloc fast path. Owned would mean we cloned.
+        assert!(matches!(result, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(result.as_ref(), "hello world");
+    }
+
+    #[test]
+    fn truncate_input_cuts_at_char_boundary_for_oversize() {
+        let provider = make_provider_for_truncation(5);
+        // Mixed ASCII + CJK to exercise multi-byte char boundary safety.
+        let result = provider.truncate_input("abc你好世界xyz");
+        assert!(matches!(result, std::borrow::Cow::Owned(_)));
+        assert_eq!(result.chars().count(), 5);
+        // Must be valid UTF-8 — the test would panic on byte-boundary slicing.
+        assert_eq!(result.as_ref(), "abc你好");
     }
 
     /// Mock embedding provider for tests

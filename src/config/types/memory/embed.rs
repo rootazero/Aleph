@@ -42,6 +42,13 @@ pub struct EmbeddingProviderConfig {
     pub batch_size: u32,
     #[serde(default = "super::defaults::default_embedding_timeout_ms")]
     pub timeout_ms: u64,
+    /// Maximum per-input character count before truncation. Each text in a
+    /// batch is UTF-8-safely truncated to this length before the embedding
+    /// API call. Prevents `compound ingest failed` cascades when raw memory
+    /// concatenations exceed the provider's 8192-token input cap. See
+    /// `default_embedding_max_input_chars` for rationale on the default.
+    #[serde(default = "super::defaults::default_embedding_max_input_chars")]
+    pub max_input_chars: usize,
     #[serde(default)]
     pub verified: bool,
     #[serde(default = "default_provider_enabled")]
@@ -68,6 +75,7 @@ impl EmbeddingProviderConfig {
             dimensions: 1024,
             batch_size: super::defaults::default_embedding_batch_size(),
             timeout_ms: super::defaults::default_embedding_timeout_ms(),
+            max_input_chars: super::defaults::default_embedding_max_input_chars(),
             verified: false,
             enabled: true,
         }
@@ -84,6 +92,7 @@ impl EmbeddingProviderConfig {
             dimensions: 1536,
             batch_size: super::defaults::default_embedding_batch_size(),
             timeout_ms: super::defaults::default_embedding_timeout_ms(),
+            max_input_chars: super::defaults::default_embedding_max_input_chars(),
             verified: false,
             enabled: true,
         }
@@ -100,6 +109,7 @@ impl EmbeddingProviderConfig {
             dimensions: 768,
             batch_size: super::defaults::default_embedding_batch_size(),
             timeout_ms: super::defaults::default_embedding_timeout_ms(),
+            max_input_chars: super::defaults::default_embedding_max_input_chars(),
             verified: false,
             enabled: true,
         }
