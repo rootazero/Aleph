@@ -123,9 +123,18 @@ pub(crate) fn parse_chat_sse_event(
     if let Some(reason) = finish_reason {
         let stop_reason = match reason {
             "stop" => Some(StopReason::EndTurn),
-            "tool_calls" => Some(StopReason::ToolUse),
-            "length" | "content_filter" => Some(StopReason::MaxTokens),
-            _ => None,
+            "tool_calls" | "function_call" => Some(StopReason::ToolUse),
+            "length" => Some(StopReason::MaxTokens),
+            "content_filter" | "content_policy_violation" => Some(StopReason::MaxTokens),
+            "incomplete" => Some(StopReason::MaxTokens),
+            other => {
+                warn!(
+                    target: "aleph::openai_chat_sse",
+                    finish_reason = other,
+                    "unknown finish_reason from OpenAI Chat; defaulting to EndTurn"
+                );
+                Some(StopReason::EndTurn)
+            }
         };
 
         if let Some(stop) = stop_reason {

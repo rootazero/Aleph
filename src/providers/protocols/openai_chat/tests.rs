@@ -655,3 +655,80 @@ fn test_parse_sse_finish_reason_length() {
         ProviderDelta::Done(StopReason::MaxTokens)
     ));
 }
+
+// =========================================================================
+// finish_reason exhaustive mapping tests (Task 4)
+// =========================================================================
+
+fn assert_finish_reason_maps_to(input: &str, expected: StopReason) {
+    let json_line = format!(
+        r#"{{"id":"x","choices":[{{"index":0,"delta":{{}},"finish_reason":"{}"}}],"usage":null}}"#,
+        input
+    );
+    let mut out: VecDeque<crate::providers::Result<ProviderDelta>> = Default::default();
+    let mut tracker = IndexIdTracker::default();
+    parse_chat_sse_event(&json_line, &mut tracker, &mut out);
+
+    let done = out
+        .iter()
+        .find_map(|r| match r {
+            Ok(ProviderDelta::Done(reason)) => Some(reason.clone()),
+            _ => None,
+        });
+    assert_eq!(done, Some(expected), "finish_reason `{}` mapping wrong", input);
+}
+
+#[test]
+fn chat_finish_reason_stop_maps_to_endturn() {
+    assert_finish_reason_maps_to("stop", StopReason::EndTurn);
+}
+
+#[test]
+fn chat_finish_reason_tool_calls_maps_to_tooluse() {
+    assert_finish_reason_maps_to("tool_calls", StopReason::ToolUse);
+}
+
+#[test]
+fn chat_finish_reason_function_call_maps_to_tooluse() {
+    assert_finish_reason_maps_to("function_call", StopReason::ToolUse);
+}
+
+#[test]
+fn chat_finish_reason_length_maps_to_maxtokens() {
+    assert_finish_reason_maps_to("length", StopReason::MaxTokens);
+}
+
+#[test]
+fn chat_finish_reason_content_filter_maps_to_maxtokens() {
+    assert_finish_reason_maps_to("content_filter", StopReason::MaxTokens);
+}
+
+#[test]
+fn chat_finish_reason_content_policy_violation_maps_to_maxtokens() {
+    assert_finish_reason_maps_to("content_policy_violation", StopReason::MaxTokens);
+}
+
+#[test]
+fn chat_finish_reason_incomplete_maps_to_maxtokens() {
+    assert_finish_reason_maps_to("incomplete", StopReason::MaxTokens);
+}
+
+#[test]
+fn chat_finish_reason_unknown_falls_back_to_endturn() {
+    let json_line = r#"{"id":"x","choices":[{"index":0,"delta":{},"finish_reason":"some_future_reason"}],"usage":null}"#;
+    let mut out: VecDeque<crate::providers::Result<ProviderDelta>> = Default::default();
+    let mut tracker = IndexIdTracker::default();
+    parse_chat_sse_event(json_line, &mut tracker, &mut out);
+
+    let done = out
+        .iter()
+        .find_map(|r| match r {
+            Ok(ProviderDelta::Done(reason)) => Some(reason.clone()),
+            _ => None,
+        });
+    assert_eq!(
+        done,
+        Some(StopReason::EndTurn),
+        "unknown finish_reason must fall back to EndTurn (not None — that hangs the loop)"
+    );
+}
