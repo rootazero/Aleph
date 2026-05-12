@@ -90,15 +90,13 @@ pub parallel_tool_calls: Option<bool>,
 pub supports_response_format: bool,
 ```
 
-Per-`EndpointClass` mapping:
+Per-`EndpointClass` mapping (13 variants total in `provider_policy.rs`):
 
 | EndpointClass | supports_response_format |
 |---|---|
-| `OpenAiPublic` | true |
-| `OpenAiResponses` | true |
-| `OpenAiCodex` | true |
-| `ChatGptBackend` | true |
-| All other 9 variants (kimi, T8Star, OpenRouter, ollama, custom, …) | **false** (conservative; opt-in later by per-class flip) |
+| `OpenAiPublic` | **true** |
+| `OpenAiCodex` | **true** |
+| `AzureOpenAi`, `AnthropicPublic`, `DeepSeekNative`, `GroqNative`, `MistralPublic`, `MoonshotNative`, `CerebrasNative`, `XAiNative`, `OpenRouter`, `Local`, `Custom` (11) | false (conservative; opt-in later by per-class flip in Cycle 3) |
 
 `build_payload_policy` `strip` list gains `"response_format"` when `!supports_response_format` — defense-in-depth tier so a forgotten adapter check still scrubs the field.
 
@@ -294,20 +292,14 @@ EndpointClass::OpenAiPublic => ProviderCapabilities {
     // ... existing fields ...
     supports_response_format: true,
 },
-EndpointClass::OpenAiResponses => ProviderCapabilities {
-    // ... existing fields ...
-    supports_response_format: true,
-},
 EndpointClass::OpenAiCodex => ProviderCapabilities {
     // ... existing fields ...
     supports_response_format: true,
 },
-EndpointClass::ChatGptBackend => ProviderCapabilities {
-    // ... existing fields ...
-    supports_response_format: true,
-},
-// All other 9 variants:
-//   _ => ProviderCapabilities { ..., supports_response_format: false, }
+// All other 11 variants (AzureOpenAi, AnthropicPublic, DeepSeekNative,
+// GroqNative, MistralPublic, MoonshotNative, CerebrasNative, XAiNative,
+// OpenRouter, Local, Custom):
+//   ProviderCapabilities { ..., supports_response_format: false, }
 ```
 
 ### 5.3 Strip-List Defense
