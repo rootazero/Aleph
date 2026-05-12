@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **OpenAI protocol — response_format wiring**: `ProviderConfig` now exposes
+  `response_format: Option<ResponseFormat>` (variants `Text` / `JsonObject` /
+  `JsonSchema { name, schema }`). Both Chat and Responses adapters honor it.
+  Capability-gated by `ProviderCapabilities::supports_response_format` —
+  enabled for OpenAI public and ChatGPT Codex endpoints, conservative `false`
+  for all third-party OpenAI-compatible backends (opt-in flip in Cycle 3).
+  Responses adapter's `text.format` slot fuses with config; variant verbosity
+  preserved. Strict mode emitted automatically when endpoint supports it.
+- **OpenAI protocol — parallel_tool_calls config knob**: `ProviderConfig` now
+  exposes `parallel_tool_calls: Option<bool>`. When `None`, no `parallel_tool_calls`
+  field is sent on the wire (server default applies).
 - **Harness Stage 7 — Initialization Audit (#12)** — closes the 12-module roadmap. A static audit of `HarnessDeps` producers + consumers found 5 production wiring gaps on the gateway path: `harness_bridge.rs` was hardcoding `None` for `guardrails`, `fallback_llm`, `stall_config`, `consecutive_failure_cap`, and `turn_timeout` despite Stage 5a/5b/P0 rescue having shipped the seams. `AgentHarnessRunner` now exposes 5 new `pub` fields plumbing those values from boot to `HarnessDeps`; production behavior is unchanged (defaults stay `None`) but Phase-6 can now wire from `aleph.toml` without touching `harness_bridge.rs`. New `TraceSink::on_init_seam(stage, seam, configured)` trait method (default no-op, strictly additive — `NoopTraceSink` / `GatewayTraceSink` / test sinks compile unchanged) emits 9 events per session-start in declared order: `PromptBuilder`, `ChainContext`, `GuardrailRegistry`, `FallbackLLM`, `VerifierChain`, `StallConfig`, `ConsecutiveFailureCap`, `TurnTimeout`, `SkillPrefetcher`. `tracing::info!` adds production telemetry alongside. Three integration tests in `src/orchestrator/tests/init_audit.rs` lock the cold-start contract (event set, declared order, configured-flag truth table). Stage 6b (`JudgeVerifier` + `ComputationalVerifier`) now **permanently deferred** per R7 (LLM Sovereignty) + R8 (Everything-is-a-Tool) + R10 dumb-loop "5 nos" #3 + #4 — `src/verification/mod.rs` preamble hardened from "gated on waiver" to permanent prohibition. Master spec § Stage 7 / plan: `docs/superpowers/specs/2026-05-08-harness-stage7-init-audit-plan.md` / audit report: `docs/superpowers/specs/2026-05-08-harness-stage7-audit-report.md`.
 - **Phase-6 — Stage 7 closure: config-driven harness assembly** — three new top-level `aleph.toml` sections (`[guardrails]`, `[stability]`, `[fallback_provider]`) finally light up the five `AgentHarnessRunner` Phase-6 placeholder fields that Stage 7 left at hardcoded `None`. Three private builders in `src/bin/aleph-server/commands/start/orchestrator_init.rs` (`build_guardrail_registry`, `build_fallback_llm`, `build_stability_triple`) read the config snapshot at boot and feed `guardrails: Option<Arc<GuardrailRegistry>>`, `fallback_llm: Option<Arc<dyn AiProvider>>`, `stall_config: Option<StallConfig>`, `consecutive_failure_cap: Option<usize>`, and `turn_timeout: Option<Duration>` end-to-end into `HarnessDeps` via `harness_bridge::run`. Behaviors: missing section ≡ `None` ≡ pre-Phase-6 main HEAD behavior; `[guardrails] enabled = true` wires the existing `PiiSecretsGuardrail::from_globals()` onto Input + Output + ToolCall surfaces (one struct, three traits); `[fallback_provider] provider = "<key>"` looks up `[providers.<key>]` and constructs the secondary via `create_provider`, with self-reference (ASCII-case-insensitive), unknown name, and `create_provider` Err all warn-and-disabled to `None`; `[stability]` independently controls `stall_timeout_secs` (defaults to `StallConfig::default().check_interval = 30s` when paired without `stall_check_interval_secs`), `consecutive_failure_cap`, and `turn_timeout_secs`. Activates Stage 5a guardrails, Stage 5b single-step `Transient` retry seam, and the P0 rescue trio (stall watchdog + failure cap + per-turn timeout) for the first time in production. R10: `src/harness/agent.rs` unchanged at 1520 lines. 13 builder tests in `commands::start::orchestrator_init::tests` (3 guardrails + 6 fallback + 4 stability) plus 3 cold-start `init_audit` non-regression tests lock the contract. Plan: `docs/superpowers/specs/2026-05-08-phase6-config-wiring-plan.md`.
 - `ProviderConfig.stream_idle_timeout_secs` — per-event idle timeout for streaming responses (Anthropic protocol). Defaults to 60 seconds; `Some(0)` disables. Stalled streams now surface as `AlephError::Timeout` instead of hanging the request task.
@@ -17,9 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OpenAI Provider Cycle 1 — SSE fixtures directory** — new `tests/fixtures/openai_sse/` containing plaintext SSE chunks captured for regression testing: `chat_completion_with_cache.txt`, `responses_with_cache_and_reasoning.txt`, `responses_with_reasoning_summary_parts.txt`. Fixtures `include_str!`d by unit tests so future wire-shape regressions are caught at the byte level.
 
 ### Changed
+- **OpenAI Responses — parallel_tool_calls no longer hardcoded**: The
+  Responses adapter previously hardcoded `parallel_tool_calls: Some(true)`
+  in `build_responses_request`. Now driven by `ProviderConfig.parallel_tool_calls`
+  (default `None` → omit field). OpenAI public endpoint server default
+  remains `true`, so observable behavior on OpenAI is unchanged. Compat
+  backends will now receive `None` instead of forced `true`.
 - `CacheControl` enum reshaped from unit variant `Ephemeral` to struct variant `Ephemeral { ttl: Option<EphemeralTtl> }`. Wire output unchanged for `ttl: None` (still `{"type":"ephemeral"}`); `ttl: Some(OneHour)` adds `"ttl":"1h"` for Anthropic 1-hour prompt cache. No production behavior change in this commit — all existing construction sites continue passing `cache_control: None`.
 
 ### Fixed
+- **OpenAI Chat — max_completion_tokens for reasoning models**: Chat adapter
+  now sends `max_completion_tokens` instead of `max_tokens` for `o1-` / `o3-` /
+  `o4-` / `gpt-5` model families. Previously, any Aleph user configuring these
+  models on a Chat endpoint received HTTP 400 from OpenAI; this is now
+  resolved automatically based on model name. Responses adapter unaffected
+  (already correctly uses `max_output_tokens`).
 - Desktop tool screenshot quality (D6) — default JPEG quality lifted from 0.75 to 0.9 and the LLM prompt example now suggests `max_width:1920` (was 1280). Step 3 e2e revealed the LLM was reading UI text from a 1280px-wide JPEG q=0.75 capture, which compressed small text past legibility. Tool description also now explicitly warns against downscaling below 1920 when text matters. PNG output (the default when no format is specified) is unaffected.
 - Memory compound-ingest no longer fails when raw memory concatenations exceed the embedding provider's 8192-token input cap. `RemoteEmbeddingProvider::call_api` now UTF-8-safely truncates each input to `EmbeddingProviderConfig.max_input_chars` (default 24000 chars — well under 8192 tokens for English BPE, ~16000 Chinese chars safely) before the API call. Logs at `tracing::debug!` per truncated input instead of hourly `compound ingest failed` WARNs. Configurable per provider; existing configs auto-migrate via `#[serde(default)]`.
 - Default-provider hot-reload follow-up — `SemanticLlmMatcher` (A2A semantic agent routing) and `GroupChatExecutor` (coordinator LLM) now hold `Arc<dyn DefaultProviderHandle>` instead of frozen `Arc<dyn AiProvider>` snapshots. UI "Set as default" reaches both paths on the next match/round without a restart. Env-only `GroupChatExecutor` boot retains a `StaticDefault` snapshot (matches `SingleProviderRegistry` immutability).
