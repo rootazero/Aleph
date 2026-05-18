@@ -637,6 +637,35 @@ mod tests {
         let body = body_of(protocol.build_request(&payload, &config).unwrap());
         assert!(body.get("output_config").is_none(), "output_config must be stripped on Custom");
     }
+
+    #[test]
+    fn build_request_injects_cache_control_only_on_official_host() {
+        let protocol = AnthropicProtocol::new(Client::new());
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs).with_system(Some("Be helpful."));
+
+        // Official path: cache_control present on system block
+        let mut official = ProviderConfig::test_config("claude-3-5-sonnet");
+        official.api_key = Some("test-key".to_string());
+        let official_body = body_of(protocol.build_request(&payload, &official).unwrap());
+        assert!(
+            official_body["system"][0]["cache_control"].is_object(),
+            "Official endpoint should inject cache_control on system block"
+        );
+
+        // Custom path: cache_control absent on system block
+        let mut custom = ProviderConfig::test_config("claude-3-5-sonnet");
+        custom.api_key = Some("test-key".to_string());
+        custom.base_url = Some("https://kimi-for-coding.example.com/v1".to_string());
+        let custom_body = body_of(protocol.build_request(&payload, &custom).unwrap());
+        // system serializes to array of blocks; cache_control must be absent
+        let custom_system_block = &custom_body["system"][0];
+        assert!(
+            custom_system_block.get("cache_control").is_none(),
+            "Custom endpoint must NOT inject cache_control on system block, got: {:?}",
+            custom_system_block
+        );
+    }
 }
 
 // =============================================================================

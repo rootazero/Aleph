@@ -33,33 +33,29 @@ fn parse_stop_sequences(csv: &str) -> Vec<String> {
 }
 
 /// Resolve the effective prompt-cache retention for a request given the
-/// provider config and the target base URL. See spec §2 decision table.
+/// provider config and the target endpoint URL. See spec §2 decision table.
 ///
-/// - Explicit `Some(retention)` is always respected. A `Long` opt-in on a
-///   non-official hostname is honored but logged via `tracing::warn!` so the
-///   trust path is auditable.
-/// - `None` (unset) is hostname-gated: `api.anthropic.com` → `Short`,
-///   anything else → `Off`.
-fn effective_cache_retention(config: &ProviderConfig, base_url: &str) -> CacheRetention {
-    let host = url::Url::parse(base_url)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_ascii_lowercase));
-    let is_official = host.as_deref() == Some("api.anthropic.com");
-
+/// Cycle 4: host-level gating moved to `policy.capabilities.supports_cache_control`
+/// in `build_request`. This function only resolves `None → Short` and warns
+/// when `Long` is requested on a non-official host (injection will be blocked
+/// downstream, but the user signal is preserved for auditability).
+fn effective_cache_retention(config: &ProviderConfig, endpoint: &str) -> CacheRetention {
     match config.cache_retention {
-        Some(explicit) => {
-            if matches!(explicit, CacheRetention::Long) && !is_official {
-                tracing::warn!(
-                    base_url = %base_url,
-                    "cache_retention = long on non-official Anthropic host; \
-                     trusting explicit opt-in (extended-cache-ttl-2025-04-11 \
-                     beta header will be sent)",
-                );
-            }
-            explicit
+        Some(CacheRetention::Long) if !endpoint.contains("api.anthropic.com") => {
+            // Keep the existing warning that surfaces long-TTL misuse on
+            // third-party hosts. Physical injection is blocked downstream
+            // by policy.capabilities.supports_cache_control, but the user
+            // signal that they explicitly asked for Long is still useful.
+            tracing::warn!(
+                endpoint = %endpoint,
+                "cache_retention = long on non-official Anthropic host; \
+                 cache_control will not be injected because the endpoint \
+                 capability is disabled."
+            );
+            CacheRetention::Long
         }
-        None if is_official => CacheRetention::Short,
-        None => CacheRetention::Off,
+        Some(r) => r,
+        None => CacheRetention::Short,
     }
 }
 
@@ -236,10 +232,11 @@ impl ProtocolAdapter for AnthropicProtocol {
                 .collect()
         });
 
-        // Mark the last system block for ephemeral prompt caching
+        // Build system block without cache_control; injection is gated on
+        // policy.capabilities.supports_cache_control below.
         let system = payload
             .system_prompt
-            .map(|s| vec![SystemBlock::cached_text(s)]);
+            .map(|s| vec![SystemBlock::text(s)]);
 
         // Cycle 4: wire sampling fields from config
         let top_p = config.top_p;
@@ -314,20 +311,27 @@ impl ProtocolAdapter for AnthropicProtocol {
             }
         }
 
-        // Inject prompt-cache breakpoints if retention is not Off.
-        let retention = effective_cache_retention(config, &endpoint);
-        let extended_cache_ttl = matches!(retention, CacheRetention::Long);
-        if retention != CacheRetention::Off {
-            let cc = CacheControl::Ephemeral {
-                ttl: if extended_cache_ttl {
-                    Some(EphemeralTtl::OneHour)
-                } else {
-                    None
-                },
-            };
-            inject_cache_control_into_system_array(&mut body, cc);
-            inject_cache_control_into_last_user_message(&mut body, cc);
-        }
+        // Inject prompt-cache breakpoints only when the endpoint supports it
+        // (cf. policy.capabilities.supports_cache_control). Cycle 4 moved
+        // the host-level gate here from effective_cache_retention.
+        let extended_cache_ttl = if policy.capabilities.supports_cache_control {
+            let retention = effective_cache_retention(config, &endpoint);
+            let ext = matches!(retention, CacheRetention::Long);
+            if retention != CacheRetention::Off {
+                let cc = CacheControl::Ephemeral {
+                    ttl: if ext {
+                        Some(EphemeralTtl::OneHour)
+                    } else {
+                        None
+                    },
+                };
+                inject_cache_control_into_system_array(&mut body, cc);
+                inject_cache_control_into_last_user_message(&mut body, cc);
+            }
+            ext
+        } else {
+            false
+        };
 
         // Cycle 4: strip capability-gated fields one last time.
         policy.apply(&mut body);
@@ -562,11 +566,13 @@ mod tests {
     }
 
     #[test]
-    fn effective_retention_third_party_unset_defaults_off() {
+    fn effective_retention_unset_always_defaults_short_after_cycle4() {
+        // Cycle 4: host gate moved to policy.capabilities.supports_cache_control.
+        // effective_cache_retention only resolves None → Short.
         let config = crate::config::ProviderConfig::test_config("claude-3-5-sonnet");
         let retention =
             effective_cache_retention(&config, "https://api.moonshot.cn/v1/messages");
-        assert_eq!(retention, CacheRetention::Off);
+        assert_eq!(retention, CacheRetention::Short);
     }
 
     #[test]
