@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use super::super::{ephemeral_for, extract_run_result};
+    use super::super::{build_effective_task, ephemeral_for, extract_run_result};
 
     use crate::sync_primitives::Mutex;
     use std::future::Future;
@@ -883,5 +883,34 @@ mod tests {
         let (agent_id, cache_read) = &usage_events[0];
         assert_eq!(agent_id, "test-subagent-id", "agent_id label mismatch");
         assert_eq!(*cache_read, Some(7), "cache_read_tokens mismatch");
+    }
+
+    // -- B5: context_mode authoritative --------------------------------------
+
+    #[test]
+    fn build_effective_task_fresh_mode_ignores_summary() {
+        use crate::agents::types::ContextMode;
+        let t = build_effective_task(Some("SECRET-CONTEXT"), ContextMode::Fresh, "do work");
+        assert_eq!(t, "do work");
+        assert!(!t.contains("SECRET-CONTEXT"));
+        assert!(!t.contains("Context from parent agent"));
+    }
+
+    #[test]
+    fn build_effective_task_summary_mode_prepends_summary() {
+        use crate::agents::types::ContextMode;
+        let t = build_effective_task(Some("PARENT-CTX"), ContextMode::Summary, "do work");
+        assert!(t.contains("Context from parent agent"));
+        assert!(t.contains("PARENT-CTX"));
+        assert!(t.ends_with("do work"));
+    }
+
+    #[test]
+    fn build_effective_task_no_summary_is_bare_task() {
+        use crate::agents::types::ContextMode;
+        assert_eq!(
+            build_effective_task(None, ContextMode::Summary, "just this"),
+            "just this"
+        );
     }
 }

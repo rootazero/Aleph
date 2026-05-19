@@ -219,13 +219,11 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .await
             .map_err(|e| format!("sub-agent failed: emit TurnStarted: {e}"))?;
 
-        let effective_task = match req.context_summary {
-            Some(summary) => format!(
-                "## Context from parent agent\n\n{}\n\n---\n\n{}",
-                summary, req.task
-            ),
-            None => req.task.to_string(),
-        };
+        let effective_task = build_effective_task(
+            req.context_summary,
+            req.agent_def.context_mode.clone(),
+            req.task,
+        );
         base.session
             .emit_event(
                 &child_id,
@@ -446,6 +444,26 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     }
 
     result
+}
+
+/// B5 — assemble the child's seed task. A `context_summary` is prepended only
+/// when the agent's declared `context_mode` is `Summary`; `Fresh`-mode agents
+/// always start from the bare task, making `AgentDef.context_mode`
+/// authoritative instead of decorative.
+fn build_effective_task(
+    context_summary: Option<&str>,
+    context_mode: crate::agents::types::ContextMode,
+    task: &str,
+) -> String {
+    match context_summary {
+        Some(summary) if context_mode == crate::agents::types::ContextMode::Summary => {
+            format!(
+                "## Context from parent agent\n\n{}\n\n---\n\n{}",
+                summary, task
+            )
+        }
+        _ => task.to_string(),
+    }
 }
 
 /// Walk the child session event log and synthesize a `LoopRunResult`.
