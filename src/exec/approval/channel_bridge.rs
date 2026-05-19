@@ -7,7 +7,7 @@ use tokio::time::timeout;
 
 use crate::exec::decision::ApprovalRequest;
 use crate::exec::socket::ApprovalDecisionType;
-use crate::gateway::channel::{ChannelId, ConversationId, UserId};
+use crate::gateway::channel::{ChannelId, ConversationId, OutboundMessage, UserId};
 use crate::gateway::channel_approval::{
     ApprovalAction, AuthorizationResult, PendingApproval as ChannelPendingApproval,
 };
@@ -395,27 +395,22 @@ impl ChannelApprovalBridge {
             .retain(|p| p.approval_id != approval_id);
     }
 
-    /// Request approval for a tool invocation and await the real user decision.
+    /// 请求工具调用审批并阻塞等待用户决策。
     ///
-    /// Two-stage flow mirroring `ExecSecurityGate::request_approval`:
-    /// 1. `approval_manager.create(...)` builds the record with a unique id.
-    /// 2. `self.request_approval(...)` delivers the prompt to the channel (inline
-    ///    keyboard on Telegram/Discord, etc). Delivery success is NOT an approval
-    ///    — it only means the UI was shown.
-    /// 3. `approval_manager.wait_for_decision(record)` blocks on a oneshot that
-    ///    the channel's button-click callback handler resolves via
-    ///    `approval_manager.resolve(id, decision, ...)`.
+    /// 两阶段：(1) `manager.create` 建记录得 `record.id`；
+    /// (2) `deliver_routed` 用 `record.id` 投递按钮到指定通道会话；
+    /// (3) `wait_for_decision` 阻塞在 `record.id` 的 oneshot，由通道按钮回调
+    /// 经 `manager.resolve(record.id, ...)` 唤醒。
     ///
-    /// `session_key` must be a valid channel session key in the format
-    /// `{platform}:{...}:{conversation_id}:{...}` so the bridge can route the
-    /// prompt to the correct channel. An empty or unparseable session_key yields
-    /// `Denied` (delivery is skipped and no approver can click the button).
+    /// `channel_id` / `conversation_id` 为结构化路由参数（来自调用方解析的
+    /// `SessionKey`），不再 parse 有损的字符串 session_key。
     pub async fn request_for_tool(
         &self,
         approval_manager: &crate::exec::manager::ExecApprovalManager,
         tool_name: &str,
         reason: &str,
-        session_key: &str,
+        channel_id: &ChannelId,
+        conversation_id: &ConversationId,
         agent_id: &str,
         timeout_ms: u64,
     ) -> ApprovalOutcome {
@@ -430,29 +425,27 @@ impl ChannelApprovalBridge {
             cwd: None,
             analysis: crate::exec::analysis::CommandAnalysis::error(reason),
             agent_id: agent_id.to_string(),
-            session_key: session_key.to_string(),
+            session_key: format!("{}:{}", channel_id.as_str(), conversation_id.as_str()),
         };
 
         let record = approval_manager.create(&request, timeout_ms);
 
-        // Deliver the prompt via the channel capability. If delivery fails
-        // (no channel capability, registry miss, send error), we cannot await
-        // a user decision — deny. This matches the existing
-        // `ExecSecurityGate::request_approval` contract.
-        match self.request_approval(&request).await {
-            Some(result) if result.delivered => {
+        match self
+            .deliver_routed(channel_id, conversation_id, tool_name, &record.id)
+            .await
+        {
+            Some(true) => {
                 tracing::info!(
                     tool = %tool_name,
                     id = %record.id,
-                    channel_id = %result.channel_id,
+                    channel = %channel_id.as_str(),
                     "Approval delivered via channel — waiting for user decision"
                 );
             }
-            Some(result) => {
+            Some(false) => {
                 tracing::warn!(
                     tool = %tool_name,
                     id = %record.id,
-                    reason = ?result.reason,
                     "Approval delivery failed — denying"
                 );
                 return ApprovalOutcome::Denied;
@@ -467,15 +460,69 @@ impl ChannelApprovalBridge {
             }
         }
 
-        // Block on the oneshot until the button-click callback resolves it,
-        // or the record's timeout fires.
         match approval_manager.wait_for_decision(record).await {
-            Some(crate::exec::socket::ApprovalDecisionType::AllowOnce)
-            | Some(crate::exec::socket::ApprovalDecisionType::AllowAlways) => {
+            Some(ApprovalDecisionType::AllowOnce) | Some(ApprovalDecisionType::AllowAlways) => {
                 ApprovalOutcome::Approved
             }
-            Some(crate::exec::socket::ApprovalDecisionType::Deny) => ApprovalOutcome::Denied,
-            None => ApprovalOutcome::Timeout,
+            Some(ApprovalDecisionType::Deny) => ApprovalOutcome::Denied,
+            None => {
+                self.send_timeout_notice(channel_id, conversation_id).await;
+                ApprovalOutcome::Timeout
+            }
+        }
+    }
+
+    /// 按结构化 `channel_id` 投递审批提示。返回 `Some(true)` 已投递、
+    /// `Some(false)` 投递失败、`None` 无通道 / 无审批能力。
+    async fn deliver_routed(
+        &self,
+        channel_id: &ChannelId,
+        conversation_id: &ConversationId,
+        tool_name: &str,
+        approval_id: &str,
+    ) -> Option<bool> {
+        let channel = self.registry.get(channel_id).await?;
+        let capability = {
+            let ch = channel.read().await;
+            ch.approval_capability()?
+        };
+        let approval_req = crate::exec::approval::types::ApprovalRequest::Command(
+            crate::exec::approval::types::CommandApprovalRequest {
+                command: tool_name.to_string(),
+                cwd: None,
+            },
+        );
+        match timeout(
+            Duration::from_secs(DELIVERY_TIMEOUT_SECS),
+            capability.deliver_approval(conversation_id, &approval_req, approval_id),
+        )
+        .await
+        {
+            Ok(Ok(_pending)) => Some(true),
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "deliver_approval returned error");
+                Some(false)
+            }
+            Err(_) => {
+                tracing::warn!("deliver_approval timed out after {}s", DELIVERY_TIMEOUT_SECS);
+                Some(false)
+            }
+        }
+    }
+
+    /// 审批超时后向通道发一条友好提示（best-effort）。
+    async fn send_timeout_notice(
+        &self,
+        channel_id: &ChannelId,
+        conversation_id: &ConversationId,
+    ) {
+        if let Some(channel) = self.registry.get(channel_id).await {
+            let ch = channel.read().await;
+            let msg = OutboundMessage::text(
+                conversation_id.as_str(),
+                "\u{23f1} 审批请求已超时，操作被拒绝。",
+            );
+            let _ = ch.send(msg).await;
         }
     }
 
