@@ -137,6 +137,9 @@ pub struct AgentRuntime {
     trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
     /// A2 — subagent concurrency cap, threaded into every `SpawnerBase`.
     subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
+    /// B2 — global plugin registry, threaded into SpawnerBase for per-agent
+    /// MCP scope provisioning.
+    plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
 }
 
 impl AgentRuntime {
@@ -168,12 +171,22 @@ impl AgentRuntime {
             turn_timeout: None,
             trace_sink: None,
             subagent_semaphore: None,
+            plugin_registry: None,
         }
     }
 
     /// A2 — wire the shared subagent concurrency semaphore.
     pub fn with_subagent_semaphore(mut self, sem: Arc<tokio::sync::Semaphore>) -> Self {
         self.subagent_semaphore = Some(sem);
+        self
+    }
+
+    /// B2 — wire the global plugin registry for per-agent MCP scope.
+    pub fn with_plugin_registry(
+        mut self,
+        registry: Arc<crate::extension::registry::PluginRegistry>,
+    ) -> Self {
+        self.plugin_registry = Some(registry);
         self
     }
 
@@ -364,9 +377,9 @@ impl AgentRuntime {
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,
             trace_sink: self.trace_sink.clone(),
-            // P3 Stage I — plugin_registry not threaded through AgentRuntime yet;
-            // None disables MCP scope for runtime-spawned subagents until wired.
-            plugin_registry: None,
+            // P3 Stage I — per-agent MCP scope; provisioned when an agent_def
+            // declares `mcp_servers` and a registry is wired (B2).
+            plugin_registry: self.plugin_registry.clone(),
             // A2 — subagent concurrency cap.
             subagent_semaphore: self.subagent_semaphore.clone(),
         };

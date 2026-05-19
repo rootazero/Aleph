@@ -117,6 +117,8 @@ pub struct SubagentTool {
     /// A3 — parent run's cancellation token. Each spawn path derives a
     /// `child_token()` so a cancelled parent stops its subagents.
     parent_cancel: Option<CancellationToken>,
+    /// B2 — global plugin registry, threaded into each AgentRuntime.
+    plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
 }
 
 impl SubagentTool {
@@ -156,7 +158,17 @@ impl SubagentTool {
                 DEFAULT_MAX_CONCURRENT_SUBAGENTS,
             )),
             parent_cancel: None,
+            plugin_registry: None,
         }
+    }
+
+    /// B2 — wire the global plugin registry for per-agent MCP scope.
+    pub fn with_plugin_registry(
+        mut self,
+        registry: Arc<crate::extension::registry::PluginRegistry>,
+    ) -> Self {
+        self.plugin_registry = Some(registry);
+        self
     }
 
     /// Set the teammate manager for auto team creation/registration.
@@ -312,6 +324,9 @@ impl SubagentTool {
             runtime = runtime.with_parent_session_id(sid);
         }
         runtime = runtime.with_subagent_semaphore(self.subagent_semaphore.clone());
+        if let Some(reg) = self.plugin_registry.clone() {
+            runtime = runtime.with_plugin_registry(reg);
+        }
         runtime
     }
 }
@@ -890,6 +905,13 @@ mod tests {
         let tool = make_tool();
         // Verify the builder methods compile and don't panic
         let _tool = tool.with_parent_agent_id("test-agent");
+    }
+
+    #[test]
+    fn with_plugin_registry_builder_smoke() {
+        use crate::extension::registry::PluginRegistry;
+        let tool = make_tool().with_plugin_registry(Arc::new(PluginRegistry::new()));
+        let _ = tool;
     }
 
     #[tokio::test]
