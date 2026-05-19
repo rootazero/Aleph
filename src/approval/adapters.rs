@@ -60,7 +60,7 @@ impl ChannelApprovalBridgeAdapter {
     /// task-local 未设置、或会话无通道来源时返回 `None`。
     fn current_channel_route() -> Option<(ChannelId, ConversationId)> {
         crate::sandbox::context::SESSION_ID
-            .try_with(|sid| channel_route(sid))
+            .try_with(channel_route)
             .ok()
             .flatten()
     }
@@ -85,7 +85,6 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
                 reason,
                 &channel_id,
                 &conversation_id,
-                "",
                 self.timeout_ms,
             )
             .await

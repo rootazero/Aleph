@@ -411,7 +411,6 @@ impl ChannelApprovalBridge {
         reason: &str,
         channel_id: &ChannelId,
         conversation_id: &ConversationId,
-        agent_id: &str,
         timeout_ms: u64,
     ) -> ApprovalOutcome {
         #[cfg(test)]
@@ -424,7 +423,7 @@ impl ChannelApprovalBridge {
             command: tool_name.to_string(),
             cwd: None,
             analysis: crate::exec::analysis::CommandAnalysis::error(reason),
-            agent_id: agent_id.to_string(),
+            agent_id: String::new(),
             session_key: format!("{}:{}", channel_id.as_str(), conversation_id.as_str()),
         };
 
