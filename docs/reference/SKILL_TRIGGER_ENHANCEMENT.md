@@ -4,6 +4,15 @@
 > Status: Approved
 > Scope: SkillManifest when_to_use + XML output + proactive trigger guidance
 
+> **Wiring update (2026-05-19):** when this doc was written, `SkillInstructionsLayer`
+> was registered but never fed — `PromptConfig.eligible_skills` was `None` in every
+> production path, so no skill XML actually reached the system prompt. The
+> skill-system-wiring effort reconnected that artery: a shared `SkillSystem`
+> singleton feeds the eligible-skill snapshot into `PromptConfig` via
+> `AgentHarnessRunner::build_system_prompt`. The `when_to_use`/`<when>` enhancement
+> described below now reaches the model. See
+> `docs/superpowers/specs/2026-05-19-skill-system-wiring-design.md`.
+
 ## Problem
 
 SkillInstructionsLayer injects skill name + description into the system prompt, but the LLM lacks trigger context — it doesn't know *when* to proactively invoke a skill. Users must explicitly request skills instead of the model recognizing matching scenarios.
