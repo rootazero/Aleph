@@ -17,6 +17,7 @@ mod execute;
 mod fast_path;
 pub mod helpers;
 mod history;
+pub mod markdown_skill_refresh;
 mod orchestrator;
 mod persistence;
 mod run_loop;
