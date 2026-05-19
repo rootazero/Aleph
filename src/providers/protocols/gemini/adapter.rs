@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use tracing::debug;
 
 use super::GeminiProtocol;
-use super::sse::parse_gemini_sse_chunk;
+use super::sse::{parse_gemini_error_body, parse_gemini_sse_chunk};
 
 #[async_trait]
 impl ProtocolAdapter for GeminiProtocol {
@@ -48,7 +48,7 @@ impl ProtocolAdapter for GeminiProtocol {
                 .or(Some(DEFAULT_MAX_TOKENS)),
             temperature: payload.temperature.or(config.temperature),
             top_p: config.top_p,
-            top_k: None,
+            top_k: config.top_k,
             thinking_config,
         };
 
@@ -149,6 +149,10 @@ impl ProtocolAdapter for GeminiProtocol {
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
             let error_text = response.text().await.unwrap_or_default();
+            // Parse Gemini's error envelope for a clean message; fall back to raw text.
+            let detail = parse_gemini_error_body(&error_text)
+                .map(|e| format!("{} ({})", e.message, e.status))
+                .unwrap_or_else(|| error_text.clone());
             if status.as_u16() == 429 {
                 let suggestion = retry_after
                     .as_ref()
@@ -157,13 +161,13 @@ impl ProtocolAdapter for GeminiProtocol {
                         "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
                     });
                 return Err(AlephError::RateLimitError {
-                    message: format!("Gemini API rate limited (429): {}", error_text),
+                    message: format!("Gemini API rate limited (429): {}", detail),
                     suggestion: Some(suggestion),
                 });
             }
             return Err(AlephError::provider(format!(
-                "Gemini streaming error ({}): {}",
-                status, error_text
+                "Gemini API error ({}): {}",
+                status, detail
             )));
         }
 

@@ -60,6 +60,8 @@ This cycle fixes 6 of the 7 (G1, G2a, G3, G4, G5, G6, G7). It explicitly does **
 
 `ContentBlock::Image.data` is already raw base64 (no data-URI prefix) — direct passthrough, matching `protocols/anthropic/proto_impl.rs:62`. Adjacent text blocks are no longer collapsed into one part; emit one `Part` per block. If a `User` message yields no parts, keep an empty-text fallback so the request stays valid. `InlineData` is already re-exported from `providers::gemini` (`pub use types::*`).
 
+The `Part::InlineData` variant in `gemini/types.rs` is also latently broken: its `inline_data` field has no `#[serde(rename)]`, so it would serialize as `inline_data` instead of Gemini's required `inlineData` (the `FunctionCall`/`FunctionResponse` variants have explicit renames; `InlineData` was missed). G1 fixes this by adding `#[serde(rename = "inlineData")]` to the field — a one-line change inside the Gemini types directory.
+
 Scope: `User` messages (the vision-input path). `Assistant`-role images and tool-result images stay out of scope — the model does not take image input on those roles, and Gemini's `functionResponse` cannot carry inline images cleanly.
 
 ### G2a — Tool-call ID passthrough
@@ -103,7 +105,7 @@ This preserves structured tool output when available without changing the common
 
 ## 5. Blast radius
 
-**Zero shared-type changes.** Every edit lands in `src/providers/gemini/**` (`types.rs` unchanged this cycle — `GeminiError` is reused as-is) and `src/providers/protocols/gemini/**` (`adapter.rs`, `proto_impl.rs`, `sse.rs`, `tests.rs`). No file touched by the `feat/anthropic-protocol-hardening`, `subagent-hardening`, `l1-stalltracker-lock`, or `openai-protocol-opt` branches is modified. Merge-conflict surface against those branches: none.
+**Zero shared-type changes.** Every edit lands in `src/providers/gemini/**` (`types.rs` — one-line `serde(rename)` fix for `Part::InlineData`; `GeminiError` reused as-is) and `src/providers/protocols/gemini/**` (`adapter.rs`, `proto_impl.rs`, `sse.rs`, `tests.rs`). No file touched by the `feat/anthropic-protocol-hardening`, `subagent-hardening`, `l1-stalltracker-lock`, or `openai-protocol-opt` branches is modified. Merge-conflict surface against those branches: none.
 
 ## 6. Error semantics
 

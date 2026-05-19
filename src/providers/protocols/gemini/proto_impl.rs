@@ -45,14 +45,33 @@ impl GeminiProtocol {
         for msg in messages {
             match msg {
                 UnifiedMessage::User { content } => {
-                    let text = content
-                        .iter()
-                        .filter_map(|b| b.as_text())
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let mut parts = Vec::new();
+                    for block in content {
+                        match block {
+                            crate::providers::message::ContentBlock::Text { text, .. } => {
+                                parts.push(Part::Text { text: text.clone() });
+                            }
+                            crate::providers::message::ContentBlock::Image { data, mime_type } => {
+                                parts.push(Part::InlineData {
+                                    inline_data: crate::providers::gemini::InlineData {
+                                        mime_type: mime_type.clone(),
+                                        data: data.clone(),
+                                    },
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Keep the request valid even if the message carried no
+                    // text/image blocks (e.g. only unsupported block kinds).
+                    if parts.is_empty() {
+                        parts.push(Part::Text {
+                            text: String::new(),
+                        });
+                    }
                     result.push(Content {
                         role: Some("user".to_string()),
-                        parts: vec![Part::Text { text }],
+                        parts,
                     });
                 }
                 UnifiedMessage::Assistant { content } => {
@@ -63,15 +82,18 @@ impl GeminiProtocol {
                                 parts.push(Part::Text { text: text.clone() });
                             }
                             crate::providers::message::ContentBlock::ToolCall {
+                                id,
                                 name,
                                 arguments,
-                                ..
                             } => {
                                 parts.push(Part::FunctionCall {
                                     function_call: crate::providers::gemini::GeminiFunctionCall {
                                         name: name.clone(),
                                         args: arguments.clone(),
-                                        id: None,
+                                        // Replay the id so the assistant's functionCall
+                                        // and the matching functionResponse stay paired
+                                        // (required for Gemini 3 native tool-call ids).
+                                        id: Some(id.clone()),
                                     },
                                 });
                             }
@@ -94,25 +116,38 @@ impl GeminiProtocol {
                     content,
                     ..
                 } => {
-                    let output = content
-                        .iter()
-                        .map(|b| match b {
-                            crate::providers::message::ContentBlock::Text { text, .. } => {
-                                text.clone()
-                            }
-                            crate::providers::message::ContentBlock::Json { value } => {
-                                serde_json::to_string(value).unwrap_or_default()
-                            }
-                            _ => String::new(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    // A lone structured-JSON object passes through directly as the
+                    // functionResponse payload; text / mixed content is wrapped in
+                    // `{"result": ...}` so `response` is always a JSON object.
+                    let response = match content.as_slice() {
+                        [crate::providers::message::ContentBlock::Json { value }]
+                            if value.is_object() =>
+                        {
+                            value.clone()
+                        }
+                        _ => {
+                            let output = content
+                                .iter()
+                                .map(|b| match b {
+                                    crate::providers::message::ContentBlock::Text {
+                                        text, ..
+                                    } => text.clone(),
+                                    crate::providers::message::ContentBlock::Json { value } => {
+                                        serde_json::to_string(value).unwrap_or_default()
+                                    }
+                                    _ => String::new(),
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            serde_json::json!({ "result": output })
+                        }
+                    };
                     result.push(Content {
                         role: Some("user".to_string()),
                         parts: vec![Part::FunctionResponse {
                             function_response: crate::providers::gemini::GeminiFunctionResponse {
                                 name: tool_name.clone(),
-                                response: serde_json::json!({ "result": output }),
+                                response,
                                 id: Some(tool_call_id.clone()),
                             },
                         }],

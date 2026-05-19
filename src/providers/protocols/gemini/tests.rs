@@ -8,7 +8,7 @@ use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderRespons
 use crate::providers::delta::ProviderDelta;
 use crate::providers::gemini::{GenerateContentResponse, Part};
 use crate::providers::message::UnifiedMessage;
-use crate::providers::protocols::gemini::sse::parse_gemini_sse_chunk;
+use crate::providers::protocols::gemini::sse::{parse_gemini_error_body, parse_gemini_sse_chunk};
 
 #[test]
 fn test_build_endpoint_always_streaming() {
@@ -64,7 +64,7 @@ fn test_map_think_level_xhigh_caps_to_high() {
 fn test_parse_sse_thought_marker() {
     let mut out = VecDeque::new();
     let mut fc = 0u64;
-    let data = r#"{"candidates":[{"content":{"parts":[{"text":"thinking...","thought":true},{"text":"answer"}]}},"finishReason":"STOP"}]}"#;
+    let data = r#"{"candidates":[{"content":{"parts":[{"text":"thinking...","thought":true},{"text":"answer"}]},"finishReason":"STOP"}]}"#;
     parse_gemini_sse_chunk(data, &mut fc, &mut out);
 
     assert!(
@@ -112,7 +112,7 @@ fn test_parse_sse_synthetic_tool_id_fallback() {
 fn test_parse_sse_thinking_tokens_in_usage() {
     let mut out = VecDeque::new();
     let mut fc = 0u64;
-    let data = r#"{"candidates":[{"content":{"parts":[{"text":"done"}]}},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"thoughtsTokenCount":100}}"#;
+    let data = r#"{"candidates":[{"content":{"parts":[{"text":"done"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"thoughtsTokenCount":100}}"#;
     parse_gemini_sse_chunk(data, &mut fc, &mut out);
 
     let usage = out
@@ -616,4 +616,213 @@ fn test_convert_s8_assistant_text_and_tool_call_same_turn() {
     let parts = json["parts"].as_array().unwrap();
     assert!(parts[1].get("functionCall").is_some());
     assert_eq!(parts[1]["functionCall"]["name"], "web_search");
+}
+
+#[test]
+fn test_parse_sse_cached_content_tokens() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":200,"candidatesTokenCount":10,"cachedContentTokenCount":150}}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+
+    let usage = out
+        .iter()
+        .find_map(|d| match d {
+            Ok(ProviderDelta::Usage(u)) => Some(u.clone()),
+            _ => None,
+        })
+        .expect("Usage event not found");
+    assert_eq!(usage.cache_read_tokens, Some(150));
+}
+
+#[test]
+fn test_build_request_includes_top_k() {
+    let client = Client::new();
+    let protocol = GeminiProtocol::new(client);
+
+    let mut config = ProviderConfig::test_config("gemini-pro");
+    config.api_key = Some("test-api-key".to_string());
+    config.top_k = Some(40);
+
+    let msgs = [UnifiedMessage::user("Hello")];
+    let payload = RequestPayload::new(&msgs);
+
+    let req = protocol
+        .build_request(&payload, &config)
+        .expect("build_request")
+        .build()
+        .expect("build");
+    let body_bytes = req
+        .body()
+        .expect("body present")
+        .as_bytes()
+        .expect("in-memory body");
+    let body: serde_json::Value = serde_json::from_slice(body_bytes).expect("json body");
+    assert_eq!(body["generationConfig"]["topK"], 40);
+}
+
+#[test]
+fn test_parse_sse_finish_reason_safety() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[]},"finishReason":"SAFETY"}]}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+    assert!(
+        out.iter()
+            .any(|d| matches!(d, Ok(ProviderDelta::Done(StopReason::Refusal)))),
+        "SAFETY should map to Done(Refusal), got {:?}",
+        out
+    );
+}
+
+#[test]
+fn test_parse_sse_finish_reason_recitation() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[]},"finishReason":"RECITATION"}]}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+    assert!(
+        out.iter()
+            .any(|d| matches!(d, Ok(ProviderDelta::Done(StopReason::Sensitive)))),
+        "RECITATION should map to Done(Sensitive), got {:?}",
+        out
+    );
+}
+
+#[test]
+fn test_convert_user_with_image() {
+    use crate::providers::message::ContentBlock as CB;
+    let msgs = [UnifiedMessage::user_with_content(vec![
+        CB::Text {
+            text: "look at this".to_string(),
+            cache_control: None,
+        },
+        CB::Image {
+            data: "QUJD".to_string(),
+            mime_type: "image/png".to_string(),
+        },
+    ])];
+    let result = GeminiProtocol::convert_messages(&msgs);
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].parts.len(), 2, "text + image = two parts");
+    match &result[0].parts[0] {
+        Part::Text { text } => assert_eq!(text, "look at this"),
+        other => panic!("expected Text part, got {:?}", other),
+    }
+    let json = serde_json::to_value(&result[0]).unwrap();
+    assert_eq!(json["parts"][1]["inlineData"]["mimeType"], "image/png");
+    assert_eq!(json["parts"][1]["inlineData"]["data"], "QUJD");
+}
+
+#[test]
+fn test_convert_assistant_tool_call_preserves_id() {
+    use crate::providers::message::ContentBlock as CB;
+    let msgs = [UnifiedMessage::Assistant {
+        content: vec![CB::ToolCall {
+            id: "call_xyz".to_string(),
+            name: "search".to_string(),
+            arguments: serde_json::json!({"q": "rust"}),
+        }],
+    }];
+    let result = GeminiProtocol::convert_messages(&msgs);
+    let json = serde_json::to_value(&result[0]).unwrap();
+    assert_eq!(
+        json["parts"][0]["functionCall"]["id"], "call_xyz",
+        "replayed functionCall must carry the tool-call id"
+    );
+}
+
+#[test]
+fn test_convert_tool_result_json_object_passthrough() {
+    let msgs = [UnifiedMessage::tool_result_json(
+        "call_1",
+        "get_weather",
+        serde_json::json!({"temp": 20, "unit": "C"}),
+        false,
+    )];
+    let result = GeminiProtocol::convert_messages(&msgs);
+    let json = serde_json::to_value(&result[0]).unwrap();
+    let response = &json["parts"][0]["functionResponse"]["response"];
+    assert_eq!(response["temp"], 20);
+    assert_eq!(response["unit"], "C");
+    assert!(
+        response.get("result").is_none(),
+        "a structured object payload must pass through unwrapped"
+    );
+}
+
+#[test]
+fn test_parse_gemini_error_body_object_form() {
+    let body = r#"{"error":{"code":400,"message":"Invalid argument","status":"INVALID_ARGUMENT"}}"#;
+    let err = parse_gemini_error_body(body).expect("envelope parsed");
+    assert_eq!(err.code, 400);
+    assert_eq!(err.message, "Invalid argument");
+    assert_eq!(err.status, "INVALID_ARGUMENT");
+}
+
+#[test]
+fn test_parse_gemini_error_body_array_form() {
+    let body = r#"[{"error":{"code":500,"message":"Internal error","status":"INTERNAL"}}]"#;
+    let err = parse_gemini_error_body(body).expect("envelope parsed");
+    assert_eq!(err.code, 500);
+    assert_eq!(err.status, "INTERNAL");
+}
+
+#[test]
+fn test_parse_gemini_error_body_not_an_envelope() {
+    assert!(parse_gemini_error_body("plain text").is_none());
+    assert!(parse_gemini_error_body(r#"{"candidates":[]}"#).is_none());
+}
+
+#[test]
+fn test_parse_sse_mid_stream_error_frame() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"error":{"code":500,"message":"boom","status":"INTERNAL"}}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+    assert_eq!(out.len(), 1, "error frame yields exactly one event");
+    match out.front() {
+        Some(Err(e)) => assert!(
+            format!("{e}").contains("boom"),
+            "error should carry the message: {e}"
+        ),
+        other => panic!("expected a fatal Err, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_sse_prompt_blocked() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"promptFeedback":{"blockReason":"SAFETY"}}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+    assert_eq!(out.len(), 1, "a blocked prompt yields exactly one event");
+    match out.front() {
+        Some(Err(e)) => assert!(
+            format!("{e}").contains("SAFETY"),
+            "error must name the block reason: {e}"
+        ),
+        other => panic!("expected Err naming SAFETY, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_sse_prompt_feedback_without_block_is_ignored() {
+    // promptFeedback with only safetyRatings (no blockReason) appears on
+    // successful responses and must not be treated as an error.
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],"promptFeedback":{"safetyRatings":[]}}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+    assert!(
+        out.iter().all(|d| d.is_ok()),
+        "no error expected, got {:?}",
+        out
+    );
+    assert!(
+        out.iter()
+            .any(|d| matches!(d, Ok(ProviderDelta::TextDelta(t)) if t == "ok")),
+        "text delta should still be emitted"
+    );
 }
