@@ -81,7 +81,7 @@ pub enum PluginPermission {
     /// Environment variable access
     Env,
 
-    /// Shell command execution (required for CliCommand registration)
+    /// Shell command execution
     Shell,
 
     /// Background service registration
