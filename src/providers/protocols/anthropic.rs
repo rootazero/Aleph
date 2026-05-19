@@ -1065,4 +1065,97 @@ mod stream_tests {
             .unwrap()
             .contains("interleaved-thinking-2025-05-14"));
     }
+
+    // ── Test 12: extended stop_reason mapping ───────────────────────────────
+
+    /// Run a `message_delta` event carrying `reason` and return its `Done` value.
+    fn done_for_stop_reason(reason: &str) -> Option<StopReason> {
+        let data = format!(
+            r#"{{"type":"message_delta","delta":{{"stop_reason":"{reason}","stop_sequence":null}},"usage":{{"output_tokens":3}}}}"#
+        );
+        parse(&data).into_iter().find_map(|d| match d {
+            ProviderDelta::Done(sr) => Some(sr),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn message_delta_maps_stop_sequence() {
+        assert_eq!(done_for_stop_reason("stop_sequence"), Some(StopReason::StopSequence));
+    }
+
+    #[test]
+    fn message_delta_maps_pause_turn() {
+        assert_eq!(done_for_stop_reason("pause_turn"), Some(StopReason::PauseTurn));
+    }
+
+    #[test]
+    fn message_delta_maps_refusal() {
+        assert_eq!(done_for_stop_reason("refusal"), Some(StopReason::Refusal));
+    }
+
+    #[test]
+    fn message_delta_maps_context_window_exceeded_to_max_tokens() {
+        assert_eq!(
+            done_for_stop_reason("model_context_window_exceeded"),
+            Some(StopReason::MaxTokens),
+        );
+    }
+
+    #[test]
+    fn message_delta_unknown_stop_reason_falls_through() {
+        assert_eq!(done_for_stop_reason("some_future_reason"), Some(StopReason::Unknown));
+    }
+
+    // ── Test 13: extended thinking is incompatible with sampling params ─────
+
+    /// Build a request and return its JSON body.
+    fn build_body(payload: &RequestPayload, config: &ProviderConfig) -> serde_json::Value {
+        let protocol = AnthropicProtocol::new(reqwest::Client::new());
+        let built = protocol
+            .build_request(payload, config)
+            .unwrap()
+            .build()
+            .unwrap();
+        serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn build_request_strips_sampling_params_when_thinking_enabled() {
+        use crate::agents::thinking::ThinkLevel;
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Medium));
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.temperature = Some(0.7);
+        config.top_p = Some(0.9);
+        config.top_k = Some(40);
+
+        let body = build_body(&payload, &config);
+        assert!(body.get("thinking").is_some(), "thinking must be present");
+        assert!(
+            body.get("temperature").is_none(),
+            "temperature must be stripped when thinking is enabled (Anthropic rejects it)",
+        );
+        assert!(body.get("top_p").is_none(), "top_p must be stripped with thinking");
+        assert!(body.get("top_k").is_none(), "top_k must be stripped with thinking");
+    }
+
+    #[test]
+    fn build_request_keeps_temperature_without_thinking() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hello")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+        config.temperature = Some(0.7);
+
+        let body = build_body(&payload, &config);
+        assert!(body.get("thinking").is_none(), "thinking absent without think_level");
+        assert!(
+            body.get("temperature").is_some(),
+            "temperature preserved when thinking is off",
+        );
+    }
 }

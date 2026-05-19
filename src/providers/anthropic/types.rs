@@ -102,7 +102,7 @@ pub struct ThinkingBlock {
 
 /// Output configuration for controlling response quality and format.
 ///
-/// Not yet wired to RequestPayload — forward-looking type definition.
+/// Wired from `ProviderConfig.effort` in `build_request` (Cycle 4).
 #[derive(Debug, Serialize)]
 pub struct OutputConfig {
     /// Output effort level: "low", "medium", "high", "max"
