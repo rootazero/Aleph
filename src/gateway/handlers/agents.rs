@@ -17,9 +17,7 @@ use serde_json::json;
 use tracing::{debug, info};
 
 use crate::config::agent_manager::{AgentManager, AgentPatch};
-use crate::config::types::agents_def::{
-    AgentDefinition, AgentIdentity, AgentModelConfig, AgentParams,
-};
+use crate::config::types::agents_def::{AgentDefinition, AgentIdentity, AgentParams};
 use crate::sync_primitives::Arc;
 
 use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
@@ -48,11 +46,7 @@ impl From<&AgentDefinition> for AgentSummary {
             name: def.name.clone(),
             emoji: def.identity.as_ref().and_then(|i| i.emoji.clone()),
             description: def.identity.as_ref().and_then(|i| i.description.clone()),
-            model: def
-                .model_config
-                .as_ref()
-                .map(|mc| mc.primary.clone())
-                .or_else(|| def.model.clone()),
+            model: def.model.clone(),
             is_default: def.default,
         }
     }
@@ -72,7 +66,6 @@ pub struct CreateAgentParams {
     pub id: String,
     pub name: Option<String>,
     pub identity: Option<AgentIdentity>,
-    pub model_config: Option<AgentModelConfig>,
     pub params: Option<AgentParams>,
     pub skills: Option<Vec<String>>,
 }
@@ -172,7 +165,6 @@ pub async fn handle_create(
         id: params.id.clone(),
         name: params.name,
         identity: params.identity,
-        model_config: params.model_config,
         params: params.params,
         skills: params.skills,
         ..Default::default()

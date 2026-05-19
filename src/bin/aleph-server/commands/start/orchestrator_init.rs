@@ -179,10 +179,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // aleph.toml. Path is now plumbed end-to-end; defaults stay None
         // so behavior matches pre-Stage-7 main exactly.
         guardrails: build_guardrail_registry(config),
-        // Stage 5b single-step fallback is superseded by the failover chain
-        // wrapped onto `default_provider` above; the field is retired in a
-        // follow-up cleanup. `None` keeps it inert until then.
-        fallback_llm: None,
         stall_config: stall_cfg,
         consecutive_failure_cap: failure_cap,
         turn_timeout: turn_to,

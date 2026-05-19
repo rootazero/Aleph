@@ -230,7 +230,6 @@ mod tests {
             parent_session_id: None,
             guardrails: None,
             // Stage A (P1):
-            fallback_llm: None,
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: None,

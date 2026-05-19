@@ -286,19 +286,6 @@ impl AgentManager {
             agent_table["identity"] = toml_edit::Item::Table(t);
         }
 
-        if let Some(mc) = &patch.model_config {
-            let mut t = toml_edit::Table::new();
-            t["primary"] = toml_edit::value(mc.primary.as_str());
-            if !mc.fallbacks.is_empty() {
-                let mut arr = Array::new();
-                for f in &mc.fallbacks {
-                    arr.push(f.as_str());
-                }
-                t["fallbacks"] = toml_edit::value(arr);
-            }
-            agent_table["model_config"] = toml_edit::Item::Table(t);
-        }
-
         if let Some(params) = &patch.params {
             let mut t = toml_edit::Table::new();
             if let Some(temp) = params.temperature {

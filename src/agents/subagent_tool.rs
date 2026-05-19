@@ -120,8 +120,6 @@ pub struct SubagentTool {
     parent_cancel: Option<CancellationToken>,
     /// B2 — global plugin registry, threaded into each AgentRuntime.
     plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
-    /// B3 — fallback LLM inherited by subagents.
-    fallback_llm: Option<Arc<dyn AiProvider>>,
     /// B3 — stall watchdog config inherited by subagents.
     stall_config: Option<crate::harness::StallConfig>,
     /// B3 — consecutive-failure cap inherited by subagents.
@@ -171,7 +169,6 @@ impl SubagentTool {
             )),
             parent_cancel: None,
             plugin_registry: None,
-            fallback_llm: None,
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: None,
@@ -195,12 +192,6 @@ impl SubagentTool {
         registry: Arc<crate::extension::registry::PluginRegistry>,
     ) -> Self {
         self.plugin_registry = Some(registry);
-        self
-    }
-
-    /// B3 — wire the fallback LLM inherited by subagents.
-    pub fn with_fallback_llm(mut self, fallback: Arc<dyn AiProvider>) -> Self {
-        self.fallback_llm = Some(fallback);
         self
     }
 
@@ -380,9 +371,6 @@ impl SubagentTool {
         }
         if let Some(sink) = self.trace_sink.clone() {
             runtime = runtime.with_trace_sink(sink);
-        }
-        if let Some(fb) = self.fallback_llm.clone() {
-            runtime = runtime.with_fallback_llm(fb);
         }
         if let Some(sc) = self.stall_config.clone() {
             runtime = runtime.with_stall_config(sc);

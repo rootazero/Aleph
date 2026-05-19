@@ -155,19 +155,6 @@ impl AgentManager {
             agent["identity"] = Item::Table(t);
         }
 
-        if let Some(ref mc) = def.model_config {
-            let mut t = Table::new();
-            t["primary"] = toml_edit::value(mc.primary.as_str());
-            if !mc.fallbacks.is_empty() {
-                let mut arr = Array::new();
-                for f in &mc.fallbacks {
-                    arr.push(f.as_str());
-                }
-                t["fallbacks"] = toml_edit::value(arr);
-            }
-            agent["model_config"] = Item::Table(t);
-        }
-
         if let Some(ref params) = def.params {
             let mut t = Table::new();
             if let Some(temp) = params.temperature {

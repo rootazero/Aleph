@@ -125,9 +125,6 @@ pub struct AgentRuntime {
     /// `None` keeps the legacy "no guardrails" path; `Some(_)` propagates
     /// to every `SpawnerBase` built by `spawn_subagent`.
     guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
-    /// Stage A (P1) — fallback LLM threaded into SpawnerBase. `None` keeps
-    /// legacy "no fallback" behavior.
-    fallback_llm: Option<Arc<dyn AiProvider>>,
     /// Stage A (P1) — stall watchdog config threaded into SpawnerBase.
     stall_config: Option<crate::harness::StallConfig>,
     /// Stage A (P1) — consecutive-failure cap threaded into SpawnerBase.
@@ -169,7 +166,6 @@ impl AgentRuntime {
             parent_agent_id: None,
             parent_session_id: None,
             guardrails: None,
-            fallback_llm: None,
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: None,
@@ -214,12 +210,6 @@ impl AgentRuntime {
     // Stage A (P1) — resilience builders threaded into SpawnerBase →
     // HarnessDeps. `SubagentTool` applies them via `build_runtime`; `trace_sink`
     // is wired in production at the run_loop.rs construction site.
-
-    /// Stage A (P1) — wire the fallback LLM. Subagents inherit it identically.
-    pub fn with_fallback_llm(mut self, fallback: Arc<dyn AiProvider>) -> Self {
-        self.fallback_llm = Some(fallback);
-        self
-    }
 
     /// Stage A (P1) — wire the stall watchdog config.
     pub fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
@@ -388,7 +378,6 @@ impl AgentRuntime {
             parent_session_id: self.parent_session_id.clone(),
             guardrails: self.guardrails.clone(),
             // Stage A (P1):
-            fallback_llm: self.fallback_llm.clone(),
             stall_config: self.stall_config.clone(),
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,

@@ -16,9 +16,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::types::agents_def::{
-    AgentIdentity, AgentModelConfig, AgentParams, SubagentPolicy,
-};
+use crate::config::types::agents_def::{AgentIdentity, AgentParams, SubagentPolicy};
 
 // =============================================================================
 // Constants
@@ -49,7 +47,6 @@ pub(super) const MAX_ID_LENGTH: usize = 32;
 pub struct AgentPatch {
     pub name: Option<String>,
     pub identity: Option<AgentIdentity>,
-    pub model_config: Option<AgentModelConfig>,
     pub params: Option<AgentParams>,
     pub skills: Option<Vec<String>>,
     pub skills_blacklist: Option<Vec<String>>,

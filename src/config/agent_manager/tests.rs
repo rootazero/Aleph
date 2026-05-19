@@ -6,7 +6,7 @@ use tempfile::TempDir;
 use toml_edit::DocumentMut;
 
 use crate::config::types::agents_def::{
-    AgentDefinition, AgentIdentity, AgentModelConfig, AgentParams, SubagentPolicy,
+    AgentDefinition, AgentIdentity, AgentParams, SubagentPolicy,
 };
 
 use super::{AgentManager, AgentPatch};
@@ -164,10 +164,6 @@ fn test_create_agent_with_all_fields() {
             avatar: None,
             theme: Some("dark".to_string()),
         }),
-        model_config: Some(AgentModelConfig {
-            primary: "claude-opus-4".to_string(),
-            fallbacks: vec!["gpt-4o".to_string()],
-        }),
         params: Some(AgentParams {
             temperature: Some(0.7),
             max_tokens: Some(4096),
@@ -190,11 +186,6 @@ fn test_create_agent_with_all_fields() {
     assert_eq!(
         agent.identity.as_ref().unwrap().emoji,
         Some("\u{1f916}".to_string())
-    );
-    assert!(agent.model_config.is_some());
-    assert_eq!(
-        agent.model_config.as_ref().unwrap().primary,
-        "claude-opus-4"
     );
     assert!(agent.params.is_some());
     // f32 -> f64 conversion may lose precision, check approximately

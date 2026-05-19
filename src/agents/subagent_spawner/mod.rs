@@ -77,10 +77,6 @@ pub struct SpawnerBase {
     /// as the spawning harness. `None` for harness instances without a
     /// configured registry.
     pub guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
-    /// Stage A (P1) — fallback LLM from `[fallback_provider]`. `None` when
-    /// not configured or when self-referencing the primary. Inherited
-    /// identically from main runner.
-    pub fallback_llm: Option<Arc<dyn AiProvider>>,
     /// Stage A (P1) — stall watchdog config from `[stability]`. `None` when
     /// `stall_timeout_secs` is unset.
     pub stall_config: Option<crate::harness::StallConfig>,
@@ -332,8 +328,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             // Stage 5a (#9): inherit parent guardrails so the subagent enforces
             // the same Input/Output/ToolCall checks as the spawning harness.
             guardrails: base.guardrails.clone(),
-            // Stage A (P1) — was None; now inherited from parent SpawnerBase.
-            fallback_llm: base.fallback_llm.clone(),
             max_iterations: max_iter,
             power: None,
             // Stage A (P1) — was None for all three; now inherited from parent.

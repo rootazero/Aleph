@@ -91,7 +91,6 @@ mod stubs {
             prompt_builder: Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: chain,
             guardrails: None,
-            fallback_llm: None,
             max_iterations: None,
             power: None,
             stall_config: None,
