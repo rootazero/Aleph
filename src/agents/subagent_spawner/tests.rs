@@ -235,8 +235,6 @@ mod tests {
             consecutive_failure_cap: None,
             turn_timeout: None,
             trace_sink: None,
-            // Stage C (P1):
-            lane_scheduler: None,
             // P3 Stage I:
             plugin_registry: None,
         }

@@ -91,9 +91,6 @@ pub struct SpawnerBase {
     /// Stage A (P1) — trace sink, cloned from parent's HarnessDeps.
     /// Subagent run events flow into the same sink as the main runner.
     pub trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
-    /// Stage C (P1) — lane budget enforcement. `None` skips lane checks
-    /// (legacy behavior); `Some(_)` reserves on entry, releases on exit.
-    pub lane_scheduler: Option<Arc<crate::scheduler::LaneScheduler>>,
     /// P3 Stage I — global plugin registry. Used by `McpScope::provision`
     /// for per-agent MCP scope lookups. `None` means MCP scope is disabled
     /// (legacy callers + tests with no `mcp_servers`); a non-empty
@@ -141,31 +138,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         .chain
         .child()
         .ok_or_else(|| "chain depth exceeded".to_string())?;
-
-    // Stage C (P1) — lane budget reservation (fail-fast). Skipped when
-    // `base.lane_scheduler` is None (legacy callers / tests).
-    let lane_run_id = format!("subagent-{}", uuid::Uuid::new_v4());
-    let parent_run_id = base.chain.chain_id.clone();
-    let lane_guard = if let Some(scheduler) = base.lane_scheduler.as_ref() {
-        // Defense-in-depth recursion check (third layer; ChainContext + mode
-        // deny are layers 1-2). Free win since the tracker exists.
-        scheduler
-            .check_recursion_depth(&parent_run_id)
-            .await
-            .map_err(|e| format!("sub-agent failed: recursion depth exceeded: {e}"))?;
-
-        let guard = scheduler
-            .try_reserve(lane_run_id.clone(), crate::scheduler::Lane::Subagent)
-            .await
-            .map_err(|e| format!("sub-agent failed: subagent lane budget exhausted: {e}"))?;
-
-        // Track parent→child for recursion accounting.
-        scheduler.record_spawn(&parent_run_id, &lane_run_id).await;
-
-        Some((scheduler.clone(), guard))
-    } else {
-        None
-    };
 
     // P3 Stage H — provision worktree if requested. The handle is held in the
     // outer scope so Drop fires as a safety net on cancel/panic/timeout/error.
@@ -422,14 +394,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     }
     .await;
 
-    // Stage C (P1) — release lane permit + clear lane state on every exit
-    // path (Ok / Err / panic-rescued).
-    if let Some((scheduler, guard)) = lane_guard {
-        scheduler
-            .on_run_complete(&lane_run_id, crate::scheduler::Lane::Subagent, Some(guard))
-            .await;
-    }
-
     // P3 Stage I — explicit MCP scope shutdown on the success path. Errors and
     // cancels leak the scope to the Drop safety net (which logs `leaked: true`).
     if result.is_ok() {
@@ -445,8 +409,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
 
     // P3 Stage H — explicit cleanup on the success path. Errors and cancels
     // leak the handle to the Drop safety net (which logs `leaked: true` via
-    // TraceSink). Lane is already released above so cleanup does not extend
-    // lane occupancy.
+    // TraceSink).
     if result.is_ok() {
         if let Some(h) = worktree_handle {
             if let Err(e) = h.cleanup().await {

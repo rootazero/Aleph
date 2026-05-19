@@ -157,8 +157,6 @@ async fn subagent_base_carries_5_p1_fields() {
         consecutive_failure_cap: Some(cap),
         turn_timeout: Some(turn),
         trace_sink: Some(trace_sink.clone()),
-        // Stage C (P1):
-        lane_scheduler: None,
         // P3 Stage I:
         plugin_registry: None,
     };

@@ -161,7 +161,6 @@ async fn h_t1_worktree_isolation_happy_path() {
         consecutive_failure_cap: None,
         turn_timeout: None,
         trace_sink: Some(sink_for_base),
-        lane_scheduler: None,
         // P3 Stage I:
         plugin_registry: None,
     };

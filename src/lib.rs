@@ -89,7 +89,6 @@ pub mod vision;
 
 pub mod daemon;
 pub mod resilience;
-pub mod scheduler;
 pub mod secrets;
 pub mod security;
 pub mod sync_primitives;
