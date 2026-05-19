@@ -127,28 +127,6 @@ impl AlephToolServer {
         self.tool(MemorySearchTool::new_with_embedder(database, embedder))
     }
 
-    /// Register MCP resource reading tool
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let server = AlephToolServer::new()
-    ///     .with_mcp_read_resource(mcp_handle);
-    /// ```
-    pub fn with_mcp_read_resource(self, mcp_handle: crate::mcp::manager::McpManagerHandle) -> Self {
-        self.tool(McpReadResourceTool::new(mcp_handle))
-    }
-
-    /// Register MCP prompt retrieval tool
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let server = AlephToolServer::new()
-    ///     .with_mcp_get_prompt(mcp_handle);
-    /// ```
-    pub fn with_mcp_get_prompt(self, mcp_handle: crate::mcp::manager::McpManagerHandle) -> Self {
-        self.tool(McpGetPromptTool::new(mcp_handle))
-    }
-
     /// Register the browser automation tool (Chromium via CDP).
     ///
     /// The tool manages its own browser lifecycle. When no browser is running,

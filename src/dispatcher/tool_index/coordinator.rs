@@ -10,7 +10,6 @@ use std::path::PathBuf;
 
 use super::inference::SemanticPurposeInferrer;
 use crate::error::AlephError;
-use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
 use crate::memory::context::{
     FactSource, FactSpecificity, MemoryCategory, MemoryFact, MemoryLayer, NoteType, TemporalScope,
 };
@@ -514,119 +513,6 @@ impl ToolIndexCoordinator {
     }
 
     // ========== Event Listeners ==========
-
-    /// Start listening to MCP Manager events
-    ///
-    /// This spawns a background task that listens for MCP events and
-    /// automatically re-syncs tool notes when tools change on MCP servers.
-    ///
-    /// Events handled:
-    /// - `ServerStarted`: Re-sync tools for the started server
-    /// - `ToolsChanged`: Re-sync tools for the affected server
-    /// - `ServerCrashed`: Remove tools for the crashed server
-    ///
-    /// # Arguments
-    /// * `mcp_handle` - Handle to the MCP Manager
-    /// * `tool_provider` - Callback to get tools for a server (server_id -> Vec<ToolMeta>)
-    ///
-    /// # Returns
-    /// A JoinHandle for the spawned task (can be used to abort the listener)
-    pub fn start_mcp_listener<F>(
-        self: Arc<Self>,
-        mcp_handle: McpManagerHandle,
-        tool_provider: F,
-    ) -> tokio::task::JoinHandle<()>
-    where
-        F: Fn(String) -> Vec<ToolMeta> + Send + Sync + 'static,
-    {
-        let mut receiver = mcp_handle.subscribe();
-        let coordinator = self;
-        let tool_provider = Arc::new(tool_provider);
-
-        tokio::spawn(async move {
-            tracing::info!("ToolIndexCoordinator: MCP event listener started");
-
-            loop {
-                match receiver.recv().await {
-                    Ok(event) => {
-                        match &event {
-                            McpManagerEvent::ServerStarted {
-                                server_id,
-                                tool_count,
-                                ..
-                            } => {
-                                tracing::info!(
-                                    server_id = %server_id,
-                                    tool_count = %tool_count,
-                                    "MCP server started, syncing tools"
-                                );
-                                let tools = tool_provider(server_id.clone());
-                                if let Err(e) = coordinator.sync_all(tools).await {
-                                    tracing::error!(
-                                        error = %e,
-                                        server_id = %server_id,
-                                        "Failed to sync tools for started MCP server"
-                                    );
-                                }
-                            }
-                            McpManagerEvent::ToolsChanged {
-                                server_id,
-                                tool_count,
-                            } => {
-                                tracing::info!(
-                                    server_id = %server_id,
-                                    tool_count = %tool_count,
-                                    "MCP tools changed, re-syncing"
-                                );
-                                let tools = tool_provider(server_id.clone());
-                                if let Err(e) = coordinator.sync_all(tools).await {
-                                    tracing::error!(
-                                        error = %e,
-                                        server_id = %server_id,
-                                        "Failed to sync tools after MCP tools changed"
-                                    );
-                                }
-                            }
-                            McpManagerEvent::ServerCrashed {
-                                server_id, error, ..
-                            } => {
-                                tracing::warn!(
-                                    server_id = %server_id,
-                                    error = %error,
-                                    "MCP server crashed, invalidating tools"
-                                );
-                                // We could remove tools here, but for now just log
-                                // The tools will be re-synced when server restarts
-                            }
-                            McpManagerEvent::ServerRemoved { server_id, .. } => {
-                                tracing::info!(
-                                    server_id = %server_id,
-                                    "MCP server removed"
-                                );
-                                // Tools from this server should be removed
-                                // but we need to know which tools belong to which server
-                                // This would require additional metadata tracking
-                            }
-                            _ => {
-                                // Other events (ManagerReady, ManagerShutdown, etc.)
-                                // don't require tool index updates
-                            }
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        tracing::info!("MCP event channel closed, stopping listener");
-                        break;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(
-                            lagged = n,
-                            "MCP event listener lagged, some events may have been missed"
-                        );
-                    }
-                }
-            }
-        })
-    }
 
     /// Start listening to Skill Registry events
     ///

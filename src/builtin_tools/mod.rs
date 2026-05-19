@@ -18,10 +18,6 @@
 //! - [`ListToolsTool`] - List available tools by category
 //! - [`GetToolSchemaTool`] - Get full JSON Schema for a specific tool
 //!
-//! # Tool Wrappers (for hot-reload)
-//!
-//! - [`McpToolWrapper`] - Wraps MCP server tools as rig-compatible tools
-//!
 //! # Tool Progress Callbacks
 //!
 //! This module provides a global callback mechanism for monitoring tool execution.
@@ -52,10 +48,8 @@ pub mod gateway_route;
 pub mod generation;
 pub mod heartbeat_manage;
 pub mod invalid;
-pub mod mcp_discover;
 pub mod mcp_prompt;
 pub mod mcp_resource;
-pub mod mcp_wrapper;
 pub mod media_send;
 pub mod media_tool;
 pub mod media_tools;
@@ -141,10 +135,8 @@ pub use heartbeat_manage::{
     HeartbeatUpdateArgs, HeartbeatUpdateOutput, HeartbeatUpdateTool,
 };
 pub use invalid::{InvalidTool, InvalidToolArgs, InvalidToolOutput};
-pub use mcp_discover::{McpToolSchemaArgs, McpToolSchemaOutput, McpToolSchemaTool};
 pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, PromptOutputMessage};
 pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};
-pub use mcp_wrapper::McpToolWrapper;
 pub use media_tool::{MediaArgs, MediaOutput, MediaTool};
 pub use media_tools::{
     AudioTranscribeArgs, AudioTranscribeOutput, AudioTranscribeTool, DocumentExtractArgs,
