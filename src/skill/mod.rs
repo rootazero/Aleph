@@ -28,7 +28,7 @@ pub use config::{
 };
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 pub use events::SkillSystemEvent;
-pub use guard::{install_allowed, merge_verdicts, scan_content, ScanVerdict, ThreatLevel, TrustLevel};
+pub use guard::{install_allowed, merge_verdicts, scan_content, scan_skill_directory, ScanVerdict, ThreatLevel, TrustLevel};
 pub use installer::{
     build_install_command, filter_install_specs_for_current_os, select_best_install,
     InstallExecutor, InstallResult,
