@@ -445,7 +445,8 @@ impl BuiltinToolRegistry {
                     TaskCreateTool, TaskListTool, TaskUpdateTool, TaskWaitTool,
                 };
 
-                let create = TaskCreateTool::new(Arc::clone(store));
+                let create =
+                    TaskCreateTool::new(Arc::clone(store), config.dispatch_signal.clone());
                 let list = TaskListTool::new(Arc::clone(store));
 
                 // TaskUpdateTool and TaskWaitTool need the event bus

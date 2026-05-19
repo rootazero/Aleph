@@ -86,6 +86,7 @@ pub enum EventType {
     TeamTaskAssigned,
     TeamTaskUpdated,
     TeamTaskCompleted,
+    TeamTaskFailed,
     TeamDisbanded,
     TeamMessageSent,
 
@@ -188,6 +189,11 @@ pub enum AlephEvent {
         task_id: String,
         result_summary: Option<String>,
     },
+    TeamTaskFailed {
+        team_id: String,
+        task_id: String,
+        error: String,
+    },
     TeamDisbanded {
         team_id: String,
     },
@@ -233,6 +239,7 @@ impl AlephEvent {
             Self::TeamTaskAssigned { .. } => EventType::TeamTaskAssigned,
             Self::TeamTaskUpdated { .. } => EventType::TeamTaskUpdated,
             Self::TeamTaskCompleted { .. } => EventType::TeamTaskCompleted,
+            Self::TeamTaskFailed { .. } => EventType::TeamTaskFailed,
             Self::TeamDisbanded { .. } => EventType::TeamDisbanded,
             Self::TeamMessageSent(_) => EventType::TeamMessageSent,
         }
@@ -274,6 +281,7 @@ impl AlephEvent {
             Self::TeamTaskAssigned { .. } => "TeamTaskAssigned",
             Self::TeamTaskUpdated { .. } => "TeamTaskUpdated",
             Self::TeamTaskCompleted { .. } => "TeamTaskCompleted",
+            Self::TeamTaskFailed { .. } => "TeamTaskFailed",
             Self::TeamDisbanded { .. } => "TeamDisbanded",
             Self::TeamMessageSent(_) => "TeamMessageSent",
         }

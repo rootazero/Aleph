@@ -140,6 +140,7 @@ impl SessionRecorder {
             | AlephEvent::TeamTaskAssigned { .. }
             | AlephEvent::TeamTaskUpdated { .. }
             | AlephEvent::TeamTaskCompleted { .. }
+            | AlephEvent::TeamTaskFailed { .. }
             | AlephEvent::TeamDisbanded { .. }
             | AlephEvent::TeamMessageSent(_) => None,
         }

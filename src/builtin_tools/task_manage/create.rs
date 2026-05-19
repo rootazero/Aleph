@@ -8,6 +8,7 @@ use tracing::info;
 use crate::agents::swarm::tasks::{CoordTaskStore, NewCoordTask, Priority};
 use crate::error::Result;
 use crate::sync_primitives::Arc;
+use crate::teams::dispatcher::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -54,15 +55,43 @@ pub struct TaskCreateOutput {
 // =============================================================================
 
 /// Tool that creates a new coordination task.
+///
+/// Tasks created here are tagged as dispatcher-managed: once their
+/// dependencies are satisfied and an owner is set, the autonomous
+/// [`TeamDispatcher`](crate::teams::dispatcher) executes them. Creating a task
+/// signals the dispatcher so a ready task starts without polling latency.
 #[derive(Clone)]
 pub struct TaskCreateTool {
     store: Arc<dyn CoordTaskStore>,
+    /// Shared wake handle for the dispatcher loop (None outside the server).
+    dispatch_signal: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl TaskCreateTool {
-    pub fn new(store: Arc<dyn CoordTaskStore>) -> Self {
-        Self { store }
+    pub fn new(
+        store: Arc<dyn CoordTaskStore>,
+        dispatch_signal: Option<Arc<tokio::sync::Notify>>,
+    ) -> Self {
+        Self {
+            store,
+            dispatch_signal,
+        }
     }
+}
+
+/// Merge the dispatcher-managed marker into a caller-supplied metadata value.
+fn with_managed_marker(metadata: Option<serde_json::Value>) -> serde_json::Value {
+    let mut value = match metadata {
+        Some(v) if v.is_object() => v,
+        _ => serde_json::json!({}),
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            MANAGED_BY_KEY.to_string(),
+            serde_json::Value::String(MANAGED_BY_DISPATCHER.to_string()),
+        );
+    }
+    value
 }
 
 #[async_trait]
@@ -71,7 +100,8 @@ impl AlephTool for TaskCreateTool {
     const DESCRIPTION: &'static str =
         "Create a new coordination task for the agent swarm. Tasks can have \
          dependencies (blocked_by), priority levels, and be assigned to a team \
-         or specific agent owner.";
+         or specific agent owner. Once dependencies are met, the team \
+         dispatcher runs the task automatically.";
 
     type Args = TaskCreateArgs;
     type Output = TaskCreateOutput;
@@ -94,12 +124,17 @@ impl AlephTool for TaskCreateTool {
             owner: args.owner,
             priority,
             blocked_by: args.blocked_by.unwrap_or_default(),
-            metadata: args.metadata.unwrap_or(serde_json::Value::Null),
+            metadata: with_managed_marker(args.metadata),
         };
 
         let task = self.store.create_task(new_task).await?;
 
         info!(task_id = %task.id, subject = %task.subject, "Task created");
+
+        // Wake the dispatcher so a ready task is picked up immediately.
+        if let Some(signal) = &self.dispatch_signal {
+            signal.notify_one();
+        }
 
         Ok(TaskCreateOutput {
             message: format!("Task '{}' created (id: {})", task.subject, task.id),

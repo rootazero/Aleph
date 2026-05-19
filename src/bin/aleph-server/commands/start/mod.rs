@@ -999,55 +999,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
-    // Register KanbanAutoUnblocker + TeamEventLogger on GlobalBus.
-    // Both handlers are fire-and-forget (handle returns empty vec), so we pass a
-    // dummy EventContext — they never call ctx.bus.publish().
-    if let (Some(artifact_store), Some(event_store)) = (
-        agent_result.artifact_store.clone(),
-        agent_result.event_store.clone(),
-    ) {
+    // Register TeamEventLogger on GlobalBus.
+    // The handler is fire-and-forget (handle returns empty vec), so we pass a
+    // dummy EventContext — it never calls ctx.bus.publish().
+    if let Some(event_store) = agent_result.event_store.clone() {
         (|| {
             use alephcore::event::{
-                AlephEvent, EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
+                EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
             };
             use alephcore::teams::events::TeamEventLogger;
-            use alephcore::teams::kanban::unblocker::KanbanAutoUnblocker;
 
-            let artifact_store_concrete = match Arc::downcast::<
-                alephcore::teams::artifacts::SqliteArtifactStore,
-            >(artifact_store)
-            {
-                Ok(s) => s,
-                Err(_) => {
-                    tracing::error!("artifact_store is not SqliteArtifactStore; skipping KanbanAutoUnblocker registration");
-                    return;
-                }
-            };
-            let kanban_handler = Arc::new(KanbanAutoUnblocker::new(artifact_store_concrete));
             let team_logger = Arc::new(TeamEventLogger::new(event_store));
             let dummy_bus = EventBus::new();
             let ctx = EventContext::new(dummy_bus);
 
-            let kanban_handler_clone = kanban_handler.clone();
-            let ctx_kanban = ctx.clone();
             tokio::spawn(async move {
-                let _kanban_sub = GlobalBus::global()
-                .subscribe_async(EventFilter::new(vec![EventType::TeamTaskCompleted]), move |global_event| {
-                    let AlephEvent::TeamTaskCompleted { team_id, task_id, result_summary } = global_event.event else {
-                        return;
-                    };
-                    let handler = kanban_handler_clone.clone();
-                    let task_id_str = task_id.clone();
-                    let ctx = ctx_kanban.clone();
-                    tokio::spawn(async move {
-                        match handler.handle(&AlephEvent::TeamTaskCompleted { team_id, task_id, result_summary }, &ctx).await {
-                            Ok(_) => {},
-                            Err(e) => tracing::debug!(handler = handler.name(), task_id = %task_id_str, error = %e, "KanbanAutoUnblocker handle error"),
-                        }
-                    });
-                })
-                .await;
-
                 let team_logger_clone = team_logger.clone();
                 let ctx_team = ctx.clone();
                 let _team_sub = GlobalBus::global()
@@ -1076,9 +1042,48 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 )
                 .await;
 
-                tracing::info!(
-                    "Team event handlers registered (KanbanAutoUnblocker, TeamEventLogger)"
-                );
+                tracing::info!("Team event handlers registered (TeamEventLogger)");
+            });
+        })();
+    }
+
+    // Register TeamNotifier on GlobalBus — routes autonomous dispatcher task
+    // outcomes to the team leader's inbox (R5: AI proactively reaches the user).
+    if let (Some(team_store), Some(coord_store), Some(msg_router)) = (
+        agent_result.team_store.clone(),
+        agent_result.coord_task_store.clone(),
+        agent_result.message_router.clone(),
+    ) {
+        (|| {
+            use alephcore::event::{
+                EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
+            };
+            use alephcore::teams::TeamNotifier;
+
+            let notifier = Arc::new(TeamNotifier::new(team_store, coord_store, msg_router));
+            let dummy_bus = EventBus::new();
+            let ctx = EventContext::new(dummy_bus);
+
+            tokio::spawn(async move {
+                let _notifier_sub = GlobalBus::global()
+                    .subscribe_async(
+                        EventFilter::new(vec![
+                            EventType::TeamTaskCompleted,
+                            EventType::TeamTaskFailed,
+                        ]),
+                        move |global_event| {
+                            let handler = notifier.clone();
+                            let event = global_event.event.clone();
+                            let ctx = ctx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = handler.handle(&event, &ctx).await {
+                                    tracing::warn!(handler = handler.name(), error = %e, "TeamNotifier handle error");
+                                }
+                            });
+                        },
+                    )
+                    .await;
+                tracing::info!("Team notifier registered (TeamNotifier)");
             });
         })();
     }

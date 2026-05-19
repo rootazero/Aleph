@@ -99,7 +99,11 @@ pub struct NewTeamMember {
 // TeamSummary
 // ---------------------------------------------------------------------------
 
-/// A lightweight summary of a team, including aggregate counts.
+/// A lightweight summary of a team and its member count.
+///
+/// Per-team task counts are intentionally not included here: tasks live in the
+/// `coord_tasks` DAG (a separate database from `teams.db`). Use the
+/// `team_status` tool for an accurate task breakdown.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamSummary {
     pub id: TeamId,
@@ -108,7 +112,6 @@ pub struct TeamSummary {
     pub leader_id: String,
     pub status: TeamStatus,
     pub member_count: u64,
-    pub task_count: u64,
     pub created_at: i64,
     pub disbanded_at: Option<i64>,
 }

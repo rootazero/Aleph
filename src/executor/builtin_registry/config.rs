@@ -64,6 +64,10 @@ pub struct BuiltinToolConfig {
     pub memory_similarity_threshold: Option<f32>,
     /// Coordination task store for task/team management tools
     pub coord_task_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
+    /// Wake handle for the autonomous team dispatcher loop.
+    /// Shared with `task_create` so a newly created task is dispatched without
+    /// polling latency.
+    pub dispatch_signal: Option<Arc<tokio::sync::Notify>>,
     /// Agent message bus for task update/wait event notifications
     pub agent_message_bus: Option<Arc<crate::agents::swarm::AgentMessageBus>>,
     /// Team store for team management tools (team_create, team_delegate, team_status, team_disband)
