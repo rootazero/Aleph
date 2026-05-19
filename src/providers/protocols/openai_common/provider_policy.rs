@@ -425,7 +425,9 @@ pub fn build_payload_policy(
     } else if is_responses_api {
         (None, true)
     } else {
-        (None, false)
+        // Chat Completions has no `store` field — it is Responses-API-only.
+        // Strip it defensively so a stray value never reaches a chat endpoint.
+        (None, true)
     };
 
     let strip_reasoning = !capabilities.supports_reasoning_effort;
