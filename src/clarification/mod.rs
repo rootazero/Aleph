@@ -32,7 +32,7 @@
 
 pub mod session;
 
-pub use session::{ClarificationManager, PendingClarification, SessionConfig};
+pub use session::{ClarificationManager, DEFAULT_CLARIFY_TIMEOUT};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
