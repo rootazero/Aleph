@@ -128,35 +128,49 @@ pub async fn run_heartbeat_loop(
 
 // ── Collect Due Tasks ────────────────────────────────────────────────
 
-/// Find all tasks that are due by timer or have been woken.
+/// Find all tasks that are due by timer or have been woken, and mark each
+/// one as running before returning it.
 async fn collect_due_tasks(
     state: &HeartbeatServiceState,
     wake_requests: &[WakeRequest],
 ) -> Vec<(HeartbeatTask, Option<String>)> {
-    let store = state.store.lock().await;
+    let mut store = state.store.lock().await;
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let mut due = Vec::new();
 
+    // First pass (immutable): identify which tasks are due.
+    let mut due_ids: Vec<(String, Option<String>)> = Vec::new();
     for task in store.tasks() {
         if !task.enabled {
             continue;
         }
-        // Skip tasks that are already running (per-task exclusion)
+        // Skip tasks that are already running (per-task exclusion).
         if task.state.running_at_ms.is_some() {
             continue;
         }
-
-        // Check if task is due by timer
         let is_due = task.state.next_due_ms.map(|t| t <= now_ms).unwrap_or(false);
-
-        // Check if task was woken
         let wake_reason = wake_requests
             .iter()
             .find(|w| w.task_id == task.id)
             .and_then(|w| w.reason.clone());
-
         if is_due || wake_reason.is_some() {
+            due_ids.push((task.id.clone(), wake_reason));
+        }
+    }
+
+    // Second pass (mutable): mark each due task as running *before* handing
+    // it to the executor. This is what makes the per-task exclusion guard
+    // above effective — the next tick skips a task that is still running,
+    // and a crash leaves a stale marker that startup catchup clears.
+    let mut due = Vec::with_capacity(due_ids.len());
+    for (id, wake_reason) in due_ids {
+        if let Some(task) = store.get_task_mut(&id) {
+            task.state.running_at_ms = Some(now_ms);
             due.push((task.clone(), wake_reason));
+        }
+    }
+    if !due.is_empty() {
+        if let Err(e) = store.persist() {
+            error!(error = %e, "heartbeat: failed to persist running markers");
         }
     }
 

@@ -1559,13 +1559,36 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             };
 
+            // Build the delivery engine with all targets registered so
+            // heartbeat L2 results actually reach the user (H2). Without this
+            // every deliver() call hits the "target not registered" path.
+            let delivery_engine = {
+                let mut engine = DeliveryEngine::new();
+                engine.register(Arc::new(
+                    alephcore::tasks::cron::webhook_target::WebhookTarget::new(),
+                ));
+                let hb_channel_cell = agent_result
+                    .channel_registry_cell
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
+                engine.register(Arc::new(
+                    alephcore::tasks::shared::targets::GatewayDeliveryTarget::new(hb_channel_cell),
+                ));
+                let raw_store: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore> =
+                    memory_db.clone();
+                engine.register(Arc::new(
+                    alephcore::tasks::shared::targets::MemoryDeliveryTarget::new(raw_store),
+                ));
+                Arc::new(engine)
+            };
+
             let tick_ctx = Arc::new(TickContext {
                 probe_executor: Arc::new(DefaultProbeExecutor::new(Arc::clone(tool_reg))),
                 adapter: Arc::new(DefaultHeartbeatAdapter::new(
                     Arc::clone(exec_adapter),
                     Arc::clone(registry),
                 )),
-                delivery: Arc::new(DeliveryEngine::new()),
+                delivery: delivery_engine,
                 dedup: dedup_engine,
             });
 

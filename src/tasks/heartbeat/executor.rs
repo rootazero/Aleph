@@ -12,7 +12,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::gateway::agent_instance::AgentRegistry;
-use crate::gateway::event_emitter::NoOpEventEmitter;
+use crate::gateway::event_emitter::{CollectingEventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::router::SessionKey;
@@ -143,20 +143,24 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         };
 
-        // Silent execution — no user-facing events
+        // Collect events (no user-facing emitter): the L2 agent declares its
+        // outcome by calling the `heartbeat_report` tool, and that tool call
+        // is recovered from the collected stream after the run completes.
+        let collector = Arc::new(CollectingEventEmitter::new());
         let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-            Arc::new(NoOpEventEmitter::new());
+            Arc::clone(&collector) as _;
 
         info!(agent_id, "executing heartbeat L2 agent turn");
 
         match self.adapter.execute(request, agent, emitter).await {
             Ok(()) => {
                 let duration_ms = start.elapsed().as_millis() as i64;
-                // Successful execution — treat as Silent for now.
-                // Future: Parse agent response for heartbeat_report tool calls
-                // to distinguish NeedsDelivery vs Silent.
+                // Recover the agent's heartbeat_report decision from this
+                // run's event stream (scoped to this run only — a stray
+                // call from any other session cannot leak in here).
+                let status = classify_l2_outcome(&collector.events().await);
                 Ok(HeartbeatL2Result {
-                    status: HeartbeatL2Status::Silent,
+                    status,
                     duration_ms,
                 })
             }
@@ -188,6 +192,44 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
     }
 }
 
+// ── L2 Outcome Classification ────────────────────────────────────────
+
+/// Recover the L2 agent's declared outcome from its event stream.
+///
+/// The L2 agent reports findings by calling the `heartbeat_report` tool.
+/// We scan the collected `ToolStart` events for the last such call and read
+/// its `action` / `message` arguments. If the agent never called the tool,
+/// the outcome is `Silent` (no notification).
+fn classify_l2_outcome(events: &[StreamEvent]) -> HeartbeatL2Status {
+    for event in events.iter().rev() {
+        let StreamEvent::ToolStart {
+            tool_name, params, ..
+        } = event
+        else {
+            continue;
+        };
+        if tool_name != "heartbeat_report" {
+            continue;
+        }
+        let action = params
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("silent");
+        if action == "notify" {
+            let msg = params
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if !msg.is_empty() {
+                return HeartbeatL2Status::NeedsDelivery(msg.to_string());
+            }
+        }
+        return HeartbeatL2Status::Silent;
+    }
+    HeartbeatL2Status::Silent
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -195,6 +237,73 @@ mod tests {
     use super::*;
     use crate::tasks::heartbeat::config::{ProbeConfig, TriggerCondition};
     use serde_json::json;
+
+    fn tool_start(tool_name: &str, params: serde_json::Value) -> StreamEvent {
+        StreamEvent::ToolStart {
+            run_id: "run-1".into(),
+            seq: 0,
+            tool_name: tool_name.into(),
+            tool_id: "tool-1".into(),
+            params,
+        }
+    }
+
+    #[test]
+    fn classify_notify_yields_needs_delivery() {
+        let events = vec![tool_start(
+            "heartbeat_report",
+            json!({"action": "notify", "message": "3 unread emails"}),
+        )];
+        match classify_l2_outcome(&events) {
+            HeartbeatL2Status::NeedsDelivery(msg) => assert_eq!(msg, "3 unread emails"),
+            other => panic!("expected NeedsDelivery, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_silent_action_yields_silent() {
+        let events = vec![tool_start("heartbeat_report", json!({"action": "silent"}))];
+        assert!(matches!(
+            classify_l2_outcome(&events),
+            HeartbeatL2Status::Silent
+        ));
+    }
+
+    #[test]
+    fn classify_no_report_call_yields_silent() {
+        let events = vec![tool_start("some_other_tool", json!({"x": 1}))];
+        assert!(matches!(
+            classify_l2_outcome(&events),
+            HeartbeatL2Status::Silent
+        ));
+    }
+
+    #[test]
+    fn classify_notify_with_empty_message_yields_silent() {
+        let events = vec![tool_start(
+            "heartbeat_report",
+            json!({"action": "notify", "message": "  "}),
+        )];
+        assert!(matches!(
+            classify_l2_outcome(&events),
+            HeartbeatL2Status::Silent
+        ));
+    }
+
+    #[test]
+    fn classify_uses_last_report_call() {
+        let events = vec![
+            tool_start("heartbeat_report", json!({"action": "silent"})),
+            tool_start(
+                "heartbeat_report",
+                json!({"action": "notify", "message": "final answer"}),
+            ),
+        ];
+        match classify_l2_outcome(&events) {
+            HeartbeatL2Status::NeedsDelivery(msg) => assert_eq!(msg, "final answer"),
+            other => panic!("expected NeedsDelivery, got {other:?}"),
+        }
+    }
 
     fn make_task() -> HeartbeatTask {
         HeartbeatTask::new(
