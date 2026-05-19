@@ -219,20 +219,20 @@ impl SubagentTool {
             task.clone(),
         );
 
-        let provider = self.provider.clone();
+        let mut runtime = self.build_runtime(child_chain, cancel_token);
+        if let Some(parent_sink) = self.trace_sink.clone() {
+            let wrapper: Arc<dyn crate::harness::TraceSink> = Arc::new(
+                crate::agents::forwarding_trace_sink::ForwardingTraceSink::new(
+                    parent_sink,
+                    self.background_tracker.clone(),
+                    request_id.clone(),
+                ),
+            );
+            runtime = runtime.with_trace_sink(wrapper);
+        }
+
         let tracker = self.background_tracker.clone();
         let rid = request_id.clone();
-        let session = self.session.clone();
-        let parent_tools = self.parent_tools.clone();
-        let sandbox = self.sandbox.clone();
-        let raw_memory_writer = self.raw_memory_writer.clone();
-        let capture_registry = self.capture_registry.clone();
-        let parent_agent_id = self.parent_agent_id.clone();
-        let parent_session_id = self.parent_session_id.clone();
-        let parent_trace_sink = self.trace_sink.clone();
-        let tracker_for_wrapper = self.background_tracker.clone();
-        let request_id_for_wrapper = request_id.clone();
-
         tokio::spawn(async move {
             let runtime_config = AgentRuntimeConfig {
                 agent_def,
@@ -241,40 +241,9 @@ impl SubagentTool {
                 model,
                 timeout_secs,
             };
-
-            let mut runtime = AgentRuntime::new(
-                provider,
-                child_chain,
-                cancel_token,
-                session,
-                parent_tools,
-                sandbox,
-            )
-            .with_parent_agent_id(parent_agent_id);
-            if let Some(w) = raw_memory_writer {
-                runtime = runtime.with_raw_memory_writer(w);
-            }
-            if let Some(reg) = capture_registry {
-                runtime = runtime.with_capture_registry(reg);
-            }
-            if let Some(sid) = parent_session_id {
-                runtime = runtime.with_parent_session_id(sid);
-            }
-            if let Some(parent_sink) = parent_trace_sink {
-                let wrapper: Arc<dyn crate::harness::TraceSink> = Arc::new(
-                    crate::agents::forwarding_trace_sink::ForwardingTraceSink::new(
-                        parent_sink,
-                        tracker_for_wrapper,
-                        request_id_for_wrapper,
-                    ),
-                );
-                runtime = runtime.with_trace_sink(wrapper);
-            }
-
             let result = AssertUnwindSafe(runtime.run(runtime_config))
                 .catch_unwind()
                 .await;
-
             let outcome = match result {
                 Ok(Ok(r)) => Ok(r.final_text.unwrap_or_else(|| "(no output)".to_string())),
                 Ok(Err(e)) => Err(e),
@@ -284,6 +253,35 @@ impl SubagentTool {
         });
 
         request_id
+    }
+
+    /// Build an `AgentRuntime` with every inheritable field this tool carries
+    /// applied. Single construction point for the foreground, sync-batch, and
+    /// background spawn paths so new wiring lands in one place.
+    fn build_runtime(
+        &self,
+        child_chain: crate::harness::chain_context::ChainContext,
+        cancel: CancellationToken,
+    ) -> AgentRuntime {
+        let mut runtime = AgentRuntime::new(
+            self.provider.clone(),
+            child_chain,
+            cancel,
+            self.session.clone(),
+            self.parent_tools.clone(),
+            self.sandbox.clone(),
+        )
+        .with_parent_agent_id(self.parent_agent_id.clone());
+        if let Some(w) = self.raw_memory_writer.clone() {
+            runtime = runtime.with_raw_memory_writer(w);
+        }
+        if let Some(reg) = self.capture_registry.clone() {
+            runtime = runtime.with_capture_registry(reg);
+        }
+        if let Some(sid) = self.parent_session_id.clone() {
+            runtime = runtime.with_parent_session_id(sid);
+        }
+        runtime
     }
 }
 
