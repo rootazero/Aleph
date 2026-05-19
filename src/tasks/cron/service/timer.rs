@@ -61,8 +61,11 @@ pub async fn on_timer_tick<C: Clock>(
     state: &Arc<ServiceState<C>>,
     executor: &JobExecutorFn,
 ) -> Result<(), String> {
-    // Phase 1: mark due jobs
-    let snapshots = phase1_mark_due_jobs(&state.store, state.clock.as_ref()).await?;
+    // Phase 1: mark due jobs. The configured per-job timeout is threaded
+    // into each snapshot so it reaches the executor (C5).
+    let default_timeout_ms = (state.config.job_timeout_secs as i64).saturating_mul(1000);
+    let snapshots =
+        phase1_mark_due_jobs(&state.store, state.clock.as_ref(), default_timeout_ms).await?;
 
     if snapshots.is_empty() {
         return Ok(());

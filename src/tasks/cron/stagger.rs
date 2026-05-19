@@ -25,7 +25,8 @@ pub fn compute_stagger_offset(job_id: &str, stagger_ms: i64) -> i64 {
 /// - If `stagger_ms <= 0`, returns `cron_next_ms` unchanged (passthrough).
 /// - Otherwise, adds a deterministic offset to `cron_next_ms`.
 /// - If the result is still in the future (`> now_ms`), returns it.
-/// - Otherwise, advances by one full `stagger_ms` window.
+/// - Otherwise, advances by whole `stagger_ms` windows until it lands
+///   strictly after `now_ms`.
 pub fn compute_staggered_next(
     job_id: &str,
     cron_next_ms: i64,
@@ -42,7 +43,12 @@ pub fn compute_staggered_next(
     if staggered > now_ms {
         staggered
     } else {
-        cron_next_ms + stagger_ms + offset
+        // `staggered` is already past. Advance by exactly enough whole
+        // windows to land strictly after `now_ms` — a single-window advance
+        // only covers up to one window of lag.
+        let lag = now_ms - staggered;
+        let windows = lag / stagger_ms + 1;
+        staggered + windows * stagger_ms
     }
 }
 

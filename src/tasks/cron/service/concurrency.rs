@@ -12,12 +12,15 @@ use tracing::warn;
 use crate::sync_primitives::Arc;
 
 use crate::tasks::cron::chain;
-use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, RunStatus, TriggerSource};
+use crate::tasks::cron::config::{
+    ExecutionResult, JobSnapshot, RunStatus, ScheduleKind, TriggerSource,
+};
 use crate::tasks::cron::history::CronRunRecord;
 use crate::tasks::cron::store::CronStore;
 use crate::tasks::shared::clock::Clock;
+use crate::tasks::shared::schedule::compute_backoff_ms;
 
-use super::ops::recompute_next_run_maintenance;
+use super::ops::{advance_next_run, recompute_next_run_maintenance};
 
 /// Phase 1: Mark due jobs and return snapshots for execution.
 ///
@@ -25,11 +28,16 @@ use super::ops::recompute_next_run_maintenance;
 /// - Not already running (`running_at_ms == None`)
 /// - Past due (`next_run_at_ms <= now`)
 ///
-/// For each due job, sets `running_at_ms = now` and creates a `JobSnapshot`.
+/// For each due job, sets `running_at_ms = now`, **advances the schedule to
+/// the next future occurrence** (at-most-once), and creates a `JobSnapshot`.
 /// Persists and releases the lock.
+///
+/// `default_timeout_ms` is the configured per-job execution timeout, threaded
+/// into each snapshot so it reaches the executor.
 pub async fn phase1_mark_due_jobs<C: Clock>(
     store: &Arc<tokio::sync::Mutex<CronStore>>,
     clock: &C,
+    default_timeout_ms: i64,
 ) -> Result<Vec<JobSnapshot>, String> {
     let now = clock.now_ms();
     let mut guard = store.lock().await;
@@ -45,13 +53,20 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
         if job.state.running_at_ms.is_some() {
             continue;
         }
-        let _next = match job.state.next_run_at_ms {
-            Some(t) if t <= now => t,
+        match job.state.next_run_at_ms {
+            Some(t) if t <= now => {}
             _ => continue,
-        };
+        }
 
-        // Mark as running
+        // Mark as running.
         job.state.running_at_ms = Some(now);
+
+        // At-most-once: advance the schedule to the next future occurrence
+        // *before* execution. If the process crashes between here and phase 3
+        // writeback, the schedule is already advanced — a recurring job will
+        // not re-run the same trigger, and a one-shot `At` job (whose next
+        // occurrence is `None`) will not fire again.
+        advance_next_run(job, clock);
 
         snapshots.push(JobSnapshot {
             id: job.id.clone(),
@@ -60,7 +75,7 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
             source_conversation_id: job.source_conversation_id.clone(),
             prompt: job.prompt.clone(),
             model: None,
-            timeout_ms: Some(job.timeout_ms()),
+            timeout_ms: Some(default_timeout_ms),
             delivery: job.delivery_config.clone(),
             session_target: job.session_target.clone(),
             marked_at: now,
@@ -77,11 +92,13 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
 
 /// Phase 1 (manual): Mark a specific job for manual execution.
 ///
-/// Returns `None` if the job is already running.
+/// Returns `None` if the job is already running. Like `phase1_mark_due_jobs`,
+/// the schedule is advanced before execution so a crash does not double-run it.
 pub async fn phase1_mark_manual<C: Clock>(
     store: &Arc<tokio::sync::Mutex<CronStore>>,
     clock: &C,
     job_id: &str,
+    default_timeout_ms: i64,
 ) -> Result<Option<JobSnapshot>, String> {
     let now = clock.now_ms();
     let mut guard = store.lock().await;
@@ -97,6 +114,7 @@ pub async fn phase1_mark_manual<C: Clock>(
     }
 
     job.state.running_at_ms = Some(now);
+    advance_next_run(job, clock);
 
     let snapshot = JobSnapshot {
         id: job.id.clone(),
@@ -105,7 +123,7 @@ pub async fn phase1_mark_manual<C: Clock>(
         source_conversation_id: job.source_conversation_id.clone(),
         prompt: job.prompt.clone(),
         model: None,
-        timeout_ms: Some(job.timeout_ms()),
+        timeout_ms: Some(default_timeout_ms),
         delivery: job.delivery_config.clone(),
         session_target: job.session_target.clone(),
         marked_at: now,
@@ -124,10 +142,15 @@ pub async fn phase1_mark_manual<C: Clock>(
 /// - Clears `running_at_ms`
 /// - Writes execution result fields (status, error, duration, etc.)
 /// - Resets or increments `consecutive_errors`
-/// - Clears `next_run_at_ms` so maintenance recompute fills it
 ///
-/// After processing all results, runs maintenance recompute on ALL jobs
-/// and persists.
+/// `next_run_at_ms` is **not** cleared here: phase 1 already advanced the
+/// schedule before execution (at-most-once). After processing all results
+/// this function:
+/// - removes one-shot `At` jobs flagged `delete_after_run`,
+/// - runs maintenance recompute (fills only still-missing `next_run_at_ms`),
+/// - applies failure backoff to recurring jobs that just failed,
+/// - fires job chains,
+/// - persists.
 pub async fn phase3_writeback<C: Clock>(
     store: &Arc<tokio::sync::Mutex<CronStore>>,
     clock: &C,
@@ -140,6 +163,10 @@ pub async fn phase3_writeback<C: Clock>(
     // (source_job_id, successor_job_id) pairs resolved during the result
     // loop; fired after maintenance recompute so the `job` borrow is free.
     let mut chain_triggers: Vec<(String, String)> = Vec::new();
+
+    // One-shot `At` jobs flagged `delete_after_run`, removed after history
+    // is recorded so the run is preserved.
+    let mut jobs_to_delete: Vec<String> = Vec::new();
 
     for (job_id, result) in results {
         let job = match guard.get_job_mut(job_id) {
@@ -181,8 +208,16 @@ pub async fn phase3_writeback<C: Clock>(
             chain_triggers.push((job_id.clone(), target));
         }
 
-        // Clear next_run_at_ms so maintenance recompute fills it
-        job.state.next_run_at_ms = None;
+        // One-shot `At` jobs with `delete_after_run` are removed once they
+        // have run. `next_run_at_ms` is left as phase 1 set it (recurring
+        // jobs keep their advanced schedule; `At` jobs are already `None`).
+        if let ScheduleKind::At {
+            delete_after_run: true,
+            ..
+        } = job.schedule_kind
+        {
+            jobs_to_delete.push(job_id.clone());
+        }
     }
 
     // Record execution history
@@ -208,11 +243,38 @@ pub async fn phase3_writeback<C: Clock>(
         }
     }
 
-    // Maintenance recompute ALL jobs
+    // Remove one-shot jobs flagged `delete_after_run` (history is recorded).
+    for job_id in &jobs_to_delete {
+        guard.remove_job(job_id);
+    }
+
+    // Maintenance recompute ALL jobs (fills only still-missing next_run_at_ms).
     {
         let jobs = guard.jobs_mut();
         for job in jobs.iter_mut() {
             recompute_next_run_maintenance(job, clock);
+        }
+    }
+
+    // Failure backoff: a recurring job that just failed gets its next run
+    // pushed out by an escalating delay so it does not hot-loop at its normal
+    // interval. `consecutive_errors` was already incremented above.
+    let backoff_now = clock.now_ms();
+    for (job_id, result) in results {
+        if !matches!(result.status, RunStatus::Error | RunStatus::Timeout) {
+            continue;
+        }
+        let Some(job) = guard.get_job_mut(job_id) else {
+            continue;
+        };
+        if matches!(job.schedule_kind, ScheduleKind::At { .. }) {
+            continue; // one-shot jobs are not rescheduled
+        }
+        let backoff = compute_backoff_ms(job.state.consecutive_errors);
+        if backoff > 0 {
+            let floor = backoff_now.saturating_add(backoff);
+            let next = job.state.next_run_at_ms.map_or(floor, |n| n.max(floor));
+            job.state.next_run_at_ms = Some(next);
         }
     }
 
@@ -268,6 +330,9 @@ mod tests {
     use crate::tasks::cron::service::ops::add_job;
     use crate::tasks::shared::clock::testing::FakeClock;
     use tempfile::TempDir;
+
+    /// Configured per-job timeout used by the test timer.
+    const TEST_TIMEOUT_MS: i64 = 300_000;
 
     fn make_test_job(id: &str) -> CronJob {
         let mut job = CronJob::new(
@@ -325,7 +390,9 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let snapshots = phase1_mark_due_jobs(&store, &clock).await.unwrap();
+        let snapshots = phase1_mark_due_jobs(&store, &clock, TEST_TIMEOUT_MS)
+            .await
+            .unwrap();
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].id, "due-job");
         assert_eq!(snapshots[0].trigger_source, TriggerSource::Schedule);
@@ -352,7 +419,9 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let snapshots = phase1_mark_due_jobs(&store, &clock).await.unwrap();
+        let snapshots = phase1_mark_due_jobs(&store, &clock, TEST_TIMEOUT_MS)
+            .await
+            .unwrap();
         assert!(snapshots.is_empty(), "running jobs should be skipped");
     }
 
@@ -481,10 +550,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let results = vec![(
-            "job-a".to_string(),
-            make_execution_result(RunStatus::Error),
-        )];
+        let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Error))];
         phase3_writeback(&store, &clock, &results).await.unwrap();
 
         let guard = store.lock().await;
@@ -513,10 +579,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let results = vec![(
-            "job-a".to_string(),
-            make_execution_result(RunStatus::Error),
-        )];
+        let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Error))];
         phase3_writeback(&store, &clock, &results).await.unwrap();
 
         let guard = store.lock().await;
@@ -624,7 +687,7 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let snapshot = phase1_mark_manual(&store, &clock, "manual-job")
+        let snapshot = phase1_mark_manual(&store, &clock, "manual-job", TEST_TIMEOUT_MS)
             .await
             .unwrap();
         assert!(snapshot.is_some());
@@ -653,12 +716,189 @@ mod tests {
             guard.persist().unwrap();
         }
 
-        let snapshot = phase1_mark_manual(&store, &clock, "busy-job")
+        let snapshot = phase1_mark_manual(&store, &clock, "busy-job", TEST_TIMEOUT_MS)
             .await
             .unwrap();
         assert!(
             snapshot.is_none(),
             "should return None for already-running job"
+        );
+    }
+
+    /// C1: phase 1 advances a recurring job's schedule *before* execution,
+    /// so a crash before phase 3 does not double-run the same trigger.
+    #[tokio::test]
+    async fn phase1_advances_recurring_schedule_before_execution() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_000_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("recurring");
+            job.created_at = 900_000;
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("recurring").unwrap();
+            j.state.next_run_at_ms = Some(950_000); // due
+            guard.persist().unwrap();
+        }
+
+        let snapshots = phase1_mark_due_jobs(&store, &clock, TEST_TIMEOUT_MS)
+            .await
+            .unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0].timeout_ms,
+            Some(TEST_TIMEOUT_MS),
+            "configured timeout must reach the snapshot"
+        );
+
+        let guard = store.lock().await;
+        let job = guard.get_job("recurring").unwrap();
+        let next = job
+            .state
+            .next_run_at_ms
+            .expect("recurring job keeps a next run");
+        assert!(
+            next > 1_000_000,
+            "next_run must be advanced past now before execution, got {next}"
+        );
+    }
+
+    /// C1: phase 1 clears a one-shot `At` job's schedule before execution,
+    /// so it cannot fire twice even across a crash.
+    #[tokio::test]
+    async fn phase1_clears_one_shot_schedule_before_execution() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_000_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = CronJob::new(
+                "once",
+                "agent",
+                "prompt",
+                ScheduleKind::At {
+                    at: 950_000,
+                    delete_after_run: false,
+                },
+            );
+            job.id = "once".to_string();
+            job.created_at = 900_000;
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("once").unwrap();
+            j.state.next_run_at_ms = Some(950_000); // due
+            guard.persist().unwrap();
+        }
+
+        let snapshots = phase1_mark_due_jobs(&store, &clock, TEST_TIMEOUT_MS)
+            .await
+            .unwrap();
+        assert_eq!(snapshots.len(), 1);
+
+        let guard = store.lock().await;
+        let job = guard.get_job("once").unwrap();
+        assert_eq!(
+            job.state.next_run_at_ms, None,
+            "one-shot job must not be re-fireable after being marked"
+        );
+    }
+
+    /// C3: phase 3 removes a one-shot job flagged `delete_after_run`.
+    #[tokio::test]
+    async fn phase3_deletes_one_shot_with_delete_after_run() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = CronJob::new(
+                "oneshot",
+                "agent",
+                "prompt",
+                ScheduleKind::At {
+                    at: 1_000_000,
+                    delete_after_run: true,
+                },
+            );
+            job.id = "oneshot".to_string();
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("oneshot").unwrap();
+            j.state.running_at_ms = Some(1_000_000);
+            guard.persist().unwrap();
+        }
+
+        let results = vec![("oneshot".to_string(), make_execution_result(RunStatus::Ok))];
+        phase3_writeback(&store, &clock, &results).await.unwrap();
+
+        let guard = store.lock().await;
+        assert!(
+            guard.get_job("oneshot").is_none(),
+            "delete_after_run job should be removed after it runs"
+        );
+        // History is still recorded.
+        let runs = guard.get_runs("oneshot", 10).unwrap();
+        assert_eq!(runs.len(), 1, "the run must be preserved in history");
+    }
+
+    /// C3: a one-shot job without `delete_after_run` is kept (and inert).
+    #[tokio::test]
+    async fn phase3_keeps_one_shot_without_delete_after_run() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = CronJob::new(
+                "keep",
+                "agent",
+                "prompt",
+                ScheduleKind::At {
+                    at: 1_000_000,
+                    delete_after_run: false,
+                },
+            );
+            job.id = "keep".to_string();
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("keep").unwrap();
+            j.state.running_at_ms = Some(1_000_000);
+            guard.persist().unwrap();
+        }
+
+        let results = vec![("keep".to_string(), make_execution_result(RunStatus::Ok))];
+        phase3_writeback(&store, &clock, &results).await.unwrap();
+
+        let guard = store.lock().await;
+        let job = guard.get_job("keep").expect("job should be kept");
+        assert_eq!(
+            job.state.next_run_at_ms, None,
+            "a completed one-shot job must not re-fire"
+        );
+    }
+
+    /// C4: a recurring job that fails has its next run pushed out by backoff.
+    #[tokio::test]
+    async fn phase3_applies_backoff_on_failure() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("flaky"); // Every 60s
+            job.created_at = 900_000;
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("flaky").unwrap();
+            j.state.running_at_ms = Some(1_000_000);
+            j.state.next_run_at_ms = Some(1_120_000); // phase1-advanced, soon
+            j.state.consecutive_errors = 2; // becomes 3 after this error
+            guard.persist().unwrap();
+        }
+
+        let results = vec![("flaky".to_string(), make_execution_result(RunStatus::Error))];
+        phase3_writeback(&store, &clock, &results).await.unwrap();
+
+        let guard = store.lock().await;
+        let job = guard.get_job("flaky").unwrap();
+        // 3 consecutive errors → 5 min backoff tier.
+        let next = job.state.next_run_at_ms.unwrap();
+        assert!(
+            next >= 1_100_000 + 300_000,
+            "backoff not applied: next={next}, expected >= {}",
+            1_100_000 + 300_000
         );
     }
 }

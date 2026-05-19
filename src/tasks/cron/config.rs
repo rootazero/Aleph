@@ -390,9 +390,13 @@ impl CronJob {
         }
     }
 
-    /// Default timeout in milliseconds (10 minutes)
+    /// Fallback per-job execution timeout in milliseconds (5 minutes).
+    ///
+    /// Matches `CronConfig::job_timeout_secs`'s default. The timer loop threads
+    /// the *configured* timeout into each `JobSnapshot`, so this constant only
+    /// serves as the baseline for the catchup stale-marker threshold.
     pub fn timeout_ms(&self) -> i64 {
-        600_000
+        300_000
     }
 
     /// Construct a generic `DeliveryPayload` from this job and its output.

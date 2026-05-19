@@ -67,9 +67,30 @@ pub fn compute_next_run_for_job(job: &CronJob, now_ms: i64) -> Option<i64> {
 /// Full recompute: always advance next_run_at_ms to a future value.
 ///
 /// Called by add/update/toggle operations that change the schedule.
+/// The result is `>= now` — a job whose anchor equals `now` fires immediately.
 pub fn recompute_next_run_full<C: Clock>(job: &mut CronJob, clock: &C) {
     let now = clock.now_ms();
     job.state.next_run_at_ms = compute_next_run_for_job(job, now);
+}
+
+/// Advance `next_run_at_ms` to the next occurrence **strictly after** now.
+///
+/// Used by phase 1 (before execution) and by catchup fast-forward. Unlike
+/// `recompute_next_run_full`, the result is guaranteed strictly in the future
+/// for recurring jobs — the job is never left immediately re-due on the same
+/// tick, which is what makes the at-most-once guarantee hold across a crash.
+///
+/// One-shot `At` jobs advance to `None` (they do not recur).
+pub fn advance_next_run<C: Clock>(job: &mut CronJob, clock: &C) {
+    let now = clock.now_ms();
+    let mut next = compute_next_run_for_job(job, now);
+    // Boundary guard: `compute_next_every` returns `now` exactly when `now`
+    // sits on a period boundary. Re-anchor one ms later so the advanced
+    // schedule is strictly in the future.
+    if matches!(next, Some(t) if t <= now) {
+        next = compute_next_run_for_job(job, now + 1);
+    }
+    job.state.next_run_at_ms = next;
 }
 
 /// Maintenance recompute: ONLY fill missing next_run_at_ms.
