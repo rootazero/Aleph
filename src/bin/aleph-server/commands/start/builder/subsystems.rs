@@ -384,6 +384,9 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
     generation_registry: Option<Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>>,
     vault: Arc<alephcore::gateway::security::SharedTokenManager>,
+    approval_callback_sink: Option<
+        Arc<dyn alephcore::gateway::inbound_router::approval_callback::ApprovalCallbackSink>,
+    >,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
@@ -413,6 +416,14 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             )
         }
     };
+
+    // Wire approval-button callback dispatch (Telegram approve/deny)
+    if let Some(sink) = approval_callback_sink {
+        inbound_router = inbound_router.with_approval_callback_sink(sink);
+        if !daemon {
+            println!("  Inbound router: exec-approval callback dispatch enabled");
+        }
+    }
 
     // Wire group chat support if executor is available
     if let Some(executor) = group_chat_executor {
