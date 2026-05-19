@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::agents::subagent_tool::SubagentTool;
+use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::refresh::ToolRefreshSource;
@@ -58,6 +59,11 @@ pub struct ScopedToolService {
     subagent_tool: Option<Arc<SubagentTool>>,
     refresh: Option<Arc<dyn ToolRefreshSource>>,
     hook_decorator: Option<Arc<dyn ToolHookDecorator>>,
+    /// Tool names that require user confirmation before they execute.
+    confirm_tools: BTreeSet<String>,
+    /// Transport used to obtain that confirmation. `None` = no approval
+    /// channel wired, so confirm-required tools fail closed (denied).
+    approval_requester: Option<Arc<dyn ApprovalRequester>>,
     schema_cache: ArcSwap<Option<(u64, Arc<[crate::dispatcher::ToolDefinition]>)>>,
     cache_generation: std::sync::atomic::AtomicU64,
 }
@@ -73,9 +79,27 @@ impl ScopedToolService {
             subagent_tool: None,
             refresh: None,
             hook_decorator: None,
+            confirm_tools: BTreeSet::new(),
+            approval_requester: None,
             schema_cache: ArcSwap::from_pointee(None),
             cache_generation: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Require user confirmation for the named tools before they execute.
+    ///
+    /// When a tool in `confirm_tools` is invoked, `execute()` first routes a
+    /// confirmation request through `requester`; the tool runs only on an
+    /// `Approved` outcome. With no requester wired, confirm-required tools
+    /// fail closed.
+    pub fn with_confirmation(
+        mut self,
+        confirm_tools: BTreeSet<String>,
+        requester: Arc<dyn ApprovalRequester>,
+    ) -> Self {
+        self.confirm_tools = confirm_tools;
+        self.approval_requester = Some(requester);
+        self
     }
 
     /// Attach a `SubagentTool` that will appear in listings and can be executed.
@@ -226,6 +250,37 @@ impl ToolService for ScopedToolService {
             return Err(ToolError::NotFound {
                 name: name.to_string(),
             });
+        }
+
+        // Confirmation gate: tools flagged `requires_confirmation` must be
+        // approved by the user before they run. Fails closed when no approval
+        // transport is wired.
+        if self.confirm_tools.contains(name) {
+            match &self.approval_requester {
+                Some(requester) => {
+                    let reason =
+                        format!("Tool `{name}` requires your confirmation to run.");
+                    let outcome = requester.request_approval(name, &reason).await;
+                    if outcome != ApprovalOutcome::Approved {
+                        return Err(ToolError::Execution {
+                            name: name.to_string(),
+                            cause: format!(
+                                "User did not approve running `{name}` ({outcome:?}). \
+                                 Do not retry; ask the user how to proceed."
+                            ),
+                        });
+                    }
+                }
+                None => {
+                    return Err(ToolError::Execution {
+                        name: name.to_string(),
+                        cause: format!(
+                            "Tool `{name}` requires confirmation but no approval \
+                             channel is available. Do not retry."
+                        ),
+                    });
+                }
+            }
         }
 
         // Fire pre-hook.

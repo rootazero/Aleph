@@ -48,6 +48,16 @@ pub struct BuiltinToolDefinition {
     pub requires_config: bool,
 }
 
+/// Builtin tools that require explicit user confirmation before they run.
+///
+/// These are destructive or security-sensitive operations (secret-vault
+/// mutation, agent deletion, team disband). The gateway uses this list to
+/// build each request's `ScopedToolService` confirm-set, which routes a
+/// confirmation prompt to the user before the tool executes. Mirrors the
+/// `AlephTool::requires_confirmation()` overrides on these tools.
+pub const CONFIRMATION_REQUIRED_TOOLS: &[&str] =
+    &["vault_store", "agent_delete", "team_disband"];
+
 /// All builtin tools in the system - Single Source of Truth
 ///
 /// This is the authoritative list of all builtin tools.
