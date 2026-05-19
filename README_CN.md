@@ -245,7 +245,6 @@ Aleph/
 │   ├── session/                 # 会话服务（追加式事件日志）
 │   ├── skill/                   # 技能系统
 │   ├── supervisor/              # 执行监督
-│   ├── task_resilience/         # 任务韧性
 │   ├── tasks/                   # 任务管理
 │   ├── teams/                   # 团队协作
 │   ├── tool_output/             # 工具输出处理

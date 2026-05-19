@@ -278,10 +278,6 @@ pub struct JobStateV2 {
 
 // ── CronJob ─────────────────────────────────────────────────────────────
 
-fn default_max_retries() -> u32 {
-    3
-}
-
 /// A scheduled job definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {
@@ -331,10 +327,6 @@ pub struct CronJob {
     /// Where the agent session runs
     #[serde(default)]
     pub session_target: SessionTarget,
-
-    /// Maximum retries before disabling
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
 
     /// Job ID to trigger on success
     #[serde(default)]
@@ -388,7 +380,6 @@ impl CronJob {
             updated_at: now,
             schedule_kind,
             session_target: SessionTarget::default(),
-            max_retries: default_max_retries(),
             next_job_id_on_success: None,
             next_job_id_on_failure: None,
             delivery_config: None,
@@ -790,7 +781,6 @@ mod tests {
         assert!(job.enabled);
         assert_eq!(job.schedule_kind, kind);
         assert_eq!(job.session_target, SessionTarget::Isolated);
-        assert_eq!(job.max_retries, 3);
         assert_eq!(job.timeout_ms(), 300_000);
         // Timestamps should be recent (within last second, in ms)
         let now = chrono::Utc::now().timestamp_millis();

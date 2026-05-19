@@ -322,12 +322,6 @@ This document contains all rust-logic-audit review prompts for each module in `s
 /rust-logic-audit src/skill --strict
 ```
 
-## task_resilience
-
-```
-/rust-logic-audit src/task_resilience --strict
-```
-
 ## tasks
 
 ```

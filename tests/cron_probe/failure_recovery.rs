@@ -76,14 +76,14 @@ async fn permanent_error_disables() {
     h.assert_job_enabled("permanent-1", true).await;
 }
 
-// ── 3. max_retries_then_disable ─────────────────────────────────────
+// ── 3. consecutive_errors_increment_on_failure ──────────────────────
 
-/// Configure transient error → run 4 ticks (default max_retries=3) →
-/// verify execution count and consecutive_errors increment.
-/// NOTE: The cron system does NOT auto-disable based on max_retries.
+/// Configure transient error → run 4 ticks → verify execution count and
+/// consecutive_errors increment on every failed run.
+/// NOTE: The cron system does NOT auto-disable on repeated failures.
 /// It only tracks consecutive_errors. This test documents the counter behavior.
 #[tokio::test]
-async fn max_retries_then_disable() {
+async fn consecutive_errors_increment_on_failure() {
     let h = CronTestHarness::new();
     let interval = 60_000;
 

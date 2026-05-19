@@ -245,7 +245,6 @@ Aleph/
 │   ├── session/                 # Session service (append-only event log)
 │   ├── skill/                   # Skill system
 │   ├── supervisor/              # Execution supervision
-│   ├── task_resilience/         # Task resilience
 │   ├── tasks/                   # Task management
 │   ├── teams/                   # Team coordination
 │   ├── tool_output/             # Tool output handling

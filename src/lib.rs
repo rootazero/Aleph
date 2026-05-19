@@ -93,7 +93,6 @@ pub mod scheduler;
 pub mod secrets;
 pub mod security;
 pub mod sync_primitives;
-pub mod task_resilience;
 
 /// Unified initialization module (re-export for backward compatibility)
 pub mod initialization {
@@ -214,16 +213,6 @@ pub use crate::exec::{
 
 // =============================================================================
 // Supervisor Exports
-// =============================================================================
-// Resilient Task Exports
-// =============================================================================
-
-pub use crate::task_resilience::{
-    classify_error, execute_resilient, DegradationReason, DegradationStrategy, ErrorClass, FnTask,
-    PodcastResult, PodcastTask, ResilienceConfig, ResilientCronJob, ResilientExecutor,
-    ResilientTask, TaskContext, TaskOutcome,
-};
-
 // =============================================================================
 // Daemon Subsystem Exports (Phase 3+4: Proactive AI)
 // =============================================================================
