@@ -75,3 +75,24 @@ impl AlephTool for SkillStatusTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn skill_status_uses_shared_initialized_system() {
+        // A SkillStatusTool built from the shared singleton must not panic and
+        // must return consistent total/filtered counts.
+        let system = crate::skill::shared_skill_system().clone();
+        let _ = system.init(crate::skill::default_skill_dirs()).await;
+        let tool = SkillStatusTool::new(system);
+        let out = tool
+            .call(SkillStatusArgs { filter: "all".to_string() })
+            .await
+            .unwrap();
+        // total >= filtered is a tautology; the assertion guards against a panic
+        // and verifies the tool can call through to a real (possibly empty) system.
+        assert!(out.total >= out.filtered);
+    }
+}

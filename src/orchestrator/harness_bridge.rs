@@ -35,7 +35,6 @@ use crate::routing::session_key::SessionKey;
 use crate::sandbox::Sandbox;
 use crate::session::events::SessionEvent;
 use crate::session::service::{SessionId, SessionService};
-use crate::skill::prefetch::SkillPrefetcher;
 use crate::tools::service::ToolService;
 use crate::verification::VerifierChain;
 
@@ -57,7 +56,6 @@ pub(crate) fn emit_init_seams(
     stall_config_configured: bool,
     consecutive_failure_cap_configured: bool,
     turn_timeout_configured: bool,
-    skill_prefetcher_configured: bool,
 ) {
     sink.on_init_seam("stage3-prompt", "PromptBuilder", true);
     sink.on_init_seam("stage4-chain", "ChainContext", true);
@@ -70,11 +68,6 @@ pub(crate) fn emit_init_seams(
         consecutive_failure_cap_configured,
     );
     sink.on_init_seam("p0-rescue-timeout", "TurnTimeout", turn_timeout_configured);
-    sink.on_init_seam(
-        "skill-prefetcher",
-        "SkillPrefetcher",
-        skill_prefetcher_configured,
-    );
 }
 
 /// Concrete [`HarnessRunner`] that dispatches to the Phase 4 `AgentHarness`.
@@ -103,7 +96,9 @@ pub struct AgentHarnessRunner {
     /// diminishing-returns state must never be shared across concurrent
     /// sessions. `None` disables mid-run compaction entirely.
     pub context_budget_config: Option<ContextBudgetConfig>,
-    pub skill_prefetcher: Option<Arc<SkillPrefetcher>>,
+    /// Shared v2 SkillSystem. When `Some`, `build_system_prompt` injects the
+    /// eligible-skill `<available_skills>` block into the system prompt.
+    pub skill_system: Option<crate::skill::SkillSystem>,
 
     // -- Stage 7 (init audit) — production wiring for the Stage 5a guardrail +
     //    P0 rescue seams. Each field defaults to None on the gateway path;
@@ -169,12 +164,9 @@ impl HarnessRunner for AgentHarnessRunner {
         // LLM call emits a LoopTraceEvent::ProviderUsage event labelled "root".
         // The trace_sink is available here (per-run, passed in from the gateway)
         // and flows into the same sink as all other harness trace events.
-        let llm: Arc<dyn crate::providers::AiProvider> =
-            Arc::new(crate::providers::MeteringProvider::new(
-                llm,
-                trace_sink.clone(),
-                "root",
-            ));
+        let llm: Arc<dyn crate::providers::AiProvider> = Arc::new(
+            crate::providers::MeteringProvider::new(llm, trace_sink.clone(), "root"),
+        );
         // Remember the provider name so transient error classification below
         // can attach it to FlowError::Transient (Gateway's outer retry loop
         // reads this to call `report_outcome(&provider_name, ...)`).
@@ -240,7 +232,6 @@ impl HarnessRunner for AgentHarnessRunner {
             verifier_chain: self.verifier_chain.clone(),
             context_budget,
             context_compactor,
-            skill_prefetcher: self.skill_prefetcher.clone(),
             trace_sink: trace_sink.clone(),
             system_prompt,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -271,7 +262,6 @@ impl HarnessRunner for AgentHarnessRunner {
                 deps.stall_config.is_some(),
                 deps.consecutive_failure_cap.is_some(),
                 deps.turn_timeout.is_some(),
-                deps.skill_prefetcher.is_some(),
             );
         }
         // Production telemetry path — operators read these via the
@@ -282,7 +272,6 @@ impl HarnessRunner for AgentHarnessRunner {
             stall_config = deps.stall_config.is_some(),
             consecutive_failure_cap = deps.consecutive_failure_cap.is_some(),
             turn_timeout = deps.turn_timeout.is_some(),
-            skill_prefetcher = deps.skill_prefetcher.is_some(),
             "harness deps assembled"
         );
         let harness = AgentHarness::new(deps);
@@ -338,9 +327,15 @@ impl HarnessRunner for AgentHarnessRunner {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&payload) {
                             // Try to extract a human-readable field (prefer longer content)
                             let candidates = [
-                                json.get("action").and_then(|a| a.get("summary")).and_then(|v| v.as_str()),
-                                json.get("action").and_then(|a| a.get("content")).and_then(|v| v.as_str()),
-                                json.get("action").and_then(|a| a.get("text")).and_then(|v| v.as_str()),
+                                json.get("action")
+                                    .and_then(|a| a.get("summary"))
+                                    .and_then(|v| v.as_str()),
+                                json.get("action")
+                                    .and_then(|a| a.get("content"))
+                                    .and_then(|v| v.as_str()),
+                                json.get("action")
+                                    .and_then(|a| a.get("text"))
+                                    .and_then(|v| v.as_str()),
                                 json.get("summary").and_then(|v| v.as_str()),
                                 json.get("content").and_then(|v| v.as_str()),
                                 json.get("message").and_then(|v| v.as_str()),
@@ -348,7 +343,9 @@ impl HarnessRunner for AgentHarnessRunner {
                                 json.get("reasoning").and_then(|v| v.as_str()),
                             ];
                             // Pick the longest candidate to avoid short reasoning over full report
-                            if let Some(best) = candidates.iter().filter_map(|&c| c).max_by_key(|c| c.len()) {
+                            if let Some(best) =
+                                candidates.iter().filter_map(|&c| c).max_by_key(|c| c.len())
+                            {
                                 text = best.to_string();
                             }
                             // If no known field found, keep original JSON
@@ -407,49 +404,65 @@ impl AgentHarnessRunner {
         use crate::providers::message::UnifiedMessage;
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
-        let mcp = self.memory_context_provider.as_ref()?;
+        // Phase 1 — fetch the eligible-skill snapshot once; reused below.
+        let skill_snapshot = match self.skill_system.as_ref() {
+            Some(sys) => Some(sys.current_snapshot().await),
+            None => None,
+        };
 
         let session_key_str = session_id.to_key_string();
 
-        let curated_text: Option<String> =
-            match mcp.build_curated_message(agent_id, &session_key_str).await {
-                Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
-                Err(e) => {
-                    tracing::warn!(
-                        agent_id,
-                        session = %session_key_str,
-                        error = %e,
-                        "build_curated_message failed; degrading curated envelope to None"
-                    );
-                    None
-                }
-            };
+        let (curated_text, memory_text) =
+            if let Some(mcp) = self.memory_context_provider.as_ref() {
+                let curated_text: Option<String> =
+                    match mcp.build_curated_message(agent_id, &session_key_str).await {
+                        Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
+                        Err(e) => {
+                            tracing::warn!(
+                                agent_id,
+                                session = %session_key_str,
+                                error = %e,
+                                "build_curated_message failed; degrading curated envelope to None"
+                            );
+                            None
+                        }
+                    };
 
-        let memory_text: Option<String> = if user_query.is_empty() {
-            None
-        } else {
-            match mcp.build_memory_user_message(agent_id, user_query).await {
-                Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
-                Err(e) => {
-                    tracing::warn!(
-                        agent_id,
-                        error = %e,
-                        "build_memory_user_message failed; degrading memory envelope to None"
-                    );
+                let memory_text: Option<String> = if user_query.is_empty() {
                     None
-                }
-            }
-        };
+                } else {
+                    match mcp.build_memory_user_message(agent_id, user_query).await {
+                        Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
+                        Err(e) => {
+                            tracing::warn!(
+                                agent_id,
+                                error = %e,
+                                "build_memory_user_message failed; degrading memory envelope to None"
+                            );
+                            None
+                        }
+                    }
+                };
+                (curated_text, memory_text)
+            } else {
+                (None, None)
+            };
 
         let agent_def = self.agent_registry.get(agent_id);
 
-        // Skip prompt assembly entirely when there is nothing memory-side to
-        // inject AND no AgentDef to seed the role layer; the harness's
-        // pre-Phase-6 behaviour was already `system_prompt: None` in that case.
-        if curated_text.is_none() && memory_text.is_none() && agent_def.is_none() {
+        let has_skills = skill_snapshot
+            .as_ref()
+            .map(|s| !s.eligible_manifests.is_empty())
+            .unwrap_or(false);
+        // Skip prompt assembly entirely when there is nothing to inject:
+        // no memory, no AgentDef, and no eligible skills.
+        if curated_text.is_none() && memory_text.is_none() && agent_def.is_none() && !has_skills {
             return None;
         }
 
+        let eligible_skills = skill_snapshot
+            .map(|s| s.eligible_manifests)
+            .filter(|m| !m.is_empty());
         // The harness path delivers tool schemas via native tool_use
         // (`with_tools(tools_ref)` in agent.rs). When `native_tools_enabled` is
         // false (the default), `ToolsLayer` injects the literal string
@@ -459,6 +472,7 @@ impl AgentHarnessRunner {
         // here so the assembled prompt matches the runtime contract.
         let mut builder = PromptBuilder::new(PromptConfig {
             native_tools_enabled: true,
+            eligible_skills,
             ..PromptConfig::default()
         });
         let role_present = agent_def.is_some();
@@ -647,9 +661,13 @@ mod tests {
     async fn seed_session_prompt_emits_one_user_message() {
         let service = fresh_service();
         let sid = SessionKey::ephemeral("seed-prompt");
-        super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Prompt("hello".into()))
-            .await
-            .expect("seed Prompt");
+        super::session_seed::seed_session(
+            service.as_ref(),
+            &sid,
+            FlowInput::Prompt("hello".into()),
+        )
+        .await
+        .expect("seed Prompt");
 
         let events = service.get_events(&sid, None, None).await.unwrap();
         let user_count = events

@@ -45,11 +45,20 @@ impl SkillSnapshot {
 
     /// Build a snapshot by evaluating all skills in the registry.
     ///
+    /// `config` is the Aleph main configuration serialized as a `serde_json::Value`
+    /// and is forwarded to `EligibilityService::evaluate` for `required_config` checks.
+    /// Pass `&serde_json::json!({})` when no config context is available.
+    ///
     /// Iterates every skill, evaluates eligibility, and collects:
     /// - eligible skill IDs
     /// - ineligible skill IDs with reasons
     /// - prompt XML for eligible + model-visible skills
-    pub fn build(registry: &SkillRegistry, eligibility: &EligibilityService, version: u64) -> Self {
+    pub fn build(
+        registry: &SkillRegistry,
+        eligibility: &EligibilityService,
+        version: u64,
+        config: &serde_json::Value,
+    ) -> Self {
         let mut eligible = Vec::new();
         let mut ineligible: HashMap<SkillId, Vec<IneligibilityReason>> = HashMap::new();
         let mut model_visible: Vec<&SkillManifest> = Vec::new();
@@ -60,7 +69,7 @@ impl SkillSnapshot {
         entries.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
 
         for (id, manifest) in entries {
-            match eligibility.evaluate(manifest) {
+            match eligibility.evaluate(manifest, config) {
                 EligibilityResult::Eligible => {
                     eligible.push(id.clone());
                     if manifest.is_model_visible() {
@@ -131,7 +140,7 @@ mod tests {
         });
         registry.register(m2);
 
-        let snap = SkillSnapshot::build(&registry, &eligibility, 1);
+        let snap = SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}));
 
         assert_eq!(snap.version, 1);
         assert_eq!(snap.eligible.len(), 1);
@@ -147,9 +156,10 @@ mod tests {
         let registry = SkillRegistry::new();
         let eligibility = EligibilityService::new();
 
-        let snap1 = SkillSnapshot::build(&registry, &eligibility, 1);
-        let snap2 = SkillSnapshot::build(&registry, &eligibility, 2);
-        let snap3 = SkillSnapshot::build(&registry, &eligibility, 5);
+        let cfg = serde_json::json!({});
+        let snap1 = SkillSnapshot::build(&registry, &eligibility, 1, &cfg);
+        let snap2 = SkillSnapshot::build(&registry, &eligibility, 2, &cfg);
+        let snap3 = SkillSnapshot::build(&registry, &eligibility, 5, &cfg);
 
         assert_eq!(snap1.version, 1);
         assert_eq!(snap2.version, 2);
@@ -178,7 +188,7 @@ mod tests {
         m3.set_scope(PromptScope::Disabled);
         registry.register(m3);
 
-        let snap = SkillSnapshot::build(&registry, &eligibility, 1);
+        let snap = SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}));
 
         // All three are eligible (no eligibility constraints)
         // But only the visible one should appear in prompt_xml
@@ -207,7 +217,7 @@ mod tests {
         });
         registry.register(m3);
 
-        let snap = SkillSnapshot::build(&registry, &eligibility, 1);
+        let snap = SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}));
         assert_eq!(snap.eligible.len(), 3);
         assert_eq!(snap.eligible_manifests.len(), 1);
         assert_eq!(snap.eligible_manifests[0].name(), "visible:skill");

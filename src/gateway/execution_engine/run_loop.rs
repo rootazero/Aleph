@@ -22,12 +22,6 @@ pub(super) use super::callback::{CallbackStateFlushHandle, StreamCallbackState, 
 pub(super) use super::history::build_loop_history;
 pub(super) use super::tool_refresh::{active_plugin_tools_for_agent, ExtensionToolRefreshSource};
 
-// Phase 6b Task 4c: `ExtensionSkillDiscoverySource` previously wrapped
-// `SkillSystem` as an `agent_loop::SkillDiscoverySource` implementor for
-// `AgentLoop::with_skill_prefetcher`. The harness now owns prefetch via
-// `HarnessDeps.skill_prefetcher`, so this adapter has no call site in this
-// file. Retained via the noop cast below; Phase 6c removes outright.
-
 // ============================================================================
 // Agent loop execution
 // ============================================================================
@@ -87,26 +81,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        let _eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>> =
-            if let Some(ext_manager) = extension_manager.as_ref() {
-                let snapshot = ext_manager.skill_system().current_snapshot().await;
-                if !snapshot.eligible_manifests.is_empty() {
-                    Some(snapshot.eligible_manifests)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
         let _hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
             let snapshot = ext_manager.hook_executor_snapshot().await;
             (snapshot.hook_count() > 0).then(|| Arc::new(snapshot))
         } else {
             None
         };
-        let _skill_system = extension_manager
-            .as_ref()
-            .map(|ext_manager| ext_manager.skill_system().clone());
 
         // Build tool registry inputs (filtered by agent whitelist).
         let base_allowed_tools: Vec<crate::dispatcher::UnifiedTool> = self
@@ -280,16 +260,30 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let allowed_names: std::collections::BTreeSet<String> =
                 allowed_tools.iter().map(|t| t.name.clone()).collect();
 
-            let tool_refresh: Option<Arc<dyn crate::tools::refresh::ToolRefreshSource>> =
-                extension_manager.as_ref().map(|ext_manager| {
-                    Arc::new(ExtensionToolRefreshSource::new(
-                        Arc::clone(ext_manager),
-                        self.tool_registry.clone(),
-                        agent.clone(),
-                        base_allowed_tools.clone(),
-                        default_working_dir.clone(),
-                    )) as Arc<dyn crate::tools::refresh::ToolRefreshSource>
-                });
+            // Compose refresh sources: plugin tools (when an extension manager
+            // is wired) + markdown CLI skills (always — installed via the
+            // `skills.install` RPC into the process-wide markdown server).
+            let mut refresh_sources: Vec<Arc<dyn crate::tools::refresh::ToolRefreshSource>> =
+                Vec::new();
+            if let Some(ext_manager) = extension_manager.as_ref() {
+                refresh_sources.push(Arc::new(ExtensionToolRefreshSource::new(
+                    Arc::clone(ext_manager),
+                    self.tool_registry.clone(),
+                    agent.clone(),
+                    base_allowed_tools.clone(),
+                    default_working_dir.clone(),
+                ))
+                    as Arc<dyn crate::tools::refresh::ToolRefreshSource>);
+            }
+            refresh_sources.push(Arc::new(
+                super::markdown_skill_refresh::MarkdownSkillRefreshSource::new(),
+            )
+                as Arc<dyn crate::tools::refresh::ToolRefreshSource>);
+            let tool_refresh: Option<Arc<dyn crate::tools::refresh::ToolRefreshSource>> = Some(
+                Arc::new(crate::tools::refresh::CompositeRefreshSource::new(
+                    refresh_sources,
+                )) as Arc<dyn crate::tools::refresh::ToolRefreshSource>,
+            );
 
             // Build parent view ToolService WITHOUT the subagent tool
             let parent_view_for_children: Arc<dyn crate::tools::service::ToolService> =

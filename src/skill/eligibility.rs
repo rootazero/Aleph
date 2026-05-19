@@ -56,6 +56,9 @@ impl EligibilityService {
 
     /// Evaluate a single skill's eligibility.
     ///
+    /// `config` is the Aleph main configuration serialized as a `serde_json::Value`.
+    /// Pass `&serde_json::json!({})` when no config is available (tests, fallback).
+    ///
     /// Check order:
     /// 1. `always` flag — if true, skip all other checks
     /// 2. `enabled` override — if explicitly `false`, immediately ineligible
@@ -63,13 +66,16 @@ impl EligibilityService {
     /// 4. required_bins
     /// 5. any_bins
     /// 6. required_env
-    pub fn evaluate(&self, manifest: &SkillManifest) -> EligibilityResult {
+    /// 7. required_config
+    pub fn evaluate(&self, manifest: &SkillManifest, config: &serde_json::Value) -> EligibilityResult {
         let spec = manifest.eligibility();
-        self.evaluate_spec(spec)
+        self.evaluate_spec(spec, config)
     }
 
     /// Evaluate an eligibility spec directly.
-    fn evaluate_spec(&self, spec: &EligibilitySpec) -> EligibilityResult {
+    ///
+    /// `config` is the Aleph main configuration serialized as a `serde_json::Value`.
+    pub fn evaluate_spec(&self, spec: &EligibilitySpec, config: &serde_json::Value) -> EligibilityResult {
         // 1. always flag
         if spec.always {
             return EligibilityResult::Eligible;
@@ -112,12 +118,11 @@ impl EligibilityService {
             }
         }
 
-        // 7. required_config — config system not yet wired, skip checks for now
-        if !spec.required_config.is_empty() {
-            tracing::debug!(
-                count = spec.required_config.len(),
-                "required_config checks not yet implemented, skipping"
-            );
+        // 7. required_config — every key must resolve in the config snapshot.
+        for key in &spec.required_config {
+            if config_get_path(config, key).is_none() {
+                reasons.push(IneligibilityReason::MissingConfig(key.clone()));
+            }
         }
 
         if reasons.is_empty() {
@@ -128,18 +133,37 @@ impl EligibilityService {
     }
 
     /// Evaluate all skills in an iterator.
+    ///
+    /// `config` is passed through to `evaluate`; use `&serde_json::json!({})`
+    /// when no config context is available.
     pub fn evaluate_all<'a>(
         &self,
         skills: impl IntoIterator<Item = &'a SkillManifest>,
+        config: &serde_json::Value,
     ) -> Vec<(&'a SkillManifest, EligibilityResult)> {
         skills
             .into_iter()
             .map(|m| {
-                let result = self.evaluate(m);
+                let result = self.evaluate(m, config);
                 (m, result)
             })
             .collect()
     }
+}
+
+/// Resolve a dot-separated path within a JSON value.
+///
+/// `config_get_path(json, "a.b.c")` is equivalent to `json["a"]["b"]["c"]`.
+/// Returns `None` if any segment is absent.
+fn config_get_path<'a>(
+    root: &'a serde_json::Value,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    let mut current = root;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current)
 }
 
 /// Detect the current operating system.
@@ -187,7 +211,7 @@ mod tests {
     fn default_eligibility_is_eligible() {
         let svc = EligibilityService::new();
         let m = manifest_with_eligibility(EligibilitySpec::default());
-        let result = svc.evaluate(&m);
+        let result = svc.evaluate(&m, &serde_json::json!({}));
         assert!(result.is_eligible());
     }
 
@@ -202,7 +226,7 @@ mod tests {
             ..Default::default()
         };
         let m = manifest_with_eligibility(spec);
-        let result = svc.evaluate(&m);
+        let result = svc.evaluate(&m, &serde_json::json!({}));
         assert!(result.is_eligible());
     }
 
@@ -214,7 +238,7 @@ mod tests {
             ..Default::default()
         };
         let m = manifest_with_eligibility(spec);
-        let result = svc.evaluate(&m);
+        let result = svc.evaluate(&m, &serde_json::json!({}));
         assert!(!result.is_eligible());
         match result {
             EligibilityResult::Ineligible(reasons) => {
@@ -233,7 +257,7 @@ mod tests {
             ..Default::default()
         };
         let m = manifest_with_eligibility(spec);
-        let result = svc.evaluate(&m);
+        let result = svc.evaluate(&m, &serde_json::json!({}));
         assert!(!result.is_eligible());
         match result {
             EligibilityResult::Ineligible(reasons) => {
@@ -254,7 +278,7 @@ mod tests {
             ..Default::default()
         };
         let m = manifest_with_eligibility(spec);
-        let result = svc.evaluate(&m);
+        let result = svc.evaluate(&m, &serde_json::json!({}));
         assert!(!result.is_eligible());
         match result {
             EligibilityResult::Ineligible(reasons) => {
@@ -274,7 +298,7 @@ mod tests {
             ..Default::default()
         };
         let m = manifest_with_eligibility(spec);
-        let result = svc.evaluate(&m);
+        let result = svc.evaluate(&m, &serde_json::json!({}));
         assert!(!result.is_eligible());
         match result {
             EligibilityResult::Ineligible(reasons) => {
@@ -282,6 +306,30 @@ mod tests {
             }
             _ => panic!("expected Ineligible"),
         }
+    }
+
+    #[test]
+    fn missing_config_key_makes_skill_ineligible() {
+        let svc = EligibilityService::new();
+        let mut spec = EligibilitySpec::default();
+        spec.required_config = vec!["definitely.absent.key".to_string()];
+        let result = svc.evaluate_spec(&spec, &serde_json::json!({}));
+        match result {
+            EligibilityResult::Ineligible(reasons) => assert!(reasons
+                .iter()
+                .any(|r| matches!(r, IneligibilityReason::MissingConfig(k) if k == "definitely.absent.key"))),
+            EligibilityResult::Eligible => panic!("should be ineligible"),
+        }
+    }
+
+    #[test]
+    fn present_config_key_passes() {
+        let svc = EligibilityService::new();
+        let mut spec = EligibilitySpec::default();
+        spec.required_config = vec!["a.b".to_string()];
+        let cfg = serde_json::json!({"a": {"b": 1}});
+        let result = svc.evaluate_spec(&spec, &cfg);
+        assert!(matches!(result, EligibilityResult::Eligible));
     }
 
     #[test]
@@ -293,7 +341,7 @@ mod tests {
             ..Default::default()
         };
         let m = manifest_with_eligibility(spec);
-        let result = svc.evaluate(&m);
+        let result = svc.evaluate(&m, &serde_json::json!({}));
         assert!(
             result.is_eligible(),
             "skill should be eligible on current OS: {:?}",

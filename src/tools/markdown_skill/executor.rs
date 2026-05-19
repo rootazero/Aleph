@@ -52,15 +52,20 @@ impl MarkdownCliTool {
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
 
-        // Apply network restrictions if specified
+        // Apply network restrictions if specified.
+        // Host sandbox cannot truly isolate the network (that requires a
+        // network namespace). Be honest: set NO_PROXY as a partial mitigation
+        // and warn that real isolation needs Docker mode.
         if let Some(aleph_meta) = &self.spec.metadata.aleph {
             if matches!(aleph_meta.security.network, NetworkMode::None) {
-                // Platform-specific network isolation
-                #[cfg(target_os = "linux")]
-                {
-                    cmd.env("NO_PROXY", "*");
-                    // TODO: Use unshare(CLONE_NEWNET) for true isolation
-                }
+                cmd.env("NO_PROXY", "*");
+                cmd.env("no_proxy", "*");
+                warn!(
+                    skill = %self.spec.name,
+                    "skill declares network=none but runs in host sandbox; \
+                     network is NOT truly isolated — use sandbox: docker for \
+                     enforced isolation"
+                );
             }
         }
 
@@ -535,5 +540,63 @@ impl Drop for VirtualFsSandbox {
                 "Cleaned up VirtualFs sandbox"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::spec::{
+        AlephExtensions, AlephSkillSpec, NetworkMode, SandboxMode, SecuritySpec, SkillMetadata,
+    };
+    use super::super::tool_adapter::MarkdownCliTool;
+    use std::collections::BTreeMap;
+
+    /// Build a minimal spec with the given network mode and sandbox mode.
+    fn make_spec(network: NetworkMode, sandbox: SandboxMode) -> AlephSkillSpec {
+        AlephSkillSpec {
+            name: "test-skill".to_string(),
+            description: "unit test skill".to_string(),
+            metadata: SkillMetadata {
+                requires: Default::default(),
+                aleph: Some(AlephExtensions {
+                    security: SecuritySpec {
+                        sandbox,
+                        confirmation: super::super::spec::ConfirmationMode::Never,
+                        network,
+                    },
+                    input_hints: BTreeMap::new(),
+                    timeout_secs: None,
+                    evolution: None,
+                    docker: None,
+                }),
+                openclaw: None,
+            },
+            markdown_content: String::new(),
+        }
+    }
+
+    /// B3 — verify that a host-mode skill with network=none exposes the
+    /// correct network and sandbox fields without panicking.  The warning log
+    /// cannot be asserted in a unit test without a log-capture crate, so we
+    /// assert the structural pre-conditions that govern the warn branch.
+    #[test]
+    fn host_network_none_spec_fields_are_readable() {
+        let spec = make_spec(NetworkMode::None, SandboxMode::Host);
+        let tool = MarkdownCliTool::new(spec);
+
+        // The aleph extensions must be present.
+        let aleph = tool.spec.metadata.aleph.as_ref().expect("aleph extensions present");
+
+        // Sandbox mode must be Host.
+        assert!(
+            matches!(aleph.security.sandbox, SandboxMode::Host),
+            "expected SandboxMode::Host"
+        );
+
+        // Network mode must be None — this is the guard for the warn branch.
+        assert!(
+            matches!(aleph.security.network, NetworkMode::None),
+            "expected NetworkMode::None"
+        );
     }
 }

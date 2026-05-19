@@ -2,28 +2,29 @@
 
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::OnceLock;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::parse_params;
 use crate::domain::skill::{PromptScope, SkillId};
 use crate::skill::{default_skill_dirs, SkillConfigUpdate, SkillSystem};
 
-/// Shared SkillSystem instance (lazy-initialized, thread-safe).
+/// Shared SkillSystem instance — delegates to the process-wide singleton.
 ///
-/// Initializes with the standard user-level skill directories so that
-/// skills installed in `~/.aleph/skills/` are visible to RPC handlers.
+/// Lazily ensures the shared instance is initialized with the default skill
+/// directories. `init` is re-runnable; `ExtensionManager` may also call it
+/// later with discovery-derived dirs — both populate the same Arc registry.
 fn shared_system() -> &'static SkillSystem {
-    static SYSTEM: OnceLock<SkillSystem> = OnceLock::new();
-    SYSTEM.get_or_init(|| {
-        let system = SkillSystem::new();
+    let system = crate::skill::shared_skill_system();
+    // Lazily ensure the shared instance is initialized with the default skill
+    // dirs. `init` is re-runnable; ExtensionManager may also init it later
+    // with discovery-derived dirs — both populate the same Arc registry.
+    static INIT_ONCE: std::sync::Once = std::sync::Once::new();
+    INIT_ONCE.call_once(|| {
         let dirs = default_skill_dirs();
-        // Initialize synchronously: we are called from an async context,
-        // so use block_in_place to run the async init without spawning a new thread.
         let rt = tokio::runtime::Handle::current();
         let _ = tokio::task::block_in_place(|| rt.block_on(system.init(dirs)));
-        system
-    })
+    });
+    system
 }
 
 // ============================================================================
@@ -199,5 +200,16 @@ mod tests {
         let json = json!({"skill_id": "test:skill"});
         let params: RemoveParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.skill_id, "test:skill");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn rpc_shares_skill_system_with_global_singleton() {
+        // shared_system() must return the same instance as crate::skill::shared_skill_system().
+        let rpc = shared_system();
+        let global = crate::skill::shared_skill_system();
+        assert_eq!(
+            rpc.current_snapshot().await.version,
+            global.current_snapshot().await.version
+        );
     }
 }

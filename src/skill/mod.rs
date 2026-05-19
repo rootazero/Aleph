@@ -9,15 +9,17 @@ pub mod compat;
 pub mod config;
 pub mod eligibility;
 pub mod events;
+pub mod guard;
 pub mod installer;
 pub mod manifest;
-pub mod prefetch;
 pub mod prompt;
 pub mod recaller;
 pub mod registry;
+mod shared;
 pub mod snapshot;
 pub mod status;
 pub mod tools;
+pub mod usage;
 
 pub use commands::{list_available_commands, resolve_command, SkillCommandSpec};
 pub use compat::SkillInfo;
@@ -26,6 +28,7 @@ pub use config::{
 };
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 pub use events::SkillSystemEvent;
+pub use guard::{install_allowed, merge_verdicts, scan_content, scan_skill_directory, ScanVerdict, ThreatLevel, TrustLevel};
 pub use installer::{
     build_install_command, filter_install_specs_for_current_os, select_best_install,
     InstallExecutor, InstallResult,
@@ -33,8 +36,10 @@ pub use installer::{
 pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
 pub use prompt::build_skills_prompt_xml;
 pub use registry::SkillRegistry;
+pub use shared::shared_skill_system;
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
+pub use usage::{UsageStats, UsageStore};
 
 use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};
@@ -197,12 +202,16 @@ impl SkillSystem {
 
     /// Build status entries for all registered skills.
     pub async fn skill_status(&self) -> Vec<SkillStatusEntry> {
+        let config_value = crate::config::Config::load()
+            .ok()
+            .and_then(|c| serde_json::to_value(&c).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
         let registry = self.inner.registry.read().await;
         let mut entries: Vec<SkillStatusEntry> = registry
             .list_all()
             .into_iter()
             .map(|m| {
-                let result = self.inner.eligibility.evaluate(m);
+                let result = self.inner.eligibility.evaluate(m, &config_value);
                 SkillStatusEntry::build(m, &result, None, false)
             })
             .collect();
@@ -246,6 +255,10 @@ impl SkillSystem {
 
     /// Build full status entries for all skills, incorporating user config.
     pub async fn full_status(&self) -> Vec<SkillStatusEntry> {
+        let config_value = crate::config::Config::load()
+            .ok()
+            .and_then(|c| serde_json::to_value(&c).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
         let registry = self.inner.registry.read().await;
         let config = self.inner.config.read().await;
 
@@ -253,7 +266,7 @@ impl SkillSystem {
             .list_all()
             .into_iter()
             .map(|manifest| {
-                let eligibility = self.inner.eligibility.evaluate(manifest);
+                let eligibility = self.inner.eligibility.evaluate(manifest, &config_value);
                 let entry_config = config.get_entry(manifest.id());
                 // Vault integration wired in RPC layer
                 let api_key_set = false;
@@ -389,9 +402,15 @@ impl SkillSystem {
         let current_version = *version;
         drop(version);
 
+        // Load config once; fall back to empty object on failure (defensive).
+        let config_value = crate::config::Config::load()
+            .ok()
+            .and_then(|c| serde_json::to_value(&c).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
         let registry = self.inner.registry.read().await;
         let new_snapshot =
-            SkillSnapshot::build(&registry, &self.inner.eligibility, current_version);
+            SkillSnapshot::build(&registry, &self.inner.eligibility, current_version, &config_value);
         let skill_ids: Vec<String> = registry
             .list_all()
             .iter()

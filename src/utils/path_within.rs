@@ -1,0 +1,35 @@
+//! Lexical path-containment check (no filesystem touch, no symlink TOCTOU).
+
+use std::path::{Component, Path, PathBuf};
+
+/// Returns true iff `target`, lexically normalized, stays within `base`.
+pub fn is_path_within(base: &Path, target: &Path) -> bool {
+    let mut normalized = PathBuf::new();
+    for component in target.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(c) => normalized.push(c),
+            Component::RootDir => normalized.push(Component::RootDir.as_os_str()),
+            Component::Prefix(p) => normalized.push(p.as_os_str()),
+            Component::CurDir => {}
+        }
+    }
+    normalized.starts_with(base)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inside_and_outside() {
+        let base = PathBuf::from("/skills/demo");
+        assert!(is_path_within(&base, &base.join("references/x.md")));
+        assert!(!is_path_within(
+            &base,
+            &PathBuf::from("/skills/demo/../other/x")
+        ));
+    }
+}

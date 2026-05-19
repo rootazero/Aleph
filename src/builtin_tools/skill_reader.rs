@@ -22,6 +22,40 @@ use crate::error::Result;
 use crate::tools::AlephTool;
 
 // ============================================================================
+// Shared helpers
+// ============================================================================
+
+/// List supporting files in a skill dir, including `references/`, `scripts/`,
+/// `assets/` subdirectories. Returns slash-joined relative paths. Hidden
+/// entries and `SKILL.md` itself are skipped.
+fn list_skill_files(skill_dir: &Path) -> Vec<String> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                walk(base, &path, out);
+            } else if name != "SKILL.md" {
+                if let Ok(rel) = path.strip_prefix(base) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(skill_dir, skill_dir, &mut files);
+    files.sort();
+    files
+}
+
+// ============================================================================
 // ReadSkillTool - Read skill instructions (Level 2) or resources (Level 3)
 // ============================================================================
 
@@ -85,31 +119,6 @@ pub struct ReadSkillTool {
 }
 
 impl ReadSkillTool {
-    /// Tool identifier
-    pub const NAME: &'static str = "skill_read";
-
-    /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str = r#"Read the instructions of an installed skill.
-
-Use this tool when you need to execute a task that matches a skill's purpose.
-The skill instructions tell you exactly how to approach the task.
-
-After reading a skill, you MUST follow its instructions exactly.
-Skill instructions are task directives, not suggestions.
-
-Skills are discovered from multiple locations:
-- Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)
-- Global level: ~/.aleph/skills, ~/.claude/skills
-
-Examples:
-- User asks to "refine this text" → skill.read(skill_id="refine-text")
-- User asks to "translate to Chinese" → skill.read(skill_id="translate")
-- User asks to "summarize this" → skill.read(skill_id="summarize")
-
-You can also read additional resources within a skill by specifying file_name:
-- skill.read(skill_id="code-review", file_name="CHECKLIST.md")
-"#;
-
     /// Create a new ReadSkillTool with a single directory (backwards compatible)
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
@@ -153,15 +162,18 @@ You can also read additional resources within a skill by specifying file_name:
         self
     }
 
-    /// Find the skill directory by ID across all configured directories
-    fn find_skill_dir(&self, skill_id: &str) -> Option<PathBuf> {
+    /// Collect every directory that contains skill `skill_id` (a SKILL.md).
+    /// Returns all matches so the caller can refuse ambiguous names rather
+    /// than silently shadowing — mirrors hermes-agent's collision refusal.
+    fn find_skill_dirs(&self, skill_id: &str) -> Vec<PathBuf> {
+        let mut hits = Vec::new();
         for skills_dir in &self.skills_dirs {
             let skill_dir = skills_dir.join(skill_id);
             if skill_dir.is_dir() && skill_dir.join("SKILL.md").exists() {
-                return Some(skill_dir);
+                hits.push(skill_dir);
             }
         }
-        None
+        hits
     }
 
     /// Validate skill_id to prevent path traversal attacks
@@ -190,44 +202,45 @@ You can also read additional resources within a skill by specifying file_name:
         Ok(())
     }
 
-    /// Validate file_name to prevent path traversal
+    /// Validate a `file_name` that MAY contain forward-slash subdir segments
+    /// (e.g. `references/guide.md`). Rejects `..` components, absolute paths,
+    /// backslashes, and any leading-dot segment. The caller additionally
+    /// confirms the resolved path stays inside the skill dir via `is_path_within`.
     fn validate_file_name(&self, file_name: &str) -> std::result::Result<(), ToolError> {
-        if file_name.contains("..") || file_name.contains('/') || file_name.contains('\\') {
+        if file_name.is_empty() {
+            return Err(ToolError::InvalidArgs("file_name cannot be empty".into()));
+        }
+        if file_name.contains('\\') {
             return Err(ToolError::InvalidArgs(
-                "file_name cannot contain path separators or '..'".to_string(),
+                "file_name cannot contain backslashes".into(),
             ));
         }
-
-        if file_name.starts_with('.') {
-            return Err(ToolError::InvalidArgs(
-                "file_name cannot start with '.'".to_string(),
-            ));
+        let path = std::path::Path::new(file_name);
+        if path.is_absolute() {
+            return Err(ToolError::InvalidArgs("file_name cannot be absolute".into()));
         }
-
-        Ok(())
-    }
-
-    /// List files in a skill directory
-    fn list_skill_files(&self, skill_dir: &Path) -> Vec<String> {
-        let mut files = Vec::new();
-
-        if let Ok(entries) = fs::read_dir(skill_dir) {
-            for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    if file_type.is_file() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            // Skip hidden files
-                            if !name.starts_with('.') {
-                                files.push(name.to_string());
-                            }
-                        }
+        for component in path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    return Err(ToolError::InvalidArgs(
+                        "invalid file_name: traversal via '..' is not allowed".into(),
+                    ))
+                }
+                std::path::Component::Normal(seg) => {
+                    if seg.to_string_lossy().starts_with('.') {
+                        return Err(ToolError::InvalidArgs(
+                            "file_name segments cannot start with '.'".into(),
+                        ));
                     }
+                }
+                _ => {
+                    return Err(ToolError::InvalidArgs(
+                        "file_name contains an invalid path component".into(),
+                    ))
                 }
             }
         }
-
-        files.sort();
-        files
+        Ok(())
     }
 
     /// Execute the read_skill operation (internal implementation)
@@ -249,18 +262,42 @@ You can also read additional resources within a skill by specifying file_name:
         let file_name = args.file_name.as_deref().unwrap_or("SKILL.md");
         self.validate_file_name(file_name)?;
 
-        // Find skill directory across all configured locations
-        let skill_dir = self.find_skill_dir(&args.skill_id).ok_or_else(|| {
-            let error_msg = format!("Skill '{}' not found", args.skill_id);
-            notify_tool_result(Self::NAME, &error_msg, false);
-            ToolError::NotFound(error_msg)
-        })?;
+        // Find skill directory across all configured locations.
+        // Refuse ambiguous names to mirror hermes-agent's collision refusal.
+        let candidates = self.find_skill_dirs(&args.skill_id);
+        let skill_dir = match candidates.len() {
+            0 => {
+                let error_msg = format!("Skill '{}' not found", args.skill_id);
+                notify_tool_result(Self::NAME, &error_msg, false);
+                return Err(ToolError::NotFound(error_msg));
+            }
+            1 => candidates.into_iter().next().unwrap(),
+            _ => {
+                let paths: Vec<String> =
+                    candidates.iter().map(|p| p.display().to_string()).collect();
+                let error_msg = format!(
+                    "skill '{}' is ambiguous — found in multiple locations: {}. \
+                     Disambiguate by removing the duplicate or renaming one.",
+                    args.skill_id,
+                    paths.join(", ")
+                );
+                notify_tool_result(Self::NAME, &error_msg, false);
+                return Err(ToolError::InvalidArgs(error_msg));
+            }
+        };
 
         let file_path = skill_dir.join(file_name);
 
+        // Defense in depth: ensure the resolved path stays inside skill_dir.
+        if !crate::utils::path_within::is_path_within(&skill_dir, &file_path) {
+            return Err(ToolError::InvalidArgs(
+                "file_name escapes the skill directory".into(),
+            ));
+        }
+
         // Check file exists
         if !file_path.exists() || !file_path.is_file() {
-            let available = self.list_skill_files(&skill_dir);
+            let available = list_skill_files(&skill_dir);
             let error_msg = format!(
                 "File '{}' not found in skill '{}'. Available files: {:?}",
                 file_name, args.skill_id, available
@@ -289,7 +326,7 @@ You can also read additional resources within a skill by specifying file_name:
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
 
         // List available files
-        let available_files = self.list_skill_files(&skill_dir);
+        let available_files = list_skill_files(&skill_dir);
 
         let result_msg = format!(
             "Read {} bytes from {}/{}",
@@ -305,6 +342,16 @@ You can also read additional resources within a skill by specifying file_name:
             size = metadata.len(),
             "Skill file read successfully"
         );
+
+        // Best-effort usage tracking — never affects the tool result.
+        if let Some(parent) = skill_dir.parent() {
+            let store = crate::skill::UsageStore::new(parent);
+            if file_name == "SKILL.md" {
+                store.record_use(&args.skill_id);
+            } else {
+                store.record_view(&args.skill_id);
+            }
+        }
 
         Ok(ReadSkillOutput {
             success: true,
@@ -343,7 +390,19 @@ Use this tool when you need to execute a task that matches a skill's purpose.
 The skill instructions tell you exactly how to approach the task.
 
 After reading a skill, you MUST follow its instructions exactly.
-Skill instructions are task directives, not suggestions."#;
+Skill instructions are task directives, not suggestions.
+
+Skills are discovered from multiple locations:
+- Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)
+- Global level: ~/.aleph/skills, ~/.claude/skills
+
+Examples:
+- User asks to "refine this text" → skill.read(skill_id="refine-text")
+- User asks to "translate to Chinese" → skill.read(skill_id="translate")
+- User asks to "summarize this" → skill.read(skill_id="summarize")
+
+You can also read additional resources within a skill by specifying file_name:
+- skill.read(skill_id="code-review", file_name="CHECKLIST.md")"#;
 
     type Args = ReadSkillArgs;
     type Output = ReadSkillOutput;
@@ -419,22 +478,6 @@ pub struct ListSkillsTool {
 }
 
 impl ListSkillsTool {
-    /// Tool identifier
-    pub const NAME: &'static str = "skill_list";
-
-    /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str = r#"List all available skills installed on the system.
-
-Use this tool to discover what skills are available before using skill.read.
-Each skill has an ID, name, description, and optional trigger keywords.
-
-Skills are discovered from multiple locations:
-- Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)
-- Global level: ~/.aleph/skills, ~/.claude/skills
-
-After finding a relevant skill, use skill.read(skill_id) to load its full instructions.
-"#;
-
     /// Create a new ListSkillsTool with a single directory (backwards compatible)
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
@@ -495,7 +538,7 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
                 .ok()?;
 
         // List files
-        let files = self.list_skill_files(skill_dir);
+        let files = list_skill_files(skill_dir);
 
         // Determine source
         let source = self.get_source_type(skill_dir);
@@ -509,28 +552,6 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
             files,
             source: Some(source),
         })
-    }
-
-    /// List files in a skill directory
-    fn list_skill_files(&self, skill_dir: &Path) -> Vec<String> {
-        let mut files = Vec::new();
-
-        if let Ok(entries) = fs::read_dir(skill_dir) {
-            for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    if file_type.is_file() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            if !name.starts_with('.') {
-                                files.push(name.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        files.sort();
-        files
     }
 
     /// Execute the list_skills operation (internal implementation)
@@ -657,6 +678,10 @@ impl AlephTool for ListSkillsTool {
 Use this tool to discover what skills are available before using skill.read.
 Each skill has an ID, name, description, and optional trigger keywords.
 
+Skills are discovered from multiple locations:
+- Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)
+- Global level: ~/.aleph/skills, ~/.claude/skills
+
 After finding a relevant skill, use skill.read(skill_id) to load its full instructions."#;
 
     type Args = ListSkillsArgs;
@@ -727,7 +752,8 @@ Follow them carefully.
         assert_eq!(result.file_name, "SKILL.md");
         assert!(result.content.contains("Test Skill"));
         assert!(result.content.contains("skill instructions"));
-        assert!(result.available_files.contains(&"SKILL.md".to_string()));
+        // SKILL.md is excluded from available_files (it's the primary file, not a reference)
+        assert!(!result.available_files.contains(&"SKILL.md".to_string()));
         assert!(result.available_files.contains(&"REFERENCE.md".to_string()));
     }
 
@@ -919,5 +945,88 @@ Follow them carefully.
         assert!(result.success);
         assert_eq!(result.skill_id, "unique-skill");
         assert!(result.content.contains("Unique Skill"));
+    }
+
+    #[tokio::test]
+    async fn skill_read_can_reach_references_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sk = tmp.path().join("withref");
+        std::fs::create_dir_all(sk.join("references")).unwrap();
+        std::fs::write(
+            sk.join("SKILL.md"),
+            "---\nname: withref\ndescription: d\n---\nx",
+        )
+        .unwrap();
+        std::fs::write(sk.join("references").join("guide.md"), "REF-CONTENT").unwrap();
+
+        let tool = ReadSkillTool::with_directories(vec![tmp.path().to_path_buf()]);
+        let out = AlephTool::call(
+            &tool,
+            ReadSkillArgs {
+                skill_id: "withref".to_string(),
+                file_name: Some("references/guide.md".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(out.content.contains("REF-CONTENT"));
+    }
+
+    #[tokio::test]
+    async fn skill_read_rejects_traversal_in_file_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sk = tmp.path().join("trav");
+        std::fs::create_dir_all(&sk).unwrap();
+        std::fs::write(
+            sk.join("SKILL.md"),
+            "---\nname: trav\ndescription: d\n---\nx",
+        )
+        .unwrap();
+        let tool = ReadSkillTool::with_directories(vec![tmp.path().to_path_buf()]);
+        let err = AlephTool::call(
+            &tool,
+            ReadSkillArgs {
+                skill_id: "trav".to_string(),
+                file_name: Some("../../etc/passwd".to_string()),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("invalid")
+                || err.to_string().to_lowercase().contains("traversal"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_skill_across_dirs_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir_a = tmp.path().join("a");
+        let dir_b = tmp.path().join("b");
+        for d in [&dir_a, &dir_b] {
+            let sk = d.join("dup");
+            std::fs::create_dir_all(&sk).unwrap();
+            std::fs::write(
+                sk.join("SKILL.md"),
+                "---\nname: dup\ndescription: d\n---\nx",
+            )
+            .unwrap();
+        }
+        let tool = ReadSkillTool::with_directories(vec![dir_a, dir_b]);
+        let err = AlephTool::call(
+            &tool,
+            ReadSkillArgs {
+                skill_id: "dup".to_string(),
+                file_name: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ambiguous") || msg.contains("multiple"),
+            "got: {msg}"
+        );
     }
 }

@@ -85,7 +85,6 @@ mod stubs {
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
-            skill_prefetcher: None,
             trace_sink: None,
             system_prompt: None,
             prompt_builder: Arc::new(crate::harness::prompt::DefaultPromptBuilder),

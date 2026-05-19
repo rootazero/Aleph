@@ -174,7 +174,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // H2: opt-in mid-run context compaction. `None` (section absent /
         // disabled) keeps the previous behavior — no compaction.
         context_budget_config: build_context_budget_config(config),
-        skill_prefetcher: None,
+        skill_system: Some(alephcore::skill::shared_skill_system().clone()),
         // Stage 7 (#12) wiring placeholders — PHASE-6 will load these from
         // aleph.toml. Path is now plumbed end-to-end; defaults stay None
         // so behavior matches pre-Stage-7 main exactly.
@@ -326,7 +326,10 @@ mod tests {
         let sc = sc.expect("stall_timeout_secs=120 → Some(StallConfig)");
         assert_eq!(sc.timeout, Duration::from_secs(120));
         // missing stall_check_interval_secs → falls back to default (30s)
-        assert_eq!(sc.check_interval, alephcore::harness::StallConfig::default().check_interval);
+        assert_eq!(
+            sc.check_interval,
+            alephcore::harness::StallConfig::default().check_interval
+        );
         assert!(cap.is_none());
         assert!(tt.is_none());
     }

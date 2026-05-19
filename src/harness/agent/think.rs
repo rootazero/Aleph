@@ -4,8 +4,8 @@ use std::sync::atomic::Ordering;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::context::budget::LoopDirective;
 use super::{AgentHarness, HarnessCallbackExt, InputGuardrailOutcome};
+use crate::context::budget::LoopDirective;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
@@ -44,13 +44,6 @@ impl AgentHarness {
         self.emit(|| crate::harness::trace::LoopTraceEvent::TurnStarted {
             iteration: iterations,
         });
-
-        // Kick off a throttled skill prefetch scan before the LLM call. The
-        // scan runs in a background task; its result surfaces on the next
-        // turn rather than blocking this one.
-        if let Some(prefetcher) = self.deps.skill_prefetcher.as_ref() {
-            let _ = prefetcher.start_scan();
-        }
 
         // 1. Fetch full event log and compute the tail boundary.
         let events = self.deps.session.get_events(session_id, None, None).await?;
