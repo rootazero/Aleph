@@ -306,6 +306,16 @@ You can also read additional resources within a skill by specifying file_name:
             "Skill file read successfully"
         );
 
+        // Best-effort usage tracking — never affects the tool result.
+        if let Some(parent) = skill_dir.parent() {
+            let store = crate::skill::UsageStore::new(parent);
+            if file_name == "SKILL.md" {
+                store.record_use(&args.skill_id);
+            } else {
+                store.record_view(&args.skill_id);
+            }
+        }
+
         Ok(ReadSkillOutput {
             success: true,
             skill_id: args.skill_id,

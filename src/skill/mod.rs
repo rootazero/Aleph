@@ -18,6 +18,7 @@ mod shared;
 pub mod snapshot;
 pub mod status;
 pub mod tools;
+pub mod usage;
 
 pub use commands::{list_available_commands, resolve_command, SkillCommandSpec};
 pub use compat::SkillInfo;
@@ -36,6 +37,7 @@ pub use registry::SkillRegistry;
 pub use shared::shared_skill_system;
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
+pub use usage::{UsageStats, UsageStore};
 
 use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};
