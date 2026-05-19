@@ -260,8 +260,6 @@ pub struct PluginRecord {
     pub tool_names: Vec<String>,
     /// Number of hooks registered
     pub hook_count: usize,
-    /// Gateway RPC methods registered by this plugin
-    pub gateway_methods: Vec<String>,
     /// Service IDs registered by this plugin
     pub service_ids: Vec<String>,
 }
@@ -281,7 +279,6 @@ impl PluginRecord {
             root_dir: PathBuf::new(),
             tool_names: Vec::new(),
             hook_count: 0,
-            gateway_methods: Vec::new(),
             service_ids: Vec::new(),
         }
     }
@@ -309,7 +306,6 @@ impl PluginRecord {
                 | CapabilityDeclaration::Command(_)
                 | CapabilityDeclaration::Agent(_)
                 | CapabilityDeclaration::McpServer(_)
-                | CapabilityDeclaration::GatewayMethod(_)
                 | CapabilityDeclaration::HttpRoute(_)
                 | CapabilityDeclaration::Cli(_) => {}
             }
@@ -330,7 +326,6 @@ impl PluginRecord {
             root_dir,
             tool_names,
             hook_count,
-            gateway_methods: Vec::new(),
             service_ids,
         }
     }

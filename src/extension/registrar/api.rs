@@ -80,9 +80,6 @@ impl<'a> CapabilityApi<'a> {
             CapabilityDeclaration::Hook(hook) => {
                 self.registry.register_hook(hook);
             }
-            CapabilityDeclaration::GatewayMethod(method) => {
-                self.registry.register_gateway_method(method);
-            }
             CapabilityDeclaration::HttpRoute(route) => {
                 self.registry.register_http_route(route);
             }
@@ -157,7 +154,7 @@ mod tests {
     use super::*;
     use crate::extension::registry::{
         AgentRegistration, CliRegistration, CommandRegistration,
-        GatewayMethodRegistration, HookRegistration, HttpRouteRegistration,
+        HookRegistration, HttpRouteRegistration,
         ServiceRegistration, SkillRegistration, ToolRegistration,
     };
     use crate::extension::types::HookEvent;
@@ -357,7 +354,6 @@ mod tests {
                 PluginPermission::Background,
                 PluginPermission::HttpRoutes,
                 PluginPermission::Shell,
-                PluginPermission::GatewayRpc,
             ],
         );
 
@@ -367,16 +363,6 @@ mod tests {
         api.register_capability(make_service()).unwrap();
         api.register_capability(make_http_route()).unwrap();
         api.register_capability(make_skill()).unwrap();
-
-        api.register_capability(CapabilityDeclaration::GatewayMethod(
-            GatewayMethodRegistration {
-                method: "test.method".to_string(),
-                description: None,
-                handler: "h".to_string(),
-                plugin_id: "test-plugin".to_string(),
-            },
-        ))
-        .unwrap();
 
         api.register_capability(CapabilityDeclaration::Cli(CliRegistration {
             name: "test-cmd".to_string(),
@@ -417,7 +403,6 @@ mod tests {
         let reg = api.registry();
         assert!(reg.get_tool("my_tool").is_some());
         assert_eq!(reg.list_hooks().len(), 1);
-        assert!(reg.get_gateway_method("test.method").is_some());
         assert_eq!(reg.list_http_routes().len(), 1);
         assert!(reg.get_cli_command("test-cmd").is_some());
         assert!(reg.get_service("test-service").is_some());

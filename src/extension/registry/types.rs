@@ -1,8 +1,7 @@
 //! Plugin registration type definitions
 //!
-//! This module defines the 9 registration types used by the plugin API:
+//! This module defines the registration types used by the plugin API:
 //! - P0 Core: Tool, Hook
-//! - P1 Important: Channel, Provider, GatewayMethod
 //! - P2 Useful: HttpRoute, HttpHandler, Cli, Service
 //! - P3 Optional: Command
 //!
@@ -49,23 +48,6 @@ pub struct HookRegistration {
     /// Optional description of what the hook does
     pub description: Option<String>,
     /// ID of the plugin that registered this hook
-    pub plugin_id: String,
-}
-
-// ============================================================================
-// P1 Important Registration Types
-// ============================================================================
-
-/// Gateway RPC method registration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayMethodRegistration {
-    /// Method name (e.g., "myplugin.do_something")
-    pub method: String,
-    /// Optional description of the method
-    pub description: Option<String>,
-    /// Handler function name within the plugin
-    pub handler: String,
-    /// ID of the plugin that registered this method
     pub plugin_id: String,
 }
 
@@ -485,17 +467,6 @@ mod tests {
         };
         assert_eq!(hook.priority, 10);
         assert_eq!(hook.name, Some("Message Logger".to_string()));
-    }
-
-    #[test]
-    fn test_gateway_method_registration() {
-        let method = GatewayMethodRegistration {
-            method: "myplugin.execute".to_string(),
-            description: Some("Execute a custom action".to_string()),
-            handler: "execute_action".to_string(),
-            plugin_id: "my-plugin".to_string(),
-        };
-        assert!(method.method.starts_with("myplugin."));
     }
 
     #[test]

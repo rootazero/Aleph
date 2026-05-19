@@ -13,9 +13,6 @@
 //!   - [`ToolRegistration`] - Expose callable tools to agents
 //!   - [`HookRegistration`] - Intercept system events
 //!
-//! - **P1 Important**: Key integration points
-//!   - [`GatewayMethodRegistration`] - RPC method extensions
-//!
 //! - **P2 Useful**: Additional extension points
 //!   - [`HttpRouteRegistration`] - REST API endpoints
 //!   - [`HttpHandlerRegistration`] - HTTP middleware

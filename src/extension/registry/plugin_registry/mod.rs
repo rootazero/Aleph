@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use super::types::{
     AgentRegistration, CliRegistration, CommandRegistration,
-    GatewayMethodRegistration, HookRegistration, HttpHandlerRegistration, HttpRouteRegistration,
+    HookRegistration, HttpHandlerRegistration, HttpRouteRegistration,
     PluginDiagnostic, ServiceRegistration, SkillRegistration,
     ToolRegistration,
 };
@@ -33,9 +33,6 @@ pub struct PluginRegistry {
 
     /// Registered hooks (sorted by priority)
     hooks: Vec<HookRegistration>,
-
-    /// Registered gateway RPC methods by method name
-    gateway_methods: HashMap<String, GatewayMethodRegistration>,
 
     /// Registered HTTP routes
     http_routes: Vec<HttpRouteRegistration>,
@@ -75,7 +72,6 @@ impl PluginRegistry {
         self.plugins.clear();
         self.tools.clear();
         self.hooks.clear();
-        self.gateway_methods.clear();
         self.http_routes.clear();
         self.http_handlers.clear();
         self.cli_commands.clear();
@@ -232,35 +228,6 @@ impl PluginRegistry {
     /// List all registered hooks.
     pub fn list_hooks(&self) -> Vec<&HookRegistration> {
         self.hooks.iter().collect()
-    }
-
-    // =========================================================================
-    // Gateway Method Registration
-    // =========================================================================
-
-    /// Register a gateway RPC method.
-    pub fn register_gateway_method(&mut self, method: GatewayMethodRegistration) {
-        let plugin_id = method.plugin_id.clone();
-        let method_name = method.method.clone();
-
-        self.gateway_methods.insert(method_name.clone(), method);
-
-        // Update plugin record
-        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
-            if !plugin.gateway_methods.contains(&method_name) {
-                plugin.gateway_methods.push(method_name);
-            }
-        }
-    }
-
-    /// Get a gateway method by name.
-    pub fn get_gateway_method(&self, method: &str) -> Option<&GatewayMethodRegistration> {
-        self.gateway_methods.get(method)
-    }
-
-    /// List all registered gateway methods.
-    pub fn list_gateway_methods(&self) -> Vec<&GatewayMethodRegistration> {
-        self.gateway_methods.values().collect()
     }
 
     // =========================================================================
@@ -485,9 +452,6 @@ impl PluginRegistry {
         // Remove all hooks from this plugin
         self.hooks.retain(|h| h.plugin_id != plugin_id);
 
-        // Remove all gateway methods from this plugin
-        self.gateway_methods.retain(|_, m| m.plugin_id != plugin_id);
-
         // Remove all HTTP routes from this plugin
         self.http_routes.retain(|r| r.plugin_id != plugin_id);
 
@@ -525,7 +489,6 @@ impl PluginRegistry {
             active_plugins: self.list_active_plugins().len(),
             tools: self.tools.len(),
             hooks: self.hooks.len(),
-            gateway_methods: self.gateway_methods.len(),
             http_routes: self.http_routes.len(),
             http_handlers: self.http_handlers.len(),
             cli_commands: self.cli_commands.len(),
@@ -545,7 +508,6 @@ pub struct RegistryStats {
     pub active_plugins: usize,
     pub tools: usize,
     pub hooks: usize,
-    pub gateway_methods: usize,
     pub http_routes: usize,
     pub http_handlers: usize,
     pub cli_commands: usize,
