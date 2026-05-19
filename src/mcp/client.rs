@@ -61,59 +61,25 @@ pub struct ExternalServerConfig {
     pub timeout_seconds: Option<u64>,
 }
 
-/// Tool location - where a tool comes from
-#[derive(Debug, Clone)]
-enum ToolLocation {
-    /// External server (name stored for debugging/future use)
-    External(#[allow(dead_code)] String),
-}
-
 /// MCP Client - registry for external MCP server connections
 ///
 /// Note: Native tools (fs, git, shell, etc.) are now handled via
 /// the AgentTool infrastructure in the `tools` module. This client
 /// only manages external MCP server connections.
 pub struct McpClient {
-    /// Tool name to location mapping (RwLock for thread-safe updates)
-    tool_location_map: tokio::sync::RwLock<HashMap<String, ToolLocation>>,
     /// External server connections
     external_servers: tokio::sync::RwLock<HashMap<String, Arc<McpServerConnection>>>,
     /// Handler for sampling requests from servers
     sampling_handler: Arc<SamplingHandler>,
-    /// Optional shared `ToolRegistry` for the Phase 2 Tool Service façade.
-    ///
-    /// Injected via `set_tool_registry` during AppContext construction
-    /// (Task 10). When present, successful server connects populate the
-    /// registry with `McpHandler` entries and disconnects remove them. When
-    /// absent, MCP tool dispatch continues to flow through the legacy path.
-    tool_registry: tokio::sync::RwLock<Option<Arc<crate::tools::registry::ToolRegistry>>>,
 }
 
 impl McpClient {
     /// Create a new empty MCP client
     pub fn new() -> Self {
         Self {
-            tool_location_map: tokio::sync::RwLock::new(HashMap::new()),
             external_servers: tokio::sync::RwLock::new(HashMap::new()),
             sampling_handler: Arc::new(SamplingHandler::new()),
-            tool_registry: tokio::sync::RwLock::new(None),
         }
-    }
-
-    /// Inject the Phase 2 shared `ToolRegistry`.
-    ///
-    /// Called once from `AppContext` setup (Task 10). Subsequent
-    /// connect/disconnect operations will populate / tear down registry
-    /// entries for each server's discovered tools via
-    /// `tools::handlers::registration::{register_mcp_tools, unregister_mcp_tools}`.
-    pub async fn set_tool_registry(&self, registry: Arc<crate::tools::registry::ToolRegistry>) {
-        *self.tool_registry.write().await = Some(registry);
-    }
-
-    /// Snapshot of the injected `ToolRegistry`, if any.
-    #[allow(dead_code)] // Consumed from Task 10 when lifecycle wiring lands.
-    pub(crate) async fn tool_registry(&self) -> Option<Arc<crate::tools::registry::ToolRegistry>> {
-        self.tool_registry.read().await.clone()
     }
 
     /// Get the sampling handler
@@ -222,18 +188,6 @@ impl McpClient {
         .await?;
 
         let connection = Arc::new(connection);
-
-        // Register tools from this server (thread-safe via RwLock)
-        let tools = connection.list_tools().await;
-        {
-            let mut map = self.tool_location_map.write().await;
-            for tool in &tools {
-                map.insert(
-                    tool.name.clone(),
-                    ToolLocation::External(config.name.clone()),
-                );
-            }
-        }
 
         // Store connection
         {
@@ -423,18 +377,6 @@ impl McpClient {
             .into_iter()
             .map(|t| (t.name, t.description, t.input_schema))
             .collect()
-    }
-
-    /// Check if a tool requires confirmation
-    pub async fn requires_confirmation(&self, tool_name: &str) -> bool {
-        let map = self.tool_location_map.read().await;
-        if map.get(tool_name).is_some() {
-            // External tools don't require confirmation by default
-            // Could be configurable in the future
-            return false;
-        }
-        // Default to requiring confirmation for unknown tools
-        true
     }
 
     /// Call a tool by name
@@ -659,21 +601,10 @@ impl McpClient {
         let connection = McpServerConnection::with_transport(&config.name, transport).await?;
         let connection = Arc::new(connection);
 
-        // Register tools from this server
-        let tools = connection.list_tools().await;
-        {
-            let mut map = self.tool_location_map.write().await;
-            for tool in &tools {
-                map.insert(
-                    tool.name.clone(),
-                    ToolLocation::External(config.name.clone()),
-                );
-            }
-        }
-
+        let tool_count = connection.list_tools().await.len();
         tracing::info!(
             server = %config.name,
-            tool_count = tools.len(),
+            tool_count,
             "Remote MCP server connected"
         );
 
@@ -726,6 +657,48 @@ impl McpClient {
         }
 
         health
+    }
+
+    /// Install a notification handler on a specific server's connection.
+    ///
+    /// Used by the manager to route `*/list_changed` notifications back into
+    /// the actor so the tool registry and capability state stay in sync.
+    pub async fn set_notification_handler(
+        &self,
+        server: &str,
+        handler: crate::mcp::transport::NotificationCallback,
+    ) {
+        let servers = self.external_servers.read().await;
+        match servers.get(server) {
+            Some(connection) => connection.set_notification_handler(handler),
+            None => tracing::warn!(
+                server = %server,
+                "set_notification_handler: no such connected MCP server"
+            ),
+        }
+    }
+
+    /// Re-fetch tool/resource/prompt caches for every connection.
+    ///
+    /// Called when a server announces a list-changed notification so that a
+    /// subsequent `list_tools` / `list_resources` / `list_prompts` reflects
+    /// the server's current state.
+    pub async fn refresh_caches(&self) {
+        let connections: Vec<_> = {
+            let servers = self.external_servers.read().await;
+            servers.values().cloned().collect()
+        };
+        for connection in &connections {
+            if let Err(e) = connection.refresh_tools().await {
+                tracing::warn!(server = %connection.name(), error = %e, "MCP refresh tools failed");
+            }
+            if let Err(e) = connection.refresh_resources().await {
+                tracing::debug!(server = %connection.name(), error = %e, "MCP refresh resources failed");
+            }
+            if let Err(e) = connection.refresh_prompts().await {
+                tracing::debug!(server = %connection.name(), error = %e, "MCP refresh prompts failed");
+            }
+        }
     }
 }
 
@@ -829,13 +802,6 @@ mod tests {
         let client = McpClient::new();
         let health = client.check_server_health().await;
         assert!(health.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_requires_confirmation_unknown() {
-        let client = McpClient::new();
-        // Unknown tools should require confirmation by default
-        assert!(client.requires_confirmation("unknown").await);
     }
 
     #[tokio::test]

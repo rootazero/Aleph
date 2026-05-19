@@ -1,34 +1,59 @@
 //! Stdio Transport for External MCP Servers
 //!
 //! Communicates with MCP servers via subprocess stdin/stdout using JSON-RPC.
+//!
+//! # I/O model
+//!
+//! A background reader task owns the child's stdout and continuously
+//! demultiplexes every line the server emits:
+//!
+//! - **Responses** (a line with `id`, no `method`) are routed to the matching
+//!   in-flight request via a per-id [`oneshot`] channel.
+//! - **Notifications** (a line with `method`, no `id`) are delivered to the
+//!   handler installed via `set_notification_handler`, which is how
+//!   `tools/list_changed` and friends reach the manager.
+//!
+//! This means a request timeout no longer corrupts the transport: the reader
+//! keeps draining stdout regardless, so later requests still resolve.
 
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::{oneshot, Mutex};
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
-use crate::mcp::transport::McpTransport;
+use crate::mcp::transport::{McpTransport, NotificationCallback};
 
 /// Default timeout for RPC calls (30 seconds)
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
+/// Map of in-flight request ids to the channel awaiting their response.
+type PendingMap = StdMutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>;
+
 /// Stdio transport for communicating with MCP servers via subprocess
 pub struct StdioTransport {
-    /// Child process handle
-    child: Mutex<Child>,
     /// Server name for logging
     server_name: String,
     /// Request timeout
     timeout: Duration,
-    /// Whether the transport is poisoned (e.g., after a timeout that may have lost buffered data)
-    poisoned: std::sync::atomic::AtomicBool,
+    /// Child process handle — kept for liveness checks and termination
+    child: Mutex<Child>,
+    /// Server stdin — writes are serialized through this lock
+    stdin: Mutex<ChildStdin>,
+    /// In-flight requests awaiting a response, keyed by JSON-RPC id
+    pending: std::sync::Arc<PendingMap>,
+    /// Handler for server-initiated notifications (installed after connect)
+    notification_handler: std::sync::Arc<StdMutex<Option<NotificationCallback>>>,
+    /// Background stdout reader; aborted on drop
+    reader_task: JoinHandle<()>,
 }
 
 impl StdioTransport {
@@ -64,17 +89,14 @@ impl StdioTransport {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        // Set environment variables
         for (key, value) in env {
             cmd.env(key, value);
         }
-
-        // Set working directory if specified
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
 
-        let child = cmd.spawn().map_err(|e| {
+        let mut child = cmd.spawn().map_err(|e| {
             AlephError::IoError(format!(
                 "Failed to spawn MCP server '{}' ({}): {}",
                 name, command_str, e
@@ -87,11 +109,35 @@ impl StdioTransport {
             "MCP server process started"
         );
 
+        // Take the pipes out of the child: stdin is owned by this transport
+        // for the lifetime of the connection, stdout is owned by the reader.
+        let stdin = child.stdin.take().ok_or_else(|| {
+            AlephError::IoError(format!("MCP server '{}' stdin not available", name))
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            AlephError::IoError(format!("MCP server '{}' stdout not available", name))
+        })?;
+
+        let pending: std::sync::Arc<PendingMap> =
+            std::sync::Arc::new(StdMutex::new(HashMap::new()));
+        let notification_handler: std::sync::Arc<StdMutex<Option<NotificationCallback>>> =
+            std::sync::Arc::new(StdMutex::new(None));
+
+        let reader_task = tokio::spawn(reader_loop(
+            stdout,
+            name.clone(),
+            std::sync::Arc::clone(&pending),
+            std::sync::Arc::clone(&notification_handler),
+        ));
+
         Ok(Self {
-            child: Mutex::new(child),
             server_name: name,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-            poisoned: std::sync::atomic::AtomicBool::new(false),
+            child: Mutex::new(child),
+            stdin: Mutex::new(stdin),
+            pending,
+            notification_handler,
+            reader_task,
         })
     }
 
@@ -101,178 +147,59 @@ impl StdioTransport {
         self
     }
 
-    /// Send a JSON-RPC request and wait for response
+    /// Send a JSON-RPC request and wait for the matching response
+    ///
+    /// The response is demultiplexed by the background reader task, so
+    /// concurrent requests on the same transport are safe and a timeout on
+    /// one request leaves the transport usable for the rest.
     pub async fn send(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
-        // Check if transport was poisoned by a previous timeout
-        if self.poisoned.load(std::sync::atomic::Ordering::Acquire) {
-            return Err(AlephError::IoError(format!(
-                "MCP server '{}' transport is poisoned after a previous timeout — restart the server",
-                self.server_name
-            )));
-        }
-
-        let request_id = request.id;
         let method = &request.method;
 
         tracing::debug!(
             server = %self.server_name,
-            id = request_id,
+            id = request.id,
             method = %method,
             "Sending JSON-RPC request"
         );
 
-        let mut child = self.child.lock().await;
+        let request_json = request
+            .to_json_line()
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize request: {}", e)))?;
 
-        // Take stdin and stdout - we need both for communication
-        // If either is missing, the process is likely dead
-        let (mut stdin, stdout) = match (child.stdin.take(), child.stdout.take()) {
-            (Some(stdin), Some(stdout)) => (stdin, stdout),
-            (stdin_opt, stdout_opt) => {
-                // Put back whatever we took
-                child.stdin = stdin_opt;
-                child.stdout = stdout_opt;
-                return Err(AlephError::IoError(format!(
-                    "MCP server '{}' stdin/stdout not available",
-                    self.server_name
-                )));
-            }
-        };
+        // Register the response slot before writing so a fast server cannot
+        // answer before the reader knows where to route the response.
+        let (tx, rx) = oneshot::channel();
+        lock(&self.pending).insert(request.id, tx);
 
-        // Serialize and send request
-        let request_json = match request.to_json_line() {
-            Ok(json) => json,
-            Err(e) => {
-                // Put handles back
-                child.stdin = Some(stdin);
-                child.stdout = Some(stdout);
-                return Err(AlephError::IoError(format!(
-                    "Failed to serialize request: {}",
-                    e
-                )));
-            }
-        };
-
-        if let Err(e) = stdin.write_all(request_json.as_bytes()).await {
-            // Put handles back before returning error
-            child.stdin = Some(stdin);
-            child.stdout = Some(stdout);
-            return Err(AlephError::IoError(format!(
-                "Failed to write to MCP server '{}': {}",
-                self.server_name, e
-            )));
+        if let Err(e) = self.write_line(&request_json).await {
+            lock(&self.pending).remove(&request.id);
+            return Err(e);
         }
 
-        if let Err(e) = stdin.flush().await {
-            // Put handles back before returning error
-            child.stdin = Some(stdin);
-            child.stdout = Some(stdout);
-            return Err(AlephError::IoError(format!(
-                "Failed to flush MCP server '{}' stdin: {}",
-                self.server_name, e
-            )));
-        }
-
-        // Put stdin back - we're done writing
-        child.stdin = Some(stdin);
-
-        // Read response with timeout, skipping any server notifications.
-        // Per JSON-RPC 2.0, servers may send notifications (no "id" field)
-        // interleaved with responses. We read lines until we find one whose
-        // "id" matches our request, or until timeout/EOF.
-        let mut reader = BufReader::new(stdout);
-        let read_result = timeout(self.timeout, async {
-            let mut line = String::new();
-            loop {
-                line.clear();
-                let bytes_read = reader.read_line(&mut line).await?;
-                if bytes_read == 0 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        format!("MCP server '{}' closed connection", self.server_name),
-                    ));
-                }
-
-                let trimmed = line.trim();
-                // Quick check: does this line contain an "id" field?
-                // Parse as generic JSON to inspect.
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    if let Some(id_val) = value.get("id") {
-                        // Has "id" — this is a response. Check if it matches our request.
-                        // Compare as Value to support both numeric and string IDs per JSON-RPC 2.0
-                        let expected_id = serde_json::Value::from(request_id);
-                        if *id_val == expected_id {
-                            // Parse as proper response
-                            let response: JsonRpcResponse =
-                                serde_json::from_value(value).map_err(|e| {
-                                    std::io::Error::new(
-                                        std::io::ErrorKind::InvalidData,
-                                        format!(
-                                            "Failed to parse response: {} (raw: {})",
-                                            e, trimmed
-                                        ),
-                                    )
-                                })?;
-                            return Ok(response);
-                        }
-                        // Response with different id — log warning and continue
-                        tracing::warn!(
-                            server = %self.server_name,
-                            expected_id = request_id,
-                            received_id = %id_val,
-                            "Received response with unexpected id, skipping"
-                        );
-                    } else {
-                        // No "id" field — this is a server notification, skip it
-                        let method = value
-                            .get("method")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("unknown");
-                        tracing::debug!(
-                            server = %self.server_name,
-                            notification_method = method,
-                            "Skipping server notification while waiting for response"
-                        );
-                    }
-                } else {
-                    // Not valid JSON — log and skip
-                    tracing::warn!(
-                        server = %self.server_name,
-                        "Received non-JSON line from server, skipping: {}",
-                        trimmed
-                    );
-                }
-            }
-        })
-        .await;
-
-        // Put stdout back
-        child.stdout = Some(reader.into_inner());
-
-        match read_result {
+        match timeout(self.timeout, rx).await {
             Ok(Ok(response)) => {
                 tracing::debug!(
                     server = %self.server_name,
-                    id = response.id,
+                    id = ?response.id,
                     success = response.is_success(),
                     "Received JSON-RPC response"
                 );
                 Ok(response)
             }
-            Ok(Err(e)) => Err(AlephError::IoError(format!(
-                "Failed to read from MCP server '{}': {}",
-                self.server_name, e
-            ))),
+            Ok(Err(_)) => {
+                // The reader task dropped our sender: stdout reached EOF.
+                Err(AlephError::IoError(format!(
+                    "MCP server '{}' closed the connection before responding",
+                    self.server_name
+                )))
+            }
             Err(_) => {
-                // Mark transport as poisoned: the cancelled BufReader may have
-                // consumed bytes into its internal buffer that are now lost,
-                // making future reads unreliable.
-                self.poisoned
-                    .store(true, std::sync::atomic::Ordering::Release);
+                lock(&self.pending).remove(&request.id);
                 tracing::warn!(
                     server = %self.server_name,
                     method = %method,
                     timeout_secs = self.timeout.as_secs(),
-                    "MCP request timed out — transport poisoned, server needs restart"
+                    "MCP request timed out"
                 );
                 Err(AlephError::McpTimeout)
             }
@@ -280,69 +207,40 @@ impl StdioTransport {
     }
 
     /// Send a JSON-RPC notification (no response expected)
-    ///
-    /// Unlike `send()`, this method does not wait for a response.
-    /// Per JSON-RPC 2.0 spec, notifications have no id and expect no reply.
     pub async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
-        let method = &notification.method;
-
         tracing::debug!(
             server = %self.server_name,
-            method = %method,
+            method = %notification.method,
             "Sending JSON-RPC notification"
         );
 
-        let mut child = self.child.lock().await;
+        let json = notification
+            .to_json_line()
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize notification: {}", e)))?;
+        self.write_line(&json).await
+    }
 
-        let stdin = match child.stdin.take() {
-            Some(stdin) => stdin,
-            None => {
-                return Err(AlephError::IoError(format!(
-                    "MCP server '{}' stdin not available",
-                    self.server_name
-                )));
-            }
-        };
-
-        // Serialize notification
-        let notification_json = match notification.to_json_line() {
-            Ok(json) => json,
-            Err(e) => {
-                child.stdin = Some(stdin);
-                return Err(AlephError::IoError(format!(
-                    "Failed to serialize notification: {}",
-                    e
-                )));
-            }
-        };
-
-        let mut stdin = stdin;
-        if let Err(e) = stdin.write_all(notification_json.as_bytes()).await {
-            child.stdin = Some(stdin);
-            return Err(AlephError::IoError(format!(
-                "Failed to write notification to MCP server '{}': {}",
+    /// Write a single pre-serialized JSON line to the server's stdin.
+    async fn write_line(&self, line: &str) -> Result<()> {
+        let mut stdin = self.stdin.lock().await;
+        stdin.write_all(line.as_bytes()).await.map_err(|e| {
+            AlephError::IoError(format!(
+                "Failed to write to MCP server '{}': {}",
                 self.server_name, e
-            )));
-        }
-
-        if let Err(e) = stdin.flush().await {
-            child.stdin = Some(stdin);
-            return Err(AlephError::IoError(format!(
+            ))
+        })?;
+        stdin.flush().await.map_err(|e| {
+            AlephError::IoError(format!(
                 "Failed to flush MCP server '{}' stdin: {}",
                 self.server_name, e
-            )));
-        }
-
-        // Put stdin back
-        child.stdin = Some(stdin);
-
-        tracing::debug!(
-            server = %self.server_name,
-            method = %method,
-            "JSON-RPC notification sent"
-        );
-
+            ))
+        })?;
         Ok(())
+    }
+
+    /// Install a handler for server-initiated notifications.
+    pub fn install_notification_handler(&self, handler: NotificationCallback) {
+        *lock(&self.notification_handler) = Some(handler);
     }
 
     /// Close the transport and terminate the server process
@@ -355,7 +253,6 @@ impl StdioTransport {
             "Terminating MCP server"
         );
 
-        // Try to kill gracefully first
         if let Err(e) = child.kill().await {
             tracing::warn!(
                 server = %self.server_name,
@@ -383,6 +280,127 @@ impl StdioTransport {
     }
 }
 
+/// Acquire a [`StdMutex`], recovering the guard if a previous holder panicked.
+fn lock<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A single JSON-RPC message read from a server's stdout.
+enum ServerMessage {
+    /// A response to one of our requests.
+    Response(JsonRpcResponse),
+    /// A server-initiated notification.
+    Notification(JsonRpcNotification),
+    /// A server-initiated request — unsupported on the stdio transport.
+    ServerRequest,
+    /// Valid JSON but not a recognizable JSON-RPC message.
+    Malformed,
+}
+
+/// Classify one stdout line into a [`ServerMessage`].
+///
+/// Per JSON-RPC 2.0: responses carry `id` and no `method`, notifications carry
+/// `method` and no `id`, and a message with both is a server-initiated request.
+fn classify_line(line: &str) -> std::result::Result<ServerMessage, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(line)?;
+    let has_id = value.get("id").map(|v| !v.is_null()).unwrap_or(false);
+    let has_method = value.get("method").is_some();
+    match (has_id, has_method) {
+        (true, false) => Ok(ServerMessage::Response(serde_json::from_value(value)?)),
+        (false, true) => Ok(ServerMessage::Notification(serde_json::from_value(value)?)),
+        (true, true) => Ok(ServerMessage::ServerRequest),
+        (false, false) => Ok(ServerMessage::Malformed),
+    }
+}
+
+/// Route one classified line to the pending request or the notification handler.
+fn dispatch_line(
+    server_name: &str,
+    line: &str,
+    pending: &PendingMap,
+    notification_handler: &StdMutex<Option<NotificationCallback>>,
+) {
+    match classify_line(line) {
+        Ok(ServerMessage::Response(response)) => {
+            let Some(id) = response.id else {
+                tracing::warn!(server = %server_name, "response without id, dropping");
+                return;
+            };
+            match lock(pending).remove(&id) {
+                Some(tx) => {
+                    let _ = tx.send(response);
+                }
+                None => tracing::warn!(
+                    server = %server_name,
+                    id,
+                    "response for unknown or already-timed-out request id"
+                ),
+            }
+        }
+        Ok(ServerMessage::Notification(notification)) => {
+            let guard = lock(notification_handler);
+            match guard.as_ref() {
+                Some(handler) => handler(notification),
+                None => tracing::debug!(
+                    server = %server_name,
+                    method = %notification.method,
+                    "notification dropped (no handler installed)"
+                ),
+            }
+        }
+        Ok(ServerMessage::ServerRequest) => tracing::warn!(
+            server = %server_name,
+            "ignoring server-initiated request (unsupported on stdio transport)"
+        ),
+        Ok(ServerMessage::Malformed) => tracing::warn!(
+            server = %server_name,
+            raw = %line,
+            "malformed JSON-RPC message from server"
+        ),
+        Err(e) => tracing::warn!(
+            server = %server_name,
+            error = %e,
+            raw = %line,
+            "failed to parse line from server"
+        ),
+    }
+}
+
+/// Background task: drain the server's stdout and demultiplex every line.
+async fn reader_loop(
+    stdout: ChildStdout,
+    server_name: String,
+    pending: std::sync::Arc<PendingMap>,
+    notification_handler: std::sync::Arc<StdMutex<Option<NotificationCallback>>>,
+) {
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => {
+                tracing::debug!(server = %server_name, "MCP server closed stdout (EOF)");
+                break;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(server = %server_name, error = %e, "MCP stdio read error");
+                break;
+            }
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        dispatch_line(&server_name, trimmed, &pending, &notification_handler);
+    }
+
+    // The reader is gone: fail every in-flight request so callers stop waiting.
+    // Dropping each sender resolves its receiver to a `RecvError`.
+    lock(&pending).clear();
+    tracing::debug!(server = %server_name, "MCP stdio reader task exited");
+}
+
 /// Implementation of the McpTransport trait for StdioTransport
 ///
 /// This adapts the existing StdioTransport methods to the unified transport interface,
@@ -390,28 +408,27 @@ impl StdioTransport {
 #[async_trait]
 impl McpTransport for StdioTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
-        // Delegate to existing send() method
         self.send(request).await
     }
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
-        // Delegate to existing send_notification() method
         StdioTransport::send_notification(self, notification).await
     }
 
     async fn is_alive(&self) -> bool {
-        // Delegate to existing is_running() method
         self.is_running().await
     }
 
     async fn close(&self) -> Result<()> {
-        // Delegate to existing close() method
         StdioTransport::close(self).await
     }
 
     fn server_name(&self) -> &str {
-        // Delegate to existing name() method
         self.name()
+    }
+
+    fn set_notification_handler(&self, handler: NotificationCallback) {
+        self.install_notification_handler(handler);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -421,7 +438,9 @@ impl McpTransport for StdioTransport {
 
 impl Drop for StdioTransport {
     fn drop(&mut self) {
-        // The child process will be killed automatically due to kill_on_drop(true)
+        // Stop the reader task explicitly; the child process is killed
+        // separately via `kill_on_drop(true)`.
+        self.reader_task.abort();
         tracing::debug!(
             server = %self.server_name,
             "StdioTransport dropped, server will be terminated"
@@ -432,25 +451,17 @@ impl Drop for StdioTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_primitives::{AtomicBool, Ordering};
 
     #[tokio::test]
     async fn test_spawn_echo_server() {
-        // Use echo as a simple "server" that echoes back input
-        // Note: This doesn't actually test JSON-RPC, just process spawning
-        let transport = StdioTransport::spawn(
-            "test-echo",
-            "cat", // cat echoes stdin to stdout
-            &[],
-            &HashMap::new(),
-            None,
-        )
-        .await;
+        // `cat` echoes stdin to stdout — exercises process spawning only.
+        let transport = StdioTransport::spawn("test-echo", "cat", &[], &HashMap::new(), None).await;
 
         assert!(transport.is_ok());
         let transport = transport.unwrap();
         assert!(transport.is_running().await);
 
-        // Clean up
         transport.close().await.unwrap();
     }
 
@@ -483,27 +494,20 @@ mod tests {
     /// Test that StdioTransport correctly implements the McpTransport trait
     #[tokio::test]
     async fn test_stdio_implements_mcp_transport() {
-        use crate::mcp::transport::McpTransport;
-
         let transport = StdioTransport::spawn("test", "cat", &[], &HashMap::new(), None)
             .await
             .unwrap();
 
-        // Verify trait methods work
         assert!(transport.is_alive().await);
         assert_eq!(transport.server_name(), "test");
 
-        // Clean up via trait method
         transport.close().await.unwrap();
-
-        // Verify transport is no longer alive after close
         assert!(!transport.is_alive().await);
     }
 
     /// Test that StdioTransport can be used as a trait object (dyn McpTransport)
     #[tokio::test]
     async fn test_stdio_as_trait_object() {
-        use crate::mcp::transport::McpTransport;
         use crate::sync_primitives::Arc;
 
         let transport: Arc<dyn McpTransport> = Arc::new(
@@ -512,11 +516,114 @@ mod tests {
                 .unwrap(),
         );
 
-        // Verify trait object usage
         assert!(transport.is_alive().await);
         assert_eq!(transport.server_name(), "dyn-test");
 
-        // Clean up
+        transport.close().await.unwrap();
+    }
+
+    #[test]
+    fn classify_response_line() {
+        let line = r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#;
+        assert!(matches!(
+            classify_line(line).unwrap(),
+            ServerMessage::Response(_)
+        ));
+    }
+
+    #[test]
+    fn classify_notification_line() {
+        let line = r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#;
+        match classify_line(line).unwrap() {
+            ServerMessage::Notification(n) => {
+                assert_eq!(n.method, "notifications/tools/list_changed")
+            }
+            _ => panic!("expected notification"),
+        }
+    }
+
+    #[test]
+    fn classify_server_request_line() {
+        // A line with both id and method is a server-initiated request.
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"sampling/createMessage"}"#;
+        assert!(matches!(
+            classify_line(line).unwrap(),
+            ServerMessage::ServerRequest
+        ));
+    }
+
+    #[test]
+    fn classify_null_id_is_not_a_response() {
+        let line = r#"{"jsonrpc":"2.0","id":null,"result":{}}"#;
+        assert!(matches!(
+            classify_line(line).unwrap(),
+            ServerMessage::Malformed
+        ));
+    }
+
+    /// A scripted server that emits a response then a notification for every
+    /// input line exercises the full demultiplexing reader path.
+    #[tokio::test]
+    async fn test_reader_routes_response_and_notification() {
+        let script = "while read l; do \
+             echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}'; \
+             echo '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}'; \
+             done";
+        let transport = StdioTransport::spawn(
+            "scripted",
+            "sh",
+            &["-c".to_string(), script.to_string()],
+            &HashMap::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let got_notification = crate::sync_primitives::Arc::new(AtomicBool::new(false));
+        let flag = crate::sync_primitives::Arc::clone(&got_notification);
+        transport.install_notification_handler(Box::new(move |n: JsonRpcNotification| {
+            if n.method == "notifications/tools/list_changed" {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }));
+
+        let response = transport
+            .send(&JsonRpcRequest::new(1, "tools/list"))
+            .await
+            .unwrap();
+        assert!(response.is_success());
+
+        // The notification is read just after the response; poll briefly.
+        for _ in 0..100 {
+            if got_notification.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(got_notification.load(Ordering::SeqCst));
+
+        transport.close().await.unwrap();
+    }
+
+    /// `cat` echoes the request back unchanged. The echoed line carries both
+    /// `id` and `method`, so it is a server-request, never a response — the
+    /// request must time out with `McpTimeout` and leave the transport intact.
+    #[tokio::test]
+    async fn test_request_timeout_returns_mcp_timeout() {
+        let transport = StdioTransport::spawn("timeout-srv", "cat", &[], &HashMap::new(), None)
+            .await
+            .unwrap()
+            .with_timeout(Duration::from_millis(300));
+
+        let err = transport
+            .send(&JsonRpcRequest::new(42, "tools/list"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AlephError::McpTimeout));
+
+        // A timeout must not poison the transport: the process is still alive.
+        assert!(transport.is_running().await);
+
         transport.close().await.unwrap();
     }
 }

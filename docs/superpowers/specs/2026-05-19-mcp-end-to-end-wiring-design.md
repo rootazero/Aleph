@@ -122,3 +122,49 @@ unambiguous.
 - No new transport (WebSocket stays out).
 - No destructive refactor of the dispatcher/registry beyond deleting the
   confirmed-dead MCP methods.
+
+## Follow-up — cycle 2 (deferred limitations resolved)
+
+The first cycle shipped Phases 1–5 but left two limitations open. This cycle
+closes them; the "no destructive refactor" constraint was lifted by the user.
+
+### L1 — `tools/list_changed` dynamic refresh
+
+The bridge already handled `McpManagerEvent::ToolsChanged`, but nothing emitted
+it: the connection layer never surfaced server notifications. Two gaps:
+
+1. **stdio transport had no notification path.** `StdioTransport` used the
+   default no-op `set_notification_handler`; its `send()` read responses in a
+   request-scoped loop and *discarded* any notification it passed over. The
+   transport is rewritten around a **background reader task** that owns stdout
+   and demultiplexes every line: responses route to per-id `oneshot` channels,
+   notifications go to the installed handler. This also removes the `poisoned`
+   timeout hack — a timed-out request no longer corrupts the transport — and
+   permits concurrent in-flight requests.
+
+2. **No connection → manager signal.** `McpServerConnection::set_notification_handler`
+   and `McpClient::set_notification_handler` now expose the transport hook. On
+   server start the actor installs a handler that maps `*/list_changed`
+   notifications to a new fire-and-forget `McpCommand::ServerListChanged`. The
+   actor handles it by calling `McpClient::refresh_caches()` (re-fetch
+   tool/resource/prompt caches) **before** broadcasting the typed
+   `ToolsChanged`/`ResourcesChanged`/`PromptsChanged` event, so the bridge's
+   existing `sync_server` reads the server's current list — no bridge change
+   needed.
+
+### L2 — dead-code deletion
+
+With the destructive-refactor constraint lifted:
+
+- `dispatcher/registry::{ToolRegistry,ToolState,ToolRegistrar}::register_mcp_tools`
+  and `refresh_all` (the Phase-1 MCP population path, zero production callers)
+  are deleted along with their now-unused imports.
+- `McpClient::set_tool_registry` / `tool_registry()` / the `tool_registry` and
+  `tool_location_map` fields / the `ToolLocation` enum / `requires_confirmation`
+  (all confirmed zero-consumer) are deleted; `tools/facade.rs` doc updated.
+
+### Still out of scope
+
+- stdio servers cannot receive server-initiated *requests* (e.g. sampling) —
+  unchanged; the reader logs and drops them.
+- stderr of stdio servers is still not drained (pre-existing).

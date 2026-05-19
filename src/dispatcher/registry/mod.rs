@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use crate::config::RoutingRuleConfig;
-use crate::mcp::types::McpToolInfo;
 use crate::skill::SkillInfo;
 
 use super::types::{ChannelType, ToolIndex, ToolIndexEntry, ToolSourceType, UnifiedTool};
@@ -50,7 +49,6 @@ use types::ToolStorage;
 ///
 /// // Register tools from various sources
 /// registry.register_builtin_tools().await;
-/// registry.register_mcp_tools(&mcp_tools, "server", false).await;
 /// registry.register_skills(&skills).await;
 /// registry.register_custom_commands(&rules).await;
 ///
@@ -99,18 +97,6 @@ impl ToolRegistry {
     pub async fn register_builtin_tools(&self) {
         self.registrar
             .register_builtin_tools(&self.conflict_resolver)
-            .await;
-    }
-
-    /// Register MCP tools from tool info list (Flat Namespace Mode)
-    pub async fn register_mcp_tools(
-        &self,
-        mcp_tools: &[McpToolInfo],
-        server_name: &str,
-        is_builtin: bool,
-    ) {
-        self.registrar
-            .register_mcp_tools(mcp_tools, server_name, is_builtin, &self.conflict_resolver)
             .await;
     }
 
@@ -209,24 +195,6 @@ impl ToolRegistry {
     /// Remove all native tools
     pub async fn remove_native_tools(&self) -> usize {
         self.state.remove_native_tools().await
-    }
-
-    /// Refresh all tools from all sources
-    pub async fn refresh_all(
-        &self,
-        mcp_tools: &[(String, Vec<McpToolInfo>)],
-        skills: &[SkillInfo],
-        rules: &[RoutingRuleConfig],
-    ) {
-        self.state
-            .refresh_all(
-                mcp_tools,
-                skills,
-                rules,
-                &self.registrar,
-                &self.conflict_resolver,
-            )
-            .await;
     }
 
     /// Set tool active state
