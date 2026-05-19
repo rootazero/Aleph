@@ -1670,16 +1670,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Arc::new(alephcore::exec::manager::ExecApprovalManager::new());
     let clarification_manager =
         Arc::new(alephcore::clarification::ClarificationManager::new());
-    approval_gate.set_requester(Arc::new(
-        alephcore::approval::adapters::ChannelApprovalBridgeAdapter::new(
-            Arc::new(
-                alephcore::exec::approval::channel_bridge::ChannelApprovalBridge::new(
-                    channel_registry.clone(),
-                ),
+    let approval_requester: Arc<
+        dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester,
+    > = Arc::new(alephcore::approval::adapters::ChannelApprovalBridgeAdapter::new(
+        Arc::new(
+            alephcore::exec::approval::channel_bridge::ChannelApprovalBridge::new(
+                channel_registry.clone(),
             ),
-            exec_approval_manager.clone(),
         ),
+        exec_approval_manager.clone(),
     ));
+    // P1: sandbox capability escalations reach the user through this requester.
+    approval_gate.set_requester(approval_requester.clone());
+    // P3: confirm-flagged tools (vault_store, agent_delete, ...) route the same
+    // channel confirmation prompt before executing.
+    alephcore::gateway::execution_engine::set_confirmation_requester(approval_requester);
     if !args.daemon {
         println!("  ApprovalGate: channel-backed approval requester wired");
     }

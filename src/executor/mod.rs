@@ -38,7 +38,7 @@ mod types;
 
 pub use builtin_registry::{
     create_tool_boxed, get_builtin_tool_names, BuiltinToolConfig, BuiltinToolRegistry,
-    BUILTIN_TOOL_DEFINITIONS, TOOL_CATEGORIES,
+    BUILTIN_TOOL_DEFINITIONS, CONFIRMATION_REQUIRED_TOOLS, TOOL_CATEGORIES,
 };
 pub use exec_security_gate::ExecSecurityGate;
 pub(crate) use exec_security_gate::PreExecDecision;

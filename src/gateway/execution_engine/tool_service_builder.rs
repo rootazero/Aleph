@@ -11,12 +11,25 @@
 
 use crate::sync_primitives::Arc;
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 use crate::agents::subagent_tool::SubagentTool;
+use crate::executor::CONFIRMATION_REQUIRED_TOOLS;
+use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::LoopToolRegistry;
 use crate::tools::scoped::ScopedToolService;
 use crate::tools::service::ToolService;
+
+/// Process-wide confirmation requester, installed by boot once the channel
+/// registry exists (see `start/mod.rs`). `build_request_tool_service` consults
+/// it so confirm-flagged tools route a user confirmation before executing.
+static CONFIRMATION_REQUESTER: OnceLock<Arc<dyn ApprovalRequester>> = OnceLock::new();
+
+/// Install the process-wide tool-confirmation requester. Called once at boot.
+pub fn set_confirmation_requester(requester: Arc<dyn ApprovalRequester>) {
+    let _ = CONFIRMATION_REQUESTER.set(requester);
+}
 
 /// Build the per-request `ToolService` for a chat turn.
 ///
@@ -37,6 +50,15 @@ pub fn build_request_tool_service(
     }
     if let Some(refresh) = tool_refresh {
         svc = svc.with_refresh(refresh);
+    }
+    // Wire the confirmation seam: confirm-flagged tools route a user prompt
+    // before executing. Inert until boot installs the requester.
+    if let Some(requester) = CONFIRMATION_REQUESTER.get() {
+        let confirm: BTreeSet<String> = CONFIRMATION_REQUIRED_TOOLS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        svc = svc.with_confirmation(confirm, Arc::clone(requester));
     }
     Arc::new(svc)
 }

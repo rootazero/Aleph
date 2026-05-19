@@ -29,7 +29,10 @@ mod groups;
 mod registry;
 
 pub use config::BuiltinToolConfig;
-pub use definitions::{create_tool_boxed, get_builtin_tool_names, BUILTIN_TOOL_DEFINITIONS};
+pub use definitions::{
+    create_tool_boxed, get_builtin_tool_names, BUILTIN_TOOL_DEFINITIONS,
+    CONFIRMATION_REQUIRED_TOOLS,
+};
 pub use groups::TOOL_CATEGORIES;
 pub use registry::BuiltinToolRegistry;
 
