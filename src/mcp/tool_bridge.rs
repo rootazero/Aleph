@@ -111,7 +111,10 @@ async fn sync_server(handle: &McpManagerHandle, registry: &ToolRegistry, server_
     let client = match handle.get_client(server_id).await {
         Ok(Some(client)) => client,
         Ok(None) => {
-            tracing::debug!(server_id, "MCP tool bridge: no client for server; skipping sync");
+            tracing::debug!(
+                server_id,
+                "MCP tool bridge: no client for server; skipping sync"
+            );
             return;
         }
         Err(e) => {
@@ -184,7 +187,10 @@ fn set_builtin(
         let handler: Arc<dyn ToolHandler> = Arc::new(BuiltinHandler::new(name.to_string(), tool));
         match registry.register(name.to_string(), handler) {
             Ok(()) => {
-                tracing::info!(tool = name, "MCP tool bridge: capability builtin registered");
+                tracing::info!(
+                    tool = name,
+                    "MCP tool bridge: capability builtin registered"
+                );
                 true
             }
             Err(e) => {
