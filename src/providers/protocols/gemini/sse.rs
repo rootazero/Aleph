@@ -139,7 +139,10 @@ pub(crate) fn parse_gemini_sse_chunk(
         let usage_event = Ok(ProviderDelta::Usage(TokenUsage {
             input_tokens: input,
             output_tokens: output,
-            cache_read_tokens: None,
+            cache_read_tokens: usage
+                .get("cachedContentTokenCount")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
             cache_creation_tokens: None,
             thinking_tokens: usage
                 .get("thoughtsTokenCount")

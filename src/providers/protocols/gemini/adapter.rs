@@ -48,7 +48,7 @@ impl ProtocolAdapter for GeminiProtocol {
                 .or(Some(DEFAULT_MAX_TOKENS)),
             temperature: payload.temperature.or(config.temperature),
             top_p: config.top_p,
-            top_k: None,
+            top_k: config.top_k,
             thinking_config,
         };
 

@@ -617,3 +617,46 @@ fn test_convert_s8_assistant_text_and_tool_call_same_turn() {
     assert!(parts[1].get("functionCall").is_some());
     assert_eq!(parts[1]["functionCall"]["name"], "web_search");
 }
+
+#[test]
+fn test_parse_sse_cached_content_tokens() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":200,"candidatesTokenCount":10,"cachedContentTokenCount":150}}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+
+    let usage = out
+        .iter()
+        .find_map(|d| match d {
+            Ok(ProviderDelta::Usage(u)) => Some(u.clone()),
+            _ => None,
+        })
+        .expect("Usage event not found");
+    assert_eq!(usage.cache_read_tokens, Some(150));
+}
+
+#[test]
+fn test_build_request_includes_top_k() {
+    let client = Client::new();
+    let protocol = GeminiProtocol::new(client);
+
+    let mut config = ProviderConfig::test_config("gemini-pro");
+    config.api_key = Some("test-api-key".to_string());
+    config.top_k = Some(40);
+
+    let msgs = [UnifiedMessage::user("Hello")];
+    let payload = RequestPayload::new(&msgs);
+
+    let req = protocol
+        .build_request(&payload, &config)
+        .expect("build_request")
+        .build()
+        .expect("build");
+    let body_bytes = req
+        .body()
+        .expect("body present")
+        .as_bytes()
+        .expect("in-memory body");
+    let body: serde_json::Value = serde_json::from_slice(body_bytes).expect("json body");
+    assert_eq!(body["generationConfig"]["topK"], 40);
+}
