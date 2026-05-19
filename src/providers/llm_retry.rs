@@ -27,7 +27,11 @@ pub enum RetryVerdict {
 
 /// Extract token gap from "prompt is too long: X tokens > Y maximum" error messages.
 pub fn parse_token_gap(err: &anyhow::Error) -> Option<usize> {
-    let msg = err.to_string();
+    parse_token_gap_str(&err.to_string())
+}
+
+/// String-based core of [`parse_token_gap`] — operates on a raw error message.
+pub fn parse_token_gap_str(msg: &str) -> Option<usize> {
     let lower = msg.to_lowercase();
     if !lower.contains("prompt is too long") && !lower.contains("prompt_too_long") {
         return None;
@@ -63,18 +67,25 @@ pub fn parse_token_gap(err: &anyhow::Error) -> Option<usize> {
 /// 413 errors pass through as `CompactAndRetry` (handled separately).
 /// 400 errors remain `Fatal` (request itself is broken).
 pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
-    let base = classify_error(err);
+    classify_exhausted(&err.to_string())
+}
+
+/// String-based core of [`classify_exhausted_error`].
+///
+/// Used by `FailoverProvider`, which classifies `AlephError` display strings.
+pub fn classify_exhausted(raw: &str) -> RetryVerdict {
+    let base = classify(raw);
 
     // 413 → still CompactAndRetry (main loop handles compression)
     if matches!(base, RetryVerdict::CompactAndRetry { .. }) {
         return base;
     }
 
-    let msg = err.to_string().to_lowercase();
+    let msg = raw.to_lowercase();
 
     // 429 rate limit → classify as model-specific (Fallback) vs account-wide (Fatal).
     if msg.contains("429") || msg.contains("rate limit") || msg.contains("rate_limit") {
-        return classify_rate_limit(err);
+        return classify_rate_limit(raw);
     }
 
     // 400 → Fatal (request is malformed, fallback won't help)
@@ -103,7 +114,7 @@ pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
     // Transient errors (overloaded, network) that exhausted retries → Fallback
     if matches!(base, RetryVerdict::Retry { .. }) {
         return RetryVerdict::Fallback {
-            reason: format!("primary model unavailable: {}", err),
+            reason: format!("primary model unavailable: {}", raw),
         };
     }
 
@@ -111,12 +122,12 @@ pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
     RetryVerdict::Fatal
 }
 
-/// Extract a Retry-After delay from an error message.
+/// Extract a Retry-After delay from a raw error message.
 ///
-/// Providers embed "Retry after N seconds" in the suggestion/message field.
-/// We parse this to use server-guided delays instead of hardcoded values.
-fn extract_retry_after(err: &anyhow::Error) -> Option<Duration> {
-    let msg = err.to_string().to_lowercase();
+/// Providers embed "Retry after N seconds" in the suggestion/message field;
+/// parsing it yields a server-guided delay instead of a hardcoded value.
+fn extract_retry_after_str(raw: &str) -> Option<Duration> {
+    let msg = raw.to_lowercase();
     // Match patterns like "retry after 30 seconds" or "retry-after: 60"
     let after_idx = msg
         .find("retry after ")
@@ -224,7 +235,7 @@ pub fn classify_http_error(
             let delay = resolve_retry_delay(headers, 0, Duration::from_secs(2), MAX_DELAY);
             RetryVerdict::Retry { delay }
         }
-        413 => RetryVerdict::CompactAndRetry { token_gap: parse_token_gap(&anyhow::anyhow!("{}", error_text)) },
+        413 => RetryVerdict::CompactAndRetry { token_gap: parse_token_gap_str(error_text) },
         401 | 403 => RetryVerdict::Fallback {
             reason: "authentication failed — check your API key".into(),
         },
@@ -253,8 +264,8 @@ pub fn classify_http_error(
 /// - Account-wide rate limits ("account", "organization", "quota")
 ///   → `Fatal` — switching models won't help, propagate to user.
 /// - Default 429 → `Fallback` (conservative: try switching provider).
-fn classify_rate_limit(err: &anyhow::Error) -> RetryVerdict {
-    let msg = err.to_string().to_lowercase();
+fn classify_rate_limit(raw: &str) -> RetryVerdict {
+    let msg = raw.to_lowercase();
 
     // Account-wide / org-level → Fatal (switching won't help)
     let account_patterns = ["account", "organization", "billing", "quota exceeded"];
@@ -263,7 +274,7 @@ fn classify_rate_limit(err: &anyhow::Error) -> RetryVerdict {
     }
 
     // Default: treat as model-specific → Fallback with server-guided delay
-    let reason = if let Some(delay) = extract_retry_after(err) {
+    let reason = if let Some(delay) = extract_retry_after_str(raw) {
         format!("rate limited (retry after {}s)", delay.as_secs())
     } else {
         "rate limited".to_string()
@@ -273,7 +284,14 @@ fn classify_rate_limit(err: &anyhow::Error) -> RetryVerdict {
 
 /// Inspect an `anyhow::Error` display string and decide whether to retry.
 pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
-    let msg = err.to_string().to_lowercase();
+    classify(&err.to_string())
+}
+
+/// String-based core of [`classify_error`] — classifies a raw error message.
+///
+/// `FailoverProvider` calls this directly on `AlephError` display strings.
+pub fn classify(raw: &str) -> RetryVerdict {
+    let msg = raw.to_lowercase();
 
     // Prompt too long / 413 → compact and retry (not a transient retry)
     if msg.contains("413")
@@ -282,7 +300,7 @@ pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
         || msg.contains("request_too_large")
     {
         return RetryVerdict::CompactAndRetry {
-            token_gap: parse_token_gap(err),
+            token_gap: parse_token_gap_str(raw),
         };
     }
 
@@ -290,12 +308,12 @@ pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
     // Model-specific limits benefit from switching providers (Fallback);
     // account-wide limits propagate immediately (Fatal).
     if msg.contains("429") || msg.contains("rate limit") || msg.contains("rate_limit") {
-        return classify_rate_limit(err);
+        return classify_rate_limit(raw);
     }
 
     // Overloaded (529) → retryable with server-guided or default 2s backoff
     if msg.contains("529") || msg.contains("overloaded") {
-        let delay = extract_retry_after(err).unwrap_or(Duration::from_secs(2));
+        let delay = extract_retry_after_str(raw).unwrap_or(Duration::from_secs(2));
         return RetryVerdict::Retry { delay };
     }
 
@@ -418,15 +436,13 @@ mod tests {
 
     #[test]
     fn test_extract_retry_after_from_error() {
-        let err = anyhow::anyhow!("Rate limited. Retry after 30 seconds.");
-        let delay = extract_retry_after(&err);
+        let delay = extract_retry_after_str("Rate limited. Retry after 30 seconds.");
         assert_eq!(delay, Some(Duration::from_secs(30)));
     }
 
     #[test]
     fn test_extract_retry_after_none() {
-        let err = anyhow::anyhow!("HTTP 429 Too Many Requests");
-        assert_eq!(extract_retry_after(&err), None);
+        assert_eq!(extract_retry_after_str("HTTP 429 Too Many Requests"), None);
     }
 
     #[test]

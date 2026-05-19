@@ -1,582 +1,456 @@
-//! Model Failover Provider
+//! Model failover provider — automatic provider/model switching.
 //!
-//! Provides automatic failover between multiple AI providers for increased reliability.
+//! [`FailoverProvider`] is an [`AiProvider`] *decorator*. It wraps an ordered
+//! chain — the live default provider plus a static list of fallbacks, each
+//! provider expanded across its configured model list — and transparently
+//! walks the chain when a call fails. The harness loop sees a single
+//! `Arc<dyn AiProvider>` and never learns failover happened: Redline R10 (the
+//! dumb loop performs no error-recovery strategy selection) holds because all
+//! of that lives here, in the provider layer.
 //!
-//! # Architecture
+//! # Failure handling
 //!
-//! ```text
-//! ┌─────────────────────────────────────┐
-//! │         FailoverProvider            │
-//! ├─────────────────────────────────────┤
-//! │  ┌─────────┐ ┌─────────┐ ┌───────┐ │
-//! │  │Anthropic│ │ OpenAI  │ │Gemini │ │
-//! │  │ (pri=1) │ │ (pri=2) │ │(pri=3)│ │
-//! │  └────┬────┘ └────┬────┘ └───┬───┘ │
-//! │       │           │          │      │
-//! │       └───────────┼──────────┘      │
-//! │                   ▼                  │
-//! │          Health Monitor              │
-//! │       (check every 60s)              │
-//! └─────────────────────────────────────┘
-//! ```
+//! Each failure is classified by [`llm_retry`](crate::providers::llm_retry) —
+//! the shared error classifier — into one [`Decision`]:
 //!
-//! # Features
+//! - **transient** (network blip, 529 overloaded) → retried in place a few
+//!   times with backoff, then treated as a provider-level failure;
+//! - **provider-level** (rate limit, auth, exhausted transient) → the
+//!   provider's circuit breaker trips and the walk advances to the next
+//!   provider;
+//! - **model-level** (404 model not found) → the walk advances to the next
+//!   model of the *same* provider;
+//! - **fatal** (400 bad request) → returned immediately — switching provider
+//!   cannot fix a malformed request;
+//! - **context overflow** (413) → returned immediately, since the harness
+//!   context-compactor owns that recovery path.
 //!
-//! - Priority-based provider selection
-//! - Automatic failover on errors
-//! - Health monitoring with periodic checks
-//! - Metrics tracking (success/failure counts)
-//! - Exponential backoff for unhealthy providers
+//! # Circuit breaker
 //!
-//! # Example
-//!
-//! ```rust,ignore
-//! use alephcore::providers::failover::{FailoverProvider, FailoverConfig, ProviderEntry};
-//!
-//! let config = FailoverConfig {
-//!     providers: vec![
-//!         ProviderEntry {
-//!             name: "claude".to_string(),
-//!             priority: 1,
-//!             config: claude_config,
-//!         },
-//!         ProviderEntry {
-//!             name: "openai".to_string(),
-//!             priority: 2,
-//!             config: openai_config,
-//!         },
-//!     ],
-//!     max_retries: 3,
-//!     health_check_interval_secs: 60,
-//! };
-//!
-//! let provider = FailoverProvider::new(config)?;
-//! let response = provider.process("Hello", None).await?;
-//! ```
+//! Per-provider health is a three-state breaker (`Closed → Open → HalfOpen`)
+//! keyed by provider name in a [`FailoverHealth`] map. That map is shared
+//! (via `Arc`) across the global chain and every per-agent chain, so one
+//! provider's outage is visible everywhere.
 
-use crate::config::ProviderConfig;
-use crate::error::{AlephError, Result};
-use crate::providers::{adapter, create_provider, AiProvider, ProviderResponse};
-use crate::sync_primitives::Arc;
-use crate::sync_primitives::{AtomicU64, Ordering};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
+
 use tokio::sync::RwLock;
 
-/// Configuration for a single provider in the failover chain
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderEntry {
-    /// Provider name (e.g., "claude", "openai")
-    pub name: String,
-    /// Priority (lower = higher priority, used first)
-    pub priority: u32,
-    /// Provider configuration
-    pub config: ProviderConfig,
-}
+use crate::error::{AlephError, ErrorClass, Result};
+use crate::providers::adapter::{ProviderResponse, RequestPayload};
+use crate::providers::llm_retry::{classify, classify_exhausted, RetryVerdict};
+use crate::providers::{AiProvider, DefaultProviderHandle};
+use crate::sync_primitives::Arc;
 
-/// Failover provider configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Consecutive failures at which a provider's circuit breaker opens.
+const CIRCUIT_OPEN_THRESHOLD: u32 = 3;
+/// Hard ceiling on the circuit-breaker cooldown.
+const MAX_COOLDOWN: Duration = Duration::from_secs(600);
+/// Backoff used for a bare transient error whose message carried no delay hint.
+const DEFAULT_TRANSIENT_DELAY: Duration = Duration::from_millis(300);
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
+/// Failover tuning knobs.
+///
+/// Internal — *not* a TOML type. The operator-facing surface is
+/// `[fallback_provider].chain`; see `config::types::phase6_wiring`.
+#[derive(Debug, Clone)]
 pub struct FailoverConfig {
-    /// List of providers in the failover chain
-    pub providers: Vec<ProviderEntry>,
-    /// Maximum retries per provider before moving to next
-    #[serde(default = "default_max_retries")]
+    /// Same-candidate retries on a transient error before the chain advances.
     pub max_retries: u32,
-    /// Health check interval in seconds
-    #[serde(default = "default_health_check_interval")]
-    pub health_check_interval_secs: u64,
-    /// Cooldown period for unhealthy providers (seconds)
-    #[serde(default = "default_unhealthy_cooldown")]
-    pub unhealthy_cooldown_secs: u64,
-    /// Enable health monitoring task
-    #[serde(default = "default_true")]
-    pub health_monitoring_enabled: bool,
-}
-
-fn default_max_retries() -> u32 {
-    2
-}
-
-fn default_health_check_interval() -> u64 {
-    60
-}
-
-fn default_unhealthy_cooldown() -> u64 {
-    300 // 5 minutes
-}
-
-fn default_true() -> bool {
-    true
+    /// Initial circuit-breaker cooldown. Doubles on each HalfOpen probe
+    /// failure, capped at [`MAX_COOLDOWN`].
+    pub unhealthy_cooldown: Duration,
 }
 
 impl Default for FailoverConfig {
     fn default() -> Self {
         Self {
-            providers: Vec::new(),
             max_retries: 2,
-            health_check_interval_secs: 60,
-            unhealthy_cooldown_secs: 300,
-            health_monitoring_enabled: true,
+            unhealthy_cooldown: Duration::from_secs(300),
         }
     }
 }
 
-/// Circuit breaker state for a provider.
-///
-/// Three-state model:
-/// - `Closed`: healthy, accepting requests.
-/// - `Open`: unhealthy, rejecting requests until cooldown expires.
-/// - `HalfOpen`: cooldown expired, allowing one probe request.
-///   - Probe success → `Closed`
-///   - Probe failure → `Open` with doubled cooldown (max 10 min)
+/// One provider in the failover chain, with the models to try in order.
+#[derive(Clone)]
+pub struct FailoverNode {
+    /// Provider name — the circuit-breaker key.
+    pub name: String,
+    /// Models to attempt, in order. Empty → a single attempt that lets the
+    /// provider pick its own configured default model.
+    pub models: Vec<String>,
+    /// The underlying provider implementation.
+    pub provider: Arc<dyn AiProvider>,
+}
+
+// =============================================================================
+// Circuit breaker
+// =============================================================================
+
+/// Circuit-breaker state for a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CircuitState {
-    /// Normal operation — requests flow through.
+    /// Healthy — requests flow through.
     Closed,
-    /// Broken — reject requests until cooldown expires.
+    /// Tripped — requests skip this provider until the cooldown expires.
     Open,
-    /// Cooldown expired — allow exactly one probe request.
+    /// Cooldown expired — the next request is a single probe.
     HalfOpen,
 }
 
-/// Default failure threshold before the circuit opens.
-const CIRCUIT_OPEN_THRESHOLD: u32 = 3;
-/// Maximum cooldown duration (10 minutes).
-const MAX_COOLDOWN: Duration = Duration::from_secs(600);
-
-/// Health state for a provider with three-state circuit breaker.
+/// Per-provider health tracked by the circuit breaker.
 #[derive(Debug, Clone)]
-pub struct HealthState {
-    /// Current circuit breaker state.
-    pub circuit: CircuitState,
-    /// Last time the provider was checked
-    pub last_check: Instant,
-    /// Last time the provider failed
-    pub last_failure: Option<Instant>,
-    /// Consecutive failure count
-    pub failure_count: u32,
-    /// Last error message
-    pub last_error: Option<String>,
-    /// Current cooldown duration (doubles on HalfOpen failure, resets on success)
-    pub cooldown: Duration,
-}
-
-impl HealthState {
-    /// Whether the provider is considered healthy (Closed or HalfOpen).
-    pub fn healthy(&self) -> bool {
-        self.circuit != CircuitState::Open
-    }
+struct HealthState {
+    circuit: CircuitState,
+    last_failure: Option<Instant>,
+    failure_count: u32,
+    last_error: Option<String>,
+    cooldown: Duration,
 }
 
 impl Default for HealthState {
     fn default() -> Self {
         Self {
             circuit: CircuitState::Closed,
-            last_check: Instant::now(),
             last_failure: None,
             failure_count: 0,
             last_error: None,
-            cooldown: Duration::from_secs(300), // initial: 5 minutes
+            cooldown: Duration::from_secs(300),
         }
     }
 }
 
-/// Metrics for a provider
-#[derive(Debug, Default)]
-pub struct ProviderMetrics {
-    /// Total requests
-    pub total_requests: AtomicU64,
-    /// Successful requests
-    pub success_count: AtomicU64,
-    /// Failed requests
-    pub failure_count: AtomicU64,
-    /// Total latency in milliseconds
-    pub total_latency_ms: AtomicU64,
+/// Per-provider circuit-breaker state, keyed by provider name.
+///
+/// Cloning shares the same underlying map (`Arc`): one provider's outage
+/// recorded by the global chain is immediately visible to every per-agent
+/// chain that was built with the same `FailoverHealth`.
+#[derive(Clone)]
+pub struct FailoverHealth(Arc<RwLock<HashMap<String, HealthState>>>);
+
+impl Default for FailoverHealth {
+    fn default() -> Self {
+        Self(Arc::new(RwLock::new(HashMap::new())))
+    }
 }
 
-impl ProviderMetrics {
-    pub fn record_success(&self, latency_ms: u64) {
-        self.total_requests.fetch_add(1, Ordering::Relaxed);
-        self.success_count.fetch_add(1, Ordering::Relaxed);
-        self.total_latency_ms
-            .fetch_add(latency_ms, Ordering::Relaxed);
-    }
+// =============================================================================
+// Decision
+// =============================================================================
 
-    pub fn record_failure(&self) {
-        self.total_requests.fetch_add(1, Ordering::Relaxed);
-        self.failure_count.fetch_add(1, Ordering::Relaxed);
-    }
+/// What to do after one failed `process()` attempt.
+#[derive(Debug, PartialEq, Eq)]
+enum Decision {
+    /// Retry the same provider + model after `delay`.
+    RetrySame(Duration),
+    /// Advance to the next model of the same provider.
+    NextModel,
+    /// Trip this provider's circuit and advance to the next provider.
+    NextProvider,
+    /// Abort the walk and return the error to the caller.
+    Stop,
+}
 
-    pub fn success_rate(&self) -> f64 {
-        let total = self.total_requests.load(Ordering::Relaxed);
-        if total == 0 {
-            return 1.0;
+/// Classify one failed attempt into a [`Decision`].
+///
+/// Two-stage: the string classifier ([`classify`]) recognises an in-place
+/// retry opportunity (529 / network keywords); [`classify_exhausted`] then
+/// gives the final verdict. A `Fatal` string verdict is overridden to a
+/// provider-level failover when the *typed* error is transient — covering
+/// errors whose `Display` carried no HTTP code (e.g. `Timeout` →
+/// "Request timed out").
+fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
+    let msg = err.to_string();
+    let lower = msg.to_lowercase();
+
+    // A transient error the string classifier recognises is worth a brief
+    // in-place retry before the chain advances.
+    let transient_delay = match classify(&msg) {
+        RetryVerdict::Retry { delay } => Some(delay),
+        _ => None,
+    };
+    let can_retry = attempt < max_retries;
+
+    match classify_exhausted(&msg) {
+        // 413 — the harness context-compactor owns this recovery path.
+        RetryVerdict::CompactAndRetry { .. } => Decision::Stop,
+        RetryVerdict::Fallback { reason } => {
+            if reason.starts_with("model not found") {
+                Decision::NextModel
+            } else if let (Some(delay), true) = (transient_delay, can_retry) {
+                Decision::RetrySame(delay)
+            } else {
+                Decision::NextProvider
+            }
         }
-        let success = self.success_count.load(Ordering::Relaxed);
-        success as f64 / total as f64
-    }
-
-    pub fn avg_latency_ms(&self) -> f64 {
-        let success = self.success_count.load(Ordering::Relaxed);
-        if success == 0 {
-            return 0.0;
+        // `classify_exhausted` never yields `Retry`; handled defensively.
+        RetryVerdict::Retry { delay } if can_retry => Decision::RetrySame(delay),
+        RetryVerdict::Retry { .. } => Decision::NextProvider,
+        RetryVerdict::Fatal => {
+            let explicit_bad_request = lower.contains("400")
+                && (lower.contains("bad request") || lower.contains("invalid"));
+            if !explicit_bad_request && err.class() == ErrorClass::Transient {
+                if can_retry {
+                    Decision::RetrySame(DEFAULT_TRANSIENT_DELAY)
+                } else {
+                    Decision::NextProvider
+                }
+            } else {
+                Decision::Stop
+            }
         }
-        let total_latency = self.total_latency_ms.load(Ordering::Relaxed);
-        total_latency as f64 / success as f64
     }
 }
 
-/// Internal provider state
-struct ProviderState {
-    provider: Arc<dyn AiProvider>,
-    entry: ProviderEntry,
-    health: HealthState,
-    metrics: ProviderMetrics,
-}
+// =============================================================================
+// FailoverProvider
+// =============================================================================
 
-/// Failover provider that automatically switches between providers on failure
+/// An `AiProvider` that fails over across an ordered provider/model chain.
 pub struct FailoverProvider {
-    /// Provider states (sorted by priority)
-    providers: RwLock<Vec<ProviderState>>,
-    /// Configuration
+    /// Live primary slot. `current()` is read on every call so a UI
+    /// `set_default` swap takes effect on the next turn (hot-reload).
+    primary: Arc<dyn DefaultProviderHandle>,
+    /// Static fallback chain, tried after the primary in order.
+    fallbacks: Vec<FailoverNode>,
+    /// Provider name → model list. Boot snapshot; lets the live primary
+    /// resolve its model list by name.
+    model_catalog: HashMap<String, Vec<String>>,
+    /// Shared circuit-breaker state.
+    health: FailoverHealth,
     config: FailoverConfig,
-    /// Shutdown signal for health monitor
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl FailoverProvider {
-    /// Create a new failover provider
-    pub fn new(config: FailoverConfig) -> Result<Self> {
-        let mut provider_states = Vec::new();
-
-        // Sort providers by priority
-        let mut entries = config.providers.clone();
-        entries.sort_by_key(|e| e.priority);
-
-        // Create provider instances
-        for entry in entries {
-            let provider = create_provider(&entry.name, entry.config.clone())?;
-            provider_states.push(ProviderState {
-                provider,
-                entry,
-                health: HealthState::default(),
-                metrics: ProviderMetrics::default(),
-            });
-        }
-
-        if provider_states.is_empty() {
-            return Err(AlephError::invalid_config(
-                "Failover provider requires at least one provider",
-            ));
-        }
-
-        tracing::info!(
-            "Created FailoverProvider with {} providers: {:?}",
-            provider_states.len(),
-            provider_states
-                .iter()
-                .map(|p| &p.entry.name)
-                .collect::<Vec<_>>()
-        );
-
-        Ok(Self {
-            providers: RwLock::new(provider_states),
+    /// Build a failover chain.
+    ///
+    /// * `primary` — the live primary slot; `current()` is read per call.
+    /// * `fallbacks` — the static fallback chain.
+    /// * `model_catalog` — provider name → model list; lets the live primary
+    ///   resolve its model list by name.
+    /// * `health` — shared circuit-breaker state (clone it to share across
+    ///   per-agent chains).
+    pub fn new(
+        primary: Arc<dyn DefaultProviderHandle>,
+        fallbacks: Vec<FailoverNode>,
+        model_catalog: HashMap<String, Vec<String>>,
+        health: FailoverHealth,
+        config: FailoverConfig,
+    ) -> Self {
+        Self {
+            primary,
+            fallbacks,
+            model_catalog,
+            health,
             config,
-            shutdown_tx: None,
-        })
-    }
-
-    /// Start the health monitoring task
-    ///
-    /// Note: Currently health monitoring relies on request-time updates.
-    /// A background health check task would require Arc<Self> which adds complexity.
-    /// For now, providers are checked at request time and marked unhealthy on failures.
-    pub fn start_health_monitor(&mut self) {
-        if !self.config.health_monitoring_enabled {
-            return;
-        }
-
-        tracing::info!(
-            "Health monitoring enabled (request-time checks, cooldown: {}s)",
-            self.config.unhealthy_cooldown_secs
-        );
-        // Background health checks would go here if needed
-        // Currently relying on request-time health updates
-    }
-
-    /// Stop the health monitoring task
-    pub fn stop_health_monitor(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
         }
     }
 
-    /// Atomically check health, transition circuit state, and acquire provider reference.
-    ///
-    /// Combines the health check and provider extraction into a single write-lock
-    /// acquisition, preventing TOCTOU races where multiple concurrent requests
-    /// could both see a provider as HalfOpen and send duplicate probe requests.
-    ///
-    /// Returns `Some((provider, name))` if the provider is available for requests,
-    /// `None` if the circuit is Open and cooldown hasn't expired.
-    async fn try_acquire_provider(&self, index: usize) -> Option<(Arc<dyn AiProvider>, String)> {
-        let mut providers = self.providers.write().await;
-        let state = providers.get_mut(index)?;
+    /// Build the ordered candidate list for one request: the live primary
+    /// first, then each fallback whose name differs from the primary's.
+    fn candidates(&self) -> Vec<FailoverNode> {
+        let primary = self.primary.current();
+        let primary_name = primary.name().to_string();
+        let primary_models = self
+            .model_catalog
+            .get(&primary_name)
+            .cloned()
+            .unwrap_or_default();
+        let mut out = vec![FailoverNode {
+            name: primary_name.clone(),
+            models: primary_models,
+            provider: primary,
+        }];
+        for fb in &self.fallbacks {
+            if fb.name == primary_name {
+                continue; // dedup: the primary slot already covers it
+            }
+            out.push(fb.clone());
+        }
+        out
+    }
 
-        let available = match state.health.circuit {
+    /// Whether `name` may be tried now. Transitions `Open → HalfOpen` when the
+    /// cooldown has elapsed (allowing exactly one probe).
+    async fn circuit_allows(&self, name: &str) -> bool {
+        let mut map = self.health.0.write().await;
+        let st = map.entry(name.to_string()).or_default();
+        match st.circuit {
             CircuitState::Closed | CircuitState::HalfOpen => true,
-            CircuitState::Open => {
-                // Check if cooldown has passed → transition to HalfOpen (allow one probe)
-                if let Some(last_failure) = state.health.last_failure {
-                    if last_failure.elapsed() >= state.health.cooldown {
-                        tracing::info!(
-                            "Provider '{}' circuit breaker: Open → HalfOpen (probe allowed)",
-                            state.entry.name
-                        );
-                        state.health.circuit = CircuitState::HalfOpen;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
+            CircuitState::Open => match st.last_failure {
+                Some(at) if at.elapsed() >= st.cooldown => {
+                    st.circuit = CircuitState::HalfOpen;
+                    true
                 }
-            }
-        };
-
-        if available {
-            Some((state.provider.clone(), state.entry.name.clone()))
-        } else {
-            None
+                _ => false,
+            },
         }
     }
 
-    /// Mark a provider as unhealthy, transitioning the circuit breaker.
-    ///
-    /// - From `Closed`: increment failure count, open circuit after threshold.
-    /// - From `HalfOpen`: probe failed → back to `Open` with doubled cooldown.
-    async fn mark_unhealthy(&self, index: usize, error: String) {
-        let mut providers = self.providers.write().await;
-        if let Some(state) = providers.get_mut(index) {
-            state.health.last_failure = Some(Instant::now());
-            state.health.failure_count += 1;
-            state.health.last_error = Some(error.clone());
-            state.metrics.record_failure();
+    /// Record a successful call — close the circuit and reset the cooldown.
+    async fn mark_healthy(&self, name: &str) {
+        let mut map = self.health.0.write().await;
+        let st = map.entry(name.to_string()).or_default();
+        st.circuit = CircuitState::Closed;
+        st.failure_count = 0;
+        st.last_error = None;
+        st.cooldown = self.config.unhealthy_cooldown;
+    }
 
-            match state.health.circuit {
-                CircuitState::HalfOpen => {
-                    // Probe failed → back to Open with doubled cooldown
-                    let new_cooldown = (state.health.cooldown * 2).min(MAX_COOLDOWN);
-                    state.health.cooldown = new_cooldown;
-                    state.health.circuit = CircuitState::Open;
-                    tracing::warn!(
-                        "Provider '{}' probe failed, circuit: HalfOpen → Open (cooldown: {}s, failure #{}: {})",
-                        state.entry.name,
-                        new_cooldown.as_secs(),
-                        state.health.failure_count,
-                        error
-                    );
-                }
-                CircuitState::Closed => {
-                    if state.health.failure_count >= CIRCUIT_OPEN_THRESHOLD {
-                        state.health.circuit = CircuitState::Open;
-                        tracing::warn!(
-                            "Provider '{}' circuit breaker opened after {} consecutive failures: {}",
-                            state.entry.name,
-                            state.health.failure_count,
-                            error
-                        );
-                    } else {
-                        tracing::warn!(
-                            "Provider '{}' failure #{}: {}",
-                            state.entry.name,
-                            state.health.failure_count,
-                            error
-                        );
-                    }
-                }
-                CircuitState::Open => {
-                    // Already open, just update stats
-                    tracing::debug!(
-                        "Provider '{}' already open, recording failure: {}",
-                        state.entry.name,
-                        error
-                    );
+    /// Record a provider-level failure and advance the circuit breaker.
+    async fn mark_unhealthy(&self, name: &str, error: String) {
+        let mut map = self.health.0.write().await;
+        let st = map.entry(name.to_string()).or_default();
+        st.last_failure = Some(Instant::now());
+        st.failure_count += 1;
+        st.last_error = Some(error);
+        match st.circuit {
+            // A probe failed → re-open with a doubled cooldown.
+            CircuitState::HalfOpen => {
+                st.cooldown = (st.cooldown * 2).min(MAX_COOLDOWN);
+                st.circuit = CircuitState::Open;
+            }
+            CircuitState::Closed => {
+                if st.failure_count >= CIRCUIT_OPEN_THRESHOLD {
+                    st.circuit = CircuitState::Open;
                 }
             }
+            CircuitState::Open => {}
         }
     }
 
-    /// Mark a provider as healthy — close the circuit breaker and reset cooldown.
-    async fn mark_healthy(&self, index: usize, latency_ms: u64) {
-        let mut providers = self.providers.write().await;
-        if let Some(state) = providers.get_mut(index) {
-            if state.health.circuit != CircuitState::Closed {
-                tracing::info!(
-                    "Provider '{}' circuit breaker: {:?} → Closed (latency: {}ms)",
-                    state.entry.name,
-                    state.health.circuit,
-                    latency_ms
-                );
-            }
-            state.health.circuit = CircuitState::Closed;
-            state.health.last_check = Instant::now();
-            state.health.failure_count = 0;
-            state.health.last_error = None;
-            // Reset cooldown to default on success
-            state.health.cooldown = Duration::from_secs(self.config.unhealthy_cooldown_secs);
-            state.metrics.record_success(latency_ms);
-        }
-    }
-
-    /// Get metrics for all providers
-    pub async fn get_metrics(&self) -> HashMap<String, (f64, f64)> {
-        let providers = self.providers.read().await;
-        providers
-            .iter()
-            .map(|p| {
-                (
-                    p.entry.name.clone(),
-                    (p.metrics.success_rate(), p.metrics.avg_latency_ms()),
-                )
-            })
-            .collect()
-    }
-
-    /// Get health status for all providers
-    pub async fn get_health_status(&self) -> HashMap<String, bool> {
-        let providers = self.providers.read().await;
-        providers
-            .iter()
-            .map(|p| (p.entry.name.clone(), p.health.healthy()))
-            .collect()
-    }
-
-    /// Get the primary (highest priority healthy) provider name
-    pub async fn get_primary_provider(&self) -> Option<String> {
-        let provider_count = {
-            let providers = self.providers.read().await;
-            providers.len()
-        };
-
-        for i in 0..provider_count {
-            if let Some((_, name)) = self.try_acquire_provider(i).await {
-                return Some(name);
-            }
-        }
-        None
+    /// Whether `name`'s circuit is currently open. Diagnostic accessor —
+    /// used by tests and (later) a provider-health status tool.
+    pub async fn circuit_open(&self, name: &str) -> bool {
+        self.health
+            .0
+            .read()
+            .await
+            .get(name)
+            .map(|h| h.circuit == CircuitState::Open)
+            .unwrap_or(false)
     }
 }
 
 impl AiProvider for FailoverProvider {
-    fn process(
-        &self,
-        payload: adapter::RequestPayload<'_>,
-    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + '_>> {
-        // Clone messages for ownership across retries
-        let messages: Vec<crate::providers::message::UnifiedMessage> = payload.messages.to_vec();
-        let system_prompt = payload.system_prompt.map(|s| s.to_string());
-        let tools: Option<Vec<crate::dispatcher::ToolDefinition>> =
-            payload.tools.map(|t| t.to_vec());
+    fn process<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        // Own every borrowed field so the payload can be rebuilt per attempt.
+        let messages = payload.messages.to_vec();
+        let system_prompt = payload.system_prompt.map(str::to_string);
+        let tools = payload.tools.map(<[_]>::to_vec);
         let think_level = payload.think_level;
         let temperature = payload.temperature;
         let max_tokens = payload.max_tokens;
         let tool_choice = payload.tool_choice.clone();
-        let model = payload.model.clone();
+        let req_model = payload.model.clone();
+        let metadata = payload.metadata.clone();
 
         Box::pin(async move {
-            let providers = self.providers.read().await;
-            let provider_count = providers.len();
-            drop(providers);
+            let candidates = self.candidates();
+            let total = candidates.len();
+            let mut last_error: Option<AlephError> = None;
 
-            let mut last_error = None;
-
-            for i in 0..provider_count {
-                // Atomically check health + acquire provider in one lock operation.
-                // Prevents TOCTOU race where multiple concurrent requests could
-                // both see a HalfOpen provider and send duplicate probe requests.
-                let Some((provider, name)) = self.try_acquire_provider(i).await else {
-                    tracing::debug!("Skipping unhealthy provider at index {}", i);
+            for (idx, cand) in candidates.into_iter().enumerate() {
+                // The circuit breaker may skip a candidate only while a later
+                // one remains; the final candidate is always attempted so a
+                // transient outage cannot hard-fail every request behind an
+                // open circuit. `circuit_allows` still runs for its
+                // `Open → HalfOpen` bookkeeping.
+                let circuit_ok = self.circuit_allows(&cand.name).await;
+                if !circuit_ok && idx + 1 < total {
+                    tracing::debug!(provider = %cand.name, "failover: circuit open, skipping");
                     continue;
+                }
+
+                // Empty model list → a single attempt with the caller's model
+                // (or the provider's own default when that is `None` too).
+                let models: Vec<Option<String>> = if cand.models.is_empty() {
+                    vec![req_model.clone()]
+                } else {
+                    cand.models.iter().cloned().map(Some).collect()
                 };
 
-                let mut already_marked_unhealthy = false;
-
-                for retry in 0..=self.config.max_retries {
-                    if retry > 0 {
-                        tracing::debug!("Retry {} for provider '{}'", retry, name);
-                        tokio::time::sleep(Duration::from_millis(100 * retry as u64)).await;
-                    }
-
-                    let inner_payload = adapter::RequestPayload {
-                        messages: &messages,
-                        system_prompt: system_prompt.as_deref(),
-                        tools: tools.as_deref(),
-                        think_level,
-                        temperature,
-                        max_tokens,
-                        tool_choice: tool_choice.clone(),
-                        model: model.clone(),
-                        metadata: None,
-                    };
-
-                    let start = Instant::now();
-                    match provider.process(inner_payload).await {
-                        Ok(response) => {
-                            let latency_ms = start.elapsed().as_millis() as u64;
-                            self.mark_healthy(i, latency_ms).await;
-                            tracing::debug!(
-                                "Provider '{}' succeeded (latency: {}ms)",
-                                name,
-                                latency_ms
-                            );
-                            return Ok(response);
-                        }
-                        Err(e) => {
-                            let error_msg = e.to_string();
-                            tracing::warn!(
-                                "Provider '{}' failed (retry {}): {}",
-                                name,
-                                retry,
-                                error_msg
-                            );
-                            last_error = Some(error_msg.clone());
-
-                            if Self::is_non_retryable_error(&e) {
-                                self.mark_unhealthy(i, error_msg).await;
-                                already_marked_unhealthy = true;
-                                break;
+                let mut tripped = false;
+                'model: for model in models {
+                    let mut attempt: u32 = 0;
+                    loop {
+                        let inner = RequestPayload {
+                            messages: &messages,
+                            system_prompt: system_prompt.as_deref(),
+                            tools: tools.as_deref(),
+                            think_level,
+                            temperature,
+                            max_tokens,
+                            tool_choice: tool_choice.clone(),
+                            model: model.clone(),
+                            metadata: metadata.clone(),
+                        };
+                        match cand.provider.process(inner).await {
+                            Ok(resp) => {
+                                self.mark_healthy(&cand.name).await;
+                                return Ok(resp);
                             }
-
-                            if matches!(e, AlephError::RateLimitError { .. }) {
-                                tracing::info!(
-                                    "Provider '{}' rate-limited, failing over to next provider",
-                                    name
-                                );
-                                self.mark_unhealthy(i, error_msg).await;
-                                already_marked_unhealthy = true;
-                                break;
-                            }
+                            Err(e) => match decide(&e, attempt, self.config.max_retries) {
+                                Decision::RetrySame(delay) => {
+                                    tracing::warn!(
+                                        provider = %cand.name, model = ?model, attempt,
+                                        error = %e, "failover: transient, retrying in place",
+                                    );
+                                    tokio::time::sleep(delay).await;
+                                    attempt += 1;
+                                    continue;
+                                }
+                                Decision::NextModel => {
+                                    tracing::warn!(
+                                        provider = %cand.name, model = ?model, error = %e,
+                                        "failover: model unavailable, trying next model",
+                                    );
+                                    last_error = Some(e);
+                                    continue 'model;
+                                }
+                                Decision::NextProvider => {
+                                    tracing::warn!(
+                                        provider = %cand.name, error = %e,
+                                        "failover: provider unavailable, advancing chain",
+                                    );
+                                    last_error = Some(e);
+                                    tripped = true;
+                                    break 'model;
+                                }
+                                Decision::Stop => {
+                                    tracing::warn!(
+                                        provider = %cand.name, error = %e,
+                                        "failover: unrecoverable error, aborting",
+                                    );
+                                    return Err(e);
+                                }
+                            },
                         }
                     }
                 }
 
-                // Only mark unhealthy after retry exhaustion if not already done
-                if !already_marked_unhealthy {
-                    if let Some(ref error) = last_error {
-                        self.mark_unhealthy(i, error.clone()).await;
-                    }
+                if tripped {
+                    let reason = last_error
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    self.mark_unhealthy(&cand.name, reason).await;
                 }
             }
 
-            Err(AlephError::provider(format!(
-                "All {} providers failed. Last error: {}",
-                provider_count,
-                last_error.unwrap_or_else(|| "Unknown error".to_string())
-            )))
+            Err(last_error.unwrap_or_else(|| {
+                AlephError::provider(format!("all {total} failover candidates failed"))
+            }))
         })
     }
 
@@ -587,100 +461,306 @@ impl AiProvider for FailoverProvider {
     fn color(&self) -> &str {
         "#6366f1"
     }
-}
 
-impl FailoverProvider {
-    /// Check if an error should not be retried
-    fn is_non_retryable_error(error: &AlephError) -> bool {
-        match error {
-            AlephError::AuthenticationError { .. } => true,
-            AlephError::InvalidConfig { .. } => true,
-            AlephError::RateLimitError { .. } => false, // Can retry after delay
-            _ => false,
-        }
+    // The wrapper should look like its live primary for behavior-resolution.
+    fn supports_native_tools(&self) -> bool {
+        self.primary.current().supports_native_tools()
     }
-}
 
-impl Drop for FailoverProvider {
-    fn drop(&mut self) {
-        self.stop_health_monitor();
+    fn supports_thinking(&self) -> bool {
+        self.primary.current().supports_thinking()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::message::UnifiedMessage;
+    use crate::providers::StaticDefault;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    /// Test provider: each `process()` call consumes the next scripted
+    /// outcome. `Ok(())` → a text response tagged with the provider name;
+    /// `Err(msg)` → `AlephError::provider(msg)`. When the script is exhausted
+    /// the last outcome repeats — so `["429..."]` means "always 429".
+    struct ScriptProvider {
+        name: String,
+        script: Mutex<VecDeque<std::result::Result<(), String>>>,
+        last: Mutex<std::result::Result<(), String>>,
+        seen_models: Mutex<Vec<Option<String>>>,
+        calls: AtomicUsize,
+    }
+
+    impl ScriptProvider {
+        fn new(name: &str, script: Vec<std::result::Result<(), String>>) -> Arc<Self> {
+            let last = script.last().cloned().unwrap_or(Ok(()));
+            Arc::new(Self {
+                name: name.to_string(),
+                script: Mutex::new(script.into()),
+                last: Mutex::new(last),
+                seen_models: Mutex::new(Vec::new()),
+                calls: AtomicUsize::new(0),
+            })
+        }
+
+        fn ok(name: &str) -> Arc<Self> {
+            Self::new(name, vec![Ok(())])
+        }
+
+        fn err(name: &str, msg: &str) -> Arc<Self> {
+            Self::new(name, vec![Err(msg.to_string())])
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+
+        fn models(&self) -> Vec<Option<String>> {
+            self.seen_models.lock().unwrap().clone()
+        }
+    }
+
+    impl AiProvider for ScriptProvider {
+        fn process<'a>(
+            &'a self,
+            payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen_models.lock().unwrap().push(payload.model.clone());
+            let outcome = {
+                let mut q = self.script.lock().unwrap();
+                match q.pop_front() {
+                    Some(o) => {
+                        *self.last.lock().unwrap() = o.clone();
+                        o
+                    }
+                    None => self.last.lock().unwrap().clone(),
+                }
+            };
+            let name = self.name.clone();
+            Box::pin(async move {
+                match outcome {
+                    Ok(()) => Ok(ProviderResponse::text_only(name)),
+                    Err(msg) => Err(AlephError::provider(msg)),
+                }
+            })
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    /// Assemble a `FailoverProvider` from a primary + fallback nodes.
+    fn build(
+        primary: Arc<dyn AiProvider>,
+        catalog: Vec<(&str, Vec<&str>)>,
+        fallbacks: Vec<FailoverNode>,
+    ) -> FailoverProvider {
+        let model_catalog = catalog
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
+            .collect();
+        FailoverProvider::new(
+            Arc::new(StaticDefault::new(primary)),
+            fallbacks,
+            model_catalog,
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        )
+    }
+
+    fn node(name: &str, provider: Arc<dyn AiProvider>) -> FailoverNode {
+        FailoverNode {
+            name: name.to_string(),
+            models: Vec::new(),
+            provider,
+        }
+    }
+
+    // --- decide() unit tests ----------------------------------------------
 
     #[test]
-    fn test_failover_config_default() {
-        let config = FailoverConfig::default();
-        assert_eq!(config.max_retries, 2);
-        assert_eq!(config.health_check_interval_secs, 60);
-        assert_eq!(config.unhealthy_cooldown_secs, 300);
+    fn decide_bad_request_stops() {
+        let e = AlephError::provider("HTTP 400 bad request: invalid param");
+        assert_eq!(decide(&e, 0, 2), Decision::Stop);
     }
 
     #[test]
-    fn test_provider_metrics() {
-        let metrics = ProviderMetrics::default();
-
-        metrics.record_success(100);
-        metrics.record_success(200);
-        metrics.record_failure();
-
-        assert_eq!(metrics.total_requests.load(Ordering::Relaxed), 3);
-        assert_eq!(metrics.success_count.load(Ordering::Relaxed), 2);
-        assert_eq!(metrics.failure_count.load(Ordering::Relaxed), 1);
-        assert!((metrics.success_rate() - 0.666).abs() < 0.01);
-        assert!((metrics.avg_latency_ms() - 150.0).abs() < 0.01);
+    fn decide_rate_limit_advances_provider() {
+        let e = AlephError::provider("HTTP 429 too many requests");
+        assert_eq!(decide(&e, 0, 2), Decision::NextProvider);
     }
 
     #[test]
-    fn test_health_state_default() {
-        let state = HealthState::default();
-        assert_eq!(state.circuit, CircuitState::Closed);
-        assert!(state.healthy());
-        assert_eq!(state.failure_count, 0);
-        assert!(state.last_error.is_none());
+    fn decide_model_not_found_advances_model() {
+        let e = AlephError::provider("HTTP 404 model gpt-9 not found");
+        assert_eq!(decide(&e, 0, 2), Decision::NextModel);
     }
 
     #[test]
-    fn test_circuit_state_healthy() {
-        let mut state = HealthState::default();
-        assert!(state.healthy()); // Closed is healthy
+    fn decide_413_stops_for_compactor() {
+        let e = AlephError::provider("HTTP 413 prompt is too long: 200000 tokens > 100000 maximum");
+        assert_eq!(decide(&e, 0, 2), Decision::Stop);
+    }
 
-        state.circuit = CircuitState::HalfOpen;
-        assert!(state.healthy()); // HalfOpen is healthy (probe allowed)
+    #[test]
+    fn decide_transient_retries_then_advances() {
+        let e = AlephError::provider("connection reset by peer");
+        assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
+        assert!(matches!(decide(&e, 1, 2), Decision::RetrySame(_)));
+        assert_eq!(decide(&e, 2, 2), Decision::NextProvider);
+    }
 
-        state.circuit = CircuitState::Open;
-        assert!(!state.healthy()); // Open is unhealthy
+    #[test]
+    fn decide_typed_timeout_with_no_http_code_still_fails_over() {
+        // `Timeout` Display is "Request timed out" — no HTTP keyword — but the
+        // typed class is Transient, so the walk must still advance.
+        let e = AlephError::Timeout { suggestion: None };
+        assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
+        assert_eq!(decide(&e, 2, 2), Decision::NextProvider);
+    }
+
+    // --- process() integration tests --------------------------------------
+
+    #[tokio::test]
+    async fn primary_success_skips_fallback() {
+        let primary = ScriptProvider::ok("primary");
+        let fallback = ScriptProvider::ok("fallback");
+        let fp = build(primary, vec![], vec![node("fallback", fallback.clone())]);
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "primary");
+        assert_eq!(fallback.call_count(), 0);
     }
 
     #[tokio::test]
-    async fn test_failover_provider_creation() {
-        // Create with mock providers
-        let mut test_provider_config = ProviderConfig::test_config("test");
-        test_provider_config.protocol = Some("mock".to_string());
-        test_provider_config.api_key = None;
-        test_provider_config.color = "#000000".to_string();
-        test_provider_config.timeout_seconds = 30;
+    async fn rate_limit_fails_over_to_next_provider() {
+        let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
+        let fallback = ScriptProvider::ok("fallback");
+        let fp = build(primary, vec![], vec![node("fallback", fallback)]);
 
-        let config = FailoverConfig {
-            providers: vec![ProviderEntry {
-                name: "mock".to_string(),
-                priority: 1,
-                config: test_provider_config,
-            }],
-            ..Default::default()
-        };
-
-        let provider = FailoverProvider::new(config);
-        assert!(provider.is_ok());
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "fallback");
     }
 
-    #[test]
-    fn test_failover_provider_empty_providers() {
-        let config = FailoverConfig::default();
-        let provider = FailoverProvider::new(config);
-        assert!(provider.is_err());
+    #[tokio::test]
+    async fn model_not_found_walks_to_next_model_same_provider() {
+        let primary = ScriptProvider::new(
+            "anthropic",
+            vec![Err("HTTP 404 model opus not found".into()), Ok(())],
+        );
+        let fp = build(
+            primary.clone(),
+            vec![("anthropic", vec!["opus", "sonnet"])],
+            vec![],
+        );
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "anthropic");
+        assert_eq!(
+            primary.models(),
+            vec![Some("opus".to_string()), Some("sonnet".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn bad_request_aborts_without_failover() {
+        let primary = ScriptProvider::err("primary", "HTTP 400 bad request: invalid");
+        let fallback = ScriptProvider::ok("fallback");
+        let fp = build(primary, vec![], vec![node("fallback", fallback.clone())]);
+
+        let msgs = [UnifiedMessage::user("hi")];
+        assert!(fp.process(RequestPayload::new(&msgs)).await.is_err());
+        assert_eq!(fallback.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn context_overflow_propagates_without_failover() {
+        let primary = ScriptProvider::err(
+            "primary",
+            "HTTP 413 prompt is too long: 200000 tokens > 100000 maximum",
+        );
+        let fallback = ScriptProvider::ok("fallback");
+        let fp = build(primary, vec![], vec![node("fallback", fallback.clone())]);
+
+        let msgs = [UnifiedMessage::user("hi")];
+        assert!(fp.process(RequestPayload::new(&msgs)).await.is_err());
+        assert_eq!(fallback.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn transient_error_retried_in_place_then_succeeds() {
+        let primary = ScriptProvider::new("primary", vec![Err("connection reset".into()), Ok(())]);
+        let fallback = ScriptProvider::ok("fallback");
+        let fp = build(primary.clone(), vec![], vec![node("fallback", fallback.clone())]);
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "primary");
+        assert_eq!(primary.call_count(), 2);
+        assert_eq!(fallback.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn all_candidates_exhausted_returns_error() {
+        let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+        let fallback = ScriptProvider::err("fallback", "HTTP 429 rate limit");
+        let fp = build(primary, vec![], vec![node("fallback", fallback)]);
+
+        let msgs = [UnifiedMessage::user("hi")];
+        assert!(fp.process(RequestPayload::new(&msgs)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn circuit_opens_after_threshold_failures() {
+        let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+        let fallback = ScriptProvider::ok("fallback");
+        let fp = build(primary, vec![], vec![node("fallback", fallback)]);
+
+        let msgs = [UnifiedMessage::user("hi")];
+        assert!(!fp.circuit_open("primary").await);
+        for _ in 0..CIRCUIT_OPEN_THRESHOLD {
+            let _ = fp.process(RequestPayload::new(&msgs)).await;
+        }
+        assert!(fp.circuit_open("primary").await);
+    }
+
+    #[tokio::test]
+    async fn lone_candidate_attempted_even_with_open_circuit() {
+        // A single provider that keeps failing must still be retried after
+        // its circuit opens — there is nowhere else to fail over to.
+        let primary = ScriptProvider::err("solo", "HTTP 429 rate limit");
+        let fp = build(primary.clone(), vec![], vec![]);
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let rounds = CIRCUIT_OPEN_THRESHOLD + 2;
+        for _ in 0..rounds {
+            let _ = fp.process(RequestPayload::new(&msgs)).await;
+        }
+        assert!(fp.circuit_open("solo").await);
+        // Despite the open circuit, the lone provider was tried every call.
+        assert_eq!(primary.call_count(), rounds as usize);
+    }
+
+    #[tokio::test]
+    async fn fallback_matching_primary_name_is_deduped() {
+        let primary = ScriptProvider::ok("anthropic");
+        let dup = ScriptProvider::err("anthropic", "HTTP 429 rate limit");
+        let fp = build(primary, vec![], vec![node("anthropic", dup.clone())]);
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "anthropic");
+        assert_eq!(dup.call_count(), 0);
     }
 }
