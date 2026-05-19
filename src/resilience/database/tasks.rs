@@ -187,7 +187,13 @@ impl StateDatabase {
         Ok(tasks)
     }
 
-    /// Get all interrupted/running tasks for recovery on startup
+    /// Get orphaned tasks left behind by a crash, for startup reconciliation.
+    ///
+    /// Only `running` rows qualify: a clean shutdown or normal completion
+    /// always transitions a task to a terminal state, so a row still marked
+    /// `running` means the process died mid-flight. Already-reconciled rows
+    /// (`interrupted`) are deliberately excluded so reconciliation is
+    /// idempotent across restarts and never re-reports the same task.
     pub async fn get_recoverable_tasks(&self) -> Result<Vec<AgentTask>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
@@ -198,7 +204,7 @@ impl StateDatabase {
                        recursion_depth, parent_task_id, created_at, updated_at,
                        started_at, completed_at, metadata_json
                 FROM agent_tasks
-                WHERE status IN ('running', 'interrupted')
+                WHERE status = 'running'
                 ORDER BY CASE risk_level WHEN 'low' THEN 0 WHEN 'high' THEN 1 ELSE 2 END ASC, created_at ASC
                 "#,
             )
@@ -249,5 +255,58 @@ impl StateDatabase {
             )
             .map_err(|e| AlephError::config(format!("Failed to mark tasks: {}", e)))?;
         Ok(count as u64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resilience::database::StateDatabase;
+
+    fn task(id: &str) -> AgentTask {
+        AgentTask::new(id, "session-1", "explorer", "do work", RiskLevel::Low)
+    }
+
+    async fn insert_with_status(db: &StateDatabase, id: &str, status: TaskStatus) {
+        db.insert_agent_task(&task(id)).await.unwrap();
+        db.update_task_status(id, status).await.unwrap();
+    }
+
+    /// Only `running` rows are orphans — a clean shutdown never leaves them.
+    /// Already-reconciled (`interrupted`) and terminal rows must be excluded.
+    #[tokio::test]
+    async fn get_recoverable_tasks_returns_only_running() {
+        let db = StateDatabase::in_memory().unwrap();
+        insert_with_status(&db, "run-1", TaskStatus::Running).await;
+        insert_with_status(&db, "int-1", TaskStatus::Interrupted).await;
+        insert_with_status(&db, "done-1", TaskStatus::Completed).await;
+
+        let recoverable = db.get_recoverable_tasks().await.unwrap();
+        let ids: Vec<&str> = recoverable.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["run-1"]);
+    }
+
+    /// After marking running rows interrupted, they must not resurface as
+    /// recoverable — otherwise every restart re-reports the same tasks.
+    #[tokio::test]
+    async fn mark_running_as_interrupted_then_recoverable_is_empty() {
+        let db = StateDatabase::in_memory().unwrap();
+        insert_with_status(&db, "run-1", TaskStatus::Running).await;
+
+        let marked = db.mark_running_as_interrupted().await.unwrap();
+        assert_eq!(marked, 1);
+
+        assert!(db.get_recoverable_tasks().await.unwrap().is_empty());
+    }
+
+    /// Reconciliation run twice in a row: the second pass is a no-op.
+    #[tokio::test]
+    async fn reconcile_is_idempotent_across_two_runs() {
+        let db = StateDatabase::in_memory().unwrap();
+        insert_with_status(&db, "run-1", TaskStatus::Running).await;
+
+        assert_eq!(db.mark_running_as_interrupted().await.unwrap(), 1);
+        assert_eq!(db.mark_running_as_interrupted().await.unwrap(), 0);
+        assert!(db.get_recoverable_tasks().await.unwrap().is_empty());
     }
 }
