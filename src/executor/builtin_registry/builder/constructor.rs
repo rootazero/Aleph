@@ -748,7 +748,9 @@ impl BuiltinToolRegistry {
         };
 
         // Skill management tools — always available
-        let skill_system = crate::skill::SkillSystem::new();
+        // Phase 2: use the process-wide shared SkillSystem instead of a
+        // throwaway empty instance; skill_status previously always reported 0.
+        let skill_system = crate::skill::shared_skill_system().clone();
         let skill_status_tool =
             crate::builtin_tools::skill_status::SkillStatusTool::new(skill_system.clone());
         let skill_install_tool =

@@ -641,19 +641,21 @@ pub fn create_tool_boxed(
             }
         }
         // Skill management tools — always available
+        // Phase 2: share the process-wide initialized SkillSystem so
+        // skill_status/install/manage see the same registry as the gateway.
         "skill_status" => Some(Box::new(
             crate::builtin_tools::skill_status::SkillStatusTool::new(
-                crate::skill::SkillSystem::new(),
+                crate::skill::shared_skill_system().clone(),
             ),
         )),
         "skill_install" => Some(Box::new(
             crate::builtin_tools::skill_install::SkillInstallTool::new(
-                crate::skill::SkillSystem::new(),
+                crate::skill::shared_skill_system().clone(),
             ),
         )),
         "skill_manage" => Some(Box::new(
             crate::builtin_tools::skill_manage::SkillManageTool::new(
-                crate::skill::SkillSystem::new(),
+                crate::skill::shared_skill_system().clone(),
             ),
         )),
         // note_manage requires memory backend — cannot create standalone fallback
