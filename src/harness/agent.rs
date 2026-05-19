@@ -21,7 +21,7 @@
 //!   * `act.rs` — `act`
 //!   * `guardrails.rs` — `apply_input_guardrail`, `apply_tool_call_guardrail`
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -71,6 +71,12 @@ pub struct AgentHarness {
     /// through [`AgentHarness::hit_limit`] so the orchestrator bridge can
     /// populate `FlowOutcome::hit_limit`.
     hit_limit: AtomicBool,
+    /// Cumulative provider-reported token usage across every LLM call in
+    /// this run (`input + output + cache_read + cache_creation`). Read after
+    /// the run via [`AgentHarness::total_tokens`] by the orchestrator bridge
+    /// and subagent spawner. A harness instance serves a single run, so the
+    /// counter is never reset.
+    total_tokens: AtomicU64,
 }
 
 impl AgentHarness {
@@ -83,6 +89,7 @@ impl AgentHarness {
             deps,
             stall_tracker,
             hit_limit: AtomicBool::new(false),
+            total_tokens: AtomicU64::new(0),
         }
     }
 
@@ -96,6 +103,14 @@ impl AgentHarness {
     /// previous run's budget trip does not leak into the next outcome.
     pub fn reset_hit_limit(&self) {
         self.hit_limit.store(false, Ordering::Relaxed);
+    }
+
+    /// Cumulative provider-reported token usage observed across every LLM
+    /// call in this run. Components summed: `input + output + cache_read +
+    /// cache_creation` (see `turn_token_total`). A harness instance serves
+    /// exactly one run, so this counter is never reset.
+    pub fn total_tokens(&self) -> u64 {
+        self.total_tokens.load(Ordering::Relaxed)
     }
 
     /// Read-only accessor for this harness's position in the subagent chain.
@@ -444,6 +459,27 @@ pub(crate) fn current_turn_id(events: &[SessionEventRecord]) -> TurnId {
         .unwrap_or_else(uuid::Uuid::new_v4)
 }
 
+/// Sum the provider-reported token components for one LLM call.
+///
+/// `total_tokens` = `input + output + cache_read + cache_creation`. Cache
+/// components default to 0 when the provider omits them. `thinking_tokens`
+/// is intentionally excluded for a consistent cross-provider token
+/// definition: Anthropic/OpenAI already fold thinking tokens into
+/// `output_tokens` (counting them would double-count), and Gemini reports
+/// `thoughtsTokenCount` separately. If Gemini thinking tokens ever need to
+/// be counted, adjust the sum here.
+fn turn_token_total(usage: &Option<crate::providers::adapter::TokenUsage>) -> u64 {
+    match usage {
+        None => 0,
+        Some(u) => {
+            u64::from(u.input_tokens)
+                + u64::from(u.output_tokens)
+                + u64::from(u.cache_read_tokens.unwrap_or(0))
+                + u64::from(u.cache_creation_tokens.unwrap_or(0))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::Future;
@@ -574,6 +610,35 @@ mod tests {
         }
     }
 
+    struct UsageProvider {
+        usage: crate::providers::adapter::TokenUsage,
+    }
+
+    impl AiProvider for UsageProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let usage = self.usage.clone();
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: Some("done".to_string()),
+                    stop_reason: StopReason::EndTurn,
+                    usage: Some(usage),
+                    ..Default::default()
+                })
+            })
+        }
+
+        fn name(&self) -> &str {
+            "usage"
+        }
+
+        fn color(&self) -> &str {
+            "#00ff00"
+        }
+    }
+
     async fn fresh_session(agent_id: &str) -> (Arc<InProcessActorSessionService>, SessionId) {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         migrate_add_session_events(&conn).expect("migrate");
@@ -612,6 +677,89 @@ mod tests {
             .await
             .unwrap();
         (session, sid)
+    }
+
+    #[test]
+    fn turn_token_total_sums_four_components() {
+        use crate::providers::adapter::TokenUsage;
+        let usage = Some(TokenUsage {
+            input_tokens: 100,
+            output_tokens: 250,
+            cache_read_tokens: Some(40),
+            cache_creation_tokens: Some(10),
+            thinking_tokens: Some(999),
+            cost: None,
+        });
+        // 100 + 250 + 40 + 10 = 400. thinking_tokens (999) is excluded.
+        assert_eq!(super::turn_token_total(&usage), 400);
+    }
+
+    #[test]
+    fn turn_token_total_none_usage_is_zero() {
+        assert_eq!(super::turn_token_total(&None), 0);
+    }
+
+    #[test]
+    fn turn_token_total_treats_missing_cache_as_zero() {
+        use crate::providers::adapter::TokenUsage;
+        let usage = Some(TokenUsage {
+            input_tokens: 7,
+            output_tokens: 11,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        });
+        assert_eq!(super::turn_token_total(&usage), 18);
+    }
+
+    #[tokio::test]
+    async fn harness_accumulates_provider_token_usage() {
+        use crate::providers::adapter::TokenUsage;
+        let provider: Arc<dyn AiProvider> = Arc::new(UsageProvider {
+            usage: TokenUsage {
+                input_tokens: 10,
+                output_tokens: 20,
+                cache_read_tokens: Some(5),
+                cache_creation_tokens: Some(3),
+                thinking_tokens: Some(99),
+                cost: None,
+            },
+        });
+
+        let (session, sid) = fresh_session("test-tokens").await;
+        let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
+
+        let deps = HarnessDeps {
+            session,
+            tools,
+            sandbox,
+            llm: provider,
+            verifier_chain: None,
+            context_budget: None,
+            context_compactor: None,
+            skill_prefetcher: None,
+            trace_sink: None,
+            system_prompt: None,
+            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+            chain_context: crate::harness::chain_context::ChainContext::default(),
+            guardrails: None,
+            fallback_llm: None,
+            max_iterations: Some(3),
+            power: None,
+            stall_config: None,
+            consecutive_failure_cap: None,
+            turn_timeout: None,
+        };
+        let harness = super::AgentHarness::new(deps);
+        let mut cb = NoopHarnessCallback;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        harness.run(&sid, &mut cb, &cancel).await.expect("run ok");
+
+        // Single text-only turn: input + output + cache_read + cache_creation
+        // = 10 + 20 + 5 + 3 = 38. thinking_tokens (99) is excluded.
+        assert_eq!(harness.total_tokens(), 38);
     }
 
     #[tokio::test]

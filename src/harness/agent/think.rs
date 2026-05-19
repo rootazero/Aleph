@@ -186,6 +186,13 @@ impl AgentHarness {
             Err(primary_err) => return Err(HarnessError::Llm(primary_err)),
         };
 
+        // Accumulate this turn's provider-reported token usage. Counted here
+        // — right after the LLM call — so a turn whose output is later
+        // blocked by a guardrail still reflects the tokens the provider
+        // billed. Excludes `thinking_tokens`; see `turn_token_total`.
+        let turn_tokens = super::turn_token_total(&response.usage);
+        self.total_tokens.fetch_add(turn_tokens, Ordering::Relaxed);
+
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = super::current_turn_id(&events);
         let text = response.text_content();
