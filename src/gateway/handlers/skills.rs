@@ -204,12 +204,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn rpc_shares_skill_system_with_global_singleton() {
-        // shared_system() must return the same instance as crate::skill::shared_skill_system().
-        let rpc = shared_system();
-        let global = crate::skill::shared_skill_system();
-        assert_eq!(
-            rpc.current_snapshot().await.version,
-            global.current_snapshot().await.version
+        // Both accessors must return the same `&'static SkillSystem` instance.
+        // Pointer-equality is race-free; an earlier `version`-comparison form
+        // flaked when a parallel test called `init()` between the two reads.
+        let rpc: *const _ = shared_system();
+        let global: *const _ = crate::skill::shared_skill_system();
+        assert!(
+            std::ptr::eq(rpc, global),
+            "shared_system() must return the same singleton as shared_skill_system()"
         );
     }
 }
