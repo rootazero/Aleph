@@ -714,3 +714,40 @@ fn test_convert_user_with_image() {
     assert_eq!(json["parts"][1]["inlineData"]["mimeType"], "image/png");
     assert_eq!(json["parts"][1]["inlineData"]["data"], "QUJD");
 }
+
+#[test]
+fn test_convert_assistant_tool_call_preserves_id() {
+    use crate::providers::message::ContentBlock as CB;
+    let msgs = [UnifiedMessage::Assistant {
+        content: vec![CB::ToolCall {
+            id: "call_xyz".to_string(),
+            name: "search".to_string(),
+            arguments: serde_json::json!({"q": "rust"}),
+        }],
+    }];
+    let result = GeminiProtocol::convert_messages(&msgs);
+    let json = serde_json::to_value(&result[0]).unwrap();
+    assert_eq!(
+        json["parts"][0]["functionCall"]["id"], "call_xyz",
+        "replayed functionCall must carry the tool-call id"
+    );
+}
+
+#[test]
+fn test_convert_tool_result_json_object_passthrough() {
+    let msgs = [UnifiedMessage::tool_result_json(
+        "call_1",
+        "get_weather",
+        serde_json::json!({"temp": 20, "unit": "C"}),
+        false,
+    )];
+    let result = GeminiProtocol::convert_messages(&msgs);
+    let json = serde_json::to_value(&result[0]).unwrap();
+    let response = &json["parts"][0]["functionResponse"]["response"];
+    assert_eq!(response["temp"], 20);
+    assert_eq!(response["unit"], "C");
+    assert!(
+        response.get("result").is_none(),
+        "a structured object payload must pass through unwrapped"
+    );
+}
