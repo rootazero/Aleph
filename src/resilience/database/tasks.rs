@@ -219,27 +219,6 @@ impl StateDatabase {
         Ok(tasks)
     }
 
-    /// Update task checkpoint for recovery
-    pub async fn update_task_checkpoint(
-        &self,
-        task_id: &str,
-        checkpoint_path: &str,
-        last_tool_call_id: Option<&str>,
-    ) -> Result<(), AlephError> {
-        let now = chrono::Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            r#"
-            UPDATE agent_tasks
-            SET checkpoint_snapshot_path = ?1, last_tool_call_id = ?2, updated_at = ?3
-            WHERE id = ?4
-            "#,
-            params![checkpoint_path, last_tool_call_id, now, task_id],
-        )
-        .map_err(|e| AlephError::config(format!("Failed to update checkpoint: {}", e)))?;
-        Ok(())
-    }
-
     /// Mark all running tasks as interrupted (for graceful shutdown)
     pub async fn mark_running_as_interrupted(&self) -> Result<u64, AlephError> {
         let now = chrono::Utc::now().timestamp();

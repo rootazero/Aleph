@@ -4,7 +4,6 @@
 //! - AgentTask: Task state and recovery checkpoints
 //! - TaskTrace: Structured execution traces for Shadow Replay
 //! - AgentEvent: Tiered event persistence (Skeleton & Pulse)
-//! - SubagentSession: Long-lived subagent session management
 
 use aleph_protocol::AgentTraceEvent;
 use serde::{Deserialize, Serialize};
@@ -149,48 +148,6 @@ impl std::str::FromStr for Lane {
             "main" => Ok(Lane::Main),
             "subagent" => Ok(Lane::Subagent),
             _ => Err(format!("Unknown lane: {}", s)),
-        }
-    }
-}
-
-/// Session status for subagent lifecycle
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionStatus {
-    /// Session is actively executing
-    Active,
-    /// Session is idle, waiting for reuse (in memory)
-    Idle,
-    /// Session context has been swapped out to disk
-    Swapped,
-}
-
-impl fmt::Display for SessionStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SessionStatus::Active => write!(f, "active"),
-            SessionStatus::Idle => write!(f, "idle"),
-            SessionStatus::Swapped => write!(f, "swapped"),
-        }
-    }
-}
-
-impl SessionStatus {
-    /// Parse session status from database string with fallback to Active
-    pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(SessionStatus::Active)
-    }
-}
-
-impl std::str::FromStr for SessionStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "active" => Ok(SessionStatus::Active),
-            "idle" => Ok(SessionStatus::Idle),
-            "swapped" => Ok(SessionStatus::Swapped),
-            _ => Err(format!("Unknown session status: {}", s)),
         }
     }
 }
@@ -464,76 +421,6 @@ impl AgentEvent {
 }
 
 // =============================================================================
-// Subagent Session
-// =============================================================================
-
-/// Long-lived subagent session (Session-as-a-Service)
-///
-/// Allows subagents to persist across multiple task invocations,
-/// supporting handle reuse and context inheritance.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubagentSession {
-    /// Unique session identifier (also the handle)
-    pub id: String,
-
-    /// Agent type (e.g., "explorer", "coder", "researcher")
-    pub agent_type: String,
-
-    /// Current session status
-    pub status: SessionStatus,
-
-    /// Path to serialized context (for swapped sessions)
-    pub context_path: Option<String>,
-
-    /// Parent session ID
-    pub parent_session_id: String,
-
-    /// Creation timestamp
-    pub created_at: i64,
-
-    /// Last activity timestamp
-    pub last_active_at: i64,
-
-    /// Total tokens consumed by this session
-    pub total_tokens_used: u64,
-
-    /// Total tool calls made by this session
-    pub total_tool_calls: u64,
-}
-
-impl SubagentSession {
-    /// Create a new active session
-    pub fn new(
-        id: impl Into<String>,
-        agent_type: impl Into<String>,
-        parent_session_id: impl Into<String>,
-    ) -> Self {
-        let now = chrono::Utc::now().timestamp();
-        Self {
-            id: id.into(),
-            agent_type: agent_type.into(),
-            status: SessionStatus::Active,
-            context_path: None,
-            parent_session_id: parent_session_id.into(),
-            created_at: now,
-            last_active_at: now,
-            total_tokens_used: 0,
-            total_tool_calls: 0,
-        }
-    }
-
-    /// Check if session is in memory (Active or Idle)
-    pub fn is_in_memory(&self) -> bool {
-        matches!(self.status, SessionStatus::Active | SessionStatus::Idle)
-    }
-
-    /// Check if session can be swapped out
-    pub fn can_swap_out(&self) -> bool {
-        self.status == SessionStatus::Idle
-    }
-}
-
-// =============================================================================
 // Tests
 // =============================================================================
 
@@ -655,28 +542,5 @@ mod tests {
         );
 
         assert!(!event.is_structural);
-    }
-
-    #[test]
-    fn test_subagent_session_new() {
-        let session = SubagentSession::new("sess-1", "explorer", "parent-1");
-
-        assert_eq!(session.id, "sess-1");
-        assert_eq!(session.status, SessionStatus::Active);
-        assert!(session.is_in_memory());
-        assert!(!session.can_swap_out());
-    }
-
-    #[test]
-    fn test_session_status_swap_out() {
-        let mut session = SubagentSession::new("sess-1", "explorer", "parent-1");
-        session.status = SessionStatus::Idle;
-
-        assert!(session.is_in_memory());
-        assert!(session.can_swap_out());
-
-        session.status = SessionStatus::Swapped;
-        assert!(!session.is_in_memory());
-        assert!(!session.can_swap_out());
     }
 }

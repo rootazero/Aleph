@@ -318,26 +318,6 @@ impl StateDatabase {
             CREATE INDEX IF NOT EXISTS idx_agent_events_task_seq ON agent_events(task_id, seq);
             CREATE INDEX IF NOT EXISTS idx_agent_events_structural ON agent_events(task_id, is_structural) WHERE is_structural = 1;
 
-            -- Subagent session management (Session-as-a-Service)
-            CREATE TABLE IF NOT EXISTS subagent_sessions (
-                id TEXT PRIMARY KEY,
-                agent_type TEXT NOT NULL,  -- explorer, coder, researcher, etc.
-                status TEXT NOT NULL,  -- Active, Idle, Swapped
-                context_path TEXT,  -- Path to serialized context (for swapped agents)
-
-                -- Handle metadata
-                parent_session_id TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                last_active_at INTEGER NOT NULL,
-
-                -- Resource tracking
-                total_tokens_used INTEGER DEFAULT 0,
-                total_tool_calls INTEGER DEFAULT 0
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_subagent_sessions_status ON subagent_sessions(status);
-            CREATE INDEX IF NOT EXISTS idx_subagent_sessions_parent ON subagent_sessions(parent_session_id);
-
             -- ================================================================
             -- Group Chat Tables
             -- ================================================================
