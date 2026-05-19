@@ -209,7 +209,9 @@ impl ExtensionManager {
             plugin_registry,
             service_manager,
             adapter_registry,
-            skill_system: crate::skill::SkillSystem::new(),
+            // Share the process-wide instance so init() here is visible to
+            // the builtin skill tools and the gateway RPC handlers.
+            skill_system: crate::skill::shared_skill_system().clone(),
             active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Mutex::new(()),
