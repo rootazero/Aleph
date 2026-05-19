@@ -12,8 +12,8 @@ use std::path::PathBuf;
 
 // V2 field types from toml_types module
 use super::toml_types::{
-    CapabilitiesSection, ChannelSection, CommandSection, HookSection, HttpRouteSection,
-    PermissionsSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
+    CapabilitiesSection, CommandSection, HookSection, PermissionsSection, PromptSection,
+    ServiceSection, ToolSection,
 };
 use crate::extension::runtime::wasm::WasmCapabilities;
 use crate::extension::runtime::wasm::WasmResourceLimits;
@@ -81,17 +81,11 @@ pub enum PluginPermission {
     /// Environment variable access
     Env,
 
-    /// Shell command execution (required for CliCommand registration)
+    /// Shell command execution
     Shell,
 
     /// Background service registration
     Background,
-
-    /// HTTP route registration
-    HttpRoutes,
-
-    /// Gateway RPC method registration
-    GatewayRpc,
 
     /// Custom/extension-specific permission
     Custom(String),
@@ -107,8 +101,6 @@ impl std::fmt::Display for PluginPermission {
             PluginPermission::Env => write!(f, "env"),
             PluginPermission::Shell => write!(f, "shell"),
             PluginPermission::Background => write!(f, "background"),
-            PluginPermission::HttpRoutes => write!(f, "http-routes"),
-            PluginPermission::GatewayRpc => write!(f, "gateway-rpc"),
             PluginPermission::Custom(s) => write!(f, "{}", s),
         }
     }
@@ -131,7 +123,10 @@ impl<'de> Deserialize<'de> for PluginPermission {
 }
 
 impl PluginPermission {
-    /// Parse a permission string into a PluginPermission
+    /// Parse a permission string into a PluginPermission.
+    ///
+    /// Unrecognized strings are kept as `Custom` so deserialization never
+    /// fails on an unknown name.
     fn from_str(s: &str) -> Self {
         match s {
             "network" => PluginPermission::Network,
@@ -141,8 +136,6 @@ impl PluginPermission {
             "env" => PluginPermission::Env,
             "shell" => PluginPermission::Shell,
             "background" => PluginPermission::Background,
-            "http-routes" => PluginPermission::HttpRoutes,
-            "gateway-rpc" => PluginPermission::GatewayRpc,
             other => PluginPermission::Custom(other.to_string()),
         }
     }
@@ -318,21 +311,6 @@ pub struct PluginManifest {
     #[serde(skip)]
     pub wasm_resource_limits: Option<WasmResourceLimits>,
 
-    // ═══════════════════════════════════════════
-    // P2 Extension fields
-    // ═══════════════════════════════════════════
-    /// V2: Channel definitions for messaging platform integrations
-    #[serde(skip)]
-    pub channels_v2: Option<Vec<ChannelSection>>,
-
-    /// V2: Provider definitions for AI model providers
-    #[serde(skip)]
-    pub providers_v2: Option<Vec<ProviderSection>>,
-
-    /// V2: HTTP route definitions for REST API endpoints
-    #[serde(skip)]
-    pub http_routes_v2: Option<Vec<HttpRouteSection>>,
-
     /// Aleph-only extensions from [aleph] section in CC-format manifest
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aleph_extensions: Option<AlephExtensions>,
@@ -372,10 +350,6 @@ impl PluginManifest {
             capabilities_v2: None,
             wasm_capabilities: None,
             wasm_resource_limits: None,
-            // P2 fields
-            channels_v2: None,
-            providers_v2: None,
-            http_routes_v2: None,
             // CC-compat extensions
             aleph_extensions: None,
             // Memory extension manifest section
@@ -463,12 +437,6 @@ pub struct AlephExtensions {
     pub runtime: AlephRuntime,
     /// WASM entry point (only for runtime = "wasm")
     pub entry: Option<String>,
-    /// Messaging channel integrations
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub channels: Vec<ChannelSection>,
-    /// Custom LLM provider backends
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub providers: Vec<ProviderSection>,
     /// Background services
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub services: Vec<ServiceSection>,
@@ -613,6 +581,26 @@ mod tests {
         assert!(hint.advanced.is_none());
         assert!(hint.sensitive.is_none());
         assert!(hint.placeholder.is_none());
+    }
+
+    #[test]
+    fn withdrawn_permission_string_parses_gracefully_not_panicked() {
+        // A stale manifest may still carry a withdrawn permission name
+        // (http-routes / gateway-rpc — capabilities now withdrawn).
+        // from_str must not panic; the Custom catch-all keeps them parseable.
+        assert_eq!(
+            PluginPermission::from_str("http-routes"),
+            PluginPermission::Custom("http-routes".to_string())
+        );
+        assert_eq!(
+            PluginPermission::from_str("gateway-rpc"),
+            PluginPermission::Custom("gateway-rpc".to_string())
+        );
+        // A known permission still parses to its real variant.
+        assert_eq!(
+            PluginPermission::from_str("network"),
+            PluginPermission::Network
+        );
     }
 
     #[test]

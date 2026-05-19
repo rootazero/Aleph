@@ -37,13 +37,10 @@ pub mod validation;
 pub mod capability;
 pub mod registrar;
 
-mod channel_manager;
 mod error;
-mod http_handler;
 pub mod manifest;
 pub mod mcp_config;
 mod plugin_ops;
-mod provider_adapter;
 pub mod registry;
 mod service_manager;
 mod service_ops;
@@ -53,13 +50,10 @@ mod template;
 mod types;
 pub mod watcher;
 
-pub use channel_manager::{ChannelHandle, ChannelManager};
 pub use component_id::ComponentId;
 pub use error::*;
-pub use http_handler::{match_path, PluginHttpHandler};
 pub use loader::PluginLoader;
 pub use manifest::*;
-pub use provider_adapter::PluginProviderAdapter;
 pub use registry::*;
 pub use service_manager::ServiceManager;
 pub use skill_tool::{check_skill_permission, request_skill_permission_async};

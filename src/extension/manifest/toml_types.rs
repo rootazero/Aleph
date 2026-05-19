@@ -54,13 +54,6 @@ pub struct AlephPluginToml {
     pub services: Vec<ServiceSection>,
     #[serde(default)]
     pub capabilities: CapabilitiesSection,
-    #[serde(default)]
-    pub channels: Vec<ChannelSection>,
-    #[serde(default)]
-    pub providers: Vec<ProviderSection>,
-    #[serde(default)]
-    pub http_routes: Vec<HttpRouteSection>,
-
     /// Optional [memory] section — declares which memory extension hooks this plugin implements.
     #[serde(default)]
     pub memory: Option<MemoryManifestSection>,
@@ -255,39 +248,6 @@ pub struct CapabilitiesSection {
     pub tool_invoke: Option<WasmToolInvokeToml>,
     #[serde(default)]
     pub secrets: Option<WasmSecretsToml>,
-}
-
-/// Channel definition section
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelSection {
-    pub id: String,
-    pub label: String,
-    #[serde(default)]
-    pub handler: Option<String>,
-    #[serde(default)]
-    pub config_schema: Option<JsonValue>,
-}
-
-/// Provider definition section
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderSection {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub models: Vec<String>,
-    #[serde(default)]
-    pub handler: Option<String>,
-    #[serde(default)]
-    pub config_schema: Option<JsonValue>,
-}
-
-/// HTTP route definition section
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpRouteSection {
-    pub path: String,
-    #[serde(default)]
-    pub methods: Vec<String>,
-    pub handler: String,
 }
 
 // =============================================================================
@@ -590,21 +550,6 @@ pub fn parse_aleph_plugin_toml_content(
         wasm_capabilities: convert_wasm_capabilities(&toml.capabilities),
         wasm_resource_limits: None,
         capabilities_v2: Some(toml.capabilities),
-        channels_v2: if toml.channels.is_empty() {
-            None
-        } else {
-            Some(toml.channels)
-        },
-        providers_v2: if toml.providers.is_empty() {
-            None
-        } else {
-            Some(toml.providers)
-        },
-        http_routes_v2: if toml.http_routes.is_empty() {
-            None
-        } else {
-            Some(toml.http_routes)
-        },
         aleph_extensions: None,
         memory_manifest: toml.memory,
     })

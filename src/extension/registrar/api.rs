@@ -43,7 +43,6 @@ impl<'a> CapabilityApi<'a> {
     ///
     /// - P0 (Core) and P1 (Important): no permission check
     /// - P2 (Pluggable): permission check if required by the capability
-    /// - P3 (GatewayExtension): permission check + warning log
     pub fn register_capability(&mut self, decl: CapabilityDeclaration) -> Result<()> {
         let tier = decl.tier();
 
@@ -55,16 +54,6 @@ impl<'a> CapabilityApi<'a> {
                 if let Some(perm) = decl.required_permission() {
                     self.require_permission(&perm)?;
                 }
-            }
-            Tier::GatewayExtension => {
-                if let Some(perm) = decl.required_permission() {
-                    self.require_permission(&perm)?;
-                }
-                tracing::warn!(
-                    plugin_id = %self.plugin_id,
-                    kind = decl.kind_name(),
-                    "Registering gateway extension capability"
-                );
             }
         }
 
@@ -79,21 +68,6 @@ impl<'a> CapabilityApi<'a> {
             }
             CapabilityDeclaration::Hook(hook) => {
                 self.registry.register_hook(hook);
-            }
-            CapabilityDeclaration::Channel(channel) => {
-                self.registry.register_channel(channel);
-            }
-            CapabilityDeclaration::Provider(provider) => {
-                self.registry.register_provider(provider);
-            }
-            CapabilityDeclaration::GatewayMethod(method) => {
-                self.registry.register_gateway_method(method);
-            }
-            CapabilityDeclaration::HttpRoute(route) => {
-                self.registry.register_http_route(route);
-            }
-            CapabilityDeclaration::Cli(cli) => {
-                self.registry.register_cli_command(cli);
             }
             CapabilityDeclaration::Service(service) => {
                 self.registry.register_service(service);
@@ -162,9 +136,8 @@ impl<'a> CapabilityApi<'a> {
 mod tests {
     use super::*;
     use crate::extension::registry::{
-        AgentRegistration, ChannelRegistration, CliRegistration, CommandRegistration,
-        GatewayMethodRegistration, HookRegistration, HttpRouteRegistration, ProviderRegistration,
-        ServiceRegistration, SkillRegistration, ToolRegistration,
+        AgentRegistration, CommandRegistration, HookRegistration, ServiceRegistration,
+        SkillRegistration, ToolRegistration,
     };
     use crate::extension::types::HookEvent;
 
@@ -185,37 +158,6 @@ mod tests {
             name: "my_tool".to_string(),
             description: "A test tool".to_string(),
             parameters: serde_json::json!({"type": "object"}),
-            handler: "handle".to_string(),
-            plugin_id: "test-plugin".to_string(),
-        })
-    }
-
-    fn make_channel() -> CapabilityDeclaration {
-        CapabilityDeclaration::Channel(ChannelRegistration {
-            id: "test-channel".to_string(),
-            label: "Test Channel".to_string(),
-            docs_path: None,
-            blurb: None,
-            system_image: None,
-            aliases: vec![],
-            order: 0,
-            plugin_id: "test-plugin".to_string(),
-        })
-    }
-
-    fn make_provider() -> CapabilityDeclaration {
-        CapabilityDeclaration::Provider(ProviderRegistration {
-            id: "test-provider".to_string(),
-            name: "Test Provider".to_string(),
-            models: vec!["model-1".to_string()],
-            plugin_id: "test-plugin".to_string(),
-        })
-    }
-
-    fn make_http_route() -> CapabilityDeclaration {
-        CapabilityDeclaration::HttpRoute(HttpRouteRegistration {
-            path: "/api/test".to_string(),
-            methods: vec!["GET".to_string()],
             handler: "handle".to_string(),
             plugin_id: "test-plugin".to_string(),
         })
@@ -273,50 +215,6 @@ mod tests {
         assert_eq!(api.registry().list_hooks().len(), 1);
     }
 
-    // ── P1 registration succeeds without permissions ─────────────────────
-
-    #[test]
-    fn test_p1_registration_no_permissions_required() {
-        let mut registry = make_registry_and_plugin();
-        let mut api = CapabilityApi::new(
-            &mut registry,
-            "test-plugin".to_string(),
-            vec![], // no permissions — P1 doesn't check
-        );
-
-        // Provider is P2 but requires no permission (core AI concept)
-        assert!(api.register_capability(make_provider()).is_ok());
-    }
-
-    // ── P2 Channel fails without Network permission ──────────────────────
-
-    #[test]
-    fn test_p2_channel_fails_without_network_permission() {
-        let mut registry = make_registry_and_plugin();
-        let mut api = CapabilityApi::new(
-            &mut registry,
-            "test-plugin".to_string(),
-            vec![], // no permissions
-        );
-
-        // Channel is P2 (Pluggable) — needs Network permission
-        let result = api.register_capability(make_channel());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_p2_channel_succeeds_with_network_permission() {
-        let mut registry = make_registry_and_plugin();
-        let mut api = CapabilityApi::new(
-            &mut registry,
-            "test-plugin".to_string(),
-            vec![PluginPermission::Network],
-        );
-
-        assert!(api.register_capability(make_channel()).is_ok());
-        assert!(api.registry().get_channel("test-channel").is_some());
-    }
-
     #[test]
     fn test_p2_service_fails_without_background_permission() {
         let mut registry = make_registry_and_plugin();
@@ -345,38 +243,6 @@ mod tests {
 
         assert!(api.register_capability(make_service()).is_ok());
         assert!(api.registry().get_service("test-service").is_some());
-    }
-
-    // ── P3 HttpRoute fails without HttpRoutes permission ─────────────────
-
-    #[test]
-    fn test_p2_http_route_fails_without_http_routes_permission() {
-        let mut registry = make_registry_and_plugin();
-        let mut api = CapabilityApi::new(
-            &mut registry,
-            "test-plugin".to_string(),
-            vec![], // no permissions
-        );
-
-        let result = api.register_capability(make_http_route());
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("http-routes"));
-    }
-
-    // ── P2 HttpRoute succeeds with HttpRoutes permission ─────────────────
-
-    #[test]
-    fn test_p2_http_route_succeeds_with_permission() {
-        let mut registry = make_registry_and_plugin();
-        let mut api = CapabilityApi::new(
-            &mut registry,
-            "test-plugin".to_string(),
-            vec![PluginPermission::HttpRoutes],
-        );
-
-        assert!(api.register_capability(make_http_route()).is_ok());
-        assert_eq!(api.registry().list_http_routes().len(), 1);
     }
 
     // ── Reload clears and re-registers ───────────────────────────────────
@@ -425,48 +291,14 @@ mod tests {
         let mut api = CapabilityApi::new(
             &mut registry,
             "test-plugin".to_string(),
-            vec![
-                PluginPermission::Background,
-                PluginPermission::HttpRoutes,
-                PluginPermission::Shell,
-                PluginPermission::GatewayRpc,
-                PluginPermission::Network,
-            ],
+            vec![PluginPermission::Background],
         );
 
         // Register one of each type
         api.register_capability(make_tool()).unwrap();
         api.register_capability(make_hook()).unwrap();
-        api.register_capability(make_channel()).unwrap();
         api.register_capability(make_service()).unwrap();
-        api.register_capability(make_http_route()).unwrap();
         api.register_capability(make_skill()).unwrap();
-
-        api.register_capability(CapabilityDeclaration::Provider(ProviderRegistration {
-            id: "test-provider".to_string(),
-            name: "Test Provider".to_string(),
-            models: vec![],
-            plugin_id: "test-plugin".to_string(),
-        }))
-        .unwrap();
-
-        api.register_capability(CapabilityDeclaration::GatewayMethod(
-            GatewayMethodRegistration {
-                method: "test.method".to_string(),
-                description: None,
-                handler: "h".to_string(),
-                plugin_id: "test-plugin".to_string(),
-            },
-        ))
-        .unwrap();
-
-        api.register_capability(CapabilityDeclaration::Cli(CliRegistration {
-            name: "test-cmd".to_string(),
-            description: "d".to_string(),
-            handler: "h".to_string(),
-            plugin_id: "test-plugin".to_string(),
-        }))
-        .unwrap();
 
         api.register_capability(CapabilityDeclaration::Command(CommandRegistration {
             name: "test-slash".to_string(),
@@ -499,11 +331,6 @@ mod tests {
         let reg = api.registry();
         assert!(reg.get_tool("my_tool").is_some());
         assert_eq!(reg.list_hooks().len(), 1);
-        assert!(reg.get_channel("test-channel").is_some());
-        assert!(reg.get_provider("test-provider").is_some());
-        assert!(reg.get_gateway_method("test.method").is_some());
-        assert_eq!(reg.list_http_routes().len(), 1);
-        assert!(reg.get_cli_command("test-cmd").is_some());
         assert!(reg.get_service("test-service").is_some());
         assert!(reg.get_command("test-slash").is_some());
         assert!(reg.get_skill("test-skill").is_some());

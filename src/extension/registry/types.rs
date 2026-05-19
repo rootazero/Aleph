@@ -1,10 +1,7 @@
 //! Plugin registration type definitions
 //!
-//! This module defines the 9 registration types used by the plugin API:
-//! - P0 Core: Tool, Hook
-//! - P1 Important: Channel, Provider, GatewayMethod
-//! - P2 Useful: HttpRoute, HttpHandler, Cli, Service
-//! - P3 Optional: Command
+//! This module defines the registration types used by the plugin API:
+//! Tool, Hook, Service, Command, Skill, Agent.
 //!
 //! Plus diagnostics support for plugin health reporting.
 
@@ -53,96 +50,8 @@ pub struct HookRegistration {
 }
 
 // ============================================================================
-// P1 Important Registration Types
-// ============================================================================
-
-/// Channel registration for messaging platform integrations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelRegistration {
-    /// Unique channel identifier (e.g., "telegram", "discord")
-    pub id: String,
-    /// Display label for the channel
-    pub label: String,
-    /// Path to documentation
-    pub docs_path: Option<String>,
-    /// Short description blurb
-    pub blurb: Option<String>,
-    /// System image/icon path
-    pub system_image: Option<String>,
-    /// Alternative names for the channel
-    pub aliases: Vec<String>,
-    /// Display order (lower = first)
-    pub order: i32,
-    /// ID of the plugin that registered this channel
-    pub plugin_id: String,
-}
-
-/// Provider registration for AI model providers
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderRegistration {
-    /// Unique provider identifier (e.g., "anthropic", "openai")
-    pub id: String,
-    /// Display name for the provider
-    pub name: String,
-    /// List of model IDs supported by this provider
-    pub models: Vec<String>,
-    /// ID of the plugin that registered this provider
-    pub plugin_id: String,
-}
-
-/// Gateway RPC method registration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayMethodRegistration {
-    /// Method name (e.g., "myplugin.do_something")
-    pub method: String,
-    /// Optional description of the method
-    pub description: Option<String>,
-    /// Handler function name within the plugin
-    pub handler: String,
-    /// ID of the plugin that registered this method
-    pub plugin_id: String,
-}
-
-// ============================================================================
 // P2 Useful Registration Types
 // ============================================================================
-
-/// HTTP route registration for REST API endpoints
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpRouteRegistration {
-    /// URL path pattern (e.g., "/api/v1/myendpoint")
-    pub path: String,
-    /// HTTP methods allowed (e.g., ["GET", "POST"])
-    pub methods: Vec<String>,
-    /// Handler function name within the plugin
-    pub handler: String,
-    /// ID of the plugin that registered this route
-    pub plugin_id: String,
-}
-
-/// HTTP handler registration for middleware/interceptors
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpHandlerRegistration {
-    /// Handler function name within the plugin
-    pub handler: String,
-    /// Execution priority (lower = earlier)
-    pub priority: i32,
-    /// ID of the plugin that registered this handler
-    pub plugin_id: String,
-}
-
-/// CLI command registration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CliRegistration {
-    /// Command name (e.g., "mycommand")
-    pub name: String,
-    /// Description shown in help text
-    pub description: String,
-    /// Handler function name within the plugin
-    pub handler: String,
-    /// ID of the plugin that registered this command
-    pub plugin_id: String,
-}
 
 /// Background service registration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -519,75 +428,6 @@ mod tests {
         };
         assert_eq!(hook.priority, 10);
         assert_eq!(hook.name, Some("Message Logger".to_string()));
-    }
-
-    #[test]
-    fn test_channel_registration() {
-        let channel = ChannelRegistration {
-            id: "telegram".to_string(),
-            label: "Telegram".to_string(),
-            docs_path: Some("/docs/telegram.md".to_string()),
-            blurb: Some("Telegram Bot integration".to_string()),
-            system_image: None,
-            aliases: vec!["tg".to_string()],
-            order: 1,
-            plugin_id: "telegram-plugin".to_string(),
-        };
-        assert_eq!(channel.aliases, vec!["tg"]);
-    }
-
-    #[test]
-    fn test_provider_registration() {
-        let provider = ProviderRegistration {
-            id: "anthropic".to_string(),
-            name: "Anthropic".to_string(),
-            models: vec!["claude-opus-4-5".to_string(), "claude-sonnet-4".to_string()],
-            plugin_id: "anthropic-plugin".to_string(),
-        };
-        assert_eq!(provider.models.len(), 2);
-    }
-
-    #[test]
-    fn test_gateway_method_registration() {
-        let method = GatewayMethodRegistration {
-            method: "myplugin.execute".to_string(),
-            description: Some("Execute a custom action".to_string()),
-            handler: "execute_action".to_string(),
-            plugin_id: "my-plugin".to_string(),
-        };
-        assert!(method.method.starts_with("myplugin."));
-    }
-
-    #[test]
-    fn test_http_route_registration() {
-        let route = HttpRouteRegistration {
-            path: "/api/v1/webhook".to_string(),
-            methods: vec!["GET".to_string(), "POST".to_string()],
-            handler: "handle_webhook".to_string(),
-            plugin_id: "webhook-plugin".to_string(),
-        };
-        assert_eq!(route.methods.len(), 2);
-    }
-
-    #[test]
-    fn test_http_handler_registration() {
-        let handler = HttpHandlerRegistration {
-            handler: "auth_middleware".to_string(),
-            priority: -100,
-            plugin_id: "auth-plugin".to_string(),
-        };
-        assert_eq!(handler.priority, -100);
-    }
-
-    #[test]
-    fn test_cli_registration() {
-        let cli = CliRegistration {
-            name: "sync".to_string(),
-            description: "Sync data with remote".to_string(),
-            handler: "handle_sync".to_string(),
-            plugin_id: "sync-plugin".to_string(),
-        };
-        assert_eq!(cli.name, "sync");
     }
 
     #[test]

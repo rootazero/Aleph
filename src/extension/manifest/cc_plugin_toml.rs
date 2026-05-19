@@ -10,8 +10,7 @@ use serde::Deserialize;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::toml_types::{
-    convert_permissions, CapabilitiesSection, ChannelSection, PermissionsSection, ProviderSection,
-    ServiceSection,
+    convert_permissions, CapabilitiesSection, PermissionsSection, ServiceSection,
 };
 use crate::extension::manifest::types::{
     AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest,
@@ -122,14 +121,6 @@ pub struct AlephExtensionsToml {
     #[serde(default)]
     pub capabilities: CapabilitiesSection,
 
-    /// Messaging channel integrations
-    #[serde(default)]
-    pub channels: Vec<ChannelSection>,
-
-    /// Custom LLM provider backends
-    #[serde(default)]
-    pub providers: Vec<ProviderSection>,
-
     /// Background services
     #[serde(default)]
     pub services: Vec<ServiceSection>,
@@ -206,8 +197,6 @@ pub fn parse_cc_plugin_toml_content(
         let aleph_ext = AlephExtensions {
             runtime: runtime_to_aleph_runtime(runtime_str),
             entry: Some(entry.clone()),
-            channels: aleph.channels,
-            providers: aleph.providers,
             services: aleph.services,
             permissions: if aleph.permissions.network
                 || aleph.permissions.env
@@ -266,10 +255,6 @@ pub fn parse_cc_plugin_toml_content(
         capabilities_v2: None,
         wasm_capabilities: None,
         wasm_resource_limits: None,
-        // P2 fields not available in CC TOML format
-        channels_v2: None,
-        providers_v2: None,
-        http_routes_v2: None,
         // CC-compat extensions
         aleph_extensions: aleph_ext,
         // Memory extension manifest — not supported in CC flat format (only in aleph.plugin.toml)
@@ -459,39 +444,6 @@ env = true
         assert!(manifest
             .permissions
             .contains(&crate::extension::manifest::types::PluginPermission::Env));
-    }
-
-    #[test]
-    fn test_parse_cc_toml_with_channels() {
-        let content = r#"
-name = "channel-plugin"
-
-[aleph]
-runtime = "mcp"
-
-[[aleph.channels]]
-id = "slack"
-label = "Slack Integration"
-handler = "handle_slack"
-
-[[aleph.providers]]
-id = "custom-llm"
-name = "Custom LLM"
-models = ["gpt-4", "claude-3"]
-"#;
-        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
-
-        assert_eq!(manifest.id, "channel-plugin");
-        assert_eq!(manifest.kind, PluginKind::Mcp);
-
-        let ext = manifest.aleph_extensions.unwrap();
-        assert_eq!(ext.channels.len(), 1);
-        assert_eq!(ext.channels[0].id, "slack");
-        assert_eq!(ext.channels[0].label, "Slack Integration");
-
-        assert_eq!(ext.providers.len(), 1);
-        assert_eq!(ext.providers[0].id, "custom-llm");
-        assert_eq!(ext.providers[0].models, vec!["gpt-4", "claude-3"]);
     }
 
     #[test]

@@ -23,10 +23,9 @@ pub use cc_plugin_toml::{
 };
 pub use toml_types::{
     convert_permissions, parse_aleph_plugin_toml, parse_aleph_plugin_toml_content,
-    parse_aleph_plugin_toml_sync, AlephPluginToml, CapabilitiesSection, ChannelSection,
-    CommandSection, FilesystemPermission, HookSection, HttpRouteSection, PermissionsSection,
-    PluginAuthorToml, PluginSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
-    ALEPH_PLUGIN_TOML,
+    parse_aleph_plugin_toml_sync, AlephPluginToml, CapabilitiesSection, CommandSection,
+    FilesystemPermission, HookSection, PermissionsSection, PluginAuthorToml, PluginSection,
+    PromptSection, ServiceSection, ToolSection, ALEPH_PLUGIN_TOML,
 };
 pub use types::{
     AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, FilesystemAccess, PluginManifest,

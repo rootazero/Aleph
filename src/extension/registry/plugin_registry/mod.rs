@@ -2,16 +2,13 @@
 //!
 //! Central storage for all plugin registrations. The PluginRegistry maintains
 //! a comprehensive registry of all plugins and their registered components:
-//! tools, hooks, channels, providers, gateway methods, HTTP routes/handlers,
-//! CLI commands, services, and in-chat commands.
+//! tools, hooks, services, in-chat commands, skills, agents.
 
 use std::collections::HashMap;
 
 use super::types::{
-    AgentRegistration, ChannelRegistration, CliRegistration, CommandRegistration,
-    GatewayMethodRegistration, HookRegistration, HttpHandlerRegistration, HttpRouteRegistration,
-    PluginDiagnostic, ProviderRegistration, ServiceRegistration, SkillRegistration,
-    ToolRegistration,
+    AgentRegistration, CommandRegistration, HookRegistration, PluginDiagnostic,
+    ServiceRegistration, SkillRegistration, ToolRegistration,
 };
 use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
 
@@ -19,7 +16,7 @@ use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
 ///
 /// The PluginRegistry provides:
 /// - Plugin lifecycle management (register, enable, disable, unregister)
-/// - Component registration (tools, hooks, channels, providers, etc.)
+/// - Component registration (tools, hooks, services, commands, skills, agents)
 /// - Query methods for accessing registered components
 /// - Automatic tracking of which plugin registered each component
 /// - Priority-ordered hook execution
@@ -33,24 +30,6 @@ pub struct PluginRegistry {
 
     /// Registered hooks (sorted by priority)
     hooks: Vec<HookRegistration>,
-
-    /// Registered channels by ID
-    channels: HashMap<String, ChannelRegistration>,
-
-    /// Registered providers by ID
-    providers: HashMap<String, ProviderRegistration>,
-
-    /// Registered gateway RPC methods by method name
-    gateway_methods: HashMap<String, GatewayMethodRegistration>,
-
-    /// Registered HTTP routes
-    http_routes: Vec<HttpRouteRegistration>,
-
-    /// Registered HTTP handlers/middleware (sorted by priority)
-    http_handlers: Vec<HttpHandlerRegistration>,
-
-    /// Registered CLI commands by name
-    cli_commands: HashMap<String, CliRegistration>,
 
     /// Registered background services by ID
     services: HashMap<String, ServiceRegistration>,
@@ -81,12 +60,6 @@ impl PluginRegistry {
         self.plugins.clear();
         self.tools.clear();
         self.hooks.clear();
-        self.channels.clear();
-        self.providers.clear();
-        self.gateway_methods.clear();
-        self.http_routes.clear();
-        self.http_handlers.clear();
-        self.cli_commands.clear();
         self.services.clear();
         self.commands.clear();
         self.skills.clear();
@@ -243,152 +216,6 @@ impl PluginRegistry {
     }
 
     // =========================================================================
-    // Channel Registration
-    // =========================================================================
-
-    /// Register a channel.
-    pub fn register_channel(&mut self, channel: ChannelRegistration) {
-        let plugin_id = channel.plugin_id.clone();
-        let channel_id = channel.id.clone();
-
-        self.channels.insert(channel_id.clone(), channel);
-
-        // Update plugin record
-        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
-            if !plugin.channel_ids.contains(&channel_id) {
-                plugin.channel_ids.push(channel_id);
-            }
-        }
-    }
-
-    /// Get a channel by ID.
-    pub fn get_channel(&self, id: &str) -> Option<&ChannelRegistration> {
-        self.channels.get(id)
-    }
-
-    /// List all registered channels.
-    pub fn list_channels(&self) -> Vec<&ChannelRegistration> {
-        let mut channels: Vec<_> = self.channels.values().collect();
-        // Sort by display order
-        channels.sort_by_key(|c| c.order);
-        channels
-    }
-
-    // =========================================================================
-    // Provider Registration
-    // =========================================================================
-
-    /// Register a provider.
-    pub fn register_provider(&mut self, provider: ProviderRegistration) {
-        let plugin_id = provider.plugin_id.clone();
-        let provider_id = provider.id.clone();
-
-        self.providers.insert(provider_id.clone(), provider);
-
-        // Update plugin record
-        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
-            if !plugin.provider_ids.contains(&provider_id) {
-                plugin.provider_ids.push(provider_id);
-            }
-        }
-    }
-
-    /// Get a provider by ID.
-    pub fn get_provider(&self, id: &str) -> Option<&ProviderRegistration> {
-        self.providers.get(id)
-    }
-
-    /// List all registered providers.
-    pub fn list_providers(&self) -> Vec<&ProviderRegistration> {
-        self.providers.values().collect()
-    }
-
-    // =========================================================================
-    // Gateway Method Registration
-    // =========================================================================
-
-    /// Register a gateway RPC method.
-    pub fn register_gateway_method(&mut self, method: GatewayMethodRegistration) {
-        let plugin_id = method.plugin_id.clone();
-        let method_name = method.method.clone();
-
-        self.gateway_methods.insert(method_name.clone(), method);
-
-        // Update plugin record
-        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
-            if !plugin.gateway_methods.contains(&method_name) {
-                plugin.gateway_methods.push(method_name);
-            }
-        }
-    }
-
-    /// Get a gateway method by name.
-    pub fn get_gateway_method(&self, method: &str) -> Option<&GatewayMethodRegistration> {
-        self.gateway_methods.get(method)
-    }
-
-    /// List all registered gateway methods.
-    pub fn list_gateway_methods(&self) -> Vec<&GatewayMethodRegistration> {
-        self.gateway_methods.values().collect()
-    }
-
-    // =========================================================================
-    // HTTP Route Registration
-    // =========================================================================
-
-    /// Register an HTTP route.
-    pub fn register_http_route(&mut self, route: HttpRouteRegistration) {
-        self.http_routes.push(route);
-    }
-
-    /// List all registered HTTP routes.
-    pub fn list_http_routes(&self) -> Vec<&HttpRouteRegistration> {
-        self.http_routes.iter().collect()
-    }
-
-    /// Find HTTP routes matching a path pattern.
-    pub fn find_http_routes(&self, path: &str) -> Vec<&HttpRouteRegistration> {
-        self.http_routes.iter().filter(|r| r.path == path).collect()
-    }
-
-    // =========================================================================
-    // HTTP Handler Registration
-    // =========================================================================
-
-    /// Register an HTTP handler/middleware.
-    ///
-    /// Handlers are maintained in priority order (lower priority = earlier execution).
-    pub fn register_http_handler(&mut self, handler: HttpHandlerRegistration) {
-        self.http_handlers.push(handler);
-        // Sort by priority
-        self.http_handlers.sort_by_key(|h| h.priority);
-    }
-
-    /// List all registered HTTP handlers in priority order.
-    pub fn list_http_handlers(&self) -> Vec<&HttpHandlerRegistration> {
-        self.http_handlers.iter().collect()
-    }
-
-    // =========================================================================
-    // CLI Command Registration
-    // =========================================================================
-
-    /// Register a CLI command.
-    pub fn register_cli_command(&mut self, cli: CliRegistration) {
-        self.cli_commands.insert(cli.name.clone(), cli);
-    }
-
-    /// Get a CLI command by name.
-    pub fn get_cli_command(&self, name: &str) -> Option<&CliRegistration> {
-        self.cli_commands.get(name)
-    }
-
-    /// List all registered CLI commands.
-    pub fn list_cli_commands(&self) -> Vec<&CliRegistration> {
-        self.cli_commands.values().collect()
-    }
-
-    // =========================================================================
     // Service Registration
     // =========================================================================
 
@@ -536,14 +363,10 @@ impl PluginRegistry {
     /// - The plugin record
     /// - All tools registered by this plugin
     /// - All hooks registered by this plugin
-    /// - All channels registered by this plugin
-    /// - All providers registered by this plugin
-    /// - All gateway methods registered by this plugin
-    /// - All HTTP routes registered by this plugin
-    /// - All HTTP handlers registered by this plugin
-    /// - All CLI commands registered by this plugin
     /// - All services registered by this plugin
     /// - All in-chat commands registered by this plugin
+    /// - All skills registered by this plugin
+    /// - All agents registered by this plugin
     /// - All diagnostics from this plugin
     pub fn unregister_plugin(&mut self, plugin_id: &str) {
         // Remove the plugin record
@@ -554,24 +377,6 @@ impl PluginRegistry {
 
         // Remove all hooks from this plugin
         self.hooks.retain(|h| h.plugin_id != plugin_id);
-
-        // Remove all channels from this plugin
-        self.channels.retain(|_, c| c.plugin_id != plugin_id);
-
-        // Remove all providers from this plugin
-        self.providers.retain(|_, p| p.plugin_id != plugin_id);
-
-        // Remove all gateway methods from this plugin
-        self.gateway_methods.retain(|_, m| m.plugin_id != plugin_id);
-
-        // Remove all HTTP routes from this plugin
-        self.http_routes.retain(|r| r.plugin_id != plugin_id);
-
-        // Remove all HTTP handlers from this plugin
-        self.http_handlers.retain(|h| h.plugin_id != plugin_id);
-
-        // Remove all CLI commands from this plugin
-        self.cli_commands.retain(|_, c| c.plugin_id != plugin_id);
 
         // Remove all services from this plugin
         self.services.retain(|_, s| s.plugin_id != plugin_id);
@@ -601,12 +406,6 @@ impl PluginRegistry {
             active_plugins: self.list_active_plugins().len(),
             tools: self.tools.len(),
             hooks: self.hooks.len(),
-            channels: self.channels.len(),
-            providers: self.providers.len(),
-            gateway_methods: self.gateway_methods.len(),
-            http_routes: self.http_routes.len(),
-            http_handlers: self.http_handlers.len(),
-            cli_commands: self.cli_commands.len(),
             services: self.services.len(),
             commands: self.commands.len(),
             skills: self.skills.len(),
@@ -623,12 +422,6 @@ pub struct RegistryStats {
     pub active_plugins: usize,
     pub tools: usize,
     pub hooks: usize,
-    pub channels: usize,
-    pub providers: usize,
-    pub gateway_methods: usize,
-    pub http_routes: usize,
-    pub http_handlers: usize,
-    pub cli_commands: usize,
     pub services: usize,
     pub commands: usize,
     pub skills: usize,

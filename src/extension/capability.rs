@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registry::{
-    AgentRegistration, ChannelRegistration, CliRegistration, CommandRegistration,
-    GatewayMethodRegistration, HookRegistration, HttpRouteRegistration, ProviderRegistration,
-    ServiceRegistration, SkillRegistration, ToolRegistration,
+    AgentRegistration, CommandRegistration, HookRegistration, ServiceRegistration,
+    SkillRegistration, ToolRegistration,
 };
 use crate::extension::types::{McpServerConfig, PluginOrigin};
 
@@ -22,16 +21,6 @@ use crate::extension::types::{McpServerConfig, PluginOrigin};
 pub type ToolDeclaration = ToolRegistration;
 /// A hook declaration is a HookRegistration
 pub type HookDeclaration = HookRegistration;
-/// A channel declaration is a ChannelRegistration
-pub type ChannelDeclaration = ChannelRegistration;
-/// A provider declaration is a ProviderRegistration
-pub type ProviderDeclaration = ProviderRegistration;
-/// A gateway method declaration is a GatewayMethodRegistration
-pub type GatewayMethodDeclaration = GatewayMethodRegistration;
-/// An HTTP route declaration is a HttpRouteRegistration
-pub type HttpRouteDeclaration = HttpRouteRegistration;
-/// A CLI command declaration is a CliRegistration
-pub type CliDeclaration = CliRegistration;
 /// A service declaration is a ServiceRegistration
 pub type ServiceDeclaration = ServiceRegistration;
 /// An in-chat command declaration is a CommandRegistration
@@ -59,16 +48,6 @@ pub enum CapabilityDeclaration {
     Tool(ToolDeclaration),
     /// A hook that intercepts system events
     Hook(HookDeclaration),
-    /// A messaging channel integration
-    Channel(ChannelDeclaration),
-    /// An AI model provider backend
-    Provider(ProviderDeclaration),
-    /// A gateway RPC method
-    GatewayMethod(GatewayMethodDeclaration),
-    /// An HTTP REST endpoint
-    HttpRoute(HttpRouteDeclaration),
-    /// A CLI command
-    Cli(CliDeclaration),
     /// A background service
     Service(ServiceDeclaration),
     /// An in-chat command (e.g., /mycommand)
@@ -89,12 +68,8 @@ impl CapabilityDeclaration {
             Self::Tool(_) | Self::Hook(_) | Self::Skill(_) => Tier::Core,
             // P1: Always allowed, no permission check
             Self::Command(_) | Self::Agent(_) => Tier::Important,
-            // P2: Some are permission-gated (Channel needs Network, Service needs Background)
-            Self::Provider(_) | Self::Channel(_) | Self::Service(_) | Self::McpServer(_) => {
-                Tier::Pluggable
-            }
-            // P3: All permission-gated + warning logged
-            Self::GatewayMethod(_) | Self::HttpRoute(_) | Self::Cli(_) => Tier::GatewayExtension,
+            // P2: Some are permission-gated (Service needs Background)
+            Self::Service(_) | Self::McpServer(_) => Tier::Pluggable,
         }
     }
 
@@ -103,11 +78,6 @@ impl CapabilityDeclaration {
         match self {
             Self::Tool(_) => "tool",
             Self::Hook(_) => "hook",
-            Self::Channel(_) => "channel",
-            Self::Provider(_) => "provider",
-            Self::GatewayMethod(_) => "gateway_method",
-            Self::HttpRoute(_) => "http_route",
-            Self::Cli(_) => "cli",
             Self::Service(_) => "service",
             Self::Command(_) => "command",
             Self::Skill(_) => "skill",
@@ -124,14 +94,8 @@ impl CapabilityDeclaration {
                 None
             }
             // P2: some need permission
-            Self::Provider(_) => None, // providers are core to AI assistant
-            Self::Channel(_) => Some(PluginPermission::Network),
             Self::Service(_) => Some(PluginPermission::Background),
             Self::McpServer(_) => None, // MCP is the standard extension mechanism
-            // P3: all need permission
-            Self::GatewayMethod(_) => Some(PluginPermission::GatewayRpc),
-            Self::HttpRoute(_) => Some(PluginPermission::HttpRoutes),
-            Self::Cli(_) => Some(PluginPermission::Shell),
         }
     }
 }
@@ -146,14 +110,12 @@ impl CapabilityDeclaration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
-    /// Core capabilities (Tool, Hook) — always registered first
+    /// Core capabilities (Tool, Hook, Skill) — always registered first
     Core,
-    /// Important capabilities (Channel, Provider, GatewayMethod)
+    /// Important capabilities (Command, Agent)
     Important,
-    /// Pluggable capabilities (HttpRoute, Cli, Service, Command, Skill, Agent)
+    /// Pluggable capabilities (Service, McpServer)
     Pluggable,
-    /// Gateway extensions (McpServer) — registered last
-    GatewayExtension,
 }
 
 // ============================================================================
@@ -295,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn test_all_12_variants_have_kind_names() {
+    fn test_all_7_variants_have_kind_names() {
         use crate::extension::types::HookEvent;
 
         let capabilities: Vec<CapabilityDeclaration> = vec![
@@ -306,40 +268,6 @@ mod tests {
                 handler: "h".to_string(),
                 name: None,
                 description: None,
-                plugin_id: "p".to_string(),
-            }),
-            CapabilityDeclaration::Channel(ChannelRegistration {
-                id: "ch".to_string(),
-                label: "Ch".to_string(),
-                docs_path: None,
-                blurb: None,
-                system_image: None,
-                aliases: vec![],
-                order: 0,
-                plugin_id: "p".to_string(),
-            }),
-            CapabilityDeclaration::Provider(ProviderRegistration {
-                id: "pr".to_string(),
-                name: "Pr".to_string(),
-                models: vec![],
-                plugin_id: "p".to_string(),
-            }),
-            CapabilityDeclaration::GatewayMethod(GatewayMethodRegistration {
-                method: "m".to_string(),
-                description: None,
-                handler: "h".to_string(),
-                plugin_id: "p".to_string(),
-            }),
-            CapabilityDeclaration::HttpRoute(HttpRouteRegistration {
-                path: "/".to_string(),
-                methods: vec![],
-                handler: "h".to_string(),
-                plugin_id: "p".to_string(),
-            }),
-            CapabilityDeclaration::Cli(CliRegistration {
-                name: "c".to_string(),
-                description: "d".to_string(),
-                handler: "h".to_string(),
                 plugin_id: "p".to_string(),
             }),
             CapabilityDeclaration::Service(ServiceRegistration {
@@ -364,18 +292,13 @@ mod tests {
             }),
         ];
 
-        assert_eq!(capabilities.len(), 12);
+        assert_eq!(capabilities.len(), 7);
         let kind_names: Vec<&str> = capabilities.iter().map(|c| c.kind_name()).collect();
         assert_eq!(
             kind_names,
             vec![
                 "tool",
                 "hook",
-                "channel",
-                "provider",
-                "gateway_method",
-                "http_route",
-                "cli",
                 "service",
                 "command",
                 "skill",
