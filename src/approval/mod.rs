@@ -43,6 +43,7 @@
 //! ```
 
 pub mod adapters;
+pub mod callback_sink;
 mod config;
 mod policy;
 mod session_route;

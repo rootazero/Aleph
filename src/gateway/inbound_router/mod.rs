@@ -4,6 +4,7 @@
 //! messages to the appropriate Agent/Session.
 
 mod agent_resolver;
+pub mod approval_callback;
 mod command_handler;
 mod dedup;
 mod executor;
