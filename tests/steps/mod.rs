@@ -5,7 +5,7 @@
 // TODO: removed — module deleted: mod agent_loop_steps;
 mod common;
 mod config_steps;
-mod daemon_steps;
+// TODO: removed — module deleted: mod daemon_steps;
 mod dispatcher_steps;
 mod e2e_steps;
 mod extension_steps;

@@ -253,7 +253,6 @@ pattern.
 | **components** | `src/components/` | Shared components |
 | **compressor** | `src/compressor/` | Context compression |
 | **core** | `src/core/` | Core types and primitives |
-| **daemon** | `src/daemon/` | Background daemon |
 | **discovery** | `src/discovery/` | Service discovery |
 | **event** | `src/event/` | Event system |
 | **generation** | `src/generation/` | Media generation |

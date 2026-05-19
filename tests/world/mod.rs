@@ -6,7 +6,7 @@ use tempfile::TempDir;
 
 // TODO: removed — module deleted: mod agent_loop_ctx;
 mod config_ctx;
-mod daemon_ctx;
+// TODO: removed — module deleted: mod daemon_ctx;
 mod dispatcher_ctx;
 mod e2e_ctx;
 mod extension_ctx;
@@ -25,7 +25,7 @@ mod tools_ctx;
 
 // TODO: removed — module deleted: pub use agent_loop_ctx::{AgentLoopContext, MockDecision};
 pub use config_ctx::ConfigContext;
-pub use daemon_ctx::DaemonContext;
+// TODO: removed — module deleted: pub use daemon_ctx::DaemonContext;
 pub use dispatcher_ctx::DispatcherContext;
 pub use e2e_ctx::{BatchLoadResult, E2eContext};
 pub use extension_ctx::ExtensionContext;
@@ -65,7 +65,7 @@ pub struct AlephWorld {
     // ═══ Module Contexts ═══
     pub scripting: Option<ScriptingContext>,
     pub config: Option<ConfigContext>,
-    pub daemon: Option<DaemonContext>,
+    // TODO: removed — module deleted: pub daemon: Option<DaemonContext>,
     pub dispatcher: Option<DispatcherContext>,
     pub e2e: Option<E2eContext>,
     pub gateway: Option<GatewayContext>,

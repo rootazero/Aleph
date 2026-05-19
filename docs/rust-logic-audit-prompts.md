@@ -112,12 +112,6 @@ This document contains all rust-logic-audit review prompts for each module in `s
 /rust-logic-audit src/core --strict
 ```
 
-## daemon
-
-```
-/rust-logic-audit src/daemon --strict
-```
-
 ## discovery
 
 ```

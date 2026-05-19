@@ -2,11 +2,7 @@
 //! NOTE: Evolution steps removed — skill_evolution module deleted
 
 use crate::world::{AlephWorld, E2eContext};
-use alephcore::daemon::dispatcher::policy::{ActionType, PolicyEngine};
-use alephcore::daemon::events::{DerivedEvent, PressureLevel, PressureType};
-use alephcore::daemon::worldmodel::state::{
-    ActivityType, EnhancedContext, MemoryPressure, SystemLoad,
-};
+// TODO: removed — module deleted: daemon dispatcher/events/worldmodel imports
 use chrono::Utc;
 use cucumber::{given, then, when};
 
