@@ -211,10 +211,8 @@ rhai = { version = "1.17", features = ["sync", "no_float", "only_i64"] }
 httpdate = "1.0"
 dashmap = "5.5"
 reqwest-eventsource = "0.6"
-plist = "1.7"
 sysinfo = "0.33"
 semver = "1"
-battery = "0.7"
 
 # Certificate parsing
 pem = "3.0"

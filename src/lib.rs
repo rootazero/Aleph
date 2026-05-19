@@ -87,7 +87,6 @@ pub mod utils;
 pub mod verification;
 pub mod vision;
 
-pub mod daemon;
 pub mod resilience;
 pub mod secrets;
 pub mod security;
@@ -208,32 +207,6 @@ pub use crate::mcp::{
 pub use crate::exec::{
     analyze_shell_command, decide_exec_approval, match_allowlist, ApprovalDecision,
     ApprovalRequest, ExecApprovalManager, ExecContext, PendingApproval, SecurityKernel,
-};
-
-// =============================================================================
-// Supervisor Exports
-// =============================================================================
-// Daemon Subsystem Exports (Phase 3+4: Proactive AI)
-// =============================================================================
-
-pub use crate::daemon::{DaemonCli, DaemonCommand, DaemonConfig, DaemonEventBus, DaemonStatus};
-
-// WorldModel (Phase 3)
-pub use crate::daemon::worldmodel::{
-    ActivityType, CoreState, EnhancedContext, WorldModel, WorldModelConfig,
-};
-
-// Dispatcher (Phase 4) - Note: Using ProactiveDispatcher* to avoid conflict with tool system
-pub use crate::daemon::dispatcher::{
-    ActionExecutor, ActionType, Dispatcher as ProactiveDispatcher,
-    DispatcherConfig as ProactiveDispatcherConfig, DispatcherMode, NotificationPriority, Policy,
-    PolicyEngine, ProposedAction, RiskLevel,
-};
-
-// Events
-pub use crate::daemon::events::{
-    DaemonEvent, DerivedEvent, FsEventType, PressureLevel, PressureType, ProcessEventType,
-    RawEvent, SystemEvent, SystemStateType, TimeTrigger,
 };
 
 // =============================================================================
