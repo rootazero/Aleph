@@ -114,6 +114,9 @@ pub struct SubagentTool {
     trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
     /// A2 — shared concurrency cap; one per tool instance (= per agent run).
     subagent_semaphore: Arc<tokio::sync::Semaphore>,
+    /// A3 — parent run's cancellation token. Each spawn path derives a
+    /// `child_token()` so a cancelled parent stops its subagents.
+    parent_cancel: Option<CancellationToken>,
 }
 
 impl SubagentTool {
@@ -152,6 +155,7 @@ impl SubagentTool {
             subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(
                 DEFAULT_MAX_CONCURRENT_SUBAGENTS,
             )),
+            parent_cancel: None,
         }
     }
 
@@ -210,6 +214,23 @@ impl SubagentTool {
         self
     }
 
+    /// A3 — wire the parent run's cancellation token so spawned subagents
+    /// stop when the parent is cancelled.
+    pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
+        self.parent_cancel = Some(token);
+        self
+    }
+
+    /// A3 — a fresh child token derived from the parent run's token (cancelled
+    /// when the parent is). Falls back to a standalone token for tests / direct
+    /// callers with no parent token wired.
+    fn cancel_for_child(&self) -> CancellationToken {
+        self.parent_cancel
+            .as_ref()
+            .map(|t| t.child_token())
+            .unwrap_or_default()
+    }
+
     fn spawn_background(
         &self,
         agent_def: AgentDef,
@@ -220,7 +241,7 @@ impl SubagentTool {
         child_chain: crate::harness::chain_context::ChainContext,
     ) -> String {
         let request_id = uuid::Uuid::new_v4().to_string();
-        let cancel_token = CancellationToken::new();
+        let cancel_token = self.cancel_for_child();
 
         self.background_tracker.register(
             request_id.clone(),
@@ -1042,6 +1063,62 @@ mod tests {
             ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
             _ => panic!("expected ToolResult::Success"),
         }
+    }
+
+    /// Provider whose `process` never resolves. Only the harness's cancellation
+    /// race (fed by the request's CancellationToken) can end the turn — so this
+    /// proves the *parent-derived* token actually reaches the child harness.
+    struct PendingProvider;
+    impl AiProvider for PendingProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                std::future::pending::<()>().await;
+                unreachable!()
+            })
+        }
+        fn name(&self) -> &str {
+            "pending"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    #[tokio::test]
+    async fn foreground_subagent_cancels_on_parent_token() {
+        let parent = CancellationToken::new();
+        let provider: Arc<dyn AiProvider> = Arc::new(PendingProvider);
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tool = SubagentTool::new(
+            provider,
+            chain,
+            make_registry(),
+            make_tracker(),
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        )
+        .with_cancel_token(parent.clone());
+
+        let handle = tokio::spawn(async move {
+            tool.execute(serde_json::json!({ "task": "hang", "timeout_secs": 30 }))
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        parent.cancel();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+            .await
+            .expect("foreground subagent did not honor parent cancel within 3s")
+            .expect("task join");
+        assert!(
+            matches!(result, ToolResult::Error { .. }),
+            "cancelled subagent must surface an error"
+        );
     }
 
     /// Async batch path: explicit run_in_background=true returns request_ids

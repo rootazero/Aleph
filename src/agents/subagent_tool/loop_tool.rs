@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use futures::FutureExt;
 use serde_json::{json, Value};
 use std::panic::AssertUnwindSafe;
-use tokio_util::sync::CancellationToken;
 
 use crate::agents::runtime::AgentRuntimeConfig;
 use crate::agents::AgentDef;
@@ -396,7 +395,7 @@ impl LoopTool for SubagentTool {
                     };
 
                     let runtime =
-                        self.build_runtime(child_chain.clone(), CancellationToken::new());
+                        self.build_runtime(child_chain.clone(), self.cancel_for_child());
                     handles.push(tokio::spawn(async move {
                         let outcome = AssertUnwindSafe(runtime.run(runtime_config))
                             .catch_unwind()
@@ -548,7 +547,7 @@ impl LoopTool for SubagentTool {
                 timeout_secs: args.timeout_secs,
             };
 
-            let runtime = self.build_runtime(child_chain, CancellationToken::new());
+            let runtime = self.build_runtime(child_chain, self.cancel_for_child());
 
             match runtime.run(runtime_config).await {
                 Ok(result) => {

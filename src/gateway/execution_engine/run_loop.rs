@@ -337,7 +337,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     sub_sandbox,
                 )
                 .with_parent_agent_id(request.session_key.agent_id().to_string())
-                .with_parent_session_id(request.session_key.to_key_string());
+                .with_parent_session_id(request.session_key.to_key_string())
+                .with_cancel_token(cancel_token.clone());
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
                 }
