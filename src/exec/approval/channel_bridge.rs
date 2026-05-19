@@ -503,18 +503,17 @@ impl ChannelApprovalBridge {
                 Some(false)
             }
             Err(_) => {
-                tracing::warn!("deliver_approval timed out after {}s", DELIVERY_TIMEOUT_SECS);
+                tracing::warn!(
+                    "deliver_approval timed out after {}s",
+                    DELIVERY_TIMEOUT_SECS
+                );
                 Some(false)
             }
         }
     }
 
     /// 审批超时后向通道发一条友好提示（best-effort）。
-    async fn send_timeout_notice(
-        &self,
-        channel_id: &ChannelId,
-        conversation_id: &ConversationId,
-    ) {
+    async fn send_timeout_notice(&self, channel_id: &ChannelId, conversation_id: &ConversationId) {
         if let Some(channel) = self.registry.get(channel_id).await {
             let ch = channel.read().await;
             let msg = OutboundMessage::text(

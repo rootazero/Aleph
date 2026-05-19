@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alephcore::approval::callback_sink::ManagerCallbackSink;
-use alephcore::exec::{ApprovalDecisionType, ApprovalRequest, CommandAnalysis, ExecApprovalManager};
+use alephcore::exec::{
+    ApprovalDecisionType, ApprovalRequest, CommandAnalysis, ExecApprovalManager,
+};
 use alephcore::gateway::inbound_router::approval_callback::ApprovalCallbackSink;
 
 fn request(id: &str) -> ApprovalRequest {
@@ -65,7 +67,7 @@ async fn deny_callback_wakes_blocked_waiter() {
 async fn timeout_when_no_callback_arrives() {
     let manager = Arc::new(ExecApprovalManager::new());
     let record = manager.create(&request("rec-timeout"), 100); // 100ms 超时
-    // 不发回调 → wait_for_decision 应在超时后返回 None。
+                                                               // 不发回调 → wait_for_decision 应在超时后返回 None。
     assert_eq!(manager.wait_for_decision(record).await, None);
 }
 

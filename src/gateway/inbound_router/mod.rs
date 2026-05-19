@@ -113,8 +113,7 @@ pub struct InboundMessageRouter {
     /// Message coalescer for merging rapid-fire inbound messages
     coalescer: Option<super::coalescer::MessageCoalescer>,
     /// 审批按钮回调汇 —— 注入则拦截 `cb_` 回调，否则按普通消息处理。
-    pub(super) approval_callback_sink:
-        Option<Arc<dyn approval_callback::ApprovalCallbackSink>>,
+    pub(super) approval_callback_sink: Option<Arc<dyn approval_callback::ApprovalCallbackSink>>,
 }
 
 impl InboundMessageRouter {
