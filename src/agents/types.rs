@@ -135,6 +135,10 @@ pub struct AgentDef {
     /// schema back-compat; legacy agent files have no `mcp_servers` key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<McpServerSpec>,
+    /// B1 — subagent worktree isolation. `#[serde(default)]` for schema
+    /// back-compat; `None` (default) keeps the shared-cwd behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<IsolationMode>,
 }
 
 impl AgentDef {
@@ -155,6 +159,7 @@ impl AgentDef {
             context_mode: ContextMode::default(),
             source: AgentSource::default(),
             mcp_servers: vec![],
+            isolation: None,
         }
     }
 
@@ -230,6 +235,12 @@ impl AgentDef {
     /// Set per-agent MCP server scope (P3 Stage I).
     pub fn with_mcp_servers(mut self, specs: Vec<McpServerSpec>) -> Self {
         self.mcp_servers = specs;
+        self
+    }
+
+    /// B1 — set subagent worktree isolation.
+    pub fn with_isolation(mut self, mode: IsolationMode) -> Self {
+        self.isolation = Some(mode);
         self
     }
 

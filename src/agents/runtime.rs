@@ -377,7 +377,7 @@ impl AgentRuntime {
             model: config.model.as_deref(),
             timeout_secs: config.timeout_secs,
             cancel: self.cancel_token.clone(),
-            isolation: None,
+            isolation: config.agent_def.isolation.clone(),
         };
         spawn(&base, req).await
     }
