@@ -119,31 +119,6 @@ pub struct ReadSkillTool {
 }
 
 impl ReadSkillTool {
-    /// Tool identifier
-    pub const NAME: &'static str = "skill_read";
-
-    /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str = r#"Read the instructions of an installed skill.
-
-Use this tool when you need to execute a task that matches a skill's purpose.
-The skill instructions tell you exactly how to approach the task.
-
-After reading a skill, you MUST follow its instructions exactly.
-Skill instructions are task directives, not suggestions.
-
-Skills are discovered from multiple locations:
-- Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)
-- Global level: ~/.aleph/skills, ~/.claude/skills
-
-Examples:
-- User asks to "refine this text" → skill.read(skill_id="refine-text")
-- User asks to "translate to Chinese" → skill.read(skill_id="translate")
-- User asks to "summarize this" → skill.read(skill_id="summarize")
-
-You can also read additional resources within a skill by specifying file_name:
-- skill.read(skill_id="code-review", file_name="CHECKLIST.md")
-"#;
-
     /// Create a new ReadSkillTool with a single directory (backwards compatible)
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
@@ -415,7 +390,19 @@ Use this tool when you need to execute a task that matches a skill's purpose.
 The skill instructions tell you exactly how to approach the task.
 
 After reading a skill, you MUST follow its instructions exactly.
-Skill instructions are task directives, not suggestions."#;
+Skill instructions are task directives, not suggestions.
+
+Skills are discovered from multiple locations:
+- Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)
+- Global level: ~/.aleph/skills, ~/.claude/skills
+
+Examples:
+- User asks to "refine this text" → skill.read(skill_id="refine-text")
+- User asks to "translate to Chinese" → skill.read(skill_id="translate")
+- User asks to "summarize this" → skill.read(skill_id="summarize")
+
+You can also read additional resources within a skill by specifying file_name:
+- skill.read(skill_id="code-review", file_name="CHECKLIST.md")"#;
 
     type Args = ReadSkillArgs;
     type Output = ReadSkillOutput;
@@ -491,22 +478,6 @@ pub struct ListSkillsTool {
 }
 
 impl ListSkillsTool {
-    /// Tool identifier
-    pub const NAME: &'static str = "skill_list";
-
-    /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str = r#"List all available skills installed on the system.
-
-Use this tool to discover what skills are available before using skill.read.
-Each skill has an ID, name, description, and optional trigger keywords.
-
-Skills are discovered from multiple locations:
-- Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)
-- Global level: ~/.aleph/skills, ~/.claude/skills
-
-After finding a relevant skill, use skill.read(skill_id) to load its full instructions.
-"#;
-
     /// Create a new ListSkillsTool with a single directory (backwards compatible)
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
@@ -706,6 +677,10 @@ impl AlephTool for ListSkillsTool {
 
 Use this tool to discover what skills are available before using skill.read.
 Each skill has an ID, name, description, and optional trigger keywords.
+
+Skills are discovered from multiple locations:
+- Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)
+- Global level: ~/.aleph/skills, ~/.claude/skills
 
 After finding a relevant skill, use skill.read(skill_id) to load its full instructions."#;
 
