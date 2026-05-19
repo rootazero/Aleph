@@ -81,6 +81,32 @@ pub struct DeltaCollector {
     stop_reason: StopReason,
 }
 
+/// Merge a newly-arrived [`TokenUsage`] into the accumulated one.
+///
+/// A provider may stream usage across multiple events, and each event only
+/// populates the fields it knows about (Anthropic: `input_tokens` + cache
+/// counts first, `output_tokens` last). A plain overwrite would drop the
+/// earlier figures, so each field keeps the incoming value when it is
+/// non-zero / `Some` and otherwise retains the accumulated one.
+fn merge_usage(prev: TokenUsage, next: TokenUsage) -> TokenUsage {
+    TokenUsage {
+        input_tokens: if next.input_tokens != 0 {
+            next.input_tokens
+        } else {
+            prev.input_tokens
+        },
+        output_tokens: if next.output_tokens != 0 {
+            next.output_tokens
+        } else {
+            prev.output_tokens
+        },
+        cache_read_tokens: next.cache_read_tokens.or(prev.cache_read_tokens),
+        cache_creation_tokens: next.cache_creation_tokens.or(prev.cache_creation_tokens),
+        thinking_tokens: next.thinking_tokens.or(prev.thinking_tokens),
+        cost: next.cost.or(prev.cost),
+    }
+}
+
 impl DeltaCollector {
     /// Create a new empty collector
     pub fn new() -> Self {
@@ -107,7 +133,16 @@ impl DeltaCollector {
             ProviderDelta::ToolCallEnd { .. } => {
                 // No state change needed; presence in tool_calls list is sufficient
             }
-            ProviderDelta::Usage(u) => self.usage = Some(u),
+            ProviderDelta::Usage(u) => {
+                // Usage may arrive in several events: Anthropic streams
+                // `input_tokens` + cache counts in `message_start` and the
+                // final `output_tokens` in `message_delta`. Merge rather than
+                // overwrite so the earlier figures are not lost.
+                self.usage = Some(match self.usage.take() {
+                    Some(prev) => merge_usage(prev, u),
+                    None => u,
+                });
+            }
             ProviderDelta::Done(reason) => self.stop_reason = reason,
             ProviderDelta::Error(_) => {
                 // Error deltas are observed by DeltaSink consumers; collector ignores them
@@ -514,6 +549,53 @@ mod tests {
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 20);
         assert_eq!(usage.cache_read_tokens, Some(5));
+    }
+
+    #[test]
+    fn usage_merges_message_start_and_message_delta() {
+        // Anthropic streams input_tokens + cache counts in message_start, then
+        // the final output_tokens in message_delta. A plain overwrite would
+        // drop input_tokens and the cache counts — the collector must merge.
+        let mut c = DeltaCollector::new();
+        c.push(ProviderDelta::Usage(TokenUsage {
+            input_tokens: 150,
+            output_tokens: 0,
+            cache_read_tokens: Some(80),
+            cache_creation_tokens: Some(30),
+            thinking_tokens: None,
+            cost: None,
+        }));
+        c.push(ProviderDelta::Usage(TokenUsage {
+            input_tokens: 0,
+            output_tokens: 42,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        }));
+        c.push(ProviderDelta::Done(StopReason::EndTurn));
+
+        let usage = c.finish().usage.expect("usage present");
+        assert_eq!(usage.input_tokens, 150, "input_tokens from message_start kept");
+        assert_eq!(usage.output_tokens, 42, "output_tokens from message_delta applied");
+        assert_eq!(usage.cache_read_tokens, Some(80), "cache_read kept");
+        assert_eq!(usage.cache_creation_tokens, Some(30), "cache_creation kept");
+    }
+
+    #[test]
+    fn usage_single_event_is_unchanged() {
+        let mut c = DeltaCollector::new();
+        c.push(ProviderDelta::Usage(TokenUsage {
+            input_tokens: 12,
+            output_tokens: 34,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        }));
+        let usage = c.finish().usage.expect("usage present");
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.output_tokens, 34);
     }
 
     #[test]

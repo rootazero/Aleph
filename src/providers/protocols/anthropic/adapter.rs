@@ -59,22 +59,28 @@ fn effective_cache_retention(config: &ProviderConfig, endpoint: &str) -> CacheRe
     }
 }
 
+/// Maximum prompt-cache breakpoints Anthropic accepts in a single request.
+const MAX_CACHE_BREAKPOINTS: usize = 4;
+
 /// Inject `cache_control` into the last text block of the `system` array.
 ///
 /// Handles three input shapes for `payload["system"]`:
-/// - Missing / null / empty array → no-op.
+/// - Missing / null / empty array → no-op, returns `false`.
 /// - String → normalized to `[{"type":"text","text":<s>,"cache_control":cc}]`.
 /// - Array → finds the last element with `type == "text"` and sets its
 ///   `cache_control` (overwriting any prior value). If no text element
 ///   exists, no-op.
+///
+/// Returns `true` when a breakpoint was placed, so the caller can subtract it
+/// from the [`MAX_CACHE_BREAKPOINTS`] budget.
 fn inject_cache_control_into_system_array(
     payload: &mut serde_json::Value,
     cc: CacheControl,
-) {
+) -> bool {
     let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
 
     match payload.get_mut("system") {
-        None | Some(serde_json::Value::Null) => {}
+        None | Some(serde_json::Value::Null) => false,
         Some(serde_json::Value::String(s)) => {
             let normalized = serde_json::json!([{
                 "type": "text",
@@ -82,6 +88,7 @@ fn inject_cache_control_into_system_array(
                 "cache_control": cc_json,
             }]);
             payload["system"] = normalized;
+            true
         }
         Some(serde_json::Value::Array(arr)) => {
             for block in arr.iter_mut().rev() {
@@ -89,63 +96,77 @@ fn inject_cache_control_into_system_array(
                     if let Some(obj) = block.as_object_mut() {
                         obj.insert("cache_control".to_string(), cc_json);
                     }
-                    return;
+                    return true;
                 }
             }
+            false
         }
-        Some(_) => {}
+        Some(_) => false,
     }
 }
 
-/// Inject `cache_control` into the last non-thinking block of the trailing
-/// user message in `payload["messages"]`.
+/// Inject `cache_control` into the trailing content block of up to
+/// `max_breakpoints` of the most-recent messages in `payload["messages"]`.
 ///
-/// - No `messages` array, empty array, or no `role == "user"` message → no-op.
-/// - Last user's `content` as string → normalized to array with cache_control.
-/// - Last user's `content` as array → walks blocks in reverse; first non-
-///   thinking/redacted_thinking block gets `cache_control` set. If all blocks
-///   are thinking-type → no-op.
-fn inject_cache_control_into_last_user_message(
+/// Anthropic allows at most [`MAX_CACHE_BREAKPOINTS`] cache breakpoints per
+/// request. Marking the last few messages (in addition to the system block)
+/// maximises the multi-turn cache-hit rate: older breakpoints stay at stable
+/// positions and become cache *reads* on the following turn — the documented
+/// incremental-caching pattern, matching hermes' `system_and_3` layout.
+///
+/// Per message the marker is placed on the last non-`thinking` /
+/// non-`redacted_thinking` block (signatures on those blocks must round-trip
+/// untouched). String content is normalized to an array. A message whose
+/// blocks are all thinking-type is skipped and does not consume a breakpoint.
+/// A message that already carries a `cache_control` marker counts as one
+/// breakpoint and is left untouched, so the total never exceeds the budget.
+fn inject_cache_control_into_recent_messages(
     payload: &mut serde_json::Value,
     cc: CacheControl,
+    max_breakpoints: usize,
 ) {
+    if max_breakpoints == 0 {
+        return;
+    }
     let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
 
     let Some(messages) = payload.get_mut("messages").and_then(|v| v.as_array_mut()) else {
         return;
     };
 
-    let Some(last_user) = messages
-        .iter_mut()
-        .rev()
-        .find(|m| m.get("role").and_then(|v| v.as_str()) == Some("user"))
-    else {
-        return;
-    };
-
-    match last_user.get_mut("content") {
-        None | Some(serde_json::Value::Null) => {}
-        Some(serde_json::Value::String(s)) => {
-            let normalized = serde_json::json!([{
-                "type": "text",
-                "text": std::mem::take(s),
-                "cache_control": cc_json,
-            }]);
-            last_user["content"] = normalized;
+    let mut remaining = max_breakpoints;
+    for msg in messages.iter_mut().rev() {
+        if remaining == 0 {
+            break;
         }
-        Some(serde_json::Value::Array(blocks)) => {
-            for block in blocks.iter_mut().rev() {
-                let ty = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if ty == "thinking" || ty == "redacted_thinking" {
+        match msg.get_mut("content") {
+            None | Some(serde_json::Value::Null) => {}
+            Some(serde_json::Value::String(s)) => {
+                msg["content"] = serde_json::json!([{
+                    "type": "text",
+                    "text": std::mem::take(s),
+                    "cache_control": cc_json.clone(),
+                }]);
+                remaining -= 1;
+            }
+            Some(serde_json::Value::Array(blocks)) => {
+                // A message that already carries a marker IS a breakpoint —
+                // count it but don't add a second to the same message.
+                if blocks.iter().any(|b| b.get("cache_control").is_some()) {
+                    remaining -= 1;
                     continue;
                 }
-                if let Some(obj) = block.as_object_mut() {
-                    obj.insert("cache_control".to_string(), cc_json);
+                let target = blocks.iter_mut().rev().find(|b| {
+                    let ty = b.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    ty != "thinking" && ty != "redacted_thinking"
+                });
+                if let Some(obj) = target.and_then(|b| b.as_object_mut()) {
+                    obj.insert("cache_control".to_string(), cc_json.clone());
+                    remaining -= 1;
                 }
-                return;
             }
+            Some(_) => {}
         }
-        Some(_) => {}
     }
 }
 
@@ -247,6 +268,17 @@ impl ProtocolAdapter for AnthropicProtocol {
             .map(parse_stop_sequences)
             .filter(|v| !v.is_empty());
 
+        // Extended thinking is incompatible with sampling parameters: Anthropic
+        // rejects a request that sets `temperature` (other than 1), `top_p`, or
+        // `top_k` while `thinking` is enabled (HTTP 400). Strip them here so a
+        // user who configures sampling AND uses a thinking model does not get
+        // every request rejected — the model samples at its thinking default.
+        let (temperature, top_p, top_k) = if thinking.is_some() {
+            (None, None, None)
+        } else {
+            (temperature, top_p, top_k)
+        };
+
         // Cycle 4: wire metadata + effort from config
         let metadata = config
             .metadata_user_id
@@ -325,8 +357,11 @@ impl ProtocolAdapter for AnthropicProtocol {
                         None
                     },
                 };
-                inject_cache_control_into_system_array(&mut body, cc);
-                inject_cache_control_into_last_user_message(&mut body, cc);
+                // System block takes one breakpoint; the rest go to the most
+                // recent messages so multi-turn conversations cache-hit.
+                let system_used = inject_cache_control_into_system_array(&mut body, cc);
+                let message_budget = MAX_CACHE_BREAKPOINTS - usize::from(system_used);
+                inject_cache_control_into_recent_messages(&mut body, cc, message_budget);
             }
             ext
         } else {
@@ -604,7 +639,8 @@ mod tests {
             ]
         });
         let cc = CacheControl::Ephemeral { ttl: None };
-        inject_cache_control_into_system_array(&mut payload, cc);
+        let used = inject_cache_control_into_system_array(&mut payload, cc);
+        assert!(used, "a system breakpoint was placed");
         let system = payload["system"].as_array().unwrap();
         assert!(system[0].get("cache_control").is_none(), "first block untouched");
         assert_eq!(
@@ -614,48 +650,190 @@ mod tests {
         );
     }
 
-    // ── inject_cache_control_into_last_user_message ───────────────────────────
+    #[test]
+    fn inject_cache_control_into_system_array_returns_false_when_absent() {
+        let mut payload = serde_json::json!({"messages": []});
+        let used = inject_cache_control_into_system_array(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+        );
+        assert!(!used, "no system block → no breakpoint consumed");
+    }
+
+    // ── inject_cache_control_into_recent_messages ─────────────────────────────
+
+    /// Count messages carrying at least one `cache_control` marker.
+    fn cached_message_count(payload: &serde_json::Value) -> usize {
+        payload["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| {
+                m["content"]
+                    .as_array()
+                    .map(|blocks| blocks.iter().any(|b| b.get("cache_control").is_some()))
+                    .unwrap_or(false)
+            })
+            .count()
+    }
 
     #[test]
-    fn inject_cache_control_into_last_user_message_tags_last_block() {
+    fn recent_messages_tags_last_n_messages() {
         let mut payload = serde_json::json!({
             "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
-                {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "user", "content": [{"type": "text", "text": "m0"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "m1"}]},
+                {"role": "user", "content": [{"type": "text", "text": "m2"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "m3"}]},
+            ]
+        });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            3,
+        );
+        // The 3 most recent messages tagged; the oldest (m0) untouched.
+        assert_eq!(cached_message_count(&payload), 3);
+        assert!(payload["messages"][0]["content"][0]
+            .get("cache_control")
+            .is_none());
+        assert!(payload["messages"][3]["content"][0]
+            .get("cache_control")
+            .is_some());
+    }
+
+    #[test]
+    fn recent_messages_respects_breakpoint_budget() {
+        let mut payload = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "m0"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "m1"}]},
+                {"role": "user", "content": [{"type": "text", "text": "m2"}]},
+            ]
+        });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            2,
+        );
+        assert_eq!(cached_message_count(&payload), 2, "budget of 2 honored");
+    }
+
+    #[test]
+    fn recent_messages_tags_last_block_only() {
+        let mut payload = serde_json::json!({
+            "messages": [
                 {"role": "user", "content": [
                     {"type": "text", "text": "first"},
                     {"type": "text", "text": "second"}
                 ]}
             ]
         });
-        let cc = CacheControl::Ephemeral { ttl: None };
-        inject_cache_control_into_last_user_message(&mut payload, cc);
-        let last_user_content = payload["messages"][2]["content"].as_array().unwrap();
-        assert!(last_user_content[0].get("cache_control").is_none());
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            3,
+        );
+        let content = payload["messages"][0]["content"].as_array().unwrap();
+        assert!(content[0].get("cache_control").is_none());
         assert_eq!(
-            last_user_content[1]["cache_control"],
+            content[1]["cache_control"],
             serde_json::json!({"type": "ephemeral"}),
         );
     }
 
     #[test]
-    fn inject_cache_control_skips_trailing_thinking_block() {
+    fn recent_messages_skips_trailing_thinking_block() {
         let mut payload = serde_json::json!({
             "messages": [
-                {"role": "user", "content": [
+                {"role": "assistant", "content": [
                     {"type": "text", "text": "answer"},
                     {"type": "thinking", "thinking": "..."}
                 ]}
             ]
         });
-        let cc = CacheControl::Ephemeral { ttl: None };
-        inject_cache_control_into_last_user_message(&mut payload, cc);
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            3,
+        );
         let content = payload["messages"][0]["content"].as_array().unwrap();
         assert_eq!(
             content[0]["cache_control"],
             serde_json::json!({"type": "ephemeral"}),
+            "marker lands on the text block, not the trailing thinking block",
         );
         assert!(content[1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn recent_messages_skips_all_thinking_message_without_consuming_budget() {
+        let mut payload = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "older"}]},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "only thinking"}
+                ]},
+            ]
+        });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            1,
+        );
+        // The all-thinking message consumes no budget, so the older message
+        // still receives the single available breakpoint.
+        assert!(payload["messages"][1]["content"][0]
+            .get("cache_control")
+            .is_none());
+        assert!(payload["messages"][0]["content"][0]
+            .get("cache_control")
+            .is_some());
+    }
+
+    #[test]
+    fn recent_messages_string_content_normalized_to_array() {
+        let mut payload = serde_json::json!({
+            "messages": [{"role": "user", "content": "plain string"}]
+        });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            3,
+        );
+        let content = payload["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "plain string");
+        assert_eq!(
+            content[0]["cache_control"],
+            serde_json::json!({"type": "ephemeral"}),
+        );
+    }
+
+    #[test]
+    fn recent_messages_preexisting_marker_counts_as_breakpoint() {
+        // A message already carrying a marker counts as a used breakpoint and
+        // is left untouched — no second marker on the same message.
+        let mut payload = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "older"}]},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "pre"},
+                    {"type": "text", "text": "tagged", "cache_control": {"type": "ephemeral"}}
+                ]},
+            ]
+        });
+        inject_cache_control_into_recent_messages(
+            &mut payload,
+            CacheControl::Ephemeral { ttl: None },
+            1,
+        );
+        // Budget of 1 is consumed by the already-tagged message; older untouched.
+        let recent = payload["messages"][1]["content"].as_array().unwrap();
+        assert!(recent[0].get("cache_control").is_none(), "no second marker added");
+        assert!(payload["messages"][0]["content"][0]
+            .get("cache_control")
+            .is_none());
     }
 
     // ── retention / header signaling ──────────────────────────────────────────

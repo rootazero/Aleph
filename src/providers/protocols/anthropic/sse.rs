@@ -148,6 +148,14 @@ pub(crate) fn parse_anthropic_sse_event(
                     "end_turn" => StopReason::EndTurn,
                     "tool_use" => StopReason::ToolUse,
                     "max_tokens" => StopReason::MaxTokens,
+                    "stop_sequence" => StopReason::StopSequence,
+                    // The model paused a long turn (e.g. server-side tool use).
+                    "pause_turn" => StopReason::PauseTurn,
+                    // The model declined to continue for safety reasons.
+                    "refusal" => StopReason::Refusal,
+                    // The request exceeded the model's context window — treat as
+                    // a length stop so finish_reason translation reads "length".
+                    "model_context_window_exceeded" => StopReason::MaxTokens,
                     _ => StopReason::Unknown,
                 };
                 out.push_back(Ok(ProviderDelta::Done(sr)));
