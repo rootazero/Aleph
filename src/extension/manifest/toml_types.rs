@@ -54,9 +54,6 @@ pub struct AlephPluginToml {
     pub services: Vec<ServiceSection>,
     #[serde(default)]
     pub capabilities: CapabilitiesSection,
-    #[serde(default)]
-    pub http_routes: Vec<HttpRouteSection>,
-
     /// Optional [memory] section — declares which memory extension hooks this plugin implements.
     #[serde(default)]
     pub memory: Option<MemoryManifestSection>,
@@ -251,15 +248,6 @@ pub struct CapabilitiesSection {
     pub tool_invoke: Option<WasmToolInvokeToml>,
     #[serde(default)]
     pub secrets: Option<WasmSecretsToml>,
-}
-
-/// HTTP route definition section
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpRouteSection {
-    pub path: String,
-    #[serde(default)]
-    pub methods: Vec<String>,
-    pub handler: String,
 }
 
 // =============================================================================
@@ -562,11 +550,6 @@ pub fn parse_aleph_plugin_toml_content(
         wasm_capabilities: convert_wasm_capabilities(&toml.capabilities),
         wasm_resource_limits: None,
         capabilities_v2: Some(toml.capabilities),
-        http_routes_v2: if toml.http_routes.is_empty() {
-            None
-        } else {
-            Some(toml.http_routes)
-        },
         aleph_extensions: None,
         memory_manifest: toml.memory,
     })

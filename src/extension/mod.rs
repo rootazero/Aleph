@@ -38,7 +38,6 @@ pub mod capability;
 pub mod registrar;
 
 mod error;
-mod http_handler;
 pub mod manifest;
 pub mod mcp_config;
 mod plugin_ops;
@@ -53,7 +52,6 @@ pub mod watcher;
 
 pub use component_id::ComponentId;
 pub use error::*;
-pub use http_handler::{match_path, PluginHttpHandler};
 pub use loader::PluginLoader;
 pub use manifest::*;
 pub use registry::*;

@@ -2,7 +2,7 @@
 //!
 //! This module defines the registration types used by the plugin API:
 //! - P0 Core: Tool, Hook
-//! - P2 Useful: HttpRoute, HttpHandler, Cli, Service
+//! - P2 Useful: Service
 //! - P3 Optional: Command
 //!
 //! Plus diagnostics support for plugin health reporting.
@@ -54,30 +54,6 @@ pub struct HookRegistration {
 // ============================================================================
 // P2 Useful Registration Types
 // ============================================================================
-
-/// HTTP route registration for REST API endpoints
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpRouteRegistration {
-    /// URL path pattern (e.g., "/api/v1/myendpoint")
-    pub path: String,
-    /// HTTP methods allowed (e.g., ["GET", "POST"])
-    pub methods: Vec<String>,
-    /// Handler function name within the plugin
-    pub handler: String,
-    /// ID of the plugin that registered this route
-    pub plugin_id: String,
-}
-
-/// HTTP handler registration for middleware/interceptors
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpHandlerRegistration {
-    /// Handler function name within the plugin
-    pub handler: String,
-    /// Execution priority (lower = earlier)
-    pub priority: i32,
-    /// ID of the plugin that registered this handler
-    pub plugin_id: String,
-}
 
 /// Background service registration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -454,27 +430,6 @@ mod tests {
         };
         assert_eq!(hook.priority, 10);
         assert_eq!(hook.name, Some("Message Logger".to_string()));
-    }
-
-    #[test]
-    fn test_http_route_registration() {
-        let route = HttpRouteRegistration {
-            path: "/api/v1/webhook".to_string(),
-            methods: vec!["GET".to_string(), "POST".to_string()],
-            handler: "handle_webhook".to_string(),
-            plugin_id: "webhook-plugin".to_string(),
-        };
-        assert_eq!(route.methods.len(), 2);
-    }
-
-    #[test]
-    fn test_http_handler_registration() {
-        let handler = HttpHandlerRegistration {
-            handler: "auth_middleware".to_string(),
-            priority: -100,
-            plugin_id: "auth-plugin".to_string(),
-        };
-        assert_eq!(handler.priority, -100);
     }
 
     #[test]

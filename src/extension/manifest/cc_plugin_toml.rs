@@ -255,8 +255,6 @@ pub fn parse_cc_plugin_toml_content(
         capabilities_v2: None,
         wasm_capabilities: None,
         wasm_resource_limits: None,
-        // P2 fields not available in CC TOML format
-        http_routes_v2: None,
         // CC-compat extensions
         aleph_extensions: aleph_ext,
         // Memory extension manifest — not supported in CC flat format (only in aleph.plugin.toml)

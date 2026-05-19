@@ -80,9 +80,6 @@ impl<'a> CapabilityApi<'a> {
             CapabilityDeclaration::Hook(hook) => {
                 self.registry.register_hook(hook);
             }
-            CapabilityDeclaration::HttpRoute(route) => {
-                self.registry.register_http_route(route);
-            }
             CapabilityDeclaration::Service(service) => {
                 self.registry.register_service(service);
             }
@@ -151,7 +148,7 @@ mod tests {
     use super::*;
     use crate::extension::registry::{
         AgentRegistration, CommandRegistration,
-        HookRegistration, HttpRouteRegistration,
+        HookRegistration,
         ServiceRegistration, SkillRegistration, ToolRegistration,
     };
     use crate::extension::types::HookEvent;
@@ -173,15 +170,6 @@ mod tests {
             name: "my_tool".to_string(),
             description: "A test tool".to_string(),
             parameters: serde_json::json!({"type": "object"}),
-            handler: "handle".to_string(),
-            plugin_id: "test-plugin".to_string(),
-        })
-    }
-
-    fn make_http_route() -> CapabilityDeclaration {
-        CapabilityDeclaration::HttpRoute(HttpRouteRegistration {
-            path: "/api/test".to_string(),
-            methods: vec!["GET".to_string()],
             handler: "handle".to_string(),
             plugin_id: "test-plugin".to_string(),
         })
@@ -269,38 +257,6 @@ mod tests {
         assert!(api.registry().get_service("test-service").is_some());
     }
 
-    // ── P3 HttpRoute fails without HttpRoutes permission ─────────────────
-
-    #[test]
-    fn test_p2_http_route_fails_without_http_routes_permission() {
-        let mut registry = make_registry_and_plugin();
-        let mut api = CapabilityApi::new(
-            &mut registry,
-            "test-plugin".to_string(),
-            vec![], // no permissions
-        );
-
-        let result = api.register_capability(make_http_route());
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("http-routes"));
-    }
-
-    // ── P2 HttpRoute succeeds with HttpRoutes permission ─────────────────
-
-    #[test]
-    fn test_p2_http_route_succeeds_with_permission() {
-        let mut registry = make_registry_and_plugin();
-        let mut api = CapabilityApi::new(
-            &mut registry,
-            "test-plugin".to_string(),
-            vec![PluginPermission::HttpRoutes],
-        );
-
-        assert!(api.register_capability(make_http_route()).is_ok());
-        assert_eq!(api.registry().list_http_routes().len(), 1);
-    }
-
     // ── Reload clears and re-registers ───────────────────────────────────
 
     #[test]
@@ -349,7 +305,6 @@ mod tests {
             "test-plugin".to_string(),
             vec![
                 PluginPermission::Background,
-                PluginPermission::HttpRoutes,
             ],
         );
 
@@ -357,7 +312,6 @@ mod tests {
         api.register_capability(make_tool()).unwrap();
         api.register_capability(make_hook()).unwrap();
         api.register_capability(make_service()).unwrap();
-        api.register_capability(make_http_route()).unwrap();
         api.register_capability(make_skill()).unwrap();
 
         api.register_capability(CapabilityDeclaration::Command(CommandRegistration {
@@ -391,7 +345,6 @@ mod tests {
         let reg = api.registry();
         assert!(reg.get_tool("my_tool").is_some());
         assert_eq!(reg.list_hooks().len(), 1);
-        assert_eq!(reg.list_http_routes().len(), 1);
         assert!(reg.get_service("test-service").is_some());
         assert!(reg.get_command("test-slash").is_some());
         assert!(reg.get_skill("test-skill").is_some());

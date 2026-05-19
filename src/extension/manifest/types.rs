@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 // V2 field types from toml_types module
 use super::toml_types::{
-    CapabilitiesSection, CommandSection, HookSection, HttpRouteSection,
+    CapabilitiesSection, CommandSection, HookSection,
     PermissionsSection, PromptSection, ServiceSection, ToolSection,
 };
 use crate::extension::runtime::wasm::WasmCapabilities;
@@ -318,13 +318,6 @@ pub struct PluginManifest {
     #[serde(skip)]
     pub wasm_resource_limits: Option<WasmResourceLimits>,
 
-    // ═══════════════════════════════════════════
-    // P2 Extension fields
-    // ═══════════════════════════════════════════
-    /// V2: HTTP route definitions for REST API endpoints
-    #[serde(skip)]
-    pub http_routes_v2: Option<Vec<HttpRouteSection>>,
-
     /// Aleph-only extensions from [aleph] section in CC-format manifest
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aleph_extensions: Option<AlephExtensions>,
@@ -364,8 +357,6 @@ impl PluginManifest {
             capabilities_v2: None,
             wasm_capabilities: None,
             wasm_resource_limits: None,
-            // P2 fields
-            http_routes_v2: None,
             // CC-compat extensions
             aleph_extensions: None,
             // Memory extension manifest section

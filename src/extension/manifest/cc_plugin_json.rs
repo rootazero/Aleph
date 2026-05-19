@@ -235,8 +235,6 @@ pub fn parse_cc_plugin_json_content(
         capabilities_v2: None,
         wasm_capabilities: None,
         wasm_resource_limits: None,
-        // P2 fields not available in CC JSON format
-        http_routes_v2: None,
         // CC-compat extensions
         aleph_extensions: aleph_ext,
         // Memory extension manifest — not available in CC JSON format

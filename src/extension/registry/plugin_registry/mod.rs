@@ -2,14 +2,13 @@
 //!
 //! Central storage for all plugin registrations. The PluginRegistry maintains
 //! a comprehensive registry of all plugins and their registered components:
-//! tools, hooks, providers, gateway methods, HTTP routes/handlers,
-//! CLI commands, services, and in-chat commands.
+//! tools, hooks, services, commands, skills, and agents.
 
 use std::collections::HashMap;
 
 use super::types::{
     AgentRegistration, CommandRegistration,
-    HookRegistration, HttpHandlerRegistration, HttpRouteRegistration,
+    HookRegistration,
     PluginDiagnostic, ServiceRegistration, SkillRegistration,
     ToolRegistration,
 };
@@ -33,12 +32,6 @@ pub struct PluginRegistry {
 
     /// Registered hooks (sorted by priority)
     hooks: Vec<HookRegistration>,
-
-    /// Registered HTTP routes
-    http_routes: Vec<HttpRouteRegistration>,
-
-    /// Registered HTTP handlers/middleware (sorted by priority)
-    http_handlers: Vec<HttpHandlerRegistration>,
 
     /// Registered background services by ID
     services: HashMap<String, ServiceRegistration>,
@@ -69,8 +62,6 @@ impl PluginRegistry {
         self.plugins.clear();
         self.tools.clear();
         self.hooks.clear();
-        self.http_routes.clear();
-        self.http_handlers.clear();
         self.services.clear();
         self.commands.clear();
         self.skills.clear();
@@ -227,43 +218,6 @@ impl PluginRegistry {
     }
 
     // =========================================================================
-    // HTTP Route Registration
-    // =========================================================================
-
-    /// Register an HTTP route.
-    pub fn register_http_route(&mut self, route: HttpRouteRegistration) {
-        self.http_routes.push(route);
-    }
-
-    /// List all registered HTTP routes.
-    pub fn list_http_routes(&self) -> Vec<&HttpRouteRegistration> {
-        self.http_routes.iter().collect()
-    }
-
-    /// Find HTTP routes matching a path pattern.
-    pub fn find_http_routes(&self, path: &str) -> Vec<&HttpRouteRegistration> {
-        self.http_routes.iter().filter(|r| r.path == path).collect()
-    }
-
-    // =========================================================================
-    // HTTP Handler Registration
-    // =========================================================================
-
-    /// Register an HTTP handler/middleware.
-    ///
-    /// Handlers are maintained in priority order (lower priority = earlier execution).
-    pub fn register_http_handler(&mut self, handler: HttpHandlerRegistration) {
-        self.http_handlers.push(handler);
-        // Sort by priority
-        self.http_handlers.sort_by_key(|h| h.priority);
-    }
-
-    /// List all registered HTTP handlers in priority order.
-    pub fn list_http_handlers(&self) -> Vec<&HttpHandlerRegistration> {
-        self.http_handlers.iter().collect()
-    }
-
-    // =========================================================================
     // Service Registration
     // =========================================================================
 
@@ -411,11 +365,6 @@ impl PluginRegistry {
     /// - The plugin record
     /// - All tools registered by this plugin
     /// - All hooks registered by this plugin
-    /// - All providers registered by this plugin
-    /// - All gateway methods registered by this plugin
-    /// - All HTTP routes registered by this plugin
-    /// - All HTTP handlers registered by this plugin
-    /// - All CLI commands registered by this plugin
     /// - All services registered by this plugin
     /// - All in-chat commands registered by this plugin
     /// - All diagnostics from this plugin
@@ -428,12 +377,6 @@ impl PluginRegistry {
 
         // Remove all hooks from this plugin
         self.hooks.retain(|h| h.plugin_id != plugin_id);
-
-        // Remove all HTTP routes from this plugin
-        self.http_routes.retain(|r| r.plugin_id != plugin_id);
-
-        // Remove all HTTP handlers from this plugin
-        self.http_handlers.retain(|h| h.plugin_id != plugin_id);
 
         // Remove all services from this plugin
         self.services.retain(|_, s| s.plugin_id != plugin_id);
@@ -463,8 +406,6 @@ impl PluginRegistry {
             active_plugins: self.list_active_plugins().len(),
             tools: self.tools.len(),
             hooks: self.hooks.len(),
-            http_routes: self.http_routes.len(),
-            http_handlers: self.http_handlers.len(),
             services: self.services.len(),
             commands: self.commands.len(),
             skills: self.skills.len(),
@@ -481,8 +422,6 @@ pub struct RegistryStats {
     pub active_plugins: usize,
     pub tools: usize,
     pub hooks: usize,
-    pub http_routes: usize,
-    pub http_handlers: usize,
     pub services: usize,
     pub commands: usize,
     pub skills: usize,

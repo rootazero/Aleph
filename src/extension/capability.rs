@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registry::{
     AgentRegistration, CommandRegistration,
-    HookRegistration, HttpRouteRegistration,
+    HookRegistration,
     ServiceRegistration, SkillRegistration, ToolRegistration,
 };
 use crate::extension::types::{McpServerConfig, PluginOrigin};
@@ -22,8 +22,6 @@ use crate::extension::types::{McpServerConfig, PluginOrigin};
 pub type ToolDeclaration = ToolRegistration;
 /// A hook declaration is a HookRegistration
 pub type HookDeclaration = HookRegistration;
-/// An HTTP route declaration is a HttpRouteRegistration
-pub type HttpRouteDeclaration = HttpRouteRegistration;
 /// A service declaration is a ServiceRegistration
 pub type ServiceDeclaration = ServiceRegistration;
 /// An in-chat command declaration is a CommandRegistration
@@ -51,8 +49,6 @@ pub enum CapabilityDeclaration {
     Tool(ToolDeclaration),
     /// A hook that intercepts system events
     Hook(HookDeclaration),
-    /// An HTTP REST endpoint
-    HttpRoute(HttpRouteDeclaration),
     /// A background service
     Service(ServiceDeclaration),
     /// An in-chat command (e.g., /mycommand)
@@ -77,8 +73,6 @@ impl CapabilityDeclaration {
             Self::Service(_) | Self::McpServer(_) => {
                 Tier::Pluggable
             }
-            // P3: All permission-gated + warning logged
-            Self::HttpRoute(_) => Tier::GatewayExtension,
         }
     }
 
@@ -87,7 +81,6 @@ impl CapabilityDeclaration {
         match self {
             Self::Tool(_) => "tool",
             Self::Hook(_) => "hook",
-            Self::HttpRoute(_) => "http_route",
             Self::Service(_) => "service",
             Self::Command(_) => "command",
             Self::Skill(_) => "skill",
@@ -106,8 +99,6 @@ impl CapabilityDeclaration {
             // P2: some need permission
             Self::Service(_) => Some(PluginPermission::Background),
             Self::McpServer(_) => None, // MCP is the standard extension mechanism
-            // P3: all need permission
-            Self::HttpRoute(_) => Some(PluginPermission::HttpRoutes),
         }
     }
 }
@@ -126,7 +117,7 @@ pub enum Tier {
     Core,
     /// Important capabilities (Channel, Provider)
     Important,
-    /// Pluggable capabilities (HttpRoute, Cli, Service, Command, Skill, Agent)
+    /// Pluggable capabilities (Service, Command, Skill, Agent)
     Pluggable,
     /// Gateway extensions (McpServer) — registered last
     GatewayExtension,
@@ -271,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn test_all_8_variants_have_kind_names() {
+    fn test_all_7_variants_have_kind_names() {
         use crate::extension::types::HookEvent;
 
         let capabilities: Vec<CapabilityDeclaration> = vec![
@@ -282,12 +273,6 @@ mod tests {
                 handler: "h".to_string(),
                 name: None,
                 description: None,
-                plugin_id: "p".to_string(),
-            }),
-            CapabilityDeclaration::HttpRoute(HttpRouteRegistration {
-                path: "/".to_string(),
-                methods: vec![],
-                handler: "h".to_string(),
                 plugin_id: "p".to_string(),
             }),
             CapabilityDeclaration::Service(ServiceRegistration {
@@ -312,14 +297,13 @@ mod tests {
             }),
         ];
 
-        assert_eq!(capabilities.len(), 8);
+        assert_eq!(capabilities.len(), 7);
         let kind_names: Vec<&str> = capabilities.iter().map(|c| c.kind_name()).collect();
         assert_eq!(
             kind_names,
             vec![
                 "tool",
                 "hook",
-                "http_route",
                 "service",
                 "command",
                 "skill",
