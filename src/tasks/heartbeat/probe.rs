@@ -91,15 +91,27 @@ pub fn evaluate_trigger(
 // ── execute_probe ─────────────────────────────────────────────────────────────
 
 /// Run a probe and evaluate its trigger condition.
+///
+/// The probe tool call is bounded by `timeout_secs` so a hung tool cannot
+/// stall a heartbeat worker (and, via the shared semaphore, every other task).
 pub async fn execute_probe(
     probe: &ProbeConfig,
     executor: &dyn ProbeExecutor,
     last_probe_result: Option<&str>,
+    timeout_secs: u64,
 ) -> Result<ProbeResult, String> {
     let start = std::time::Instant::now();
-    let raw_value = executor
-        .execute(&probe.tool_name, probe.tool_params.as_ref())
-        .await?;
+    let raw_value = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs.max(1)),
+        executor.execute(&probe.tool_name, probe.tool_params.as_ref()),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "probe tool '{}' timed out after {timeout_secs}s",
+            probe.tool_name
+        )
+    })??;
     let duration_ms = start.elapsed().as_millis() as i64;
     let triggered = evaluate_trigger(&probe.trigger_condition, &raw_value, last_probe_result);
     Ok(ProbeResult {
@@ -336,7 +348,7 @@ mod tests {
             tool_params: None,
             trigger_condition: TriggerCondition::Always,
         };
-        let result = execute_probe(&probe, &executor, None).await.unwrap();
+        let result = execute_probe(&probe, &executor, None, 30).await.unwrap();
         assert!(result.triggered);
         assert_eq!(result.raw_value, json!(42));
         assert!(result.duration_ms >= 0);
@@ -350,7 +362,36 @@ mod tests {
             tool_params: None,
             trigger_condition: TriggerCondition::Always,
         };
-        let result = execute_probe(&probe, &executor, None).await;
+        let result = execute_probe(&probe, &executor, None, 30).await;
         assert!(result.is_err());
+    }
+
+    struct HangingExecutor;
+
+    #[async_trait]
+    impl ProbeExecutor for HangingExecutor {
+        async fn execute(
+            &self,
+            _tool_name: &str,
+            _params: Option<&Value>,
+        ) -> Result<Value, String> {
+            // Far longer than any probe timeout.
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            Ok(Value::Null)
+        }
+    }
+
+    /// H7: a hung probe tool is bounded by the timeout, not left to stall.
+    #[tokio::test(start_paused = true)]
+    async fn test_execute_probe_times_out() {
+        let executor = HangingExecutor;
+        let probe = ProbeConfig {
+            tool_name: "slow.tool".to_string(),
+            tool_params: None,
+            trigger_condition: TriggerCondition::Always,
+        };
+        let result = execute_probe(&probe, &executor, None, 1).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("timed out"));
     }
 }

@@ -1590,6 +1590,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 )),
                 delivery: delivery_engine,
                 dedup: dedup_engine,
+                job_timeout_secs: hb_state.config.job_timeout_secs,
             });
 
             tokio::spawn(async move {
