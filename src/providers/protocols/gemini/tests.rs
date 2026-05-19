@@ -660,3 +660,31 @@ fn test_build_request_includes_top_k() {
     let body: serde_json::Value = serde_json::from_slice(body_bytes).expect("json body");
     assert_eq!(body["generationConfig"]["topK"], 40);
 }
+
+#[test]
+fn test_parse_sse_finish_reason_safety() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[]},"finishReason":"SAFETY"}]}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+    assert!(
+        out.iter()
+            .any(|d| matches!(d, Ok(ProviderDelta::Done(StopReason::Refusal)))),
+        "SAFETY should map to Done(Refusal), got {:?}",
+        out
+    );
+}
+
+#[test]
+fn test_parse_sse_finish_reason_recitation() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[]},"finishReason":"RECITATION"}]}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+    assert!(
+        out.iter()
+            .any(|d| matches!(d, Ok(ProviderDelta::Done(StopReason::Sensitive)))),
+        "RECITATION should map to Done(Sensitive), got {:?}",
+        out
+    );
+}

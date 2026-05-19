@@ -99,6 +99,9 @@ pub(crate) fn parse_gemini_sse_chunk(
             Some("STOP") => Some(StopReason::EndTurn),
             Some("MAX_TOKENS") => Some(StopReason::MaxTokens),
             Some("FUNCTION_CALL") => Some(StopReason::ToolUse),
+            Some("SAFETY") | Some("BLOCKLIST") | Some("PROHIBITED_CONTENT")
+            | Some("SPII") => Some(StopReason::Refusal),
+            Some("RECITATION") => Some(StopReason::Sensitive),
             Some(other) if !other.is_empty() => {
                 // If we emitted tool calls in this same chunk, treat as ToolUse
                 if has_tool_calls {
