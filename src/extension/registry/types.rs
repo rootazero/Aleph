@@ -79,19 +79,6 @@ pub struct HttpHandlerRegistration {
     pub plugin_id: String,
 }
 
-/// CLI command registration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CliRegistration {
-    /// Command name (e.g., "mycommand")
-    pub name: String,
-    /// Description shown in help text
-    pub description: String,
-    /// Handler function name within the plugin
-    pub handler: String,
-    /// ID of the plugin that registered this command
-    pub plugin_id: String,
-}
-
 /// Background service registration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceRegistration {
@@ -488,17 +475,6 @@ mod tests {
             plugin_id: "auth-plugin".to_string(),
         };
         assert_eq!(handler.priority, -100);
-    }
-
-    #[test]
-    fn test_cli_registration() {
-        let cli = CliRegistration {
-            name: "sync".to_string(),
-            description: "Sync data with remote".to_string(),
-            handler: "handle_sync".to_string(),
-            plugin_id: "sync-plugin".to_string(),
-        };
-        assert_eq!(cli.name, "sync");
     }
 
     #[test]

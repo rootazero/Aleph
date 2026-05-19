@@ -83,9 +83,6 @@ impl<'a> CapabilityApi<'a> {
             CapabilityDeclaration::HttpRoute(route) => {
                 self.registry.register_http_route(route);
             }
-            CapabilityDeclaration::Cli(cli) => {
-                self.registry.register_cli_command(cli);
-            }
             CapabilityDeclaration::Service(service) => {
                 self.registry.register_service(service);
             }
@@ -153,7 +150,7 @@ impl<'a> CapabilityApi<'a> {
 mod tests {
     use super::*;
     use crate::extension::registry::{
-        AgentRegistration, CliRegistration, CommandRegistration,
+        AgentRegistration, CommandRegistration,
         HookRegistration, HttpRouteRegistration,
         ServiceRegistration, SkillRegistration, ToolRegistration,
     };
@@ -353,7 +350,6 @@ mod tests {
             vec![
                 PluginPermission::Background,
                 PluginPermission::HttpRoutes,
-                PluginPermission::Shell,
             ],
         );
 
@@ -363,14 +359,6 @@ mod tests {
         api.register_capability(make_service()).unwrap();
         api.register_capability(make_http_route()).unwrap();
         api.register_capability(make_skill()).unwrap();
-
-        api.register_capability(CapabilityDeclaration::Cli(CliRegistration {
-            name: "test-cmd".to_string(),
-            description: "d".to_string(),
-            handler: "h".to_string(),
-            plugin_id: "test-plugin".to_string(),
-        }))
-        .unwrap();
 
         api.register_capability(CapabilityDeclaration::Command(CommandRegistration {
             name: "test-slash".to_string(),
@@ -404,7 +392,6 @@ mod tests {
         assert!(reg.get_tool("my_tool").is_some());
         assert_eq!(reg.list_hooks().len(), 1);
         assert_eq!(reg.list_http_routes().len(), 1);
-        assert!(reg.get_cli_command("test-cmd").is_some());
         assert!(reg.get_service("test-service").is_some());
         assert!(reg.get_command("test-slash").is_some());
         assert!(reg.get_skill("test-skill").is_some());

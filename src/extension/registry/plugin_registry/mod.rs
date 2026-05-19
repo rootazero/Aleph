@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use super::types::{
-    AgentRegistration, CliRegistration, CommandRegistration,
+    AgentRegistration, CommandRegistration,
     HookRegistration, HttpHandlerRegistration, HttpRouteRegistration,
     PluginDiagnostic, ServiceRegistration, SkillRegistration,
     ToolRegistration,
@@ -39,9 +39,6 @@ pub struct PluginRegistry {
 
     /// Registered HTTP handlers/middleware (sorted by priority)
     http_handlers: Vec<HttpHandlerRegistration>,
-
-    /// Registered CLI commands by name
-    cli_commands: HashMap<String, CliRegistration>,
 
     /// Registered background services by ID
     services: HashMap<String, ServiceRegistration>,
@@ -74,7 +71,6 @@ impl PluginRegistry {
         self.hooks.clear();
         self.http_routes.clear();
         self.http_handlers.clear();
-        self.cli_commands.clear();
         self.services.clear();
         self.commands.clear();
         self.skills.clear();
@@ -268,25 +264,6 @@ impl PluginRegistry {
     }
 
     // =========================================================================
-    // CLI Command Registration
-    // =========================================================================
-
-    /// Register a CLI command.
-    pub fn register_cli_command(&mut self, cli: CliRegistration) {
-        self.cli_commands.insert(cli.name.clone(), cli);
-    }
-
-    /// Get a CLI command by name.
-    pub fn get_cli_command(&self, name: &str) -> Option<&CliRegistration> {
-        self.cli_commands.get(name)
-    }
-
-    /// List all registered CLI commands.
-    pub fn list_cli_commands(&self) -> Vec<&CliRegistration> {
-        self.cli_commands.values().collect()
-    }
-
-    // =========================================================================
     // Service Registration
     // =========================================================================
 
@@ -458,9 +435,6 @@ impl PluginRegistry {
         // Remove all HTTP handlers from this plugin
         self.http_handlers.retain(|h| h.plugin_id != plugin_id);
 
-        // Remove all CLI commands from this plugin
-        self.cli_commands.retain(|_, c| c.plugin_id != plugin_id);
-
         // Remove all services from this plugin
         self.services.retain(|_, s| s.plugin_id != plugin_id);
 
@@ -491,7 +465,6 @@ impl PluginRegistry {
             hooks: self.hooks.len(),
             http_routes: self.http_routes.len(),
             http_handlers: self.http_handlers.len(),
-            cli_commands: self.cli_commands.len(),
             services: self.services.len(),
             commands: self.commands.len(),
             skills: self.skills.len(),
@@ -510,7 +483,6 @@ pub struct RegistryStats {
     pub hooks: usize,
     pub http_routes: usize,
     pub http_handlers: usize,
-    pub cli_commands: usize,
     pub services: usize,
     pub commands: usize,
     pub skills: usize,

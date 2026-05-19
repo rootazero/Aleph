@@ -306,8 +306,7 @@ impl PluginRecord {
                 | CapabilityDeclaration::Command(_)
                 | CapabilityDeclaration::Agent(_)
                 | CapabilityDeclaration::McpServer(_)
-                | CapabilityDeclaration::HttpRoute(_)
-                | CapabilityDeclaration::Cli(_) => {}
+                | CapabilityDeclaration::HttpRoute(_) => {}
             }
         }
 

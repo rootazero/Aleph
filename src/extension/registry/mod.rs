@@ -5,7 +5,7 @@
 //! ## Components
 //!
 //! - [`PluginRegistry`] - Central storage for all plugin registrations
-//! - Registration types - 9 types for plugin API registration
+//! - Registration types - 8 types for plugin API registration
 //!
 //! ## Registration Categories
 //!
@@ -16,7 +16,6 @@
 //! - **P2 Useful**: Additional extension points
 //!   - [`HttpRouteRegistration`] - REST API endpoints
 //!   - [`HttpHandlerRegistration`] - HTTP middleware
-//!   - [`CliRegistration`] - CLI command extensions
 //!   - [`ServiceRegistration`] - Background services
 //!
 //! - **P3 Optional**: Nice-to-have features
