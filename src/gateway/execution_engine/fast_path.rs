@@ -46,6 +46,9 @@ where
                 run_id: run_id.to_string(),
                 seq: final_seq,
                 summary: RunSummary {
+                    // 0 is correct: the L0 slash-command fast path bypasses
+                    // the agent loop and makes no LLM call (commands that
+                    // need an LLM fall through to the loop instead).
                     total_tokens: 0,
                     tool_calls: 1,
                     loops: steps_completed,
@@ -127,6 +130,8 @@ where
                 run_id: run_id.to_string(),
                 seq: final_seq,
                 summary: RunSummary {
+                    // 0 is correct: the L0 slash-command fast path bypasses
+                    // the agent loop and makes no LLM call.
                     total_tokens: 0,
                     tool_calls: 1,
                     loops: 0,

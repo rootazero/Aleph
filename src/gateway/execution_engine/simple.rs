@@ -136,6 +136,9 @@ impl SimpleExecutionEngine {
                         run_id: run_id.clone(),
                         seq: final_seq,
                         summary: RunSummary {
+                            // 0 is correct: SimpleExecutionEngine is the
+                            // simulated/fallback engine used when no API key
+                            // is set — no real LLM call is made.
                             total_tokens: 0,
                             tool_calls: 0,
                             loops: steps_completed,
