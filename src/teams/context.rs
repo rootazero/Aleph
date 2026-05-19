@@ -1,9 +1,9 @@
-//! Inbox-aware context injection for agents.
+//! Inbox-aware context for agents.
 //!
 //! Provides [`InboxContext`] — a lightweight summary of an agent's unread
-//! messages across all teams — and the [`InboxContextProvider`] trait that
-//! the [`ContextInjector`](crate::agents::swarm::context_injector::ContextInjector)
-//! uses to append inbox awareness to the agent's system prompt.
+//! messages across all teams — and the [`InboxContextProvider`] trait used by
+//! the team dispatcher's handoff-context builder to append inbox awareness
+//! when a member agent is launched for a task.
 
 use async_trait::async_trait;
 

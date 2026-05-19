@@ -445,7 +445,8 @@ impl BuiltinToolRegistry {
                     TaskCreateTool, TaskListTool, TaskUpdateTool, TaskWaitTool,
                 };
 
-                let create = TaskCreateTool::new(Arc::clone(store));
+                let create =
+                    TaskCreateTool::new(Arc::clone(store), config.dispatch_signal.clone());
                 let list = TaskListTool::new(Arc::clone(store));
 
                 // TaskUpdateTool and TaskWaitTool need the event bus
@@ -659,6 +660,66 @@ impl BuiltinToolRegistry {
                 );
             }
             (send, read)
+        };
+
+        // Add plan approval tools (require MessageRouter + ArtifactStore + EventLogStore)
+        let (plan_submit_tool, plan_resolve_tool) = {
+            let plan_manager = match (
+                config.message_router.as_ref(),
+                config.artifact_store.as_ref(),
+                config.event_store.as_ref(),
+            ) {
+                (Some(mr), Some(a_s), Some(es)) => Some(Arc::new(
+                    crate::teams::plans::PlanManager::new(
+                        Arc::clone(mr),
+                        Arc::clone(a_s),
+                        Arc::clone(es),
+                    ),
+                )),
+                _ => None,
+            };
+            let submit = match (plan_manager.as_ref(), config.team_store.as_ref()) {
+                (Some(pm), Some(ts)) => {
+                    use crate::builtin_tools::team::PlanSubmitTool;
+                    Some(PlanSubmitTool::new(
+                        Arc::clone(pm),
+                        Arc::clone(ts),
+                        current_agent_id.clone(),
+                    ))
+                }
+                _ => None,
+            };
+            let resolve = plan_manager.as_ref().map(|pm| {
+                use crate::builtin_tools::team::PlanResolveTool;
+                PlanResolveTool::new(Arc::clone(pm), current_agent_id.clone())
+            });
+
+            // Register parameter schemas
+            {
+                use crate::tools::AlephTool;
+                let mut defs: Vec<crate::dispatcher::ToolDefinition> = Vec::new();
+                if let Some(ref s) = submit {
+                    defs.push(s.definition());
+                }
+                if let Some(ref r) = resolve {
+                    defs.push(r.definition());
+                }
+                for td in &defs {
+                    let mut ut = UnifiedTool::new(
+                        format!("builtin:{}", td.name),
+                        &td.name,
+                        &td.description,
+                        ToolSource::Builtin,
+                    );
+                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    tools.insert(td.name.clone(), ut);
+                }
+            }
+
+            if submit.is_some() || resolve.is_some() {
+                info!("Registered plan approval tools (plan_submit, plan_resolve)");
+            }
+            (submit, resolve)
         };
 
         // Add task artifact tools (if ArtifactStore is available)
@@ -1037,6 +1098,8 @@ impl BuiltinToolRegistry {
             team_digest_tool,
             message_send_tool,
             inbox_read_tool,
+            plan_submit_tool,
+            plan_resolve_tool,
             session_collaborate_tool,
             session_turn_tool,
             session_read_tool,

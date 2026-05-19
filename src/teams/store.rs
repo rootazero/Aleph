@@ -106,7 +106,7 @@ impl SqliteTeamStore {
         }
     }
 
-    /// Run schema migration — creates the `teams`, `team_members`, and `team_tasks` tables.
+    /// Run schema migration — creates the `teams` and `team_members` tables.
     pub async fn migrate(&self) -> crate::error::Result<()> {
         let conn = self.conn.lock().await;
         conn.execute_batch("PRAGMA foreign_keys = ON;")
@@ -133,21 +133,7 @@ impl SqliteTeamStore {
                 FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
             );
 
-            CREATE TABLE IF NOT EXISTS team_tasks (
-                id           TEXT PRIMARY KEY,
-                team_id      TEXT NOT NULL,
-                agent_id     TEXT NOT NULL,
-                subject      TEXT NOT NULL,
-                status       TEXT NOT NULL DEFAULT 'pending',
-                result       TEXT,
-                created_at   INTEGER NOT NULL,
-                completed_at INTEGER,
-                FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
-            );
-
             CREATE INDEX IF NOT EXISTS idx_team_members_agent ON team_members(agent_id);
-            CREATE INDEX IF NOT EXISTS idx_team_tasks_team    ON team_tasks(team_id);
-            CREATE INDEX IF NOT EXISTS idx_team_tasks_agent   ON team_tasks(agent_id);
             "#,
         )
         .map_err(db_err)?;
@@ -191,7 +177,6 @@ fn read_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamSummary> {
         created_at: row.get(5)?,
         disbanded_at: row.get(6)?,
         member_count: row.get(7)?,
-        task_count: row.get(8)?,
     })
 }
 
@@ -246,11 +231,9 @@ impl TeamStore for SqliteTeamStore {
                 r#"
                 SELECT t.id, t.name, t.description, t.leader_id, t.status,
                        t.created_at, t.disbanded_at,
-                       COUNT(DISTINCT m.agent_id) AS member_count,
-                       COUNT(DISTINCT k.id) AS task_count
+                       COUNT(DISTINCT m.agent_id) AS member_count
                 FROM teams t
                 LEFT JOIN team_members m ON m.team_id = t.id
-                LEFT JOIN team_tasks k ON k.team_id = t.id
                 GROUP BY t.id
                 ORDER BY t.created_at ASC
                 "#,
@@ -446,12 +429,10 @@ impl TeamStore for SqliteTeamStore {
                 r#"
                 SELECT t.id, t.name, t.description, t.leader_id, t.status,
                        t.created_at, t.disbanded_at,
-                       COUNT(DISTINCT am.agent_id) AS member_count,
-                       COUNT(DISTINCT k.id) AS task_count
+                       COUNT(DISTINCT am.agent_id) AS member_count
                 FROM teams t
                 LEFT JOIN team_members fm ON fm.team_id = t.id AND fm.agent_id = ?1
                 LEFT JOIN team_members am ON am.team_id = t.id
-                LEFT JOIN team_tasks k ON k.team_id = t.id
                 WHERE t.leader_id = ?1 OR fm.agent_id IS NOT NULL
                 GROUP BY t.id
                 ORDER BY t.created_at ASC
@@ -531,21 +512,9 @@ mod tests {
             .unwrap();
         }
 
-        // Add a task directly via SQL (team_tasks table kept for backward compat)
-        {
-            let conn = store.conn.lock().await;
-            let now = now_epoch();
-            conn.execute(
-                "INSERT INTO team_tasks (id, team_id, agent_id, subject, status, created_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
-                params!["task-1", team.id, "agent-2", "Do something", now],
-            )
-            .unwrap();
-        }
-
         let summaries = store.list_teams().await.unwrap();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].member_count, 1);
-        assert_eq!(summaries[0].task_count, 1);
     }
 
     #[tokio::test]

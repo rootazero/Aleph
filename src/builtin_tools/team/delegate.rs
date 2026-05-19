@@ -1,26 +1,26 @@
 //! TeamDelegateTool — delegate a task to a team member agent.
 //!
-//! Launches an independent agent session for the target member, sends the task
-//! as a message, waits for completion with a timeout, and records the result
-//! in the team task store.
-
-use std::collections::HashMap;
+//! Synchronous, leader-driven delegation: creates a tracked task, launches an
+//! independent agent session for the target member, waits for completion with
+//! a timeout, and records the result.
+//!
+//! This is distinct from the autonomous [`TeamDispatcher`](crate::teams::dispatcher):
+//! `team_delegate` runs exactly one member and blocks the caller for the
+//! result. Both share [`execute_member_task`] for the actual execution.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::agents::swarm::tasks::{
     CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
 };
 use crate::error::{AlephError, Result};
 use crate::gateway::context::GatewayContext;
-use crate::gateway::event_emitter::NoOpEventEmitter;
-use crate::gateway::execution_engine::RunRequest;
-use crate::gateway::router::SessionKey;
 use crate::sync_primitives::Arc;
 use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact, TaskStatus};
+use crate::teams::dispatcher::{execute_member_task, MemberRunStatus};
 use crate::teams::TeamStore;
 use crate::tools::AlephTool;
 
@@ -85,9 +85,8 @@ pub enum DelegateStatus {
 /// Flow:
 /// 1. Verify the agent is a member of the specified team
 /// 2. Create a task record in the team store
-/// 3. Launch a session for the target agent via the execution adapter
-/// 4. Wait for completion with timeout
-/// 5. Update the task record and return the result
+/// 3. Run the member agent via the shared execution path, with timeout
+/// 4. Update the task record and return the result
 #[derive(Clone)]
 pub struct TeamDelegateTool {
     store: Arc<dyn TeamStore>,
@@ -130,21 +129,46 @@ impl TeamDelegateTool {
         self.context = Some(context);
     }
 
-    /// Fetch the last assistant reply from an agent's session.
-    async fn fetch_last_reply(
-        agent: &crate::gateway::agent_instance::AgentInstance,
-        session_key: &SessionKey,
-    ) -> Option<String> {
-        let history = agent.get_history(session_key, Some(1)).await;
-        history
-            .last()
-            .filter(|msg| {
-                matches!(
-                    msg.role,
-                    crate::gateway::agent_instance::MessageRole::Assistant
-                )
+    /// Persist a delegation result as a report artifact (best-effort).
+    async fn persist_result_artifact(
+        &self,
+        task_id: &str,
+        agent_id: &str,
+        task: &str,
+        reply: &str,
+    ) {
+        let Some(ref artifact_store) = self.artifact_store else {
+            return;
+        };
+        let _ = artifact_store
+            .create_artifact(NewArtifact {
+                task_id: task_id.to_string(),
+                agent_id: agent_id.to_string(),
+                artifact_type: ArtifactType::Report,
+                title: format!("Delegation result: {task}"),
+                content: reply.to_string(),
+                metadata: serde_json::Value::Null,
+                status: TaskStatus::Completed,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
             })
-            .map(|msg| msg.content.clone())
+            .await;
+    }
+
+    /// Record the terminal status of the delegated task.
+    async fn finish_task(&self, task_id: &str, status: CoordTaskStatus, result: String) {
+        let _ = self
+            .coord_store
+            .update_task(
+                task_id,
+                CoordTaskUpdate {
+                    status: Some(status),
+                    result: Some(result),
+                    ..Default::default()
+                },
+            )
+            .await;
     }
 }
 
@@ -172,17 +196,18 @@ impl AlephTool for TeamDelegateTool {
             AlephError::other("GatewayContext not configured for team_delegate tool")
         })?;
 
-        // 1. Verify agent is a member of the team
+        // 1. Verify the agent is a member of the team.
         let members = self.store.get_members(&args.team_id).await?;
-        let is_member = members.iter().any(|m| m.agent_id == args.agent_id);
-        if !is_member {
+        if !members.iter().any(|m| m.agent_id == args.agent_id) {
             return Err(AlephError::other(format!(
                 "Agent '{}' is not a member of team '{}'",
                 args.agent_id, args.team_id
             )));
         }
 
-        // 2. Create task record via CoordTaskStore
+        // 2. Create the task record. No `managed_by` flag is set — the
+        //    autonomous dispatcher must not pick up a task that `team_delegate`
+        //    runs itself.
         let task = self
             .coord_store
             .create_task(NewCoordTask {
@@ -203,7 +228,6 @@ impl AlephTool for TeamDelegateTool {
             "team_delegate: task created, launching agent session"
         );
 
-        // Mark task as running
         self.coord_store
             .update_task(
                 &task.id,
@@ -213,212 +237,63 @@ impl AlephTool for TeamDelegateTool {
                 },
             )
             .await?;
+        // Task lock — best effort (advisory; a single synchronous owner here).
+        let _ = self.coord_store.acquire_lock(&task.id, &args.agent_id).await;
 
-        // Acquire task lock (non-fatal — best effort)
-        let _ = self
-            .coord_store
-            .acquire_lock(&task.id, &args.agent_id)
-            .await;
+        // 3. Run the member agent via the shared execution path.
+        let outcome = execute_member_task(
+            context,
+            &args.agent_id,
+            &args.team_id,
+            &task.id,
+            args.task.clone(),
+            args.timeout_secs,
+        )
+        .await;
+        let _ = self.coord_store.release_lock(&task.id, &args.agent_id).await;
 
-        // 3. Look up the target agent in the registry
-        let agent_registry = context.agent_registry();
-        let target_agent = match agent_registry.get(&args.agent_id).await {
-            Some(agent) => agent,
-            None => {
-                self.coord_store
-                    .update_task(
-                        &task.id,
-                        CoordTaskUpdate {
-                            status: Some(CoordTaskStatus::Failed),
-                            result: Some(format!(
-                                "Agent '{}' not found in registry",
-                                args.agent_id
-                            )),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-                return Err(AlephError::other(format!(
-                    "Agent '{}' not found in registry",
-                    args.agent_id
-                )));
-            }
-        };
-
-        // 4. Build a run request using a task-scoped session key
-        let session_key = SessionKey::task(&args.agent_id, "team", &task.id);
-        let run_id = uuid::Uuid::new_v4().to_string();
-
-        let request = RunRequest {
-            run_id: run_id.clone(),
-            input: args.task.clone(),
-            session_key: session_key.clone(),
-            timeout_secs: Some(args.timeout_secs),
-            metadata: {
-                let mut m = HashMap::new();
-                m.insert("team_id".to_string(), args.team_id.clone());
-                m.insert("task_id".to_string(), task.id.clone());
-                m
-            },
-            attachments: Vec::new(),
-            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-        };
-
-        let execution_adapter = Arc::clone(context.execution_adapter());
-        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-            Arc::new(NoOpEventEmitter::new());
-
-        // 5. Spawn execution so we can abort on timeout (prevents resource leak)
-        let agent_for_exec = target_agent.clone();
-        let handle = tokio::spawn(async move {
-            execution_adapter
-                .execute(request, agent_for_exec, emitter)
-                .await
-        });
-        let abort_handle = handle.abort_handle();
-
-        let timeout_duration = std::time::Duration::from_secs(args.timeout_secs);
-        let execution_result = tokio::time::timeout(timeout_duration, handle).await;
-
-        match execution_result {
-            Ok(Ok(Ok(()))) => {
-                // Execution completed — fetch the last assistant message
-                let reply = Self::fetch_last_reply(&target_agent, &session_key).await;
-                let reply_text = reply.unwrap_or_else(|| "(No reply content)".to_string());
-
-                let _ = self
-                    .coord_store
-                    .release_lock(&task.id, &args.agent_id)
+        // 4. Record the result and return.
+        match outcome.status {
+            MemberRunStatus::Completed => {
+                let reply = outcome
+                    .reply
+                    .unwrap_or_else(|| "(No reply content)".to_string());
+                self.finish_task(&task.id, CoordTaskStatus::Completed, reply.clone())
                     .await;
-                self.coord_store
-                    .update_task(
-                        &task.id,
-                        CoordTaskUpdate {
-                            status: Some(CoordTaskStatus::Completed),
-                            result: Some(reply_text.clone()),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-
-                // Persist delegation result as an artifact (best-effort)
-                if let Some(ref artifact_store) = self.artifact_store {
-                    let _ = artifact_store
-                        .create_artifact(NewArtifact {
-                            task_id: task.id.clone(),
-                            agent_id: args.agent_id.clone(),
-                            artifact_type: ArtifactType::Report,
-                            title: format!("Delegation result: {}", args.task),
-                            content: reply_text.clone(),
-                            metadata: serde_json::Value::Null,
-                            status: TaskStatus::Completed,
-                            blocked_by: vec![],
-                            assignee: None,
-                            priority: 0,
-                        })
-                        .await;
-                }
-
-                info!(
-                    task_id = %task.id,
-                    reply_len = reply_text.len(),
-                    "team_delegate: task completed"
-                );
-
+                self.persist_result_artifact(&task.id, &args.agent_id, &args.task, &reply)
+                    .await;
+                info!(task_id = %task.id, reply_len = reply.len(), "team_delegate: task completed");
                 Ok(TeamDelegateOutput {
                     task_id: task.id,
                     status: DelegateStatus::Completed,
-                    reply: Some(reply_text),
+                    reply: Some(reply),
                     error: None,
                 })
             }
-            Ok(Ok(Err(e))) => {
-                let error_msg = format!("Execution failed: {}", e);
-                warn!(
-                    task_id = %task.id,
-                    error = %e,
-                    "team_delegate: execution failed"
-                );
-
-                let _ = self
-                    .coord_store
-                    .release_lock(&task.id, &args.agent_id)
+            MemberRunStatus::Failed => {
+                let error = outcome
+                    .error
+                    .unwrap_or_else(|| "Execution failed".to_string());
+                self.finish_task(&task.id, CoordTaskStatus::Failed, error.clone())
                     .await;
-                self.coord_store
-                    .update_task(
-                        &task.id,
-                        CoordTaskUpdate {
-                            status: Some(CoordTaskStatus::Failed),
-                            result: Some(error_msg.clone()),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-
                 Ok(TeamDelegateOutput {
                     task_id: task.id,
                     status: DelegateStatus::Failed,
                     reply: None,
-                    error: Some(error_msg),
+                    error: Some(error),
                 })
             }
-            Ok(Err(join_err)) => {
-                let error_msg = format!("Task panicked: {}", join_err);
-                warn!(task_id = %task.id, "team_delegate: task panicked");
-
-                let _ = self
-                    .coord_store
-                    .release_lock(&task.id, &args.agent_id)
+            MemberRunStatus::Timeout => {
+                let error = outcome
+                    .error
+                    .unwrap_or_else(|| format!("Timed out after {} seconds", args.timeout_secs));
+                self.finish_task(&task.id, CoordTaskStatus::Failed, error.clone())
                     .await;
-                self.coord_store
-                    .update_task(
-                        &task.id,
-                        CoordTaskUpdate {
-                            status: Some(CoordTaskStatus::Failed),
-                            result: Some(error_msg.clone()),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-
-                Ok(TeamDelegateOutput {
-                    task_id: task.id,
-                    status: DelegateStatus::Failed,
-                    reply: None,
-                    error: Some(error_msg),
-                })
-            }
-            Err(_) => {
-                // Timeout — abort the spawned task to free resources
-                abort_handle.abort();
-
-                let error_msg = format!("Timed out after {} seconds", args.timeout_secs);
-                warn!(
-                    task_id = %task.id,
-                    timeout_secs = args.timeout_secs,
-                    "team_delegate: timed out, task aborted"
-                );
-
-                let _ = self
-                    .coord_store
-                    .release_lock(&task.id, &args.agent_id)
-                    .await;
-                self.coord_store
-                    .update_task(
-                        &task.id,
-                        CoordTaskUpdate {
-                            status: Some(CoordTaskStatus::Failed),
-                            result: Some(error_msg.clone()),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-
                 Ok(TeamDelegateOutput {
                     task_id: task.id,
                     status: DelegateStatus::Timeout,
                     reply: None,
-                    error: Some(error_msg),
+                    error: Some(error),
                 })
             }
         }

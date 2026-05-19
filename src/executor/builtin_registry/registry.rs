@@ -228,6 +228,9 @@ pub struct BuiltinToolRegistry {
     /// Team messaging tools (optional — require MessageRouter / Inbox)
     pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
     pub(crate) inbox_read_tool: Option<crate::builtin_tools::team::InboxReadTool>,
+    /// Plan approval tools (optional — require MessageRouter + ArtifactStore + EventLogStore)
+    pub(crate) plan_submit_tool: Option<crate::builtin_tools::team::PlanSubmitTool>,
+    pub(crate) plan_resolve_tool: Option<crate::builtin_tools::team::PlanResolveTool>,
     /// Collaborative session tools (optional — require SessionCoordinator / SessionStore)
     pub(crate) session_collaborate_tool: Option<crate::builtin_tools::team::SessionCollaborateTool>,
     pub(crate) session_turn_tool: Option<crate::builtin_tools::team::SessionTurnTool>,
@@ -984,6 +987,20 @@ impl ToolRegistry for BuiltinToolRegistry {
             "inbox_read" => Box::pin(async move {
                 let tool = self.inbox_read_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("inbox_read not available: no Inbox configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+
+            // Plan approval tools
+            "plan_submit" => Box::pin(async move {
+                let tool = self.plan_submit_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("plan_submit not available: plan approval not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "plan_resolve" => Box::pin(async move {
+                let tool = self.plan_resolve_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("plan_resolve not available: plan approval not configured")
                 })?;
                 tool.call_json(arguments).await
             }),

@@ -58,10 +58,10 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     #[allow(dead_code)]
     pub command_handler:
         Option<std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>>,
-    /// Event log store for team event logging and KanbanAutoUnblocker
+    /// Event log store for team event logging
     pub event_store: Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
-    /// Artifact store for task artifact management and KanbanAutoUnblocker
-    pub artifact_store: Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
+    /// Message router for the TeamNotifier event handler
+    pub message_router: Option<Arc<alephcore::teams::messages::MessageRouter>>,
     /// OnceLock handle shared with the real ExecutionEngine. Boot code calls
     /// `.set(orchestrator)` on this after `initialize_orchestrator` returns so
     /// that `dispatch_via_orchestrator` can resolve the orchestrator from the
@@ -414,89 +414,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         _ => None,
     };
 
-    // Initialize SwarmCoordinator and attach the coord task store and inbox provider.
-    // The AI provider is injected later via set_intelligence_provider() once resolved.
-    let swarm_coordinator: Option<Arc<alephcore::agents::swarm::SwarmCoordinator>> = async {
-        use alephcore::agents::swarm::{SwarmConfig, SwarmCoordinator};
-
-        let coordinator = SwarmCoordinator::with_config(SwarmConfig::default())
-            .await
-            .map_err(|e| {
-                if !daemon {
-                    eprintln!("Warning: Failed to initialize swarm coordinator: {}.", e);
-                }
-            })
-            .ok()?;
-
-        // Attach task store if available; on failure, recreate without it
-        let coordinator = if let Some(ref store) = coord_store {
-            match coordinator.with_task_store(store.clone()) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!("Failed to attach task store to swarm coordinator: {e}");
-                    // coordinator was consumed; recreate without task store
-                    SwarmCoordinator::with_config(SwarmConfig::default())
-                        .await
-                        .map_err(|e2| {
-                            tracing::error!("Swarm coordinator recreation failed: {e2}");
-                        })
-                        .ok()?
-                }
-            }
-        } else {
-            coordinator
-        };
-
-        // Attach inbox context provider for team message awareness.
-        // with_inbox_provider consumes self, so on the (unlikely) error path
-        // the coordinator is lost. This only fails if the injector Arc was
-        // already shared (i.e. start() was called), which hasn't happened yet.
-        let coordinator = if let (Some(ib), Some(ts)) = (inbox.as_ref(), team_store.as_ref()) {
-            use alephcore::teams::context::TeamInboxContextProvider;
-            let mut inbox_provider = TeamInboxContextProvider::new(Arc::clone(ib), Arc::clone(ts));
-            if let Some(ref ss) = team_session_store {
-                inbox_provider = inbox_provider.with_session_store(ss.clone());
-            }
-            match coordinator.with_inbox_provider(Arc::new(inbox_provider)) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!("Failed to attach inbox provider to swarm coordinator: {e}");
-                    // Coordinator was consumed; recreate without inbox provider
-                    let c2 = SwarmCoordinator::with_config(SwarmConfig::default())
-                        .await
-                        .map_err(|e2| {
-                            tracing::error!("Swarm coordinator recreation failed: {e2}");
-                        })
-                        .ok()?;
-                    // Re-attach task store if available
-                    if let Some(ref store) = coord_store {
-                        match c2.with_task_store(store.clone()) {
-                            Ok(c) => c,
-                            Err(_) => SwarmCoordinator::with_config(SwarmConfig::default())
-                                .await
-                                .ok()?,
-                        }
-                    } else {
-                        c2
-                    }
-                }
-            }
-        } else {
-            coordinator
-        };
-
-        let coordinator = Arc::new(coordinator);
-        coordinator.clone().start().await;
-        if !daemon {
-            println!("  Swarm coordinator started");
-        }
-        Some(coordinator)
-    }
-    .await;
-
-    // Extract the AgentMessageBus from the coordinator for tool config wiring.
+    // AgentMessageBus — in-process agent-to-agent event channel.
+    // `task_update` publishes ImportantEvents here; `task_wait` subscribes.
     let agent_message_bus: Option<Arc<alephcore::agents::swarm::AgentMessageBus>> =
-        swarm_coordinator.as_ref().map(|c| c.bus.clone());
+        Some(Arc::new(alephcore::agents::swarm::AgentMessageBus::new()));
 
     // Build generation provider registry (independent of chat AI provider)
     let generation_registry = {
@@ -769,16 +690,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     };
 
     if let Some(provider_registry) = provider_registry {
-        // Wire AI provider into SwarmCoordinator's IntelligenceLayer (deferred injection).
-        // The coordinator was initialized before the provider was resolved; now that we
-        // have a provider, inject it so the intelligence layer can use LLM summarization.
-        if let Some(ref coordinator) = swarm_coordinator {
-            let provider = provider_registry.default_provider();
-            if coordinator.set_intelligence_provider(provider) {
-                tracing::info!("Swarm intelligence layer: AI provider attached");
-            }
-        }
-
         // Create embedding provider from app config for memory tools
         let embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = {
             let embedding_settings = &app_config.memory.embedding;
@@ -860,6 +771,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             })
         };
 
+        // Shared wake handle for the autonomous team dispatcher. `task_create`
+        // notifies it; the dispatcher (constructed later, once GatewayContext
+        // exists) waits on it.
+        let dispatch_signal = std::sync::Arc::new(tokio::sync::Notify::new());
+
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
@@ -881,6 +797,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             memory_similarity_threshold: Some(app_config.memory.similarity_threshold),
             injection_mode: app_config.memory.injection_mode,
             coord_task_store: coord_store.clone(),
+            dispatch_signal: Some(dispatch_signal.clone()),
             agent_message_bus: agent_message_bus.clone(),
             team_store: team_store.clone(),
             artifact_store: artifact_store.clone(),
@@ -1714,6 +1631,36 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 engine_arc,
                 a2a_policy,
             ));
+
+            // Autonomous team dispatcher — drives the coordination-task DAG to
+            // completion. Constructed here because it needs the GatewayContext
+            // (agent registry + execution adapter), which only now exists.
+            if let (Some(cs), Some(ts)) = (coord_store.clone(), team_store.clone()) {
+                use alephcore::teams::context::TeamInboxContextProvider;
+                use alephcore::teams::dispatcher::{DispatcherConfig, TeamDispatcher};
+
+                let inbox_provider = inbox.as_ref().map(|ib| {
+                    let mut p = TeamInboxContextProvider::new(Arc::clone(ib), Arc::clone(&ts));
+                    if let Some(ss) = team_session_store.clone() {
+                        p = p.with_session_store(ss);
+                    }
+                    Arc::new(p)
+                });
+                let dispatcher = Arc::new(TeamDispatcher::new(
+                    cs,
+                    ts,
+                    artifact_store.clone(),
+                    inbox_provider,
+                    (*gateway_ctx).clone(),
+                    DispatcherConfig::default(),
+                    dispatch_signal.clone(),
+                ));
+                dispatcher.spawn_loop();
+                if !daemon {
+                    println!("  Team dispatcher started");
+                }
+            }
+
             let _ = gateway_context_cell.set(gateway_ctx);
         }
     } else {
@@ -2154,7 +2101,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         coord_task_store: coord_store,
         command_handler: command_handler_out,
         event_store: event_store.clone(),
-        artifact_store: artifact_store.clone(),
+        message_router: message_router.clone(),
         orchestrator_cell: orch_cell_out,
         memory_context_provider: mcp_for_orchestrator,
     }
