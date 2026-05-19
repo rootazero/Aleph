@@ -9,8 +9,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::context::budget::ContextBudgetConfig;
 use crate::harness::StallConfig;
 use crate::providers::AiProvider;
+
+/// Default model context-window estimate (tokens) used when `[context_budget]`
+/// omits `token_budget`. Operators on larger- or smaller-window models should
+/// set `token_budget` explicitly — compaction thresholds are fractions of it.
+const DEFAULT_CONTEXT_TOKEN_BUDGET: u64 = 200_000;
 
 /// Stability triple — three independent Optionals derived from `[stability]`.
 ///
@@ -86,11 +92,150 @@ pub fn build_stability_triple(config: &Config) -> StabilityTriple {
     }
 }
 
+/// Build the optional per-run context-budget config from `[context_budget]`.
+///
+/// Returns `None` when the section is absent or `enabled = false` — the
+/// orchestrator then leaves `HarnessDeps.context_budget`/`context_compactor`
+/// as `None`, so behavior is identical to before this wiring (no mid-run
+/// compaction). When `Some`, `AgentHarnessRunner::run` constructs a *fresh*
+/// `ContextBudget` per run (its circuit-breaker / diminishing-returns state
+/// must not be shared across concurrent sessions).
+///
+/// `token_budget` and the two thresholds are user-tunable; the remaining
+/// `ContextBudgetConfig` fields use validated internal defaults (KISS — not
+/// every knob needs a toml surface).
+pub fn build_context_budget_config(config: &Config) -> Option<ContextBudgetConfig> {
+    let cb = config.context_budget.as_ref()?;
+    if !cb.enabled {
+        return None;
+    }
+    let token_budget = cb.token_budget.unwrap_or(DEFAULT_CONTEXT_TOKEN_BUDGET);
+    let warning_threshold = cb.warning_threshold.unwrap_or(0.70);
+    let critical_threshold = cb.critical_threshold.unwrap_or(0.85);
+
+    // Defensive validation (P7): a misconfigured budget silently cuts off
+    // every run — e.g. inverted thresholds make `CompactAndContinue`
+    // unreachable so every warning-pressure turn escalates to `FinalReply`.
+    // Reject rather than degrade, mirroring `build_fallback_llm`'s
+    // warn-and-return-`None` pattern.
+    if token_budget == 0 {
+        tracing::warn!("context_budget: token_budget must be > 0; disabling");
+        return None;
+    }
+    if !(warning_threshold > 0.0
+        && warning_threshold < critical_threshold
+        && critical_threshold <= 1.0)
+    {
+        tracing::warn!(
+            warning_threshold,
+            critical_threshold,
+            "context_budget: require 0 < warning_threshold < critical_threshold <= 1.0; disabling"
+        );
+        return None;
+    }
+
+    Some(ContextBudgetConfig {
+        token_budget,
+        warning_threshold,
+        critical_threshold,
+        // Internal tuning — validated defaults, deliberately not exposed as
+        // toml knobs (KISS: every run inherits the same compaction cadence).
+        token_estimate_ratio: 3.5,
+        fresh_tail_count: 6,
+        circuit_breaker_max: 3,
+        diminishing_window: 4,
+        diminishing_threshold: 500,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::{FallbackProviderToml, ProviderConfig, StabilityToml};
+    use crate::{ContextBudgetToml, FallbackProviderToml, ProviderConfig, StabilityToml};
+
+    fn cfg_with_context_budget(cb: Option<ContextBudgetToml>) -> Config {
+        Config {
+            context_budget: cb,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn context_budget_none_when_section_missing() {
+        let cfg = Config::default();
+        assert!(build_context_budget_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn context_budget_none_when_disabled() {
+        let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
+            enabled: false,
+            token_budget: Some(128_000),
+            ..ContextBudgetToml::default()
+        }));
+        assert!(build_context_budget_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn context_budget_some_uses_defaults_when_fields_unset() {
+        let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
+            enabled: true,
+            ..ContextBudgetToml::default()
+        }));
+        let bc = build_context_budget_config(&cfg).expect("enabled → Some");
+        assert_eq!(bc.token_budget, DEFAULT_CONTEXT_TOKEN_BUDGET);
+        assert_eq!(bc.warning_threshold, 0.70);
+        assert_eq!(bc.critical_threshold, 0.85);
+    }
+
+    #[test]
+    fn context_budget_some_honours_explicit_values() {
+        let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
+            enabled: true,
+            token_budget: Some(64_000),
+            warning_threshold: Some(0.6),
+            critical_threshold: Some(0.9),
+        }));
+        let bc = build_context_budget_config(&cfg).expect("enabled → Some");
+        assert_eq!(bc.token_budget, 64_000);
+        assert_eq!(bc.warning_threshold, 0.6);
+        assert_eq!(bc.critical_threshold, 0.9);
+    }
+
+    #[test]
+    fn context_budget_none_when_thresholds_inverted() {
+        // warning >= critical makes the CompactAndContinue branch unreachable;
+        // every warning-pressure turn escalates straight to FinalReply,
+        // silently cutting off every run. Reject rather than degrade.
+        let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
+            enabled: true,
+            warning_threshold: Some(0.9),
+            critical_threshold: Some(0.7),
+            ..ContextBudgetToml::default()
+        }));
+        assert!(build_context_budget_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn context_budget_none_when_token_budget_zero() {
+        let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
+            enabled: true,
+            token_budget: Some(0),
+            ..ContextBudgetToml::default()
+        }));
+        assert!(build_context_budget_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn context_budget_none_when_threshold_out_of_range() {
+        let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
+            enabled: true,
+            warning_threshold: Some(1.5),
+            ..ContextBudgetToml::default()
+        }));
+        assert!(build_context_budget_config(&cfg).is_none());
+    }
 
     fn cfg_with_fallback(
         fb: Option<FallbackProviderToml>,

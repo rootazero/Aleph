@@ -21,8 +21,8 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::agents::AgentRegistry;
-use crate::context::budget::ContextBudget;
-use crate::context::compact::compactor::ContextCompactor;
+use crate::context::budget::{ContextBudget, ContextBudgetConfig};
+use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::harness::agent::AgentHarness;
 
 use crate::harness::deps::HarnessDeps;
@@ -99,8 +99,12 @@ pub struct AgentHarnessRunner {
     // `run()` so each `AgentHarness` instance sees the same pressure sensor
     // / compactor / hook set.
     pub verifier_chain: Option<Arc<VerifierChain>>,
-    pub context_budget: Option<Arc<Mutex<ContextBudget>>>,
-    pub context_compactor: Option<Arc<ContextCompactor>>,
+    /// Opt-in mid-run context management (`[context_budget]`). Held as the
+    /// *config*, not a live `ContextBudget`: `run()` constructs a fresh
+    /// `ContextBudget` per call because its circuit-breaker /
+    /// diminishing-returns state must never be shared across concurrent
+    /// sessions. `None` disables mid-run compaction entirely.
+    pub context_budget_config: Option<ContextBudgetConfig>,
     pub skill_prefetcher: Option<Arc<SkillPrefetcher>>,
 
     // -- Stage 7 (init audit) — production wiring for Stage 5a/5b + P0 rescue
@@ -112,6 +116,12 @@ pub struct AgentHarnessRunner {
     pub stall_config: Option<crate::harness::deps::StallConfig>,
     pub consecutive_failure_cap: Option<usize>,
     pub turn_timeout: Option<std::time::Duration>,
+
+    /// Boot-time default for the harness Think→Act iteration cap, sourced from
+    /// `[execution] max_iterations`. A per-flow `FlowOverrides.max_iterations`
+    /// overrides it on a run-by-run basis. The harness loop is never left
+    /// uncapped — see [`resolve_max_iterations`].
+    pub default_max_iterations: usize,
 
     /// Platform-specific power-management capability. Injected at boot so the
     /// core never directly imports platform crates (R1: Brain–Limb separation).
@@ -206,14 +216,33 @@ impl HarnessRunner for AgentHarnessRunner {
         // Wire the platform-specific power capability so the harness can
         // inhibit idle sleep for the duration of each Think→Act turn.
         let power = self.power.clone();
+        // H2: build a per-run context budget + compactor when `[context_budget]`
+        // is enabled. The budget is fresh per run — its circuit-breaker and
+        // diminishing-returns counters must not leak across concurrent
+        // sessions. The compactor reuses this run's provider for side-channel
+        // summarization (deterministic-truncation fallback on provider error).
+        let (context_budget, context_compactor) = match self.context_budget_config.as_ref() {
+            Some(cfg) => {
+                let budget = Arc::new(Mutex::new(ContextBudget::new(cfg)));
+                let compactor = Arc::new(ContextCompactor::new(
+                    llm.clone(),
+                    CompactorConfig {
+                        fresh_tail: cfg.fresh_tail_count,
+                        ..CompactorConfig::default()
+                    },
+                ));
+                (Some(budget), Some(compactor))
+            }
+            None => (None, None),
+        };
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
             sandbox,
             llm,
             verifier_chain: self.verifier_chain.clone(),
-            context_budget: self.context_budget.clone(),
-            context_compactor: self.context_compactor.clone(),
+            context_budget,
+            context_compactor,
             skill_prefetcher: self.skill_prefetcher.clone(),
             trace_sink: trace_sink.clone(),
             system_prompt,
@@ -221,7 +250,12 @@ impl HarnessRunner for AgentHarnessRunner {
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: self.guardrails.clone(),
             fallback_llm: self.fallback_llm.clone(),
-            max_iterations: None,
+            // H1: the Think→Act loop is always capped. Per-flow override wins;
+            // otherwise the boot-time `[execution] max_iterations` default.
+            max_iterations: Some(resolve_max_iterations(
+                spec.overrides.max_iterations,
+                self.default_max_iterations,
+            )),
             power,
             stall_config: self.stall_config.clone(),
             consecutive_failure_cap: self.consecutive_failure_cap,
@@ -457,6 +491,31 @@ impl AgentHarnessRunner {
         );
         Some(prompt)
     }
+}
+
+/// Hard fallback iteration cap — used only when both the per-flow override
+/// and the boot-configured default are absent or zero. The harness Think→Act
+/// loop must never run uncapped: a model that keeps emitting tool calls would
+/// otherwise loop (and bill) forever.
+///
+/// Kept numerically equal to `config::types::execution::default_max_iterations()`
+/// (the `[execution] max_iterations` default) — both express "the default
+/// per-run cap"; update them together.
+pub(crate) const FALLBACK_MAX_ITERATIONS: usize = 200;
+
+/// Resolve the hard per-run iteration cap for the harness loop.
+///
+/// A positive `FlowOverrides.max_iterations` (per-flow preset override) wins;
+/// otherwise the boot-time `default` (from `[execution] max_iterations`)
+/// applies. A zero on either input is treated as "unset" so a misconfigured
+/// `0` can never leave the loop uncapped — it falls through to
+/// [`FALLBACK_MAX_ITERATIONS`].
+fn resolve_max_iterations(flow_override: Option<u32>, default: usize) -> usize {
+    flow_override
+        .map(|n| n as usize)
+        .filter(|&n| n > 0)
+        .or(Some(default).filter(|&n| n > 0))
+        .unwrap_or(FALLBACK_MAX_ITERATIONS)
 }
 
 /// Extract the user's most recent prompt text from a `FlowInput` for use as
@@ -815,6 +874,46 @@ mod tests {
     /// ResponseFormatLayer is intentionally not asserted here — it was
     /// unregistered from the default pipeline on 2026-05-10 and is no longer
     /// expected on any path.
+    // -- resolve_max_iterations tests (H1: cap the Think→Act loop) ----------
+    //
+    // The harness loop must always be capped. Before this wiring the
+    // orchestrator passed `max_iterations: None`, so a model that kept
+    // emitting tool calls looped forever. These tests pin the resolution
+    // rules: per-flow override wins, zero means "unset", and a misconfigured
+    // default still yields a non-zero cap.
+
+    #[test]
+    fn resolve_max_iterations_uses_default_when_no_override() {
+        assert_eq!(super::resolve_max_iterations(None, 200), 200);
+    }
+
+    #[test]
+    fn resolve_max_iterations_flow_override_wins() {
+        assert_eq!(super::resolve_max_iterations(Some(50), 200), 50);
+    }
+
+    #[test]
+    fn resolve_max_iterations_treats_zero_override_as_unset() {
+        assert_eq!(super::resolve_max_iterations(Some(0), 200), 200);
+    }
+
+    #[test]
+    fn resolve_max_iterations_falls_back_when_default_is_zero() {
+        // Misconfigured `[execution] max_iterations = 0` must still cap.
+        assert_eq!(
+            super::resolve_max_iterations(None, 0),
+            super::FALLBACK_MAX_ITERATIONS
+        );
+    }
+
+    #[test]
+    fn resolve_max_iterations_never_returns_zero() {
+        assert_eq!(
+            super::resolve_max_iterations(Some(0), 0),
+            super::FALLBACK_MAX_ITERATIONS
+        );
+    }
+
     #[test]
     fn legacy_prompt_config_still_emits_tools_layer() {
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};

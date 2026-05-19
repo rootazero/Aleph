@@ -196,6 +196,12 @@ pub struct Config {
     /// to an existing `[providers.<key>]` entry by toml key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_provider: Option<FallbackProviderToml>,
+    /// Opt-in mid-run context-window management. When `Some` and
+    /// `enabled = true`, the orchestrator builds a per-run `ContextBudget` +
+    /// `ContextCompactor` so long Think→Act runs compact history instead of
+    /// hard-failing on a provider context-length error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_budget: Option<ContextBudgetToml>,
     /// Presets override loaded from ~/.aleph/presets.toml
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
@@ -390,6 +396,7 @@ impl Default for Config {
             guardrails: None,
             stability: None,
             fallback_provider: None,
+            context_budget: None,
             presets_override: crate::config::presets_override::PresetsOverride::default(),
             prompts_override: crate::config::prompts_override::PromptsOverride::default(),
             defaults_override: crate::config::defaults_override::DefaultsOverride::default(),

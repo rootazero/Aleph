@@ -126,7 +126,7 @@ pub use crate::config::{
     types::acp::{AcpAdapterEntry, AcpConfig, AdapterModeSerde, OutputFormatSerde},
     types::generation::GenerationConfig,
     types::memory::DreamingConfig,
-    types::phase6_wiring::{FallbackProviderToml, GuardrailsToml, StabilityToml},
+    types::phase6_wiring::{ContextBudgetToml, FallbackProviderToml, GuardrailsToml, StabilityToml},
     types::stop_hooks::StopHookConfig,
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
     FullConfig, GeneralConfig, GenerationProviderConfig, MemoryConfig, MemoryInjectionMode,

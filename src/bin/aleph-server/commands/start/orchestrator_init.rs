@@ -21,9 +21,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use alephcore::orchestrator::{
-    build_sandbox_factory, dispatch::Orchestrator, flow_registry::FlowRegistry,
-    harness_bridge::AgentHarnessRunner, loader::load_presets, resolver::RoutingOverrides,
-    sandbox_factory::WorkspaceBuilder,
+    build_context_budget_config, build_sandbox_factory, dispatch::Orchestrator,
+    flow_registry::FlowRegistry, harness_bridge::AgentHarnessRunner, loader::load_presets,
+    resolver::RoutingOverrides, sandbox_factory::WorkspaceBuilder,
 };
 use alephcore::verification::{
     stop_hooks::build_from_config as build_stop_hooks, StopHookVerifier, ToolLoopVerifier,
@@ -157,8 +157,9 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         default_provider,
         named_providers: HashMap::new(),
         verifier_chain,
-        context_budget: None,
-        context_compactor: None,
+        // H2: opt-in mid-run context compaction. `None` (section absent /
+        // disabled) keeps the previous behavior — no compaction.
+        context_budget_config: build_context_budget_config(config),
         skill_prefetcher: None,
         // Stage 7 (#12) wiring placeholders — PHASE-6 will load these from
         // aleph.toml. Path is now plumbed end-to-end; defaults stay None
@@ -168,6 +169,9 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         stall_config: stall_cfg,
         consecutive_failure_cap: failure_cap,
         turn_timeout: turn_to,
+        // H1: wire the (previously orphaned) `[execution] max_iterations`
+        // config so every harness run is capped. Default 200.
+        default_max_iterations: config.execution.max_iterations,
         power,
         memory_context_provider,
     });
