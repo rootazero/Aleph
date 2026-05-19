@@ -2,7 +2,40 @@
 
 **Date:** 2026-05-19
 **Branch:** `feat/provider-failover`
-**Status:** Approved design — ready for implementation plan
+**Status:** Phases 1–2 SHIPPED & verified; Phases 3–4 scoped as follow-up.
+
+## Status (2026-05-19)
+
+| Phase | State | Commit |
+|---|---|---|
+| 1 — Failover engine | ✅ shipped, 17 unit tests | `7b1a03bf7` |
+| 2 — Config + wiring (`FailoverProvider` as `deps.llm`) | ✅ shipped, 69 lib + 7 bin tests green | `219da2ec4` |
+| 3 — Per-agent `provider_hint` | ⏳ deferred — see note below | — |
+| 4 — Dead-code cleanup (`fallback_llm`, `AgentModelConfig`) | ⏳ deferred — see note below | — |
+
+**Delivered:** automatic provider **and** model failover when the default
+provider/model fails — an ordered `[fallback_provider].chain`, model-level
+fallback across each provider's `models[]`, a per-provider circuit breaker, and
+rich error classification (the formerly-dead `llm_retry.rs` classifier and
+`FailoverProvider` are now both live). No harness changes — R10 holds.
+
+**Phase 3 deferral rationale:** per-agent provider needs `provider_hint`
+threaded to *all four* `SubagentTool` construction sites
+(`tools/scoped.rs` ×3, `gateway/.../run_loop.rs` ×1) plus a per-provider
+failover-chain registry the orchestrator does not yet build (`named_providers`
+is still the empty "Phase 6" map). Wiring only the production path would leave
+`provider_hint` honored inconsistently — the half-wired anti-pattern this very
+spec set out to remove. It is a clean, self-contained next cycle: add
+`AgentDef.provider_hint` + loader parsing, build a `name → FailoverProvider`
+registry at boot, thread it via a `with_provider_overrides` builder on
+`SubagentTool`, and resolve it in `SubagentTool::build_runtime`.
+
+**Phase 4 deferral rationale:** removing the now-inert `deps.fallback_llm`
+touches ~50 struct-literal sites and the documented nine-event init-seam
+contract; removing dead `AgentModelConfig` touches the agent-config CRUD +
+gateway handlers. Both are mechanical but wide; sequencing them after Phase 3
+keeps each commit coherent. `deps.fallback_llm` is currently set to `None`
+(inert) with an inline comment marking it for removal.
 
 ## 1. Problem
 
