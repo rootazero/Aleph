@@ -153,15 +153,18 @@ You can also read additional resources within a skill by specifying file_name:
         self
     }
 
-    /// Find the skill directory by ID across all configured directories
-    fn find_skill_dir(&self, skill_id: &str) -> Option<PathBuf> {
+    /// Collect every directory that contains skill `skill_id` (a SKILL.md).
+    /// Returns all matches so the caller can refuse ambiguous names rather
+    /// than silently shadowing — mirrors hermes-agent's collision refusal.
+    fn find_skill_dirs(&self, skill_id: &str) -> Vec<PathBuf> {
+        let mut hits = Vec::new();
         for skills_dir in &self.skills_dirs {
             let skill_dir = skills_dir.join(skill_id);
             if skill_dir.is_dir() && skill_dir.join("SKILL.md").exists() {
-                return Some(skill_dir);
+                hits.push(skill_dir);
             }
         }
-        None
+        hits
     }
 
     /// Validate skill_id to prevent path traversal attacks
@@ -249,12 +252,29 @@ You can also read additional resources within a skill by specifying file_name:
         let file_name = args.file_name.as_deref().unwrap_or("SKILL.md");
         self.validate_file_name(file_name)?;
 
-        // Find skill directory across all configured locations
-        let skill_dir = self.find_skill_dir(&args.skill_id).ok_or_else(|| {
-            let error_msg = format!("Skill '{}' not found", args.skill_id);
-            notify_tool_result(Self::NAME, &error_msg, false);
-            ToolError::NotFound(error_msg)
-        })?;
+        // Find skill directory across all configured locations.
+        // Refuse ambiguous names to mirror hermes-agent's collision refusal.
+        let candidates = self.find_skill_dirs(&args.skill_id);
+        let skill_dir = match candidates.len() {
+            0 => {
+                let error_msg = format!("Skill '{}' not found", args.skill_id);
+                notify_tool_result(Self::NAME, &error_msg, false);
+                return Err(ToolError::NotFound(error_msg));
+            }
+            1 => candidates.into_iter().next().unwrap(),
+            _ => {
+                let paths: Vec<String> =
+                    candidates.iter().map(|p| p.display().to_string()).collect();
+                let error_msg = format!(
+                    "skill '{}' is ambiguous — found in multiple locations: {}. \
+                     Disambiguate by removing the duplicate or renaming one.",
+                    args.skill_id,
+                    paths.join(", ")
+                );
+                notify_tool_result(Self::NAME, &error_msg, false);
+                return Err(ToolError::InvalidArgs(error_msg));
+            }
+        };
 
         let file_path = skill_dir.join(file_name);
 
@@ -929,5 +949,36 @@ Follow them carefully.
         assert!(result.success);
         assert_eq!(result.skill_id, "unique-skill");
         assert!(result.content.contains("Unique Skill"));
+    }
+
+    #[tokio::test]
+    async fn duplicate_skill_across_dirs_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir_a = tmp.path().join("a");
+        let dir_b = tmp.path().join("b");
+        for d in [&dir_a, &dir_b] {
+            let sk = d.join("dup");
+            std::fs::create_dir_all(&sk).unwrap();
+            std::fs::write(
+                sk.join("SKILL.md"),
+                "---\nname: dup\ndescription: d\n---\nx",
+            )
+            .unwrap();
+        }
+        let tool = ReadSkillTool::with_directories(vec![dir_a, dir_b]);
+        let err = AlephTool::call(
+            &tool,
+            ReadSkillArgs {
+                skill_id: "dup".to_string(),
+                file_name: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ambiguous") || msg.contains("multiple"),
+            "got: {msg}"
+        );
     }
 }
