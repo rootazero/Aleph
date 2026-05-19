@@ -568,6 +568,57 @@ fn test_parse_sse_empty_content_skipped() {
 }
 
 #[test]
+fn test_parse_sse_reasoning_content_delta() {
+    // DeepSeek-R1 / Moonshot-Kimi stream chain-of-thought via `reasoning_content`.
+    let mut tracker = IndexIdTracker::new();
+    let mut pending = VecDeque::new();
+    let data = r#"{"choices":[{"delta":{"reasoning_content":"Let me think"},"index":0}]}"#;
+    parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+    assert_eq!(pending.len(), 1);
+    let delta = pending.pop_front().unwrap().unwrap();
+    assert!(matches!(delta, ProviderDelta::ThinkingDelta(t) if t == "Let me think"));
+}
+
+#[test]
+fn test_parse_sse_reasoning_field_delta() {
+    // OpenRouter's unified format streams reasoning under the `reasoning` field.
+    let mut tracker = IndexIdTracker::new();
+    let mut pending = VecDeque::new();
+    let data = r#"{"choices":[{"delta":{"reasoning":"weighing options"},"index":0}]}"#;
+    parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+    assert_eq!(pending.len(), 1);
+    let delta = pending.pop_front().unwrap().unwrap();
+    assert!(matches!(delta, ProviderDelta::ThinkingDelta(t) if t == "weighing options"));
+}
+
+#[test]
+fn test_parse_sse_null_reasoning_content_falls_through_to_reasoning() {
+    // DeepSeek emits `reasoning_content: null` during the content phase;
+    // a co-present `reasoning` field must still be picked up.
+    let mut tracker = IndexIdTracker::new();
+    let mut pending = VecDeque::new();
+    let data = r#"{"choices":[{"delta":{"reasoning_content":null,"reasoning":"fallback"},"index":0}]}"#;
+    parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+    assert_eq!(pending.len(), 1);
+    let delta = pending.pop_front().unwrap().unwrap();
+    assert!(matches!(delta, ProviderDelta::ThinkingDelta(t) if t == "fallback"));
+}
+
+#[test]
+fn test_parse_sse_empty_reasoning_skipped() {
+    let mut tracker = IndexIdTracker::new();
+    let mut pending = VecDeque::new();
+    let data = r#"{"choices":[{"delta":{"reasoning_content":""},"index":0}]}"#;
+    parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+    // Empty reasoning should not emit any delta
+    assert_eq!(pending.len(), 0);
+}
+
+#[test]
 fn test_parse_sse_tool_call_start() {
     let mut tracker = IndexIdTracker::new();
     let mut pending = VecDeque::new();
