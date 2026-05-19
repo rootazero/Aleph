@@ -129,6 +129,8 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "team_digest",
             "message_send",
             "inbox_read",
+            "plan_submit",
+            "plan_resolve",
             "task_create",
             "task_update",
             "task_list",

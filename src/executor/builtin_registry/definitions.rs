@@ -391,6 +391,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     BuiltinToolDefinition {
+        name: "plan_submit",
+        description: "Submit a plan for team-leader approval before starting significant work",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "plan_resolve",
+        description: "Approve or reject a plan submitted via plan_submit (team leader only)",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
         name: "inbox_read",
         description: "Read inbox messages or a full thread. Use mode='inbox' (default) to read your messages, mode='thread' with thread_id to read a conversation thread.",
         requires_config: true,
@@ -600,7 +610,7 @@ pub fn create_tool_boxed(
         // Team management tools require TeamStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "team_create" | "team_delegate" | "team_status" | "team_disband" | "team_member_remove"
-        | "team_digest" | "message_send" | "inbox_read" => None,
+        | "team_digest" | "message_send" | "inbox_read" | "plan_submit" | "plan_resolve" => None,
         // Task coordination tools require CoordTaskStore + AgentMessageBus at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_create" | "task_update" | "task_list" | "task_wait" => None,

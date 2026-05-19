@@ -321,29 +321,20 @@ pub struct ReviewScore {
 
 ### Context Integration
 
-**InboxContext** injected into the agent loop via the existing `ContextInjector`:
+When the autonomous dispatcher launches a member agent for a task, it
+assembles a deterministic **handoff context** (`teams::dispatcher::handoff`)
+and passes it as the agent's input. Sections:
 
-```rust
-pub struct InboxContext {
-    pub unread_to: u32,
-    pub unread_cc: u32,
-    pub urgent_summary: String,
-}
-```
+- **Task** — the task subject and description
+- **Dependency Results** — the result of every completed upstream task (the
+  DAG fan-in channel)
+- **Team** — the member's identity and the team roster with roles
+- **Inbox** — an unread-message summary (`InboxContext`); the agent reads the
+  detail on demand via `inbox_read` (R8)
 
-**Injection rules**:
-- **to messages**: summary always injected (high priority)
-- **cc messages**: count only ("3 cc messages"), no content
-- **Collaborative session invite**: strong prompt injection
-- Agent reads details via `inbox_read` on demand (R8)
-
-**Context priority** (high to low):
-1. Current task instructions
-2. to messages (actionable)
-3. Tool results / work output
-4. cc messages (informational)
-5. Team digest (background)
-6. ← truncation line adjusts dynamically based on token budget →
+Every section is individually byte-capped so a large DAG cannot blow the
+prompt. There is no background "sensing" loop — context is gathered once, at
+launch, from the task store and team state.
 
 ### Event Log
 
@@ -366,17 +357,34 @@ pub enum TeamEventType {
 
 **Retention**: Active teams — events older than 72h pruned lazily (during `team_digest` generation or periodic cleanup). Disbanded teams — events older than 24h pruned. Used for `team_digest` generation.
 
-## Infrastructure: Swarm Sensing
+## Infrastructure: Autonomous Dispatcher
 
-**Components**: Event Bus, Rules Engine, Semantic Aggregator, Context Injector, Collective Memory
+The **`TeamDispatcher`** (`src/teams/dispatcher/`) drives a team's
+coordination-task DAG to completion without leader micro-management.
 
-Not a user-triggerable mode. Automatically active for all named agents. Provides:
-- Cross-agent activity awareness (who is doing what)
-- Hotspot detection (multiple agents working in same area)
-- Contextual injection (team task boards, swarm activity summaries)
-- Collective memory for shared knowledge
+- **Event-driven**: `task_create` and task completion signal the dispatcher
+  (a `tokio::sync::Notify`); there is no polling. A fallback tick (default
+  60 s) catches any missed signal.
+- **In-process**: members run as `tokio` tasks via the shared execution path
+  (`execute_member_task`) — real cancellation, no process-spawn cost, no
+  scheduling latency.
+- **DAG as protocol**: a task created with `blocked_by` edges runs only once
+  every dependency is `Completed` (`CoordTaskStore` derives the `Blocked`
+  status dynamically). Fan-in is simply a task that depends on several others.
+- **Claiming**: each runnable task is claimed with an atomic lock; a
+  concurrency cap (`DispatcherConfig::max_concurrent`, default 4) bounds
+  parallelism.
+- **Restart reconciliation**: on startup, in-progress tasks left by a previous
+  process are reclaimed and rescheduled.
+- **Unknown owner** is an explicit failure — the task is marked `Failed` with a
+  clear error rather than left silently stuck.
 
-All three modes benefit from swarm sensing — it is the shared perception layer that makes multi-agent collaboration intelligent.
+Only tasks created via `task_create` (tagged `managed_by: dispatcher` in
+metadata) are autonomous. `team_delegate` runs a single member synchronously
+and is never picked up by the dispatcher.
+
+Task outcomes are broadcast as `TeamTaskCompleted` / `TeamTaskFailed` events;
+the **`TeamNotifier`** routes them to the team leader's inbox (R5).
 
 ## Mode Selection Guide
 
@@ -405,12 +413,18 @@ All three modes benefit from swarm sensing — it is the shared perception layer
 |------|-------------|
 | `session_send` | Send message to another agent's session (fire-and-forget or wait) |
 
-### Team — Layer 1 (Tasks & Artifacts)
+### Team — Layer 1 (Tasks & Coordination)
 | Tool | Description |
 |------|-------------|
-| `team_create` | Create a team with a leader |
-| `team_list` | List all teams and their status |
-| `team_disband` | Disband a team, cancelling remaining tasks |
+| `team_create` | Create a team with a leader and members |
+| `team_delegate` | Delegate one task to a member synchronously and wait for the reply |
+| `team_status` | Inspect a team's members and tasks |
+| `team_disband` | Disband a team |
+| `team_member_remove` | Remove a member from a team |
+| `task_create` | Create a coordination task (with `blocked_by` deps) for autonomous dispatch |
+| `task_update` | Update a task's status / result |
+| `task_list` | List coordination tasks |
+| `task_wait` | Wait for a task to reach a terminal state |
 | `task_submit` | Submit a structured artifact for a task |
 | `task_read_artifact` | Read artifact(s) by task ID |
 
@@ -428,6 +442,12 @@ All three modes benefit from swarm sensing — it is the shared perception layer
 | `session_turn` | Speak in session (mode: respond or conclude) |
 | `session_read` | Read session transcript and outcome |
 
+### Team — Plan Approval
+| Tool | Description |
+|------|-------------|
+| `plan_submit` | Submit a plan for team-leader approval before starting significant work |
+| `plan_resolve` | Approve or reject a submitted plan (team leader) |
+
 ### Team — Roles
 | Tool | Description |
 |------|-------------|
@@ -438,26 +458,32 @@ All three modes benefit from swarm sensing — it is the shared perception layer
 ```
 src/teams/
 ├── mod.rs                  // re-exports
-├── types.rs                // Team, TeamMember, TeamStatus
+├── types.rs                // Team, TeamMember, TeamStatus, TeamSummary
 ├── store.rs                // SqliteTeamStore (team/member management)
 ├── artifacts.rs            // TaskArtifact, ArtifactType, storage
-├── events.rs               // TeamEvent, TeamEventType, event log store
-├── context.rs              // InboxContext, context injection
+├── events.rs               // TeamEvent, TeamEventType, TeamEventLogger
+├── context.rs              // InboxContext, InboxContextProvider
+├── plans.rs                // PlanManager (plan submit / approve / reject)
+├── notifier.rs             // TeamNotifier (task outcomes → leader inbox)
+├── dispatcher/
+│   ├── mod.rs              // TeamDispatcher, DispatcherConfig, dispatch loop
+│   ├── schedule.rs         // dispatch_once, select_schedulable, run_task
+│   ├── runner.rs           // execute_member_task (shared with team_delegate)
+│   └── handoff.rs          // build_handoff_context
 ├── messages/
 │   ├── mod.rs
 │   ├── types.rs            // TeamMessage, Recipient, MessageType
 │   ├── router.rs           // MessageRouter: send, broadcast, route
 │   ├── inbox.rs            // Inbox: read, peek, thread, expire
 │   └── store.rs            // SQLite message storage
-├── sessions/
-│   ├── mod.rs
-│   ├── types.rs            // CollaborativeSession, SessionTurn, SessionOutcome
-│   ├── store.rs            // SQLite session storage
-│   └── coordinator.rs      // SessionCoordinator, EscalationRule
-└── roles/
+└── sessions/
     ├── mod.rs
-    ├── types.rs            // AgentRole, TeamRoleConfig, Severity
-    └── review.rs           // ReviewScore, DimensionScore, Challenge, validation
+    ├── types.rs            // CollaborativeSession, SessionTurn, SessionOutcome
+    ├── store.rs            // SQLite session storage
+    └── coordinator.rs      // SessionCoordinator
+
+The coordination-task DAG store (CoordTaskStore / coord_tasks) lives in
+src/agents/swarm/tasks/.
 ```
 
 ## Design Principles
