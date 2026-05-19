@@ -87,26 +87,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        let _eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>> =
-            if let Some(ext_manager) = extension_manager.as_ref() {
-                let snapshot = ext_manager.skill_system().current_snapshot().await;
-                if !snapshot.eligible_manifests.is_empty() {
-                    Some(snapshot.eligible_manifests)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
         let _hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
             let snapshot = ext_manager.hook_executor_snapshot().await;
             (snapshot.hook_count() > 0).then(|| Arc::new(snapshot))
         } else {
             None
         };
-        let _skill_system = extension_manager
-            .as_ref()
-            .map(|ext_manager| ext_manager.skill_system().clone());
 
         // Build tool registry inputs (filtered by agent whitelist).
         let base_allowed_tools: Vec<crate::dispatcher::UnifiedTool> = self
