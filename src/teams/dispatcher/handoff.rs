@@ -74,9 +74,7 @@ pub async fn build_handoff_context(
             if !members.is_empty() {
                 out.push_str("\n## Team\n");
                 if let Some(owner) = &task.owner {
-                    out.push_str(&format!(
-                        "You are agent `{owner}` on team `{team_id}`.\n"
-                    ));
+                    out.push_str(&format!("You are agent `{owner}` on team `{team_id}`.\n"));
                 }
                 out.push_str("Members:\n");
                 for m in &members {

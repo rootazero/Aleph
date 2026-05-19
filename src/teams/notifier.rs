@@ -93,9 +93,7 @@ impl TeamNotifier {
         tasks.iter().all(|t| {
             matches!(
                 t.status,
-                CoordTaskStatus::Completed
-                    | CoordTaskStatus::Failed
-                    | CoordTaskStatus::Cancelled
+                CoordTaskStatus::Completed | CoordTaskStatus::Failed | CoordTaskStatus::Cancelled
             )
         })
     }

@@ -12,9 +12,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use super::handoff::build_handoff_context;
 use super::runner::{execute_member_task, MemberRunStatus};
 use super::TeamDispatcher;
-use crate::agents::swarm::tasks::{
-    CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate,
-};
+use crate::agents::swarm::tasks::{CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate};
 use crate::event::{AlephEvent, GlobalBus};
 use crate::sync_primitives::Arc;
 use crate::teams::artifacts::{ArtifactType, NewArtifact, TaskStatus};
@@ -133,8 +131,11 @@ impl TeamDispatcher {
 
             // Fail fast on an unknown owner instead of leaving the task stuck.
             if self.context.agent_registry().get(&owner).await.is_none() {
-                self.fail_task(&task, &format!("Owner agent '{owner}' not found in registry"))
-                    .await;
+                self.fail_task(
+                    &task,
+                    &format!("Owner agent '{owner}' not found in registry"),
+                )
+                .await;
                 continue;
             }
 
@@ -267,9 +268,7 @@ impl TeamDispatcher {
                 tracing::info!(task_id = %task_id, "dispatcher: task completed");
             }
             MemberRunStatus::Failed | MemberRunStatus::Timeout => {
-                let err = outcome
-                    .error
-                    .unwrap_or_else(|| "unknown error".to_string());
+                let err = outcome.error.unwrap_or_else(|| "unknown error".to_string());
                 self.fail_task(&task, &err).await;
                 tracing::warn!(task_id = %task_id, error = %err, "dispatcher: task failed");
             }
@@ -369,10 +368,38 @@ mod tests {
     fn selects_only_pending_managed_owned_unlocked() {
         let running = HashSet::new();
         let tasks = vec![
-            task("ok", CoordTaskStatus::Pending, Some("a"), true, Priority::Normal, 1),
-            task("blocked", CoordTaskStatus::Blocked, Some("a"), true, Priority::Normal, 2),
-            task("no-owner", CoordTaskStatus::Pending, None, true, Priority::Normal, 3),
-            task("unmanaged", CoordTaskStatus::Pending, Some("a"), false, Priority::Normal, 4),
+            task(
+                "ok",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                1,
+            ),
+            task(
+                "blocked",
+                CoordTaskStatus::Blocked,
+                Some("a"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+            task(
+                "no-owner",
+                CoordTaskStatus::Pending,
+                None,
+                true,
+                Priority::Normal,
+                3,
+            ),
+            task(
+                "unmanaged",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                false,
+                Priority::Normal,
+                4,
+            ),
         ];
         let picked = select_schedulable(&tasks, &running, 10);
         assert_eq!(picked.len(), 1);
@@ -383,12 +410,33 @@ mod tests {
     fn skips_locked_and_running_tasks() {
         let mut running = HashSet::new();
         running.insert("running-task".to_string());
-        let mut locked = task("locked", CoordTaskStatus::Pending, Some("a"), true, Priority::Normal, 1);
+        let mut locked = task(
+            "locked",
+            CoordTaskStatus::Pending,
+            Some("a"),
+            true,
+            Priority::Normal,
+            1,
+        );
         locked.locked_by = Some("a".to_string());
         let tasks = vec![
             locked,
-            task("running-task", CoordTaskStatus::Pending, Some("a"), true, Priority::Normal, 2),
-            task("free", CoordTaskStatus::Pending, Some("a"), true, Priority::Normal, 3),
+            task(
+                "running-task",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+            task(
+                "free",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                3,
+            ),
         ];
         let picked = select_schedulable(&tasks, &running, 10);
         assert_eq!(picked.len(), 1);
@@ -399,10 +447,38 @@ mod tests {
     fn orders_by_priority_then_creation() {
         let running = HashSet::new();
         let tasks = vec![
-            task("low-old", CoordTaskStatus::Pending, Some("a"), true, Priority::Low, 1),
-            task("crit-new", CoordTaskStatus::Pending, Some("a"), true, Priority::Critical, 9),
-            task("norm-old", CoordTaskStatus::Pending, Some("a"), true, Priority::Normal, 2),
-            task("norm-new", CoordTaskStatus::Pending, Some("a"), true, Priority::Normal, 5),
+            task(
+                "low-old",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Low,
+                1,
+            ),
+            task(
+                "crit-new",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Critical,
+                9,
+            ),
+            task(
+                "norm-old",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+            task(
+                "norm-new",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                5,
+            ),
         ];
         let picked = select_schedulable(&tasks, &running, 10);
         let order: Vec<&str> = picked.iter().map(|t| t.id.as_str()).collect();

@@ -200,12 +200,12 @@ loop {
 
 注入为 `RunRequest.input` 前置块。无 prior-attempts 段（v1 不重试，列为未来）。
 
-### 3.7 计划审批门控 (Plan Gate)
+### 3.7 计划审批工具 (Plan Approval Tools)
 
-- 新工具 `plan_submit { team_id, plan }`→`PlanManager::submit_plan`。
-- 新工具 `plan_resolve { plan_id, decision: approve|reject, reason? }`→`approve_plan/reject_plan`。
-- 门控逻辑（`dispatch_once` §3.4 step 4）：若该 team 存在**未获批**计划 → 跳过该 team 全部任务。无计划 → 正常调度（门控为 leader 主动 opt-in：调用 `plan_submit` 即进入门控）。
-- `plan_resolve` 批准后 `signal()` 解除门控。
+- 新工具 `plan_submit { team_id, title, content, task_id? }`→`PlanManager::submit_plan`：创建 Plan artifact + 向 leader 发 `PlanApprovalRequest` 消息。
+- 新工具 `plan_resolve { team_id, plan_message_id, submitter_agent_id, decision, feedback? }`→`approve_plan/reject_plan`：leader 批准/拒绝，回复提交者。
+
+> **实施期修订**：原设计含"调度器 plan-gate"——团队有未获批计划时跳过其任务。实现时发现 `PlanManager` 是基于**消息**的审批流，没有可查询的"团队计划状态"字段；硬门控需新增 schema。按 P6 (KISS) / R10 (YAGNI)，**descope 调度器 plan-gate**：`plan_submit`/`plan_resolve` 作为独立工具接线（这已满足"接线 plans.rs 为功能"），调度器不耦合计划状态。若未来确需强制门控，再引入可查询的计划状态。
 
 ### 3.8 共享执行函数 `execute_member_task`
 
@@ -213,13 +213,16 @@ loop {
 
 ### 3.9 通知 (`TeamNotifier`)
 
-调度器**只发事件**（P1 解耦），不直接管投递。新增 `TeamNotifier`（`EventHandler`，与现有 `TeamEventLogger` 并列，boot 时注册）：
+调度器**只发事件**（P1 解耦），不直接管投递。新增 `TeamNotifier`（`EventHandler`，与现有 `TeamEventLogger` 并列，boot 时经 `GlobalBus` 注册）：
 
 - 订阅 `TeamTaskCompleted` / `TeamTaskFailed`。
-- 终态时从 team metadata 读取 `origin_session`（`team_create` 时记录发起会话），经 `GatewayContext` 推送通知给该通道。
-- 团队全部任务终态 → 推送"团队完成"汇总。
+- 任务**失败** → 立即向团队 leader 的收件箱发 `SystemNotification` 消息。
+- 任务**完成** → 仅当该团队全部任务都进入终态时，向 leader 发"团队完成"汇总（避免逐任务噪音）。
+- 投递走 `MessageRouter`（leader 从 `TeamStore.get_team().leader_id` 查得），不引入新 schema、不耦合 Gateway。leader 是面向用户的 agent；结合 handoff 的 inbox 段，团队进度自然回流。
 
 需新增事件变体 `AlephEvent::TeamTaskFailed`（`event/types.rs`）。
+
+> **实施期修订**：原设计拟从 team metadata 的 `origin_session` 推送到发起通道。实现时发现团队无可查询的"发起会话"字段，且 `task_create` 工具拿不到 ambient 会话上下文。改为通知 leader 收件箱——用现有 `MessageRouter`，零新 schema，仍满足 R5。
 
 ---
 
@@ -228,8 +231,8 @@ loop {
 | 变更 | 文件 | 说明 |
 |------|------|------|
 | 新增 `TeamTaskFailed` 事件 | `src/event/types.rs` | 失败终态事件，驱动 `TeamNotifier` |
-| team metadata 增 `origin_session` | `team_create` 工具 | 记录发起会话用于推送（写入现有 `metadata` JSON，无 schema 变更）|
-| 删除 `team_tasks` 表 + JOIN | `src/teams/store.rs` | `TeamSummary.task_count` 改为查 `CoordTaskStore` 计数 |
+| `task_create` 任务标记 `managed_by: dispatcher` | `task_create` 工具 | 写入现有 `metadata` JSON，区分自主任务与 `team_delegate` 任务，无 schema 变更 |
+| 删除 `team_tasks` 表 + JOIN + `TeamSummary.task_count` 字段 | `src/teams/store.rs`、`types.rs` | 该字段零外部消费者且恒为 0；`team_status` 工具已能从 `CoordTaskStore` 给出真实计数 |
 
 **无破坏性迁移**：`coord_tasks` schema 不变；`team_tasks` 是死表，删除其建表语句与 JOIN 即可（旧数据库残留空表无害）。
 
