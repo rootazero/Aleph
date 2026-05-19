@@ -688,3 +688,29 @@ fn test_parse_sse_finish_reason_recitation() {
         out
     );
 }
+
+#[test]
+fn test_convert_user_with_image() {
+    use crate::providers::message::ContentBlock as CB;
+    let msgs = [UnifiedMessage::user_with_content(vec![
+        CB::Text {
+            text: "look at this".to_string(),
+            cache_control: None,
+        },
+        CB::Image {
+            data: "QUJD".to_string(),
+            mime_type: "image/png".to_string(),
+        },
+    ])];
+    let result = GeminiProtocol::convert_messages(&msgs);
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].parts.len(), 2, "text + image = two parts");
+    match &result[0].parts[0] {
+        Part::Text { text } => assert_eq!(text, "look at this"),
+        other => panic!("expected Text part, got {:?}", other),
+    }
+    let json = serde_json::to_value(&result[0]).unwrap();
+    assert_eq!(json["parts"][1]["inlineData"]["mimeType"], "image/png");
+    assert_eq!(json["parts"][1]["inlineData"]["data"], "QUJD");
+}

@@ -70,7 +70,10 @@ pub enum Part {
     /// Text content part
     Text { text: String },
     /// Inline image data part
-    InlineData { inline_data: InlineData },
+    InlineData {
+        #[serde(rename = "inlineData")]
+        inline_data: InlineData,
+    },
     /// Function call from model
     FunctionCall {
         #[serde(rename = "functionCall")]
