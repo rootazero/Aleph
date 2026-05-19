@@ -9,16 +9,12 @@
 //! - [`TaskExecutionResult`]: Result of executing a single task
 //! - [`ExecutionContext`]: Context information for execution
 //! - [`ExecutorError`]: Error types for executor operations
-//! - [`SingleStepExecutor`]: Single-step task executor
+//! - [`ToolRegistry`]: Tool lookup + execution trait for the agent loop
 //!
 //! # Usage
 //!
 //! ```ignore
 //! use alephcore::executor::{ExecutionResult, ExecutionContext, ExecutorError};
-//! use alephcore::executor::{SingleStepExecutor, SingleStepConfig};
-//!
-//! // Create executor
-//! let executor = SingleStepExecutor::new(config);
 //!
 //! // Create results for testing:
 //! let result = ExecutionResult::success("Task completed successfully")
@@ -32,15 +28,12 @@ pub mod action_types;
 mod builtin_registry;
 mod cache_config;
 mod cache_store;
-mod exec_security_gate;
-mod single_step;
+mod tool_registry;
 mod types;
 
 pub use builtin_registry::{
     create_tool_boxed, get_builtin_tool_names, BuiltinToolConfig, BuiltinToolRegistry,
     BUILTIN_TOOL_DEFINITIONS, CONFIRMATION_REQUIRED_TOOLS, TOOL_CATEGORIES,
 };
-pub use exec_security_gate::ExecSecurityGate;
-pub(crate) use exec_security_gate::PreExecDecision;
-pub use single_step::ToolRegistry;
+pub use tool_registry::ToolRegistry;
 pub use types::{ExecutionContext, ExecutionResult, ToolCallRecord};
