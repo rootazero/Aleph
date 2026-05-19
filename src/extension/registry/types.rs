@@ -56,27 +56,6 @@ pub struct HookRegistration {
 // P1 Important Registration Types
 // ============================================================================
 
-/// Channel registration for messaging platform integrations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelRegistration {
-    /// Unique channel identifier (e.g., "telegram", "discord")
-    pub id: String,
-    /// Display label for the channel
-    pub label: String,
-    /// Path to documentation
-    pub docs_path: Option<String>,
-    /// Short description blurb
-    pub blurb: Option<String>,
-    /// System image/icon path
-    pub system_image: Option<String>,
-    /// Alternative names for the channel
-    pub aliases: Vec<String>,
-    /// Display order (lower = first)
-    pub order: i32,
-    /// ID of the plugin that registered this channel
-    pub plugin_id: String,
-}
-
 /// Provider registration for AI model providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderRegistration {
@@ -519,21 +498,6 @@ mod tests {
         };
         assert_eq!(hook.priority, 10);
         assert_eq!(hook.name, Some("Message Logger".to_string()));
-    }
-
-    #[test]
-    fn test_channel_registration() {
-        let channel = ChannelRegistration {
-            id: "telegram".to_string(),
-            label: "Telegram".to_string(),
-            docs_path: Some("/docs/telegram.md".to_string()),
-            blurb: Some("Telegram Bot integration".to_string()),
-            system_image: None,
-            aliases: vec!["tg".to_string()],
-            order: 1,
-            plugin_id: "telegram-plugin".to_string(),
-        };
-        assert_eq!(channel.aliases, vec!["tg"]);
     }
 
     #[test]

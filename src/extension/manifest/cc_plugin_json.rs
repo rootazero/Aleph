@@ -236,7 +236,6 @@ pub fn parse_cc_plugin_json_content(
         wasm_capabilities: None,
         wasm_resource_limits: None,
         // P2 fields not available in CC JSON format
-        channels_v2: None,
         providers_v2: None,
         http_routes_v2: None,
         // CC-compat extensions
@@ -496,14 +495,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_cc_json_aleph_channels_and_providers() {
+    fn test_parse_cc_json_aleph_providers() {
         let content = r#"{
             "name": "full-plugin",
             "aleph": {
                 "runtime": "mcp",
-                "channels": [
-                    {"id": "telegram", "label": "Telegram Bot"}
-                ],
                 "providers": [
                     {"id": "my-llm", "name": "My LLM", "models": ["model-1"]}
                 ]
@@ -513,9 +509,6 @@ mod tests {
         assert_eq!(manifest.kind, PluginKind::Mcp);
 
         let ext = manifest.aleph_extensions.unwrap();
-        assert_eq!(ext.channels.len(), 1);
-        assert_eq!(ext.channels[0].id, "telegram");
-
         assert_eq!(ext.providers.len(), 1);
         assert_eq!(ext.providers[0].name, "My LLM");
     }

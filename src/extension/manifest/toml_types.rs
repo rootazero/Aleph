@@ -55,8 +55,6 @@ pub struct AlephPluginToml {
     #[serde(default)]
     pub capabilities: CapabilitiesSection,
     #[serde(default)]
-    pub channels: Vec<ChannelSection>,
-    #[serde(default)]
     pub providers: Vec<ProviderSection>,
     #[serde(default)]
     pub http_routes: Vec<HttpRouteSection>,
@@ -255,17 +253,6 @@ pub struct CapabilitiesSection {
     pub tool_invoke: Option<WasmToolInvokeToml>,
     #[serde(default)]
     pub secrets: Option<WasmSecretsToml>,
-}
-
-/// Channel definition section
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelSection {
-    pub id: String,
-    pub label: String,
-    #[serde(default)]
-    pub handler: Option<String>,
-    #[serde(default)]
-    pub config_schema: Option<JsonValue>,
 }
 
 /// Provider definition section
@@ -590,11 +577,6 @@ pub fn parse_aleph_plugin_toml_content(
         wasm_capabilities: convert_wasm_capabilities(&toml.capabilities),
         wasm_resource_limits: None,
         capabilities_v2: Some(toml.capabilities),
-        channels_v2: if toml.channels.is_empty() {
-            None
-        } else {
-            Some(toml.channels)
-        },
         providers_v2: if toml.providers.is_empty() {
             None
         } else {

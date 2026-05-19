@@ -80,9 +80,6 @@ impl<'a> CapabilityApi<'a> {
             CapabilityDeclaration::Hook(hook) => {
                 self.registry.register_hook(hook);
             }
-            CapabilityDeclaration::Channel(channel) => {
-                self.registry.register_channel(channel);
-            }
             CapabilityDeclaration::Provider(provider) => {
                 self.registry.register_provider(provider);
             }
@@ -162,7 +159,7 @@ impl<'a> CapabilityApi<'a> {
 mod tests {
     use super::*;
     use crate::extension::registry::{
-        AgentRegistration, ChannelRegistration, CliRegistration, CommandRegistration,
+        AgentRegistration, CliRegistration, CommandRegistration,
         GatewayMethodRegistration, HookRegistration, HttpRouteRegistration, ProviderRegistration,
         ServiceRegistration, SkillRegistration, ToolRegistration,
     };
@@ -186,19 +183,6 @@ mod tests {
             description: "A test tool".to_string(),
             parameters: serde_json::json!({"type": "object"}),
             handler: "handle".to_string(),
-            plugin_id: "test-plugin".to_string(),
-        })
-    }
-
-    fn make_channel() -> CapabilityDeclaration {
-        CapabilityDeclaration::Channel(ChannelRegistration {
-            id: "test-channel".to_string(),
-            label: "Test Channel".to_string(),
-            docs_path: None,
-            blurb: None,
-            system_image: None,
-            aliases: vec![],
-            order: 0,
             plugin_id: "test-plugin".to_string(),
         })
     }
@@ -286,35 +270,6 @@ mod tests {
 
         // Provider is P2 but requires no permission (core AI concept)
         assert!(api.register_capability(make_provider()).is_ok());
-    }
-
-    // ── P2 Channel fails without Network permission ──────────────────────
-
-    #[test]
-    fn test_p2_channel_fails_without_network_permission() {
-        let mut registry = make_registry_and_plugin();
-        let mut api = CapabilityApi::new(
-            &mut registry,
-            "test-plugin".to_string(),
-            vec![], // no permissions
-        );
-
-        // Channel is P2 (Pluggable) — needs Network permission
-        let result = api.register_capability(make_channel());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_p2_channel_succeeds_with_network_permission() {
-        let mut registry = make_registry_and_plugin();
-        let mut api = CapabilityApi::new(
-            &mut registry,
-            "test-plugin".to_string(),
-            vec![PluginPermission::Network],
-        );
-
-        assert!(api.register_capability(make_channel()).is_ok());
-        assert!(api.registry().get_channel("test-channel").is_some());
     }
 
     #[test]
@@ -430,14 +385,12 @@ mod tests {
                 PluginPermission::HttpRoutes,
                 PluginPermission::Shell,
                 PluginPermission::GatewayRpc,
-                PluginPermission::Network,
             ],
         );
 
         // Register one of each type
         api.register_capability(make_tool()).unwrap();
         api.register_capability(make_hook()).unwrap();
-        api.register_capability(make_channel()).unwrap();
         api.register_capability(make_service()).unwrap();
         api.register_capability(make_http_route()).unwrap();
         api.register_capability(make_skill()).unwrap();
@@ -499,7 +452,6 @@ mod tests {
         let reg = api.registry();
         assert!(reg.get_tool("my_tool").is_some());
         assert_eq!(reg.list_hooks().len(), 1);
-        assert!(reg.get_channel("test-channel").is_some());
         assert!(reg.get_provider("test-provider").is_some());
         assert!(reg.get_gateway_method("test.method").is_some());
         assert_eq!(reg.list_http_routes().len(), 1);

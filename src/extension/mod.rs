@@ -37,7 +37,6 @@ pub mod validation;
 pub mod capability;
 pub mod registrar;
 
-mod channel_manager;
 mod error;
 mod http_handler;
 pub mod manifest;
@@ -53,7 +52,6 @@ mod template;
 mod types;
 pub mod watcher;
 
-pub use channel_manager::{ChannelHandle, ChannelManager};
 pub use component_id::ComponentId;
 pub use error::*;
 pub use http_handler::{match_path, PluginHttpHandler};

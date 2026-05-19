@@ -260,8 +260,6 @@ pub struct PluginRecord {
     pub tool_names: Vec<String>,
     /// Number of hooks registered
     pub hook_count: usize,
-    /// Channel IDs registered by this plugin
-    pub channel_ids: Vec<String>,
     /// Provider IDs registered by this plugin
     pub provider_ids: Vec<String>,
     /// Gateway RPC methods registered by this plugin
@@ -285,7 +283,6 @@ impl PluginRecord {
             root_dir: PathBuf::new(),
             tool_names: Vec::new(),
             hook_count: 0,
-            channel_ids: Vec::new(),
             provider_ids: Vec::new(),
             gateway_methods: Vec::new(),
             service_ids: Vec::new(),
@@ -304,7 +301,6 @@ impl PluginRecord {
 
         let mut tool_names = Vec::new();
         let mut hook_count = 0;
-        let mut channel_ids = Vec::new();
         let mut provider_ids = Vec::new();
         let mut service_ids = Vec::new();
 
@@ -312,7 +308,6 @@ impl PluginRecord {
             match cap {
                 CapabilityDeclaration::Tool(t) => tool_names.push(t.name.clone()),
                 CapabilityDeclaration::Hook(_) => hook_count += 1,
-                CapabilityDeclaration::Channel(c) => channel_ids.push(c.id.clone()),
                 CapabilityDeclaration::Provider(p) => provider_ids.push(p.id.clone()),
                 CapabilityDeclaration::Service(s) => service_ids.push(s.id.clone()),
                 CapabilityDeclaration::Skill(_)
@@ -340,7 +335,6 @@ impl PluginRecord {
             root_dir,
             tool_names,
             hook_count,
-            channel_ids,
             provider_ids,
             gateway_methods: Vec::new(),
             service_ids,

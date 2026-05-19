@@ -31,9 +31,6 @@ pub enum ExtensionError {
     #[error("Plugin not found: {0}")]
     PluginNotFound(String),
 
-    #[error("Channel not found: {0}")]
-    ChannelNotFound(String),
-
     #[error("Skill not found: {0}")]
     SkillNotFound(String),
 

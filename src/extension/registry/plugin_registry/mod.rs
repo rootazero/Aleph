@@ -2,13 +2,13 @@
 //!
 //! Central storage for all plugin registrations. The PluginRegistry maintains
 //! a comprehensive registry of all plugins and their registered components:
-//! tools, hooks, channels, providers, gateway methods, HTTP routes/handlers,
+//! tools, hooks, providers, gateway methods, HTTP routes/handlers,
 //! CLI commands, services, and in-chat commands.
 
 use std::collections::HashMap;
 
 use super::types::{
-    AgentRegistration, ChannelRegistration, CliRegistration, CommandRegistration,
+    AgentRegistration, CliRegistration, CommandRegistration,
     GatewayMethodRegistration, HookRegistration, HttpHandlerRegistration, HttpRouteRegistration,
     PluginDiagnostic, ProviderRegistration, ServiceRegistration, SkillRegistration,
     ToolRegistration,
@@ -19,7 +19,7 @@ use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
 ///
 /// The PluginRegistry provides:
 /// - Plugin lifecycle management (register, enable, disable, unregister)
-/// - Component registration (tools, hooks, channels, providers, etc.)
+/// - Component registration (tools, hooks, providers, etc.)
 /// - Query methods for accessing registered components
 /// - Automatic tracking of which plugin registered each component
 /// - Priority-ordered hook execution
@@ -33,9 +33,6 @@ pub struct PluginRegistry {
 
     /// Registered hooks (sorted by priority)
     hooks: Vec<HookRegistration>,
-
-    /// Registered channels by ID
-    channels: HashMap<String, ChannelRegistration>,
 
     /// Registered providers by ID
     providers: HashMap<String, ProviderRegistration>,
@@ -81,7 +78,6 @@ impl PluginRegistry {
         self.plugins.clear();
         self.tools.clear();
         self.hooks.clear();
-        self.channels.clear();
         self.providers.clear();
         self.gateway_methods.clear();
         self.http_routes.clear();
@@ -240,38 +236,6 @@ impl PluginRegistry {
     /// List all registered hooks.
     pub fn list_hooks(&self) -> Vec<&HookRegistration> {
         self.hooks.iter().collect()
-    }
-
-    // =========================================================================
-    // Channel Registration
-    // =========================================================================
-
-    /// Register a channel.
-    pub fn register_channel(&mut self, channel: ChannelRegistration) {
-        let plugin_id = channel.plugin_id.clone();
-        let channel_id = channel.id.clone();
-
-        self.channels.insert(channel_id.clone(), channel);
-
-        // Update plugin record
-        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
-            if !plugin.channel_ids.contains(&channel_id) {
-                plugin.channel_ids.push(channel_id);
-            }
-        }
-    }
-
-    /// Get a channel by ID.
-    pub fn get_channel(&self, id: &str) -> Option<&ChannelRegistration> {
-        self.channels.get(id)
-    }
-
-    /// List all registered channels.
-    pub fn list_channels(&self) -> Vec<&ChannelRegistration> {
-        let mut channels: Vec<_> = self.channels.values().collect();
-        // Sort by display order
-        channels.sort_by_key(|c| c.order);
-        channels
     }
 
     // =========================================================================
@@ -536,7 +500,6 @@ impl PluginRegistry {
     /// - The plugin record
     /// - All tools registered by this plugin
     /// - All hooks registered by this plugin
-    /// - All channels registered by this plugin
     /// - All providers registered by this plugin
     /// - All gateway methods registered by this plugin
     /// - All HTTP routes registered by this plugin
@@ -554,9 +517,6 @@ impl PluginRegistry {
 
         // Remove all hooks from this plugin
         self.hooks.retain(|h| h.plugin_id != plugin_id);
-
-        // Remove all channels from this plugin
-        self.channels.retain(|_, c| c.plugin_id != plugin_id);
 
         // Remove all providers from this plugin
         self.providers.retain(|_, p| p.plugin_id != plugin_id);
@@ -601,7 +561,6 @@ impl PluginRegistry {
             active_plugins: self.list_active_plugins().len(),
             tools: self.tools.len(),
             hooks: self.hooks.len(),
-            channels: self.channels.len(),
             providers: self.providers.len(),
             gateway_methods: self.gateway_methods.len(),
             http_routes: self.http_routes.len(),
@@ -623,7 +582,6 @@ pub struct RegistryStats {
     pub active_plugins: usize,
     pub tools: usize,
     pub hooks: usize,
-    pub channels: usize,
     pub providers: usize,
     pub gateway_methods: usize,
     pub http_routes: usize,

@@ -14,7 +14,6 @@
 //!   - [`HookRegistration`] - Intercept system events
 //!
 //! - **P1 Important**: Key integration points
-//!   - [`ChannelRegistration`] - Messaging platform integrations
 //!   - [`ProviderRegistration`] - AI model providers
 //!   - [`GatewayMethodRegistration`] - RPC method extensions
 //!

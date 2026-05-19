@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 // V2 field types from toml_types module
 use super::toml_types::{
-    CapabilitiesSection, ChannelSection, CommandSection, HookSection, HttpRouteSection,
+    CapabilitiesSection, CommandSection, HookSection, HttpRouteSection,
     PermissionsSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
 };
 use crate::extension::runtime::wasm::WasmCapabilities;
@@ -321,10 +321,6 @@ pub struct PluginManifest {
     // ═══════════════════════════════════════════
     // P2 Extension fields
     // ═══════════════════════════════════════════
-    /// V2: Channel definitions for messaging platform integrations
-    #[serde(skip)]
-    pub channels_v2: Option<Vec<ChannelSection>>,
-
     /// V2: Provider definitions for AI model providers
     #[serde(skip)]
     pub providers_v2: Option<Vec<ProviderSection>>,
@@ -373,7 +369,6 @@ impl PluginManifest {
             wasm_capabilities: None,
             wasm_resource_limits: None,
             // P2 fields
-            channels_v2: None,
             providers_v2: None,
             http_routes_v2: None,
             // CC-compat extensions
@@ -463,9 +458,6 @@ pub struct AlephExtensions {
     pub runtime: AlephRuntime,
     /// WASM entry point (only for runtime = "wasm")
     pub entry: Option<String>,
-    /// Messaging channel integrations
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub channels: Vec<ChannelSection>,
     /// Custom LLM provider backends
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<ProviderSection>,

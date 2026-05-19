@@ -2,7 +2,6 @@
 //!
 //! This module contains types for plugin runtime interactions including:
 //! - Background services (lifecycle management)
-//! - Messaging channels (external platform integration)
 //! - AI providers (custom model providers)
 //! - HTTP routes (plugin-provided endpoints)
 
@@ -69,82 +68,6 @@ impl ServiceResult {
             data: None,
         }
     }
-}
-
-// =============================================================================
-// Channel Types (V2 Plugin Channels)
-// =============================================================================
-
-/// Channel message from external platform
-///
-/// Represents an incoming message from a plugin-provided messaging channel
-/// (e.g., Telegram, Discord, Slack, etc.).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelMessage {
-    /// Unique channel identifier (e.g., "telegram", "discord")
-    pub channel_id: String,
-    /// Conversation/chat identifier within the channel
-    pub conversation_id: String,
-    /// Sender identifier (user ID on the platform)
-    pub sender_id: String,
-    /// Message content
-    pub content: String,
-    /// When the message was sent
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    /// Platform-specific metadata (e.g., message_id, attachments)
-    pub metadata: Option<serde_json::Value>,
-}
-
-/// Channel send request
-///
-/// Request to send a message through a plugin-provided channel.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelSendRequest {
-    /// Conversation/chat identifier to send to
-    pub conversation_id: String,
-    /// Message content to send
-    pub content: String,
-    /// Optional message ID to reply to
-    pub reply_to: Option<String>,
-    /// Platform-specific options (e.g., parse_mode, disable_notification)
-    pub metadata: Option<serde_json::Value>,
-}
-
-/// Channel connection state
-///
-/// Represents the current connection status of a plugin channel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[derive(Default)]
-pub enum ChannelState {
-    /// Channel is not connected
-    #[default]
-    Disconnected,
-    /// Channel is attempting to connect
-    Connecting,
-    /// Channel is connected and operational
-    Connected,
-    /// Channel lost connection and is attempting to reconnect
-    Reconnecting,
-    /// Channel connection failed
-    Failed,
-}
-
-/// Channel info
-///
-/// Describes a plugin-provided messaging channel.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelInfo {
-    /// Unique channel identifier
-    pub id: String,
-    /// Plugin that provides this channel
-    pub plugin_id: String,
-    /// Human-readable label (e.g., "Telegram Bot")
-    pub label: String,
-    /// Current connection state
-    pub state: ChannelState,
-    /// Error message if state is Failed
-    pub error: Option<String>,
 }
 
 // =============================================================================

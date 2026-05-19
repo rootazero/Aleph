@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registry::{
-    AgentRegistration, ChannelRegistration, CliRegistration, CommandRegistration,
+    AgentRegistration, CliRegistration, CommandRegistration,
     GatewayMethodRegistration, HookRegistration, HttpRouteRegistration, ProviderRegistration,
     ServiceRegistration, SkillRegistration, ToolRegistration,
 };
@@ -22,8 +22,6 @@ use crate::extension::types::{McpServerConfig, PluginOrigin};
 pub type ToolDeclaration = ToolRegistration;
 /// A hook declaration is a HookRegistration
 pub type HookDeclaration = HookRegistration;
-/// A channel declaration is a ChannelRegistration
-pub type ChannelDeclaration = ChannelRegistration;
 /// A provider declaration is a ProviderRegistration
 pub type ProviderDeclaration = ProviderRegistration;
 /// A gateway method declaration is a GatewayMethodRegistration
@@ -59,8 +57,6 @@ pub enum CapabilityDeclaration {
     Tool(ToolDeclaration),
     /// A hook that intercepts system events
     Hook(HookDeclaration),
-    /// A messaging channel integration
-    Channel(ChannelDeclaration),
     /// An AI model provider backend
     Provider(ProviderDeclaration),
     /// A gateway RPC method
@@ -89,8 +85,8 @@ impl CapabilityDeclaration {
             Self::Tool(_) | Self::Hook(_) | Self::Skill(_) => Tier::Core,
             // P1: Always allowed, no permission check
             Self::Command(_) | Self::Agent(_) => Tier::Important,
-            // P2: Some are permission-gated (Channel needs Network, Service needs Background)
-            Self::Provider(_) | Self::Channel(_) | Self::Service(_) | Self::McpServer(_) => {
+            // P2: Some are permission-gated (Service needs Background)
+            Self::Provider(_) | Self::Service(_) | Self::McpServer(_) => {
                 Tier::Pluggable
             }
             // P3: All permission-gated + warning logged
@@ -103,7 +99,6 @@ impl CapabilityDeclaration {
         match self {
             Self::Tool(_) => "tool",
             Self::Hook(_) => "hook",
-            Self::Channel(_) => "channel",
             Self::Provider(_) => "provider",
             Self::GatewayMethod(_) => "gateway_method",
             Self::HttpRoute(_) => "http_route",
@@ -125,7 +120,6 @@ impl CapabilityDeclaration {
             }
             // P2: some need permission
             Self::Provider(_) => None, // providers are core to AI assistant
-            Self::Channel(_) => Some(PluginPermission::Network),
             Self::Service(_) => Some(PluginPermission::Background),
             Self::McpServer(_) => None, // MCP is the standard extension mechanism
             // P3: all need permission
@@ -295,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn test_all_12_variants_have_kind_names() {
+    fn test_all_11_variants_have_kind_names() {
         use crate::extension::types::HookEvent;
 
         let capabilities: Vec<CapabilityDeclaration> = vec![
@@ -306,16 +300,6 @@ mod tests {
                 handler: "h".to_string(),
                 name: None,
                 description: None,
-                plugin_id: "p".to_string(),
-            }),
-            CapabilityDeclaration::Channel(ChannelRegistration {
-                id: "ch".to_string(),
-                label: "Ch".to_string(),
-                docs_path: None,
-                blurb: None,
-                system_image: None,
-                aliases: vec![],
-                order: 0,
                 plugin_id: "p".to_string(),
             }),
             CapabilityDeclaration::Provider(ProviderRegistration {
@@ -364,14 +348,13 @@ mod tests {
             }),
         ];
 
-        assert_eq!(capabilities.len(), 12);
+        assert_eq!(capabilities.len(), 11);
         let kind_names: Vec<&str> = capabilities.iter().map(|c| c.kind_name()).collect();
         assert_eq!(
             kind_names,
             vec![
                 "tool",
                 "hook",
-                "channel",
                 "provider",
                 "gateway_method",
                 "http_route",
