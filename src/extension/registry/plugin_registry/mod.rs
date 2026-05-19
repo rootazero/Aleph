@@ -2,7 +2,7 @@
 //!
 //! Central storage for all plugin registrations. The PluginRegistry maintains
 //! a comprehensive registry of all plugins and their registered components:
-//! tools, hooks, services, commands, skills, and agents.
+//! tools, hooks, services, in-chat commands, skills, agents.
 
 use std::collections::HashMap;
 
@@ -18,7 +18,7 @@ use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
 ///
 /// The PluginRegistry provides:
 /// - Plugin lifecycle management (register, enable, disable, unregister)
-/// - Component registration (tools, hooks, providers, etc.)
+/// - Component registration (tools, hooks, services, commands, skills, agents)
 /// - Query methods for accessing registered components
 /// - Automatic tracking of which plugin registered each component
 /// - Priority-ordered hook execution
@@ -367,6 +367,8 @@ impl PluginRegistry {
     /// - All hooks registered by this plugin
     /// - All services registered by this plugin
     /// - All in-chat commands registered by this plugin
+    /// - All skills registered by this plugin
+    /// - All agents registered by this plugin
     /// - All diagnostics from this plugin
     pub fn unregister_plugin(&mut self, plugin_id: &str) {
         // Remove the plugin record

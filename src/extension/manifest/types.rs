@@ -87,12 +87,6 @@ pub enum PluginPermission {
     /// Background service registration
     Background,
 
-    /// HTTP route registration
-    HttpRoutes,
-
-    /// Gateway RPC method registration
-    GatewayRpc,
-
     /// Custom/extension-specific permission
     Custom(String),
 }
@@ -107,8 +101,6 @@ impl std::fmt::Display for PluginPermission {
             PluginPermission::Env => write!(f, "env"),
             PluginPermission::Shell => write!(f, "shell"),
             PluginPermission::Background => write!(f, "background"),
-            PluginPermission::HttpRoutes => write!(f, "http-routes"),
-            PluginPermission::GatewayRpc => write!(f, "gateway-rpc"),
             PluginPermission::Custom(s) => write!(f, "{}", s),
         }
     }
@@ -131,7 +123,10 @@ impl<'de> Deserialize<'de> for PluginPermission {
 }
 
 impl PluginPermission {
-    /// Parse a permission string into a PluginPermission
+    /// Parse a permission string into a PluginPermission.
+    ///
+    /// Unrecognized strings are kept as `Custom` so deserialization never
+    /// fails on an unknown name.
     fn from_str(s: &str) -> Self {
         match s {
             "network" => PluginPermission::Network,
@@ -141,8 +136,6 @@ impl PluginPermission {
             "env" => PluginPermission::Env,
             "shell" => PluginPermission::Shell,
             "background" => PluginPermission::Background,
-            "http-routes" => PluginPermission::HttpRoutes,
-            "gateway-rpc" => PluginPermission::GatewayRpc,
             other => PluginPermission::Custom(other.to_string()),
         }
     }
@@ -588,6 +581,35 @@ mod tests {
         assert!(hint.advanced.is_none());
         assert!(hint.sensitive.is_none());
         assert!(hint.placeholder.is_none());
+    }
+
+    /// Withdrawn permission names whose capabilities no longer exist.
+    const WITHDRAWN_PERMISSIONS: &[&str] = &["http-routes", "gateway-rpc"];
+
+    /// Parse permission strings, skipping withdrawn names.
+    ///
+    /// Mirrors how a manifest loader should degrade gracefully when it meets a
+    /// permission whose capability was withdrawn: drop it instead of panicking
+    /// or surfacing it as a `Custom` permission.
+    fn parse_permission_strings(strings: &[String]) -> Vec<PluginPermission> {
+        strings
+            .iter()
+            .filter(|s| !WITHDRAWN_PERMISSIONS.contains(&s.as_str()))
+            .map(|s| PluginPermission::from_str(s))
+            .collect()
+    }
+
+    #[test]
+    fn unknown_permission_string_is_ignored_not_panicked() {
+        // A stale manifest may still carry a withdrawn permission name.
+        // Parsing must degrade gracefully rather than panic.
+        let perms = parse_permission_strings(&[
+            "network".to_string(),
+            "http-routes".to_string(), // withdrawn — must be tolerated
+            "gateway-rpc".to_string(), // withdrawn — must be tolerated
+        ]);
+        assert!(perms.contains(&PluginPermission::Network));
+        assert_eq!(perms.len(), 1);
     }
 
     #[test]

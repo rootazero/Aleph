@@ -7,17 +7,14 @@
 //! - [`PluginRegistry`] - Central storage for all plugin registrations
 //! - Registration types for plugin API registration
 //!
-//! ## Registration Categories
+//! ## Registration Types
 //!
-//! - **P0 Core**: Essential types for basic plugin functionality
-//!   - [`ToolRegistration`] - Expose callable tools to agents
-//!   - [`HookRegistration`] - Intercept system events
-//!
-//! - **P2 Useful**: Additional extension points
-//!   - [`ServiceRegistration`] - Background services
-//!
-//! - **P3 Optional**: Nice-to-have features
-//!   - [`CommandRegistration`] - In-chat slash commands
+//! - [`ToolRegistration`] - Expose callable tools to agents
+//! - [`HookRegistration`] - Intercept system events
+//! - [`ServiceRegistration`] - Background services
+//! - [`CommandRegistration`] - In-chat slash commands
+//! - [`SkillRegistration`] - Prompt-based skills
+//! - [`AgentRegistration`] - Agent definitions
 //!
 //! ## Diagnostics
 //!

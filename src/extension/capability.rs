@@ -113,14 +113,12 @@ impl CapabilityDeclaration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
-    /// Core capabilities (Tool, Hook) — always registered first
+    /// Core capabilities (Tool, Hook, Skill) — always registered first
     Core,
-    /// Important capabilities (Channel, Provider)
+    /// Important capabilities (Command, Agent)
     Important,
-    /// Pluggable capabilities (Service, Command, Skill, Agent)
+    /// Pluggable capabilities (Service, McpServer)
     Pluggable,
-    /// Gateway extensions (McpServer) — registered last
-    GatewayExtension,
 }
 
 // ============================================================================

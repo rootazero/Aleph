@@ -1,9 +1,7 @@
 //! Plugin registration type definitions
 //!
 //! This module defines the registration types used by the plugin API:
-//! - P0 Core: Tool, Hook
-//! - P2 Useful: Service
-//! - P3 Optional: Command
+//! Tool, Hook, Service, Command, Skill, Agent.
 //!
 //! Plus diagnostics support for plugin health reporting.
 

@@ -43,7 +43,6 @@ impl<'a> CapabilityApi<'a> {
     ///
     /// - P0 (Core) and P1 (Important): no permission check
     /// - P2 (Pluggable): permission check if required by the capability
-    /// - P3 (GatewayExtension): permission check + warning log
     pub fn register_capability(&mut self, decl: CapabilityDeclaration) -> Result<()> {
         let tier = decl.tier();
 
@@ -55,16 +54,6 @@ impl<'a> CapabilityApi<'a> {
                 if let Some(perm) = decl.required_permission() {
                     self.require_permission(&perm)?;
                 }
-            }
-            Tier::GatewayExtension => {
-                if let Some(perm) = decl.required_permission() {
-                    self.require_permission(&perm)?;
-                }
-                tracing::warn!(
-                    plugin_id = %self.plugin_id,
-                    kind = decl.kind_name(),
-                    "Registering gateway extension capability"
-                );
             }
         }
 
