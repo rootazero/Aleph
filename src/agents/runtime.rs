@@ -4,6 +4,7 @@
 //! Wraps the Harness-based spawner with lifecycle tracing and transcript
 //! persistence.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
@@ -140,6 +141,9 @@ pub struct AgentRuntime {
     /// B2 — global plugin registry, threaded into SpawnerBase for per-agent
     /// MCP scope provisioning.
     plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
+    /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
+    /// map (the `new()` default) means every spawn uses `provider`.
+    provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
 }
 
 impl AgentRuntime {
@@ -172,7 +176,18 @@ impl AgentRuntime {
             trace_sink: None,
             subagent_semaphore: None,
             plugin_registry: None,
+            provider_overrides: HashMap::new(),
         }
+    }
+
+    /// Phase 3 — wire the per-`provider_hint` override registry. Each spawn
+    /// whose `agent_def.provider_hint` matches a key runs on that provider.
+    pub fn with_provider_overrides(
+        mut self,
+        overrides: HashMap<String, Arc<dyn AiProvider>>,
+    ) -> Self {
+        self.provider_overrides = overrides;
+        self
     }
 
     /// A2 — wire the shared subagent concurrency semaphore.
@@ -351,11 +366,21 @@ impl AgentRuntime {
             depth: self.child_chain.depth.saturating_sub(1),
             max_depth: self.child_chain.max_depth,
         };
+        // Phase 3 — resolve the per-agent provider: when `provider_hint` names
+        // a registered override, the subagent runs on that provider (pinned,
+        // then falling through the global chain); otherwise the shared default.
+        let provider = config
+            .agent_def
+            .provider_hint
+            .as_deref()
+            .and_then(|hint| self.provider_overrides.get(hint))
+            .cloned()
+            .unwrap_or_else(|| self.provider.clone());
         let base = SpawnerBase {
             session: self.session.clone(),
             parent_tools: self.parent_tools.clone(),
             sandbox: self.sandbox.clone(),
-            provider: self.provider.clone(),
+            provider,
             chain: parent_chain,
             raw_memory_writer: self.raw_memory_writer.clone(),
             capture_registry: self.capture_registry.clone(),

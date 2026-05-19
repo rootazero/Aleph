@@ -155,6 +155,10 @@ pub struct Orchestrator {
     pub sandbox_factory: SandboxFactory,
     /// Harness runner injected at construction — test mocks can swap this out.
     pub harness: Arc<dyn HarnessRunner>,
+    /// Phase 3 — provider routing for spawned subagents (the global failover
+    /// chain + per-`provider_hint` overrides). `None` for test mocks and the
+    /// simple engine; `Some` once `build_failover_chain` has run at boot.
+    pub subagent_routing: Option<crate::orchestrator::deps_builder::ProviderChain>,
     active_sessions: Arc<Mutex<HashSet<String>>>,
 }
 
@@ -204,8 +208,21 @@ impl Orchestrator {
             session_service,
             sandbox_factory,
             harness,
+            subagent_routing: None,
             active_sessions: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Phase 3 — attach the subagent provider routing built by
+    /// `build_failover_chain`. The gateway execution engine reads it to route
+    /// spawned subagents through the failover chain and to honour
+    /// `AgentDef.provider_hint`.
+    pub fn with_subagent_routing(
+        mut self,
+        routing: crate::orchestrator::deps_builder::ProviderChain,
+    ) -> Self {
+        self.subagent_routing = Some(routing);
+        self
     }
 
     /// Seven-step dispatch. See design §6.

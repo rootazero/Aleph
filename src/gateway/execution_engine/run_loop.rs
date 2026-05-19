@@ -314,25 +314,36 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 use crate::agents::background_tracker::BackgroundAgentTracker;
                 use crate::agents::subagent_tool::SubagentTool;
                 use crate::agents::AgentRegistry;
-                let sub_provider = self.provider_registry.default_provider();
                 let agent_registry = Arc::new(AgentRegistry::with_builtins());
                 let background_tracker = Arc::new(BackgroundAgentTracker::new());
                 let run_chain = crate::harness::chain_context::ChainContext::new();
 
-                let sub_session: Arc<dyn crate::session::service::SessionService> =
-                    match self.orchestrator.get() {
-                        Some(o) => o.session_service.clone(),
-                        None => {
-                            error!(
-                                run_id = run_id,
-                                "Orchestrator not wired when constructing SubagentTool"
-                            );
-                            return Err(ExecutionError::Orchestrator(
-                                "orchestrator not yet initialised — boot ordering error"
-                                    .to_string(),
-                            ));
-                        }
-                    };
+                let orchestrator = match self.orchestrator.get() {
+                    Some(o) => o,
+                    None => {
+                        error!(
+                            run_id = run_id,
+                            "Orchestrator not wired when constructing SubagentTool"
+                        );
+                        return Err(ExecutionError::Orchestrator(
+                            "orchestrator not yet initialised — boot ordering error".to_string(),
+                        ));
+                    }
+                };
+                let sub_session = orchestrator.session_service.clone();
+                // Phase 3 — route spawned subagents through the same
+                // FailoverProvider chain the main harness uses, and surface the
+                // per-`provider_hint` override registry. Without this the
+                // gateway handed subagents a bare provider, bypassing failover.
+                // Falls back to the bare default provider only when the
+                // orchestrator carries no chain (test / simple-engine paths).
+                let (sub_provider, agent_overrides) = match &orchestrator.subagent_routing {
+                    Some(chain) => (chain.default.current(), chain.agent_overrides.clone()),
+                    None => (
+                        self.provider_registry.default_provider(),
+                        std::collections::HashMap::new(),
+                    ),
+                };
                 let sub_sandbox: Arc<dyn crate::sandbox::Sandbox> =
                     Arc::new(crate::sandbox::NoopSandbox);
 
@@ -348,7 +359,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .with_parent_agent_id(request.session_key.agent_id().to_string())
                 .with_parent_session_id(request.session_key.to_key_string())
                 .with_cancel_token(cancel_token.clone())
-                .with_trace_sink(trace_sink.clone());
+                .with_trace_sink(trace_sink.clone())
+                .with_provider_overrides(agent_overrides);
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
                 }

@@ -13,8 +13,8 @@ use crate::config::Config;
 use crate::context::budget::ContextBudgetConfig;
 use crate::harness::StallConfig;
 use crate::providers::{
-    create_provider, DefaultProviderHandle, FailoverConfig, FailoverHealth, FailoverNode,
-    FailoverProvider, StaticDefault,
+    create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
+    FailoverNode, FailoverProvider, StaticDefault,
 };
 
 /// Default model context-window estimate (tokens) used when `[context_budget]`
@@ -32,26 +32,48 @@ pub struct StabilityTriple {
     pub turn_timeout: Option<Duration>,
 }
 
-/// Wrap `default_provider` in a [`FailoverProvider`] that walks the ordered
-/// chain `[primary, ...[fallback_provider].chain]`.
+/// Sentinel name for the fallback node that wraps the whole global chain
+/// inside a per-`provider_hint` override. Cannot collide with a real provider
+/// (names come from `[providers]` toml keys), so `FailoverProvider`'s
+/// primary-vs-fallback dedup never drops it.
+const GLOBAL_CHAIN_NODE: &str = "__global_chain__";
+
+/// Provider routing assembled once at boot.
 ///
-/// The primary slot stays *live*: the returned handle's `FailoverProvider`
-/// reads `default_provider.current()` on every call, so a UI `set_default`
-/// swap still takes effect on the next turn (hot-reload preserved).
+/// `default` is the global failover chain — wired as `deps.llm` for the main
+/// harness and used as the subagent provider for agents without a
+/// `provider_hint`. `agent_overrides` maps a `provider_hint` to a
+/// `FailoverProvider` that pins that provider, then falls through the entire
+/// global chain (the "pin + fall-through" semantics).
+#[derive(Clone)]
+pub struct ProviderChain {
+    pub default: Arc<dyn DefaultProviderHandle>,
+    pub agent_overrides: HashMap<String, Arc<dyn AiProvider>>,
+}
+
+/// Build the provider routing: the global failover chain plus the
+/// per-`provider_hint` override registry.
 ///
-/// Every configured provider's `models` list feeds the catalog, so the chain
-/// can also fail over *between models* of one provider. A chain entry that
-/// matches the primary, names a provider absent from `[providers]`, or fails
-/// to construct is skipped with a warn log.
+/// The global chain wraps `default_provider` in a [`FailoverProvider`] that
+/// walks `[primary, ...[fallback_provider].chain]`. The primary slot stays
+/// *live*: the `FailoverProvider` reads `default_provider.current()` on every
+/// call, so a UI `set_default` swap takes effect on the next turn (hot-reload
+/// preserved). Every configured provider's `models` list feeds the catalog,
+/// so the chain can also fail over *between models* of one provider.
 ///
-/// Always returns a `FailoverProvider` handle — even with an empty chain it
-/// adds model-level fallback, transient in-place retry, and a per-provider
-/// circuit breaker over the primary.
+/// Each `agent_overrides` entry pins one configured provider as the primary
+/// and adds a single fallback node = the whole global chain. All chains share
+/// one [`FailoverHealth`], so one provider's outage is visible everywhere.
+/// The primary provider itself gets no override entry — hinting it is
+/// equivalent to not hinting at all.
+///
+/// A provider that fails to construct, and a chain entry that matches the
+/// primary or is absent from `[providers]`, are skipped with a warn log.
 pub fn build_failover_chain(
     config: &Config,
     primary_provider_key: &str,
     default_provider: Arc<dyn DefaultProviderHandle>,
-) -> Arc<dyn DefaultProviderHandle> {
+) -> ProviderChain {
     // Catalog of every configured provider's model list, keyed by toml name.
     // Lets the live primary — and each fallback — fail over across models.
     let model_catalog: HashMap<String, Vec<String>> = config
@@ -60,6 +82,31 @@ pub fn build_failover_chain(
         .map(|(name, pc)| (name.clone(), pc.all_models().to_vec()))
         .collect();
 
+    // Shared circuit-breaker health: the global chain and every per-hint
+    // override see the same provider-outage picture.
+    let health = FailoverHealth::default();
+
+    // Build every non-primary provider once, reused by both the fallback
+    // chain and the per-hint override registry (no double construction).
+    let mut built: HashMap<String, Arc<dyn AiProvider>> = HashMap::new();
+    for (name, pc) in &config.providers {
+        if name.eq_ignore_ascii_case(primary_provider_key) {
+            continue; // the primary is already built behind `default_provider`
+        }
+        match create_provider(name, pc.clone()) {
+            Ok(provider) => {
+                built.insert(name.clone(), provider);
+            }
+            Err(e) => tracing::warn!(
+                provider = %name,
+                error = %e,
+                "provider build failed; skipping"
+            ),
+        }
+    }
+
+    // Ordered fallback chain — the subset of `built` named by
+    // `[fallback_provider].chain`, in order.
     let mut fallbacks: Vec<FailoverNode> = Vec::new();
     if let Some(fb) = config.fallback_provider.as_ref() {
         for name in fb.resolved_chain() {
@@ -67,46 +114,62 @@ pub fn build_failover_chain(
                 tracing::warn!(provider = %name, "failover chain: entry matches primary; skipping");
                 continue;
             }
-            let pc = match config.providers.get(&name) {
-                Some(c) => c.clone(),
-                None => {
-                    tracing::warn!(
-                        provider = %name,
-                        "failover chain: provider not in [providers]; skipping"
-                    );
-                    continue;
-                }
-            };
-            let models = pc.all_models().to_vec();
-            match create_provider(&name, pc) {
-                Ok(provider) => fallbacks.push(FailoverNode {
-                    name,
-                    models,
-                    provider,
-                }),
-                Err(e) => tracing::warn!(
+            let Some(provider) = built.get(&name) else {
+                tracing::warn!(
                     provider = %name,
-                    error = %e,
-                    "failover chain: create_provider failed; skipping"
-                ),
-            }
+                    "failover chain: provider not in [providers] or failed to build; skipping"
+                );
+                continue;
+            };
+            let models = model_catalog.get(&name).cloned().unwrap_or_default();
+            fallbacks.push(FailoverNode {
+                name,
+                models,
+                provider: provider.clone(),
+            });
         }
     }
 
     tracing::info!(
         primary = %primary_provider_key,
         fallback_count = fallbacks.len(),
+        override_count = built.len(),
         "failover chain assembled"
     );
 
-    let failover = FailoverProvider::new(
+    let global: Arc<dyn AiProvider> = Arc::new(FailoverProvider::new(
         default_provider,
         fallbacks,
-        model_catalog,
-        FailoverHealth::default(),
+        model_catalog.clone(),
+        health.clone(),
         FailoverConfig::default(),
-    );
-    Arc::new(StaticDefault::new(Arc::new(failover)))
+    ));
+    let default: Arc<dyn DefaultProviderHandle> = Arc::new(StaticDefault::new(global.clone()));
+
+    // Per-`provider_hint` overrides: one FailoverProvider per non-primary
+    // provider, pinning it as primary then falling through the global chain.
+    let agent_overrides: HashMap<String, Arc<dyn AiProvider>> = built
+        .into_iter()
+        .map(|(name, provider)| {
+            let pinned = FailoverProvider::new(
+                Arc::new(StaticDefault::new(provider)),
+                vec![FailoverNode {
+                    name: GLOBAL_CHAIN_NODE.to_string(),
+                    models: Vec::new(),
+                    provider: global.clone(),
+                }],
+                model_catalog.clone(),
+                health.clone(),
+                FailoverConfig::default(),
+            );
+            (name, Arc::new(pinned) as Arc<dyn AiProvider>)
+        })
+        .collect();
+
+    ProviderChain {
+        default,
+        agent_overrides,
+    }
 }
 
 /// Build the P0 rescue triple from `[stability]`. Each field is independent.
@@ -308,8 +371,10 @@ mod tests {
         // No `[fallback_provider]` — the primary is still wrapped so it gains
         // model-level fallback, transient retry, and a circuit breaker.
         let cfg = cfg_with_fallback(None, vec![("primary", mock_provider_config())]);
-        let wrapped = build_failover_chain(&cfg, "primary", mock_handle("primary"));
-        assert_eq!(wrapped.current().name(), "failover");
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        assert_eq!(chain.default.current().name(), "failover");
+        // Only the primary is configured → no per-hint overrides.
+        assert!(chain.agent_overrides.is_empty());
     }
 
     #[test]
@@ -324,8 +389,13 @@ mod tests {
                 ("fb", mock_provider_config()),
             ],
         );
-        let wrapped = build_failover_chain(&cfg, "primary", mock_handle("primary"));
-        assert_eq!(wrapped.current().name(), "failover");
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        assert_eq!(chain.default.current().name(), "failover");
+        // `fb` is a non-primary configured provider → it gets a pinned override;
+        // the primary never gets one (hinting it == no hint).
+        assert!(chain.agent_overrides.contains_key("fb"));
+        assert!(!chain.agent_overrides.contains_key("primary"));
+        assert_eq!(chain.agent_overrides["fb"].name(), "failover");
     }
 
     #[test]
@@ -340,8 +410,31 @@ mod tests {
             }),
             vec![("primary", mock_provider_config())],
         );
-        let wrapped = build_failover_chain(&cfg, "primary", mock_handle("primary"));
-        assert_eq!(wrapped.current().name(), "failover");
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        assert_eq!(chain.default.current().name(), "failover");
+    }
+
+    #[test]
+    fn agent_overrides_cover_every_non_primary_provider() {
+        // Three providers configured; `aux1` / `aux2` are not even in the
+        // fallback chain, but per-hint overrides still cover them so any agent
+        // can pin any configured provider.
+        let cfg = cfg_with_fallback(
+            Some(FallbackProviderToml {
+                chain: vec!["aux1".to_string()],
+                provider: None,
+            }),
+            vec![
+                ("primary", mock_provider_config()),
+                ("aux1", mock_provider_config()),
+                ("aux2", mock_provider_config()),
+            ],
+        );
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        assert_eq!(chain.agent_overrides.len(), 2);
+        assert!(chain.agent_overrides.contains_key("aux1"));
+        assert!(chain.agent_overrides.contains_key("aux2"));
+        assert!(!chain.agent_overrides.contains_key("primary"));
     }
 
     #[test]

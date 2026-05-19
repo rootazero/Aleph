@@ -126,6 +126,13 @@ pub struct AgentDef {
     pub token_budget: Option<u32>,
     /// Suggested model to use (e.g., "fast", "deep")
     pub model_hint: Option<String>,
+    /// Provider this agent should run on — a `[providers]` toml name. When set
+    /// and the name resolves at boot, the agent's subagent runs on that
+    /// provider pinned as primary, then falls through the global failover
+    /// chain. `#[serde(default)]` for schema back-compat: legacy agent files
+    /// have no `provider_hint` key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_hint: Option<String>,
     /// Context mode: whether sub-agent gets parent context
     pub context_mode: ContextMode,
     /// Where this definition was loaded from
@@ -156,6 +163,7 @@ impl AgentDef {
             max_iterations: None,
             token_budget: None,
             model_hint: None,
+            provider_hint: None,
             context_mode: ContextMode::default(),
             source: AgentSource::default(),
             mcp_servers: vec![],
@@ -223,6 +231,12 @@ impl AgentDef {
     /// Set model hint
     pub fn with_model_hint(mut self, hint: impl Into<String>) -> Self {
         self.model_hint = Some(hint.into());
+        self
+    }
+
+    /// Set provider hint — the `[providers]` toml name this agent runs on.
+    pub fn with_provider_hint(mut self, hint: impl Into<String>) -> Self {
+        self.provider_hint = Some(hint.into());
         self
     }
 
@@ -380,6 +394,23 @@ mod tests {
     fn test_with_model_hint() {
         let agent = AgentDef::new("test", AgentMode::SubAgent).with_model_hint("fast");
         assert_eq!(agent.model_hint.as_deref(), Some("fast"));
+    }
+
+    #[test]
+    fn test_provider_hint_default_none_and_setter() {
+        let agent = AgentDef::new("test", AgentMode::SubAgent);
+        assert!(agent.provider_hint.is_none());
+        let agent = agent.with_provider_hint("openai");
+        assert_eq!(agent.provider_hint.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn test_provider_hint_serde_back_compat() {
+        // Legacy agent JSON with no `provider_hint` key still deserializes.
+        let json = serde_json::to_string(&AgentDef::new("a", AgentMode::SubAgent)).unwrap();
+        assert!(!json.contains("provider_hint"), "None must skip serialization");
+        let back: AgentDef = serde_json::from_str(&json).unwrap();
+        assert!(back.provider_hint.is_none());
     }
 
     #[test]
