@@ -9,22 +9,16 @@
 //! - exec.approvals.node.set - Set node approval config
 
 use crate::sync_primitives::Arc;
-use std::future::Future;
-use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::HandlerRegistry;
 use crate::exec::{
     ApprovalBridge, ApprovalDecisionType, ConfigWithHash, ExecApprovalManager, ExecApprovalsFile,
     PendingApproval, StorageError,
 };
-
-/// Type alias for an async RPC handler function
-type RpcHandler = Box<
-    dyn Fn(JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> + Send + Sync,
->;
 
 /// Parameters for exec.approval.request
 #[derive(Debug, Deserialize)]
@@ -109,55 +103,50 @@ pub struct CallbackHandleResponse {
     pub decision: Option<ApprovalDecisionType>,
 }
 
-/// Create handlers that need the manager
-pub fn create_handlers(manager: Arc<ExecApprovalManager>) -> impl Fn(&str) -> Option<RpcHandler> {
-    move |method: &str| -> Option<RpcHandler> {
-        let mgr = manager.clone();
-        match method {
-            "exec.approval.request" => {
-                let m = mgr.clone();
-                Some(Box::new(move |req| {
-                    let manager = m.clone();
-                    Box::pin(handle_approval_request(req, manager))
-                }))
-            }
-            "exec.approval.resolve" => {
-                let m = mgr.clone();
-                Some(Box::new(move |req| {
-                    let manager = m.clone();
-                    Box::pin(handle_approval_resolve(req, manager))
-                }))
-            }
-            "exec.approvals.get" => {
-                let m = mgr.clone();
-                Some(Box::new(move |req| {
-                    let manager = m.clone();
-                    Box::pin(handle_approvals_get(req, manager))
-                }))
-            }
-            "exec.approvals.set" => {
-                let m = mgr.clone();
-                Some(Box::new(move |req| {
-                    let manager = m.clone();
-                    Box::pin(handle_approvals_set(req, manager))
-                }))
-            }
-            "exec.approvals.pending" => {
-                let m = mgr.clone();
-                Some(Box::new(move |req| {
-                    let manager = m.clone();
-                    Box::pin(handle_approvals_pending(req, manager))
-                }))
-            }
-            "exec.callback.handle" => {
-                let m = mgr.clone();
-                Some(Box::new(move |req| {
-                    let manager = m.clone();
-                    Box::pin(handle_callback(req, manager))
-                }))
-            }
-            _ => None,
-        }
+/// 把 exec-approval 全部方法注册进 JSON-RPC 处理器注册表。
+/// 所有方法共享同一个 `Arc<ExecApprovalManager>`。
+pub fn register_handlers(registry: &mut HandlerRegistry, manager: Arc<ExecApprovalManager>) {
+    {
+        let m = manager.clone();
+        registry.register("exec.approval.request", move |req| {
+            let m = m.clone();
+            async move { handle_approval_request(req, m).await }
+        });
+    }
+    {
+        let m = manager.clone();
+        registry.register("exec.approval.resolve", move |req| {
+            let m = m.clone();
+            async move { handle_approval_resolve(req, m).await }
+        });
+    }
+    {
+        let m = manager.clone();
+        registry.register("exec.approvals.get", move |req| {
+            let m = m.clone();
+            async move { handle_approvals_get(req, m).await }
+        });
+    }
+    {
+        let m = manager.clone();
+        registry.register("exec.approvals.set", move |req| {
+            let m = m.clone();
+            async move { handle_approvals_set(req, m).await }
+        });
+    }
+    {
+        let m = manager.clone();
+        registry.register("exec.approvals.pending", move |req| {
+            let m = m.clone();
+            async move { handle_approvals_pending(req, m).await }
+        });
+    }
+    {
+        let m = manager.clone();
+        registry.register("exec.callback.handle", move |req| {
+            let m = m.clone();
+            async move { handle_callback(req, m).await }
+        });
     }
 }
 
@@ -494,5 +483,22 @@ mod tests {
         let result = response.result.unwrap();
         assert_eq!(result["handled"], false);
         assert_eq!(result["approval_id"], "non-existent");
+    }
+
+    #[tokio::test]
+    async fn register_handlers_registers_all_methods() {
+        let (_dir, manager) = temp_manager();
+        let mut registry = HandlerRegistry::empty();
+        register_handlers(&mut registry, manager);
+        for m in [
+            "exec.approval.request",
+            "exec.approval.resolve",
+            "exec.approvals.get",
+            "exec.approvals.set",
+            "exec.approvals.pending",
+            "exec.callback.handle",
+        ] {
+            assert!(registry.has_method(m), "method {m} not registered");
+        }
     }
 }

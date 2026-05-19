@@ -54,8 +54,8 @@ impl TelegramChannelApprovalCapability {
 
     fn approval_callback_data(action: ApprovalAction, approval_id: &str) -> String {
         match action {
-            ApprovalAction::Approve => format!("approve:{}", approval_id),
-            ApprovalAction::Deny => format!("deny:{}", approval_id),
+            ApprovalAction::Approve => format!("approve:{}:once", approval_id),
+            ApprovalAction::Deny => format!("approve:{}:deny", approval_id),
         }
     }
 }
@@ -66,13 +66,25 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
         &self,
         conversation_id: &ConversationId,
         request: &ApprovalRequest,
+        approval_id: &str,
     ) -> ChannelResult<PendingApproval> {
-        let approval_id = format!("tg-{}", uuid::Uuid::new_v4());
         let expires_at = Utc::now() + Duration::minutes(5);
+        let text = self.render_approval_text(request);
 
-        let rendered = self.render_approval(conversation_id, request).await?;
+        let keyboard = InlineKeyboard::new()
+            .button(
+                "\u{2705} Approve",
+                Self::approval_callback_data(ApprovalAction::Approve, approval_id),
+            )
+            .button(
+                "\u{274c} Deny",
+                Self::approval_callback_data(ApprovalAction::Deny, approval_id),
+            );
 
-        let result = self.channel.send(rendered.message).await?;
+        let mut message = OutboundMessage::text(conversation_id.as_str(), text);
+        message.inline_keyboard = Some(keyboard);
+
+        let result = self.channel.send(message).await?;
 
         Ok(PendingApproval::new(
             approval_id,
@@ -193,5 +205,31 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exec::ApprovalBridge;
+
+    #[test]
+    fn approval_callback_data_is_three_part_and_parseable() {
+        let approve = TelegramChannelApprovalCapability::approval_callback_data(
+            ApprovalAction::Approve,
+            "rec-123",
+        );
+        let deny = TelegramChannelApprovalCapability::approval_callback_data(
+            ApprovalAction::Deny,
+            "rec-123",
+        );
+        assert_eq!(approve, "approve:rec-123:once");
+        assert_eq!(deny, "approve:rec-123:deny");
+
+        // 与 RPC 侧 ApprovalBridge::parse_callback 必须双向一致
+        let (id, _) = ApprovalBridge::parse_callback(&approve).expect("approve parses");
+        assert_eq!(id, "rec-123");
+        let (id, _) = ApprovalBridge::parse_callback(&deny).expect("deny parses");
+        assert_eq!(id, "rec-123");
     }
 }

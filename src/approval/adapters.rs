@@ -7,20 +7,22 @@
 //!   channel's button-click callback resolves.
 //!
 //! The adapter reads the current session from the `SESSION_ID` task-local
-//! (set at every tool entry point by Task 1's `with_session_scope`). The
-//! task-local's `SessionKey` is serialised to the channel session_key format
-//! (`{platform}:{...}:{conversation_id}:{...}`) that
-//! `ChannelApprovalBridge::parse_session_key` expects.
+//! (set at every tool entry point by `with_session_scope`) and derives the
+//! delivery route `(ChannelId, ConversationId)` directly from the structured
+//! `SessionKey` via `channel_route` — no lossy string parsing.
 //!
-//! Missing `SESSION_ID` or unreachable channel produces `Denied` with an
-//! explicit warning — never a silent auto-approve.
+//! A session with no channel origin (`Main` / `Task` / `Ephemeral`), a missing
+//! `SESSION_ID`, or an unreachable channel produces `Denied` with an explicit
+//! warning — never a silent auto-approve.
 
 use async_trait::async_trait;
 
 use crate::sync_primitives::Arc;
 
+use crate::approval::session_route::channel_route;
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
+use crate::gateway::channel::{ChannelId, ConversationId};
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 
 /// Adapts `ChannelApprovalBridge` + `ExecApprovalManager` to the
@@ -54,24 +56,24 @@ impl ChannelApprovalBridgeAdapter {
         self
     }
 
-    /// Resolve the current session context into the channel session_key string
-    /// the bridge expects. Reads from the `SESSION_ID` task-local scoped by
-    /// `with_session_scope` at the tool entry point.
-    fn current_session_key() -> Option<String> {
+    /// 从 `SESSION_ID` task-local 的结构化 `SessionKey` 解出通道路由。
+    /// task-local 未设置、或会话无通道来源时返回 `None`。
+    fn current_channel_route() -> Option<(ChannelId, ConversationId)> {
         crate::sandbox::context::SESSION_ID
-            .try_with(|sid| sid.to_string())
+            .try_with(channel_route)
             .ok()
+            .flatten()
     }
 }
 
 #[async_trait]
 impl ApprovalRequester for ChannelApprovalBridgeAdapter {
     async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
-        let Some(session_key) = Self::current_session_key() else {
+        let Some((channel_id, conversation_id)) = Self::current_channel_route() else {
             tracing::warn!(
                 tool = %tool_name,
-                "ChannelApprovalBridgeAdapter: SESSION_ID task-local not set \
-                 at approval point — cannot route prompt to a channel, denying"
+                "ChannelApprovalBridgeAdapter: no channel route from SESSION_ID \
+                 (unset, or Main/Task/Ephemeral session) — denying"
             );
             return ApprovalOutcome::Denied;
         };
@@ -81,8 +83,8 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
                 &self.approval_manager,
                 tool_name,
                 reason,
-                &session_key,
-                "",
+                &channel_id,
+                &conversation_id,
                 self.timeout_ms,
             )
             .await
@@ -92,14 +94,16 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routing::session_key::{DmScope, SessionKey};
     use crate::session::with_session_scope;
 
     fn test_manager() -> Arc<ExecApprovalManager> {
         Arc::new(ExecApprovalManager::new())
     }
 
+    /// DM session key — `channel_route` 能解出 `("telegram","123456")`。
     fn test_session_id() -> crate::session::service::SessionId {
-        crate::routing::session_key::SessionKey::ephemeral("adapter-test")
+        SessionKey::dm("main", "telegram", "123456", DmScope::PerPeer)
     }
 
     #[tokio::test]

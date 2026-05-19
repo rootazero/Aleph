@@ -535,34 +535,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // references a single instance. Boot never aborts if `enabled = false`
     // — tests / CI override via config and get a NoopSandbox that refuses
     // execution with a structured error.
-    // Build a single ApprovalGate shared between the Sandbox capability
-    // escalation path and the PermissionLayer's Ask-tier confirm path.
-    //
-    // H1 status (Phase 4a Task 2): `ChannelApprovalBridgeAdapter` exists as
-    // library code (`src/approval/adapters.rs`) and performs the full two-
-    // stage flow (deliver prompt + await user decision via
-    // `ExecApprovalManager`'s oneshot). Wiring it here requires threading
-    // the shared `Arc<ChannelRegistry>` (built later in
-    // `builder/subsystems.rs::initialize_channels`) and
-    // `Arc<ExecApprovalManager>` into this boot point, which is deferred
-    // to a follow-on task. Until then `request_approval_for_tool` falls
-    // back to `Denied` — elevated-capability and Ask-tier calls are
-    // rejected by policy rather than hanging. See Known Limitations in
-    // CHANGELOG.
+    // exec-approval 闭环共享实例：boot 构造一个 ExecApprovalManager，供
+    // (a) ChannelApprovalBridgeAdapter (ApprovalGate requester)、
+    // (b) exec.approval.* RPC 处理器、(c) router 回调汇 共用。
+    // 通道就绪后（initialize_channels 之后）再经 set_requester 注入 adapter。
+    let exec_approval_manager = Arc::new(alephcore::exec::ExecApprovalManager::new());
+
+    // ApprovalGate 在 Sandbox capability 升级路径与 PermissionLayer Ask-tier
+    // 确认路径间共享。先以空 requester 构造，通道就绪后注入 requester。
     let approval_gate = {
         use alephcore::sandbox::exec_approval::gate::ApprovalGate;
         use alephcore::sandbox::exec_approval::types::ApprovalConfig;
         Arc::new(ApprovalGate::new(ApprovalConfig::default(), None))
     };
-    if !args.daemon {
-        tracing::warn!(
-            "ApprovalGate has no ApprovalRequester wired — elevated-capability \
-             sandbox escalations and Ask-tier tool calls will be denied until \
-             `ChannelApprovalBridgeAdapter` is threaded through the shared \
-             ChannelRegistry + ExecApprovalManager at boot. Baseline-capability \
-             commands are unaffected."
-        );
-    }
 
     let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
         use alephcore::sandbox::rate_limit::SandboxRateLimitConfig;
@@ -1751,6 +1736,32 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
+    // ── exec-approval 闭环接线（channel_registry 已就绪）──────────────────
+    {
+        use alephcore::approval::adapters::ChannelApprovalBridgeAdapter;
+        use alephcore::exec::approval::channel_bridge::ChannelApprovalBridge;
+
+        // 注册 exec.approval.* RPC 处理器（server handlers 此刻引用计数为 1）。
+        alephcore::gateway::handlers::exec_approvals::register_handlers(
+            server.handlers_mut(),
+            exec_approval_manager.clone(),
+        );
+
+        // 构造 bridge + adapter，注入 ApprovalGate requester。
+        let bridge = Arc::new(ChannelApprovalBridge::new(channel_registry.clone()));
+        let adapter = Arc::new(ChannelApprovalBridgeAdapter::new(
+            bridge,
+            exec_approval_manager.clone(),
+        ));
+        approval_gate.set_requester(adapter);
+
+        if !args.daemon {
+            println!(
+                "exec-approval: ApprovalGate requester wired (Telegram channel approvals enabled)"
+            );
+        }
+    }
+
     // Inject ChannelRegistry into BuiltinToolRegistry (deferred — channels created after tools)
     if let Some(ref cell) = agent_result.channel_registry_cell {
         let _ = cell.set(channel_registry.clone());
@@ -1759,6 +1770,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
+    let approval_callback_sink: Option<
+        Arc<dyn alephcore::gateway::inbound_router::approval_callback::ApprovalCallbackSink>,
+    > = Some(Arc::new(
+        alephcore::approval::callback_sink::ManagerCallbackSink::new(exec_approval_manager.clone()),
+    ));
     initialize_inbound_router(
         channel_registry,
         agent_result.execution_adapter,
@@ -1773,6 +1789,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Some(app_config_for_channels.clone()),
         agent_result.generation_registry,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        approval_callback_sink,
         args.daemon,
     )
     .await;

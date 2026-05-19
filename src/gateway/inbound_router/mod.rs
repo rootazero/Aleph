@@ -4,6 +4,7 @@
 //! messages to the appropriate Agent/Session.
 
 mod agent_resolver;
+pub mod approval_callback;
 mod command_handler;
 mod dedup;
 mod executor;
@@ -111,6 +112,8 @@ pub struct InboundMessageRouter {
         Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
     /// Message coalescer for merging rapid-fire inbound messages
     coalescer: Option<super::coalescer::MessageCoalescer>,
+    /// 审批按钮回调汇 —— 注入则拦截 `cb_` 回调，否则按普通消息处理。
+    pub(super) approval_callback_sink: Option<Arc<dyn approval_callback::ApprovalCallbackSink>>,
 }
 
 impl InboundMessageRouter {
@@ -144,6 +147,7 @@ impl InboundMessageRouter {
             generation_registry: None,
             generation_config: None,
             coalescer: None,
+            approval_callback_sink: None,
         }
     }
 
@@ -247,6 +251,15 @@ impl InboundMessageRouter {
     /// are buffered and merged before being handed off to the agent loop.
     pub fn with_coalescer(mut self, config: super::coalescer::CoalescingConfig) -> Self {
         self.coalescer = Some(super::coalescer::MessageCoalescer::new(config));
+        self
+    }
+
+    /// 注入审批回调汇，启用通道按钮 approve/deny 分发。
+    pub fn with_approval_callback_sink(
+        mut self,
+        sink: Arc<dyn approval_callback::ApprovalCallbackSink>,
+    ) -> Self {
+        self.approval_callback_sink = Some(sink);
         self
     }
 
@@ -379,6 +392,23 @@ impl InboundMessageRouter {
             msg.sender_id.as_str(),
             msg.text.chars().take(50).collect::<String>()
         );
+
+        // 审批按钮回调短路：在正常路由之前拦截。
+        // callback query 入站消息 id 以 "cb_" 前缀（webhook / 轮询两路一致）。
+        if msg.id.as_str().starts_with("cb_") {
+            if let Some(ref sink) = self.approval_callback_sink {
+                if let Some(result) = sink
+                    .handle_callback(&msg.text, msg.sender_id.as_str())
+                    .await
+                {
+                    let reply =
+                        OutboundMessage::text(msg.conversation_id.as_str(), result.response_text);
+                    let _ = self.channel_registry.send(&msg.channel_id, reply).await;
+                    return Ok(());
+                }
+                // sink 返回 None → 非审批回调 → 落入正常消息流
+            }
+        }
 
         // Resolve agent ID via multi-tier route bindings with fallback
         let (agent_id, resolved_route) = self
@@ -753,5 +783,58 @@ impl InboundMessageRouter {
             keyboard.rows.push(chunk.to_vec());
         }
         keyboard
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::channel::{ChannelId, ConversationId, MessageId, UserId};
+    use crate::gateway::inbound_router::approval_callback::{
+        ApprovalCallbackResult, ApprovalCallbackSink,
+    };
+    use crate::gateway::pairing_store::SqlitePairingStore;
+
+    /// Sink stub —— 任何回调都拦截。
+    struct AlwaysIntercept;
+    #[async_trait::async_trait]
+    impl ApprovalCallbackSink for AlwaysIntercept {
+        async fn handle_callback(&self, _d: &str, _u: &str) -> Option<ApprovalCallbackResult> {
+            Some(ApprovalCallbackResult {
+                resolved: true,
+                response_text: "ok".to_string(),
+            })
+        }
+    }
+
+    fn cb_message() -> InboundMessage {
+        InboundMessage {
+            id: MessageId::new("cb_1"),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("123"),
+            sender_id: UserId::new("u1"),
+            sender_name: None,
+            text: "approve:rec-1:once".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        }
+    }
+
+    /// `cb_` 前缀 + 注入 sink → handle_message 拦截并早返回 Ok，
+    /// 不进入 agent 解析（空 registry，send 静默失败）。
+    #[tokio::test]
+    async fn cb_message_with_approval_sink_is_intercepted() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_approval_callback_sink(Arc::new(AlwaysIntercept));
+
+        assert!(router.handle_message(cb_message()).await.is_ok());
     }
 }
