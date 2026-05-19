@@ -21,7 +21,7 @@ use alephcore::orchestrator::{
     build_sandbox_factory, AgentHarnessRunner, BrainRef, DenyAllSandbox, FlowOverrides,
     FlowRegistry, FlowSet, FlowSpec, Orchestrator, RoutingOverrides, SandboxKind, SessionStrategy,
 };
-use alephcore::providers::adapter::{ProviderResponse, RequestPayload};
+use alephcore::providers::adapter::{ProviderResponse, RequestPayload, StopReason, TokenUsage};
 use alephcore::providers::AiProvider;
 use alephcore::sandbox::Sandbox;
 use alephcore::session::events::ToolOutput;
@@ -99,7 +99,21 @@ impl AiProvider for ScriptedLlm {
         Box::pin(async move {
             let mut q = self.queue.lock().await;
             let text = q.pop().unwrap_or_else(|| self.sticky.clone());
-            Ok(ProviderResponse::text_only(text))
+            // Report a fixed token usage so e2e tests can assert the
+            // usage-surfacing path. 7 + 11 = 18 tokens per call.
+            Ok(ProviderResponse {
+                text: Some(text),
+                stop_reason: StopReason::EndTurn,
+                usage: Some(TokenUsage {
+                    input_tokens: 7,
+                    output_tokens: 11,
+                    cache_read_tokens: None,
+                    cache_creation_tokens: None,
+                    thinking_tokens: None,
+                    cost: None,
+                }),
+                ..Default::default()
+            })
         })
     }
 

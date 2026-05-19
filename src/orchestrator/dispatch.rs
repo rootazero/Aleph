@@ -76,11 +76,10 @@ pub struct FlowOutcome {
     pub iterations: u32,
     /// Number of tool dispatches (ToolCallRequested events).
     pub tool_calls_made: u32,
-    /// Sum of provider-reported token usage across the flow run.
-    /// Populated once the LLM layer surfaces usage through the session log;
-    /// today the field is present for Gateway parity with the retiring
-    /// `LoopRunResult` and reads as `0` until Phase 6a task 6 wires
-    /// `ContextBudget` observations into the report.
+    /// Sum of provider-reported token usage across the flow run, populated
+    /// from the harness cumulative counter (`AgentHarness::total_tokens`)
+    /// after the run completes. Saturates to `u32::MAX` on overflow
+    /// (unreachable for a realistic run).
     pub total_tokens: u32,
     /// `true` if the run stopped because it hit an iteration or token cap.
     /// Defaults to `false`; actual cap tracking lands in Phase 6a task 6.

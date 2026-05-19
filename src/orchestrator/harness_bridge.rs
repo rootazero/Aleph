@@ -371,15 +371,17 @@ impl HarnessRunner for AgentHarnessRunner {
             }
         }
 
-        // `total_tokens` still defaults to 0 — provider-side usage surfacing
-        // is outside Task-10 scope. `hit_limit` is now populated from the
-        // budget sensor via `AgentHarness::hit_limit()`.
+        // `total_tokens` and `hit_limit` are read straight off the harness
+        // after the run: the harness retains the cumulative token counter
+        // and the budget-sensor flag. `total_tokens` saturates into the
+        // `u32` field (`as u32` would truncate; a run is realistically far
+        // below `u32::MAX` tokens).
         let outcome = FlowOutcome {
             final_text,
             iterations,
             tool_calls_made,
+            total_tokens: u32::try_from(harness.total_tokens()).unwrap_or(u32::MAX),
             hit_limit: harness.hit_limit(),
-            ..Default::default()
         };
 
         // Emit `Complete(outcome)` as the terminal broadcast event.

@@ -40,6 +40,13 @@ async fn default_agent_roundtrip() {
         "expected '42' in: {}",
         outcome.final_text
     );
+
+    // ScriptedLlm reports 7 input + 11 output tokens per call; this flow
+    // makes one LLM call, so the bridge surfaces 18 tokens.
+    assert_eq!(
+        outcome.total_tokens, 18,
+        "FlowOutcome.total_tokens should reflect provider-reported usage",
+    );
 }
 
 #[tokio::test]
