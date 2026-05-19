@@ -583,33 +583,24 @@ mod tests {
         assert!(hint.placeholder.is_none());
     }
 
-    /// Withdrawn permission names whose capabilities no longer exist.
-    const WITHDRAWN_PERMISSIONS: &[&str] = &["http-routes", "gateway-rpc"];
-
-    /// Parse permission strings, skipping withdrawn names.
-    ///
-    /// Mirrors how a manifest loader should degrade gracefully when it meets a
-    /// permission whose capability was withdrawn: drop it instead of panicking
-    /// or surfacing it as a `Custom` permission.
-    fn parse_permission_strings(strings: &[String]) -> Vec<PluginPermission> {
-        strings
-            .iter()
-            .filter(|s| !WITHDRAWN_PERMISSIONS.contains(&s.as_str()))
-            .map(|s| PluginPermission::from_str(s))
-            .collect()
-    }
-
     #[test]
-    fn unknown_permission_string_is_ignored_not_panicked() {
-        // A stale manifest may still carry a withdrawn permission name.
-        // Parsing must degrade gracefully rather than panic.
-        let perms = parse_permission_strings(&[
-            "network".to_string(),
-            "http-routes".to_string(), // withdrawn — must be tolerated
-            "gateway-rpc".to_string(), // withdrawn — must be tolerated
-        ]);
-        assert!(perms.contains(&PluginPermission::Network));
-        assert_eq!(perms.len(), 1);
+    fn withdrawn_permission_string_parses_gracefully_not_panicked() {
+        // A stale manifest may still carry a withdrawn permission name
+        // (http-routes / gateway-rpc — capabilities now withdrawn).
+        // from_str must not panic; the Custom catch-all keeps them parseable.
+        assert_eq!(
+            PluginPermission::from_str("http-routes"),
+            PluginPermission::Custom("http-routes".to_string())
+        );
+        assert_eq!(
+            PluginPermission::from_str("gateway-rpc"),
+            PluginPermission::Custom("gateway-rpc".to_string())
+        );
+        // A known permission still parses to its real variant.
+        assert_eq!(
+            PluginPermission::from_str("network"),
+            PluginPermission::Network
+        );
     }
 
     #[test]
