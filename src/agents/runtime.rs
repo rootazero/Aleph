@@ -135,6 +135,8 @@ pub struct AgentRuntime {
     turn_timeout: Option<std::time::Duration>,
     /// Stage A (P1) — trace sink threaded into SpawnerBase.
     trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+    /// A2 — subagent concurrency cap, threaded into every `SpawnerBase`.
+    subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 impl AgentRuntime {
@@ -165,7 +167,14 @@ impl AgentRuntime {
             consecutive_failure_cap: None,
             turn_timeout: None,
             trace_sink: None,
+            subagent_semaphore: None,
         }
+    }
+
+    /// A2 — wire the shared subagent concurrency semaphore.
+    pub fn with_subagent_semaphore(mut self, sem: Arc<tokio::sync::Semaphore>) -> Self {
+        self.subagent_semaphore = Some(sem);
+        self
     }
 
     /// Stage 5a (#9) — wire a guardrail registry that subagents inherit.
@@ -358,6 +367,8 @@ impl AgentRuntime {
             // P3 Stage I — plugin_registry not threaded through AgentRuntime yet;
             // None disables MCP scope for runtime-spawned subagents until wired.
             plugin_registry: None,
+            // A2 — subagent concurrency cap.
+            subagent_semaphore: self.subagent_semaphore.clone(),
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

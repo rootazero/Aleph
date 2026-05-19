@@ -163,6 +163,7 @@ async fn h_t1_worktree_isolation_happy_path() {
         trace_sink: Some(sink_for_base),
         // P3 Stage I:
         plugin_registry: None,
+        subagent_semaphore: None,
     };
 
     let agent_def = AgentDef::new("worktree-probe", AgentMode::SubAgent)

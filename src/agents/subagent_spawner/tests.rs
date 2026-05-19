@@ -237,6 +237,7 @@ mod tests {
             trace_sink: None,
             // P3 Stage I:
             plugin_registry: None,
+            subagent_semaphore: None,
         }
     }
 
@@ -344,6 +345,66 @@ mod tests {
             result.total_tokens, 15,
             "10 input + 5 output from one UsageProvider call"
         );
+    }
+
+    #[tokio::test]
+    async fn spawn_blocks_when_semaphore_exhausted() {
+        use tokio::sync::Semaphore;
+        let sem = Arc::new(Semaphore::new(1));
+        let provider = ScriptedProvider::new(vec![
+            ProviderResponse::text_only("ok".into()),
+            ProviderResponse::text_only("ok".into()),
+        ]);
+        let mut base = make_base(provider);
+        base.subagent_semaphore = Some(sem.clone());
+
+        let agent = agent_with_allowed("capped", vec!["*"]);
+
+        // Exhaust the single permit by hand.
+        let held = sem.clone().acquire_owned().await.unwrap();
+
+        // spawn() must block on acquire — wrap in a short timeout.
+        let blocked = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            spawn(
+                &base,
+                SpawnRequest {
+                    agent_def: &agent,
+                    task: "noop",
+                    context_summary: None,
+                    model: None,
+                    timeout_secs: 5,
+                    cancel: CancellationToken::new(),
+                    isolation: None,
+                },
+            ),
+        )
+        .await;
+        assert!(
+            blocked.is_err(),
+            "spawn must block while the semaphore is exhausted"
+        );
+
+        // Release the permit; the next spawn proceeds promptly.
+        drop(held);
+        let ran = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            spawn(
+                &base,
+                SpawnRequest {
+                    agent_def: &agent,
+                    task: "noop",
+                    context_summary: None,
+                    model: None,
+                    timeout_secs: 5,
+                    cancel: CancellationToken::new(),
+                    isolation: None,
+                },
+            ),
+        )
+        .await;
+        assert!(ran.is_ok(), "spawn must proceed once a permit frees up");
+        ran.unwrap().expect("spawn ok");
     }
 
     #[tokio::test]

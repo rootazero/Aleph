@@ -96,6 +96,10 @@ pub struct SpawnerBase {
     /// (legacy callers + tests with no `mcp_servers`); a non-empty
     /// `agent_def.mcp_servers` will fail-loud if this is `None`.
     pub plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
+    /// A2 — global cap on concurrently-running subagent spawns. `None` skips
+    /// the cap (direct test callers); `Some(_)` makes `spawn()` acquire a
+    /// permit held for the child's full lifetime.
+    pub subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -138,6 +142,17 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         .chain
         .child()
         .ok_or_else(|| "chain depth exceeded".to_string())?;
+
+    // A2 — reserve a concurrency permit; held until `spawn` returns.
+    let _permit = match base.subagent_semaphore.as_ref() {
+        Some(sem) => Some(
+            sem.clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| format!("sub-agent failed: subagent semaphore closed: {e}"))?,
+        ),
+        None => None,
+    };
 
     // P3 Stage H — provision worktree if requested. The handle is held in the
     // outer scope so Drop fires as a safety net on cancel/panic/timeout/error.

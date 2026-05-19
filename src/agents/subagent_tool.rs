@@ -33,6 +33,10 @@ use crate::tools::runtime::ToolResult;
 
 mod loop_tool;
 
+/// A2 — default cap on concurrently-running subagent spawns per top-level
+/// agent run. Matches the deleted `Lane::Subagent` default.
+const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
+
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]
 pub(super) enum SubagentAction {
@@ -108,6 +112,8 @@ pub struct SubagentTool {
     /// runtimes wrapped by ForwardingTraceSink for progress observation.
     /// Sync subagents do NOT receive this wrapper (Stage A inheritance suffices).
     trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+    /// A2 — shared concurrency cap; one per tool instance (= per agent run).
+    subagent_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl SubagentTool {
@@ -143,6 +149,9 @@ impl SubagentTool {
             capture_registry: None,
             parent_session_id: None,
             trace_sink: None,
+            subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+            )),
         }
     }
 
@@ -281,6 +290,7 @@ impl SubagentTool {
         if let Some(sid) = self.parent_session_id.clone() {
             runtime = runtime.with_parent_session_id(sid);
         }
+        runtime = runtime.with_subagent_semaphore(self.subagent_semaphore.clone());
         runtime
     }
 }
