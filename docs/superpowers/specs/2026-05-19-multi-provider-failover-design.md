@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-19
 **Branch:** `feat/provider-failover`
-**Status:** Phases 1–2 SHIPPED & verified; Phases 3–4 scoped as follow-up.
+**Status:** Phases 1–3 SHIPPED & verified; Phase 4 (dead-code cleanup) scoped as follow-up.
 
 ## Status (2026-05-19)
 
@@ -10,25 +10,32 @@
 |---|---|---|
 | 1 — Failover engine | ✅ shipped, 17 unit tests | `7b1a03bf7` |
 | 2 — Config + wiring (`FailoverProvider` as `deps.llm`) | ✅ shipped, 69 lib + 7 bin tests green | `219da2ec4` |
-| 3 — Per-agent `provider_hint` | ⏳ deferred — see note below | — |
+| 3 — Per-agent `provider_hint` + subagent failover | ✅ shipped, new unit tests green | `feat/provider-failover-phase3` |
 | 4 — Dead-code cleanup (`fallback_llm`, `AgentModelConfig`) | ⏳ deferred — see note below | — |
 
 **Delivered:** automatic provider **and** model failover when the default
 provider/model fails — an ordered `[fallback_provider].chain`, model-level
 fallback across each provider's `models[]`, a per-provider circuit breaker, and
 rich error classification (the formerly-dead `llm_retry.rs` classifier and
-`FailoverProvider` are now both live). No harness changes — R10 holds.
+`FailoverProvider` are now both live). Plus per-agent provider selection via
+`AgentDef.provider_hint`. No harness changes — R10 holds.
 
-**Phase 3 deferral rationale:** per-agent provider needs `provider_hint`
-threaded to *all four* `SubagentTool` construction sites
-(`tools/scoped.rs` ×3, `gateway/.../run_loop.rs` ×1) plus a per-provider
-failover-chain registry the orchestrator does not yet build (`named_providers`
-is still the empty "Phase 6" map). Wiring only the production path would leave
-`provider_hint` honored inconsistently — the half-wired anti-pattern this very
-spec set out to remove. It is a clean, self-contained next cycle: add
-`AgentDef.provider_hint` + loader parsing, build a `name → FailoverProvider`
-registry at boot, thread it via a `with_provider_overrides` builder on
-`SubagentTool`, and resolve it in `SubagentTool::build_runtime`.
+**Phase 3 implementation notes:** the original plan assumed four `SubagentTool`
+construction sites and the `named_providers` map. Investigation corrected both:
+only **one** site is production (`gateway/execution_engine/run_loop.rs`) — the
+rest are `#[cfg(test)]` — and the subagent path never consults
+`named_providers`/`pick_llm`; it uses `SpawnerBase.provider`. That production
+site also handed subagents a *bare* provider
+(`provider_registry.default_provider()`), silently bypassing the Phase 1–2
+failover chain — so Phase 3 fixes that bypass too. What shipped:
+`build_failover_chain` now returns a `ProviderChain { default, agent_overrides }`;
+`agent_overrides` maps each non-primary provider to a `FailoverProvider` that
+pins it as primary then falls through the whole global chain, all sharing one
+`FailoverHealth`. The chain is carried on `Orchestrator`
+(`with_subagent_routing`); `run_loop.rs` reads it so **every** subagent runs on
+the failover chain, and `AgentDef.provider_hint` selects an override. The
+registry threads `SubagentTool` → `AgentRuntime`, resolved in
+`AgentRuntime::spawn_subagent` (`provider_hint` → override, else default).
 
 **Phase 4 deferral rationale:** removing the now-inert `deps.fallback_llm`
 touches ~50 struct-literal sites and the documented nine-event init-seam
@@ -165,15 +172,28 @@ Each phase is independently testable and committable.
 - `on_model_fallback` callback trait method is retained (harmless, tiny) but no
   longer driven from `think.rs`.
 
-### Phase 3 — Per-agent provider (`agents/types.rs`, `agents/loader.rs`, `agents/subagent_spawner/`)
+### Phase 3 — Per-agent provider + subagent failover (SHIPPED)
 
-- `AgentDef` gains `provider_hint: Option<String>` alongside `model_hint`.
-- `loader.rs` parses `provider_hint` from markdown frontmatter.
-- The subagent spawner, when `provider_hint` is set, roots that agent's
-  `FailoverProvider` at the hinted provider, then **falls through the shared
-  global chain** (chosen semantics: pin + fall through). Shared health map →
-  cross-agent circuit awareness.
-- When `provider_hint` is unset, the agent uses the global `FailoverProvider`
+Files: `agents/types.rs`, `agents/loader.rs`, `orchestrator/deps_builder.rs`,
+`orchestrator/dispatch.rs`, `agents/runtime.rs`, `agents/subagent_tool.rs`,
+`bin/aleph-server/.../orchestrator_init.rs`, `gateway/execution_engine/run_loop.rs`.
+
+- `AgentDef` gains `provider_hint: Option<String>` alongside `model_hint`
+  (`#[serde(default)]` for back-compat); `loader.rs` parses it from frontmatter.
+- `build_failover_chain` returns `ProviderChain { default, agent_overrides }`.
+  Each `agent_overrides` entry is a `FailoverProvider` that pins one non-primary
+  provider as primary, then adds a single fallback node = the whole global
+  chain ("pin + fall through"). All chains share one `FailoverHealth`, so a
+  provider's outage is visible across every chain. The primary gets no entry —
+  hinting it is equivalent to no hint.
+- The `ProviderChain` is carried on `Orchestrator` via `with_subagent_routing`.
+  `run_loop.rs` reads `orchestrator.subagent_routing`: `chain.default.current()`
+  becomes the subagent provider — **fixing a pre-existing bypass** where the
+  gateway handed subagents a bare `provider_registry.default_provider()` — and
+  `chain.agent_overrides` is threaded into `SubagentTool::with_provider_overrides`.
+- `SubagentTool` → `AgentRuntime` carry the override map; `spawn_subagent`
+  resolves `agent_def.provider_hint` → override (else the shared default).
+- When `provider_hint` is unset, the subagent uses the global `FailoverProvider`
   unchanged.
 
 ### Phase 4 — Cleanup

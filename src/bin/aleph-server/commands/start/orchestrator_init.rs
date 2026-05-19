@@ -153,11 +153,15 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // in a FailoverProvider that walks [primary, ...[fallback_provider].chain],
     // each provider expanded across its `models` list. Hot-reload is preserved
     // — the wrapper resolves `default_provider.current()` on every call.
-    let default_provider = alephcore::orchestrator::build_failover_chain(
+    // `build_failover_chain` also yields the per-`provider_hint` override
+    // registry; both are carried on the orchestrator (`with_subagent_routing`)
+    // so the gateway routes spawned subagents through the same chain.
+    let provider_chain = alephcore::orchestrator::build_failover_chain(
         config,
         primary_provider_key,
         default_provider,
     );
+    let default_provider = provider_chain.default.clone();
 
     let (stall_cfg, failure_cap, turn_to) = build_stability_triple(config);
     let harness = Arc::new(AgentHarnessRunner {
@@ -197,7 +201,8 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         session_service,
         sandbox_factory,
         harness,
-    );
+    )
+    .with_subagent_routing(provider_chain);
 
     tracing::info!("Orchestrator assembled (Phase 5)");
     Ok(Arc::new(orchestrator))

@@ -13,6 +13,7 @@
 
 use futures::FutureExt;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 
@@ -127,6 +128,9 @@ pub struct SubagentTool {
     consecutive_failure_cap: Option<usize>,
     /// B3 — per-turn wall-clock timeout inherited by subagents.
     turn_timeout: Option<std::time::Duration>,
+    /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
+    /// map (the `new()` default) means every subagent uses `provider`.
+    provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
 }
 
 impl SubagentTool {
@@ -171,7 +175,18 @@ impl SubagentTool {
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: None,
+            provider_overrides: HashMap::new(),
         }
+    }
+
+    /// Phase 3 — wire the per-`provider_hint` override registry. A subagent
+    /// whose `AgentDef.provider_hint` matches a key runs on that provider.
+    pub fn with_provider_overrides(
+        mut self,
+        overrides: HashMap<String, Arc<dyn AiProvider>>,
+    ) -> Self {
+        self.provider_overrides = overrides;
+        self
     }
 
     /// B2 — wire the global plugin registry for per-agent MCP scope.
@@ -377,6 +392,9 @@ impl SubagentTool {
         }
         if let Some(tt) = self.turn_timeout {
             runtime = runtime.with_turn_timeout(tt);
+        }
+        if !self.provider_overrides.is_empty() {
+            runtime = runtime.with_provider_overrides(self.provider_overrides.clone());
         }
         runtime
     }
