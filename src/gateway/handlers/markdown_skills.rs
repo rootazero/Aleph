@@ -11,6 +11,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
@@ -19,14 +20,32 @@ use super::parse_params;
 use crate::tools::markdown_skill::{load_skills_from_dir, MarkdownCliTool};
 use crate::tools::AlephToolServer;
 
-// Global ToolServer for Markdown skills
-// This is shared across all RPC calls
-static MARKDOWN_SKILLS_SERVER: Lazy<Arc<RwLock<AlephToolServer>>> =
-    Lazy::new(|| Arc::new(RwLock::new(AlephToolServer::new())));
+/// Process-wide markdown-skill tool server. `AlephToolServer` is already
+/// internally `Arc<RwLock<..>>`, so no outer lock is needed.
+static MARKDOWN_SKILLS_SERVER: Lazy<AlephToolServer> = Lazy::new(AlephToolServer::new);
+
+/// Monotonic revision — bumped on every install/load/reload/unload so the
+/// agent loop's `MarkdownSkillRefreshSource` can detect changes cheaply.
+static MARKDOWN_SKILLS_REVISION: AtomicU64 = AtomicU64::new(0);
 
 // Track loaded skill paths for reload
 static SKILL_PATHS: Lazy<Arc<RwLock<std::collections::HashMap<String, PathBuf>>>> =
     Lazy::new(|| Arc::new(RwLock::new(std::collections::HashMap::new())));
+
+/// Accessor for the shared markdown-skill server.
+pub fn markdown_skills_server() -> &'static AlephToolServer {
+    &MARKDOWN_SKILLS_SERVER
+}
+
+/// Current revision of the markdown-skill tool set.
+pub fn markdown_skills_revision() -> u64 {
+    MARKDOWN_SKILLS_REVISION.load(Ordering::Relaxed)
+}
+
+/// Bump the revision; call after any add/replace/remove.
+pub fn bump_markdown_skills_revision() {
+    MARKDOWN_SKILLS_REVISION.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Markdown skill info for JSON serialization
 #[derive(Debug, Clone, Serialize)]
@@ -284,7 +303,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 
     // Add tools to server and track paths
-    let server = MARKDOWN_SKILLS_SERVER.read().await;
+    let server = markdown_skills_server();
     let mut paths = SKILL_PATHS.write().await;
     let mut loaded_skills = Vec::new();
 
@@ -306,6 +325,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         paths.insert(tool_name, load_path.clone());
         loaded_skills.push(skill_info);
     }
+    bump_markdown_skills_revision();
 
     JsonRpcResponse::success(
         request.id,
@@ -348,7 +368,7 @@ pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 
     // Add tools to server and track paths
-    let server = MARKDOWN_SKILLS_SERVER.read().await;
+    let server = markdown_skills_server();
     let mut paths = SKILL_PATHS.write().await;
     let mut loaded_skills = Vec::new();
 
@@ -370,6 +390,7 @@ pub async fn handle_load(request: JsonRpcRequest) -> JsonRpcResponse {
         paths.insert(tool_name, path.clone());
         loaded_skills.push(skill_info);
     }
+    bump_markdown_skills_revision();
 
     JsonRpcResponse::success(
         request.id,
@@ -426,8 +447,9 @@ pub async fn handle_reload(request: JsonRpcRequest) -> JsonRpcResponse {
     };
 
     // Replace in server
-    let server = MARKDOWN_SKILLS_SERVER.read().await;
+    let server = markdown_skills_server();
     let update_info = server.replace_tool(tool.clone()).await;
+    bump_markdown_skills_revision();
 
     info!(
         name = %params.name,
@@ -450,7 +472,7 @@ pub async fn handle_reload(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// List all loaded Markdown skills
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
-    let server = MARKDOWN_SKILLS_SERVER.read().await;
+    let server = markdown_skills_server();
     let paths = SKILL_PATHS.read().await;
 
     let mut skills = Vec::new();
@@ -496,10 +518,12 @@ pub async fn handle_unload(request: JsonRpcRequest) -> JsonRpcResponse {
     };
 
     // Remove from server
-    let server = MARKDOWN_SKILLS_SERVER.read().await;
+    let server = markdown_skills_server();
     let removed = server.remove_tool(&params.name).await;
 
-    if !removed {
+    if removed {
+        bump_markdown_skills_revision();
+    } else {
         warn!(name = %params.name, "Attempted to unload non-existent skill");
     }
 
@@ -540,5 +564,12 @@ mod tests {
         let json = json!({"name": "my-skill"});
         let params: UnloadParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.name, "my-skill");
+    }
+
+    #[test]
+    fn revision_bumps_monotonically() {
+        let before = markdown_skills_revision();
+        bump_markdown_skills_revision();
+        assert!(markdown_skills_revision() > before);
     }
 }
