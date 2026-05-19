@@ -326,6 +326,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_reports_total_tokens_from_usage() {
+        let provider: Arc<dyn AiProvider> = Arc::new(UsageProvider);
+        let base = make_base(provider);
+        let agent = agent_with_allowed("token-probe", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "say hi",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert_eq!(
+            result.total_tokens, 15,
+            "10 input + 5 output from one UsageProvider call"
+        );
+    }
+
+    #[tokio::test]
     async fn spawn_multi_turn_counts_iterations_and_tool_calls() {
         let provider = ScriptedProvider::new(vec![
             // Turn 1: the agent calls a tool.
@@ -641,7 +662,7 @@ mod tests {
         seed_session_with_assistant_texts(&session, &child_id, &[Some("thinking..."), None]).await;
 
         let chain = ChainContext::new();
-        let result = extract_run_result(session.as_ref(), &child_id, &chain, true)
+        let result = extract_run_result(session.as_ref(), &child_id, &chain, true, 0)
             .await
             .expect("extract ok");
 
@@ -669,7 +690,7 @@ mod tests {
         seed_session_with_assistant_texts(&session, &child_id, &[None, Some("final answer")]).await;
 
         let chain = ChainContext::new();
-        let result = extract_run_result(session.as_ref(), &child_id, &chain, false)
+        let result = extract_run_result(session.as_ref(), &child_id, &chain, false, 0)
             .await
             .expect("extract ok");
         assert_eq!(result.final_text.as_deref(), Some("final answer"));

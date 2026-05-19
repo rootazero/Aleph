@@ -259,11 +259,15 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         // subagent emits a LoopTraceEvent::ProviderUsage labelled with the
         // subagent's agent_def.id (distinct from "root" label used at the
         // top-level harness wrap site in orchestrator_init.rs).
-        let llm: Arc<dyn AiProvider> = Arc::new(crate::providers::MeteringProvider::new(
-            llm,
-            base.trace_sink.clone(),
-            req.agent_def.id.clone(),
-        ));
+        let token_counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let llm: Arc<dyn AiProvider> = Arc::new(
+            crate::providers::MeteringProvider::new(
+                llm,
+                base.trace_sink.clone(),
+                req.agent_def.id.clone(),
+            )
+            .with_token_accumulator(token_counter.clone()),
+        );
 
         // 6. Wrap the parent's tool service with the allowlist gate.
         // P3 Stage I — if an McpScope was provisioned, layer its tools UNDER
@@ -364,9 +368,14 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 //    `Arc<AgentHarness>` we just read the flag.
                 let hit_limit = harness.hit_limit();
 
-                let result =
-                    extract_run_result(base.session.as_ref(), &child_id, &child_chain, hit_limit)
-                        .await?;
+                let result = extract_run_result(
+                    base.session.as_ref(),
+                    &child_id,
+                    &child_chain,
+                    hit_limit,
+                    token_counter.load(std::sync::atomic::Ordering::Relaxed),
+                )
+                .await?;
 
                 // 9. Spec 1 G2 — fire-and-forget Delegation emit so CompressionService
                 //    can distil parent-side lessons. Skipped silently when no writer is
@@ -436,6 +445,7 @@ async fn extract_run_result(
     child_id: &SessionId,
     chain: &ChainContext,
     hit_limit: bool,
+    total_tokens: u64,
 ) -> Result<LoopRunResult, String> {
     let events = session
         .get_events(child_id, None, None)
@@ -474,7 +484,7 @@ async fn extract_run_result(
         final_text,
         iterations,
         tool_calls_made,
-        total_tokens: 0,
+        total_tokens: total_tokens as usize,
         hit_limit,
         chain_id: chain.chain_id.clone(),
         depth: chain.depth,

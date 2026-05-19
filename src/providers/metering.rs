@@ -14,12 +14,14 @@ use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub struct MeteringProvider {
     inner: Arc<dyn AiProvider>,
     sink: Option<Arc<dyn TraceSink>>,
     agent_id: String,
+    total_tokens: Option<Arc<AtomicU64>>,
 }
 
 impl MeteringProvider {
@@ -32,7 +34,16 @@ impl MeteringProvider {
             inner,
             sink,
             agent_id: agent_id.into(),
+            total_tokens: None,
         }
+    }
+
+    /// Wire a shared counter that accumulates `input + output` tokens across
+    /// every `process()` call. Used by the subagent spawner to populate
+    /// `LoopRunResult.total_tokens`.
+    pub fn with_token_accumulator(mut self, acc: Arc<AtomicU64>) -> Self {
+        self.total_tokens = Some(acc);
+        self
     }
 }
 
@@ -45,6 +56,7 @@ impl AiProvider for MeteringProvider {
         let sink = self.sink.clone();
         let agent_id = self.agent_id.clone();
         let provider_name = self.inner.name().to_string();
+        let acc = self.total_tokens.clone();
         Box::pin(async move {
             let resp = fut.await?;
             if let Some(usage) = resp.usage.as_ref() {
@@ -59,6 +71,12 @@ impl AiProvider for MeteringProvider {
                     thinking_tokens = ?usage.thinking_tokens,
                     "LLM call completed"
                 );
+                if let Some(acc) = &acc {
+                    acc.fetch_add(
+                        usage.input_tokens as u64 + usage.output_tokens as u64,
+                        Ordering::Relaxed,
+                    );
+                }
                 if let Some(sink) = sink {
                     sink.on_trace(&LoopTraceEvent::ProviderUsage {
                         agent_id,
@@ -181,5 +199,27 @@ mod tests {
         let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
         let _ = metering.process(RequestPayload::new(&msgs)).await.unwrap();
         assert!(sink.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn accumulator_sums_input_and_output_tokens() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let inner = Arc::new(FakeProvider {
+            usage: TokenUsage {
+                input_tokens: 200,
+                output_tokens: 50,
+                cache_read_tokens: Some(150),
+                cache_creation_tokens: Some(20),
+                thinking_tokens: None,
+                cost: None,
+            },
+        });
+        let acc = Arc::new(AtomicU64::new(0));
+        let metering = MeteringProvider::new(inner, None, "acc-test")
+            .with_token_accumulator(acc.clone());
+        let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+        let _ = metering.process(RequestPayload::new(&msgs)).await.expect("process");
+        let _ = metering.process(RequestPayload::new(&msgs)).await.expect("process");
+        assert_eq!(acc.load(Ordering::Relaxed), 500, "two calls × (200+50)");
     }
 }
