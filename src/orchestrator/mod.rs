@@ -17,7 +17,8 @@ pub mod retry;
 pub mod sandbox_factory;
 
 pub use deps_builder::{
-    build_context_budget_config, build_failover_chain, build_stability_triple, StabilityTriple,
+    build_context_budget_config, build_failover_chain, build_stability_triple, ProviderChain,
+    StabilityTriple,
 };
 
 pub use dispatch::{

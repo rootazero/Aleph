@@ -1,6 +1,6 @@
 //! Stage 7 (#12) — Init seam audit tests.
 //!
-//! Locks the contract that `AgentHarnessRunner::run` emits exactly nine
+//! Locks the contract that `AgentHarnessRunner::run` emits exactly eight
 //! `TraceSink::on_init_seam` events in declared order, with `configured`
 //! flags reflecting which Stage 1-6 / P0 rescue seams have wired impls.
 
@@ -26,14 +26,13 @@ impl TraceSink for InitRecorder {
 #[test]
 fn cold_start_emits_all_seam_events() {
     let recorder = InitRecorder::default();
-    emit_init_seams(&recorder, false, false, true, false, false, false, false);
+    emit_init_seams(&recorder, false, true, false, false, false, false);
     let events = recorder.events.lock().unwrap();
     let seams: Vec<&'static str> = events.iter().map(|(_, seam, _)| *seam).collect();
     let expected = [
         "PromptBuilder",
         "ChainContext",
         "GuardrailRegistry",
-        "FallbackLLM",
         "VerifierChain",
         "StallConfig",
         "ConsecutiveFailureCap",
@@ -59,8 +58,8 @@ fn cold_start_emits_all_seam_events() {
 fn init_seams_emitted_in_declared_order_with_correct_configured_flags() {
     let recorder = InitRecorder::default();
     // guardrails=true, verifier_chain=true, consecutive_failure_cap=true;
-    // remaining four are false. PromptBuilder + ChainContext always true.
-    emit_init_seams(&recorder, true, false, true, false, true, false, false);
+    // remaining three are false. PromptBuilder + ChainContext always true.
+    emit_init_seams(&recorder, true, true, false, true, false, false);
     let events = recorder.events.lock().unwrap();
     let snapshot: Vec<(&'static str, &'static str, bool)> = events.iter().copied().collect();
     assert_eq!(
@@ -69,7 +68,6 @@ fn init_seams_emitted_in_declared_order_with_correct_configured_flags() {
             ("stage3-prompt", "PromptBuilder", true),
             ("stage4-chain", "ChainContext", true),
             ("stage5a-guardrails", "GuardrailRegistry", true),
-            ("stage5b-fallback", "FallbackLLM", false),
             ("stage6a-verifier", "VerifierChain", true),
             ("p0-rescue-stall", "StallConfig", false),
             ("p0-rescue-cap", "ConsecutiveFailureCap", true),

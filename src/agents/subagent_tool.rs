@@ -13,6 +13,7 @@
 
 use futures::FutureExt;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 
@@ -119,14 +120,15 @@ pub struct SubagentTool {
     parent_cancel: Option<CancellationToken>,
     /// B2 — global plugin registry, threaded into each AgentRuntime.
     plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
-    /// B3 — fallback LLM inherited by subagents.
-    fallback_llm: Option<Arc<dyn AiProvider>>,
     /// B3 — stall watchdog config inherited by subagents.
     stall_config: Option<crate::harness::StallConfig>,
     /// B3 — consecutive-failure cap inherited by subagents.
     consecutive_failure_cap: Option<usize>,
     /// B3 — per-turn wall-clock timeout inherited by subagents.
     turn_timeout: Option<std::time::Duration>,
+    /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
+    /// map (the `new()` default) means every subagent uses `provider`.
+    provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
 }
 
 impl SubagentTool {
@@ -167,11 +169,21 @@ impl SubagentTool {
             )),
             parent_cancel: None,
             plugin_registry: None,
-            fallback_llm: None,
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: None,
+            provider_overrides: HashMap::new(),
         }
+    }
+
+    /// Phase 3 — wire the per-`provider_hint` override registry. A subagent
+    /// whose `AgentDef.provider_hint` matches a key runs on that provider.
+    pub fn with_provider_overrides(
+        mut self,
+        overrides: HashMap<String, Arc<dyn AiProvider>>,
+    ) -> Self {
+        self.provider_overrides = overrides;
+        self
     }
 
     /// B2 — wire the global plugin registry for per-agent MCP scope.
@@ -180,12 +192,6 @@ impl SubagentTool {
         registry: Arc<crate::extension::registry::PluginRegistry>,
     ) -> Self {
         self.plugin_registry = Some(registry);
-        self
-    }
-
-    /// B3 — wire the fallback LLM inherited by subagents.
-    pub fn with_fallback_llm(mut self, fallback: Arc<dyn AiProvider>) -> Self {
-        self.fallback_llm = Some(fallback);
         self
     }
 
@@ -366,9 +372,6 @@ impl SubagentTool {
         if let Some(sink) = self.trace_sink.clone() {
             runtime = runtime.with_trace_sink(sink);
         }
-        if let Some(fb) = self.fallback_llm.clone() {
-            runtime = runtime.with_fallback_llm(fb);
-        }
         if let Some(sc) = self.stall_config.clone() {
             runtime = runtime.with_stall_config(sc);
         }
@@ -377,6 +380,9 @@ impl SubagentTool {
         }
         if let Some(tt) = self.turn_timeout {
             runtime = runtime.with_turn_timeout(tt);
+        }
+        if !self.provider_overrides.is_empty() {
+            runtime = runtime.with_provider_overrides(self.provider_overrides.clone());
         }
         runtime
     }

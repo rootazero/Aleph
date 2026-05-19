@@ -1,15 +1,15 @@
-//! Stage A (P1) integration: SpawnerBase carries the 5 P1 fields and the
-//! subagent's HarnessDeps inherits them identically — `fallback_llm`,
-//! `stall_config`, `consecutive_failure_cap`, `turn_timeout`, `trace_sink`.
+//! Stage A (P1) integration: SpawnerBase carries the 4 P1 fields and the
+//! subagent's HarnessDeps inherits them identically — `stall_config`,
+//! `consecutive_failure_cap`, `turn_timeout`, `trace_sink`.
 //!
 //! Strategy (c) per the P1 plan — structural-correctness test:
-//!   1. Construct a `SpawnerBase` with sentinel values for the 5 fields.
+//!   1. Construct a `SpawnerBase` with sentinel values for the 4 fields.
 //!   2. Assert each field is observable from the base (round-trip via
 //!      `SpawnerBase` is the inheritance contract).
 //!   3. Run `spawn()` once with a scripted provider so the build path
-//!      exercises the `HarnessDeps { … base.fallback_llm.clone() … }`
+//!      exercises the `HarnessDeps { … base.stall_config.clone() … }`
 //!      construction site — verifying the wiring at A4 didn't regress
-//!      (a `None`-vs-`Some` branch on `fallback_llm` would surface here).
+//!      (a `None`-vs-`Some` branch on an inherited field would surface here).
 //!
 //! R10-safe: zero `src/harness/` changes; the test depends only on public
 //! types in `agents::subagent_spawner`, `harness::{StallConfig, TraceSink,
@@ -118,8 +118,8 @@ impl AiProvider for OneShotProvider {
 // -- The test ---------------------------------------------------------------
 
 #[tokio::test]
-async fn subagent_base_carries_5_p1_fields() {
-    // Sentinel values for the 5 fields. The test asserts each survives the
+async fn subagent_base_carries_4_p1_fields() {
+    // Sentinel values for the 4 fields. The test asserts each survives the
     // round-trip from SpawnerBase into the spawned harness's HarnessDeps.
     let stall = StallConfig::default().with_timeout(Duration::from_secs(123));
     let cap: usize = 7;
@@ -128,13 +128,6 @@ async fn subagent_base_carries_5_p1_fields() {
 
     let provider: Arc<dyn AiProvider> = Arc::new(OneShotProvider {
         text: "ok".to_string(),
-    });
-    // Distinct sentinel for fallback_llm — a separate provider instance so the
-    // assertion below can prove (via Arc::ptr_eq) that the exact Arc travels
-    // from SpawnerBase into the inheritance chain rather than being defaulted
-    // to None or replaced with a fresh provider.
-    let fallback_provider: Arc<dyn AiProvider> = Arc::new(OneShotProvider {
-        text: "fallback-sentinel".to_string(),
     });
     let session = fresh_session_service();
     let tools: Arc<dyn ToolService> = Arc::new(NoopTools);
@@ -152,7 +145,6 @@ async fn subagent_base_carries_5_p1_fields() {
         parent_session_id: None,
         guardrails: None,
         // Stage A (P1) — sentinel values:
-        fallback_llm: Some(Arc::clone(&fallback_provider)),
         stall_config: Some(stall.clone()),
         consecutive_failure_cap: Some(cap),
         turn_timeout: Some(turn),
@@ -182,21 +174,10 @@ async fn subagent_base_carries_5_p1_fields() {
         base.trace_sink.is_some(),
         "trace_sink must be Some when set on parent"
     );
-    assert!(
-        base.fallback_llm.is_some(),
-        "fallback_llm should carry the sentinel"
-    );
-    // Strong evidence: the exact Arc instance travels — not a clone of a
-    // different provider, not a default. `Arc::ptr_eq` compares the underlying
-    // allocation, so the inheritance contract is proved at the bit level.
-    assert!(
-        Arc::ptr_eq(base.fallback_llm.as_ref().unwrap(), &fallback_provider),
-        "fallback_llm should be the same Arc instance as the sentinel"
-    );
 
     // Invoke spawn() — exercises the HarnessDeps construction site that
     // reads `base.{stall_config,consecutive_failure_cap,turn_timeout,
-    // trace_sink,fallback_llm}.clone()`. Any wiring regression there
+    // trace_sink}.clone()`. Any wiring regression there
     // surfaces as a build error or a runtime panic on the inherited values
     // (e.g., a turn_timeout of 456s wraps every LLM call but the call
     // returns immediately, so the timeout never fires).

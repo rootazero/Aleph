@@ -156,7 +156,6 @@ async fn h_t1_worktree_isolation_happy_path() {
         parent_agent_id: None,
         parent_session_id: None,
         guardrails: None,
-        fallback_llm: None,
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,

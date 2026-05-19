@@ -58,6 +58,8 @@ struct UserFrontmatter {
     #[serde(default)]
     model_hint: Option<String>,
     #[serde(default)]
+    provider_hint: Option<String>,
+    #[serde(default)]
     allowed_tools: Vec<String>,
     #[serde(default)]
     allowed_tool_sets: Vec<String>,
@@ -138,6 +140,9 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
         .with_when_to_use(&fm.when_to_use);
     if let Some(m) = fm.model_hint {
         def = def.with_model_hint(m);
+    }
+    if let Some(p) = fm.provider_hint {
+        def = def.with_provider_hint(p);
     }
     if !fm.allowed_tools.is_empty() {
         def = def.with_allowed_tools(fm.allowed_tools);
@@ -277,6 +282,30 @@ mod tests {
         assert_eq!(def.description, "Test agent");
         assert_eq!(def.mode, AgentMode::SubAgent);
         assert_eq!(def.source, AgentSource::User);
+    }
+
+    #[test]
+    fn parses_provider_hint_from_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tmp(
+            &tmp,
+            "pinned.md",
+            "---\nid: pinned\ndescription: Pinned agent\nwhen_to_use: For tests\nprovider_hint: openai\n---\nbody\n",
+        );
+        let def = parse_file(&path, AgentSource::User).unwrap();
+        assert_eq!(def.provider_hint.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn provider_hint_absent_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tmp(
+            &tmp,
+            "plain.md",
+            "---\nid: plain\ndescription: Plain agent\nwhen_to_use: For tests\n---\nbody\n",
+        );
+        let def = parse_file(&path, AgentSource::User).unwrap();
+        assert!(def.provider_hint.is_none());
     }
 
     #[test]

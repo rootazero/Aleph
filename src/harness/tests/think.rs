@@ -254,7 +254,6 @@ async fn think_with_no_tool_use_returns_done() {
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
-        fallback_llm: None,
         max_iterations: None,
         power: None,
         stall_config: None,
@@ -308,7 +307,6 @@ async fn think_llm_error_maps_to_harness_llm() {
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
-        fallback_llm: None,
         max_iterations: None,
         power: None,
         stall_config: None,
@@ -325,90 +323,10 @@ async fn think_llm_error_maps_to_harness_llm() {
     assert!(matches!(err, HarnessError::Llm(_)), "got: {err:?}");
 }
 
-/// Stage 5b (#9): primary returns `ErrorClass::Transient` (provider error),
-/// `fallback_llm` is wired and returns Ok — `on_model_fallback` must fire
-/// with the primary's reason + fallback's name, and the persisted assistant
-/// message must come from the fallback provider.
-#[tokio::test]
-async fn fallback_llm_engaged_on_transient_primary_error() {
-    use crate::harness::HarnessCallback;
-
-    #[derive(Default)]
-    struct FallbackTracker {
-        fallbacks: Vec<(String, String)>,
-        deltas: Vec<String>,
-    }
-    impl HarnessCallback for FallbackTracker {
-        fn on_delta(&mut self, text: &str) {
-            self.deltas.push(text.to_string());
-        }
-        fn on_model_fallback(&mut self, reason: &str, fallback_model: &str) {
-            self.fallbacks
-                .push((reason.to_string(), fallback_model.to_string()));
-        }
-    }
-
-    let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
-    let deps = HarnessDeps {
-        session: session.clone(),
-        tools: Arc::new(EmptyTools),
-        sandbox: MockSandbox::new(noop_sandbox_output()),
-        // ErrProvider returns AlephError::provider(...) → ErrorClass::Transient.
-        llm: Arc::new(ErrProvider),
-        verifier_chain: None,
-        context_budget: None,
-        context_compactor: None,
-        skill_prefetcher: None,
-        trace_sink: None,
-        system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
-        chain_context: crate::harness::chain_context::ChainContext::default(),
-        guardrails: None,
-        // FixedProvider::text_only -> name() == "fixed"; fallback returns Ok.
-        fallback_llm: Some(FixedProvider::text_only("from_fallback") as Arc<dyn AiProvider>),
-        max_iterations: None,
-        power: None,
-        stall_config: None,
-        consecutive_failure_cap: None,
-        turn_timeout: None,
-    };
-    let harness = AgentHarness::new(deps);
-
-    let mut cb = FallbackTracker::default();
-    let state = harness
-        .run_turn(&sample_session_id(), &mut cb)
-        .await
-        .expect("turn must succeed via fallback");
-    assert_eq!(state, TurnState::Done);
-
-    assert_eq!(
-        cb.fallbacks.len(),
-        1,
-        "on_model_fallback must fire exactly once, got {:?}",
-        cb.fallbacks
-    );
-    assert!(
-        cb.fallbacks[0].0.contains("simulated"),
-        "callback reason should mention primary error, got {:?}",
-        cb.fallbacks[0].0
-    );
-    assert_eq!(
-        cb.fallbacks[0].1, "fixed",
-        "callback should report fallback provider's name"
-    );
-
-    // The assistant message persisted is the fallback's reply.
-    let log = session.snapshot().await;
-    let assistant_text = log.iter().rev().find_map(|r| match &r.event {
-        SessionEvent::AssistantMessage { content, .. } => Some(content.text.clone()),
-        _ => None,
-    });
-    assert_eq!(assistant_text.as_deref(), Some("from_fallback"));
-}
-
-/// Stage 5b: with no `fallback_llm` configured, transient primary errors
-/// still surface as `HarnessError::Llm` — guards against accidental
-/// silent-recovery bugs in the new code path.
+/// A transient primary-provider error surfaces as `HarnessError::Llm` — the
+/// harness propagates it for the orchestrator to handle. Provider-tier
+/// failover, when configured, lives inside `deps.llm` (`FailoverProvider`),
+/// not in the harness loop (R10).
 #[tokio::test]
 async fn primary_transient_error_without_fallback_still_propagates() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("hello")]);
@@ -426,7 +344,6 @@ async fn primary_transient_error_without_fallback_still_propagates() {
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
-        fallback_llm: None,
         max_iterations: None,
         power: None,
         stall_config: None,
@@ -509,7 +426,6 @@ async fn callback_fires_on_delta_and_tool_call() {
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
-        fallback_llm: None,
         max_iterations: None,
         power: None,
         stall_config: None,
@@ -573,7 +489,6 @@ async fn run_returns_cancelled_when_token_is_pre_cancelled() {
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
-        fallback_llm: None,
         max_iterations: None,
         power: None,
         stall_config: None,
@@ -640,7 +555,6 @@ async fn think_tool_use_after_act_returns_continue() {
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
-        fallback_llm: None,
         max_iterations: None,
         power: None,
         stall_config: None,

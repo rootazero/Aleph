@@ -29,16 +29,11 @@ pub struct HarnessDeps {
     pub tools: Arc<dyn ToolService>,
     /// Shared sandbox instance (produced by `build_sandbox` at boot).
     pub sandbox: Arc<dyn Sandbox>,
+    /// The LLM provider. Provider-tier failover (ordered chain, model-level
+    /// fallback, circuit breaker) is layered *inside* this `AiProvider` via
+    /// `providers::FailoverProvider`; the harness sees one provider and never
+    /// knows failover exists (R10 — the loop carries no recovery strategy).
     pub llm: Arc<dyn AiProvider>,
-    /// Stage 5b seam (#9). Single-step fallback provider. When the primary
-    /// `llm.process(...)` returns an `ErrorClass::Transient` failure, the
-    /// harness retries the same `RequestPayload` against `fallback_llm` once.
-    /// On success, fires `HarnessCallback::on_model_fallback(reason, name)`.
-    /// `None` disables — primary errors propagate as before. This seam is
-    /// intentionally narrow: production callers wanting N-tier failover
-    /// should wrap their primary in `providers::FailoverProvider` and pass
-    /// that as `llm` instead.
-    pub fallback_llm: Option<Arc<dyn AiProvider>>,
 
     /// Stage 6a seam (#10). Per-turn verifier chain consulted between Think
     /// and Act every iteration. `StopHookVerifier` (in the chain) preserves

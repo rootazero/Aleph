@@ -133,18 +133,6 @@ pub struct AgentIdentity {
 }
 
 // =============================================================================
-// AgentModelConfig
-// =============================================================================
-
-/// Model configuration with fallback chain
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct AgentModelConfig {
-    pub primary: String,
-    #[serde(default)]
-    pub fallbacks: Vec<String>,
-}
-
-// =============================================================================
 // AgentParams
 // =============================================================================
 
@@ -224,10 +212,6 @@ pub struct AgentDefinition {
     /// Agent identity (emoji, description, avatar, theme)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<AgentIdentity>,
-
-    /// Model configuration with fallback chain (overrides `model` field)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_config: Option<AgentModelConfig>,
 
     /// Per-agent inference parameters
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -417,17 +401,6 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_model_config_deserialize() {
-        let toml_str = r#"
-            primary = "claude-opus-4"
-            fallbacks = ["claude-sonnet-4", "gpt-4o"]
-        "#;
-        let mc: AgentModelConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(mc.primary, "claude-opus-4");
-        assert_eq!(mc.fallbacks, vec!["claude-sonnet-4", "gpt-4o"]);
-    }
-
-    #[test]
     fn test_agent_params_deserialize() {
         let toml_str = r#"
             temperature = 0.3
@@ -451,10 +424,6 @@ mod tests {
             emoji = "🧑‍💻"
             description = "Full-stack coding specialist"
 
-            [list.model_config]
-            primary = "claude-opus-4"
-            fallbacks = ["claude-sonnet-4"]
-
             [list.params]
             temperature = 0.3
             max_tokens = 8192
@@ -466,11 +435,6 @@ mod tests {
         assert_eq!(
             agent.identity.as_ref().unwrap().emoji,
             Some("🧑‍💻".to_string())
-        );
-        assert!(agent.model_config.is_some());
-        assert_eq!(
-            agent.model_config.as_ref().unwrap().primary,
-            "claude-opus-4"
         );
         assert!(agent.params.is_some());
         assert_eq!(agent.params.as_ref().unwrap().temperature, Some(0.3));
@@ -486,7 +450,6 @@ mod tests {
         let config: AgentsConfig = toml::from_str(toml_str).unwrap();
         let agent = &config.list[0];
         assert_eq!(agent.model, Some("claude-sonnet-4".to_string()));
-        assert!(agent.model_config.is_none());
     }
 
     #[test]

@@ -46,14 +46,13 @@ mod session_seed;
 
 /// Stage 7 (#12): emit one `TraceSink::on_init_seam` event per Stage 1-6
 /// seam. Extracted from `AgentHarnessRunner::run` so tests can assert the
-/// nine-event contract without a full runner fixture. `configured = false`
+/// eight-event contract without a full runner fixture. `configured = false`
 /// distinguishes a deliberate `None` path (Phase-6 stub) from a missing
 /// wiring; `PromptBuilder` and `ChainContext` are always configured because
 /// the gateway path constructs them unconditionally.
 pub(crate) fn emit_init_seams(
     sink: &dyn crate::harness::TraceSink,
     guardrails_configured: bool,
-    fallback_llm_configured: bool,
     verifier_chain_configured: bool,
     stall_config_configured: bool,
     consecutive_failure_cap_configured: bool,
@@ -63,7 +62,6 @@ pub(crate) fn emit_init_seams(
     sink.on_init_seam("stage3-prompt", "PromptBuilder", true);
     sink.on_init_seam("stage4-chain", "ChainContext", true);
     sink.on_init_seam("stage5a-guardrails", "GuardrailRegistry", guardrails_configured);
-    sink.on_init_seam("stage5b-fallback", "FallbackLLM", fallback_llm_configured);
     sink.on_init_seam("stage6a-verifier", "VerifierChain", verifier_chain_configured);
     sink.on_init_seam("p0-rescue-stall", "StallConfig", stall_config_configured);
     sink.on_init_seam(
@@ -107,12 +105,11 @@ pub struct AgentHarnessRunner {
     pub context_budget_config: Option<ContextBudgetConfig>,
     pub skill_prefetcher: Option<Arc<SkillPrefetcher>>,
 
-    // -- Stage 7 (init audit) — production wiring for Stage 5a/5b + P0 rescue
-    //    seams. Each field defaults to None on the gateway path; PHASE-6
-    //    will load values from `aleph.toml` and wire them here so HarnessDeps
-    //    receives the configured impls instead of hardcoded None.
+    // -- Stage 7 (init audit) — production wiring for the Stage 5a guardrail +
+    //    P0 rescue seams. Each field defaults to None on the gateway path;
+    //    PHASE-6 will load values from `aleph.toml` and wire them here so
+    //    HarnessDeps receives the configured impls instead of hardcoded None.
     pub guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
-    pub fallback_llm: Option<Arc<dyn AiProvider>>,
     pub stall_config: Option<crate::harness::deps::StallConfig>,
     pub consecutive_failure_cap: Option<usize>,
     pub turn_timeout: Option<std::time::Duration>,
@@ -249,7 +246,6 @@ impl HarnessRunner for AgentHarnessRunner {
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: self.guardrails.clone(),
-            fallback_llm: self.fallback_llm.clone(),
             // H1: the Think→Act loop is always capped. Per-flow override wins;
             // otherwise the boot-time `[execution] max_iterations` default.
             max_iterations: Some(resolve_max_iterations(
@@ -271,7 +267,6 @@ impl HarnessRunner for AgentHarnessRunner {
             emit_init_seams(
                 sink.as_ref(),
                 deps.guardrails.is_some(),
-                deps.fallback_llm.is_some(),
                 deps.verifier_chain.is_some(),
                 deps.stall_config.is_some(),
                 deps.consecutive_failure_cap.is_some(),
@@ -283,7 +278,6 @@ impl HarnessRunner for AgentHarnessRunner {
         // existing tracing subscriber regardless of TraceSink wiring.
         tracing::info!(
             guardrails = deps.guardrails.is_some(),
-            fallback_llm = deps.fallback_llm.is_some(),
             verifier_chain = deps.verifier_chain.is_some(),
             stall_config = deps.stall_config.is_some(),
             consecutive_failure_cap = deps.consecutive_failure_cap.is_some(),

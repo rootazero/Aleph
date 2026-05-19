@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-19
 **Branch:** `feat/provider-failover`
-**Status:** Phases 1–2 SHIPPED & verified; Phases 3–4 scoped as follow-up.
+**Status:** Phases 1–4 SHIPPED & verified — the multi-provider failover work is complete.
 
 ## Status (2026-05-19)
 
@@ -10,32 +10,44 @@
 |---|---|---|
 | 1 — Failover engine | ✅ shipped, 17 unit tests | `7b1a03bf7` |
 | 2 — Config + wiring (`FailoverProvider` as `deps.llm`) | ✅ shipped, 69 lib + 7 bin tests green | `219da2ec4` |
-| 3 — Per-agent `provider_hint` | ⏳ deferred — see note below | — |
-| 4 — Dead-code cleanup (`fallback_llm`, `AgentModelConfig`) | ⏳ deferred — see note below | — |
+| 3 — Per-agent `provider_hint` + subagent failover | ✅ shipped, new unit tests green | `b6f5c091a` |
+| 4 — Dead-code cleanup (`fallback_llm`, `AgentModelConfig`) | ✅ shipped | `feat/provider-failover-phase4` |
 
 **Delivered:** automatic provider **and** model failover when the default
 provider/model fails — an ordered `[fallback_provider].chain`, model-level
 fallback across each provider's `models[]`, a per-provider circuit breaker, and
 rich error classification (the formerly-dead `llm_retry.rs` classifier and
-`FailoverProvider` are now both live). No harness changes — R10 holds.
+`FailoverProvider` are now both live). Plus per-agent provider selection via
+`AgentDef.provider_hint`. No harness changes — R10 holds.
 
-**Phase 3 deferral rationale:** per-agent provider needs `provider_hint`
-threaded to *all four* `SubagentTool` construction sites
-(`tools/scoped.rs` ×3, `gateway/.../run_loop.rs` ×1) plus a per-provider
-failover-chain registry the orchestrator does not yet build (`named_providers`
-is still the empty "Phase 6" map). Wiring only the production path would leave
-`provider_hint` honored inconsistently — the half-wired anti-pattern this very
-spec set out to remove. It is a clean, self-contained next cycle: add
-`AgentDef.provider_hint` + loader parsing, build a `name → FailoverProvider`
-registry at boot, thread it via a `with_provider_overrides` builder on
-`SubagentTool`, and resolve it in `SubagentTool::build_runtime`.
+**Phase 3 implementation notes:** the original plan assumed four `SubagentTool`
+construction sites and the `named_providers` map. Investigation corrected both:
+only **one** site is production (`gateway/execution_engine/run_loop.rs`) — the
+rest are `#[cfg(test)]` — and the subagent path never consults
+`named_providers`/`pick_llm`; it uses `SpawnerBase.provider`. That production
+site also handed subagents a *bare* provider
+(`provider_registry.default_provider()`), silently bypassing the Phase 1–2
+failover chain — so Phase 3 fixes that bypass too. What shipped:
+`build_failover_chain` now returns a `ProviderChain { default, agent_overrides }`;
+`agent_overrides` maps each non-primary provider to a `FailoverProvider` that
+pins it as primary then falls through the whole global chain, all sharing one
+`FailoverHealth`. The chain is carried on `Orchestrator`
+(`with_subagent_routing`); `run_loop.rs` reads it so **every** subagent runs on
+the failover chain, and `AgentDef.provider_hint` selects an override. The
+registry threads `SubagentTool` → `AgentRuntime`, resolved in
+`AgentRuntime::spawn_subagent` (`provider_hint` → override, else default).
 
-**Phase 4 deferral rationale:** removing the now-inert `deps.fallback_llm`
-touches ~50 struct-literal sites and the documented nine-event init-seam
-contract; removing dead `AgentModelConfig` touches the agent-config CRUD +
-gateway handlers. Both are mechanical but wide; sequencing them after Phase 3
-keeps each commit coherent. `deps.fallback_llm` is currently set to `None`
-(inert) with an inline comment marking it for removal.
+**Phase 4 implementation notes:** two coherent commits. (4a) Removed the
+inert single-step `deps.fallback_llm` seam — the `HarnessDeps` field, the
+`think.rs` Stage 5b retry arm, the `AgentHarnessRunner`/`SpawnerBase`/
+`SubagentTool`/`AgentRuntime` fields + `with_fallback_llm` builders, and the
+`stage5b-fallback` init seam (the contract is now **eight** events, not
+nine). The `FailoverProvider` chain in `deps.llm` fully subsumes it. (4b)
+Removed the half-dead `AgentModelConfig { primary, fallbacks }` — the type,
+the `model_config` field on `AgentDefinition`/`AgentPatch`/`CreateAgentParams`,
+and its TOML-write + CRUD + gateway plumbing. It round-tripped through config
+but never reached an LLM call; `AgentDefinition` has no `deny_unknown_fields`,
+so dropping the field silently ignores it in any legacy config file.
 
 ## 1. Problem
 
@@ -165,25 +177,48 @@ Each phase is independently testable and committable.
 - `on_model_fallback` callback trait method is retained (harmless, tiny) but no
   longer driven from `think.rs`.
 
-### Phase 3 — Per-agent provider (`agents/types.rs`, `agents/loader.rs`, `agents/subagent_spawner/`)
+### Phase 3 — Per-agent provider + subagent failover (SHIPPED)
 
-- `AgentDef` gains `provider_hint: Option<String>` alongside `model_hint`.
-- `loader.rs` parses `provider_hint` from markdown frontmatter.
-- The subagent spawner, when `provider_hint` is set, roots that agent's
-  `FailoverProvider` at the hinted provider, then **falls through the shared
-  global chain** (chosen semantics: pin + fall through). Shared health map →
-  cross-agent circuit awareness.
-- When `provider_hint` is unset, the agent uses the global `FailoverProvider`
+Files: `agents/types.rs`, `agents/loader.rs`, `orchestrator/deps_builder.rs`,
+`orchestrator/dispatch.rs`, `agents/runtime.rs`, `agents/subagent_tool.rs`,
+`bin/aleph-server/.../orchestrator_init.rs`, `gateway/execution_engine/run_loop.rs`.
+
+- `AgentDef` gains `provider_hint: Option<String>` alongside `model_hint`
+  (`#[serde(default)]` for back-compat); `loader.rs` parses it from frontmatter.
+- `build_failover_chain` returns `ProviderChain { default, agent_overrides }`.
+  Each `agent_overrides` entry is a `FailoverProvider` that pins one non-primary
+  provider as primary, then adds a single fallback node = the whole global
+  chain ("pin + fall through"). All chains share one `FailoverHealth`, so a
+  provider's outage is visible across every chain. The primary gets no entry —
+  hinting it is equivalent to no hint.
+- The `ProviderChain` is carried on `Orchestrator` via `with_subagent_routing`.
+  `run_loop.rs` reads `orchestrator.subagent_routing`: `chain.default.current()`
+  becomes the subagent provider — **fixing a pre-existing bypass** where the
+  gateway handed subagents a bare `provider_registry.default_provider()` — and
+  `chain.agent_overrides` is threaded into `SubagentTool::with_provider_overrides`.
+- `SubagentTool` → `AgentRuntime` carry the override map; `spawn_subagent`
+  resolves `agent_def.provider_hint` → override (else the shared default).
+- When `provider_hint` is unset, the subagent uses the global `FailoverProvider`
   unchanged.
 
-### Phase 4 — Cleanup
+### Phase 4 — Dead-code cleanup (SHIPPED)
 
-- Delete dead `AgentModelConfig { primary, fallbacks }` and its CRUD/gateway
-  plumbing (`config/types/agents_def.rs`, `config/agent_manager/*`,
-  `gateway/handlers/agents.rs`). Its independent-list semantics do not match
-  the chosen "fall through global chain" model, and it never affected runtime.
-- Remove orphaned imports / now-unused helpers surfaced by Phases 1–3.
-- Reconcile docs: `docs/reference/AGENT_SYSTEM.md`, provider/architecture docs.
+Two commits.
+
+- **4a — `fallback_llm`**: removed the inert single-step Stage 5b seam. The
+  `HarnessDeps.fallback_llm` field, the `think.rs` transient-error retry arm,
+  the `AgentHarnessRunner`/`SpawnerBase`/`SubagentTool`/`AgentRuntime` fields +
+  `with_fallback_llm` builders, the `orchestrator_init.rs` `None` wiring, and
+  the `stage5b-fallback` init seam. The init-seam contract is now **eight**
+  events; `emit_init_seams` lost its `fallback_llm_configured` parameter. The
+  `FailoverProvider` chain in `deps.llm` fully subsumes the single-step path —
+  this also shrinks `src/harness/` (net-positive for R10).
+- **4b — `AgentModelConfig`**: removed the half-dead `AgentModelConfig
+  { primary, fallbacks }` type, the `model_config` field on `AgentDefinition`
+  / `AgentPatch` / `CreateAgentParams`, and its TOML-write (`toml_ops.rs`,
+  `crud.rs`) + gateway-handler plumbing. It round-tripped through config but
+  never reached an LLM call; its independent-list semantics never matched the
+  chosen "fall through global chain" model.
 
 ## 6. Scope Boundaries (YAGNI)
 

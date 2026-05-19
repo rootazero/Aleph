@@ -5,7 +5,6 @@ use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::budget::LoopDirective;
-use crate::error::ErrorClass;
 use super::{AgentHarness, HarnessCallbackExt, InputGuardrailOutcome};
 use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState};
@@ -140,49 +139,16 @@ impl AgentHarness {
             state: crate::harness::trace::LoopTraceState::Think,
         });
 
-        // 3. Call the LLM, racing against cancel + turn-timeout. Stage 5b:
-        // on `ErrorClass::Transient`, retry once via `deps.fallback_llm`.
+        // 3. Call the LLM, racing against cancel + turn-timeout. Provider-tier
+        // failover — the ordered chain, model-level fallback, and the circuit
+        // breaker — lives inside `deps.llm` itself (`providers::FailoverProvider`),
+        // so the harness simply propagates whatever error survives it.
         let started = std::time::Instant::now();
-        let primary_result = self
+        let response = match self
             .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
-            .await?;
-        let response = match primary_result {
+            .await?
+        {
             Ok(r) => r,
-            Err(primary_err)
-                if primary_err.class() == ErrorClass::Transient
-                    && self.deps.fallback_llm.is_some() =>
-            {
-                let fallback = self
-                    .deps
-                    .fallback_llm
-                    .as_ref()
-                    .expect("checked is_some above");
-                // Rebuild — primary `process` consumed the original payload.
-                let fb_payload = match self.deps.system_prompt.as_deref() {
-                    Some(sp) => RequestPayload::new(&messages)
-                        .with_system(Some(sp))
-                        .with_tools(tools_ref),
-                    None => RequestPayload::new(&messages).with_tools(tools_ref),
-                };
-                let fb_started = std::time::Instant::now();
-                match self
-                    .race_llm_call(fallback.process(fb_payload), parent_cancel, fb_started)
-                    .await?
-                {
-                    Ok(r) => {
-                        callback.on_model_fallback(&primary_err.to_string(), fallback.name());
-                        r
-                    }
-                    Err(fb_err) => {
-                        tracing::warn!(
-                            primary = %primary_err,
-                            fallback = %fb_err,
-                            "fallback provider also failed; surfacing primary error",
-                        );
-                        return Err(HarnessError::Llm(primary_err));
-                    }
-                }
-            }
             Err(primary_err) => return Err(HarnessError::Llm(primary_err)),
         };
 

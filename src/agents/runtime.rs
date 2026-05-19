@@ -4,6 +4,7 @@
 //! Wraps the Harness-based spawner with lifecycle tracing and transcript
 //! persistence.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
@@ -124,9 +125,6 @@ pub struct AgentRuntime {
     /// `None` keeps the legacy "no guardrails" path; `Some(_)` propagates
     /// to every `SpawnerBase` built by `spawn_subagent`.
     guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
-    /// Stage A (P1) — fallback LLM threaded into SpawnerBase. `None` keeps
-    /// legacy "no fallback" behavior.
-    fallback_llm: Option<Arc<dyn AiProvider>>,
     /// Stage A (P1) — stall watchdog config threaded into SpawnerBase.
     stall_config: Option<crate::harness::StallConfig>,
     /// Stage A (P1) — consecutive-failure cap threaded into SpawnerBase.
@@ -140,6 +138,9 @@ pub struct AgentRuntime {
     /// B2 — global plugin registry, threaded into SpawnerBase for per-agent
     /// MCP scope provisioning.
     plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
+    /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
+    /// map (the `new()` default) means every spawn uses `provider`.
+    provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
 }
 
 impl AgentRuntime {
@@ -165,14 +166,24 @@ impl AgentRuntime {
             parent_agent_id: None,
             parent_session_id: None,
             guardrails: None,
-            fallback_llm: None,
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: None,
             trace_sink: None,
             subagent_semaphore: None,
             plugin_registry: None,
+            provider_overrides: HashMap::new(),
         }
+    }
+
+    /// Phase 3 — wire the per-`provider_hint` override registry. Each spawn
+    /// whose `agent_def.provider_hint` matches a key runs on that provider.
+    pub fn with_provider_overrides(
+        mut self,
+        overrides: HashMap<String, Arc<dyn AiProvider>>,
+    ) -> Self {
+        self.provider_overrides = overrides;
+        self
     }
 
     /// A2 — wire the shared subagent concurrency semaphore.
@@ -199,12 +210,6 @@ impl AgentRuntime {
     // Stage A (P1) — resilience builders threaded into SpawnerBase →
     // HarnessDeps. `SubagentTool` applies them via `build_runtime`; `trace_sink`
     // is wired in production at the run_loop.rs construction site.
-
-    /// Stage A (P1) — wire the fallback LLM. Subagents inherit it identically.
-    pub fn with_fallback_llm(mut self, fallback: Arc<dyn AiProvider>) -> Self {
-        self.fallback_llm = Some(fallback);
-        self
-    }
 
     /// Stage A (P1) — wire the stall watchdog config.
     pub fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
@@ -351,11 +356,21 @@ impl AgentRuntime {
             depth: self.child_chain.depth.saturating_sub(1),
             max_depth: self.child_chain.max_depth,
         };
+        // Phase 3 — resolve the per-agent provider: when `provider_hint` names
+        // a registered override, the subagent runs on that provider (pinned,
+        // then falling through the global chain); otherwise the shared default.
+        let provider = config
+            .agent_def
+            .provider_hint
+            .as_deref()
+            .and_then(|hint| self.provider_overrides.get(hint))
+            .cloned()
+            .unwrap_or_else(|| self.provider.clone());
         let base = SpawnerBase {
             session: self.session.clone(),
             parent_tools: self.parent_tools.clone(),
             sandbox: self.sandbox.clone(),
-            provider: self.provider.clone(),
+            provider,
             chain: parent_chain,
             raw_memory_writer: self.raw_memory_writer.clone(),
             capture_registry: self.capture_registry.clone(),
@@ -363,7 +378,6 @@ impl AgentRuntime {
             parent_session_id: self.parent_session_id.clone(),
             guardrails: self.guardrails.clone(),
             // Stage A (P1):
-            fallback_llm: self.fallback_llm.clone(),
             stall_config: self.stall_config.clone(),
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,
