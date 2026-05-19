@@ -36,6 +36,36 @@ pub fn build_refreshed_registry(tools: Vec<Box<dyn LoopTool>>) -> LoopToolRegist
 }
 
 // =============================================================================
+// CompositeRefreshSource
+// =============================================================================
+
+/// Combines multiple refresh sources: changed if ANY changed; tools = union.
+pub struct CompositeRefreshSource {
+    sources: Vec<std::sync::Arc<dyn ToolRefreshSource>>,
+}
+
+impl CompositeRefreshSource {
+    pub fn new(sources: Vec<std::sync::Arc<dyn ToolRefreshSource>>) -> Self {
+        Self { sources }
+    }
+}
+
+impl ToolRefreshSource for CompositeRefreshSource {
+    fn poll_changes(&self) -> bool {
+        // Poll ALL sources — each `poll_changes` updates its own baseline as a
+        // side effect, so short-circuiting would leave some sources stale.
+        self.sources
+            .iter()
+            .map(|s| s.poll_changes())
+            .fold(false, |a, b| a || b)
+    }
+
+    fn fetch_tools(&self) -> Vec<Box<dyn LoopTool>> {
+        self.sources.iter().flat_map(|s| s.fetch_tools()).collect()
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -151,5 +181,50 @@ mod tests {
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"x"));
         assert!(names.contains(&"y"));
+    }
+
+    #[test]
+    fn composite_reports_change_when_any_source_changed() {
+        let a = Arc::new(MockRefreshSource::new(vec!["a1", "a2"]));
+        let b = Arc::new(MockRefreshSource::new(vec!["b1"]));
+        let composite = CompositeRefreshSource::new(vec![
+            a.clone() as Arc<dyn ToolRefreshSource>,
+            b.clone() as Arc<dyn ToolRefreshSource>,
+        ]);
+
+        // No source signalled — composite reports no change.
+        assert!(!composite.poll_changes());
+
+        // Only `b` signals — composite must still report a change.
+        b.signal();
+        assert!(composite.poll_changes());
+        // Signal consumed — next poll is clean again.
+        assert!(!composite.poll_changes());
+
+        // fetch_tools returns the union of all sources.
+        let tools = composite.fetch_tools();
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert_eq!(tools.len(), 3);
+        assert!(names.contains(&"a1"));
+        assert!(names.contains(&"a2"));
+        assert!(names.contains(&"b1"));
+    }
+
+    #[test]
+    fn composite_polls_all_sources_without_short_circuit() {
+        // First source signalled — composite must still poll the second so its
+        // baseline is updated (no short-circuit on the first `true`).
+        let a = Arc::new(MockRefreshSource::new(vec!["a1"]));
+        let b = Arc::new(MockRefreshSource::new(vec!["b1"]));
+        a.signal();
+        b.signal();
+        let composite = CompositeRefreshSource::new(vec![
+            a.clone() as Arc<dyn ToolRefreshSource>,
+            b.clone() as Arc<dyn ToolRefreshSource>,
+        ]);
+        assert!(composite.poll_changes());
+        // Both signals were consumed — neither source still reports a change.
+        assert!(!a.poll_changes());
+        assert!(!b.poll_changes());
     }
 }
