@@ -193,7 +193,14 @@ where
             match fast_result {
                 Ok(response) => {
                     return self
-                        .finalize_fast_path_success(&run_id, &request, &agent, &emitter, response)
+                        .finalize_fast_path_success(
+                            &run_id,
+                            &request,
+                            &agent,
+                            &emitter,
+                            response,
+                            trace_task_persisted,
+                        )
                         .await;
                 }
                 Err(ExecutionError::Fallthrough { ref reason }) => {
@@ -212,7 +219,13 @@ where
                 Err(ref e) => {
                     // Direct tool errors: return error response, do NOT fall through
                     return self
-                        .finalize_fast_path_error(&run_id, &request, &agent, &emitter, &e.to_string(),
+                        .finalize_fast_path_error(
+                            &run_id,
+                            &request,
+                            &agent,
+                            &emitter,
+                            &e.to_string(),
+                            trace_task_persisted,
                         )
                         .await;
                 }
@@ -294,8 +307,10 @@ where
 
         let final_result = match &result {
             Ok(response) => {
-                self.persist_run_task_status(&run_id, TaskStatus::Completed)
-                    .await;
+                if trace_task_persisted {
+                    self.persist_run_task_status(&run_id, TaskStatus::Completed)
+                        .await;
+                }
 
                 // Store assistant response
                 agent
@@ -450,7 +465,9 @@ where
                     ExecutionError::Cancelled => TaskStatus::Interrupted,
                     _ => TaskStatus::Failed,
                 };
-                self.persist_run_task_status(&run_id, task_status).await;
+                if trace_task_persisted {
+                    self.persist_run_task_status(&run_id, task_status).await;
+                }
 
                 let error_code = match &e {
                     ExecutionError::Timeout => "TIMEOUT",

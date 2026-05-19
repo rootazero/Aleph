@@ -17,6 +17,7 @@ where
         agent: &AgentInstance,
         emitter: &crate::sync_primitives::Arc<E>,
         response: String,
+        task_persisted: bool,
     ) -> Result<(), ExecutionError> {
         let (started_at, steps_completed, final_seq) = {
             let mut runs = self.active_runs.write().await;
@@ -32,8 +33,10 @@ where
 
         agent.set_state(AgentState::Idle).await;
         let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
-        self.persist_run_task_status(run_id, TaskStatus::Completed)
-            .await;
+        if task_persisted {
+            self.persist_run_task_status(run_id, TaskStatus::Completed)
+                .await;
+        }
 
         agent
             .add_message(&request.session_key, MessageRole::Assistant, &response)
@@ -76,6 +79,7 @@ where
         agent: &AgentInstance,
         emitter: &crate::sync_primitives::Arc<E>,
         error_msg: &str,
+        task_persisted: bool,
     ) -> Result<(), ExecutionError> {
         let (started_at, final_seq) = {
             let mut runs = self.active_runs.write().await;
@@ -93,8 +97,10 @@ where
 
         agent.set_state(AgentState::Idle).await;
         let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
-        self.persist_run_task_status(run_id, TaskStatus::Failed)
-            .await;
+        if task_persisted {
+            self.persist_run_task_status(run_id, TaskStatus::Failed)
+                .await;
+        }
         let error_response = format!("❌ {}", error_msg);
 
         agent
