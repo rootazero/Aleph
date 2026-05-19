@@ -256,6 +256,21 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to mark tasks: {}", e)))?;
         Ok(count as u64)
     }
+
+    /// Reconcile tasks orphaned by a crash or hard restart.
+    ///
+    /// Finds tasks still marked `running` (see `get_recoverable_tasks`) — the
+    /// signature of a process that died mid-flight — marks them `interrupted`,
+    /// and returns them so the caller can report each one. Orphans are not
+    /// resumed; `interrupted` is a terminal state. Idempotent: a second call
+    /// immediately after the first finds nothing.
+    pub async fn reconcile_orphaned_tasks(&self) -> Result<Vec<AgentTask>, AlephError> {
+        let orphans = self.get_recoverable_tasks().await?;
+        if !orphans.is_empty() {
+            self.mark_running_as_interrupted().await?;
+        }
+        Ok(orphans)
+    }
 }
 
 #[cfg(test)]
@@ -308,5 +323,41 @@ mod tests {
         assert_eq!(db.mark_running_as_interrupted().await.unwrap(), 1);
         assert_eq!(db.mark_running_as_interrupted().await.unwrap(), 0);
         assert!(db.get_recoverable_tasks().await.unwrap().is_empty());
+    }
+
+    /// reconcile_orphaned_tasks returns the orphans and marks them
+    /// interrupted; terminal tasks are left untouched.
+    #[tokio::test]
+    async fn reconcile_orphaned_tasks_marks_running_as_interrupted() {
+        let db = StateDatabase::in_memory().unwrap();
+        insert_with_status(&db, "run-1", TaskStatus::Running).await;
+        insert_with_status(&db, "done-1", TaskStatus::Completed).await;
+
+        let orphans = db.reconcile_orphaned_tasks().await.unwrap();
+        let ids: Vec<&str> = orphans.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["run-1"]);
+
+        let reloaded = db.get_agent_task("run-1").await.unwrap().unwrap();
+        assert_eq!(reloaded.status, TaskStatus::Interrupted);
+        let done = db.get_agent_task("done-1").await.unwrap().unwrap();
+        assert_eq!(done.status, TaskStatus::Completed);
+    }
+
+    /// No orphans → empty result, no error.
+    #[tokio::test]
+    async fn reconcile_orphaned_tasks_noop_when_no_orphans() {
+        let db = StateDatabase::in_memory().unwrap();
+        insert_with_status(&db, "done-1", TaskStatus::Completed).await;
+        assert!(db.reconcile_orphaned_tasks().await.unwrap().is_empty());
+    }
+
+    /// Running reconcile twice: the second pass finds nothing.
+    #[tokio::test]
+    async fn reconcile_orphaned_tasks_is_idempotent() {
+        let db = StateDatabase::in_memory().unwrap();
+        insert_with_status(&db, "run-1", TaskStatus::Running).await;
+
+        assert_eq!(db.reconcile_orphaned_tasks().await.unwrap().len(), 1);
+        assert!(db.reconcile_orphaned_tasks().await.unwrap().is_empty());
     }
 }

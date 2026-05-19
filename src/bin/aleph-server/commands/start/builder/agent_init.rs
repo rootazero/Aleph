@@ -1523,6 +1523,35 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         orch_cell_out = Some(orch_cell);
         let engine = Arc::new(engine);
 
+        // Reconcile agent tasks orphaned by a previous crash: a row still
+        // marked `running` means the prior process died mid-flight. Mark them
+        // interrupted and report each one. This runs before the engine accepts
+        // any request, so no live task can be misclassified.
+        if let Some(ref state_db) = resilience_db {
+            match state_db.reconcile_orphaned_tasks().await {
+                Ok(orphans) => {
+                    for task in &orphans {
+                        let prompt: String = task.task_prompt.chars().take(120).collect();
+                        tracing::warn!(
+                            task_id = %task.id,
+                            agent_id = %task.agent_id,
+                            task_prompt = %prompt,
+                            "Reconciling agent task orphaned by a previous run"
+                        );
+                    }
+                    if !orphans.is_empty() {
+                        tracing::info!(
+                            count = orphans.len(),
+                            "Reconciled orphaned agent tasks"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Failed to reconcile orphaned agent tasks");
+                }
+            }
+        }
+
         if !app_config.agents.list.is_empty() {
             // New path: use ResolvedAgents from AgentDefinitionResolver
             let mut resolver = alephcore::AgentDefinitionResolver::new();
