@@ -178,7 +178,7 @@ impl OrchestratorFixture {
             named_providers: HashMap::new(),
             verifier_chain: None,
             context_budget_config: None,
-            skill_prefetcher: None,
+            skill_system: None,
             guardrails: None,
             fallback_llm: None,
             stall_config: None,

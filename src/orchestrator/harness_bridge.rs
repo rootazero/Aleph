@@ -45,7 +45,7 @@ mod session_seed;
 
 /// Stage 7 (#12): emit one `TraceSink::on_init_seam` event per Stage 1-6
 /// seam. Extracted from `AgentHarnessRunner::run` so tests can assert the
-/// nine-event contract without a full runner fixture. `configured = false`
+/// eight-event contract without a full runner fixture. `configured = false`
 /// distinguishes a deliberate `None` path (Phase-6 stub) from a missing
 /// wiring; `PromptBuilder` and `ChainContext` are always configured because
 /// the gateway path constructs them unconditionally.
@@ -57,7 +57,6 @@ pub(crate) fn emit_init_seams(
     stall_config_configured: bool,
     consecutive_failure_cap_configured: bool,
     turn_timeout_configured: bool,
-    skill_prefetcher_configured: bool,
 ) {
     sink.on_init_seam("stage3-prompt", "PromptBuilder", true);
     sink.on_init_seam("stage4-chain", "ChainContext", true);
@@ -79,11 +78,6 @@ pub(crate) fn emit_init_seams(
         consecutive_failure_cap_configured,
     );
     sink.on_init_seam("p0-rescue-timeout", "TurnTimeout", turn_timeout_configured);
-    sink.on_init_seam(
-        "skill-prefetcher",
-        "SkillPrefetcher",
-        skill_prefetcher_configured,
-    );
 }
 
 /// Concrete [`HarnessRunner`] that dispatches to the Phase 4 `AgentHarness`.
@@ -249,7 +243,6 @@ impl HarnessRunner for AgentHarnessRunner {
             verifier_chain: self.verifier_chain.clone(),
             context_budget,
             context_compactor,
-            skill_prefetcher: None,
             trace_sink: trace_sink.clone(),
             system_prompt,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -282,7 +275,6 @@ impl HarnessRunner for AgentHarnessRunner {
                 deps.stall_config.is_some(),
                 deps.consecutive_failure_cap.is_some(),
                 deps.turn_timeout.is_some(),
-                deps.skill_prefetcher.is_some(),
             );
         }
         // Production telemetry path — operators read these via the
@@ -294,7 +286,6 @@ impl HarnessRunner for AgentHarnessRunner {
             stall_config = deps.stall_config.is_some(),
             consecutive_failure_cap = deps.consecutive_failure_cap.is_some(),
             turn_timeout = deps.turn_timeout.is_some(),
-            skill_prefetcher = deps.skill_prefetcher.is_some(),
             "harness deps assembled"
         );
         let harness = AgentHarness::new(deps);

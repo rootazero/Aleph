@@ -16,7 +16,6 @@ use crate::harness::trace_sink::TraceSink;
 use crate::providers::AiProvider;
 use crate::sandbox::Sandbox;
 use crate::session::service::SessionService;
-use crate::skill::prefetch::SkillPrefetcher;
 use crate::tools::service::ToolService;
 use crate::verification::VerifierChain;
 
@@ -55,11 +54,6 @@ pub struct HarnessDeps {
     /// `CompactAndContinue`. Falls back to deterministic truncation on
     /// provider failure (see `ContextCompactor::compact`).
     pub context_compactor: Option<Arc<ContextCompactor>>,
-    /// Optional async skill discovery prefetcher. Wired from the orchestrator
-    /// boot path; the harness triggers a throttled scan at the start of each
-    /// Think pass so newly available skills are surfaced without adding
-    /// latency to the main loop.
-    pub skill_prefetcher: Option<Arc<SkillPrefetcher>>,
     /// Gateway-side observability sink. `None` falls back to no-op tracing.
     /// Production path: Gateway wraps its persistence callback in `GatewayTraceSink`.
     pub trace_sink: Option<Arc<dyn TraceSink>>,

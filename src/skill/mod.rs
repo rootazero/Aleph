@@ -11,7 +11,6 @@ pub mod eligibility;
 pub mod events;
 pub mod installer;
 pub mod manifest;
-pub mod prefetch;
 pub mod prompt;
 pub mod recaller;
 pub mod registry;

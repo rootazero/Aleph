@@ -276,7 +276,6 @@ pub(super) fn minimal_deps(
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
-        skill_prefetcher: None,
         trace_sink: None,
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -614,7 +613,8 @@ async fn think_phase_timeout_terminates_via_hit_limit() {
     .await
     .expect("must return within 2s");
 
-    result.expect("Phase-2: Think-phase timeout must surface as Ok(HitLimit), not Err(StalledTurn)");
+    result
+        .expect("Phase-2: Think-phase timeout must surface as Ok(HitLimit), not Err(StalledTurn)");
     assert!(
         harness.hit_limit(),
         "hit_limit must be true after Think turn timeout",

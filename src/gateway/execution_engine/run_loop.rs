@@ -22,12 +22,6 @@ pub(super) use super::callback::{CallbackStateFlushHandle, StreamCallbackState, 
 pub(super) use super::history::build_loop_history;
 pub(super) use super::tool_refresh::{active_plugin_tools_for_agent, ExtensionToolRefreshSource};
 
-// Phase 6b Task 4c: `ExtensionSkillDiscoverySource` previously wrapped
-// `SkillSystem` as an `agent_loop::SkillDiscoverySource` implementor for
-// `AgentLoop::with_skill_prefetcher`. The harness now owns prefetch via
-// `HarnessDeps.skill_prefetcher`, so this adapter has no call site in this
-// file. Retained via the noop cast below; Phase 6c removes outright.
-
 // ============================================================================
 // Agent loop execution
 // ============================================================================

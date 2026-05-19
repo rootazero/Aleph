@@ -36,9 +36,9 @@ use crate::session::events::{SessionEvent, SessionEventRecord, ToolOutput, TurnI
 use crate::session::service::SessionId;
 use crate::verification::ToolCallSummary;
 
-mod think;
 mod act;
 mod guardrails;
+mod think;
 
 /// Outcome of `AgentHarness::apply_input_guardrail`. The two non-block
 /// variants both carry the (possibly mutated) events vector; the caller
@@ -486,7 +486,6 @@ mod tests {
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
 
-    use serde_json::{json, Value};
     use crate::error::Result as AlephResult;
     use crate::harness::callback::NoopHarnessCallback;
     use crate::harness::deps::HarnessDeps;
@@ -494,11 +493,12 @@ mod tests {
     use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
     use crate::providers::AiProvider;
     use crate::routing::session_key::SessionKey;
+    use crate::session::events::ToolOutput;
     use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
     use crate::session::in_process::InProcessActorSessionService;
-    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
-    use crate::session::events::ToolOutput;
     use crate::session::service::{SessionId, SessionService};
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+    use serde_json::{json, Value};
 
     #[allow(dead_code)]
     struct RecordingProvider {
@@ -739,7 +739,6 @@ mod tests {
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
-            skill_prefetcher: None,
             trace_sink: None,
             system_prompt: None,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -781,7 +780,6 @@ mod tests {
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
-            skill_prefetcher: None,
             trace_sink: None,
             system_prompt: None,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -822,7 +820,6 @@ mod tests {
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
-            skill_prefetcher: None,
             trace_sink: None,
             system_prompt: None,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -840,6 +837,9 @@ mod tests {
         let cancel = tokio_util::sync::CancellationToken::new();
         let result = harness.run(&sid, &mut cb, &cancel).await;
         assert!(result.is_ok(), "turn timeout should return Ok, not Err");
-        assert!(harness.hit_limit(), "hit_limit should be true after timeout");
+        assert!(
+            harness.hit_limit(),
+            "hit_limit should be true after timeout"
+        );
     }
 }

@@ -159,16 +159,13 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     // Explicit cleanup happens on the success path (after harness completes Ok).
     let worktree_handle: Option<crate::sandbox::WorktreeHandle> = match req.isolation {
         Some(crate::agents::IsolationMode::Worktree) => {
-            let repo_root = std::env::current_dir()
-                .map_err(|e| format!("sub-agent failed: cwd: {e}"))?;
+            let repo_root =
+                std::env::current_dir().map_err(|e| format!("sub-agent failed: cwd: {e}"))?;
             let label = &req.agent_def.id;
-            let handle = crate::sandbox::worktree::create(
-                &repo_root,
-                label,
-                base.trace_sink.clone(),
-            )
-            .await
-            .map_err(|e| format!("sub-agent failed: worktree create: {e}"))?;
+            let handle =
+                crate::sandbox::worktree::create(&repo_root, label, base.trace_sink.clone())
+                    .await
+                    .map_err(|e| format!("sub-agent failed: worktree create: {e}"))?;
             Some(handle)
         }
         None => None,
@@ -177,23 +174,26 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     // P3 Stage I — provision per-agent MCP scope. Held in outer scope so Drop
     // fires as a safety net on cancel/panic/timeout/error. Explicit
     // shutdown() happens on the success path (after harness completes Ok).
-    let mcp_scope: Option<crate::extension::registrar::mcp_registrar::McpScope> =
-        if !req.agent_def.mcp_servers.is_empty() {
-            let registry = base.plugin_registry.as_ref().ok_or_else(|| {
+    let mcp_scope: Option<crate::extension::registrar::mcp_registrar::McpScope> = if !req
+        .agent_def
+        .mcp_servers
+        .is_empty()
+    {
+        let registry = base.plugin_registry.as_ref().ok_or_else(|| {
                 "sub-agent failed: mcp scope: SpawnerBase.plugin_registry is None but agent_def.mcp_servers is non-empty".to_string()
             })?;
-            Some(
-                crate::extension::registrar::mcp_registrar::McpScope::provision(
-                    req.agent_def,
-                    registry.clone(),
-                    base.trace_sink.clone(),
-                )
-                .await
-                .map_err(|e| format!("sub-agent failed: mcp scope: {e}"))?,
+        Some(
+            crate::extension::registrar::mcp_registrar::McpScope::provision(
+                req.agent_def,
+                registry.clone(),
+                base.trace_sink.clone(),
             )
-        } else {
-            None
-        };
+            .await
+            .map_err(|e| format!("sub-agent failed: mcp scope: {e}"))?,
+        )
+    } else {
+        None
+    };
 
     let result: Result<LoopRunResult, String> = async {
         // 2. Unique ephemeral session key for this sub-agent.
@@ -306,9 +306,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         // this child, swap in a WorktreeSandbox so all command execution runs
         // at the worktree path with CARGO_TARGET_DIR redirected.
         let sandbox: Arc<dyn crate::sandbox::Sandbox> = match worktree_handle.as_ref() {
-            Some(h) => Arc::new(crate::sandbox::WorktreeSandbox::new(
-                h.path().to_path_buf(),
-            )),
+            Some(h) => Arc::new(crate::sandbox::WorktreeSandbox::new(h.path().to_path_buf())),
             None => base.sandbox.clone(),
         };
 
@@ -320,7 +318,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
-            skill_prefetcher: None,
             // Stage A (P1) — was None; now inherited from parent SpawnerBase.
             trace_sink: base.trace_sink.clone(),
             system_prompt: Some(system_prompt),
@@ -360,8 +357,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             let mut cb = NoopHarnessCallback;
             harness_for_run.run(&sid, &mut cb, &cancel).await
         };
-        let outcome =
-            tokio::time::timeout(timeout, AssertUnwindSafe(run_fut).catch_unwind()).await;
+        let outcome = tokio::time::timeout(timeout, AssertUnwindSafe(run_fut).catch_unwind()).await;
 
         match outcome {
             Err(_elapsed) => Err(format!("Sub-agent timed out after {}s", req.timeout_secs)),

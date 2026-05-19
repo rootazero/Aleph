@@ -273,7 +273,9 @@ impl AgentDef {
         }
 
         // Existing flat allowlist with "*" wildcard support
-        self.allowed_tools.iter().any(|t| t == "*" || t == tool_name)
+        self.allowed_tools
+            .iter()
+            .any(|t| t == "*" || t == tool_name)
     }
 }
 
@@ -417,7 +419,11 @@ mod tests {
 
     #[test]
     fn agent_source_serde_roundtrip() {
-        for variant in [AgentSource::Builtin, AgentSource::User, AgentSource::Project] {
+        for variant in [
+            AgentSource::Builtin,
+            AgentSource::User,
+            AgentSource::Project,
+        ] {
             let json = serde_json::to_string(&variant).unwrap();
             let back: AgentSource = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
@@ -428,8 +434,8 @@ mod tests {
 
     #[test]
     fn subagent_mode_denies_subagent_tool_even_with_wildcard() {
-        let agent = AgentDef::new("child", AgentMode::SubAgent)
-            .with_allowed_tools(vec!["*".into()]);
+        let agent =
+            AgentDef::new("child", AgentMode::SubAgent).with_allowed_tools(vec!["*".into()]);
 
         // Wildcard would normally allow everything, but the recursion guard
         // must override it for the `subagent` tool name.
@@ -551,7 +557,9 @@ mod tests {
 
     #[test]
     fn mcp_server_spec_reference_serde_round_trip() {
-        let spec = McpServerSpec::Reference { name: "github".into() };
+        let spec = McpServerSpec::Reference {
+            name: "github".into(),
+        };
         let json = serde_json::to_string(&spec).expect("serialize");
         assert_eq!(json, r#"{"type":"reference","name":"github"}"#);
         let parsed: McpServerSpec = serde_json::from_str(&json).expect("deserialize");
@@ -561,13 +569,18 @@ mod tests {
     #[test]
     fn agent_def_default_mcp_servers_is_empty() {
         let def = AgentDef::new("test", AgentMode::SubAgent);
-        assert!(def.mcp_servers.is_empty(), "default mcp_servers should be empty");
+        assert!(
+            def.mcp_servers.is_empty(),
+            "default mcp_servers should be empty"
+        );
     }
 
     #[test]
     fn agent_def_with_mcp_servers_roundtrip() {
         let specs = vec![
-            McpServerSpec::Reference { name: "global-mcp".into() },
+            McpServerSpec::Reference {
+                name: "global-mcp".into(),
+            },
             McpServerSpec::Inline {
                 name: "fresh".into(),
                 config: McpInlineConfig {
@@ -577,8 +590,7 @@ mod tests {
                 },
             },
         ];
-        let def = AgentDef::new("test", AgentMode::SubAgent)
-            .with_mcp_servers(specs.clone());
+        let def = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(specs.clone());
         assert_eq!(def.mcp_servers, specs);
     }
 }

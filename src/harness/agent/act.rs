@@ -76,7 +76,10 @@ impl AgentHarness {
             // Scope is per-`run` (one user request) so cross-request retries
             // are unaffected. Skips the per-call provider round-trip when the
             // model loops on the same call.
-            let cache_key = (call.name.clone(), super::canonical_json_string(&call.arguments));
+            let cache_key = (
+                call.name.clone(),
+                super::canonical_json_string(&call.arguments),
+            );
             if let Some(cached) = tool_call_cache.get(&cache_key) {
                 tracing::warn!(
                     tool = %call.name,

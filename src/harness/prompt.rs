@@ -228,8 +228,8 @@ mod tests {
     use super::*;
     use crate::providers::message::ContentBlock;
     use crate::session::events::{
-        now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput,
-        ToolOutputMetadata, TurnTrigger,
+        now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, ToolOutputMetadata,
+        TurnTrigger,
     };
     use serde_json::json;
 

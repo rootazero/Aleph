@@ -27,9 +27,9 @@ use crate::session::service::SessionService;
 use crate::sync_primitives::Arc;
 use crate::teams::messages::inbox::Inbox;
 use crate::teams::messages::router::MessageRouter;
-use crate::tools::service::ToolService;
 #[cfg(test)]
 use crate::tools::runtime::ToolResult;
+use crate::tools::service::ToolService;
 
 mod loop_tool;
 
@@ -291,11 +291,8 @@ impl SubagentTool {
         let request_id = uuid::Uuid::new_v4().to_string();
         let cancel_token = self.cancel_for_child();
 
-        self.background_tracker.register(
-            request_id.clone(),
-            cancel_token.clone(),
-            task.clone(),
-        );
+        self.background_tracker
+            .register(request_id.clone(), cancel_token.clone(), task.clone());
 
         let mut runtime = self.build_runtime(child_chain, cancel_token);
         if let Some(parent_sink) = self.trace_sink.clone() {
@@ -484,18 +481,17 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
 
     // Run action — top-level `task` is required UNLESS batch_tasks supplies
     // the actual sub-task descriptions.
-    let task = match task {
-        Some(t) if !t.trim().is_empty() => t,
-        Some(_) if has_batch => String::new(),
-        Some(_) => return Err("task must not be empty".to_string()),
-        None if has_batch => String::new(),
-        None => {
-            return Err(
+    let task =
+        match task {
+            Some(t) if !t.trim().is_empty() => t,
+            Some(_) if has_batch => String::new(),
+            Some(_) => return Err("task must not be empty".to_string()),
+            None if has_batch => String::new(),
+            None => return Err(
                 "missing required field: task (or provide request_id to check background status)"
                     .to_string(),
-            )
-        }
-    };
+            ),
+        };
 
     let agent_type = input
         .get("agent_type")
@@ -1279,9 +1275,7 @@ mod tests {
             .execute(serde_json::json!({ "task": "bg", "run_in_background": true }))
             .await;
         let rid = match out {
-            ToolResult::Success { output } => {
-                output["request_id"].as_str().unwrap().to_string()
-            }
+            ToolResult::Success { output } => output["request_id"].as_str().unwrap().to_string(),
             other => panic!("expected background success, got {other:?}"),
         };
 
@@ -1316,7 +1310,9 @@ mod tests {
             ToolResult::Success { output } => {
                 assert_eq!(output["status"], "batch_running_in_background");
                 assert_eq!(output["count"], 2);
-                let ids = output["request_ids"].as_array().expect("request_ids is array");
+                let ids = output["request_ids"]
+                    .as_array()
+                    .expect("request_ids is array");
                 assert_eq!(ids.len(), 2);
                 for id in ids {
                     let s = id.as_str().expect("request_id is string");

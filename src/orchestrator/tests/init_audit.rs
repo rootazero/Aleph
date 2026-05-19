@@ -26,7 +26,7 @@ impl TraceSink for InitRecorder {
 #[test]
 fn cold_start_emits_all_seam_events() {
     let recorder = InitRecorder::default();
-    emit_init_seams(&recorder, false, false, true, false, false, false, false);
+    emit_init_seams(&recorder, false, false, true, false, false, false);
     let events = recorder.events.lock().unwrap();
     let seams: Vec<&'static str> = events.iter().map(|(_, seam, _)| *seam).collect();
     let expected = [
@@ -38,7 +38,6 @@ fn cold_start_emits_all_seam_events() {
         "StallConfig",
         "ConsecutiveFailureCap",
         "TurnTimeout",
-        "SkillPrefetcher",
     ];
     assert_eq!(
         seams.len(),
@@ -59,8 +58,8 @@ fn cold_start_emits_all_seam_events() {
 fn init_seams_emitted_in_declared_order_with_correct_configured_flags() {
     let recorder = InitRecorder::default();
     // guardrails=true, verifier_chain=true, consecutive_failure_cap=true;
-    // remaining four are false. PromptBuilder + ChainContext always true.
-    emit_init_seams(&recorder, true, false, true, false, true, false, false);
+    // remaining three are false. PromptBuilder + ChainContext always true.
+    emit_init_seams(&recorder, true, false, true, false, true, false);
     let events = recorder.events.lock().unwrap();
     let snapshot: Vec<(&'static str, &'static str, bool)> = events.iter().copied().collect();
     assert_eq!(
@@ -74,7 +73,6 @@ fn init_seams_emitted_in_declared_order_with_correct_configured_flags() {
             ("p0-rescue-stall", "StallConfig", false),
             ("p0-rescue-cap", "ConsecutiveFailureCap", true),
             ("p0-rescue-timeout", "TurnTimeout", false),
-            ("skill-prefetcher", "SkillPrefetcher", false),
         ]
     );
 }
