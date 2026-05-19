@@ -32,7 +32,13 @@ pub const READ_ONLY: &[&str] = &["file_read", "file_ops"];
 /// Note: `file_ops` is admitted for its `list`/`search`/`read` operations.
 /// Its write-side operations are gated separately by the agent's
 /// `denied_tools` and the sandbox's `denied_paths` policy.
-pub const INVESTIGATION: &[&str] = &["file_read", "file_ops", "search", "web_fetch", "subagent"];
+pub const INVESTIGATION: &[&str] = &[
+    "file_read",
+    "file_ops",
+    "search",
+    "web_fetch",
+    "subagent",
+];
 
 /// Subset of INVESTIGATION safe for autonomous background execution: no
 /// exfiltration risk (no web_fetch). Excludes subagent to defend against

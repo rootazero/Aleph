@@ -11,8 +11,11 @@ mod tests {
 
     use crate::agents::{AgentDef, AgentMode};
     use crate::error::Result as AlephResult;
+    use tokio_util::sync::CancellationToken;
     use crate::harness::chain_context::ChainContext;
-    use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
+    use crate::providers::adapter::{
+        NativeToolCall, ProviderResponse, RequestPayload, StopReason,
+    };
     use crate::providers::AiProvider;
     use crate::session::events::{
         now_ms, MessageContent, SessionEvent, ToolOutput, ToolOutputMetadata, TurnTrigger,
@@ -22,7 +25,6 @@ mod tests {
     use crate::session::{SessionId, SessionService};
     use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
     use serde_json::json;
-    use tokio_util::sync::CancellationToken;
 
     // -- Providers --------------------------------------------------------
 
@@ -747,10 +749,7 @@ mod tests {
             result.final_text
         );
         assert!(result.hit_limit, "hit_limit must propagate from caller");
-        assert_eq!(
-            result.total_tokens, 777,
-            "total_tokens must propagate from caller"
-        );
+        assert_eq!(result.total_tokens, 777, "total_tokens must propagate from caller");
     }
 
     /// Control case: when the final AssistantMessage has non-empty text,
@@ -773,10 +772,7 @@ mod tests {
             .expect("extract ok");
         assert_eq!(result.final_text.as_deref(), Some("final answer"));
         assert!(!result.hit_limit);
-        assert_eq!(
-            result.total_tokens, 0,
-            "total_tokens propagates the zero path"
-        );
+        assert_eq!(result.total_tokens, 0, "total_tokens propagates the zero path");
     }
 
     // -- P3 Stage I: McpScope provision tests ---------------------------------
@@ -789,18 +785,19 @@ mod tests {
     async fn spawn_mcp_scope_unknown_reference_fails_loud() {
         use crate::agents::McpServerSpec;
 
-        let agent = agent_with_allowed("scoped", vec!["*"]).with_mcp_servers(vec![
-            McpServerSpec::Reference {
+        let agent = agent_with_allowed("scoped", vec!["*"])
+            .with_mcp_servers(vec![McpServerSpec::Reference {
                 name: "missing".into(),
-            },
-        ]);
+            }]);
 
         let provider = ScriptedProvider::new(vec![ProviderResponse::text_only(
             "should not reach".to_string(),
         )]);
         let mut base = make_base(provider);
         // Provide an empty registry — every reference lookup returns "not found".
-        base.plugin_registry = Some(Arc::new(crate::extension::registry::PluginRegistry::new()));
+        base.plugin_registry = Some(Arc::new(
+            crate::extension::registry::PluginRegistry::new(),
+        ));
 
         let cancel = CancellationToken::new();
         let req = SpawnRequest {
@@ -850,12 +847,8 @@ mod tests {
             })
         }
 
-        fn name(&self) -> &str {
-            "usage-provider"
-        }
-        fn color(&self) -> &str {
-            "#000000"
-        }
+        fn name(&self) -> &str { "usage-provider" }
+        fn color(&self) -> &str { "#000000" }
     }
 
     struct CapturingSink(std::sync::Mutex<Vec<crate::harness::trace::LoopTraceEvent>>);

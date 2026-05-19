@@ -55,16 +55,9 @@ pub enum LoopTraceEvent {
     WorktreeCreated { path: std::path::PathBuf },
     /// Subagent worktree cleaned up; `leaked = true` means cleanup was via
     /// Drop safety-net rather than explicit `cleanup()` (P3 Stage H).
-    WorktreeCleanedUp {
-        path: std::path::PathBuf,
-        leaked: bool,
-    },
+    WorktreeCleanedUp { path: std::path::PathBuf, leaked: bool },
     /// Per-agent MCP scope attached (P3 Stage I).
-    McpScopeAttached {
-        agent_id: String,
-        references: Vec<String>,
-        inline_count: usize,
-    },
+    McpScopeAttached { agent_id: String, references: Vec<String>, inline_count: usize },
     /// Per-agent MCP scope cleaned up; `leaked = true` means cleanup was via
     /// Drop safety-net rather than explicit `shutdown()` (P3 Stage I).
     McpScopeCleaned { agent_id: String, leaked: bool },

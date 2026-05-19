@@ -1,7 +1,7 @@
 //! Error classification logic for harness bridge.
 
-use crate::harness::trait_def::HarnessError;
 use crate::orchestrator::errors::FlowError;
+use crate::harness::trait_def::HarnessError;
 
 /// Classify a non-cancelled `HarnessError` as either a provider-transient
 /// failure (retryable by Gateway's outer fallback loop) or an internal error.
@@ -20,7 +20,10 @@ use crate::orchestrator::errors::FlowError;
 ///
 /// TODO(phase6c): replace with structural matching once HarnessError
 /// surfaces a `Transient(AlephError)` variant directly.
-pub(super) fn classify_harness_error(err: HarnessError, provider: &str) -> FlowError {
+pub(super) fn classify_harness_error(
+    err: HarnessError,
+    provider: &str,
+) -> FlowError {
     let msg = err.to_string();
     if is_transient_harness_message(&msg) {
         FlowError::Transient {
