@@ -358,15 +358,22 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             }
             Ok(Ok(Err(e))) => Err(format!("sub-agent failed: {e}")),
             Ok(Ok(Ok(()))) => {
-                // 8. Query the harness directly for the `hit_limit` signal. The
-                //    previous implementation reconstructed this from the event log
-                //    because the harness had been moved into the async closure; with
-                //    `Arc<AgentHarness>` we just read the flag.
+                // 8. Query the harness directly for the `hit_limit` and
+                //    `total_tokens` signals. The previous implementation
+                //    reconstructed these from the event log because the harness
+                //    had been moved into the async closure; with
+                //    `Arc<AgentHarness>` we just read the flags.
                 let hit_limit = harness.hit_limit();
 
-                let result =
-                    extract_run_result(base.session.as_ref(), &child_id, &child_chain, hit_limit)
-                        .await?;
+                let total_tokens = harness.total_tokens();
+                let result = extract_run_result(
+                    base.session.as_ref(),
+                    &child_id,
+                    &child_chain,
+                    hit_limit,
+                    total_tokens,
+                )
+                .await?;
 
                 // 9. Spec 1 G2 — fire-and-forget Delegation emit so CompressionService
                 //    can distil parent-side lessons. Skipped silently when no writer is
@@ -431,11 +438,14 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
 /// `final_text` := text of the last `AssistantMessage`, or `None`.
 /// `hit_limit` := passed in by the caller (sourced from
 ///                 `AgentHarness::hit_limit()` after the run).
+/// `total_tokens` := passed in by the caller (sourced from
+///                 `AgentHarness::total_tokens()` after the run).
 async fn extract_run_result(
     session: &dyn SessionService,
     child_id: &SessionId,
     chain: &ChainContext,
     hit_limit: bool,
+    total_tokens: u64,
 ) -> Result<LoopRunResult, String> {
     let events = session
         .get_events(child_id, None, None)
@@ -474,7 +484,7 @@ async fn extract_run_result(
         final_text,
         iterations,
         tool_calls_made,
-        total_tokens: 0,
+        total_tokens: total_tokens as usize,
         hit_limit,
         chain_id: chain.chain_id.clone(),
         depth: chain.depth,

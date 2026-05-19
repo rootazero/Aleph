@@ -326,6 +326,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_reports_provider_token_usage() {
+        use crate::providers::adapter::{StopReason, TokenUsage};
+        let provider = ScriptedProvider::new(vec![ProviderResponse {
+            text: Some("done".to_string()),
+            tool_calls: vec![],
+            thinking: None,
+            thinking_signature: None,
+            stop_reason: StopReason::EndTurn,
+            usage: Some(TokenUsage {
+                input_tokens: 12,
+                output_tokens: 30,
+                cache_read_tokens: Some(4),
+                cache_creation_tokens: Some(2),
+                thinking_tokens: None,
+                cost: None,
+            }),
+        }]);
+        let base = make_base(provider);
+
+        let agent = agent_with_allowed("echo", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "say hi",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+            isolation: None,
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        // 12 + 30 + 4 + 2 = 48.
+        assert_eq!(result.total_tokens, 48);
+    }
+
+    #[tokio::test]
     async fn spawn_multi_turn_counts_iterations_and_tool_calls() {
         let provider = ScriptedProvider::new(vec![
             // Turn 1: the agent calls a tool.
@@ -641,7 +677,7 @@ mod tests {
         seed_session_with_assistant_texts(&session, &child_id, &[Some("thinking..."), None]).await;
 
         let chain = ChainContext::new();
-        let result = extract_run_result(session.as_ref(), &child_id, &chain, true)
+        let result = extract_run_result(session.as_ref(), &child_id, &chain, true, 777)
             .await
             .expect("extract ok");
 
@@ -652,6 +688,7 @@ mod tests {
             result.final_text
         );
         assert!(result.hit_limit, "hit_limit must propagate from caller");
+        assert_eq!(result.total_tokens, 777, "total_tokens must propagate from caller");
     }
 
     /// Control case: when the final AssistantMessage has non-empty text,
@@ -669,11 +706,12 @@ mod tests {
         seed_session_with_assistant_texts(&session, &child_id, &[None, Some("final answer")]).await;
 
         let chain = ChainContext::new();
-        let result = extract_run_result(session.as_ref(), &child_id, &chain, false)
+        let result = extract_run_result(session.as_ref(), &child_id, &chain, false, 0)
             .await
             .expect("extract ok");
         assert_eq!(result.final_text.as_deref(), Some("final answer"));
         assert!(!result.hit_limit);
+        assert_eq!(result.total_tokens, 0, "total_tokens propagates the zero path");
     }
 
     // -- P3 Stage I: McpScope provision tests ---------------------------------
