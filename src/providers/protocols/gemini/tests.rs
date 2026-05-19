@@ -8,7 +8,7 @@ use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderRespons
 use crate::providers::delta::ProviderDelta;
 use crate::providers::gemini::{GenerateContentResponse, Part};
 use crate::providers::message::UnifiedMessage;
-use crate::providers::protocols::gemini::sse::parse_gemini_sse_chunk;
+use crate::providers::protocols::gemini::sse::{parse_gemini_error_body, parse_gemini_sse_chunk};
 
 #[test]
 fn test_build_endpoint_always_streaming() {
@@ -749,5 +749,80 @@ fn test_convert_tool_result_json_object_passthrough() {
     assert!(
         response.get("result").is_none(),
         "a structured object payload must pass through unwrapped"
+    );
+}
+
+#[test]
+fn test_parse_gemini_error_body_object_form() {
+    let body = r#"{"error":{"code":400,"message":"Invalid argument","status":"INVALID_ARGUMENT"}}"#;
+    let err = parse_gemini_error_body(body).expect("envelope parsed");
+    assert_eq!(err.code, 400);
+    assert_eq!(err.message, "Invalid argument");
+    assert_eq!(err.status, "INVALID_ARGUMENT");
+}
+
+#[test]
+fn test_parse_gemini_error_body_array_form() {
+    let body = r#"[{"error":{"code":500,"message":"Internal error","status":"INTERNAL"}}]"#;
+    let err = parse_gemini_error_body(body).expect("envelope parsed");
+    assert_eq!(err.code, 500);
+    assert_eq!(err.status, "INTERNAL");
+}
+
+#[test]
+fn test_parse_gemini_error_body_not_an_envelope() {
+    assert!(parse_gemini_error_body("plain text").is_none());
+    assert!(parse_gemini_error_body(r#"{"candidates":[]}"#).is_none());
+}
+
+#[test]
+fn test_parse_sse_mid_stream_error_frame() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"error":{"code":500,"message":"boom","status":"INTERNAL"}}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+    assert_eq!(out.len(), 1, "error frame yields exactly one event");
+    match out.front() {
+        Some(Err(e)) => assert!(
+            format!("{e}").contains("boom"),
+            "error should carry the message: {e}"
+        ),
+        other => panic!("expected a fatal Err, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_sse_prompt_blocked() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"promptFeedback":{"blockReason":"SAFETY"}}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+    assert_eq!(out.len(), 1, "a blocked prompt yields exactly one event");
+    match out.front() {
+        Some(Err(e)) => assert!(
+            format!("{e}").contains("SAFETY"),
+            "error must name the block reason: {e}"
+        ),
+        other => panic!("expected Err naming SAFETY, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_sse_prompt_feedback_without_block_is_ignored() {
+    // promptFeedback with only safetyRatings (no blockReason) appears on
+    // successful responses and must not be treated as an error.
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],"promptFeedback":{"safetyRatings":[]}}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+    assert!(
+        out.iter().all(|d| d.is_ok()),
+        "no error expected, got {:?}",
+        out
+    );
+    assert!(
+        out.iter()
+            .any(|d| matches!(d, Ok(ProviderDelta::TextDelta(t)) if t == "ok")),
+        "text delta should still be emitted"
     );
 }

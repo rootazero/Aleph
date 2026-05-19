@@ -3,6 +3,7 @@
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{StopReason, TokenUsage};
 use crate::providers::delta::ProviderDelta;
+use crate::providers::gemini::GeminiError;
 use std::collections::VecDeque;
 
 /// Parse one Gemini SSE data JSON chunk and push [`ProviderDelta`] events into `out`.
@@ -25,6 +26,36 @@ pub(crate) fn parse_gemini_sse_chunk(
             return;
         }
     };
+
+    // Mid-stream error frame: Gemini may deliver `{"error": {...}}` as a data
+    // chunk. Surface it as a fatal stream error (matches the parse-error path).
+    if let Some(err) = json.get("error") {
+        let message = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown error");
+        let status = err.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        out.push_back(Err(AlephError::provider(format!(
+            "Gemini stream error: {} ({})",
+            message, status
+        ))));
+        return;
+    }
+
+    // Prompt-level block: a blocked prompt returns `promptFeedback.blockReason`
+    // and no candidates. Surface it as a fatal error instead of an empty turn.
+    if let Some(block_reason) = json
+        .get("promptFeedback")
+        .and_then(|pf| pf.get("blockReason"))
+        .and_then(|r| r.as_str())
+        .filter(|r| !r.is_empty())
+    {
+        out.push_back(Err(AlephError::provider(format!(
+            "Gemini blocked the prompt (blockReason={})",
+            block_reason
+        ))));
+        return;
+    }
 
     // Extract candidate[0]
     let candidate = json.get("candidates").and_then(|c| c.get(0));
@@ -161,4 +192,18 @@ pub(crate) fn parse_gemini_sse_chunk(
             out.push_back(usage_event);
         }
     }
+}
+
+/// Extract a Gemini error envelope from an HTTP error body.
+///
+/// Handles both the object form `{"error": {...}}` and the streaming array
+/// form `[{"error": {...}}]`. Returns `None` when no envelope can be parsed.
+pub(crate) fn parse_gemini_error_body(body: &str) -> Option<GeminiError> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let error_obj = match &value {
+        serde_json::Value::Array(items) => items.first()?.get("error")?,
+        serde_json::Value::Object(_) => value.get("error")?,
+        _ => return None,
+    };
+    serde_json::from_value(error_obj.clone()).ok()
 }
