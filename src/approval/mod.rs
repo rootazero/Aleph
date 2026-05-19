@@ -45,6 +45,7 @@
 pub mod adapters;
 mod config;
 mod policy;
+mod session_route;
 mod types;
 
 pub use config::{matches_glob, ConfigApprovalPolicy, PolicyConfig, PolicyRule};
