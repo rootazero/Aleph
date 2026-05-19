@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use super::types::{
     AgentRegistration, CliRegistration, CommandRegistration,
     GatewayMethodRegistration, HookRegistration, HttpHandlerRegistration, HttpRouteRegistration,
-    PluginDiagnostic, ProviderRegistration, ServiceRegistration, SkillRegistration,
+    PluginDiagnostic, ServiceRegistration, SkillRegistration,
     ToolRegistration,
 };
 use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
@@ -33,9 +33,6 @@ pub struct PluginRegistry {
 
     /// Registered hooks (sorted by priority)
     hooks: Vec<HookRegistration>,
-
-    /// Registered providers by ID
-    providers: HashMap<String, ProviderRegistration>,
 
     /// Registered gateway RPC methods by method name
     gateway_methods: HashMap<String, GatewayMethodRegistration>,
@@ -78,7 +75,6 @@ impl PluginRegistry {
         self.plugins.clear();
         self.tools.clear();
         self.hooks.clear();
-        self.providers.clear();
         self.gateway_methods.clear();
         self.http_routes.clear();
         self.http_handlers.clear();
@@ -236,35 +232,6 @@ impl PluginRegistry {
     /// List all registered hooks.
     pub fn list_hooks(&self) -> Vec<&HookRegistration> {
         self.hooks.iter().collect()
-    }
-
-    // =========================================================================
-    // Provider Registration
-    // =========================================================================
-
-    /// Register a provider.
-    pub fn register_provider(&mut self, provider: ProviderRegistration) {
-        let plugin_id = provider.plugin_id.clone();
-        let provider_id = provider.id.clone();
-
-        self.providers.insert(provider_id.clone(), provider);
-
-        // Update plugin record
-        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
-            if !plugin.provider_ids.contains(&provider_id) {
-                plugin.provider_ids.push(provider_id);
-            }
-        }
-    }
-
-    /// Get a provider by ID.
-    pub fn get_provider(&self, id: &str) -> Option<&ProviderRegistration> {
-        self.providers.get(id)
-    }
-
-    /// List all registered providers.
-    pub fn list_providers(&self) -> Vec<&ProviderRegistration> {
-        self.providers.values().collect()
     }
 
     // =========================================================================
@@ -518,9 +485,6 @@ impl PluginRegistry {
         // Remove all hooks from this plugin
         self.hooks.retain(|h| h.plugin_id != plugin_id);
 
-        // Remove all providers from this plugin
-        self.providers.retain(|_, p| p.plugin_id != plugin_id);
-
         // Remove all gateway methods from this plugin
         self.gateway_methods.retain(|_, m| m.plugin_id != plugin_id);
 
@@ -561,7 +525,6 @@ impl PluginRegistry {
             active_plugins: self.list_active_plugins().len(),
             tools: self.tools.len(),
             hooks: self.hooks.len(),
-            providers: self.providers.len(),
             gateway_methods: self.gateway_methods.len(),
             http_routes: self.http_routes.len(),
             http_handlers: self.http_handlers.len(),
@@ -582,7 +545,6 @@ pub struct RegistryStats {
     pub active_plugins: usize,
     pub tools: usize,
     pub hooks: usize,
-    pub providers: usize,
     pub gateway_methods: usize,
     pub http_routes: usize,
     pub http_handlers: usize,

@@ -14,7 +14,6 @@
 //!   - [`HookRegistration`] - Intercept system events
 //!
 //! - **P1 Important**: Key integration points
-//!   - [`ProviderRegistration`] - AI model providers
 //!   - [`GatewayMethodRegistration`] - RPC method extensions
 //!
 //! - **P2 Useful**: Additional extension points

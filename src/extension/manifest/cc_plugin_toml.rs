@@ -10,8 +10,7 @@ use serde::Deserialize;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::toml_types::{
-    convert_permissions, CapabilitiesSection, PermissionsSection, ProviderSection,
-    ServiceSection,
+    convert_permissions, CapabilitiesSection, PermissionsSection, ServiceSection,
 };
 use crate::extension::manifest::types::{
     AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest,
@@ -122,10 +121,6 @@ pub struct AlephExtensionsToml {
     #[serde(default)]
     pub capabilities: CapabilitiesSection,
 
-    /// Custom LLM provider backends
-    #[serde(default)]
-    pub providers: Vec<ProviderSection>,
-
     /// Background services
     #[serde(default)]
     pub services: Vec<ServiceSection>,
@@ -202,7 +197,6 @@ pub fn parse_cc_plugin_toml_content(
         let aleph_ext = AlephExtensions {
             runtime: runtime_to_aleph_runtime(runtime_str),
             entry: Some(entry.clone()),
-            providers: aleph.providers,
             services: aleph.services,
             permissions: if aleph.permissions.network
                 || aleph.permissions.env
@@ -262,7 +256,6 @@ pub fn parse_cc_plugin_toml_content(
         wasm_capabilities: None,
         wasm_resource_limits: None,
         // P2 fields not available in CC TOML format
-        providers_v2: None,
         http_routes_v2: None,
         // CC-compat extensions
         aleph_extensions: aleph_ext,

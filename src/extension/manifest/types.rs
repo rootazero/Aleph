@@ -13,7 +13,7 @@ use std::path::PathBuf;
 // V2 field types from toml_types module
 use super::toml_types::{
     CapabilitiesSection, CommandSection, HookSection, HttpRouteSection,
-    PermissionsSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
+    PermissionsSection, PromptSection, ServiceSection, ToolSection,
 };
 use crate::extension::runtime::wasm::WasmCapabilities;
 use crate::extension::runtime::wasm::WasmResourceLimits;
@@ -321,10 +321,6 @@ pub struct PluginManifest {
     // ═══════════════════════════════════════════
     // P2 Extension fields
     // ═══════════════════════════════════════════
-    /// V2: Provider definitions for AI model providers
-    #[serde(skip)]
-    pub providers_v2: Option<Vec<ProviderSection>>,
-
     /// V2: HTTP route definitions for REST API endpoints
     #[serde(skip)]
     pub http_routes_v2: Option<Vec<HttpRouteSection>>,
@@ -369,7 +365,6 @@ impl PluginManifest {
             wasm_capabilities: None,
             wasm_resource_limits: None,
             // P2 fields
-            providers_v2: None,
             http_routes_v2: None,
             // CC-compat extensions
             aleph_extensions: None,
@@ -458,9 +453,6 @@ pub struct AlephExtensions {
     pub runtime: AlephRuntime,
     /// WASM entry point (only for runtime = "wasm")
     pub entry: Option<String>,
-    /// Custom LLM provider backends
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub providers: Vec<ProviderSection>,
     /// Background services
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub services: Vec<ServiceSection>,

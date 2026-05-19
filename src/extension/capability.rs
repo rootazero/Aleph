@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registry::{
     AgentRegistration, CliRegistration, CommandRegistration,
-    GatewayMethodRegistration, HookRegistration, HttpRouteRegistration, ProviderRegistration,
+    GatewayMethodRegistration, HookRegistration, HttpRouteRegistration,
     ServiceRegistration, SkillRegistration, ToolRegistration,
 };
 use crate::extension::types::{McpServerConfig, PluginOrigin};
@@ -22,8 +22,6 @@ use crate::extension::types::{McpServerConfig, PluginOrigin};
 pub type ToolDeclaration = ToolRegistration;
 /// A hook declaration is a HookRegistration
 pub type HookDeclaration = HookRegistration;
-/// A provider declaration is a ProviderRegistration
-pub type ProviderDeclaration = ProviderRegistration;
 /// A gateway method declaration is a GatewayMethodRegistration
 pub type GatewayMethodDeclaration = GatewayMethodRegistration;
 /// An HTTP route declaration is a HttpRouteRegistration
@@ -57,8 +55,6 @@ pub enum CapabilityDeclaration {
     Tool(ToolDeclaration),
     /// A hook that intercepts system events
     Hook(HookDeclaration),
-    /// An AI model provider backend
-    Provider(ProviderDeclaration),
     /// A gateway RPC method
     GatewayMethod(GatewayMethodDeclaration),
     /// An HTTP REST endpoint
@@ -86,7 +82,7 @@ impl CapabilityDeclaration {
             // P1: Always allowed, no permission check
             Self::Command(_) | Self::Agent(_) => Tier::Important,
             // P2: Some are permission-gated (Service needs Background)
-            Self::Provider(_) | Self::Service(_) | Self::McpServer(_) => {
+            Self::Service(_) | Self::McpServer(_) => {
                 Tier::Pluggable
             }
             // P3: All permission-gated + warning logged
@@ -99,7 +95,6 @@ impl CapabilityDeclaration {
         match self {
             Self::Tool(_) => "tool",
             Self::Hook(_) => "hook",
-            Self::Provider(_) => "provider",
             Self::GatewayMethod(_) => "gateway_method",
             Self::HttpRoute(_) => "http_route",
             Self::Cli(_) => "cli",
@@ -119,7 +114,6 @@ impl CapabilityDeclaration {
                 None
             }
             // P2: some need permission
-            Self::Provider(_) => None, // providers are core to AI assistant
             Self::Service(_) => Some(PluginPermission::Background),
             Self::McpServer(_) => None, // MCP is the standard extension mechanism
             // P3: all need permission
@@ -289,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn test_all_11_variants_have_kind_names() {
+    fn test_all_10_variants_have_kind_names() {
         use crate::extension::types::HookEvent;
 
         let capabilities: Vec<CapabilityDeclaration> = vec![
@@ -300,12 +294,6 @@ mod tests {
                 handler: "h".to_string(),
                 name: None,
                 description: None,
-                plugin_id: "p".to_string(),
-            }),
-            CapabilityDeclaration::Provider(ProviderRegistration {
-                id: "pr".to_string(),
-                name: "Pr".to_string(),
-                models: vec![],
                 plugin_id: "p".to_string(),
             }),
             CapabilityDeclaration::GatewayMethod(GatewayMethodRegistration {
@@ -348,14 +336,13 @@ mod tests {
             }),
         ];
 
-        assert_eq!(capabilities.len(), 11);
+        assert_eq!(capabilities.len(), 10);
         let kind_names: Vec<&str> = capabilities.iter().map(|c| c.kind_name()).collect();
         assert_eq!(
             kind_names,
             vec![
                 "tool",
                 "hook",
-                "provider",
                 "gateway_method",
                 "http_route",
                 "cli",

@@ -2,7 +2,6 @@
 //!
 //! This module contains types for plugin runtime interactions including:
 //! - Background services (lifecycle management)
-//! - AI providers (custom model providers)
 //! - HTTP routes (plugin-provided endpoints)
 
 use serde::{Deserialize, Serialize};
@@ -68,98 +67,6 @@ impl ServiceResult {
             data: None,
         }
     }
-}
-
-// =============================================================================
-// Provider Types (V2 Plugin Providers)
-// =============================================================================
-
-/// Provider chat request
-///
-/// Represents a chat completion request to a plugin-provided AI model provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderChatRequest {
-    /// Model identifier (e.g., "gpt-4", "claude-3-opus")
-    pub model: String,
-    /// Conversation messages
-    pub messages: Vec<ProviderMessage>,
-    /// Sampling temperature (0.0 - 2.0)
-    pub temperature: Option<f32>,
-    /// Maximum tokens to generate
-    pub max_tokens: Option<u32>,
-    /// Whether to stream the response
-    pub stream: bool,
-}
-
-/// Provider message
-///
-/// A single message in a chat conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderMessage {
-    /// Message role (e.g., "system", "user", "assistant")
-    pub role: String,
-    /// Message content
-    pub content: String,
-}
-
-/// Provider chat response (non-streaming)
-///
-/// Complete response from a chat completion request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderChatResponse {
-    /// Generated response content
-    pub content: String,
-    /// Reason the generation stopped (e.g., "stop", "length", "tool_calls")
-    pub finish_reason: Option<String>,
-    /// Token usage statistics
-    pub usage: Option<ProviderUsage>,
-}
-
-/// Provider usage info
-///
-/// Token usage statistics for a completion request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderUsage {
-    /// Number of tokens in the prompt
-    pub prompt_tokens: u32,
-    /// Number of tokens in the completion
-    pub completion_tokens: u32,
-    /// Total tokens used (prompt + completion)
-    pub total_tokens: u32,
-}
-
-/// Provider streaming chunk
-///
-/// A chunk of data in a streaming response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ProviderStreamChunk {
-    /// Content delta - partial response text
-    #[serde(rename = "delta")]
-    Delta { content: String },
-    /// Stream completed
-    #[serde(rename = "done")]
-    Done { usage: Option<ProviderUsage> },
-    /// Error occurred during streaming
-    #[serde(rename = "error")]
-    Error { message: String },
-}
-
-/// Provider model info
-///
-/// Describes a model available from a plugin-provided AI provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderModelInfo {
-    /// Model identifier
-    pub id: String,
-    /// Human-readable display name
-    pub display_name: String,
-    /// Context window size in tokens
-    pub context_window: Option<u32>,
-    /// Whether the model supports tool/function calling
-    pub supports_tools: bool,
-    /// Whether the model supports vision/image inputs
-    pub supports_vision: bool,
 }
 
 // =============================================================================

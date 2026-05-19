@@ -80,9 +80,6 @@ impl<'a> CapabilityApi<'a> {
             CapabilityDeclaration::Hook(hook) => {
                 self.registry.register_hook(hook);
             }
-            CapabilityDeclaration::Provider(provider) => {
-                self.registry.register_provider(provider);
-            }
             CapabilityDeclaration::GatewayMethod(method) => {
                 self.registry.register_gateway_method(method);
             }
@@ -160,7 +157,7 @@ mod tests {
     use super::*;
     use crate::extension::registry::{
         AgentRegistration, CliRegistration, CommandRegistration,
-        GatewayMethodRegistration, HookRegistration, HttpRouteRegistration, ProviderRegistration,
+        GatewayMethodRegistration, HookRegistration, HttpRouteRegistration,
         ServiceRegistration, SkillRegistration, ToolRegistration,
     };
     use crate::extension::types::HookEvent;
@@ -183,15 +180,6 @@ mod tests {
             description: "A test tool".to_string(),
             parameters: serde_json::json!({"type": "object"}),
             handler: "handle".to_string(),
-            plugin_id: "test-plugin".to_string(),
-        })
-    }
-
-    fn make_provider() -> CapabilityDeclaration {
-        CapabilityDeclaration::Provider(ProviderRegistration {
-            id: "test-provider".to_string(),
-            name: "Test Provider".to_string(),
-            models: vec!["model-1".to_string()],
             plugin_id: "test-plugin".to_string(),
         })
     }
@@ -255,21 +243,6 @@ mod tests {
         // Hook is P0 (Core) — should succeed
         assert!(api.register_capability(make_hook()).is_ok());
         assert_eq!(api.registry().list_hooks().len(), 1);
-    }
-
-    // ── P1 registration succeeds without permissions ─────────────────────
-
-    #[test]
-    fn test_p1_registration_no_permissions_required() {
-        let mut registry = make_registry_and_plugin();
-        let mut api = CapabilityApi::new(
-            &mut registry,
-            "test-plugin".to_string(),
-            vec![], // no permissions — P1 doesn't check
-        );
-
-        // Provider is P2 but requires no permission (core AI concept)
-        assert!(api.register_capability(make_provider()).is_ok());
     }
 
     #[test]
@@ -395,14 +368,6 @@ mod tests {
         api.register_capability(make_http_route()).unwrap();
         api.register_capability(make_skill()).unwrap();
 
-        api.register_capability(CapabilityDeclaration::Provider(ProviderRegistration {
-            id: "test-provider".to_string(),
-            name: "Test Provider".to_string(),
-            models: vec![],
-            plugin_id: "test-plugin".to_string(),
-        }))
-        .unwrap();
-
         api.register_capability(CapabilityDeclaration::GatewayMethod(
             GatewayMethodRegistration {
                 method: "test.method".to_string(),
@@ -452,7 +417,6 @@ mod tests {
         let reg = api.registry();
         assert!(reg.get_tool("my_tool").is_some());
         assert_eq!(reg.list_hooks().len(), 1);
-        assert!(reg.get_provider("test-provider").is_some());
         assert!(reg.get_gateway_method("test.method").is_some());
         assert_eq!(reg.list_http_routes().len(), 1);
         assert!(reg.get_cli_command("test-cmd").is_some());

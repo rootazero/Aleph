@@ -56,19 +56,6 @@ pub struct HookRegistration {
 // P1 Important Registration Types
 // ============================================================================
 
-/// Provider registration for AI model providers
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderRegistration {
-    /// Unique provider identifier (e.g., "anthropic", "openai")
-    pub id: String,
-    /// Display name for the provider
-    pub name: String,
-    /// List of model IDs supported by this provider
-    pub models: Vec<String>,
-    /// ID of the plugin that registered this provider
-    pub plugin_id: String,
-}
-
 /// Gateway RPC method registration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayMethodRegistration {
@@ -498,17 +485,6 @@ mod tests {
         };
         assert_eq!(hook.priority, 10);
         assert_eq!(hook.name, Some("Message Logger".to_string()));
-    }
-
-    #[test]
-    fn test_provider_registration() {
-        let provider = ProviderRegistration {
-            id: "anthropic".to_string(),
-            name: "Anthropic".to_string(),
-            models: vec!["claude-opus-4-5".to_string(), "claude-sonnet-4".to_string()],
-            plugin_id: "anthropic-plugin".to_string(),
-        };
-        assert_eq!(provider.models.len(), 2);
     }
 
     #[test]
