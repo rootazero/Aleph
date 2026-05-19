@@ -163,12 +163,13 @@ impl StallTracker {
         self.last_activity.lock().await.elapsed()
     }
 
-    pub fn is_stalled(&self) -> bool {
-        if let Ok(guard) = self.last_activity.try_lock() {
-            guard.elapsed() > self.config.timeout
-        } else {
-            false
-        }
+    /// Returns `true` when no activity has been recorded within the
+    /// configured timeout. Async because it acquires the same
+    /// `tokio::sync::Mutex` as `record_activity` / `elapsed`: under lock
+    /// contention it waits for the lock rather than reporting a false
+    /// "not stalled".
+    pub async fn is_stalled(&self) -> bool {
+        self.last_activity.lock().await.elapsed() > self.config.timeout
     }
 }
 
@@ -183,7 +184,7 @@ mod stall_tests {
 
         tracker.record_activity().await;
 
-        assert!(!tracker.is_stalled());
+        assert!(!tracker.is_stalled().await);
     }
 
     #[tokio::test]
@@ -196,6 +197,45 @@ mod stall_tests {
 
         tokio::time::sleep(Duration::from_millis(20)).await;
 
-        assert!(tracker.is_stalled());
+        assert!(tracker.is_stalled().await);
+    }
+
+    #[tokio::test]
+    async fn is_stalled_reports_stall_even_when_lock_is_contended() {
+        use tokio::sync::Notify;
+
+        let config = StallConfig {
+            timeout: Duration::from_millis(10),
+            check_interval: Duration::from_millis(1),
+        };
+        let tracker = StallTracker::new(config);
+
+        // Become stalled: idle well past the 10ms timeout.
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        // A second task holds the inner `last_activity` lock; it signals via
+        // `Notify` once the lock is actually held, so the assertion below is
+        // guaranteed to run under genuine contention (no timing guesswork).
+        let lock_held = std::sync::Arc::new(Notify::new());
+        let holder = {
+            let last_activity = tracker.last_activity.clone();
+            let lock_held = lock_held.clone();
+            tokio::spawn(async move {
+                let _guard = last_activity.lock().await;
+                lock_held.notify_one();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            })
+        };
+        lock_held.notified().await;
+
+        // The old `try_lock` impl returned `false` here (lock unavailable),
+        // missing the stall. The async impl waits for the lock, then correctly
+        // observes the elapsed time.
+        assert!(
+            tracker.is_stalled().await,
+            "is_stalled must report a real stall even while the lock is held elsewhere",
+        );
+
+        holder.await.unwrap();
     }
 }

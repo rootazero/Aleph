@@ -195,7 +195,7 @@ impl Harness for AgentHarness {
                 break Err(HarnessError::Cancelled);
             }
             if let Some(ref tracker) = self.stall_tracker {
-                if tracker.is_stalled() {
+                if tracker.is_stalled().await {
                     let elapsed = tracker.elapsed().await;
                     tracing::warn!(
                         ?session_id,
