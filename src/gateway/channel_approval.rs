@@ -104,7 +104,7 @@ impl PendingApproval {
 ///
 /// #[async_trait]
 /// impl ChannelApprovalCapability for TelegramApprovalCapability {
-///     async fn deliver_approval(&self, req: &ApprovalRequest) -> ChannelResult<PendingApproval> {
+///     async fn deliver_approval(&self, conv: &ConversationId, req: &ApprovalRequest, approval_id: &str) -> ChannelResult<PendingApproval> {
 ///         // Send message with inline keyboard
 ///         let keyboard = InlineKeyboard::new()
 ///             .button("✅ Approve", format!("approve:{}", req.id))
@@ -126,11 +126,16 @@ impl PendingApproval {
 pub trait ChannelApprovalCapability: Send + Sync {
     /// Deliver an approval request to the user.
     ///
-    /// Returns a `PendingApproval` that can be used to resolve or cancel the approval later.
+    /// `approval_id` is the caller-owned id (the `ExecApprovalManager` record
+    /// id). The capability MUST embed it verbatim into the button callback
+    /// data so the click resolves the correct pending approval.
+    ///
+    /// Returns a `PendingApproval` that can be used to resolve or cancel later.
     async fn deliver_approval(
         &self,
         conversation_id: &ConversationId,
         request: &ApprovalRequest,
+        approval_id: &str,
     ) -> ChannelResult<PendingApproval>;
 
     /// Authorize an actor for an approval action.

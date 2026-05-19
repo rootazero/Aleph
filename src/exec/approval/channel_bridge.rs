@@ -105,7 +105,7 @@ impl ChannelApprovalBridge {
 
         let pending = match timeout(
             Duration::from_secs(DELIVERY_TIMEOUT_SECS),
-            capability.deliver_approval(&conversation_id, &approval_req),
+            capability.deliver_approval(&conversation_id, &approval_req, &request.id),
         )
         .await
         {
