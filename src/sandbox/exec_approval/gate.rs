@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 
@@ -27,7 +27,10 @@ impl ApprovalOutcome {
 
 pub struct ApprovalGate {
     config: ApprovalConfig,
-    requester: Option<Arc<dyn ApprovalRequester>>,
+    /// Swappable so boot can construct the gate before the channel registry
+    /// exists, then wire the real requester via `set_requester` once channels
+    /// are up. An empty slot denies — never a silent auto-approve.
+    requester: RwLock<Option<Arc<dyn ApprovalRequester>>>,
     retry_counts: HashMap<String, u8>,
 }
 
@@ -35,14 +38,24 @@ impl ApprovalGate {
     pub fn new(config: ApprovalConfig, requester: Option<Arc<dyn ApprovalRequester>>) -> Self {
         Self {
             config,
-            requester,
+            requester: RwLock::new(requester),
             retry_counts: HashMap::new(),
         }
     }
 
-    pub fn with_requester(mut self, requester: Arc<dyn ApprovalRequester>) -> Self {
-        self.requester = Some(requester);
+    pub fn with_requester(self, requester: Arc<dyn ApprovalRequester>) -> Self {
+        self.set_requester(requester);
         self
+    }
+
+    /// Install (or replace) the approval requester after construction.
+    ///
+    /// Boot constructs the gate before the channel registry exists; once
+    /// channels are up this wires the real `ChannelApprovalBridgeAdapter` so
+    /// elevated-capability sandbox escalations can actually reach the user
+    /// instead of being auto-denied.
+    pub fn set_requester(&self, requester: Arc<dyn ApprovalRequester>) {
+        *self.requester.write().unwrap_or_else(|e| e.into_inner()) = Some(requester);
     }
 
     pub fn parse_and_decide(
@@ -92,7 +105,14 @@ impl ApprovalGate {
         tool_name: &str,
         reason: &str,
     ) -> ApprovalOutcome {
-        match &self.requester {
+        // Clone the Arc out of the lock and drop the guard before awaiting —
+        // a std `RwLock` guard is not `Send` and must not be held across await.
+        let requester = self
+            .requester
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        match requester {
             Some(requester) => requester.request_approval(tool_name, reason).await,
             None => {
                 tracing::warn!("No approval requester configured, defaulting to denied");
@@ -227,5 +247,32 @@ mod tests {
         assert!(ApprovalOutcome::Approved.is_approved());
         assert!(!ApprovalOutcome::Denied.is_approved());
         assert!(!ApprovalOutcome::Timeout.is_approved());
+    }
+
+    /// Regression: the gate denies when no requester is wired (the CRITICAL
+    /// boot bug), and routes to the requester once `set_requester` installs
+    /// one — the post-construction wiring boot now performs.
+    #[tokio::test]
+    async fn set_requester_makes_escalation_reach_the_requester() {
+        struct AlwaysApprove;
+        #[async_trait::async_trait]
+        impl ApprovalRequester for AlwaysApprove {
+            async fn request_approval(&self, _tool: &str, _reason: &str) -> ApprovalOutcome {
+                ApprovalOutcome::Approved
+            }
+        }
+
+        let gate = ApprovalGate::new(ApprovalConfig::default(), None);
+        // No requester wired → denied (never a silent auto-approve).
+        assert_eq!(
+            gate.request_approval_for_tool("code_exec", "allow_network").await,
+            ApprovalOutcome::Denied
+        );
+        // Once the requester is installed, escalations reach it.
+        gate.set_requester(Arc::new(AlwaysApprove));
+        assert_eq!(
+            gate.request_approval_for_tool("code_exec", "allow_network").await,
+            ApprovalOutcome::Approved
+        );
     }
 }
