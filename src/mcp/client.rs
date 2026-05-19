@@ -80,13 +80,6 @@ pub struct McpClient {
     external_servers: tokio::sync::RwLock<HashMap<String, Arc<McpServerConnection>>>,
     /// Handler for sampling requests from servers
     sampling_handler: Arc<SamplingHandler>,
-    /// Optional shared `ToolRegistry` for the Phase 2 Tool Service façade.
-    ///
-    /// Injected via `set_tool_registry` during AppContext construction
-    /// (Task 10). When present, successful server connects populate the
-    /// registry with `McpHandler` entries and disconnects remove them. When
-    /// absent, MCP tool dispatch continues to flow through the legacy path.
-    tool_registry: tokio::sync::RwLock<Option<Arc<crate::tools::registry::ToolRegistry>>>,
 }
 
 impl McpClient {
@@ -96,24 +89,7 @@ impl McpClient {
             tool_location_map: tokio::sync::RwLock::new(HashMap::new()),
             external_servers: tokio::sync::RwLock::new(HashMap::new()),
             sampling_handler: Arc::new(SamplingHandler::new()),
-            tool_registry: tokio::sync::RwLock::new(None),
         }
-    }
-
-    /// Inject the Phase 2 shared `ToolRegistry`.
-    ///
-    /// Called once from `AppContext` setup (Task 10). Subsequent
-    /// connect/disconnect operations will populate / tear down registry
-    /// entries for each server's discovered tools via
-    /// `tools::handlers::registration::{register_mcp_tools, unregister_mcp_tools}`.
-    pub async fn set_tool_registry(&self, registry: Arc<crate::tools::registry::ToolRegistry>) {
-        *self.tool_registry.write().await = Some(registry);
-    }
-
-    /// Snapshot of the injected `ToolRegistry`, if any.
-    #[allow(dead_code)] // Consumed from Task 10 when lifecycle wiring lands.
-    pub(crate) async fn tool_registry(&self) -> Option<Arc<crate::tools::registry::ToolRegistry>> {
-        self.tool_registry.read().await.clone()
     }
 
     /// Get the sampling handler

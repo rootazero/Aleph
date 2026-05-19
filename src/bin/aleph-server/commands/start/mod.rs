@@ -453,58 +453,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     initialize_extension_manager(args.daemon).await;
 
-    // Phase 2 Task 10: assemble the ToolService decorator chain.
-    //
-    // The chain is built once here and held as a local `tool_service`. As
-    // agent_loop migrates to `Arc<dyn ToolService>` dispatch (Task 11+), this
-    // binding will be threaded into the downstream builders; today it is
-    // enough to materialise the registry so MCP + Extension setters can wire
-    // into it, and the Phase 5 Orchestrator (`initialize_orchestrator` below)
-    // consumes it. Any failure is warn-only — never aborts boot.
-    //
-    // Phase 3 H3 fix: use `build_tool_service_with_handles` so we can attach
-    // the Phase 3 `LayeredPermissionResolver` + `ApprovalGate`-as-Approver
-    // onto the `PermissionLayer` below. Previously the layer had a default
-    // `Allow` classifier attached and Ask-tier tools could not route through
-    // a real approver.
-    let (tool_service, tool_registry_phase2, tool_service_handles) = {
-        let tool_cfg = loaded_app_config.tool_service.clone();
-        // Use an empty AlephToolServer here: the aleph-server bin currently
-        // builds its active tool catalogue via BuiltinToolRegistry inside
-        // register_agent_handlers. Handlers synchronised with that catalogue
-        // will flow into the Phase 2 registry in Task 11 when agent_loop
-        // migrates. Builtins register lazily via MCP / Extension lifecycle
-        // hooks injected below.
-        let server = Arc::new(alephcore::tools::AlephToolServer::new());
-        let (svc, reg, handles) =
-            alephcore::tools::build_tool_service_with_handles(server, &tool_cfg).await;
-        if !args.daemon {
-            println!("ToolService chain assembled (Phase 2)");
-        }
-        (svc, reg, handles)
-    };
-
-    // Phase 2 Task 10: inject the shared ToolRegistry into ExtensionManager
-    // so plugin load/unload lifecycles populate the registry via
-    // `tools::handlers::registration`. Warn-only on failure.
-    {
-        use alephcore::gateway::handlers::plugins::get_extension_manager;
-        match get_extension_manager() {
-            Ok(ext_manager) => {
-                ext_manager.set_tool_registry(tool_registry_phase2.clone());
-                if !args.daemon {
-                    println!("  ExtensionManager: tool registry wired");
-                }
-            }
-            Err(_) => {
-                tracing::warn!(
-                    "ExtensionManager not initialised — Phase 2 tool registry \
-                     will not receive plugin tools this run"
-                );
-            }
-        }
-    }
-
     // Phase 3 Task 7: compose the shared `Arc<dyn Sandbox>` once at boot.
     //
     // Exec-class tools will consume this sandbox through their constructors
@@ -549,50 +497,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         } else {
             println!("Sandbox: disabled (NoopSandbox) — exec-class tools will refuse execution");
         }
-    }
-
-    // Phase 3 H3 fix: wire the LayeredPermissionResolver into the
-    // PermissionLayer so global (+ boot-time default per-agent) permissions
-    // actually gate tool invocations instead of defaulting to Allow.
-    //
-    // Per-agent filters plug in when Phase 4 migrates per-session agent
-    // activation; boot uses the global config merged against an empty
-    // per-agent config, which means Deny/Ask in global immediately take
-    // effect for every call. Approver is the shared ApprovalGate above.
-    //
-    // Double-prompt mitigation (H4): exec-class tools (`bash`, `code_exec`)
-    // own their own sandbox-level approval path. PermissionLayer's own
-    // Ask-tier prompt on those tools would produce two prompts. Until H4
-    // introduces a clean exclude-list parameter, we document this risk in
-    // SANDBOX.md. Shipping global default `Allow` for exec tools (the
-    // current config) avoids the double-prompt in practice.
-    {
-        use alephcore::tools::middleware::permission::{AgentPermissionFilter, Approver};
-
-        let global = loaded_app_config.policies.tool_permissions.clone();
-        // Per-agent default: clone and reset so we get a ToolPermissionsConfig
-        // with no overrides (Default impl lives in the private config module).
-        // Phase 4 session activation replaces this with the real per-agent
-        // config via `PermissionLayer::set_smart_filter`.
-        let per_agent_default = {
-            let mut c = global.clone();
-            c.overrides.clear();
-            c
-        };
-        let filter = AgentPermissionFilter::build(&global, &per_agent_default);
-        tool_service_handles
-            .permission_layer
-            .set_smart_filter(Some(filter));
-        tool_service_handles
-            .permission_layer
-            .set_approver(Some(approval_gate.clone() as Arc<dyn Approver>));
-
-        tracing::info!(
-            default = ?global.default,
-            overrides = global.overrides.len(),
-            "wired LayeredPermissionResolver into PermissionLayer with global tool permissions \
-             (per-agent overrides plug in at Phase 4 session activation)"
-        );
     }
 
     // Log desktop capability mode
@@ -1132,12 +1036,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .default_provider
             .clone()
             .unwrap_or_default();
+        // Gateway always supplies a per-request `ScopedToolService` via
+        // `FlowRequest::tool_service`, so the runner's fallback is never
+        // reached in production — `NullToolService` is the fail-closed
+        // placeholder. See `src/tools/null.rs` and the deletion record in
+        // `docs/superpowers/specs/2026-05-19-hitl-loop-closure-design.md` §8.
+        let tool_service: Arc<dyn alephcore::tools::service::ToolService> =
+            Arc::new(alephcore::tools::NullToolService::new());
         match initialize_orchestrator(
             &cfg_snapshot,
             &primary_provider_key,
             orchestrator_agent_registry,
             session_service,
-            tool_service.clone(),
+            tool_service,
             default_handle,
             sandbox.clone(),
             &stop_hook_configs,
