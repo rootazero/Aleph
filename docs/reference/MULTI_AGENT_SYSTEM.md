@@ -73,12 +73,10 @@ tool. Enforcement lives in `AgentDef::is_tool_allowed`
 (including wildcard `"*"`). Primary-mode agents retain full subagent
 spawning capability.
 
-Two additional defense layers exist:
+One additional defense layer exists:
 - `ChainContext::child()` depth guard (`subagent_spawner.rs:114-117`)
   returns `None` when `max_depth` is reached, surfacing as a `"chain
   depth exceeded"` error.
-- `LaneScheduler::check_recursion_depth` (`scheduler/lane_scheduler.rs`)
-  tracks parent→child relationships across the run lifetime.
 
 ### Filesystem Agent Loading (P2 Stage E)
 
@@ -136,23 +134,6 @@ one bad file does not abort startup.
 
 Filesystem agents are loaded once at startup. Modifying a markdown file
 requires restarting `aleph-server`.
-
-### Lane Budget Enforcement
-
-Subagent spawns reserve a `Lane::Subagent` permit via
-`LaneScheduler::try_reserve` (added in P1 Stage C). The default Subagent
-capacity is 4 concurrent runs (changed from 8 in P1 Stage C, per the
-"personal AI sweet spot" decision). On exhaustion, the spawner returns
-`ToolError::Execution { name: "subagent", cause: "subagent lane budget
-exhausted (max=4)" }` — the LLM is responsible for retry policy
-(R7 LLM Sovereignty).
-
-The lane scheduler is wired into `AgentRuntime` via
-`with_lane_scheduler`; legacy callers without a scheduler skip lane
-checks (Option semantics). Reservation is fail-fast (no queueing); the
-spawner releases the permit on every exit path via a single
-`on_run_complete` call after the run body, with the `ScheduleGuard`'s
-`Drop` impl as a panic-safety net.
 
 ## Mode 2: Delegate (Peer Communication)
 

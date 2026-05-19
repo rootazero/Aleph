@@ -15,7 +15,7 @@ mod memory_steps;
 // TODO: removed — module deleted: mod message_builder_steps;
 // TODO: removed — module deleted: mod models_steps;
 mod protocol_steps;
-mod scheduler_steps;
+// TODO: removed — module deleted: mod scheduler_steps;
 mod scripting_steps;
 mod security_steps;
 mod skills_steps;

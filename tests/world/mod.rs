@@ -16,7 +16,7 @@ mod memory_ctx;
 // TODO: removed — module deleted: mod message_builder_ctx;
 // TODO: removed — module deleted: mod models_ctx;
 mod protocol_ctx;
-mod scheduler_ctx;
+// TODO: removed — module deleted: mod scheduler_ctx;
 mod security_ctx;
 mod skills_ctx;
 mod subagent_ctx;
@@ -35,7 +35,7 @@ pub use memory_ctx::MemoryContext;
 // TODO: removed — module deleted: pub use message_builder_ctx::MessageBuilderContext;
 // TODO: removed — module deleted: pub use models_ctx::ModelsContext;
 pub use protocol_ctx::ProtocolContext;
-pub use scheduler_ctx::SchedulerContext;
+// TODO: removed — module deleted: pub use scheduler_ctx::SchedulerContext;
 pub use security_ctx::{SecurityContext, SkillExecutionResult};
 pub use skills_ctx::SkillsContext;
 pub use subagent_ctx::SubagentContext;
@@ -74,7 +74,7 @@ pub struct AlephWorld {
     // TODO: removed — module deleted: pub message_builder: Option<MessageBuilderContext>,
     // TODO: removed — module deleted: pub agent_loop: Option<AgentLoopContext>,
     pub extension: Option<ExtensionContext>,
-    pub scheduler: Option<SchedulerContext>,
+    // TODO: removed — module deleted: pub scheduler: Option<SchedulerContext>,
     pub security: Option<SecurityContext>,
     pub thinker: Option<ThinkerContext>,
     pub tools: Option<ToolsContext>,

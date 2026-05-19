@@ -286,12 +286,6 @@ This document contains all rust-logic-audit review prompts for each module in `s
 /rust-logic-audit src/sandbox --strict
 ```
 
-## scheduler
-
-```
-/rust-logic-audit src/scheduler --strict
-```
-
 ## search
 
 ```

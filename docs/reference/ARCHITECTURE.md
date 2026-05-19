@@ -267,8 +267,6 @@ pattern.
 | **pii** | `src/pii/` | PII detection and handling |
 | **prompt** | `src/prompt/` | Prompt management |
 | **resilience** | `src/resilience/` | State management (SQLite) |
-| **resilient** | `src/resilient/` | Resilience utilities |
-| **scheduler** | `src/scheduler/` | Job scheduling |
 | **search** | `src/search/` | Search providers |
 | **secrets** | `src/secrets/` | Secret management |
 | **security** | `src/security/` | Security utilities |
