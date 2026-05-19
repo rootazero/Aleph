@@ -20,7 +20,6 @@
 //! - `schedule` — Pure scheduling computation
 //! - `stagger` — Hash-based stagger for cron jobs
 //! - `service/` — State container, CRUD ops, timer loop, concurrency, catchup
-//! - `execution/` — Three-phase job execution pipeline
 //! - `alert` — Failure alerting
 //! - `delivery` — Result delivery pipeline
 //! - `chain` — Job chaining with cycle detection
@@ -30,7 +29,6 @@
 pub mod alert;
 pub mod chain;
 pub mod config;
-pub mod execution;
 pub mod executor;
 pub mod history;
 pub mod service;

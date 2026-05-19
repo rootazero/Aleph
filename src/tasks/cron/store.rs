@@ -283,15 +283,6 @@ fn load_all_jobs(conn: &Connection) -> Result<Vec<CronJob>, String> {
     Ok(jobs)
 }
 
-// ── Re-export for backward compat ────────────────────────────────────
-
-/// Legacy type alias (no longer used but kept for any external references)
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CronStoreFile {
-    pub version: u32,
-    pub jobs: Vec<CronJob>,
-}
-
 // ── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]

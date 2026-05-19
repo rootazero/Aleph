@@ -17,6 +17,7 @@ use crate::tasks::cron::config::{
 };
 use crate::tasks::cron::history::CronRunRecord;
 use crate::tasks::cron::store::CronStore;
+use crate::tasks::cron::template::resolve_job_prompt;
 use crate::tasks::shared::clock::Clock;
 use crate::tasks::shared::schedule::compute_backoff_ms;
 
@@ -73,7 +74,7 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
             agent_id: Some(job.agent_id.clone()),
             source_channel_id: job.source_channel_id.clone(),
             source_conversation_id: job.source_conversation_id.clone(),
-            prompt: job.prompt.clone(),
+            prompt: resolve_job_prompt(job, clock),
             model: None,
             timeout_ms: Some(default_timeout_ms),
             delivery: job.delivery_config.clone(),
@@ -187,6 +188,19 @@ pub async fn phase3_writeback<C: Clock>(
         job.state.last_error = result.error.clone();
         job.state.last_error_reason = result.error_reason.clone();
         job.state.last_delivery_status = result.delivery_status;
+
+        // Template context for the next run: a bounded copy of this run's
+        // output and an incremented run counter feed `{{last_output}}` /
+        // `{{run_count}}` when the job uses a `prompt_template`.
+        job.state.run_count = job.state.run_count.saturating_add(1);
+        job.state.last_output = result.output.as_ref().map(|s| {
+            const MAX_CHARS: usize = 2_000;
+            if s.chars().count() > MAX_CHARS {
+                s.chars().take(MAX_CHARS).collect()
+            } else {
+                s.clone()
+            }
+        });
 
         // Update consecutive errors
         match result.status {
