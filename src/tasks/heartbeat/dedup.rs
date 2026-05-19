@@ -34,6 +34,22 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+// ── DedupVerdict ──────────────────────────────────────────────────────────────
+
+/// Outcome of a [`DedupEngine::check`].
+#[derive(Debug)]
+pub enum DedupVerdict {
+    /// Semantically similar to a recent output — suppress the notification.
+    Duplicate,
+    /// Not a duplicate. Carries the embedding computed during the check so
+    /// the caller can hand it straight to [`DedupEngine::record_fresh`]
+    /// after a successful delivery, avoiding a second embedding call.
+    Fresh(Vec<f32>),
+    /// Dedup is unavailable (no embedding provider, or embedding failed).
+    /// The caller should deliver but must not record.
+    Unavailable,
+}
+
 // ── DedupEngine ───────────────────────────────────────────────────────────────
 
 /// Deduplication engine for heartbeat outputs.
@@ -91,25 +107,26 @@ impl DedupEngine {
         }
     }
 
-    /// Check whether the given output is a semantic duplicate of recent outputs.
+    /// Check whether `output` is a semantic duplicate of recent outputs.
     ///
-    /// Returns false when:
-    /// - No embedding provider is configured
-    /// - Embedding generation fails
-    /// - No similar output found in history within the window
-    pub async fn is_duplicate(&self, task_id: &str, output: &str) -> bool {
+    /// Returns:
+    /// - `Unavailable` when no embedding provider is configured or embedding
+    ///   generation fails (caller should deliver but not record),
+    /// - `Duplicate` when a similar output exists within the window,
+    /// - `Fresh(embedding)` otherwise — the embedding is handed back so the
+    ///   caller can record it without recomputing.
+    pub async fn check(&self, task_id: &str, output: &str) -> DedupVerdict {
         let provider = match &self.embedding_provider {
             Some(p) => p,
-            None => return false, // No embedding provider = no dedup
+            None => return DedupVerdict::Unavailable,
         };
 
-        // Compute embedding for current output
         let embedding = match provider.embed(output).await {
             Ok(e) => e,
-            Err(_) => return false, // Embedding failure = pass through
+            Err(_) => return DedupVerdict::Unavailable,
         };
 
-        // Load history from DB (lock only for DB read, release before comparison)
+        // Load history from DB (lock only for the read, release before compare).
         let history = {
             let conn = self.conn.lock().await;
             let cutoff = chrono::Utc::now().timestamp_millis() - self.config.window_ms as i64;
@@ -117,36 +134,30 @@ impl DedupEngine {
             load_dedup_history(&conn, task_id, cutoff, &model_name, self.config.max_history)
                 .unwrap_or_default()
         };
-        // Lock released here
 
-        // Compare with history entries
         for (_, hist_embedding) in &history {
-            let sim = cosine_similarity(&embedding, hist_embedding);
-            if sim >= self.config.similarity_threshold {
-                return true; // Duplicate found
+            if cosine_similarity(&embedding, hist_embedding) >= self.config.similarity_threshold {
+                return DedupVerdict::Duplicate;
             }
         }
 
-        false
+        DedupVerdict::Fresh(embedding)
     }
 
-    /// Record an output embedding after successful delivery.
+    /// Record a delivered output's embedding into the dedup history.
     ///
-    /// No-op when embedding provider is not configured.
-    pub async fn record(&self, task_id: &str, output: &str) {
-        let provider = match &self.embedding_provider {
-            Some(p) => p,
+    /// Call this only after a *successful* delivery, passing the embedding
+    /// from `check`'s `Fresh` verdict — so a failed delivery stays retryable
+    /// and the embedding is computed only once per cycle.
+    ///
+    /// No-op when no embedding provider is configured.
+    pub async fn record_fresh(&self, task_id: &str, output: &str, embedding: &[f32]) {
+        let model_name = match &self.embedding_provider {
+            Some(p) => p.model_name().to_string(),
             None => return,
         };
-
-        let embedding = match provider.embed(output).await {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        let model_name = provider.model_name().to_string();
         let conn = self.conn.lock().await;
-        let _ = insert_dedup_record(&conn, task_id, output, &embedding, &model_name);
+        let _ = insert_dedup_record(&conn, task_id, output, embedding, &model_name);
         let _ = prune_dedup_records(&conn, task_id, self.config.max_history);
     }
 
@@ -439,10 +450,16 @@ mod tests {
     #[tokio::test]
     async fn test_noop_engine_never_deduplicates() {
         let engine = DedupEngine::noop(DedupConfig::default());
-        assert!(!engine.is_duplicate("task-1", "some output").await);
-        engine.record("task-1", "some output").await;
-        // Still no dedup since embedding provider not wired
-        assert!(!engine.is_duplicate("task-1", "some output").await);
+        assert!(matches!(
+            engine.check("task-1", "some output").await,
+            DedupVerdict::Unavailable
+        ));
+        engine.record_fresh("task-1", "some output", &[1.0]).await;
+        // Still no dedup since embedding provider is not wired.
+        assert!(matches!(
+            engine.check("task-1", "some output").await,
+            DedupVerdict::Unavailable
+        ));
     }
 
     #[tokio::test]
@@ -454,8 +471,14 @@ mod tests {
             Arc::new(Mutex::new(conn)),
             None, // no embedding provider
         );
-        assert!(!engine.is_duplicate("task-1", "hello").await);
-        engine.record("task-1", "hello").await;
-        assert!(!engine.is_duplicate("task-1", "hello").await);
+        assert!(matches!(
+            engine.check("task-1", "hello").await,
+            DedupVerdict::Unavailable
+        ));
+        engine.record_fresh("task-1", "hello", &[1.0]).await;
+        assert!(matches!(
+            engine.check("task-1", "hello").await,
+            DedupVerdict::Unavailable
+        ));
     }
 }

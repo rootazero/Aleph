@@ -38,6 +38,8 @@ pub enum CronAction {
     Toggle,
     /// Trigger a task to run immediately (manual execution)
     Run,
+    /// Modify an existing task's fields (name, prompt, schedule, agent, enabled)
+    Update,
 }
 
 /// Schedule definition for creating a cron job.
@@ -79,6 +81,36 @@ pub enum ScheduleInput {
 
 fn default_true() -> bool {
     true
+}
+
+/// Validate a schedule input before it is converted to a `ScheduleKind`.
+///
+/// Rejects one-shot tasks scheduled in the past and sub-second intervals
+/// (which would fire on every timer tick and serve no real use case).
+fn validate_schedule(schedule: &ScheduleInput) -> Result<()> {
+    match schedule {
+        ScheduleInput::At { at_ms, .. } => {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            if *at_ms <= now_ms {
+                let at_human = chrono::DateTime::from_timestamp_millis(*at_ms)
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                    .unwrap_or_else(|| format!("{at_ms}ms"));
+                return Err(crate::error::AlephError::tool(format!(
+                    "Cannot schedule a one-shot task in the past. at_ms={at_ms} resolves to \
+                     {at_human}, but current time is {now_ms}ms. Provide a future timestamp."
+                )));
+            }
+        }
+        ScheduleInput::Every { every_ms } => {
+            if *every_ms < 1000 {
+                return Err(crate::error::AlephError::tool(format!(
+                    "Interval too short: every_ms={every_ms} is below the 1000ms minimum."
+                )));
+            }
+        }
+        ScheduleInput::Cron { .. } => {}
+    }
+    Ok(())
 }
 
 impl From<ScheduleInput> for ScheduleKind {
@@ -127,10 +159,14 @@ pub struct CronManageArgs {
     #[serde(default)]
     pub agent_id: Option<String>,
 
-    // ── Get/Delete/Enable/Disable/Toggle fields ────────────────────
-    /// Job ID (required for get/delete/enable/disable/toggle)
+    // ── Get/Delete/Enable/Disable/Toggle/Update fields ─────────────
+    /// Job ID (required for get/delete/enable/disable/toggle/update)
     #[serde(default)]
     pub job_id: Option<String>,
+
+    /// New enabled state — only used by the `update` action.
+    #[serde(default)]
+    pub enabled: Option<bool>,
 
     // ── Internal (injected by dispatcher, not LLM-visible) ────────
     /// Source channel ID — injected by the tool dispatcher from session context.
@@ -206,7 +242,7 @@ impl CronManageTool {
 impl AlephTool for CronManageTool {
     const NAME: &'static str = "cron_manage";
     const DESCRIPTION: &'static str =
-        "Manage scheduled tasks (cron jobs). Create, list, delete, enable, disable, \
+        "Manage scheduled tasks (cron jobs). Create, list, update, delete, enable, disable, \
          or manually trigger recurring or one-shot tasks. Use this when the user wants \
          to schedule something for a specific time or interval — e.g., 'remind me tomorrow at 9am', \
          'check the server every hour', 'send a report every Monday at 10am'. \
@@ -242,24 +278,7 @@ impl AlephTool for CronManageTool {
                     crate::error::AlephError::tool("cron_manage create: 'schedule' is required")
                 })?;
 
-                // Validate At timestamps: reject if in the past
-                if let ScheduleInput::At { at_ms, .. } = &schedule {
-                    let now_ms = chrono::Utc::now().timestamp_millis();
-                    if *at_ms <= now_ms {
-                        let at_human = chrono::DateTime::from_timestamp_millis(*at_ms)
-                            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-                            .unwrap_or_else(|| format!("{}ms", at_ms));
-                        let now_human = chrono::Utc::now()
-                            .format("%Y-%m-%d %H:%M:%S UTC")
-                            .to_string();
-                        return Err(crate::error::AlephError::tool(format!(
-                            "Cannot schedule a one-shot task in the past. \
-                             The provided at_ms={} resolves to {}, but current time is {} (now_ms={}). \
-                             Please provide a future timestamp.",
-                            at_ms, at_human, now_human, now_ms
-                        )));
-                    }
-                }
+                validate_schedule(&schedule)?;
 
                 let agent_id = args.agent_id.unwrap_or_else(|| "main".to_string());
                 let schedule_kind: ScheduleKind = schedule.into();
@@ -393,6 +412,39 @@ impl AlephTool for CronManageTool {
 
                 Ok(CronManageOutput {
                     message: format!("定时任务 {} 已手动触发，将在下一次检查周期内执行", id),
+                    job_id: Some(id),
+                    jobs: None,
+                    job: None,
+                })
+            }
+
+            CronAction::Update => {
+                let id = args.job_id.ok_or_else(|| {
+                    crate::error::AlephError::tool("cron_manage update: 'job_id' is required")
+                })?;
+
+                if let Some(ref schedule) = args.schedule {
+                    validate_schedule(schedule)?;
+                }
+
+                let updates = crate::tasks::cron::service::ops::CronJobUpdates {
+                    name: args.name,
+                    agent_id: args.agent_id,
+                    prompt: args.prompt,
+                    enabled: args.enabled,
+                    schedule_kind: args.schedule.map(ScheduleKind::from),
+                    tags: None,
+                    timezone: None,
+                };
+
+                service.update_job(&id, updates).await.map_err(|e| {
+                    crate::error::AlephError::tool(format!("Failed to update cron job: {}", e))
+                })?;
+
+                info!(job_id = %id, "Cron job updated via tool");
+
+                Ok(CronManageOutput {
+                    message: format!("定时任务 {} 已更新", id),
                     job_id: Some(id),
                     jobs: None,
                     job: None,

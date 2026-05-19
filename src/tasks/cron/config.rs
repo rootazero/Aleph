@@ -274,6 +274,13 @@ pub struct JobStateV2 {
     pub schedule_error_count: u32,
     pub last_failure_alert_at_ms: Option<i64>,
     pub last_delivery_status: Option<DeliveryStatus>,
+    /// Output text of the previous run — feeds the `{{last_output}}`
+    /// template variable so a job can chain off its own last result.
+    #[serde(default)]
+    pub last_output: Option<String>,
+    /// Total number of completed runs — feeds the `{{run_count}}` variable.
+    #[serde(default)]
+    pub run_count: u64,
 }
 
 // ── CronJob ─────────────────────────────────────────────────────────────
@@ -390,9 +397,13 @@ impl CronJob {
         }
     }
 
-    /// Default timeout in milliseconds (10 minutes)
+    /// Fallback per-job execution timeout in milliseconds (5 minutes).
+    ///
+    /// Matches `CronConfig::job_timeout_secs`'s default. The timer loop threads
+    /// the *configured* timeout into each `JobSnapshot`, so this constant only
+    /// serves as the baseline for the catchup stale-marker threshold.
     pub fn timeout_ms(&self) -> i64 {
-        600_000
+        300_000
     }
 
     /// Construct a generic `DeliveryPayload` from this job and its output.
@@ -697,6 +708,8 @@ mod tests {
         assert_eq!(state.schedule_error_count, 0);
         assert!(state.last_failure_alert_at_ms.is_none());
         assert!(state.last_delivery_status.is_none());
+        assert!(state.last_output.is_none());
+        assert_eq!(state.run_count, 0);
     }
 
     #[test]

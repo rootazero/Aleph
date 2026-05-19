@@ -4,9 +4,11 @@ use tracing::info;
 
 use crate::sync_primitives::Arc;
 
-use crate::tasks::cron::service::ops::recompute_next_run_full;
+use crate::tasks::cron::config::{CronJob, ScheduleKind};
+use crate::tasks::cron::service::ops::{advance_next_run, recompute_next_run_full};
 use crate::tasks::cron::store::CronStore;
 use crate::tasks::shared::clock::Clock;
+use crate::tasks::shared::schedule::compute_next_cron;
 
 /// Summary of what the catchup pass did.
 #[derive(Debug, Default)]
@@ -14,6 +16,8 @@ pub struct CatchupReport {
     pub stale_markers_cleared: usize,
     pub immediate_count: usize,
     pub deferred_count: usize,
+    /// Recurring jobs that were too stale to catch up and were fast-forwarded.
+    pub fast_forwarded: usize,
 }
 
 /// Default stale threshold: 2 hours in milliseconds.
@@ -25,11 +29,47 @@ const DEFAULT_MAX_MISSED: usize = 5;
 /// Default stagger interval between deferred jobs: 30 seconds.
 const DEFAULT_STAGGER_MS: i64 = 30_000;
 
+/// Minimum missed-run grace window: 2 minutes.
+const MIN_GRACE_MS: i64 = 120_000;
+
+/// Maximum missed-run grace window: 2 hours.
+const MAX_GRACE_MS: i64 = 7_200_000;
+
+/// Compute the missed-run grace window for a job.
+///
+/// A recurring job whose `next_run_at_ms` is older than this window is
+/// hopelessly stale and is fast-forwarded instead of replaying out-of-date
+/// runs. The window is half the schedule period, clamped to `[2min, 2h]`.
+///
+/// Returns `None` for one-shot `At` jobs — they have no period and are always
+/// caught up (the user asked for a specific wall-clock event).
+fn compute_grace_ms(job: &CronJob, now: i64) -> Option<i64> {
+    let period_ms = match &job.schedule_kind {
+        ScheduleKind::At { .. } => return None,
+        ScheduleKind::Every { every_ms, .. } => *every_ms,
+        ScheduleKind::Cron { expr, tz, .. } => {
+            // Period ≈ gap between the next two occurrences from `now`.
+            let from = chrono::DateTime::from_timestamp_millis(now)?;
+            let n1 = compute_next_cron(expr, tz.as_deref(), from).ok()??;
+            let from2 = chrono::DateTime::from_timestamp_millis(n1)?;
+            let n2 = compute_next_cron(expr, tz.as_deref(), from2).ok()??;
+            n2 - n1
+        }
+    };
+    if period_ms <= 0 {
+        return Some(MAX_GRACE_MS);
+    }
+    Some((period_ms / 2).clamp(MIN_GRACE_MS, MAX_GRACE_MS))
+}
+
 /// Run startup catchup: clear stale running markers and reschedule missed jobs.
 ///
 /// - Stale markers: if `running_at_ms` is set and `now - running_at_ms > max(7_200_000, timeout_ms * 2)`, clear it.
-/// - Missed jobs: enabled, not running, `next_run_at_ms <= now`. Sorted by `next_run_at_ms` ASC.
-/// - First `max_missed` are kept as-is (immediate). Rest are deferred with stagger.
+/// - Missed jobs: enabled, not running, `next_run_at_ms <= now`.
+///   - Recurring jobs staler than their grace window are fast-forwarded
+///     (the stale run is skipped) rather than replayed.
+///   - The rest are sorted by `next_run_at_ms` ASC; the first `max_missed`
+///     run immediately, the rest are deferred with stagger.
 pub async fn run_startup_catchup<C: Clock>(
     store: &Arc<tokio::sync::Mutex<CronStore>>,
     clock: &C,
@@ -67,18 +107,33 @@ pub async fn run_startup_catchup<C: Clock>(
         }
     }
 
-    // Phase 2: Collect missed job indices (enabled, not running, past due)
+    // Phase 2: Classify past-due jobs.
+    //  - within grace window → collect as "missed" (catch up)
+    //  - beyond grace window → fast-forward (skip the stale run)
     let mut missed_indices: Vec<(usize, i64)> = Vec::new();
-    for (i, job) in guard.jobs().iter().enumerate() {
-        if !job.enabled {
-            continue;
-        }
-        if job.state.running_at_ms.is_some() {
-            continue;
-        }
-        if let Some(next) = job.state.next_run_at_ms {
-            if next <= now {
-                missed_indices.push((i, next));
+    {
+        let jobs = guard.jobs_mut();
+        for (i, job) in jobs.iter_mut().enumerate() {
+            if !job.enabled || job.state.running_at_ms.is_some() {
+                continue;
+            }
+            let Some(next) = job.state.next_run_at_ms else {
+                continue;
+            };
+            if next > now {
+                continue; // not due
+            }
+            match compute_grace_ms(job, now) {
+                Some(grace) if now - next > grace => {
+                    // Hopelessly stale recurring run: fast-forward past it.
+                    advance_next_run(job, clock);
+                    report.fast_forwarded += 1;
+                    changed = true;
+                }
+                _ => {
+                    // Within grace, or a one-shot job: catch it up.
+                    missed_indices.push((i, next));
+                }
             }
         }
     }
@@ -114,6 +169,7 @@ pub async fn run_startup_catchup<C: Clock>(
         stale_cleared = report.stale_markers_cleared,
         immediate = report.immediate_count,
         deferred = report.deferred_count,
+        fast_forwarded = report.fast_forwarded,
         "startup catchup complete"
     );
 
@@ -352,5 +408,70 @@ mod tests {
         assert_eq!(report.stale_markers_cleared, 0);
         assert_eq!(report.immediate_count, 0);
         assert_eq!(report.deferred_count, 0);
+    }
+
+    /// C2: a recurring job missed by far more than its grace window is
+    /// fast-forwarded instead of replaying a stale run.
+    #[tokio::test]
+    async fn fast_forwards_hopelessly_stale_recurring_job() {
+        let (store, _dir) = make_store();
+        let now = 100_000_000_i64;
+        let clock = FakeClock::new(now);
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("ancient"); // Every 60s → grace = 2 min
+            job.created_at = 1_000_000;
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("ancient").unwrap();
+            // Missed by 3 hours — far beyond the 2-minute grace window.
+            j.state.next_run_at_ms = Some(now - 3 * 3_600_000);
+            guard.persist().unwrap();
+        }
+
+        let report = run_startup_catchup(&store, &clock, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            report.fast_forwarded, 1,
+            "stale job should be fast-forwarded"
+        );
+        assert_eq!(report.immediate_count, 0, "no stale run should be replayed");
+
+        let guard = store.lock().await;
+        let job = guard.get_job("ancient").unwrap();
+        let next = job.state.next_run_at_ms.unwrap();
+        assert!(
+            next > now,
+            "fast-forwarded job runs in the future, got {next}"
+        );
+    }
+
+    /// C2: a recurring job missed within its grace window is still caught up.
+    #[tokio::test]
+    async fn catches_up_recently_missed_recurring_job() {
+        let (store, _dir) = make_store();
+        let now = 100_000_000_i64;
+        let clock = FakeClock::new(now);
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("recent"); // Every 60s → grace = 2 min
+            job.created_at = 1_000_000;
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("recent").unwrap();
+            // Missed by 30 seconds — within the 2-minute grace window.
+            j.state.next_run_at_ms = Some(now - 30_000);
+            guard.persist().unwrap();
+        }
+
+        let report = run_startup_catchup(&store, &clock, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(report.fast_forwarded, 0);
+        assert_eq!(
+            report.immediate_count, 1,
+            "recently-missed job is caught up"
+        );
     }
 }

@@ -12,7 +12,6 @@ use crate::tasks::heartbeat::store::HeartbeatStore;
 pub struct HeartbeatServiceState {
     pub store: Arc<tokio::sync::Mutex<HeartbeatStore>>,
     pub config: HeartbeatConfig,
-    running: AtomicBool,
     shutdown: AtomicBool,
 }
 
@@ -22,19 +21,8 @@ impl HeartbeatServiceState {
         Self {
             store,
             config,
-            running: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
         }
-    }
-
-    /// Whether the service is currently processing a tick.
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::Acquire)
-    }
-
-    /// Access the running flag for CAS operations.
-    pub fn running(&self) -> &AtomicBool {
-        &self.running
     }
 
     /// Whether a shutdown has been requested.
@@ -63,17 +51,7 @@ mod tests {
     #[test]
     fn initial_state() {
         let state = make_state();
-        assert!(!state.is_running());
         assert!(!state.is_shutdown());
-    }
-
-    #[test]
-    fn running_flag_via_atomic() {
-        let state = make_state();
-        state.running().store(true, Ordering::Release);
-        assert!(state.is_running());
-        state.running().store(false, Ordering::Release);
-        assert!(!state.is_running());
     }
 
     #[test]
