@@ -19,9 +19,9 @@
 //! Builtin tools are drained from `AlephToolServer::all_builtin_handlers()`,
 //! wrapped in `BuiltinHandler`, and inserted into the shared `ToolRegistry`.
 //! The returned `(Arc<dyn ToolService>, Arc<ToolRegistry>)` tuple lets the
-//! caller thread the registry into `McpClient::set_tool_registry` /
-//! `ExtensionManager::set_tool_registry` so subsequent MCP connections and
-//! plugin loads extend the same registry.
+//! caller thread the registry into `ExtensionManager::set_tool_registry` and
+//! into `spawn_tool_bridge`, so plugin loads and MCP server connections
+//! extend the same registry.
 
 use std::sync::Arc;
 

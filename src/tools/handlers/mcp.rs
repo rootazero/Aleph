@@ -68,9 +68,9 @@ impl ToolHandler for McpHandler {
                 } else {
                     Err(ToolError::Execution {
                         name: qualified,
-                        cause: result.error.unwrap_or_else(|| {
+                        cause: crate::mcp::redact_mcp_error(&result.error.unwrap_or_else(|| {
                             "MCP tool returned failure without message".to_string()
-                        }),
+                        })),
                     })
                 }
             }
@@ -96,13 +96,20 @@ impl ToolHandler for McpHandler {
 /// Transport-like variants (network, I/O, timeouts) are marked retryable via
 /// `ToolError::Transport` / `ToolError::Timeout`. Everything else — including
 /// MCP protocol errors — is an `Execution` failure.
+///
+/// Free-text `cause` strings are passed through [`crate::mcp::redact_mcp_error`]
+/// so a server that echoes back a secret-bearing argument or URL cannot leak
+/// it into conversation history.
 fn map_mcp_error(name: String, err: AlephError) -> ToolError {
     match err {
         AlephError::NetworkError { message, .. } => ToolError::Transport {
             name,
-            cause: message,
+            cause: crate::mcp::redact_mcp_error(&message),
         },
-        AlephError::IoError(msg) => ToolError::Transport { name, cause: msg },
+        AlephError::IoError(msg) => ToolError::Transport {
+            name,
+            cause: crate::mcp::redact_mcp_error(&msg),
+        },
         AlephError::McpTimeout => ToolError::Timeout {
             name,
             elapsed_ms: 0, // concrete latency not surfaced by this variant
@@ -114,7 +121,7 @@ fn map_mcp_error(name: String, err: AlephError) -> ToolError {
         AlephError::McpToolNotFound(tool) => ToolError::NotFound { name: tool },
         other => ToolError::Execution {
             name,
-            cause: other.to_string(),
+            cause: crate::mcp::redact_mcp_error(&other.to_string()),
         },
     }
 }

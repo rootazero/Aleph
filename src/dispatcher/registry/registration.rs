@@ -5,7 +5,6 @@
 use tracing::{debug, info, warn};
 
 use crate::config::RoutingRuleConfig;
-use crate::mcp::types::McpToolInfo;
 use crate::skill::SkillInfo;
 
 use super::super::types::{ChannelType, ToolSafetyLevel, ToolSource, UnifiedTool};
@@ -223,81 +222,6 @@ impl ToolRegistrar {
             .await;
 
         info!("Registered builtin tools (generate_* + skill_* + snapshot_capture + switch + groupchat + session_new + new + cron_manage + voice)");
-    }
-
-    /// Register MCP tools from tool info list (Flat Namespace Mode)
-    ///
-    /// In flat namespace mode, MCP tools are registered as root-level commands
-    /// with automatic conflict resolution. Users can invoke them directly
-    /// via `/{tool_name}` without the `/mcp` prefix.
-    ///
-    /// # Arguments
-    ///
-    /// * `mcp_tools` - List of MCP tool info from McpClient
-    /// * `server_name` - Name of the MCP server (e.g., "fs", "git", "github")
-    /// * `is_builtin` - Whether this is a builtin System Tool
-    /// * `conflict_resolver` - Conflict resolver for handling name conflicts
-    ///
-    /// # Conflict Resolution
-    ///
-    /// If an MCP tool name conflicts with an existing tool:
-    /// - Higher priority tools keep the original name
-    /// - Lower priority tools are renamed with `-mcp` suffix
-    ///
-    /// Priority: Builtin > Native > Custom > MCP > Skill
-    pub async fn register_mcp_tools(
-        &self,
-        mcp_tools: &[McpToolInfo],
-        server_name: &str,
-        is_builtin: bool,
-        conflict_resolver: &ConflictResolver,
-    ) {
-        for tool_info in mcp_tools {
-            let id = format!("mcp:{}:{}", server_name, tool_info.name);
-
-            let tool = UnifiedTool::new(
-                &id,
-                &tool_info.name,
-                &tool_info.description,
-                ToolSource::Mcp {
-                    server: server_name.to_string(),
-                },
-            )
-            .with_service_name(&tool_info.service_name)
-            .with_requires_confirmation(tool_info.requires_confirmation)
-            .with_icon("bolt.fill") // Default MCP icon
-            .with_usage(format!("/{} [args]", tool_info.name))
-            // Generate routing regex for flat namespace
-            .with_routing_regex(format!(r"^/{}\s*", regex::escape(&tool_info.name)))
-            .with_routing_intent_type(format!("mcp:{}", tool_info.name))
-            .with_routing_strip_prefix(true);
-
-            // Mark builtin system tools for clarity
-            let tool = if is_builtin {
-                tool.with_display_name(format!("{} (System)", tool_info.name))
-            } else {
-                tool.with_display_name(&tool_info.name)
-            };
-
-            // Infer channel visibility from safety level
-            let visible = infer_visible_channels(&tool);
-            let tool = if !visible.is_empty() {
-                tool.with_visible_channels(visible)
-            } else {
-                tool
-            };
-
-            // Register with automatic conflict resolution
-            conflict_resolver
-                .register_with_conflict_resolution(tool)
-                .await;
-        }
-
-        debug!(
-            "Registered {} MCP tools from server '{}' (flat namespace)",
-            mcp_tools.len(),
-            server_name
-        );
     }
 
     /// Register skills from SkillInfo list (Flat Namespace Mode)

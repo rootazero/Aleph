@@ -505,6 +505,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // MCP: spawn the manager actor and bridge external-server tools into the
+    // Phase-2 `ToolRegistry`, so the live agent loop (registry → CoreDispatch →
+    // harness `think`) sees external MCP tools. Warn-only on failure — a
+    // missing or malformed MCP config must never abort boot.
+    let mcp_handle: Option<alephcore::mcp::McpManagerHandle> =
+        match alephcore::mcp::McpManagerActor::new(None).await {
+            Ok((actor, handle)) => {
+                tokio::spawn(actor.run());
+                alephcore::mcp::spawn_tool_bridge(handle.clone(), tool_registry_phase2.clone());
+                if !args.daemon {
+                    println!("MCP Manager spawned + tool bridge wired");
+                }
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "MCP Manager failed to start — external MCP servers unavailable this run"
+                );
+                None
+            }
+        };
+
     // Phase 3 Task 7: compose the shared `Arc<dyn Sandbox>` once at boot.
     //
     // Exec-class tools will consume this sandbox through their constructors
@@ -1253,6 +1276,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Agent management (agent_manager created earlier for tool config sharing)
     register_agents_handlers(&mut server, &agent_manager, &event_bus);
+
+    // MCP server management — only when the manager actor spawned. The handle
+    // was created above next to the tool bridge.
+    if let Some(ref h) = mcp_handle {
+        register_mcp_handlers(&mut server, h);
+        if !args.daemon {
+            println!("  MCP management handlers registered (mcp.*)");
+        }
+    }
 
     // Team management (team store created inside register_agent_handlers)
     if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store, &agent_result.coord_task_store)

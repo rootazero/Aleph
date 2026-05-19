@@ -387,6 +387,17 @@ impl Serialize for ServerHealth {
     }
 }
 
+/// Which capability list a server announced as changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListChangeKind {
+    /// The server's `tools/list` changed.
+    Tools,
+    /// The server's `resources/list` changed.
+    Resources,
+    /// The server's `prompts/list` changed.
+    Prompts,
+}
+
 /// Commands for the MCP Manager Actor
 ///
 /// These commands are sent via channels to control the manager's behavior.
@@ -489,6 +500,17 @@ pub enum McpCommand {
         callback: Arc<crate::mcp::sampling::SamplingCallback>,
         respond_to: oneshot::Sender<()>,
     },
+
+    /// A server announced that one of its capability lists changed.
+    ///
+    /// Sent fire-and-forget from a transport notification handler; the actor
+    /// re-fetches the affected caches and re-broadcasts a typed event.
+    ServerListChanged {
+        /// Server ID that emitted the notification
+        server_id: String,
+        /// Which list changed
+        kind: ListChangeKind,
+    },
 }
 
 impl std::fmt::Debug for McpCommand {
@@ -528,6 +550,11 @@ impl std::fmt::Debug for McpCommand {
             Self::ReloadConfig { .. } => f.debug_struct("ReloadConfig").finish(),
             Self::Shutdown { .. } => f.debug_struct("Shutdown").finish(),
             Self::SetSamplingCallback { .. } => f.debug_struct("SetSamplingCallback").finish(),
+            Self::ServerListChanged { server_id, kind } => f
+                .debug_struct("ServerListChanged")
+                .field("server_id", server_id)
+                .field("kind", kind)
+                .finish(),
         }
     }
 }

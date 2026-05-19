@@ -26,7 +26,7 @@ use tokio::sync::{broadcast, mpsc};
 use super::config::McpPersistentConfig;
 use super::handle::McpManagerHandle;
 use super::types::{
-    HealthStatus, McpCommand, McpManagerConfig, McpManagerEvent, McpServerInfo,
+    HealthStatus, ListChangeKind, McpCommand, McpManagerConfig, McpManagerEvent, McpServerInfo,
     McpServerStatusDetail, McpTransportType, ServerHealth,
 };
 use crate::mcp::{
@@ -175,18 +175,30 @@ impl McpManagerActor {
         let _ = self.event_tx.send(McpManagerEvent::ManagerReady);
         tracing::info!("MCP Manager ready with {} servers", self.clients.len());
 
-        // Main command loop
+        // Main command loop, interleaved with periodic health checks. The
+        // health tick fires once immediately; that first tick is consumed
+        // before the loop because servers were just auto-started above.
         let mut shutdown_respond_to = None;
-        while let Some(cmd) = self.cmd_rx.recv().await {
-            match cmd {
-                McpCommand::Shutdown { respond_to } => {
-                    shutdown_respond_to = Some(respond_to);
-                    break;
-                }
-                other => {
-                    if !self.handle_command(other).await {
-                        break;
+        let mut health_tick = tokio::time::interval(self.health_config.interval);
+        health_tick.tick().await;
+        loop {
+            tokio::select! {
+                maybe_cmd = self.cmd_rx.recv() => {
+                    match maybe_cmd {
+                        Some(McpCommand::Shutdown { respond_to }) => {
+                            shutdown_respond_to = Some(respond_to);
+                            break;
+                        }
+                        Some(other) => {
+                            if !self.handle_command(other).await {
+                                break;
+                            }
+                        }
+                        None => break,
                     }
+                }
+                _ = health_tick.tick() => {
+                    self.health_check_pass().await;
                 }
             }
         }
@@ -199,6 +211,74 @@ impl McpManagerActor {
         }
         let _ = self.event_tx.send(McpManagerEvent::ManagerShutdown);
         tracing::info!("MCP Manager shutdown complete");
+    }
+
+    /// Periodic health probe over every running server.
+    ///
+    /// For each server it checks transport liveness, drives the per-server
+    /// circuit breaker (`ServerHealth`), and auto-restarts servers that have
+    /// failed past the unhealthy threshold — subject to the restart-window
+    /// cap so a permanently-broken server does not restart-loop forever.
+    ///
+    /// The probe doubles as a keepalive: for stdio it confirms the child
+    /// process is alive, for SSE that the event stream is still connected.
+    /// HTTP transports are stateless, so their probe is always healthy and a
+    /// dead endpoint instead surfaces as ordinary tool-call failures.
+    async fn health_check_pass(&mut self) {
+        // Snapshot (id, client) up front: the probe awaits, and we must not
+        // hold a borrow of `self.clients` across the `restart_server` call.
+        let probes: Vec<(String, Arc<McpClient>)> = self
+            .clients
+            .iter()
+            .map(|(id, c)| (id.clone(), Arc::clone(c)))
+            .collect();
+        if probes.is_empty() {
+            return;
+        }
+
+        let mut to_restart: Vec<String> = Vec::new();
+        for (server_id, client) in probes {
+            let alive = client.check_server_health().await.values().all(|&ok| ok);
+            let health = self.health_states.entry(server_id.clone()).or_default();
+            if alive {
+                health.record_success();
+            } else {
+                health.record_failure("health probe: transport not alive");
+                if health.should_restart(
+                    self.health_config.max_restarts,
+                    self.health_config.restart_window.as_secs(),
+                ) {
+                    to_restart.push(server_id);
+                }
+            }
+        }
+
+        for server_id in to_restart {
+            let server_name = self
+                .config
+                .get_server(&server_id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| server_id.clone());
+            // Emit ServerCrashed first so the tool bridge drops the dead
+            // server's tools from the registry before the restart re-publishes
+            // a fresh set via the ServerStarted event.
+            let _ = self.event_tx.send(McpManagerEvent::ServerCrashed {
+                server_id: server_id.clone(),
+                server_name,
+                error: "health probe failed; auto-restarting".to_string(),
+            });
+            match self.restart_server(&server_id).await {
+                Ok(()) => {
+                    tracing::info!(server_id = %server_id, "auto-restarted unhealthy MCP server");
+                }
+                Err(e) => {
+                    tracing::warn!(server_id = %server_id, error = %e, "auto-restart failed");
+                    if let Some(h) = self.health_states.get_mut(&server_id) {
+                        h.mark_dead();
+                    }
+                }
+            }
+        }
     }
 
     /// Handle a single command
@@ -295,8 +375,47 @@ impl McpManagerActor {
                 self.sampling_callback = Some(callback);
                 let _ = respond_to.send(());
             }
+            McpCommand::ServerListChanged { server_id, kind } => {
+                self.handle_list_changed(&server_id, kind).await;
+            }
         }
         true
+    }
+
+    /// Refresh caches for a server that announced a list change, then
+    /// re-broadcast a typed capability event for the tool bridge.
+    ///
+    /// The cache is refreshed *before* the event is emitted so that the
+    /// bridge's `sync_server` reads the server's current tool list.
+    async fn handle_list_changed(&mut self, server_id: &str, kind: ListChangeKind) {
+        let Some(client) = self.clients.get(server_id).cloned() else {
+            tracing::debug!(
+                server_id = %server_id,
+                "list-changed for unknown server; ignoring"
+            );
+            return;
+        };
+        client.refresh_caches().await;
+        let event = match kind {
+            ListChangeKind::Tools => McpManagerEvent::ToolsChanged {
+                server_id: server_id.to_string(),
+                tool_count: client.list_tools().await.len(),
+            },
+            ListChangeKind::Resources => McpManagerEvent::ResourcesChanged {
+                server_id: server_id.to_string(),
+                resource_count: client.list_resources().await.len(),
+            },
+            ListChangeKind::Prompts => McpManagerEvent::PromptsChanged {
+                server_id: server_id.to_string(),
+                prompt_count: client.list_prompts().await.len(),
+            },
+        };
+        tracing::info!(
+            server_id = %server_id,
+            ?kind,
+            "MCP server announced a list change; re-broadcasting"
+        );
+        let _ = self.event_tx.send(event);
     }
 
     // ===== Lifecycle Methods =====
@@ -504,6 +623,25 @@ impl McpManagerActor {
                     .map_err(|e| format!("Failed to start remote server: {}", e))?;
             }
         }
+
+        // Route this server's `*/list_changed` notifications back into the
+        // actor so the tool registry and capability state stay in sync.
+        let cmd_tx = self.cmd_tx.clone();
+        let notify_server_id = config.id.clone();
+        let notification_handler: crate::mcp::transport::NotificationCallback =
+            Box::new(move |notification| {
+                if let Some(kind) = classify_list_change(&notification.method) {
+                    // Fire-and-forget: a dropped signal self-heals on the next
+                    // notification, a restart, or the periodic health probe.
+                    let _ = cmd_tx.try_send(McpCommand::ServerListChanged {
+                        server_id: notify_server_id.clone(),
+                        kind,
+                    });
+                }
+            });
+        client
+            .set_notification_handler(&config.id, notification_handler)
+            .await;
 
         // Set sampling callback if one is registered
         if let Some(ref callback) = self.sampling_callback {
@@ -746,6 +884,25 @@ impl McpManagerActor {
     }
 }
 
+/// Map an MCP notification method to the capability list it changed, if any.
+///
+/// Both the spec's snake_case form (`list_changed`) and the camelCase form
+/// some servers emit (`listChanged`) are accepted.
+fn classify_list_change(method: &str) -> Option<ListChangeKind> {
+    match method {
+        "notifications/tools/list_changed" | "notifications/tools/listChanged" => {
+            Some(ListChangeKind::Tools)
+        }
+        "notifications/resources/list_changed" | "notifications/resources/listChanged" => {
+            Some(ListChangeKind::Resources)
+        }
+        "notifications/prompts/list_changed" | "notifications/prompts/listChanged" => {
+            Some(ListChangeKind::Prompts)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -786,6 +943,28 @@ mod tests {
         assert_eq!(config.restart_delay, Duration::from_secs(2));
         assert_eq!(config.max_restarts, 3);
         assert_eq!(config.restart_window, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn classify_list_change_recognizes_both_casings() {
+        assert_eq!(
+            classify_list_change("notifications/tools/list_changed"),
+            Some(ListChangeKind::Tools)
+        );
+        assert_eq!(
+            classify_list_change("notifications/tools/listChanged"),
+            Some(ListChangeKind::Tools)
+        );
+        assert_eq!(
+            classify_list_change("notifications/resources/list_changed"),
+            Some(ListChangeKind::Resources)
+        );
+        assert_eq!(
+            classify_list_change("notifications/prompts/listChanged"),
+            Some(ListChangeKind::Prompts)
+        );
+        assert_eq!(classify_list_change("notifications/progress"), None);
+        assert_eq!(classify_list_change("notifications/initialized"), None);
     }
 
     #[tokio::test]

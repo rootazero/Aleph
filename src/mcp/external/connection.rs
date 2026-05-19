@@ -723,6 +723,14 @@ impl McpServerConnection {
         self.transport.is_alive().await
     }
 
+    /// Install a handler for server-initiated notifications on this
+    /// connection's transport (e.g. `notifications/tools/list_changed`).
+    ///
+    /// Transports that cannot receive notifications keep the default no-op.
+    pub fn set_notification_handler(&self, handler: crate::mcp::transport::NotificationCallback) {
+        self.transport.set_notification_handler(handler);
+    }
+
     /// Close the connection
     pub async fn close(&self) -> Result<()> {
         tracing::info!(server = %self.name, "Closing MCP connection");

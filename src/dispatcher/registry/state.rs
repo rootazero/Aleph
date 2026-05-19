@@ -2,18 +2,10 @@
 //!
 //! Methods for managing tool state and performing bulk operations.
 
-use crate::sync_primitives::Arc;
 use std::collections::HashMap;
-use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::config::RoutingRuleConfig;
-use crate::mcp::types::McpToolInfo;
-use crate::skill::SkillInfo;
-
 use super::super::types::{ToolSourceType, UnifiedTool};
-use super::conflict::ConflictResolver;
-use super::registration::ToolRegistrar;
 use super::types::ToolStorage;
 
 /// State management functionality for ToolRegistry
@@ -182,61 +174,5 @@ impl ToolState {
     /// Number of tools removed
     pub async fn remove_native_tools(&self) -> usize {
         self.remove_by_source_type(ToolSourceType::Native).await
-    }
-
-    /// Refresh all tools from all sources
-    ///
-    /// This method aggregates tools from all sources into a unified registry.
-    ///
-    /// # Arguments
-    ///
-    /// * `mcp_tools` - External MCP server tools (server_name, tools)
-    /// * `skills` - Installed Claude Agent skills
-    /// * `rules` - User-defined routing rules
-    /// * `registrar` - Tool registrar for registration
-    /// * `conflict_resolver` - Conflict resolver for handling conflicts
-    ///
-    /// # Registration Order
-    ///
-    /// 1. Builtin commands (if any)
-    /// 2. External MCP tools
-    /// 3. Skills
-    /// 4. Custom commands from config
-    pub async fn refresh_all(
-        &self,
-        mcp_tools: &[(String, Vec<McpToolInfo>)],
-        skills: &[SkillInfo],
-        rules: &[RoutingRuleConfig],
-        _registrar: &ToolRegistrar,
-        _conflict_resolver: &ConflictResolver,
-    ) {
-        // Build the new registry in a temporary map so the main storage
-        // never sees an empty or partially-populated state.
-        let temp_storage = Arc::new(RwLock::new(HashMap::new()));
-        let temp_registrar = ToolRegistrar::new(Arc::clone(&temp_storage));
-        let temp_resolver = ConflictResolver::new(Arc::clone(&temp_storage));
-
-        // 1. Builtin commands first (currently no-op in AI-first mode)
-        temp_registrar.register_builtin_tools(&temp_resolver).await;
-
-        // 2. External MCP tools
-        for (server_name, tools) in mcp_tools {
-            temp_registrar
-                .register_mcp_tools(tools, server_name, false, &temp_resolver)
-                .await;
-        }
-
-        // 3. Skills
-        temp_registrar.register_skills(skills, &temp_resolver).await;
-
-        // 4. Custom commands from user config
-        temp_registrar.register_custom_commands(rules).await;
-
-        // Atomically swap — no empty-window
-        let new_tools: Vec<UnifiedTool> = {
-            let map = temp_storage.read().await;
-            map.values().cloned().collect()
-        };
-        self.refresh_atomic(new_tools).await;
     }
 }

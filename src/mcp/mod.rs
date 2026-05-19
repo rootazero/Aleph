@@ -51,8 +51,10 @@ pub mod manager;
 mod notifications;
 mod prompts;
 pub mod protocol;
+mod redact;
 mod resources;
 pub mod sampling;
+mod tool_bridge;
 pub mod transport;
 pub mod types;
 
@@ -75,9 +77,11 @@ pub use protocol::{
     ApprovalDecision, ApprovalRequest, ApprovalResponse, IncludeContext, SamplingChunk,
 };
 pub use resources::{McpResourceManager, ResourceContent};
+pub use redact::redact_mcp_error;
 pub use sampling::{
     extract_system_prompt, sampling_messages_to_chat, SamplingCallback, SamplingHandler,
 };
+pub use tool_bridge::spawn_tool_bridge;
 pub use transport::{
     HttpTransport, HttpTransportConfig, McpTransport, NotificationCallback, SseTransport,
     SseTransportConfig, StdioTransport,
