@@ -1697,6 +1697,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
+    // Inject ClarificationManager into BuiltinToolRegistry (deferred) — enables `ask_user`.
+    if let Some(ref cell) = agent_result.clarification_manager_cell {
+        let _ = cell.set(clarification_manager.clone());
+        tracing::info!("ClarificationManager injected into BuiltinToolRegistry for ask_user tool");
+    }
+
     initialize_inbound_router(
         channel_registry,
         agent_result.execution_adapter,

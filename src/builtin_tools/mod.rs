@@ -34,6 +34,7 @@ use tracing::debug;
 pub mod acp_tools;
 pub mod agent_manage;
 pub mod arena;
+pub mod ask_user;
 pub mod atomic_ops;
 pub mod automation_tool;
 pub mod bash_exec;

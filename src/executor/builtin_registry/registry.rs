@@ -249,6 +249,10 @@ pub struct BuiltinToolRegistry {
     /// Channel registry for deferred injection (same pattern as gateway_context).
     /// Used by channel_pairing tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
+    /// Clarification manager for deferred injection (same pattern as
+    /// channel_registry_cell). Used by the `ask_user` tool.
+    pub(crate) clarification_manager_cell:
+        Arc<tokio::sync::OnceCell<Arc<crate::clarification::ClarificationManager>>>,
     /// Wiki orient tool (Spec 5 Task 12) — optional, requires wiki handle.
     pub(crate) note_orient_tool: Option<crate::builtin_tools::note_orient::NoteOrientTool>,
     /// Note schema tool (Spec 5 Task 12) — always Some when note_memory_dir is set.
@@ -315,6 +319,25 @@ impl BuiltinToolRegistry {
     /// Get a handle to the ChannelRegistry OnceCell for deferred injection.
     pub fn channel_registry_cell(&self) -> Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>> {
         Arc::clone(&self.channel_registry_cell)
+    }
+
+    /// Inject the `ClarificationManager` after construction (deferred — the
+    /// manager is created alongside the channels). Enables the `ask_user` tool.
+    /// Takes `&self` so it works through `Arc`.
+    pub fn set_clarification_manager(
+        &self,
+        manager: Arc<crate::clarification::ClarificationManager>,
+    ) {
+        if self.clarification_manager_cell.set(manager).is_ok() {
+            info!("ClarificationManager injected — ask_user tool now available");
+        }
+    }
+
+    /// Get a handle to the ClarificationManager OnceCell for deferred injection.
+    pub fn clarification_manager_cell(
+        &self,
+    ) -> Arc<tokio::sync::OnceCell<Arc<crate::clarification::ClarificationManager>>> {
+        Arc::clone(&self.clarification_manager_cell)
     }
 
     /// Inject a `MemoryReflector` into the `memory_reflect` tool (Task 8 wiring).
@@ -1052,6 +1075,24 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 let tool =
                     crate::builtin_tools::channel_manage::ChannelPairingTool::new(Arc::clone(cr));
+                tool.call_json(arguments).await
+            }),
+
+            // ask_user clarification tool (deferred — ChannelRegistry +
+            // ClarificationManager injected after construction)
+            "ask_user" => Box::pin(async move {
+                let cr = self.channel_registry_cell.get().ok_or_else(|| {
+                    AlephError::tool("ask_user not available: ChannelRegistry not yet injected")
+                })?;
+                let cm = self.clarification_manager_cell.get().ok_or_else(|| {
+                    AlephError::tool(
+                        "ask_user not available: ClarificationManager not yet injected",
+                    )
+                })?;
+                let tool = crate::builtin_tools::ask_user::AskUserTool::new(
+                    Arc::clone(cm),
+                    Arc::clone(cr),
+                );
                 tool.call_json(arguments).await
             }),
 

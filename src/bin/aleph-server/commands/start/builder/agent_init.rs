@@ -46,6 +46,10 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub channel_registry_cell: Option<
         Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>,
     >,
+    /// Deferred injection cell for ClarificationManager (enables the `ask_user` tool)
+    pub clarification_manager_cell: Option<
+        Arc<tokio::sync::OnceCell<Arc<alephcore::clarification::ClarificationManager>>>,
+    >,
     /// Generation provider registry for TTS voice output
     pub generation_registry: Option<Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>>,
     /// Builtin tool registry (for heartbeat probe executor)
@@ -119,6 +123,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut multi_reg: Option<Arc<alephcore::MultiProviderRegistry>> = None;
     let mut channel_reg_cell: Option<
         Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>,
+    > = None;
+    let mut clar_mgr_cell: Option<
+        Arc<tokio::sync::OnceCell<Arc<alephcore::clarification::ClarificationManager>>>,
     > = None;
     let mut tool_reg_out: Option<Arc<BuiltinToolRegistry>> = None;
     let mut orch_cell_out: Option<
@@ -907,6 +914,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // (Spec A Task 17 — enables the `remember` tool).
         let gateway_context_cell = tool_registry.gateway_context_cell();
         channel_reg_cell = Some(tool_registry.channel_registry_cell());
+        clar_mgr_cell = Some(tool_registry.clarification_manager_cell());
         let mcp_cell_for_tools = tool_registry.memory_context_provider_cell();
 
         // Spec 2 Task 8: construct Arc<MemoryReflector> and inject into memory_reflect tool.
@@ -2095,6 +2103,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         compression_service: compression_out,
         multi_registry: multi_reg,
         channel_registry_cell: channel_reg_cell,
+        clarification_manager_cell: clar_mgr_cell,
         generation_registry: Some(generation_registry),
         tool_registry: tool_reg_out,
         team_store,

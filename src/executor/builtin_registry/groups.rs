@@ -76,6 +76,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "vault_store",
             "channel_pairing",
             "voice_mode_set",
+            "ask_user",
             "skill_status",
             "skill_install",
             "skill_manage",

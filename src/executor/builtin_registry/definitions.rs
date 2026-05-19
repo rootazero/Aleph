@@ -475,6 +475,13 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Send media files (images, videos, audio) directly to the user in the chat",
         requires_config: false,
     },
+    // Human-in-the-loop clarification tool — requires ChannelRegistry +
+    // ClarificationManager (deferred injection).
+    BuiltinToolDefinition {
+        name: "ask_user",
+        description: "Ask the user a clarifying question and wait for their reply before continuing — use instead of guessing when the task is ambiguous or a required detail is missing",
+        requires_config: true,
+    },
     // voice_mode_set is a LLM tool only — NOT a slash command.
     // Use /voice on|off instead. Excluded from BUILTIN_TOOL_DEFINITIONS
     // to avoid appearing in command lists.
@@ -581,6 +588,9 @@ pub fn create_tool_boxed(
         "remember" => None,
         // Cron management tool requires SharedCronService at runtime
         "cron_manage" => None,
+        // ask_user requires ChannelRegistry + ClarificationManager, injected
+        // after construction — built per call in BuiltinToolRegistry.
+        "ask_user" => None,
         // Heartbeat management tools require SharedHeartbeatService at runtime
         "heartbeat_list" | "heartbeat_create" | "heartbeat_update" | "heartbeat_delete"
         | "heartbeat_toggle" => None,
