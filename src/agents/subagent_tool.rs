@@ -119,6 +119,14 @@ pub struct SubagentTool {
     parent_cancel: Option<CancellationToken>,
     /// B2 — global plugin registry, threaded into each AgentRuntime.
     plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
+    /// B3 — fallback LLM inherited by subagents.
+    fallback_llm: Option<Arc<dyn AiProvider>>,
+    /// B3 — stall watchdog config inherited by subagents.
+    stall_config: Option<crate::harness::StallConfig>,
+    /// B3 — consecutive-failure cap inherited by subagents.
+    consecutive_failure_cap: Option<usize>,
+    /// B3 — per-turn wall-clock timeout inherited by subagents.
+    turn_timeout: Option<std::time::Duration>,
 }
 
 impl SubagentTool {
@@ -159,6 +167,10 @@ impl SubagentTool {
             )),
             parent_cancel: None,
             plugin_registry: None,
+            fallback_llm: None,
+            stall_config: None,
+            consecutive_failure_cap: None,
+            turn_timeout: None,
         }
     }
 
@@ -168,6 +180,30 @@ impl SubagentTool {
         registry: Arc<crate::extension::registry::PluginRegistry>,
     ) -> Self {
         self.plugin_registry = Some(registry);
+        self
+    }
+
+    /// B3 — wire the fallback LLM inherited by subagents.
+    pub fn with_fallback_llm(mut self, fallback: Arc<dyn AiProvider>) -> Self {
+        self.fallback_llm = Some(fallback);
+        self
+    }
+
+    /// B3 — wire the stall watchdog config inherited by subagents.
+    pub fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
+        self.stall_config = Some(config);
+        self
+    }
+
+    /// B3 — wire the consecutive-failure cap inherited by subagents.
+    pub fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
+        self.consecutive_failure_cap = Some(cap);
+        self
+    }
+
+    /// B3 — wire the per-turn wall-clock timeout inherited by subagents.
+    pub fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.turn_timeout = Some(timeout);
         self
     }
 
@@ -326,6 +362,21 @@ impl SubagentTool {
         runtime = runtime.with_subagent_semaphore(self.subagent_semaphore.clone());
         if let Some(reg) = self.plugin_registry.clone() {
             runtime = runtime.with_plugin_registry(reg);
+        }
+        if let Some(sink) = self.trace_sink.clone() {
+            runtime = runtime.with_trace_sink(sink);
+        }
+        if let Some(fb) = self.fallback_llm.clone() {
+            runtime = runtime.with_fallback_llm(fb);
+        }
+        if let Some(sc) = self.stall_config.clone() {
+            runtime = runtime.with_stall_config(sc);
+        }
+        if let Some(cap) = self.consecutive_failure_cap {
+            runtime = runtime.with_consecutive_failure_cap(cap);
+        }
+        if let Some(tt) = self.turn_timeout {
+            runtime = runtime.with_turn_timeout(tt);
         }
         runtime
     }
@@ -1140,6 +1191,112 @@ mod tests {
         assert!(
             matches!(result, ToolResult::Error { .. }),
             "cancelled subagent must surface an error"
+        );
+    }
+
+    struct UsageMockProvider;
+    impl AiProvider for UsageMockProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Ok(ProviderResponse {
+                    text: Some("done".into()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                    stop_reason: crate::providers::adapter::StopReason::EndTurn,
+                    usage: Some(crate::providers::adapter::TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        cache_read_tokens: None,
+                        cache_creation_tokens: None,
+                        thinking_tokens: None,
+                        cost: None,
+                    }),
+                })
+            })
+        }
+        fn name(&self) -> &str {
+            "usage-mock"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    struct CapturingSink(std::sync::Mutex<Vec<crate::harness::trace::LoopTraceEvent>>);
+    impl crate::harness::TraceSink for CapturingSink {
+        fn on_trace(&self, e: &crate::harness::trace::LoopTraceEvent) {
+            self.0.lock().unwrap().push(e.clone());
+        }
+        fn flush(&self) {}
+    }
+
+    #[tokio::test]
+    async fn foreground_subagent_inherits_trace_sink() {
+        let sink = Arc::new(CapturingSink(std::sync::Mutex::new(vec![])));
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tool = SubagentTool::new(
+            Arc::new(UsageMockProvider),
+            chain,
+            make_registry(),
+            make_tracker(),
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        )
+        .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
+
+        let _ = tool.execute(serde_json::json!({ "task": "hi" })).await;
+
+        let events = sink.0.lock().unwrap();
+        assert!(
+            !events.is_empty(),
+            "subagent run must emit trace events into the inherited sink"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_subagent_forwards_trace_to_parent_sink() {
+        let sink = Arc::new(CapturingSink(std::sync::Mutex::new(vec![])));
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tracker = make_tracker();
+        let tool = SubagentTool::new(
+            Arc::new(UsageMockProvider),
+            chain,
+            make_registry(),
+            tracker.clone(),
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        )
+        .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
+
+        let out = tool
+            .execute(serde_json::json!({ "task": "bg", "run_in_background": true }))
+            .await;
+        let rid = match out {
+            ToolResult::Success { output } => {
+                output["request_id"].as_str().unwrap().to_string()
+            }
+            other => panic!("expected background success, got {other:?}"),
+        };
+
+        // Poll until the background task completes (bounded).
+        for _ in 0..100 {
+            if tracker.list_running().iter().all(|(id, _, _)| id != &rid) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let events = sink.0.lock().unwrap();
+        assert!(
+            !events.is_empty(),
+            "background subagent must forward trace events to the parent sink \
+             via ForwardingTraceSink"
         );
     }
 

@@ -300,6 +300,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     tool_refresh.clone(),
                 );
 
+            // Trace sink — built before SubagentTool so it can be inherited by
+            // runtime-spawned subagents (B3): their run events flow into the
+            // same gateway sink as the main runner, and the background path's
+            // ForwardingTraceSink populates check_status progress.
+            let trace_sink: Arc<dyn crate::harness::TraceSink> =
+                Arc::new(super::GatewayTraceSink::new(Arc::new(
+                    CallbackStateFlushHandle::new(callback_state.clone()),
+                )));
+
             // SubagentTool construction
             let subagent_tool = {
                 use crate::agents::background_tracker::BackgroundAgentTracker;
@@ -338,7 +347,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 )
                 .with_parent_agent_id(request.session_key.agent_id().to_string())
                 .with_parent_session_id(request.session_key.to_key_string())
-                .with_cancel_token(cancel_token.clone());
+                .with_cancel_token(cancel_token.clone())
+                .with_trace_sink(trace_sink.clone());
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
                 }
@@ -362,12 +372,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Some(subagent_tool),
                 tool_refresh,
             );
-
-            // Trace sink
-            let trace_sink: Arc<dyn crate::harness::TraceSink> =
-                Arc::new(super::GatewayTraceSink::new(Arc::new(
-                    CallbackStateFlushHandle::new(callback_state.clone()),
-                )));
 
             // Build FlowRequest
             let flow_input =
