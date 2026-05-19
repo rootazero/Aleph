@@ -418,6 +418,62 @@ fn responses_reasoning_summary_part_done_emits_no_delta() {
     assert_eq!(out.len(), 0, "part.done should not emit");
 }
 
+// ─── raw reasoning_text event handling ───────────────────────────────
+
+#[test]
+fn responses_reasoning_text_delta_emits_thinking() {
+    // Raw (unsummarized) chain-of-thought from reasoning models.
+    let json = r#"{"type":"response.reasoning_text.delta","item_id":"x","output_index":0,"content_index":0,"delta":"raw thought"}"#;
+    let mut out = std::collections::VecDeque::new();
+    let mut tracker = Default::default();
+    super::parse_sse_event_multi(json, &mut tracker, &mut out);
+    match out.front().expect("expected one delta") {
+        Ok(crate::providers::ProviderDelta::ThinkingDelta(s)) => assert_eq!(s, "raw thought"),
+        other => panic!("expected ThinkingDelta, got {:?}", other),
+    }
+}
+
+#[test]
+fn responses_reasoning_text_done_emits_no_delta() {
+    let json = r#"{"type":"response.reasoning_text.done","item_id":"x","output_index":0,"content_index":0,"text":"raw thought"}"#;
+    let mut out = std::collections::VecDeque::new();
+    let mut tracker = Default::default();
+    super::parse_sse_event_multi(json, &mut tracker, &mut out);
+    assert_eq!(out.len(), 0, "reasoning_text.done should not emit (already accumulated)");
+}
+
+// ─── top-level error frame handling ──────────────────────────────────
+
+#[test]
+fn responses_error_frame_emits_error_delta() {
+    // Top-level `error` frame (xAI/OAuth entitlement failure) — distinct
+    // from `response.failed`. Must not be silently dropped.
+    let json = r#"{"type":"error","code":"insufficient_quota","message":"You exceeded your quota","param":null}"#;
+    let mut out = std::collections::VecDeque::new();
+    let mut tracker = Default::default();
+    super::parse_sse_event_multi(json, &mut tracker, &mut out);
+    match out.front().expect("expected one delta") {
+        Ok(crate::providers::ProviderDelta::Error(msg)) => {
+            assert!(msg.contains("insufficient_quota"), "msg={msg}");
+            assert!(msg.contains("You exceeded your quota"), "msg={msg}");
+        }
+        other => panic!("expected Error, got {:?}", other),
+    }
+}
+
+#[test]
+fn responses_error_frame_minimal_emits_error_delta() {
+    // `code` and `param` both absent — only `message` is required.
+    let json = r#"{"type":"error","message":"stream aborted"}"#;
+    let mut out = std::collections::VecDeque::new();
+    let mut tracker = Default::default();
+    super::parse_sse_event_multi(json, &mut tracker, &mut out);
+    match out.front().expect("expected one delta") {
+        Ok(crate::providers::ProviderDelta::Error(msg)) => assert_eq!(msg, "stream aborted"),
+        other => panic!("expected Error, got {:?}", other),
+    }
+}
+
 #[test]
 fn test_convert_s4_tool_result() {
     use crate::providers::message::UnifiedMessage;

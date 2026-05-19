@@ -362,11 +362,50 @@ pub enum StreamEvent {
         output_index: usize,
     },
 
+    /// Raw reasoning text delta — emitted by reasoning models that expose
+    /// unsummarized chain-of-thought (e.g. gpt-oss open-weight models).
+    /// Distinct from `reasoning_summary_text.delta`, which carries the summary.
+    #[serde(rename = "response.reasoning_text.delta")]
+    ReasoningTextDelta {
+        delta: String,
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+    },
+
+    /// Raw reasoning text complete
+    #[serde(rename = "response.reasoning_text.done")]
+    ReasoningTextDone {
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        output_index: usize,
+    },
+
     #[serde(rename = "response.completed")]
     Completed { response: ResponseResource },
 
     #[serde(rename = "response.failed")]
     Failed { response: ResponseResource },
+
+    /// Top-level streaming error frame — distinct from `response.failed`.
+    ///
+    /// Arrives as `{"type":"error","code":...,"message":...,"param":...}`,
+    /// sometimes as the very first frame (e.g. xAI/OAuth entitlement
+    /// failures). Without this variant the frame fails to deserialize and is
+    /// silently dropped, leaving the consumer with an empty response and no
+    /// diagnostic.
+    #[serde(rename = "error")]
+    Error {
+        #[serde(default)]
+        code: Option<String>,
+        message: String,
+        #[serde(default)]
+        param: Option<String>,
+    },
 }
 
 #[cfg(test)]

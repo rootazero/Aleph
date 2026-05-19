@@ -523,6 +523,22 @@ fn parse_sse_event_multi(
             out.push_back(Ok(ProviderDelta::Error(msg)));
         }
 
+        StreamEvent::Error {
+            code,
+            message,
+            param,
+        } => {
+            // Top-level error frame (not wrapped in a `response` object).
+            let detail = match (code, param) {
+                (Some(c), Some(p)) => format!("{c} (param={p}): {message}"),
+                (Some(c), None) => format!("{c}: {message}"),
+                (None, Some(p)) => format!("(param={p}): {message}"),
+                (None, None) => message,
+            };
+            warn!(error = %detail, "Responses API stream error frame");
+            out.push_back(Ok(ProviderDelta::Error(detail)));
+        }
+
         StreamEvent::ReasoningSummaryPartAdded { .. } => {
             tracing::debug!(
                 target: "aleph::openai_responses_sse",
@@ -542,6 +558,18 @@ fn parse_sse_event_multi(
             tracing::debug!(
                 target: "aleph::openai_responses_sse",
                 "reasoning_summary_part.done — boundary marker, no canonical delta emitted"
+            );
+        }
+
+        StreamEvent::ReasoningTextDelta { delta, .. } => {
+            // Raw (unsummarized) chain-of-thought — same canonical delta as
+            // the summary variant so consumers render it uniformly.
+            out.push_back(Ok(ProviderDelta::ThinkingDelta(delta)));
+        }
+        StreamEvent::ReasoningTextDone { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "reasoning_text.done — content already accumulated via delta events"
             );
         }
 

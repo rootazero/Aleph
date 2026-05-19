@@ -12,6 +12,7 @@ use tracing::warn;
 /// OpenAI Chat Completions SSE delta format (simplified):
 /// ```json
 /// {"choices":[{"delta":{"content":"Hello"},"index":0}]}
+/// {"choices":[{"delta":{"reasoning_content":"Let me think"},"index":0}]}
 /// {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":""}}]},"index":0}]}
 /// {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":"}}]},"index":0}]}
 /// {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{...}}
@@ -45,6 +46,23 @@ pub(crate) fn parse_chat_sse_event(
     if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
         if !content.is_empty() {
             out.push_back(Ok(ProviderDelta::TextDelta(content.to_string())));
+        }
+    }
+
+    // ── Reasoning / extended-thinking delta ─────────────────────────────
+    // Reasoning models on the Chat Completions protocol stream their
+    // chain-of-thought in a separate field, never in `delta.content`:
+    //   • `reasoning_content` — DeepSeek-R1, Moonshot/Kimi thinking models
+    //   • `reasoning`         — OpenRouter's unified reasoning format
+    // Both map to a single ThinkingDelta so downstream consumers
+    // (DeltaCollector, gateway streaming UX) surface the thinking trace.
+    if let Some(reasoning) = delta
+        .get("reasoning_content")
+        .and_then(|r| r.as_str())
+        .or_else(|| delta.get("reasoning").and_then(|r| r.as_str()))
+    {
+        if !reasoning.is_empty() {
+            out.push_back(Ok(ProviderDelta::ThinkingDelta(reasoning.to_string())));
         }
     }
 
