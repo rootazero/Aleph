@@ -38,11 +38,15 @@ pub fn set_confirmation_requester(requester: Arc<dyn ApprovalRequester>) {
 /// * `subagent_tool` — optional subagent tool handle (adds the `subagent`
 ///   verb to the agent's toolbelt).
 /// * `tool_refresh` — optional refresh source (plugin/MCP hot-reload).
+/// * `turn_context` — optional routing context of the agent turn; lets HITL
+///   tools (sandbox escalation, `requires_confirmation`, `ask_user`) reach the
+///   originating channel.
 pub fn build_request_tool_service(
     tool_registry: Arc<LoopToolRegistry>,
     allowed_tools: BTreeSet<String>,
     subagent_tool: Option<Arc<SubagentTool>>,
     tool_refresh: Option<Arc<dyn ToolRefreshSource>>,
+    turn_context: Option<crate::tools::turn_context::TurnContext>,
 ) -> Arc<dyn ToolService> {
     let mut svc = ScopedToolService::new(tool_registry, allowed_tools);
     if let Some(st) = subagent_tool {
@@ -50,6 +54,9 @@ pub fn build_request_tool_service(
     }
     if let Some(refresh) = tool_refresh {
         svc = svc.with_refresh(refresh);
+    }
+    if let Some(tc) = turn_context {
+        svc = svc.with_turn_context(tc);
     }
     // Wire the confirmation seam: confirm-flagged tools route a user prompt
     // before executing. Inert until boot installs the requester.
@@ -94,7 +101,7 @@ mod tests {
         reg.register(Box::new(StubTool));
         let registry = Arc::new(reg);
 
-        let svc = build_request_tool_service(registry, BTreeSet::new(), None, None);
+        let svc = build_request_tool_service(registry, BTreeSet::new(), None, None, None);
         let defs = svc.list().await;
         assert!(defs.iter().any(|d| d.name == "read_file"));
     }
@@ -106,7 +113,7 @@ mod tests {
         let registry = Arc::new(reg);
 
         let allowed: BTreeSet<String> = ["other".to_string()].into_iter().collect();
-        let svc = build_request_tool_service(registry, allowed, None, None);
+        let svc = build_request_tool_service(registry, allowed, None, None, None);
         let defs = svc.list().await;
         assert!(
             defs.iter().all(|d| d.name != "read_file"),

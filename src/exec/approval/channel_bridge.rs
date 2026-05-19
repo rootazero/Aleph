@@ -406,16 +406,21 @@ impl ChannelApprovalBridge {
     ///    inbound router resolves the user's `/approve` or `/deny` reply via
     ///    `approval_manager.resolve_for_session(session_key, ...)`.
     ///
-    /// `session_key` must be a valid channel session key in the format
-    /// `{platform}:{...}:{conversation_id}:{...}` so the bridge can route the
-    /// prompt to the correct channel. An unparseable session_key or a failed
-    /// send yields `Denied` — no approver could ever reply.
+    /// `session_key` is the running turn's session key — it is stored on the
+    /// approval record so the inbound router's `/approve` or `/deny` reply
+    /// resolves the matching pending request. `channel_id` / `conversation_id`
+    /// are the originating channel coordinates (from the turn's `TURN_CONTEXT`)
+    /// and route the prompt; the caller must supply a reachable channel.
+    /// A failed send yields `Denied` — no approver could ever reply.
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_for_tool(
         &self,
         approval_manager: &crate::exec::manager::ExecApprovalManager,
         tool_name: &str,
         reason: &str,
         session_key: &str,
+        channel_id: &str,
+        conversation_id: &str,
         agent_id: &str,
         timeout_ms: u64,
     ) -> ApprovalOutcome {
@@ -438,22 +443,14 @@ impl ChannelApprovalBridge {
         // Deliver a plain-text approval prompt. The inbound router resolves
         // the user's `/approve` or `/deny` reply by session key — no channel
         // button capability required.
-        let Some((channel_id, conversation_id)) = self.parse_session_key(session_key) else {
-            tracing::warn!(
-                tool = %tool_name,
-                "Unparseable session_key for approval delivery — denying"
-            );
-            return ApprovalOutcome::Denied;
-        };
-
         let prompt = format!(
             "⚠️ Approval needed\n\n{reason}\n\n\
              Reply /approve to allow or /deny to refuse."
         );
-        let message = OutboundMessage::text(conversation_id.as_str(), prompt);
+        let message = OutboundMessage::text(conversation_id, prompt);
         if let Err(e) = self
             .registry
-            .send(&ChannelId::new(&channel_id), message)
+            .send(&ChannelId::new(channel_id), message)
             .await
         {
             tracing::warn!(

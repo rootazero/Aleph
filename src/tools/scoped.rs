@@ -64,6 +64,11 @@ pub struct ScopedToolService {
     /// Transport used to obtain that confirmation. `None` = no approval
     /// channel wired, so confirm-required tools fail closed (denied).
     approval_requester: Option<Arc<dyn ApprovalRequester>>,
+    /// Routing context of the agent turn this service serves. When set,
+    /// `execute()` scopes it into the `TURN_CONTEXT` task-local so HITL tools
+    /// (sandbox escalation, `requires_confirmation`, `ask_user`) can route a
+    /// prompt back to the originating channel.
+    turn_context: Option<crate::tools::turn_context::TurnContext>,
     schema_cache: ArcSwap<Option<(u64, Arc<[crate::dispatcher::ToolDefinition]>)>>,
     cache_generation: std::sync::atomic::AtomicU64,
 }
@@ -81,6 +86,7 @@ impl ScopedToolService {
             hook_decorator: None,
             confirm_tools: BTreeSet::new(),
             approval_requester: None,
+            turn_context: None,
             schema_cache: ArcSwap::from_pointee(None),
             cache_generation: std::sync::atomic::AtomicU64::new(0),
         }
@@ -99,6 +105,16 @@ impl ScopedToolService {
     ) -> Self {
         self.confirm_tools = confirm_tools;
         self.approval_requester = Some(requester);
+        self
+    }
+
+    /// Attach the routing context of the agent turn this service serves.
+    ///
+    /// `execute()` scopes it into the `TURN_CONTEXT` task-local for the
+    /// duration of every tool call, letting HITL tools route a prompt back to
+    /// the originating channel.
+    pub fn with_turn_context(mut self, ctx: crate::tools::turn_context::TurnContext) -> Self {
+        self.turn_context = Some(ctx);
         self
     }
 
@@ -245,6 +261,74 @@ impl ToolService for ScopedToolService {
     }
 
     async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
+        // Scope the turn's routing context so HITL tools (sandbox escalation,
+        // `requires_confirmation`, `ask_user`) can reach the originating
+        // channel. Scoped here — the immediate caller of every tool's
+        // `execute` — so it stays visible without crossing a `tokio::spawn`.
+        match self.turn_context.clone() {
+            Some(turn) => {
+                crate::tools::turn_context::TURN_CONTEXT
+                    .scope(turn, self.execute_inner(name, input))
+                    .await
+            }
+            None => self.execute_inner(name, input).await,
+        }
+    }
+
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        use std::sync::atomic::Ordering;
+
+        // Bump generation if the refresh source signals external changes.
+        if let Some(ref refresh) = self.refresh {
+            if refresh.poll_changes() {
+                let _ = refresh.fetch_tools();
+                self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+        let gen_now = self.cache_generation.load(Ordering::Acquire);
+
+        // Cache hit?
+        if let Some(ref cached) = **self.schema_cache.load() {
+            if cached.0 == gen_now {
+                return Arc::clone(&cached.1);
+            }
+        }
+
+        // Cache miss: rebuild loop-side defs (matching list() body), then convert.
+        let mut defs: Vec<ToolDefinition> = self
+            .inner
+            .tool_definitions()
+            .into_iter()
+            .map(|d| ToolDefinition {
+                name: d.name,
+                description: d.description,
+                input_schema: d.parameters,
+                source: ToolSource::Builtin,
+                metadata: ToolDefinitionMetadata::default(),
+            })
+            .collect();
+        if let Some(ref st) = self.subagent_tool {
+            defs.push(Self::subagent_definition(st.as_ref()));
+        }
+        if !self.allowed.is_empty() {
+            // Mirror list() — subagent is exempt from allow-filter via is_allowed.
+            defs.retain(|d| self.is_allowed(&d.name));
+        }
+        let schema = to_dispatcher_form(&defs);
+        self.schema_cache
+            .store(Arc::new(Some((gen_now, Arc::clone(&schema)))));
+        schema
+    }
+}
+
+impl ScopedToolService {
+    /// Tool dispatch proper. Wrapped by the `ToolService::execute` trait
+    /// method, which scopes `TURN_CONTEXT` around it.
+    async fn execute_inner(
+        &self,
+        name: &str,
+        input: Value,
+    ) -> Result<ToolOutput, ToolError> {
         // Enforce allowed filter.
         if !self.is_allowed(name) {
             return Err(ToolError::NotFound {
@@ -312,51 +396,6 @@ impl ToolService for ScopedToolService {
         }
 
         result
-    }
-
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
-        use std::sync::atomic::Ordering;
-
-        // Bump generation if the refresh source signals external changes.
-        if let Some(ref refresh) = self.refresh {
-            if refresh.poll_changes() {
-                let _ = refresh.fetch_tools();
-                self.cache_generation.fetch_add(1, Ordering::AcqRel);
-            }
-        }
-        let gen_now = self.cache_generation.load(Ordering::Acquire);
-
-        // Cache hit?
-        if let Some(ref cached) = **self.schema_cache.load() {
-            if cached.0 == gen_now {
-                return Arc::clone(&cached.1);
-            }
-        }
-
-        // Cache miss: rebuild loop-side defs (matching list() body), then convert.
-        let mut defs: Vec<ToolDefinition> = self
-            .inner
-            .tool_definitions()
-            .into_iter()
-            .map(|d| ToolDefinition {
-                name: d.name,
-                description: d.description,
-                input_schema: d.parameters,
-                source: ToolSource::Builtin,
-                metadata: ToolDefinitionMetadata::default(),
-            })
-            .collect();
-        if let Some(ref st) = self.subagent_tool {
-            defs.push(Self::subagent_definition(st.as_ref()));
-        }
-        if !self.allowed.is_empty() {
-            // Mirror list() — subagent is exempt from allow-filter via is_allowed.
-            defs.retain(|d| self.is_allowed(&d.name));
-        }
-        let schema = to_dispatcher_form(&defs);
-        self.schema_cache
-            .store(Arc::new(Some((gen_now, Arc::clone(&schema)))));
-        schema
     }
 }
 

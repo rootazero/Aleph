@@ -1,19 +1,19 @@
-//! Adapter: bridges tool-level `ApprovalRequester` onto the legacy
+//! Adapter: bridges tool-level `ApprovalRequester` onto the
 //! `ChannelApprovalBridge` transport.
 //!
 //! The adapter holds:
 //! - `Arc<ChannelApprovalBridge>` — delivers the prompt to the user's channel.
 //! - `Arc<ExecApprovalManager>` — registers the per-request oneshot that the
-//!   channel's button-click callback resolves.
+//!   inbound router's `/approve` / `/deny` reply resolves.
 //!
-//! The adapter reads the current session from the `SESSION_ID` task-local
-//! (set at every tool entry point by Task 1's `with_session_scope`). The
-//! task-local's `SessionKey` is serialised to the channel session_key format
-//! (`{platform}:{...}:{conversation_id}:{...}`) that
-//! `ChannelApprovalBridge::parse_session_key` expects.
+//! The adapter reads the current turn's routing context from the `TURN_CONTEXT`
+//! task-local (scoped by `ScopedToolService::execute` around every tool call).
+//! That context carries the session key plus the originating channel id and
+//! conversation id, so the prompt routes correctly for every session type —
+//! including per-peer DMs, whose channel a session key alone cannot recover.
 //!
-//! Missing `SESSION_ID` or unreachable channel produces `Denied` with an
-//! explicit warning — never a silent auto-approve.
+//! Missing `TURN_CONTEXT`, a non-channel turn, or an unreachable channel
+//! produces `Denied` with an explicit warning — never a silent auto-approve.
 
 use async_trait::async_trait;
 
@@ -53,35 +53,37 @@ impl ChannelApprovalBridgeAdapter {
         self.timeout_ms = timeout_ms;
         self
     }
-
-    /// Resolve the current session context into the channel session_key string
-    /// the bridge expects. Reads from the `SESSION_ID` task-local scoped by
-    /// `with_session_scope` at the tool entry point.
-    fn current_session_key() -> Option<String> {
-        crate::sandbox::context::SESSION_ID
-            .try_with(|sid| sid.to_string())
-            .ok()
-    }
 }
 
 #[async_trait]
 impl ApprovalRequester for ChannelApprovalBridgeAdapter {
     async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
-        let Some(session_key) = Self::current_session_key() else {
+        let Some(turn) = crate::tools::turn_context::current_turn_context() else {
             tracing::warn!(
                 tool = %tool_name,
-                "ChannelApprovalBridgeAdapter: SESSION_ID task-local not set \
-                 at approval point — cannot route prompt to a channel, denying"
+                "ChannelApprovalBridgeAdapter: TURN_CONTEXT not set at approval \
+                 point — cannot route prompt to a channel, denying"
             );
             return ApprovalOutcome::Denied;
         };
+        if !turn.is_channel_routable() {
+            tracing::warn!(
+                tool = %tool_name,
+                session = %turn.session_key,
+                "ChannelApprovalBridgeAdapter: turn has no originating channel \
+                 — cannot route approval prompt, denying"
+            );
+            return ApprovalOutcome::Denied;
+        }
 
         self.bridge
             .request_for_tool(
                 &self.approval_manager,
                 tool_name,
                 reason,
-                &session_key,
+                &turn.session_key.to_string(),
+                &turn.channel_id,
+                &turn.conversation_id,
                 "",
                 self.timeout_ms,
             )
@@ -92,25 +94,30 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::with_session_scope;
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
 
     fn test_manager() -> Arc<ExecApprovalManager> {
         Arc::new(ExecApprovalManager::new())
     }
 
-    fn test_session_id() -> crate::session::service::SessionId {
-        crate::routing::session_key::SessionKey::ephemeral("adapter-test")
+    /// A routable turn context pointing at a `telegram` DM.
+    fn routable_turn() -> TurnContext {
+        TurnContext {
+            session_key: crate::routing::session_key::SessionKey::ephemeral("adapter-test"),
+            channel_id: "telegram".to_string(),
+            conversation_id: "user-1".to_string(),
+        }
     }
 
     #[tokio::test]
     async fn adapter_forwards_approved() {
         let bridge = Arc::new(ChannelApprovalBridge::for_test_always_approved());
         let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
-        let sid = test_session_id();
-        let out = with_session_scope(&sid, async {
-            adapter.request_approval("code_exec", "run ls").await
-        })
-        .await;
+        let out = TURN_CONTEXT
+            .scope(routable_turn(), async {
+                adapter.request_approval("code_exec", "run ls").await
+            })
+            .await;
         assert_eq!(out, ApprovalOutcome::Approved);
     }
 
@@ -118,33 +125,54 @@ mod tests {
     async fn adapter_forwards_denied() {
         let bridge = Arc::new(ChannelApprovalBridge::for_test_always_denied());
         let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
-        let sid = test_session_id();
-        let out = with_session_scope(&sid, async {
-            adapter.request_approval("code_exec", "rm -rf").await
-        })
-        .await;
+        let out = TURN_CONTEXT
+            .scope(routable_turn(), async {
+                adapter.request_approval("code_exec", "rm -rf").await
+            })
+            .await;
         assert_eq!(out, ApprovalOutcome::Denied);
     }
 
-    /// Negative path: no `SESSION_ID` in scope → Denied. Exercises the real
+    /// Negative path: no `TURN_CONTEXT` in scope → Denied. Exercises the real
     /// code path (no `test_outcome_override` fast path).
     #[tokio::test]
-    async fn adapter_denies_when_session_id_unset() {
+    async fn adapter_denies_when_turn_context_unset() {
         use crate::gateway::channel_registry::ChannelRegistry;
 
         let registry = Arc::new(ChannelRegistry::new());
         let bridge = Arc::new(ChannelApprovalBridge::new(registry));
         let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
 
-        // No `with_session_scope` wrapping — task-local is unset.
+        // No `TURN_CONTEXT.scope` wrapping — task-local is unset.
         let out = adapter.request_approval("code_exec", "run ls").await;
         assert_eq!(out, ApprovalOutcome::Denied);
     }
 
-    /// Negative path: SESSION_ID is set but no channel capability is registered
-    /// in the registry. Bridge's `request_approval` returns `None` → adapter
-    /// must deny (not approve). This exercises the REAL code path end-to-end
-    /// via `request_for_tool` → `request_approval` → `None` → `Denied`.
+    /// Negative path: `TURN_CONTEXT` is set but the turn has no originating
+    /// channel (cron / webhook) → Denied before the bridge is even consulted.
+    #[tokio::test]
+    async fn adapter_denies_when_turn_not_channel_routable() {
+        let bridge = Arc::new(ChannelApprovalBridge::for_test_always_approved());
+        let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
+        let non_channel_turn = TurnContext {
+            session_key: crate::routing::session_key::SessionKey::task(
+                "main", "cron", "daily",
+            ),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+        };
+        let out = TURN_CONTEXT
+            .scope(non_channel_turn, async {
+                adapter.request_approval("code_exec", "run ls").await
+            })
+            .await;
+        // Even with an always-approved bridge, an unroutable turn is denied.
+        assert_eq!(out, ApprovalOutcome::Denied);
+    }
+
+    /// Negative path: `TURN_CONTEXT` is set and routable but no channel is
+    /// registered. Bridge's send fails → adapter must deny (not approve).
+    /// Exercises the REAL code path end-to-end (no `test_outcome_override`).
     #[tokio::test]
     async fn adapter_denies_when_channel_missing() {
         use crate::gateway::channel_registry::ChannelRegistry;
@@ -153,11 +181,11 @@ mod tests {
         let bridge = Arc::new(ChannelApprovalBridge::new(registry));
         let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager()).with_timeout_ms(50);
 
-        let sid = test_session_id();
-        let out = with_session_scope(&sid, async {
-            adapter.request_approval("code_exec", "run ls").await
-        })
-        .await;
+        let out = TURN_CONTEXT
+            .scope(routable_turn(), async {
+                adapter.request_approval("code_exec", "run ls").await
+            })
+            .await;
         assert_eq!(out, ApprovalOutcome::Denied);
     }
 }
