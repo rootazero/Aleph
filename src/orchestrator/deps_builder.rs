@@ -5,13 +5,17 @@
 //! HarnessDeps fields consistently. Subagents inherit identical config; no
 //! override params are accepted (per P1 zero-override decision).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::Config;
 use crate::context::budget::ContextBudgetConfig;
 use crate::harness::StallConfig;
-use crate::providers::AiProvider;
+use crate::providers::{
+    create_provider, DefaultProviderHandle, FailoverConfig, FailoverHealth, FailoverNode,
+    FailoverProvider, StaticDefault,
+};
 
 /// Default model context-window estimate (tokens) used when `[context_budget]`
 /// omits `token_budget`. Operators on larger- or smaller-window models should
@@ -28,45 +32,81 @@ pub struct StabilityTriple {
     pub turn_timeout: Option<Duration>,
 }
 
-/// Build the optional Stage 5b single-step fallback provider from
-/// `[fallback_provider]`. Returns `None` if:
-/// - section missing
-/// - `provider` matches `primary_provider_key` ASCII-case-insensitively
-/// - `provider` not present in `[providers]` map (warn log)
-/// - `create_provider` failure (warn log; e.g. unknown protocol)
-pub fn build_fallback_llm(
+/// Wrap `default_provider` in a [`FailoverProvider`] that walks the ordered
+/// chain `[primary, ...[fallback_provider].chain]`.
+///
+/// The primary slot stays *live*: the returned handle's `FailoverProvider`
+/// reads `default_provider.current()` on every call, so a UI `set_default`
+/// swap still takes effect on the next turn (hot-reload preserved).
+///
+/// Every configured provider's `models` list feeds the catalog, so the chain
+/// can also fail over *between models* of one provider. A chain entry that
+/// matches the primary, names a provider absent from `[providers]`, or fails
+/// to construct is skipped with a warn log.
+///
+/// Always returns a `FailoverProvider` handle — even with an empty chain it
+/// adds model-level fallback, transient in-place retry, and a per-provider
+/// circuit breaker over the primary.
+pub fn build_failover_chain(
     config: &Config,
     primary_provider_key: &str,
-) -> Option<Arc<dyn AiProvider>> {
-    let fb = config.fallback_provider.as_ref()?;
-    if fb.provider.eq_ignore_ascii_case(primary_provider_key) {
-        tracing::warn!(
-            provider = %fb.provider,
-            "fallback_provider self-reference; disabling"
-        );
-        return None;
-    }
-    let pc = match config.providers.get(&fb.provider) {
-        Some(c) => c.clone(),
-        None => {
-            tracing::warn!(
-                provider = %fb.provider,
-                "fallback_provider not found in [providers]; disabling"
-            );
-            return None;
+    default_provider: Arc<dyn DefaultProviderHandle>,
+) -> Arc<dyn DefaultProviderHandle> {
+    // Catalog of every configured provider's model list, keyed by toml name.
+    // Lets the live primary — and each fallback — fail over across models.
+    let model_catalog: HashMap<String, Vec<String>> = config
+        .providers
+        .iter()
+        .map(|(name, pc)| (name.clone(), pc.all_models().to_vec()))
+        .collect();
+
+    let mut fallbacks: Vec<FailoverNode> = Vec::new();
+    if let Some(fb) = config.fallback_provider.as_ref() {
+        for name in fb.resolved_chain() {
+            if name.eq_ignore_ascii_case(primary_provider_key) {
+                tracing::warn!(provider = %name, "failover chain: entry matches primary; skipping");
+                continue;
+            }
+            let pc = match config.providers.get(&name) {
+                Some(c) => c.clone(),
+                None => {
+                    tracing::warn!(
+                        provider = %name,
+                        "failover chain: provider not in [providers]; skipping"
+                    );
+                    continue;
+                }
+            };
+            let models = pc.all_models().to_vec();
+            match create_provider(&name, pc) {
+                Ok(provider) => fallbacks.push(FailoverNode {
+                    name,
+                    models,
+                    provider,
+                }),
+                Err(e) => tracing::warn!(
+                    provider = %name,
+                    error = %e,
+                    "failover chain: create_provider failed; skipping"
+                ),
+            }
         }
-    };
-    match crate::providers::create_provider(&fb.provider, pc) {
-        Ok(p) => Some(p),
-        Err(e) => {
-            tracing::warn!(
-                provider = %fb.provider,
-                error = %e,
-                "fallback_provider create_provider failed; disabling"
-            );
-            None
-        }
     }
+
+    tracing::info!(
+        primary = %primary_provider_key,
+        fallback_count = fallbacks.len(),
+        "failover chain assembled"
+    );
+
+    let failover = FailoverProvider::new(
+        default_provider,
+        fallbacks,
+        model_catalog,
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    );
+    Arc::new(StaticDefault::new(Arc::new(failover)))
 }
 
 /// Build the P0 rescue triple from `[stability]`. Each field is independent.
@@ -116,8 +156,7 @@ pub fn build_context_budget_config(config: &Config) -> Option<ContextBudgetConfi
     // Defensive validation (P7): a misconfigured budget silently cuts off
     // every run — e.g. inverted thresholds make `CompactAndContinue`
     // unreachable so every warning-pressure turn escalates to `FinalReply`.
-    // Reject rather than degrade, mirroring `build_fallback_llm`'s
-    // warn-and-return-`None` pattern.
+    // Reject rather than degrade.
     if token_budget == 0 {
         tracing::warn!("context_budget: token_budget must be > 0; disabling");
         return None;
@@ -259,22 +298,50 @@ mod tests {
         pc
     }
 
-    #[test]
-    fn fallback_returns_none_when_section_missing() {
-        let cfg = Config::default();
-        assert!(build_fallback_llm(&cfg, "primary").is_none());
+    fn mock_handle(name: &str) -> Arc<dyn DefaultProviderHandle> {
+        let provider = create_provider(name, mock_provider_config()).expect("mock provider");
+        Arc::new(StaticDefault::new(provider))
     }
 
     #[test]
-    fn fallback_returns_none_on_self_reference() {
+    fn failover_chain_wraps_primary_even_without_fallback_section() {
+        // No `[fallback_provider]` — the primary is still wrapped so it gains
+        // model-level fallback, transient retry, and a circuit breaker.
+        let cfg = cfg_with_fallback(None, vec![("primary", mock_provider_config())]);
+        let wrapped = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        assert_eq!(wrapped.current().name(), "failover");
+    }
+
+    #[test]
+    fn failover_chain_builds_with_configured_chain() {
         let cfg = cfg_with_fallback(
             Some(FallbackProviderToml {
-                provider: "Primary".to_string(),
+                chain: vec!["fb".to_string()],
+                provider: None,
+            }),
+            vec![
+                ("primary", mock_provider_config()),
+                ("fb", mock_provider_config()),
+            ],
+        );
+        let wrapped = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        assert_eq!(wrapped.current().name(), "failover");
+    }
+
+    #[test]
+    fn failover_chain_skips_self_reference_and_unknown_providers() {
+        // `Primary` (self, case-insensitive) and `ghost` (absent from
+        // `[providers]`) are both skipped with a warn log; the build still
+        // succeeds and yields a failover handle.
+        let cfg = cfg_with_fallback(
+            Some(FallbackProviderToml {
+                chain: vec!["Primary".to_string(), "ghost".to_string()],
+                provider: None,
             }),
             vec![("primary", mock_provider_config())],
         );
-        // ASCII case-insensitive match → self-reference detected.
-        assert!(build_fallback_llm(&cfg, "primary").is_none());
+        let wrapped = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        assert_eq!(wrapped.current().name(), "failover");
     }
 
     #[test]

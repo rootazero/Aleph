@@ -149,6 +149,16 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         }
     };
 
+    // Wire the provider failover chain: wrap the live default-provider handle
+    // in a FailoverProvider that walks [primary, ...[fallback_provider].chain],
+    // each provider expanded across its `models` list. Hot-reload is preserved
+    // — the wrapper resolves `default_provider.current()` on every call.
+    let default_provider = alephcore::orchestrator::build_failover_chain(
+        config,
+        primary_provider_key,
+        default_provider,
+    );
+
     let (stall_cfg, failure_cap, turn_to) = build_stability_triple(config);
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
@@ -165,7 +175,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // aleph.toml. Path is now plumbed end-to-end; defaults stay None
         // so behavior matches pre-Stage-7 main exactly.
         guardrails: build_guardrail_registry(config),
-        fallback_llm: build_fallback_llm(config, primary_provider_key),
+        // Stage 5b single-step fallback is superseded by the failover chain
+        // wrapped onto `default_provider` above; the field is retired in a
+        // follow-up cleanup. `None` keeps it inert until then.
+        fallback_llm: None,
         stall_config: stall_cfg,
         consecutive_failure_cap: failure_cap,
         turn_timeout: turn_to,
@@ -215,18 +228,6 @@ fn build_guardrail_registry(
     ))
 }
 
-/// Build the optional Stage 5b single-step fallback provider from
-/// `[fallback_provider]`. Forwarding wrapper around the shared assembly
-/// module (`alephcore::orchestrator::deps_builder`); preserves the existing
-/// caller surface and unit-test names while letting the subagent path
-/// (Stage A, P1) reuse the same logic.
-fn build_fallback_llm(
-    config: &Config,
-    primary_provider_key: &str,
-) -> Option<Arc<dyn alephcore::providers::AiProvider>> {
-    alephcore::orchestrator::build_fallback_llm(config, primary_provider_key)
-}
-
 /// Build the P0 rescue triple from `[stability]`. Forwarding wrapper around
 /// the shared assembly module; the wrapper unpacks the `StabilityTriple`
 /// struct back into the historical 3-tuple so existing callers (and the
@@ -249,7 +250,7 @@ fn build_stability_triple(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alephcore::{FallbackProviderToml, GuardrailsToml, ProviderConfig, StabilityToml};
+    use alephcore::{GuardrailsToml, StabilityToml};
     use std::time::Duration;
 
     fn cfg_with_guardrails(g: Option<GuardrailsToml>) -> Config {
@@ -282,87 +283,9 @@ mod tests {
         assert_eq!(r.tool_call_count(), 1);
     }
 
-    use std::collections::HashMap;
-
-    fn mock_provider_config() -> ProviderConfig {
-        let mut pc = ProviderConfig::test_config("mock-model");
-        pc.protocol = Some("mock".to_string());
-        pc
-    }
-
-    fn cfg_with_fallback(
-        fb: Option<FallbackProviderToml>,
-        providers: Vec<(&str, ProviderConfig)>,
-    ) -> Config {
-        let mut providers_map: HashMap<String, ProviderConfig> = HashMap::new();
-        for (k, v) in providers {
-            providers_map.insert(k.to_string(), v);
-        }
-        Config {
-            fallback_provider: fb,
-            providers: providers_map,
-            ..Config::default()
-        }
-    }
-
-    #[test]
-    fn fallback_missing_section_returns_none() {
-        let cfg = Config::default();
-        assert!(build_fallback_llm(&cfg, "anthropic").is_none());
-    }
-
-    #[test]
-    fn fallback_self_reference_returns_none() {
-        let cfg = cfg_with_fallback(
-            Some(FallbackProviderToml {
-                provider: "anthropic".to_string(),
-            }),
-            vec![("anthropic", mock_provider_config())],
-        );
-        assert!(
-            build_fallback_llm(&cfg, "anthropic").is_none(),
-            "self-reference must yield None"
-        );
-    }
-
-    #[test]
-    fn fallback_unknown_name_returns_none() {
-        let cfg = cfg_with_fallback(
-            Some(FallbackProviderToml {
-                provider: "ghost".to_string(),
-            }),
-            vec![],
-        );
-        assert!(build_fallback_llm(&cfg, "anthropic").is_none());
-    }
-
-    #[test]
-    fn fallback_valid_name_returns_some() {
-        let cfg = cfg_with_fallback(
-            Some(FallbackProviderToml {
-                provider: "mock".to_string(),
-            }),
-            vec![("mock", mock_provider_config())],
-        );
-        let r = build_fallback_llm(&cfg, "anthropic");
-        assert!(r.is_some(), "valid by-name reference must yield Some");
-    }
-
-    #[test]
-    fn fallback_create_provider_failure_returns_none() {
-        // Construct a ProviderConfig that create_provider rejects:
-        // protocol = Some("__bogus_protocol__") falls through every match arm
-        // and ends in "Unknown protocol" Err.
-        let mut bad = ProviderConfig::test_config("bad");
-        bad.protocol = Some("__bogus_protocol__".to_string());
-        let cfg = cfg_with_fallback(
-            Some(FallbackProviderToml {
-                provider: "bad".to_string(),
-            }),
-            vec![("bad", bad)],
-        );
-        assert!(build_fallback_llm(&cfg, "anthropic").is_none());
-    }
+    // `[fallback_provider]` chain assembly is exercised by
+    // `orchestrator::deps_builder` unit tests (`build_failover_chain`); the
+    // forwarding wrapper this module used to host was removed with Stage 5b.
 
     fn cfg_with_stability(s: Option<StabilityToml>) -> Config {
         Config {
@@ -423,20 +346,4 @@ mod tests {
         assert_eq!(tt, Some(Duration::from_secs(180)));
     }
 
-    #[test]
-    fn fallback_self_reference_case_insensitive_returns_none() {
-        // Regression: primary key "Anthropic" and fallback "anthropic" must
-        // be detected as self-reference. ASCII case differences alone must
-        // not bypass the safety check.
-        let cfg = cfg_with_fallback(
-            Some(FallbackProviderToml {
-                provider: "anthropic".to_string(),
-            }),
-            vec![("anthropic", mock_provider_config())],
-        );
-        assert!(
-            build_fallback_llm(&cfg, "Anthropic").is_none(),
-            "ASCII case-difference must still trigger self-reference disable"
-        );
-    }
 }

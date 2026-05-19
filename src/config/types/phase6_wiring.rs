@@ -38,14 +38,49 @@ pub struct StabilityToml {
     pub turn_timeout_secs: Option<u64>,
 }
 
-/// `[fallback_provider]` — Stage 5b single-step fallback. References an
-/// existing `[providers.<provider>]` entry by toml key; `ProviderConfig`
-/// is *not* inlined here. Self-reference (provider == primary toml key)
-/// is detected at build time and yields `None` with a warn log.
-// Intentionally no `Default` — `provider` is required so users can't silently configure an empty fallback target.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+/// `[fallback_provider]` — the ordered provider failover chain.
+///
+/// Each entry references an existing `[providers.<name>]` entry by its toml
+/// key; `ProviderConfig` is *not* inlined. The primary provider is tried
+/// first, then each chain provider in order — every provider expanded across
+/// its own `models` list. Entries matching the primary, unknown providers,
+/// or providers that fail to construct are skipped with a warn log.
+///
+/// Two equivalent forms are accepted:
+///
+/// ```toml
+/// [fallback_provider]
+/// chain = ["openai", "gemini"]
+/// ```
+///
+/// ```toml
+/// # back-compat single-provider form (folded into `chain`)
+/// [fallback_provider]
+/// provider = "openai"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct FallbackProviderToml {
-    pub provider: String,
+    /// Ordered list of fallback provider toml keys.
+    #[serde(default)]
+    pub chain: Vec<String>,
+    /// Back-compat single-provider form. Folded into the effective chain by
+    /// [`FallbackProviderToml::resolved_chain`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
+
+impl FallbackProviderToml {
+    /// The effective ordered fallback chain: explicit `chain` entries, then
+    /// the back-compat `provider` when set and not already present.
+    pub fn resolved_chain(&self) -> Vec<String> {
+        let mut out = self.chain.clone();
+        if let Some(p) = &self.provider {
+            if !out.iter().any(|c| c.eq_ignore_ascii_case(p)) {
+                out.push(p.clone());
+            }
+        }
+        out
+    }
 }
 
 /// `[context_budget]` — opt-in mid-run context-window management. When
@@ -139,7 +174,8 @@ critical_threshold = 0.85
         assert_eq!(
             p.fallback_provider,
             Some(FallbackProviderToml {
-                provider: "openai-mini".to_string()
+                chain: Vec::new(),
+                provider: Some("openai-mini".to_string()),
             })
         );
         assert_eq!(
@@ -151,6 +187,32 @@ critical_threshold = 0.85
                 critical_threshold: Some(0.85),
             })
         );
+    }
+
+    #[test]
+    fn fallback_provider_chain_form_parses() {
+        let p: Probe = toml::from_str("[fallback_provider]\nchain = [\"openai\", \"gemini\"]\n")
+            .expect("toml parses");
+        let fb = p.fallback_provider.expect("section present");
+        assert_eq!(fb.chain, vec!["openai", "gemini"]);
+        assert_eq!(fb.resolved_chain(), vec!["openai", "gemini"]);
+    }
+
+    #[test]
+    fn fallback_provider_resolved_chain_folds_back_compat_provider() {
+        // Legacy single-provider form folds into the effective chain.
+        let legacy = FallbackProviderToml {
+            chain: Vec::new(),
+            provider: Some("openai".to_string()),
+        };
+        assert_eq!(legacy.resolved_chain(), vec!["openai"]);
+
+        // A `provider` already present in `chain` is not duplicated.
+        let both = FallbackProviderToml {
+            chain: vec!["openai".to_string(), "gemini".to_string()],
+            provider: Some("openai".to_string()),
+        };
+        assert_eq!(both.resolved_chain(), vec!["openai", "gemini"]);
     }
 
     #[test]
