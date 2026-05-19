@@ -91,11 +91,11 @@
   ┄┄ 用户在 Telegram 点按钮 ┄┄
 
   → 回调 → InboundMessage { id: "cb_…", text: "approve:{record.id}:once" }
-  → InboundMessageRouter 入口：cb_ 前缀 → 转发 JSON-RPC `exec.callback.handle`
-  → handler: ApprovalBridge::parse_callback → manager.resolve(record.id, decision, resolved_by)
+  → InboundMessageRouter 入口：cb_ 前缀 → ApprovalCallbackSink.handle_callback
+  → ManagerCallbackSink: ApprovalBridge::parse_callback → manager.resolve(record.id, decision, resolved_by)
   → oneshot 唤醒 → wait_for_decision 返回 Some(decision)
   → ApprovalOutcome::Approved/Denied → 工具放行/拒绝
-  → router 把 RPC 响应 response_text 渲染回通道（"✅ 已批准" / "❌ 已拒绝" / "该审批已过期"）
+  → router 把 sink 返回的 response_text 渲染回通道（"✅ 已批准" / "❌ 已拒绝" / "该审批已过期"）
 ```
 
 唯一 id 全程为 `ExecApprovalManager` 的 `record.id`，缺陷①②③在链路上一并消除。
@@ -157,23 +157,36 @@ fn channel_route(key: &SessionKey) -> Option<(ChannelId, ConversationId)> {
 - 旧 `request_approval(&request)` + `parse_session_key` + `authorize_and_deliver` + `resolve_approval` 由 out-of-scope 的 `ExecSecurityGate` 间接依赖，**保留不动并标注为已知缺陷**（见 §9）。
 - 假设：单 Telegram 通道实例时 `SessionKey.channel` 字符串 == 注册的 `ChannelId`。多实例命名差异属边界情况，本期不处理但在实现中加断言式日志。
 
-### 5.4 回调分发链路（goal 子工作 #3）— R4 合规设计
+### 5.4 回调分发链路（goal 子工作 #3）
 
-`InboundMessageRouter` 入口拦截，但**不直接触碰 `ExecApprovalManager`**，而是把回调转成 in-process JSON-RPC `exec.callback.handle` 发给 Server —— 严格符合 R4「Interface 层纯 I/O：输入转 JSON-RPC 发给 Server，响应渲染给用户」。
+`InboundMessageRouter::handle_message` 入口拦截 `cb_` 前缀的回调消息。router **不直接持有 `ExecApprovalManager`**，而是依赖一个注入的窄接口 `ApprovalCallbackSink`（trait，定义于新模块 `src/gateway/inbound_router/approval_callback.rs`）：
 
-新增聚焦模块 `src/gateway/inbound_router/approval_callback.rs`：
+```rust
+pub(crate) struct ApprovalCallbackResult { pub resolved: bool, pub response_text: String }
 
-1. 仅对 `id` 以 `cb_` 前缀的 `InboundMessage` 触发（callback query 标记）。
-2. 构造 `JsonRpcRequest { method: "exec.callback.handle", params: { callback_data: msg.text, user_id: msg.sender_id } }`，经 `HandlerRegistry::handle` 派发。
-3. 判定响应：
-   - `handled == true` → 是审批回调且已 resolve → 拦截，把 `response_text` 渲染回通道。
-   - `handled == false && approval_id.is_some()` → 是审批回调但已过期/已处理 → 拦截，渲染「该审批已过期或已处理」。
-   - `handled == false && approval_id == None` → 非审批回调（parse 失败）→ **不拦截**，放行进正常消息流（其它 inline keyboard 不受影响）。
-4. router 持 `Option<Arc<HandlerRegistry>>`（不持 manager）；渲染回执用 router 已有的 `channel_registry`。
+#[async_trait]
+pub(crate) trait ApprovalCallbackSink: Send + Sync {
+    /// 返回 Some 当且仅当 callback_data 是审批按钮回调。
+    async fn handle_callback(&self, callback_data: &str, user_id: &str)
+        -> Option<ApprovalCallbackResult>;
+}
+```
 
-router 不解析 callback 语义、不调 core —— 解析与 `resolve` 全在 RPC handler 内。子工作 #2 与 #3 自然复用同一处理器。
+具体实现 `ManagerCallbackSink`（新文件 `src/approval/callback_sink.rs`）包 `Arc<ExecApprovalManager>`：
+`ApprovalBridge::parse_callback` 解析 callback_data —— `None` 即非审批回调；`Some((id, decision))`
+→ `manager.resolve(id, decision, Some(user_id))` → 据 resolved 结果产出确认 / 过期文案。
 
-> **R4/R7/P8 说明**：解析 `approve:{id}:{decision}` 是对**机器生成的固定格式** callback data 的解析，非自然语言模式匹配 —— 符合 P8「正则只适用于格式固定的机器生成文本」。`manager.resolve` 只是把人类已做出的决策投递进 oneshot，非业务推理，不违反 R7/R10。
+router 在 `handle_message` 顶部：`msg.id` 以 `cb_` 开头且 sink 存在 → `sink.handle_callback` →
+`Some` 即拦截，`response_text` 经 `channel_registry.send` 渲染回通道并 `return Ok(())`；
+`None` → 放行进正常消息流（其它 inline keyboard 不受影响）。
+
+**为何不走 JSON-RPC 自分发**：让 router 持 `Arc<HandlerRegistry>` 会使注册表引用计数 >1，
+之后任何 `GatewayServer::handlers_mut()`（`Arc::get_mut`，如 config watcher 注册）会 panic。
+注入窄 trait 既避开此隐患，又让 router 依赖抽象而非 core 具体类型（P4 依赖倒置）。
+
+> **R4/R7/P8 说明**：router 仍是纯 I/O —— 收回调、交注入的 sink、渲染返回文案，不解析不持久化不推理。
+> `manager.resolve` 仅把人类已做决策投递进 oneshot，是机制非业务逻辑。解析 `approve:{id}:{decision}`
+> 针对**固定机器格式**（P8「正则只适用于格式固定的机器生成文本」），非自然语言匹配，不违反 R7/R10。
 
 ### 5.5 RPC handler 注册（goal 子工作 #2）
 
@@ -190,15 +203,15 @@ router 不解析 callback 语义、不调 core —— 解析与 `resolve` 全在
 
 1. **`start/mod.rs` 第 555 行前**：构造共享 `let exec_approval_manager = Arc::new(ExecApprovalManager::new());`。
 2. `ApprovalGate` 仍在 555 以 `None` requester 构造（不变）。
-3. **RPC 注册**：在 `initialize_channels` 内（`register_channel_handlers` 同处，server handlers 仍可变）调 `exec_approvals::register_handlers(server.handlers_mut(), exec_approval_manager.clone())`。需把 manager 传入 `initialize_channels`。
-4. **`initialize_channels` 返回 `channel_registry` 后**（`start/mod.rs:1697` 附近）：
+3. **RPC 注册**：`initialize_channels` 返回后、`initialize_inbound_router` 之前调 `exec_approvals::register_handlers(server.handlers_mut(), exec_approval_manager.clone())`（此时 `server` 仍 `&mut`、handlers 引用计数为 1）。无需改 `initialize_channels` 签名。
+4. **`initialize_channels` 返回 `channel_registry` 后**（`start/mod.rs:1705` 之后）：
    ```rust
    let bridge = Arc::new(ChannelApprovalBridge::new(channel_registry.clone()));
    let adapter = Arc::new(ChannelApprovalBridgeAdapter::new(bridge, exec_approval_manager.clone()));
    approval_gate.set_requester(adapter);
    ```
-5. **router 注入**：`initialize_inbound_router` 增参 `Option<Arc<HandlerRegistry>>`（传 `server.handlers().clone()`），router 内接 `approval_callback` 模块。
-6. **顺序约束**（写进实现注释）：所有 `register_*`（含 `exec.approval.*`）必须在 `server.handlers()` 被 clone 进 router **之前**完成 —— 否则 `handlers_mut` 的 `Arc::get_mut` panic。现有顺序（`initialize_channels` → `initialize_inbound_router`）天然满足。
+5. **router 注入**：`initialize_inbound_router` 增参 `Option<Arc<dyn ApprovalCallbackSink>>`（boot 构造 `ManagerCallbackSink`），router 经 `with_approval_callback_sink` 持有。
+6. **`handlers_mut` 安全**：router 不再 clone `Arc<HandlerRegistry>`，注册表引用计数维持为 1，后续 `setup_config_watcher` 等的 `handlers_mut()` 不受影响。
 
 ### 5.7 错误与超时处理
 
@@ -228,8 +241,9 @@ router 不解析 callback 语义、不调 core —— 解析与 `resolve` 全在
 | `src/exec/approval/channel_bridge.rs` | `request_for_tool` 签名改结构化 `(ChannelId, ConversationId)`；内部直接按 channel 查 registry，不调 `parse_session_key`；超时向通道发提示 |
 | `src/approval/adapters.rs` | 新增 `channel_route(&SessionKey)`；`request_approval` 改读结构化 SessionKey；无通道 → Denied + warn |
 | `src/gateway/handlers/exec_approvals.rs` | 新增 `register_handlers(&mut HandlerRegistry, Arc<ExecApprovalManager>)`；删除死的 `create_handlers` + `RpcHandler` 别名 |
-| `src/gateway/inbound_router/approval_callback.rs` **〔新〕** | 回调拦截：`cb_` 前缀 → `exec.callback.handle` RPC → 按响应拦截/放行/渲染 |
-| `src/gateway/inbound_router/`（router 主体 + mod） | router 持 `Option<Arc<HandlerRegistry>>`；入口接 `approval_callback` |
+| `src/gateway/inbound_router/approval_callback.rs` **〔新〕** | 定义 `ApprovalCallbackSink` trait + `ApprovalCallbackResult` |
+| `src/approval/callback_sink.rs` **〔新〕** | `ManagerCallbackSink`：实现 `ApprovalCallbackSink`，包 `Arc<ExecApprovalManager>`，`parse_callback` + `resolve` |
+| `src/gateway/inbound_router/mod.rs` | router 增 `Option<Arc<dyn ApprovalCallbackSink>>` 字段 + `with_approval_callback_sink`；`handle_message` 顶部拦截 `cb_` 回调 |
 | `src/bin/aleph-server/commands/start/mod.rs` | 555 前构造共享 `Arc<ExecApprovalManager>`；1697 后构造 bridge+adapter+`set_requester` |
 | `src/bin/aleph-server/commands/start/builder/subsystems.rs` | `initialize_channels` 增 manager 参 + 调 `register_handlers`；`initialize_inbound_router` 增 `HandlerRegistry` 参 |
 
@@ -285,7 +299,7 @@ router 不解析 callback 语义、不调 core —— 解析与 `resolve` 全在
 
 | 红线 | 合规说明 |
 |------|---------|
-| **R4**（Interface 纯 I/O） | router 不触 core，仅把回调转 JSON-RPC `exec.callback.handle` 发 Server、响应渲染回通道 |
+| **R4**（Interface 纯 I/O） | router 不触 core，仅把回调交注入的 `ApprovalCallbackSink`、响应渲染回通道 |
 | **R7 / R10**（LLM 主权 / 笨循环） | 不新增 LLM 调用、不碰 `src/harness/`；`manager.resolve` 仅投递人类决策，非推理 |
 | **P8**（LLM-First） | 解析 callback data 是固定机器格式解析，非自然语言模式匹配 |
 | **P1 / P2**（低耦合高内聚） | 回调逻辑收敛于 `approval_callback.rs`；router 依赖 `HandlerRegistry` 而非具体 manager |
