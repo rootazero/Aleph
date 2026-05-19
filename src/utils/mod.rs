@@ -4,6 +4,7 @@ pub mod atomic_write;
 pub mod instance_lock;
 pub mod json_extract;
 pub mod one_or_many;
+pub mod path_within;
 pub mod paths;
 pub mod pii;
 pub mod sqlite_open;

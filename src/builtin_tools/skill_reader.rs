@@ -193,42 +193,73 @@ You can also read additional resources within a skill by specifying file_name:
         Ok(())
     }
 
-    /// Validate file_name to prevent path traversal
+    /// Validate a `file_name` that MAY contain forward-slash subdir segments
+    /// (e.g. `references/guide.md`). Rejects `..` components, absolute paths,
+    /// backslashes, and any leading-dot segment. The caller additionally
+    /// confirms the resolved path stays inside the skill dir via `is_path_within`.
     fn validate_file_name(&self, file_name: &str) -> std::result::Result<(), ToolError> {
-        if file_name.contains("..") || file_name.contains('/') || file_name.contains('\\') {
+        if file_name.is_empty() {
+            return Err(ToolError::InvalidArgs("file_name cannot be empty".into()));
+        }
+        if file_name.contains('\\') {
             return Err(ToolError::InvalidArgs(
-                "file_name cannot contain path separators or '..'".to_string(),
+                "file_name cannot contain backslashes".into(),
             ));
         }
-
-        if file_name.starts_with('.') {
-            return Err(ToolError::InvalidArgs(
-                "file_name cannot start with '.'".to_string(),
-            ));
+        let path = std::path::Path::new(file_name);
+        if path.is_absolute() {
+            return Err(ToolError::InvalidArgs("file_name cannot be absolute".into()));
         }
-
+        for component in path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    return Err(ToolError::InvalidArgs(
+                        "invalid file_name: traversal via '..' is not allowed".into(),
+                    ))
+                }
+                std::path::Component::Normal(seg) => {
+                    if seg.to_string_lossy().starts_with('.') {
+                        return Err(ToolError::InvalidArgs(
+                            "file_name segments cannot start with '.'".into(),
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(ToolError::InvalidArgs(
+                        "file_name contains an invalid path component".into(),
+                    ))
+                }
+            }
+        }
         Ok(())
     }
 
-    /// List files in a skill directory
+    /// List supporting files in a skill dir, including `references/`,
+    /// `scripts/`, `assets/` subdirectories. Returns slash-joined relative
+    /// paths. Hidden entries and `SKILL.md` itself are skipped.
     fn list_skill_files(&self, skill_dir: &Path) -> Vec<String> {
-        let mut files = Vec::new();
-
-        if let Ok(entries) = fs::read_dir(skill_dir) {
+        fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
             for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    if file_type.is_file() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            // Skip hidden files
-                            if !name.starts_with('.') {
-                                files.push(name.to_string());
-                            }
-                        }
+                let path = entry.path();
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with('.') {
+                    continue;
+                }
+                if path.is_dir() {
+                    walk(base, &path, out);
+                } else if name != "SKILL.md" {
+                    if let Ok(rel) = path.strip_prefix(base) {
+                        out.push(rel.to_string_lossy().replace('\\', "/"));
                     }
                 }
             }
         }
-
+        let mut files = Vec::new();
+        walk(skill_dir, skill_dir, &mut files);
         files.sort();
         files
     }
@@ -277,6 +308,13 @@ You can also read additional resources within a skill by specifying file_name:
         };
 
         let file_path = skill_dir.join(file_name);
+
+        // Defense in depth: ensure the resolved path stays inside skill_dir.
+        if !crate::utils::path_within::is_path_within(&skill_dir, &file_path) {
+            return Err(ToolError::InvalidArgs(
+                "file_name escapes the skill directory".into(),
+            ));
+        }
 
         // Check file exists
         if !file_path.exists() || !file_path.is_file() {
@@ -757,7 +795,8 @@ Follow them carefully.
         assert_eq!(result.file_name, "SKILL.md");
         assert!(result.content.contains("Test Skill"));
         assert!(result.content.contains("skill instructions"));
-        assert!(result.available_files.contains(&"SKILL.md".to_string()));
+        // SKILL.md is excluded from available_files (it's the primary file, not a reference)
+        assert!(!result.available_files.contains(&"SKILL.md".to_string()));
         assert!(result.available_files.contains(&"REFERENCE.md".to_string()));
     }
 
@@ -949,6 +988,58 @@ Follow them carefully.
         assert!(result.success);
         assert_eq!(result.skill_id, "unique-skill");
         assert!(result.content.contains("Unique Skill"));
+    }
+
+    #[tokio::test]
+    async fn skill_read_can_reach_references_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sk = tmp.path().join("withref");
+        std::fs::create_dir_all(sk.join("references")).unwrap();
+        std::fs::write(
+            sk.join("SKILL.md"),
+            "---\nname: withref\ndescription: d\n---\nx",
+        )
+        .unwrap();
+        std::fs::write(sk.join("references").join("guide.md"), "REF-CONTENT").unwrap();
+
+        let tool = ReadSkillTool::with_directories(vec![tmp.path().to_path_buf()]);
+        let out = AlephTool::call(
+            &tool,
+            ReadSkillArgs {
+                skill_id: "withref".to_string(),
+                file_name: Some("references/guide.md".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(out.content.contains("REF-CONTENT"));
+    }
+
+    #[tokio::test]
+    async fn skill_read_rejects_traversal_in_file_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sk = tmp.path().join("trav");
+        std::fs::create_dir_all(&sk).unwrap();
+        std::fs::write(
+            sk.join("SKILL.md"),
+            "---\nname: trav\ndescription: d\n---\nx",
+        )
+        .unwrap();
+        let tool = ReadSkillTool::with_directories(vec![tmp.path().to_path_buf()]);
+        let err = AlephTool::call(
+            &tool,
+            ReadSkillArgs {
+                skill_id: "trav".to_string(),
+                file_name: Some("../../etc/passwd".to_string()),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("invalid")
+                || err.to_string().to_lowercase().contains("traversal"),
+            "got: {err}"
+        );
     }
 
     #[tokio::test]
