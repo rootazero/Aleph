@@ -15,6 +15,7 @@ pub mod prefetch;
 pub mod prompt;
 pub mod recaller;
 pub mod registry;
+mod shared;
 pub mod snapshot;
 pub mod status;
 pub mod tools;
@@ -33,6 +34,7 @@ pub use installer::{
 pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
 pub use prompt::build_skills_prompt_xml;
 pub use registry::SkillRegistry;
+pub use shared::shared_skill_system;
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
 
