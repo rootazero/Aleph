@@ -7,10 +7,8 @@
 use std::collections::HashMap;
 
 use super::types::{
-    AgentRegistration, CommandRegistration,
-    HookRegistration,
-    PluginDiagnostic, ServiceRegistration, SkillRegistration,
-    ToolRegistration,
+    AgentRegistration, CommandRegistration, HookRegistration, PluginDiagnostic,
+    ServiceRegistration, SkillRegistration, ToolRegistration,
 };
 use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
 

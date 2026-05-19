@@ -136,9 +136,8 @@ impl<'a> CapabilityApi<'a> {
 mod tests {
     use super::*;
     use crate::extension::registry::{
-        AgentRegistration, CommandRegistration,
-        HookRegistration,
-        ServiceRegistration, SkillRegistration, ToolRegistration,
+        AgentRegistration, CommandRegistration, HookRegistration, ServiceRegistration,
+        SkillRegistration, ToolRegistration,
     };
     use crate::extension::types::HookEvent;
 
@@ -292,9 +291,7 @@ mod tests {
         let mut api = CapabilityApi::new(
             &mut registry,
             "test-plugin".to_string(),
-            vec![
-                PluginPermission::Background,
-            ],
+            vec![PluginPermission::Background],
         );
 
         // Register one of each type

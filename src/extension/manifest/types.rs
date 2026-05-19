@@ -12,8 +12,8 @@ use std::path::PathBuf;
 
 // V2 field types from toml_types module
 use super::toml_types::{
-    CapabilitiesSection, CommandSection, HookSection,
-    PermissionsSection, PromptSection, ServiceSection, ToolSection,
+    CapabilitiesSection, CommandSection, HookSection, PermissionsSection, PromptSection,
+    ServiceSection, ToolSection,
 };
 use crate::extension::runtime::wasm::WasmCapabilities;
 use crate::extension::runtime::wasm::WasmResourceLimits;

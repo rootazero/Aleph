@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registry::{
-    AgentRegistration, CommandRegistration,
-    HookRegistration,
-    ServiceRegistration, SkillRegistration, ToolRegistration,
+    AgentRegistration, CommandRegistration, HookRegistration, ServiceRegistration,
+    SkillRegistration, ToolRegistration,
 };
 use crate::extension::types::{McpServerConfig, PluginOrigin};
 
@@ -70,9 +69,7 @@ impl CapabilityDeclaration {
             // P1: Always allowed, no permission check
             Self::Command(_) | Self::Agent(_) => Tier::Important,
             // P2: Some are permission-gated (Service needs Background)
-            Self::Service(_) | Self::McpServer(_) => {
-                Tier::Pluggable
-            }
+            Self::Service(_) | Self::McpServer(_) => Tier::Pluggable,
         }
     }
 

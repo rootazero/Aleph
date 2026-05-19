@@ -490,5 +490,4 @@ mod tests {
         let manifest = parse_cc_plugin_json_content(content, &dir).unwrap();
         assert_eq!(manifest.root_dir, dir);
     }
-
 }
