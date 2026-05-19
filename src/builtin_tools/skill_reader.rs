@@ -22,6 +22,40 @@ use crate::error::Result;
 use crate::tools::AlephTool;
 
 // ============================================================================
+// Shared helpers
+// ============================================================================
+
+/// List supporting files in a skill dir, including `references/`, `scripts/`,
+/// `assets/` subdirectories. Returns slash-joined relative paths. Hidden
+/// entries and `SKILL.md` itself are skipped.
+fn list_skill_files(skill_dir: &Path) -> Vec<String> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                walk(base, &path, out);
+            } else if name != "SKILL.md" {
+                if let Ok(rel) = path.strip_prefix(base) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(skill_dir, skill_dir, &mut files);
+    files.sort();
+    files
+}
+
+// ============================================================================
 // ReadSkillTool - Read skill instructions (Level 2) or resources (Level 3)
 // ============================================================================
 
@@ -234,36 +268,6 @@ You can also read additional resources within a skill by specifying file_name:
         Ok(())
     }
 
-    /// List supporting files in a skill dir, including `references/`,
-    /// `scripts/`, `assets/` subdirectories. Returns slash-joined relative
-    /// paths. Hidden entries and `SKILL.md` itself are skipped.
-    fn list_skill_files(&self, skill_dir: &Path) -> Vec<String> {
-        fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                return;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if name.starts_with('.') {
-                    continue;
-                }
-                if path.is_dir() {
-                    walk(base, &path, out);
-                } else if name != "SKILL.md" {
-                    if let Ok(rel) = path.strip_prefix(base) {
-                        out.push(rel.to_string_lossy().replace('\\', "/"));
-                    }
-                }
-            }
-        }
-        let mut files = Vec::new();
-        walk(skill_dir, skill_dir, &mut files);
-        files.sort();
-        files
-    }
-
     /// Execute the read_skill operation (internal implementation)
     async fn call_impl(
         &self,
@@ -318,7 +322,7 @@ You can also read additional resources within a skill by specifying file_name:
 
         // Check file exists
         if !file_path.exists() || !file_path.is_file() {
-            let available = self.list_skill_files(&skill_dir);
+            let available = list_skill_files(&skill_dir);
             let error_msg = format!(
                 "File '{}' not found in skill '{}'. Available files: {:?}",
                 file_name, args.skill_id, available
@@ -347,7 +351,7 @@ You can also read additional resources within a skill by specifying file_name:
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
 
         // List available files
-        let available_files = self.list_skill_files(&skill_dir);
+        let available_files = list_skill_files(&skill_dir);
 
         let result_msg = format!(
             "Read {} bytes from {}/{}",
@@ -563,7 +567,7 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
                 .ok()?;
 
         // List files
-        let files = self.list_skill_files(skill_dir);
+        let files = list_skill_files(skill_dir);
 
         // Determine source
         let source = self.get_source_type(skill_dir);
@@ -577,28 +581,6 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
             files,
             source: Some(source),
         })
-    }
-
-    /// List files in a skill directory
-    fn list_skill_files(&self, skill_dir: &Path) -> Vec<String> {
-        let mut files = Vec::new();
-
-        if let Ok(entries) = fs::read_dir(skill_dir) {
-            for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    if file_type.is_file() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            if !name.starts_with('.') {
-                                files.push(name.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        files.sort();
-        files
     }
 
     /// Execute the list_skills operation (internal implementation)
