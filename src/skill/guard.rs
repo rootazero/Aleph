@@ -63,7 +63,7 @@ const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "destructive_rm_rf_root",
-        regex: r"rm\s+-rf?\s+(/|~|\$HOME)\s",
+        regex: r"rm\s+-rf?\s+(/|~|\$HOME)(\s|/|$)",
         level: ThreatLevel::Dangerous,
     },
     Pattern {
@@ -181,6 +181,20 @@ mod tests {
     fn clean_content_is_safe() {
         let verdict = scan_content("SKILL.md", b"---\nname: x\ndescription: y\n---\nHello.");
         assert_eq!(verdict.level, ThreatLevel::Safe);
+    }
+
+    #[test]
+    fn detects_destructive_rm_at_eof_and_home() {
+        // `rm -rf /` at end-of-file (no trailing whitespace) must be caught.
+        assert_eq!(
+            scan_content("a.sh", b"rm -rf /").level,
+            ThreatLevel::Dangerous
+        );
+        // `rm -rf ~/...` (slash after the home glyph) must be caught.
+        assert_eq!(
+            scan_content("b.sh", b"rm -rf ~/Documents").level,
+            ThreatLevel::Dangerous
+        );
     }
 
     #[test]
