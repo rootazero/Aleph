@@ -64,7 +64,7 @@ fn test_map_think_level_xhigh_caps_to_high() {
 fn test_parse_sse_thought_marker() {
     let mut out = VecDeque::new();
     let mut fc = 0u64;
-    let data = r#"{"candidates":[{"content":{"parts":[{"text":"thinking...","thought":true},{"text":"answer"}]}},"finishReason":"STOP"}]}"#;
+    let data = r#"{"candidates":[{"content":{"parts":[{"text":"thinking...","thought":true},{"text":"answer"}]},"finishReason":"STOP"}]}"#;
     parse_gemini_sse_chunk(data, &mut fc, &mut out);
 
     assert!(
@@ -112,7 +112,7 @@ fn test_parse_sse_synthetic_tool_id_fallback() {
 fn test_parse_sse_thinking_tokens_in_usage() {
     let mut out = VecDeque::new();
     let mut fc = 0u64;
-    let data = r#"{"candidates":[{"content":{"parts":[{"text":"done"}]}},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"thoughtsTokenCount":100}}"#;
+    let data = r#"{"candidates":[{"content":{"parts":[{"text":"done"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"thoughtsTokenCount":100}}"#;
     parse_gemini_sse_chunk(data, &mut fc, &mut out);
 
     let usage = out
