@@ -61,6 +61,35 @@ impl AiProvider for HangingProvider {
     }
 }
 
+/// Provider that returns one text-only response carrying a fixed token
+/// `usage` — the Think loop sees no tool_calls and terminates in one turn.
+pub(super) struct UsageTextProvider {
+    pub(super) usage: crate::providers::adapter::TokenUsage,
+}
+
+impl AiProvider for UsageTextProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        let usage = self.usage.clone();
+        Box::pin(async move {
+            Ok(ProviderResponse {
+                text: Some("done".to_string()),
+                stop_reason: crate::providers::adapter::StopReason::EndTurn,
+                usage: Some(usage),
+                ..Default::default()
+            })
+        })
+    }
+    fn name(&self) -> &str {
+        "usage-text"
+    }
+    fn color(&self) -> &str {
+        "#00ff00"
+    }
+}
+
 /// Provider that returns one tool_call (`name`) once, then text-only "done".
 pub(super) struct OneShotToolProvider {
     pub(super) name: String,
@@ -849,5 +878,52 @@ async fn session_error_path_carries_error_class_in_tracing() {
         })
         .class(),
         ErrorClass::Fixable,
+    );
+}
+
+#[tokio::test]
+async fn session_completed_and_turn_metrics_carry_total_tokens() {
+    use crate::providers::adapter::TokenUsage;
+    let (sink, events) = RecordingTraceSink::new();
+    let provider: Arc<dyn AiProvider> = Arc::new(UsageTextProvider {
+        usage: TokenUsage {
+            input_tokens: 8,
+            output_tokens: 14,
+            cache_read_tokens: Some(2),
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        },
+    });
+    let (session, sid) = fresh_session("trace-tokens").await;
+    let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(MixedTools);
+
+    let mut deps = minimal_deps(session, tools, provider);
+    deps.trace_sink = Some(sink);
+    let harness = AgentHarness::new(deps);
+
+    let mut cb = NoopHarnessCallback;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    harness.run(&sid, &mut cb, &cancel).await.expect("run ok");
+
+    let captured = events.lock().unwrap().clone();
+    // Single text-only turn: 8 + 14 + 2 = 24.
+    let session_completed = captured.iter().find_map(|e| match e {
+        LoopTraceEvent::SessionCompleted { total_tokens, .. } => Some(*total_tokens),
+        _ => None,
+    });
+    assert_eq!(
+        session_completed,
+        Some(24),
+        "SessionCompleted.total_tokens should be the cumulative sum",
+    );
+    let turn_metrics = captured.iter().find_map(|e| match e {
+        LoopTraceEvent::TurnCompleted { metrics, .. } => Some(metrics.total_tokens),
+        _ => None,
+    });
+    assert_eq!(
+        turn_metrics,
+        Some(24),
+        "TurnCompleted metrics.total_tokens should be the turn's usage sum",
     );
 }

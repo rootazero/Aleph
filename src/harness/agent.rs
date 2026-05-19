@@ -309,7 +309,7 @@ impl Harness for AgentHarness {
                     outcome,
                     iterations,
                     tool_calls_made,
-                    total_tokens: 0,
+                    total_tokens: self.total_tokens.load(Ordering::Relaxed) as usize,
                     hit_limit: matches!(
                         outcome,
                         crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
@@ -339,7 +339,7 @@ impl Harness for AgentHarness {
                     outcome: session_outcome,
                     iterations,
                     tool_calls_made,
-                    total_tokens: 0,
+                    total_tokens: self.total_tokens.load(Ordering::Relaxed) as usize,
                     hit_limit: false,
                     final_text: None,
                 });
