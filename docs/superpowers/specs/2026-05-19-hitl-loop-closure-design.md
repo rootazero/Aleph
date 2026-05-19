@@ -194,3 +194,43 @@ agent 不重试。
 - P1–P4 各自验证项（见上）全部满足。
 - P5 后无悬挂引用、无新增 clippy 警告（相对基线）。
 - `src/harness/` 无改动（薄 harness 不变）。
+
+## 8. 实施状态（2026-05-20）
+
+| 阶段 | 状态 | 提交 |
+|---|---|---|
+| P1 审批传输 + `ApprovalGate.requester` 修复 | ✅ 已交付 | `4c36b2d9d` |
+| P2 inbound `/approve`·`/deny` 拦截回路 | ✅ 已交付 | `4c36b2d9d` |
+| P3 工具 `requires_confirmation` 接缝 + boot 接线 | ✅ 已交付 | `839a20f07` `d572d909f` |
+| **TURN_CONTEXT 路由修复**（spec 外修正） | ✅ 已交付 | `1673874b1` |
+| P4 `ask_user` 澄清工具 | ✅ 已交付 | `e4fee8b7f` `1dc5e9674` |
+| P5 净杀（`SingleStepExecutor` + `ExecSecurityGate`，~1480 行） | ✅ 已交付 | `0f2ebc307` |
+| P5 链式删除（Phase 2 facade 链 + boot 改写） | ⏸ 推迟 | — |
+
+### TURN_CONTEXT 修正（对 spec 的偏离）
+
+D5 原设计假设 HITL 工具读 `SESSION_ID` task-local 取会话路由。实现期发现：
+`SESSION_ID` 仅由 `invoke_with_session_trace` 设置，而该函数在 gateway 回合路径
+**零生产调用方** —— 故审批适配器读不到会话，升级一律静默拒绝（P1 形同虚设）。
+且 `ChannelApprovalBridge::parse_session_key` 对默认 `DmScope::PerPeer` 私聊无法
+还原 channel（key 中不编码 channel）。
+
+修正：新增 `TURN_CONTEXT` task-local，承载 `{session_key, channel_id,
+conversation_id}`，由 `ScopedToolService::execute`（生产工具分发唯一咽喉）在每次
+工具调用外层 scope —— 不跨 `tokio::spawn`，可靠可见。审批适配器与 `ask_user`
+统一读它；channel 坐标来自 inbound metadata，对一切会话类型均可路由。
+
+### P5 链式删除推迟原因
+
+Phase 2 facade 链（`tools/facade.rs`·`dispatch.rs`·`middleware/`·`handlers/`·
+`tools/registry.rs`，~2552 行）由 `start/mod.rs:470` 在 boot 装配，输出经
+`ExtensionManager::set_tool_registry` 与 `PermissionLayer` 接线，且作为
+Orchestrator 默认 `tool_service`（被 gateway 的 `ScopedToolService` 覆盖、实际
+不可达）。删除它须改写 boot 470-606 段并解除 MCP/Extension 接线 —— 属 boot 路径
+变更，`cargo check` 无法捕获运行时回归。
+
+本环境下 `just test-all` 因 CPU/内存竞争被 SIGTERM 杀死（exit 144），无法满足
+spec 第 7 节「`just test-all` 通过」这一针对 boot 变更的验收前提。依据「不作破坏性
+重构」与 spec 第 6 节「分两步、每步独立验证」的自我约束，链式删除留作后续独立
+周期：在可跑全量测试的环境中执行 boot 改写并验证。`TOOL_SYSTEM.md` /
+`SECURITY.md` 中 facade 链 / `ToolServer` 描述同步推迟修正（当前仍与代码一致）。
