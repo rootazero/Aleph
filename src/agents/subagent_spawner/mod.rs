@@ -96,6 +96,10 @@ pub struct SpawnerBase {
     /// (legacy callers + tests with no `mcp_servers`); a non-empty
     /// `agent_def.mcp_servers` will fail-loud if this is `None`.
     pub plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
+    /// A2 — global cap on concurrently-running subagent spawns. `None` skips
+    /// the cap (direct test callers); `Some(_)` makes `spawn()` acquire a
+    /// permit held for the child's full lifetime.
+    pub subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -138,6 +142,17 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         .chain
         .child()
         .ok_or_else(|| "chain depth exceeded".to_string())?;
+
+    // A2 — reserve a concurrency permit; held until `spawn` returns.
+    let _permit = match base.subagent_semaphore.as_ref() {
+        Some(sem) => Some(
+            sem.clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| format!("sub-agent failed: subagent semaphore closed: {e}"))?,
+        ),
+        None => None,
+    };
 
     // P3 Stage H — provision worktree if requested. The handle is held in the
     // outer scope so Drop fires as a safety net on cancel/panic/timeout/error.
@@ -204,13 +219,11 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .await
             .map_err(|e| format!("sub-agent failed: emit TurnStarted: {e}"))?;
 
-        let effective_task = match req.context_summary {
-            Some(summary) => format!(
-                "## Context from parent agent\n\n{}\n\n---\n\n{}",
-                summary, req.task
-            ),
-            None => req.task.to_string(),
-        };
+        let effective_task = build_effective_task(
+            req.context_summary,
+            req.agent_def.context_mode.clone(),
+            req.task,
+        );
         base.session
             .emit_event(
                 &child_id,
@@ -429,6 +442,26 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     }
 
     result
+}
+
+/// B5 — assemble the child's seed task. A `context_summary` is prepended only
+/// when the agent's declared `context_mode` is `Summary`; `Fresh`-mode agents
+/// always start from the bare task, making `AgentDef.context_mode`
+/// authoritative instead of decorative.
+fn build_effective_task(
+    context_summary: Option<&str>,
+    context_mode: crate::agents::types::ContextMode,
+    task: &str,
+) -> String {
+    match context_summary {
+        Some(summary) if context_mode == crate::agents::types::ContextMode::Summary => {
+            format!(
+                "## Context from parent agent\n\n{}\n\n---\n\n{}",
+                summary, task
+            )
+        }
+        _ => task.to_string(),
+    }
 }
 
 /// Walk the child session event log and synthesize a `LoopRunResult`.

@@ -135,6 +135,11 @@ pub struct AgentRuntime {
     turn_timeout: Option<std::time::Duration>,
     /// Stage A (P1) — trace sink threaded into SpawnerBase.
     trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+    /// A2 — subagent concurrency cap, threaded into every `SpawnerBase`.
+    subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
+    /// B2 — global plugin registry, threaded into SpawnerBase for per-agent
+    /// MCP scope provisioning.
+    plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
 }
 
 impl AgentRuntime {
@@ -165,7 +170,24 @@ impl AgentRuntime {
             consecutive_failure_cap: None,
             turn_timeout: None,
             trace_sink: None,
+            subagent_semaphore: None,
+            plugin_registry: None,
         }
+    }
+
+    /// A2 — wire the shared subagent concurrency semaphore.
+    pub fn with_subagent_semaphore(mut self, sem: Arc<tokio::sync::Semaphore>) -> Self {
+        self.subagent_semaphore = Some(sem);
+        self
+    }
+
+    /// B2 — wire the global plugin registry for per-agent MCP scope.
+    pub fn with_plugin_registry(
+        mut self,
+        registry: Arc<crate::extension::registry::PluginRegistry>,
+    ) -> Self {
+        self.plugin_registry = Some(registry);
+        self
     }
 
     /// Stage 5a (#9) — wire a guardrail registry that subagents inherit.
@@ -174,18 +196,9 @@ impl AgentRuntime {
         self
     }
 
-    // -------------------------------------------------------------------------
-    // Stage A (P1, 2026-05-08): These 5 with_* builders are reachable from the
-    // SpawnerBase → HarnessDeps inheritance chain (verified by
-    // tests/subagent_deps_inherit.rs). Production wiring of values into the
-    // builder chain lives at the SubagentTool construction site in
-    // src/gateway/execution_engine/run_loop.rs (currently passes None defaults).
-    // Threading the parent harness's fallback_llm/stall_config/cap/timeout/
-    // trace_sink values through SubagentTool is a follow-up; tracked in roadmap
-    // docs/superpowers/specs/2026-05-08-subagent-uplift-roadmap-design.md as a
-    // P2 deliverable. The builders + fields ship now to lock the data path; the
-    // orchestration plumbing closes the loop in P2.
-    // -------------------------------------------------------------------------
+    // Stage A (P1) — resilience builders threaded into SpawnerBase →
+    // HarnessDeps. `SubagentTool` applies them via `build_runtime`; `trace_sink`
+    // is wired in production at the run_loop.rs construction site.
 
     /// Stage A (P1) — wire the fallback LLM. Subagents inherit it identically.
     pub fn with_fallback_llm(mut self, fallback: Arc<dyn AiProvider>) -> Self {
@@ -355,9 +368,11 @@ impl AgentRuntime {
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,
             trace_sink: self.trace_sink.clone(),
-            // P3 Stage I — plugin_registry not threaded through AgentRuntime yet;
-            // None disables MCP scope for runtime-spawned subagents until wired.
-            plugin_registry: None,
+            // P3 Stage I — per-agent MCP scope; provisioned when an agent_def
+            // declares `mcp_servers` and a registry is wired (B2).
+            plugin_registry: self.plugin_registry.clone(),
+            // A2 — subagent concurrency cap.
+            subagent_semaphore: self.subagent_semaphore.clone(),
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,
@@ -366,7 +381,7 @@ impl AgentRuntime {
             model: config.model.as_deref(),
             timeout_secs: config.timeout_secs,
             cancel: self.cancel_token.clone(),
-            isolation: None,
+            isolation: config.agent_def.isolation.clone(),
         };
         spawn(&base, req).await
     }

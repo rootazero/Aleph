@@ -4,9 +4,8 @@ use async_trait::async_trait;
 use futures::FutureExt;
 use serde_json::{json, Value};
 use std::panic::AssertUnwindSafe;
-use tokio_util::sync::CancellationToken;
 
-use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
+use crate::agents::runtime::AgentRuntimeConfig;
 use crate::agents::AgentDef;
 use crate::teams::messages::router::SendRequest;
 use crate::teams::messages::types::MessageType;
@@ -395,35 +394,9 @@ impl LoopTool for SubagentTool {
                         timeout_secs: timeout,
                     };
 
-                    let provider = self.provider.clone();
-                    let session = self.session.clone();
-                    let parent_tools = self.parent_tools.clone();
-                    let sandbox = self.sandbox.clone();
-                    let raw_memory_writer = self.raw_memory_writer.clone();
-                    let capture_registry = self.capture_registry.clone();
-                    let parent_agent_id = self.parent_agent_id.clone();
-                    let parent_session_id = self.parent_session_id.clone();
-                    let chain_for_task = child_chain.clone();
-
+                    let runtime =
+                        self.build_runtime(child_chain.clone(), self.cancel_for_child());
                     handles.push(tokio::spawn(async move {
-                        let mut runtime = AgentRuntime::new(
-                            provider,
-                            chain_for_task,
-                            CancellationToken::new(),
-                            session,
-                            parent_tools,
-                            sandbox,
-                        )
-                        .with_parent_agent_id(parent_agent_id);
-                        if let Some(w) = raw_memory_writer {
-                            runtime = runtime.with_raw_memory_writer(w);
-                        }
-                        if let Some(reg) = capture_registry {
-                            runtime = runtime.with_capture_registry(reg);
-                        }
-                        if let Some(sid) = parent_session_id {
-                            runtime = runtime.with_parent_session_id(sid);
-                        }
                         let outcome = AssertUnwindSafe(runtime.run(runtime_config))
                             .catch_unwind()
                             .await;
@@ -574,24 +547,7 @@ impl LoopTool for SubagentTool {
                 timeout_secs: args.timeout_secs,
             };
 
-            let mut runtime = AgentRuntime::new(
-                self.provider.clone(),
-                child_chain,
-                CancellationToken::new(),
-                self.session.clone(),
-                self.parent_tools.clone(),
-                self.sandbox.clone(),
-            )
-            .with_parent_agent_id(self.parent_agent_id.clone());
-            if let Some(w) = self.raw_memory_writer.clone() {
-                runtime = runtime.with_raw_memory_writer(w);
-            }
-            if let Some(reg) = self.capture_registry.clone() {
-                runtime = runtime.with_capture_registry(reg);
-            }
-            if let Some(sid) = self.parent_session_id.clone() {
-                runtime = runtime.with_parent_session_id(sid);
-            }
+            let runtime = self.build_runtime(child_chain, self.cancel_for_child());
 
             match runtime.run(runtime_config).await {
                 Ok(result) => {

@@ -159,6 +159,7 @@ async fn subagent_base_carries_5_p1_fields() {
         trace_sink: Some(trace_sink.clone()),
         // P3 Stage I:
         plugin_registry: None,
+        subagent_semaphore: None,
     };
 
     // Structural assertions — the 5 P1 fields are populated as expected.

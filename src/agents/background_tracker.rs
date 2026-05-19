@@ -7,6 +7,10 @@ use crate::agents::progress::SubagentProgress;
 use crate::sync_primitives::RwLock;
 use tokio_util::sync::CancellationToken;
 
+/// C1 — completed background results older than this are pruned opportunistically
+/// on each new `register()`.
+const BACKGROUND_RESULT_TTL: Duration = Duration::from_secs(3600);
+
 pub struct BackgroundAgentTracker {
     running: RwLock<HashMap<String, RunningAgent>>,
     completed: RwLock<HashMap<String, CompletedAgent>>,
@@ -40,6 +44,9 @@ impl BackgroundAgentTracker {
         cancel_token: CancellationToken,
         task_description: String,
     ) {
+        // C1 — opportunistically prune stale completed results so they don't
+        // accumulate unbounded when callers never poll `take_result`.
+        self.cleanup(BACKGROUND_RESULT_TTL);
         let mut running = self.running.write().unwrap_or_else(|e| e.into_inner());
         running.insert(
             request_id,
@@ -187,6 +194,19 @@ mod tests {
         tracker.mark_completed("old", Ok("old result".to_string()));
         tracker.cleanup(std::time::Duration::ZERO);
         assert!(tracker.take_result("old").is_none());
+    }
+
+    #[test]
+    fn register_prunes_stale_completed_keeps_fresh() {
+        let tracker = BackgroundAgentTracker::new();
+        // A freshly completed entry must survive a register() call.
+        tracker.mark_completed("fresh", Ok("r".to_string()));
+        let token = CancellationToken::new();
+        tracker.register("new-run".to_string(), token, "task".to_string());
+        assert!(
+            tracker.take_result("fresh").is_some(),
+            "register() must not evict a still-fresh completed entry"
+        );
     }
 
     use crate::agents::progress::{ProgressKind, SubagentProgress};

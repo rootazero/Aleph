@@ -13,6 +13,8 @@ follows: 2026-05-08-phase6-config-wiring-design.md
 ✅ P3 Stage H Shipped: cfb2b358722089768d1c5f358b3525f9f4f94d62 on 2026-05-09
 ✅ P3 Stage I Shipped: 864f0e53a40d7fa4eaac883ed3665197aef8382a on 2026-05-09
 ✅ Stage J-pre Shipped: c56c5d014 on 2026-05-09 — cache observability pipeline; reassess Stage J fork branch on 2026-05-23 (≥2 weeks of trace data)
+⚠️ Stage C (LaneScheduler) reverted 2026-05-19 (commits ae4f05532 + e0e29d886) — orphaned, never wired into the orchestrator/gateway. Replaced by a `tokio::Semaphore` on `SubagentTool`/`SpawnerBase` in 2026-05-19-subagent-hardening.
+✅ Production wiring of Stages A/F/H/I closed 2026-05-19 (subagent-hardening branch) — see docs/superpowers/specs/2026-05-19-subagent-hardening-design.md. The run_loop.rs → SubagentTool → AgentRuntime hop, left at `None` defaults, is now wired: token accounting, parent-cancel propagation, trace_sink inheritance (→ background progress), AgentDef-driven worktree isolation. Two documented follow-ups remain: the per-agent MCP `plugin_registry` and the four resilience values need an ExtensionManager/Orchestrator storage change to reach the construction site.
 
 # Aleph Subagent Uplift Roadmap — Master Spec
 

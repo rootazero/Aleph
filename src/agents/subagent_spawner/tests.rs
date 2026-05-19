@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use super::super::{ephemeral_for, extract_run_result};
+    use super::super::{build_effective_task, ephemeral_for, extract_run_result};
 
     use crate::sync_primitives::Mutex;
     use std::future::Future;
@@ -237,6 +237,7 @@ mod tests {
             trace_sink: None,
             // P3 Stage I:
             plugin_registry: None,
+            subagent_semaphore: None,
         }
     }
 
@@ -359,6 +360,66 @@ mod tests {
         let result = spawn(&base, req).await.expect("spawn ok");
         // 12 + 30 + 4 + 2 = 48.
         assert_eq!(result.total_tokens, 48);
+    }
+
+    #[tokio::test]
+    async fn spawn_blocks_when_semaphore_exhausted() {
+        use tokio::sync::Semaphore;
+        let sem = Arc::new(Semaphore::new(1));
+        let provider = ScriptedProvider::new(vec![
+            ProviderResponse::text_only("ok".into()),
+            ProviderResponse::text_only("ok".into()),
+        ]);
+        let mut base = make_base(provider);
+        base.subagent_semaphore = Some(sem.clone());
+
+        let agent = agent_with_allowed("capped", vec!["*"]);
+
+        // Exhaust the single permit by hand.
+        let held = sem.clone().acquire_owned().await.unwrap();
+
+        // spawn() must block on acquire — wrap in a short timeout.
+        let blocked = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            spawn(
+                &base,
+                SpawnRequest {
+                    agent_def: &agent,
+                    task: "noop",
+                    context_summary: None,
+                    model: None,
+                    timeout_secs: 5,
+                    cancel: CancellationToken::new(),
+                    isolation: None,
+                },
+            ),
+        )
+        .await;
+        assert!(
+            blocked.is_err(),
+            "spawn must block while the semaphore is exhausted"
+        );
+
+        // Release the permit; the next spawn proceeds promptly.
+        drop(held);
+        let ran = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            spawn(
+                &base,
+                SpawnRequest {
+                    agent_def: &agent,
+                    task: "noop",
+                    context_summary: None,
+                    model: None,
+                    timeout_secs: 5,
+                    cancel: CancellationToken::new(),
+                    isolation: None,
+                },
+            ),
+        )
+        .await;
+        assert!(ran.is_ok(), "spawn must proceed once a permit frees up");
+        ran.unwrap().expect("spawn ok");
     }
 
     #[tokio::test]
@@ -839,5 +900,34 @@ mod tests {
         let (agent_id, cache_read) = &usage_events[0];
         assert_eq!(agent_id, "test-subagent-id", "agent_id label mismatch");
         assert_eq!(*cache_read, Some(7), "cache_read_tokens mismatch");
+    }
+
+    // -- B5: context_mode authoritative --------------------------------------
+
+    #[test]
+    fn build_effective_task_fresh_mode_ignores_summary() {
+        use crate::agents::types::ContextMode;
+        let t = build_effective_task(Some("SECRET-CONTEXT"), ContextMode::Fresh, "do work");
+        assert_eq!(t, "do work");
+        assert!(!t.contains("SECRET-CONTEXT"));
+        assert!(!t.contains("Context from parent agent"));
+    }
+
+    #[test]
+    fn build_effective_task_summary_mode_prepends_summary() {
+        use crate::agents::types::ContextMode;
+        let t = build_effective_task(Some("PARENT-CTX"), ContextMode::Summary, "do work");
+        assert!(t.contains("Context from parent agent"));
+        assert!(t.contains("PARENT-CTX"));
+        assert!(t.ends_with("do work"));
+    }
+
+    #[test]
+    fn build_effective_task_no_summary_is_bare_task() {
+        use crate::agents::types::ContextMode;
+        assert_eq!(
+            build_effective_task(None, ContextMode::Summary, "just this"),
+            "just this"
+        );
     }
 }

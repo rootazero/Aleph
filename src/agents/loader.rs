@@ -76,6 +76,8 @@ struct UserFrontmatter {
     source: Option<String>,
     #[serde(default)]
     mcp_servers: Vec<crate::agents::McpServerSpec>,
+    #[serde(default)]
+    isolation: Option<crate::agents::types::IsolationMode>,
 }
 
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
@@ -168,6 +170,9 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
         // Per design § 3.2.3: name-conflict detection deferred to spawn time
         // (when global registry is stable). Loader only validates schema.
         def = def.with_mcp_servers(fm.mcp_servers);
+    }
+    if let Some(iso) = fm.isolation {
+        def = def.with_isolation(iso);
     }
     def.source = source;
 
@@ -310,6 +315,31 @@ mod tests {
         assert!(def.allowed_tools.is_empty() || def.allowed_tools == vec!["*"]);
         assert!(def.denied_tools.is_empty());
         assert_eq!(def.source, AgentSource::Project);
+    }
+
+    #[test]
+    fn parses_isolation_worktree_from_frontmatter() {
+        use crate::agents::types::IsolationMode;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tmp(
+            &tmp,
+            "iso.md",
+            "---\nid: iso\ndescription: d\nwhen_to_use: w\nisolation:\n  kind: worktree\n---\nbody\n",
+        );
+        let def = parse_file(&path, AgentSource::User).unwrap();
+        assert_eq!(def.isolation, Some(IsolationMode::Worktree));
+    }
+
+    #[test]
+    fn isolation_defaults_none_when_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_tmp(
+            &tmp,
+            "noiso.md",
+            "---\nid: noiso\ndescription: d\nwhen_to_use: w\n---\nbody\n",
+        );
+        let def = parse_file(&path, AgentSource::User).unwrap();
+        assert!(def.isolation.is_none());
     }
 
     #[test]

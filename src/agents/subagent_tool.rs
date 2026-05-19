@@ -33,6 +33,10 @@ use crate::tools::runtime::ToolResult;
 
 mod loop_tool;
 
+/// A2 — default cap on concurrently-running subagent spawns per top-level
+/// agent run. Matches the deleted `Lane::Subagent` default.
+const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
+
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]
 pub(super) enum SubagentAction {
@@ -108,6 +112,21 @@ pub struct SubagentTool {
     /// runtimes wrapped by ForwardingTraceSink for progress observation.
     /// Sync subagents do NOT receive this wrapper (Stage A inheritance suffices).
     trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+    /// A2 — shared concurrency cap; one per tool instance (= per agent run).
+    subagent_semaphore: Arc<tokio::sync::Semaphore>,
+    /// A3 — parent run's cancellation token. Each spawn path derives a
+    /// `child_token()` so a cancelled parent stops its subagents.
+    parent_cancel: Option<CancellationToken>,
+    /// B2 — global plugin registry, threaded into each AgentRuntime.
+    plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
+    /// B3 — fallback LLM inherited by subagents.
+    fallback_llm: Option<Arc<dyn AiProvider>>,
+    /// B3 — stall watchdog config inherited by subagents.
+    stall_config: Option<crate::harness::StallConfig>,
+    /// B3 — consecutive-failure cap inherited by subagents.
+    consecutive_failure_cap: Option<usize>,
+    /// B3 — per-turn wall-clock timeout inherited by subagents.
+    turn_timeout: Option<std::time::Duration>,
 }
 
 impl SubagentTool {
@@ -143,7 +162,49 @@ impl SubagentTool {
             capture_registry: None,
             parent_session_id: None,
             trace_sink: None,
+            subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+            )),
+            parent_cancel: None,
+            plugin_registry: None,
+            fallback_llm: None,
+            stall_config: None,
+            consecutive_failure_cap: None,
+            turn_timeout: None,
         }
+    }
+
+    /// B2 — wire the global plugin registry for per-agent MCP scope.
+    pub fn with_plugin_registry(
+        mut self,
+        registry: Arc<crate::extension::registry::PluginRegistry>,
+    ) -> Self {
+        self.plugin_registry = Some(registry);
+        self
+    }
+
+    /// B3 — wire the fallback LLM inherited by subagents.
+    pub fn with_fallback_llm(mut self, fallback: Arc<dyn AiProvider>) -> Self {
+        self.fallback_llm = Some(fallback);
+        self
+    }
+
+    /// B3 — wire the stall watchdog config inherited by subagents.
+    pub fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
+        self.stall_config = Some(config);
+        self
+    }
+
+    /// B3 — wire the consecutive-failure cap inherited by subagents.
+    pub fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
+        self.consecutive_failure_cap = Some(cap);
+        self
+    }
+
+    /// B3 — wire the per-turn wall-clock timeout inherited by subagents.
+    pub fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.turn_timeout = Some(timeout);
+        self
     }
 
     /// Set the teammate manager for auto team creation/registration.
@@ -201,6 +262,23 @@ impl SubagentTool {
         self
     }
 
+    /// A3 — wire the parent run's cancellation token so spawned subagents
+    /// stop when the parent is cancelled.
+    pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
+        self.parent_cancel = Some(token);
+        self
+    }
+
+    /// A3 — a fresh child token derived from the parent run's token (cancelled
+    /// when the parent is). Falls back to a standalone token for tests / direct
+    /// callers with no parent token wired.
+    fn cancel_for_child(&self) -> CancellationToken {
+        self.parent_cancel
+            .as_ref()
+            .map(|t| t.child_token())
+            .unwrap_or_default()
+    }
+
     fn spawn_background(
         &self,
         agent_def: AgentDef,
@@ -211,7 +289,7 @@ impl SubagentTool {
         child_chain: crate::harness::chain_context::ChainContext,
     ) -> String {
         let request_id = uuid::Uuid::new_v4().to_string();
-        let cancel_token = CancellationToken::new();
+        let cancel_token = self.cancel_for_child();
 
         self.background_tracker.register(
             request_id.clone(),
@@ -219,20 +297,20 @@ impl SubagentTool {
             task.clone(),
         );
 
-        let provider = self.provider.clone();
+        let mut runtime = self.build_runtime(child_chain, cancel_token);
+        if let Some(parent_sink) = self.trace_sink.clone() {
+            let wrapper: Arc<dyn crate::harness::TraceSink> = Arc::new(
+                crate::agents::forwarding_trace_sink::ForwardingTraceSink::new(
+                    parent_sink,
+                    self.background_tracker.clone(),
+                    request_id.clone(),
+                ),
+            );
+            runtime = runtime.with_trace_sink(wrapper);
+        }
+
         let tracker = self.background_tracker.clone();
         let rid = request_id.clone();
-        let session = self.session.clone();
-        let parent_tools = self.parent_tools.clone();
-        let sandbox = self.sandbox.clone();
-        let raw_memory_writer = self.raw_memory_writer.clone();
-        let capture_registry = self.capture_registry.clone();
-        let parent_agent_id = self.parent_agent_id.clone();
-        let parent_session_id = self.parent_session_id.clone();
-        let parent_trace_sink = self.trace_sink.clone();
-        let tracker_for_wrapper = self.background_tracker.clone();
-        let request_id_for_wrapper = request_id.clone();
-
         tokio::spawn(async move {
             let runtime_config = AgentRuntimeConfig {
                 agent_def,
@@ -241,40 +319,9 @@ impl SubagentTool {
                 model,
                 timeout_secs,
             };
-
-            let mut runtime = AgentRuntime::new(
-                provider,
-                child_chain,
-                cancel_token,
-                session,
-                parent_tools,
-                sandbox,
-            )
-            .with_parent_agent_id(parent_agent_id);
-            if let Some(w) = raw_memory_writer {
-                runtime = runtime.with_raw_memory_writer(w);
-            }
-            if let Some(reg) = capture_registry {
-                runtime = runtime.with_capture_registry(reg);
-            }
-            if let Some(sid) = parent_session_id {
-                runtime = runtime.with_parent_session_id(sid);
-            }
-            if let Some(parent_sink) = parent_trace_sink {
-                let wrapper: Arc<dyn crate::harness::TraceSink> = Arc::new(
-                    crate::agents::forwarding_trace_sink::ForwardingTraceSink::new(
-                        parent_sink,
-                        tracker_for_wrapper,
-                        request_id_for_wrapper,
-                    ),
-                );
-                runtime = runtime.with_trace_sink(wrapper);
-            }
-
             let result = AssertUnwindSafe(runtime.run(runtime_config))
                 .catch_unwind()
                 .await;
-
             let outcome = match result {
                 Ok(Ok(r)) => Ok(r.final_text.unwrap_or_else(|| "(no output)".to_string())),
                 Ok(Err(e)) => Err(e),
@@ -284,6 +331,54 @@ impl SubagentTool {
         });
 
         request_id
+    }
+
+    /// Build an `AgentRuntime` with every inheritable field this tool carries
+    /// applied. Single construction point for the foreground, sync-batch, and
+    /// background spawn paths so new wiring lands in one place.
+    fn build_runtime(
+        &self,
+        child_chain: crate::harness::chain_context::ChainContext,
+        cancel: CancellationToken,
+    ) -> AgentRuntime {
+        let mut runtime = AgentRuntime::new(
+            self.provider.clone(),
+            child_chain,
+            cancel,
+            self.session.clone(),
+            self.parent_tools.clone(),
+            self.sandbox.clone(),
+        )
+        .with_parent_agent_id(self.parent_agent_id.clone());
+        if let Some(w) = self.raw_memory_writer.clone() {
+            runtime = runtime.with_raw_memory_writer(w);
+        }
+        if let Some(reg) = self.capture_registry.clone() {
+            runtime = runtime.with_capture_registry(reg);
+        }
+        if let Some(sid) = self.parent_session_id.clone() {
+            runtime = runtime.with_parent_session_id(sid);
+        }
+        runtime = runtime.with_subagent_semaphore(self.subagent_semaphore.clone());
+        if let Some(reg) = self.plugin_registry.clone() {
+            runtime = runtime.with_plugin_registry(reg);
+        }
+        if let Some(sink) = self.trace_sink.clone() {
+            runtime = runtime.with_trace_sink(sink);
+        }
+        if let Some(fb) = self.fallback_llm.clone() {
+            runtime = runtime.with_fallback_llm(fb);
+        }
+        if let Some(sc) = self.stall_config.clone() {
+            runtime = runtime.with_stall_config(sc);
+        }
+        if let Some(cap) = self.consecutive_failure_cap {
+            runtime = runtime.with_consecutive_failure_cap(cap);
+        }
+        if let Some(tt) = self.turn_timeout {
+            runtime = runtime.with_turn_timeout(tt);
+        }
+        runtime
     }
 }
 
@@ -863,6 +958,13 @@ mod tests {
         let _tool = tool.with_parent_agent_id("test-agent");
     }
 
+    #[test]
+    fn with_plugin_registry_builder_smoke() {
+        use crate::extension::registry::PluginRegistry;
+        let tool = make_tool().with_plugin_registry(Arc::new(PluginRegistry::new()));
+        let _ = tool;
+    }
+
     #[tokio::test]
     async fn test_send_message_without_router() {
         let tool = make_tool();
@@ -1034,6 +1136,168 @@ mod tests {
             ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
             _ => panic!("expected ToolResult::Success"),
         }
+    }
+
+    /// Provider whose `process` never resolves. Only the harness's cancellation
+    /// race (fed by the request's CancellationToken) can end the turn — so this
+    /// proves the *parent-derived* token actually reaches the child harness.
+    struct PendingProvider;
+    impl AiProvider for PendingProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                std::future::pending::<()>().await;
+                unreachable!()
+            })
+        }
+        fn name(&self) -> &str {
+            "pending"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    #[tokio::test]
+    async fn foreground_subagent_cancels_on_parent_token() {
+        let parent = CancellationToken::new();
+        let provider: Arc<dyn AiProvider> = Arc::new(PendingProvider);
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tool = SubagentTool::new(
+            provider,
+            chain,
+            make_registry(),
+            make_tracker(),
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        )
+        .with_cancel_token(parent.clone());
+
+        let handle = tokio::spawn(async move {
+            tool.execute(serde_json::json!({ "task": "hang", "timeout_secs": 30 }))
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        parent.cancel();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+            .await
+            .expect("foreground subagent did not honor parent cancel within 3s")
+            .expect("task join");
+        assert!(
+            matches!(result, ToolResult::Error { .. }),
+            "cancelled subagent must surface an error"
+        );
+    }
+
+    struct UsageMockProvider;
+    impl AiProvider for UsageMockProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Ok(ProviderResponse {
+                    text: Some("done".into()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                    stop_reason: crate::providers::adapter::StopReason::EndTurn,
+                    usage: Some(crate::providers::adapter::TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        cache_read_tokens: None,
+                        cache_creation_tokens: None,
+                        thinking_tokens: None,
+                        cost: None,
+                    }),
+                })
+            })
+        }
+        fn name(&self) -> &str {
+            "usage-mock"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    struct CapturingSink(std::sync::Mutex<Vec<crate::harness::trace::LoopTraceEvent>>);
+    impl crate::harness::TraceSink for CapturingSink {
+        fn on_trace(&self, e: &crate::harness::trace::LoopTraceEvent) {
+            self.0.lock().unwrap().push(e.clone());
+        }
+        fn flush(&self) {}
+    }
+
+    #[tokio::test]
+    async fn foreground_subagent_inherits_trace_sink() {
+        let sink = Arc::new(CapturingSink(std::sync::Mutex::new(vec![])));
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tool = SubagentTool::new(
+            Arc::new(UsageMockProvider),
+            chain,
+            make_registry(),
+            make_tracker(),
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        )
+        .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
+
+        let _ = tool.execute(serde_json::json!({ "task": "hi" })).await;
+
+        let events = sink.0.lock().unwrap();
+        assert!(
+            !events.is_empty(),
+            "subagent run must emit trace events into the inherited sink"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_subagent_forwards_trace_to_parent_sink() {
+        let sink = Arc::new(CapturingSink(std::sync::Mutex::new(vec![])));
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tracker = make_tracker();
+        let tool = SubagentTool::new(
+            Arc::new(UsageMockProvider),
+            chain,
+            make_registry(),
+            tracker.clone(),
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        )
+        .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
+
+        let out = tool
+            .execute(serde_json::json!({ "task": "bg", "run_in_background": true }))
+            .await;
+        let rid = match out {
+            ToolResult::Success { output } => {
+                output["request_id"].as_str().unwrap().to_string()
+            }
+            other => panic!("expected background success, got {other:?}"),
+        };
+
+        // Poll until the background task completes (bounded).
+        for _ in 0..100 {
+            if tracker.list_running().iter().all(|(id, _, _)| id != &rid) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let events = sink.0.lock().unwrap();
+        assert!(
+            !events.is_empty(),
+            "background subagent must forward trace events to the parent sink \
+             via ForwardingTraceSink"
+        );
     }
 
     /// Async batch path: explicit run_in_background=true returns request_ids
