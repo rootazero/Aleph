@@ -1397,6 +1397,53 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Phase 3b Task 13: spawn SkillWatcher for markdown-skill hot reload.
+    //
+    // On every SKILL.md change under ~/.aleph/skills/, the watcher reloads
+    // the affected tools and registers them into the shared markdown-skill
+    // server. The MarkdownSkillRefreshSource (Task 12) detects the bumped
+    // revision on the next agent loop turn and refreshes the tool set.
+    {
+        if let Some(home) = dirs::home_dir() {
+            let skills_dir = home.join(".aleph").join("skills");
+            if skills_dir.exists() {
+                use alephcore::tools::markdown_skill::{
+                    ReloadCallback, SkillWatcher, SkillWatcherConfig,
+                };
+                match SkillWatcher::new(&skills_dir, SkillWatcherConfig::default()) {
+                    Ok(watcher) => {
+                        let callback: ReloadCallback =
+                            std::sync::Arc::new(|tools: Vec<alephcore::tools::markdown_skill::MarkdownCliTool>| {
+                                // replace_tool is async; use block_in_place so we can drive it
+                                // from this sync callback without spawning an extra task.
+                                tokio::task::block_in_place(|| {
+                                    let rt = tokio::runtime::Handle::current();
+                                    rt.block_on(async {
+                                        let server = alephcore::gateway::handlers::markdown_skills::markdown_skills_server();
+                                        for tool in tools {
+                                            server.replace_tool(tool).await;
+                                        }
+                                    });
+                                });
+                                alephcore::gateway::handlers::markdown_skills::bump_markdown_skills_revision();
+                                Ok(())
+                            });
+                        tokio::spawn(watcher.run(skills_dir.clone(), callback));
+                        if !args.daemon {
+                            println!(
+                                "Skill watcher: hot-reload active ({})",
+                                skills_dir.display()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "skill watcher disabled: could not watch skills dir");
+                    }
+                }
+            }
+        }
+    }
+
     // Spawn cron timer loop (after agent handlers, so AgentRegistry is populated)
     if let Some(ref cron_svc) = cron_service {
         if let (Some(ref exec_adapter), Some(ref registry)) = (
