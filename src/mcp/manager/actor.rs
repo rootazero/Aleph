@@ -175,18 +175,30 @@ impl McpManagerActor {
         let _ = self.event_tx.send(McpManagerEvent::ManagerReady);
         tracing::info!("MCP Manager ready with {} servers", self.clients.len());
 
-        // Main command loop
+        // Main command loop, interleaved with periodic health checks. The
+        // health tick fires once immediately; that first tick is consumed
+        // before the loop because servers were just auto-started above.
         let mut shutdown_respond_to = None;
-        while let Some(cmd) = self.cmd_rx.recv().await {
-            match cmd {
-                McpCommand::Shutdown { respond_to } => {
-                    shutdown_respond_to = Some(respond_to);
-                    break;
-                }
-                other => {
-                    if !self.handle_command(other).await {
-                        break;
+        let mut health_tick = tokio::time::interval(self.health_config.interval);
+        health_tick.tick().await;
+        loop {
+            tokio::select! {
+                maybe_cmd = self.cmd_rx.recv() => {
+                    match maybe_cmd {
+                        Some(McpCommand::Shutdown { respond_to }) => {
+                            shutdown_respond_to = Some(respond_to);
+                            break;
+                        }
+                        Some(other) => {
+                            if !self.handle_command(other).await {
+                                break;
+                            }
+                        }
+                        None => break,
                     }
+                }
+                _ = health_tick.tick() => {
+                    self.health_check_pass().await;
                 }
             }
         }
@@ -199,6 +211,74 @@ impl McpManagerActor {
         }
         let _ = self.event_tx.send(McpManagerEvent::ManagerShutdown);
         tracing::info!("MCP Manager shutdown complete");
+    }
+
+    /// Periodic health probe over every running server.
+    ///
+    /// For each server it checks transport liveness, drives the per-server
+    /// circuit breaker (`ServerHealth`), and auto-restarts servers that have
+    /// failed past the unhealthy threshold — subject to the restart-window
+    /// cap so a permanently-broken server does not restart-loop forever.
+    ///
+    /// The probe doubles as a keepalive: for stdio it confirms the child
+    /// process is alive, for SSE that the event stream is still connected.
+    /// HTTP transports are stateless, so their probe is always healthy and a
+    /// dead endpoint instead surfaces as ordinary tool-call failures.
+    async fn health_check_pass(&mut self) {
+        // Snapshot (id, client) up front: the probe awaits, and we must not
+        // hold a borrow of `self.clients` across the `restart_server` call.
+        let probes: Vec<(String, Arc<McpClient>)> = self
+            .clients
+            .iter()
+            .map(|(id, c)| (id.clone(), Arc::clone(c)))
+            .collect();
+        if probes.is_empty() {
+            return;
+        }
+
+        let mut to_restart: Vec<String> = Vec::new();
+        for (server_id, client) in probes {
+            let alive = client.check_server_health().await.values().all(|&ok| ok);
+            let health = self.health_states.entry(server_id.clone()).or_default();
+            if alive {
+                health.record_success();
+            } else {
+                health.record_failure("health probe: transport not alive");
+                if health.should_restart(
+                    self.health_config.max_restarts,
+                    self.health_config.restart_window.as_secs(),
+                ) {
+                    to_restart.push(server_id);
+                }
+            }
+        }
+
+        for server_id in to_restart {
+            let server_name = self
+                .config
+                .get_server(&server_id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| server_id.clone());
+            // Emit ServerCrashed first so the tool bridge drops the dead
+            // server's tools from the registry before the restart re-publishes
+            // a fresh set via the ServerStarted event.
+            let _ = self.event_tx.send(McpManagerEvent::ServerCrashed {
+                server_id: server_id.clone(),
+                server_name,
+                error: "health probe failed; auto-restarting".to_string(),
+            });
+            match self.restart_server(&server_id).await {
+                Ok(()) => {
+                    tracing::info!(server_id = %server_id, "auto-restarted unhealthy MCP server");
+                }
+                Err(e) => {
+                    tracing::warn!(server_id = %server_id, error = %e, "auto-restart failed");
+                    if let Some(h) = self.health_states.get_mut(&server_id) {
+                        h.mark_dead();
+                    }
+                }
+            }
+        }
     }
 
     /// Handle a single command
