@@ -196,18 +196,9 @@ impl AgentRuntime {
         self
     }
 
-    // -------------------------------------------------------------------------
-    // Stage A (P1, 2026-05-08): These 5 with_* builders are reachable from the
-    // SpawnerBase → HarnessDeps inheritance chain (verified by
-    // tests/subagent_deps_inherit.rs). Production wiring of values into the
-    // builder chain lives at the SubagentTool construction site in
-    // src/gateway/execution_engine/run_loop.rs (currently passes None defaults).
-    // Threading the parent harness's fallback_llm/stall_config/cap/timeout/
-    // trace_sink values through SubagentTool is a follow-up; tracked in roadmap
-    // docs/superpowers/specs/2026-05-08-subagent-uplift-roadmap-design.md as a
-    // P2 deliverable. The builders + fields ship now to lock the data path; the
-    // orchestration plumbing closes the loop in P2.
-    // -------------------------------------------------------------------------
+    // Stage A (P1) — resilience builders threaded into SpawnerBase →
+    // HarnessDeps. `SubagentTool` applies them via `build_runtime`; `trace_sink`
+    // is wired in production at the run_loop.rs construction site.
 
     /// Stage A (P1) — wire the fallback LLM. Subagents inherit it identically.
     pub fn with_fallback_llm(mut self, fallback: Arc<dyn AiProvider>) -> Self {

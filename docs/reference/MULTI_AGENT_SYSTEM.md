@@ -594,6 +594,17 @@ older agent definitions.
 Other builtins still use flat `allowed_tools`; migrations are incremental
 and require behavior-equivalence verification (see `tests/tool_sets.rs`).
 
+## Subagent Concurrency Cap
+
+Every `SubagentTool` instance owns a `tokio::sync::Semaphore` (default 4
+permits) shared across the foreground, sync-batch, and background spawn
+paths. `subagent_spawner::spawn` acquires a permit before running the child
+harness and holds it for the child's lifetime, so a single `subagent` call
+with a large `batch_tasks` array queues on the semaphore instead of fanning
+out unbounded `tokio` tasks. `SpawnerBase.subagent_semaphore` is `None` for
+direct test callers (no cap). This is the lightweight replacement for the
+retired lane scheduler.
+
 ## Worktree Isolation (P3 Stage H)
 
 Subagent spawns can opt into git worktree isolation:
@@ -615,6 +626,13 @@ worktree at `$TMPDIR/aleph-subagent-<safe_label>-<uuid>/` before running
 the child harness. The child's `Sandbox` is replaced with `WorktreeSandbox`,
 which executes commands at the worktree path and injects `CARGO_TARGET_DIR`
 for strict build isolation.
+
+A subagent dispatched through the production gateway path (`AgentRuntime`)
+sources `isolation` from its `AgentDef`: declare `isolation:` with
+`kind: worktree` in an agent's markdown frontmatter to opt that named agent
+into worktree isolation. Builtin agents leave it unset (shared cwd) —
+worktree isolation changes where a child's file edits land, so it is opt-in
+per agent definition.
 
 Cleanup is RAII-guaranteed:
 - **Success path**: explicit `cleanup().await` after harness returns.
