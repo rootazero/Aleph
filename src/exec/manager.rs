@@ -276,6 +276,58 @@ impl ExecApprovalManager {
         }
     }
 
+    /// Resolve the oldest unresolved approval for `session_key`.
+    ///
+    /// A channel reply (`/approve` / `/deny` or a button callback) carries no
+    /// request id, so the inbound router resolves by session: the oldest live
+    /// pending entry for that session is picked (FIFO). Returns `true` if one
+    /// was found and resolved.
+    pub fn resolve_for_session(
+        &self,
+        session_key: &str,
+        decision: ApprovalDecisionType,
+        resolved_by: Option<String>,
+    ) -> bool {
+        let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
+
+        let target = pending
+            .iter()
+            .filter(|(_, e)| e.sender.is_some() && e.record.session_key == session_key)
+            .min_by_key(|(_, e)| e.created_at)
+            .map(|(id, _)| id.clone());
+
+        let Some(id) = target else {
+            warn!(session_key = %session_key, "No pending approval for session");
+            return false;
+        };
+
+        if let Some(entry) = pending.get_mut(&id) {
+            entry.record.decision = Some(decision);
+            entry.record.resolved_by = resolved_by;
+            entry.record.resolved_at_ms = Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+            );
+            if let Some(sender) = entry.sender.take() {
+                let _ = sender.send(Some(decision));
+            }
+            debug!(id = %id, ?decision, "Resolved approval by session");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether `session_key` has at least one unresolved pending approval.
+    pub fn has_pending_for_session(&self, session_key: &str) -> bool {
+        let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
+        pending
+            .values()
+            .any(|e| e.sender.is_some() && e.record.session_key == session_key)
+    }
+
     /// Get snapshot of a pending approval
     pub fn get_pending(&self, id: &str) -> Option<PendingApproval> {
         let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());

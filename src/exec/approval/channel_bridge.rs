@@ -7,7 +7,7 @@ use tokio::time::timeout;
 
 use crate::exec::decision::ApprovalRequest;
 use crate::exec::socket::ApprovalDecisionType;
-use crate::gateway::channel::{ChannelId, ConversationId, UserId};
+use crate::gateway::channel::{ChannelId, ConversationId, OutboundMessage, UserId};
 use crate::gateway::channel_approval::{
     ApprovalAction, AuthorizationResult, PendingApproval as ChannelPendingApproval,
 };
@@ -397,19 +397,19 @@ impl ChannelApprovalBridge {
 
     /// Request approval for a tool invocation and await the real user decision.
     ///
-    /// Two-stage flow mirroring `ExecSecurityGate::request_approval`:
-    /// 1. `approval_manager.create(...)` builds the record with a unique id.
-    /// 2. `self.request_approval(...)` delivers the prompt to the channel (inline
-    ///    keyboard on Telegram/Discord, etc). Delivery success is NOT an approval
-    ///    — it only means the UI was shown.
-    /// 3. `approval_manager.wait_for_decision(record)` blocks on a oneshot that
-    ///    the channel's button-click callback handler resolves via
-    ///    `approval_manager.resolve(id, decision, ...)`.
+    /// Text-reply flow — channel-agnostic, needs no `ChannelApprovalCapability`
+    /// button implementation:
+    /// 1. `approval_manager.create(...)` builds the record (carrying the
+    ///    session key) with a unique id.
+    /// 2. A plain-text approval prompt is delivered to the channel.
+    /// 3. `approval_manager.wait_for_decision(record)` blocks until the
+    ///    inbound router resolves the user's `/approve` or `/deny` reply via
+    ///    `approval_manager.resolve_for_session(session_key, ...)`.
     ///
     /// `session_key` must be a valid channel session key in the format
     /// `{platform}:{...}:{conversation_id}:{...}` so the bridge can route the
-    /// prompt to the correct channel. An empty or unparseable session_key yields
-    /// `Denied` (delivery is skipped and no approver can click the button).
+    /// prompt to the correct channel. An unparseable session_key or a failed
+    /// send yields `Denied` — no approver could ever reply.
     pub async fn request_for_tool(
         &self,
         approval_manager: &crate::exec::manager::ExecApprovalManager,
@@ -435,40 +435,44 @@ impl ChannelApprovalBridge {
 
         let record = approval_manager.create(&request, timeout_ms);
 
-        // Deliver the prompt via the channel capability. If delivery fails
-        // (no channel capability, registry miss, send error), we cannot await
-        // a user decision — deny. This matches the existing
-        // `ExecSecurityGate::request_approval` contract.
-        match self.request_approval(&request).await {
-            Some(result) if result.delivered => {
-                tracing::info!(
-                    tool = %tool_name,
-                    id = %record.id,
-                    channel_id = %result.channel_id,
-                    "Approval delivered via channel — waiting for user decision"
-                );
-            }
-            Some(result) => {
-                tracing::warn!(
-                    tool = %tool_name,
-                    id = %record.id,
-                    reason = ?result.reason,
-                    "Approval delivery failed — denying"
-                );
-                return ApprovalOutcome::Denied;
-            }
-            None => {
-                tracing::warn!(
-                    tool = %tool_name,
-                    id = %record.id,
-                    "No channel capability for approval delivery — denying"
-                );
-                return ApprovalOutcome::Denied;
-            }
-        }
+        // Deliver a plain-text approval prompt. The inbound router resolves
+        // the user's `/approve` or `/deny` reply by session key — no channel
+        // button capability required.
+        let Some((channel_id, conversation_id)) = self.parse_session_key(session_key) else {
+            tracing::warn!(
+                tool = %tool_name,
+                "Unparseable session_key for approval delivery — denying"
+            );
+            return ApprovalOutcome::Denied;
+        };
 
-        // Block on the oneshot until the button-click callback resolves it,
-        // or the record's timeout fires.
+        let prompt = format!(
+            "⚠️ Approval needed\n\n{reason}\n\n\
+             Reply /approve to allow or /deny to refuse."
+        );
+        let message = OutboundMessage::text(conversation_id.as_str(), prompt);
+        if let Err(e) = self
+            .registry
+            .send(&ChannelId::new(&channel_id), message)
+            .await
+        {
+            tracing::warn!(
+                tool = %tool_name,
+                id = %record.id,
+                error = %e,
+                "Failed to deliver approval prompt — denying"
+            );
+            return ApprovalOutcome::Denied;
+        }
+        tracing::info!(
+            tool = %tool_name,
+            id = %record.id,
+            channel_id = %channel_id,
+            "Approval prompt delivered — awaiting /approve or /deny"
+        );
+
+        // Block on the oneshot until the inbound router resolves the user's
+        // reply, or the record's timeout fires.
         match approval_manager.wait_for_decision(record).await {
             Some(crate::exec::socket::ApprovalDecisionType::AllowOnce)
             | Some(crate::exec::socket::ApprovalDecisionType::AllowAlways) => {

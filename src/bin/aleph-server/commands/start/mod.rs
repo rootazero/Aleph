@@ -515,31 +515,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Build a single ApprovalGate shared between the Sandbox capability
     // escalation path and the PermissionLayer's Ask-tier confirm path.
     //
-    // H1 status (Phase 4a Task 2): `ChannelApprovalBridgeAdapter` exists as
-    // library code (`src/approval/adapters.rs`) and performs the full two-
-    // stage flow (deliver prompt + await user decision via
-    // `ExecApprovalManager`'s oneshot). Wiring it here requires threading
-    // the shared `Arc<ChannelRegistry>` (built later in
-    // `builder/subsystems.rs::initialize_channels`) and
-    // `Arc<ExecApprovalManager>` into this boot point, which is deferred
-    // to a follow-on task. Until then `request_approval_for_tool` falls
-    // back to `Denied` — elevated-capability and Ask-tier calls are
-    // rejected by policy rather than hanging. See Known Limitations in
-    // CHANGELOG.
+    // The gate is constructed here with no requester because the
+    // `ChannelRegistry` it needs is built later in
+    // `builder/subsystems.rs::initialize_channels`. Once channels are up, the
+    // HITL wiring just after `initialize_channels` (below) calls
+    // `set_requester` to install the `ChannelApprovalBridgeAdapter`. Until
+    // that point `request_approval_for_tool` denies — never a silent
+    // auto-approve.
     let approval_gate = {
         use alephcore::sandbox::exec_approval::gate::ApprovalGate;
         use alephcore::sandbox::exec_approval::types::ApprovalConfig;
         Arc::new(ApprovalGate::new(ApprovalConfig::default(), None))
     };
-    if !args.daemon {
-        tracing::warn!(
-            "ApprovalGate has no ApprovalRequester wired — elevated-capability \
-             sandbox escalations and Ask-tier tool calls will be denied until \
-             `ChannelApprovalBridgeAdapter` is threaded through the shared \
-             ChannelRegistry + ExecApprovalManager at boot. Baseline-capability \
-             commands are unaffected."
-        );
-    }
 
     let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
         use alephcore::sandbox::rate_limit::SandboxRateLimitConfig;
@@ -1672,6 +1659,31 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
+    // HITL: now that channels exist, wire the human-in-the-loop managers.
+    //
+    // P1 — install the approval requester so elevated-capability sandbox
+    // escalations and tool confirmations reach the user instead of being
+    // auto-denied (the CRITICAL `requester: None` bug).
+    // The managers are also threaded into the inbound router so `/approve`,
+    // `/deny`, and `ask_user` replies resolve their pending interaction.
+    let exec_approval_manager =
+        Arc::new(alephcore::exec::manager::ExecApprovalManager::new());
+    let clarification_manager =
+        Arc::new(alephcore::clarification::ClarificationManager::new());
+    approval_gate.set_requester(Arc::new(
+        alephcore::approval::adapters::ChannelApprovalBridgeAdapter::new(
+            Arc::new(
+                alephcore::exec::approval::channel_bridge::ChannelApprovalBridge::new(
+                    channel_registry.clone(),
+                ),
+            ),
+            exec_approval_manager.clone(),
+        ),
+    ));
+    if !args.daemon {
+        println!("  ApprovalGate: channel-backed approval requester wired");
+    }
+
     // Inject ChannelRegistry into BuiltinToolRegistry (deferred — channels created after tools)
     if let Some(ref cell) = agent_result.channel_registry_cell {
         let _ = cell.set(channel_registry.clone());
@@ -1694,6 +1706,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Some(app_config_for_channels.clone()),
         agent_result.generation_registry,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        exec_approval_manager,
+        clarification_manager.clone(),
         args.daemon,
     )
     .await;

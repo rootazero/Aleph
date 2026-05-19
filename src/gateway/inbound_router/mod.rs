@@ -27,6 +27,7 @@ use super::execution_adapter::ExecutionAdapter;
 use super::handlers::group_chat::SharedOrchestrator;
 
 use super::agent_env::AgentEnvStore;
+use super::inbound_context::InboundContext;
 use super::pairing_store::PairingStore;
 use super::routing_config::RoutingConfig;
 use crate::command::CommandParser;
@@ -111,6 +112,12 @@ pub struct InboundMessageRouter {
         Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
     /// Message coalescer for merging rapid-fire inbound messages
     coalescer: Option<super::coalescer::MessageCoalescer>,
+    /// Exec-approval manager — resolves `/approve` and `/deny` channel replies
+    /// against pending tool/sandbox approvals (HITL).
+    pub(super) exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
+    /// Clarification manager — routes a reply back to a pending `ask_user`
+    /// question instead of starting a new agent turn (HITL).
+    pub(super) clarification_manager: Option<Arc<crate::clarification::ClarificationManager>>,
 }
 
 impl InboundMessageRouter {
@@ -144,6 +151,8 @@ impl InboundMessageRouter {
             generation_registry: None,
             generation_config: None,
             coalescer: None,
+            exec_approval_manager: None,
+            clarification_manager: None,
         }
     }
 
@@ -194,6 +203,18 @@ impl InboundMessageRouter {
     /// Set the LLM provider for intent classification and soul generation
     pub fn with_llm_provider(mut self, provider: Arc<dyn crate::providers::AiProvider>) -> Self {
         self.llm_provider = Some(provider);
+        self
+    }
+
+    /// Wire the HITL managers so `/approve` `/deny` replies and replies to a
+    /// pending `ask_user` are intercepted before starting a new agent turn.
+    pub fn with_hitl(
+        mut self,
+        exec_approval_manager: Arc<crate::exec::manager::ExecApprovalManager>,
+        clarification_manager: Arc<crate::clarification::ClarificationManager>,
+    ) -> Self {
+        self.exec_approval_manager = Some(exec_approval_manager);
+        self.clarification_manager = Some(clarification_manager);
         self
     }
 
@@ -445,6 +466,12 @@ impl InboundMessageRouter {
                     ctx.voice_reply_hint = true;
                 }
             }
+        }
+
+        // HITL interception: a reply to a pending approval or `ask_user`
+        // clarification is resolved here instead of starting a new agent turn.
+        if self.try_intercept_hitl(&ctx).await {
+            return Ok(());
         }
 
         // Built-in /voice command — direct handler, no LLM needed
@@ -718,6 +745,67 @@ impl InboundMessageRouter {
         self.execute_for_context(&ctx).await?;
 
         Ok(())
+    }
+
+    /// Intercept a reply to a pending HITL interaction (tool/sandbox approval
+    /// or an `ask_user` clarification) before it would start a new agent turn.
+    ///
+    /// Returns `true` if the message was consumed as an interaction reply.
+    async fn try_intercept_hitl(&self, ctx: &InboundContext) -> bool {
+        let session_key = ctx.session_key.to_string();
+        let raw = strip_bot_mention(ctx.message.text.trim());
+        let lower = raw.trim().to_lowercase();
+
+        // Approval reply: `/approve` or `/deny` (optionally with trailing text).
+        let is_approve = lower == "/approve" || lower.starts_with("/approve ");
+        let is_deny = lower == "/deny" || lower.starts_with("/deny ");
+        if is_approve || is_deny {
+            if let Some(ref mgr) = self.exec_approval_manager {
+                use crate::exec::socket::ApprovalDecisionType;
+                let decision = if is_approve {
+                    ApprovalDecisionType::AllowOnce
+                } else {
+                    ApprovalDecisionType::Deny
+                };
+                let resolved = mgr.resolve_for_session(
+                    &session_key,
+                    decision,
+                    ctx.message.sender_name.clone(),
+                );
+                let reply = if resolved {
+                    if is_approve {
+                        "✅ Approved."
+                    } else {
+                        "❌ Denied."
+                    }
+                } else {
+                    "Nothing is awaiting your approval right now."
+                };
+                let _ = self
+                    .channel_registry
+                    .send(
+                        &ctx.reply_route.channel_id,
+                        OutboundMessage::text(ctx.reply_route.conversation_id.as_str(), reply),
+                    )
+                    .await;
+            }
+            // `/approve` and `/deny` are always consumed here — never forwarded
+            // to the agent loop.
+            return true;
+        }
+
+        // Clarification reply: any message while an `ask_user` is pending for
+        // this session is taken as the answer.
+        if let Some(ref mgr) = self.clarification_manager {
+            if mgr.has_pending(&session_key).await
+                && mgr.resolve(&session_key, &ctx.message.text).await
+            {
+                info!("[Router] Routed reply to pending clarification for {session_key}");
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Build an inline keyboard for namespace sub-commands.

@@ -384,6 +384,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
     generation_registry: Option<Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>>,
     vault: Arc<alephcore::gateway::security::SharedTokenManager>,
+    exec_approval_manager: Arc<alephcore::exec::manager::ExecApprovalManager>,
+    clarification_manager: Arc<alephcore::clarification::ClarificationManager>,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
@@ -588,6 +590,9 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             println!("  Inbound router: voice TTS output enabled");
         }
     }
+
+    // Wire HITL managers for /approve · /deny · ask_user reply interception.
+    inbound_router = inbound_router.with_hitl(exec_approval_manager, clarification_manager);
 
     let inbound_router = Arc::new(inbound_router);
 
