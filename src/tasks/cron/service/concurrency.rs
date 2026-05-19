@@ -11,6 +11,7 @@ use tracing::warn;
 
 use crate::sync_primitives::Arc;
 
+use crate::tasks::cron::chain;
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, RunStatus, TriggerSource};
 use crate::tasks::cron::history::CronRunRecord;
 use crate::tasks::cron::store::CronStore;
@@ -136,6 +137,10 @@ pub async fn phase3_writeback<C: Clock>(
 
     guard.force_reload()?;
 
+    // (source_job_id, successor_job_id) pairs resolved during the result
+    // loop; fired after maintenance recompute so the `job` borrow is free.
+    let mut chain_triggers: Vec<(String, String)> = Vec::new();
+
     for (job_id, result) in results {
         let job = match guard.get_job_mut(job_id) {
             Some(j) => j,
@@ -164,6 +169,16 @@ pub async fn phase3_writeback<C: Clock>(
             RunStatus::Error | RunStatus::Timeout => {
                 job.state.consecutive_errors += 1;
             }
+        }
+
+        // Resolve the chain successor for this outcome. Triggering needs
+        // `&mut store`, so collect here and apply after the `job` borrow ends.
+        let chain_target = match result.status {
+            RunStatus::Ok | RunStatus::Skipped => job.next_job_id_on_success.clone(),
+            RunStatus::Error | RunStatus::Timeout => job.next_job_id_on_failure.clone(),
+        };
+        if let Some(target) = chain_target {
+            chain_triggers.push((job_id.clone(), target));
         }
 
         // Clear next_run_at_ms so maintenance recompute fills it
@@ -198,6 +213,44 @@ pub async fn phase3_writeback<C: Clock>(
         let jobs = guard.jobs_mut();
         for job in jobs.iter_mut() {
             recompute_next_run_maintenance(job, clock);
+        }
+    }
+
+    // Fire job chains: enqueue each successor to run on the next tick.
+    // Done *after* maintenance recompute so the chain trigger's
+    // `next_run_at_ms = now` wins over a recomputed schedule. Cyclic chains
+    // are skipped — chain.rs has no creation-time guard, so an A->B->A loop
+    // would otherwise re-trigger every tick (runaway).
+    let chain_now = clock.now_ms();
+    for (source_id, target_id) in chain_triggers {
+        match chain::detect_cycle(&guard, &source_id, &target_id) {
+            Ok(true) => {
+                warn!(
+                    source = %source_id,
+                    target = %target_id,
+                    "phase3: skipping cyclic chain trigger"
+                );
+                continue;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                warn!(
+                    source = %source_id,
+                    target = %target_id,
+                    error = %e,
+                    "phase3: chain cycle check failed; skipping trigger"
+                );
+                continue;
+            }
+        }
+        match chain::trigger_chain_job(&mut guard, &target_id, chain_now) {
+            // Triggered, or a benign no-op (target missing or disabled).
+            Ok(_) => {}
+            Err(e) => warn!(
+                target = %target_id,
+                error = %e,
+                "phase3: chain trigger failed"
+            ),
         }
     }
 
@@ -379,6 +432,182 @@ mod tests {
         assert_eq!(
             job.state.consecutive_errors, 3,
             "consecutive_errors should increment on Error"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase3_triggers_success_chain() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job_a = make_test_job("job-a");
+            job_a.next_job_id_on_success = Some("job-b".to_string());
+            add_job(&mut guard, job_a, &clock);
+            add_job(&mut guard, make_test_job("job-b"), &clock);
+            let a = guard.get_job_mut("job-a").unwrap();
+            a.state.running_at_ms = Some(1_000_000);
+            let b = guard.get_job_mut("job-b").unwrap();
+            b.state.next_run_at_ms = Some(9_999_999_999);
+            guard.persist().unwrap();
+        }
+
+        let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
+        phase3_writeback(&store, &clock, &results).await.unwrap();
+
+        let guard = store.lock().await;
+        let b = guard.get_job("job-b").unwrap();
+        assert_eq!(
+            b.state.next_run_at_ms,
+            Some(1_100_000),
+            "Ok result triggers next_job_id_on_success to run now"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase3_triggers_failure_chain() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job_a = make_test_job("job-a");
+            job_a.next_job_id_on_failure = Some("job-b".to_string());
+            add_job(&mut guard, job_a, &clock);
+            add_job(&mut guard, make_test_job("job-b"), &clock);
+            let a = guard.get_job_mut("job-a").unwrap();
+            a.state.running_at_ms = Some(1_000_000);
+            let b = guard.get_job_mut("job-b").unwrap();
+            b.state.next_run_at_ms = Some(9_999_999_999);
+            guard.persist().unwrap();
+        }
+
+        let results = vec![(
+            "job-a".to_string(),
+            make_execution_result(RunStatus::Error),
+        )];
+        phase3_writeback(&store, &clock, &results).await.unwrap();
+
+        let guard = store.lock().await;
+        let b = guard.get_job("job-b").unwrap();
+        assert_eq!(
+            b.state.next_run_at_ms,
+            Some(1_100_000),
+            "Error result triggers next_job_id_on_failure to run now"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase3_success_chain_not_fired_on_failure() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job_a = make_test_job("job-a");
+            job_a.next_job_id_on_success = Some("job-b".to_string());
+            add_job(&mut guard, job_a, &clock);
+            add_job(&mut guard, make_test_job("job-b"), &clock);
+            let a = guard.get_job_mut("job-a").unwrap();
+            a.state.running_at_ms = Some(1_000_000);
+            let b = guard.get_job_mut("job-b").unwrap();
+            b.state.next_run_at_ms = Some(9_999_999_999);
+            guard.persist().unwrap();
+        }
+
+        let results = vec![(
+            "job-a".to_string(),
+            make_execution_result(RunStatus::Error),
+        )];
+        phase3_writeback(&store, &clock, &results).await.unwrap();
+
+        let guard = store.lock().await;
+        let b = guard.get_job("job-b").unwrap();
+        assert_eq!(
+            b.state.next_run_at_ms,
+            Some(9_999_999_999),
+            "Error result must not fire the on_success chain"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase3_skips_cyclic_chain() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job_a = make_test_job("job-a");
+            job_a.next_job_id_on_success = Some("job-b".to_string());
+            add_job(&mut guard, job_a, &clock);
+            let mut job_b = make_test_job("job-b");
+            job_b.next_job_id_on_success = Some("job-a".to_string());
+            add_job(&mut guard, job_b, &clock);
+            let a = guard.get_job_mut("job-a").unwrap();
+            a.state.running_at_ms = Some(1_000_000);
+            let b = guard.get_job_mut("job-b").unwrap();
+            b.state.next_run_at_ms = Some(9_999_999_999);
+            guard.persist().unwrap();
+        }
+
+        let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
+        phase3_writeback(&store, &clock, &results).await.unwrap();
+
+        let guard = store.lock().await;
+        let b = guard.get_job("job-b").unwrap();
+        assert_eq!(
+            b.state.next_run_at_ms,
+            Some(9_999_999_999),
+            "a cyclic chain (a->b->a) must not be triggered"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase3_chain_target_disabled_not_triggered() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job_a = make_test_job("job-a");
+            job_a.next_job_id_on_success = Some("job-b".to_string());
+            add_job(&mut guard, job_a, &clock);
+            add_job(&mut guard, make_test_job("job-b"), &clock);
+            let a = guard.get_job_mut("job-a").unwrap();
+            a.state.running_at_ms = Some(1_000_000);
+            let b = guard.get_job_mut("job-b").unwrap();
+            b.enabled = false;
+            b.state.next_run_at_ms = Some(9_999_999_999);
+            guard.persist().unwrap();
+        }
+
+        let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
+        phase3_writeback(&store, &clock, &results).await.unwrap();
+
+        let guard = store.lock().await;
+        let b = guard.get_job("job-b").unwrap();
+        assert_eq!(
+            b.state.next_run_at_ms,
+            Some(9_999_999_999),
+            "a disabled chain target must not be triggered"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase3_chain_target_missing_is_noop() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job_a = make_test_job("job-a");
+            job_a.next_job_id_on_success = Some("ghost".to_string());
+            add_job(&mut guard, job_a, &clock);
+            let a = guard.get_job_mut("job-a").unwrap();
+            a.state.running_at_ms = Some(1_000_000);
+            guard.persist().unwrap();
+        }
+
+        let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
+        let outcome = phase3_writeback(&store, &clock, &results).await;
+        assert!(
+            outcome.is_ok(),
+            "a chain target that no longer exists must not error"
         );
     }
 
