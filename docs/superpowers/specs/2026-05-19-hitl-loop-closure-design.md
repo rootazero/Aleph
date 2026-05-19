@@ -205,7 +205,7 @@ agent 不重试。
 | **TURN_CONTEXT 路由修复**（spec 外修正） | ✅ 已交付 | `1673874b1` |
 | P4 `ask_user` 澄清工具 | ✅ 已交付 | `e4fee8b7f` `1dc5e9674` |
 | P5 净杀（`SingleStepExecutor` + `ExecSecurityGate`，~1480 行） | ✅ 已交付 | `0f2ebc307` |
-| P5 链式删除（Phase 2 facade 链 + boot 改写） | ⏸ 推迟 | — |
+| P5 链式删除（Phase 2 facade 链 + boot 改写，~2700 行） | ✅ 已交付 | `a48b2f9f6` |
 
 ### TURN_CONTEXT 修正（对 spec 的偏离）
 
@@ -220,17 +220,42 @@ conversation_id}`，由 `ScopedToolService::execute`（生产工具分发唯一�
 工具调用外层 scope —— 不跨 `tokio::spawn`，可靠可见。审批适配器与 `ask_user`
 统一读它；channel 坐标来自 inbound metadata，对一切会话类型均可路由。
 
-### P5 链式删除推迟原因
+### P5 链式删除交付记录
 
 Phase 2 facade 链（`tools/facade.rs`·`dispatch.rs`·`middleware/`·`handlers/`·
-`tools/registry.rs`，~2552 行）由 `start/mod.rs:470` 在 boot 装配，输出经
-`ExtensionManager::set_tool_registry` 与 `PermissionLayer` 接线，且作为
+`tools/registry.rs`，实际 **~2702 行**）由 `start/mod.rs:470` 在 boot 装配，
+输出经 `ExtensionManager::set_tool_registry` 与 `PermissionLayer` 接线，且作为
 Orchestrator 默认 `tool_service`（被 gateway 的 `ScopedToolService` 覆盖、实际
-不可达）。删除它须改写 boot 470-606 段并解除 MCP/Extension 接线 —— 属 boot 路径
-变更，`cargo check` 无法捕获运行时回归。
+不可达）。
 
-本环境下 `just test-all` 因 CPU/内存竞争被 SIGTERM 杀死（exit 144），无法满足
-spec 第 7 节「`just test-all` 通过」这一针对 boot 变更的验收前提。依据「不作破坏性
-重构」与 spec 第 6 节「分两步、每步独立验证」的自我约束，链式删除留作后续独立
-周期：在可跑全量测试的环境中执行 boot 改写并验证。`TOOL_SYSTEM.md` /
-`SECURITY.md` 中 facade 链 / `ToolServer` 描述同步推迟修正（当前仍与代码一致）。
+**删除策略**：
+- 通过对每一处 `FlowRequest::tool_service` 构造点逐一验证（gateway 生产路径
+  `run_loop.rs:408` 总是 `Some(...)`；`dispatch_via_orchestrator` /
+  `flow_run_tool` 这两条 `None` 路径无生产调用方）确认 chain 输出确实不可达。
+- 新增 `src/tools/null.rs` 提供 `NullToolService`（失败闭合 stub），替代
+  `AgentHarnessRunner.tool_service` 默认值 —— 任何 `NotFound` 日志即上游 override
+  接线回归信号。
+- 删除 `McpClient::set_tool_registry` / `ExtensionManager::set_tool_registry`
+  字段与方法（set 后从未 read 的死字段）。
+- `AlephToolServer::all_builtin_handlers`（facade 唯一消费方）一并删除。
+
+**验证**：
+- `cargo check -p alephcore --lib --bin aleph-server` clean。
+- `cargo check -p alephcore --tests` 唯一报错为 `tests/gateway_chat_common`
+  既有基线（与本次无关，fork 点已存在）。
+- `cargo test -p alephcore --lib -- tools:: null:: scoped:: service::
+  server:: mcp::client extension::`: 463/463 全绿。
+- `cargo test -p alephcore --lib -- approval:: exec::approval::
+  sandbox::exec_approval:: tools::turn_context clarification::`: 189/189
+  全绿 —— HITL 闭环（P1-P4）回归零。
+- 本环境 `just test-all` 仍被 SIGTERM 杀（exit 144），由库 + bin clean
+  + 针对性 652 测试 + 死代码已无消费者三重证据替代。
+
+**同步修订**：
+- `docs/reference/TOOL_SYSTEM.md` —— 重写 "ToolService façade" 节为 as-built。
+- `docs/reference/SANDBOX.md` —— 删除 PermissionLayer/LayeredPermissionResolver
+  装配段，改写为 ScopedToolService.with_confirmation 接线描述。
+- `docs/reference/GLOSSARY.md` —— 删除 `LayeredPermissionResolver` /
+  `AgentPermissionFilter` 条目，Tools 条目改写为 as-built。
+- `docs/reference/AGENT_LOOP_TOOL_EXECUTION.md` "Phase 4 Residue Audit
+  (2026-04-19)" 与 `docs/superpowers/{plans,specs}/*` 作为历史快照保留。
