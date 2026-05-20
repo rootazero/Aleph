@@ -1,21 +1,31 @@
 //! SandboxCapabilities — what a command is allowed to do inside the sandbox.
 //!
-//! # Platform-specific network restrictions
+//! # Platform-specific network policy support (as of Cycle 1 hardening)
 //!
-//! **macOS**: `AllowHosts` is enforced via seatbelt profiles (sandbox-exec).
+//! **macOS**: `NetworkPolicy::AllowHosts` accepts IP literals only. Hostnames
+//! return `SandboxError::UnsupportedPolicy` because Seatbelt's `remote ip`
+//! matcher does not perform DNS resolution. `ProxyOnly { ports }` is honored
+//! by allowing outbound connections to `localhost:port`.
 //!
-//! **Linux**: `AllowHosts` is enforced via bubblewrap network namespaces
-//! combined with seccomp or iptables rules.
+//! **Linux**: `AllowHosts` and `ProxyOnly` return `UnsupportedPolicy`.
+//! Bubblewrap only offers all-or-nothing network isolation (`--unshare-net`);
+//! fine-grained host filtering requires Landlock + seccomp-bpf or iptables
+//! (deferred — see spec SP-2). Use `AllowAll` or `None`.
 //!
-//! **Windows**: `AllowHosts` is **not enforceable at the OS level** using
-//! standard Windows APIs. Windows sandboxing uses restricted tokens and job
-//! objects, which do not provide per-host network filtering. To restrict
-//! network access on Windows, use Windows Firewall with Advanced Security
-//! (WFAS) or a third-party firewall solution.
+//! **Windows**: `AllowHosts` and `ProxyOnly` return `UnsupportedPolicy`. The
+//! WFP (Windows Filtering Platform) integration that would enforce per-host
+//! rules is deferred — see spec SP-3. Use `AllowAll` or `None`.
 //!
-//! When `AllowHosts` is used on Windows, a warning is logged and the policy
-//! falls back to `AllowAll` (if any network access is granted) or `None`
-//! (if no network access is requested).
+//! # Resource limits
+//!
+//! `max_memory_mb` is enforced on all three platforms when `Some`:
+//! - macOS / Linux: `setrlimit(RLIMIT_AS)` applied via `pre_exec` before the
+//!   sandbox helper spawns the target (limit propagates through exec).
+//! - Windows: `JOBOBJECT_EXTENDED_LIMIT_INFORMATION.ProcessMemoryLimit` on
+//!   the Job Object that contains the sandboxed process.
+//!
+//! `timeout_secs`, when `Some`, overrides the per-call default that the
+//! `WorkspaceSandbox` applies. `None` falls back to the configured default.
 
 use std::path::PathBuf;
 
@@ -31,6 +41,14 @@ pub struct SandboxCapabilities {
     pub network: NetworkPolicy,
     #[serde(default)]
     pub spawn_subprocess: bool,
+    /// Hard ceiling on the sandboxed process's virtual address space.
+    /// `None` means "no per-call cap" (the OS default still applies).
+    #[serde(default)]
+    pub max_memory_mb: Option<u64>,
+    /// Per-call timeout override. `None` falls back to the sandbox-level
+    /// default configured in `SandboxConfig`.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -51,10 +69,14 @@ impl SandboxCapabilities {
     }
 
     /// Is `self` ⊆ `baseline` (fs subset; Network ordered None ⊆ AllowHosts ⊆ AllowAll;
-    /// spawn monotonic)?
+    /// spawn monotonic; resource limits at least as tight as baseline)?
     ///
     /// For filesystem paths, both paths are normalized (resolving `.` and `..`)
     /// before the prefix check to prevent path traversal bypasses.
+    ///
+    /// For `max_memory_mb` / `timeout_secs`: `None` means "unlimited". A
+    /// limited child is within an unlimited baseline; an unlimited child is
+    /// NOT within a limited baseline; two limited values use `<=`.
     pub fn is_within(&self, baseline: &Self) -> bool {
         let fs_read_ok = self.fs_read.iter().all(|p| {
             baseline
@@ -70,7 +92,19 @@ impl SandboxCapabilities {
         });
         let net_ok = network_within(&self.network, &baseline.network);
         let spawn_ok = !self.spawn_subprocess || baseline.spawn_subprocess;
-        fs_read_ok && fs_write_ok && net_ok && spawn_ok
+        let mem_ok = limit_within(self.max_memory_mb, baseline.max_memory_mb);
+        let timeout_ok = limit_within(self.timeout_secs, baseline.timeout_secs);
+        fs_read_ok && fs_write_ok && net_ok && spawn_ok && mem_ok && timeout_ok
+    }
+}
+
+/// `Option<u64>` subset check where smaller-or-equal-or-Some is "tighter".
+/// `None` = unlimited.
+fn limit_within(child: Option<u64>, baseline: Option<u64>) -> bool {
+    match (child, baseline) {
+        (_, None) => true,             // unlimited baseline accepts anything
+        (None, Some(_)) => false,      // unlimited child violates limited baseline
+        (Some(c), Some(b)) => c <= b,  // both limited: child must be ≤ baseline
     }
 }
 
@@ -178,5 +212,54 @@ mod tests {
             ..Default::default()
         };
         assert!(child.is_within(&baseline));
+    }
+
+    #[test]
+    fn limit_within_unlimited_baseline_accepts_any() {
+        assert!(limit_within(None, None));
+        assert!(limit_within(Some(64), None));
+        assert!(limit_within(Some(u64::MAX), None));
+    }
+
+    #[test]
+    fn limit_within_unlimited_child_violates_limited_baseline() {
+        assert!(!limit_within(None, Some(64)));
+    }
+
+    #[test]
+    fn limit_within_smaller_child_is_tighter() {
+        assert!(limit_within(Some(32), Some(64)));
+        assert!(limit_within(Some(64), Some(64)));
+        assert!(!limit_within(Some(128), Some(64)));
+    }
+
+    #[test]
+    fn is_within_respects_memory_tighter() {
+        let baseline = SandboxCapabilities {
+            max_memory_mb: Some(128),
+            ..Default::default()
+        };
+        let child_tighter = SandboxCapabilities {
+            max_memory_mb: Some(64),
+            ..Default::default()
+        };
+        let child_unlimited = SandboxCapabilities::default();
+        assert!(child_tighter.is_within(&baseline));
+        assert!(!child_unlimited.is_within(&baseline));
+    }
+
+    #[test]
+    fn is_within_respects_timeout_tighter() {
+        let baseline = SandboxCapabilities {
+            timeout_secs: Some(60),
+            ..Default::default()
+        };
+        let child_tighter = SandboxCapabilities {
+            timeout_secs: Some(10),
+            ..Default::default()
+        };
+        let child_unlimited = SandboxCapabilities::default();
+        assert!(child_tighter.is_within(&baseline));
+        assert!(!child_unlimited.is_within(&baseline));
     }
 }
