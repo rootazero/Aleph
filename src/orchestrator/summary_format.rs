@@ -176,12 +176,22 @@ fn render_telegram(o: &FlowOutcome) -> String {
     if md.len() <= TELEGRAM_HARD_LIMIT {
         return md;
     }
-    // hermes-agent reserves a small headroom (~200 chars) for the "truncated"
-    // marker so the receiving platform doesn't itself clip the indicator.
-    let visible = TELEGRAM_HARD_LIMIT.saturating_sub(64);
-    let mut truncated = truncate_with_ellipsis(&md, visible);
-    truncated.push_str("\n\u{2026} (output truncated)");
-    truncated
+    // Telegram's limit is in *bytes*, not chars — multi-byte glyphs (emojis,
+    // CJK, the ellipsis itself) make char-count budgets overshoot. Walk char
+    // boundaries to find the largest prefix that still leaves room for the
+    // suffix marker.
+    const SUFFIX: &str = "\n\u{2026} (output truncated)";
+    let budget = TELEGRAM_HARD_LIMIT.saturating_sub(SUFFIX.len());
+    let cutoff = md
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= budget)
+        .last()
+        .unwrap_or(0);
+    let mut out = String::with_capacity(TELEGRAM_HARD_LIMIT);
+    out.push_str(&md[..cutoff]);
+    out.push_str(SUFFIX);
+    out
 }
 
 // ─── Style: Json ─────────────────────────────────────────────────────────────
