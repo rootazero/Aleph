@@ -7,6 +7,7 @@ use crate::domain::Entity;
 use crate::skill::config::SkillEntryConfig;
 use crate::skill::eligibility::{EligibilityResult, IneligibilityReason};
 use crate::skill::installer::filter_install_specs_for_current_os;
+use crate::skill::usage::UsageStats;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallOption {
@@ -50,6 +51,11 @@ pub struct SkillStatusEntry {
     pub api_key_set: bool,
     pub scope: PromptScope,
     pub user_invocable: bool,
+    /// Per-skill activity telemetry from `.usage.json`. `None` when the
+    /// sidecar has no row for this skill (e.g. brand-new install that's
+    /// never been read, or a bundled skill that's never been touched).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<UsageStats>,
 }
 
 impl SkillStatusEntry {
@@ -58,6 +64,7 @@ impl SkillStatusEntry {
         eligibility: &EligibilityResult,
         entry_config: Option<&SkillEntryConfig>,
         api_key_set: bool,
+        usage: Option<UsageStats>,
     ) -> Self {
         let disabled = entry_config
             .and_then(|c| c.enabled)
@@ -126,6 +133,7 @@ impl SkillStatusEntry {
             api_key_set,
             scope,
             user_invocable: manifest.is_user_invocable(),
+            usage,
         }
     }
 
@@ -157,17 +165,24 @@ mod tests {
     #[test]
     fn build_eligible_entry() {
         let m = make_manifest("test:skill");
-        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false);
+        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false, None);
         assert!(e.eligible);
         assert!(!e.disabled);
         assert!(e.missing.bins.is_empty());
+        assert!(e.usage.is_none());
     }
 
     #[test]
     fn build_ineligible_entry() {
         let m = make_manifest("test:skill");
         let reasons = vec![IneligibilityReason::MissingBinary("docker".into())];
-        let e = SkillStatusEntry::build(&m, &EligibilityResult::Ineligible(reasons), None, false);
+        let e = SkillStatusEntry::build(
+            &m,
+            &EligibilityResult::Ineligible(reasons),
+            None,
+            false,
+            None,
+        );
         assert!(!e.eligible);
         assert_eq!(e.missing.bins, vec!["docker"]);
     }
@@ -179,7 +194,13 @@ mod tests {
             enabled: Some(false),
             scope_override: None,
         };
-        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, Some(&cfg), false);
+        let e = SkillStatusEntry::build(
+            &m,
+            &EligibilityResult::Eligible,
+            Some(&cfg),
+            false,
+            None,
+        );
         assert!(e.disabled);
     }
 
@@ -187,7 +208,7 @@ mod tests {
     fn missing_api_key_added_to_env() {
         let mut m = make_manifest("test:skill");
         m.set_primary_env("OPENAI_API_KEY".to_string());
-        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false);
+        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false, None);
         assert!(e.missing.env.contains(&"OPENAI_API_KEY".to_string()));
     }
 
@@ -195,22 +216,43 @@ mod tests {
     fn api_key_set_not_missing() {
         let mut m = make_manifest("test:skill");
         m.set_primary_env("OPENAI_API_KEY".to_string());
-        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, true);
+        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, true, None);
         assert!(!e.missing.env.contains(&"OPENAI_API_KEY".to_string()));
     }
 
     #[test]
     fn filter_matching() {
         let m = make_manifest("test:skill");
-        let ready = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false);
+        let ready = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false, None);
         let needs = SkillStatusEntry::build(
             &m,
             &EligibilityResult::Ineligible(vec![IneligibilityReason::MissingBinary("x".into())]),
             None,
             false,
+            None,
         );
         assert!(ready.matches_filter(SkillStatusFilter::Ready));
         assert!(!ready.matches_filter(SkillStatusFilter::NeedsSetup));
         assert!(needs.matches_filter(SkillStatusFilter::NeedsSetup));
+    }
+
+    #[test]
+    fn usage_is_attached_when_provided() {
+        let m = make_manifest("test:skill");
+        let stats = UsageStats {
+            use_count: 5,
+            view_count: 2,
+            ..Default::default()
+        };
+        let e = SkillStatusEntry::build(
+            &m,
+            &EligibilityResult::Eligible,
+            None,
+            false,
+            Some(stats),
+        );
+        let u = e.usage.expect("usage should pass through");
+        assert_eq!(u.use_count, 5);
+        assert_eq!(u.view_count, 2);
     }
 }

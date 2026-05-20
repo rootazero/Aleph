@@ -75,6 +75,13 @@ impl AlephTool for SkillInstallTool {
             .install_dependency(&skill_id, args.spec_id.as_deref())
             .await;
 
+        // Successful installs reshape the skill's runtime (new binaries,
+        // env, eligibility) — record as a patch event so the curator /
+        // status surface reflects the install activity.
+        if result.success {
+            self.system.record_patch(&skill_id).await;
+        }
+
         Ok(SkillInstallOutput::from(result))
     }
 }
