@@ -14,7 +14,8 @@
 //! // => "## Runtime Environment\nos=macos | arch=aarch64 | shell=zsh | cwd=/workspace | model=claude-opus-4-6 | host=MacBook-Pro"
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Lightweight snapshot of the runtime environment.
 ///
@@ -50,8 +51,11 @@ impl RuntimeContext {
     /// `current_model` is passed in because the caller (prompt builder) knows which
     /// model was selected by the router.
     ///
-    /// `repo_root` is left as `None` — the caller should set it from cached git info
-    /// after calling this method.
+    /// `repo_root` is populated lazily via a process-lifetime `OnceLock` cache
+    /// (see [`cached_repo_root`]). The detector walks up from the working
+    /// directory looking for `.git`; no `git` subprocess is spawned. aleph-server
+    /// is a long-running daemon whose working directory is stable, so caching at
+    /// process scope is sufficient.
     pub fn collect(current_model: &str) -> Self {
         let os = std::env::consts::OS.to_string();
         let arch = std::env::consts::ARCH.to_string();
@@ -83,12 +87,14 @@ impl RuntimeContext {
             })
         };
 
+        let repo_root = cached_repo_root(&working_dir).cloned();
+
         Self {
             os,
             arch,
             shell,
             working_dir,
-            repo_root: None,
+            repo_root,
             current_model: current_model.to_string(),
             hostname,
             current_time,
@@ -127,6 +133,40 @@ impl RuntimeContext {
     }
 }
 
+/// Process-lifetime cache for the detected repository root.
+///
+/// Detection cost is one to a few `fs::exists` syscalls on the first call;
+/// subsequent calls return the cached `Option<PathBuf>`. `None` is also cached,
+/// so non-repo working directories never re-walk.
+static REPO_ROOT_CACHE: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+fn cached_repo_root(working_dir: &Path) -> Option<&'static PathBuf> {
+    REPO_ROOT_CACHE
+        .get_or_init(|| detect_repo_root(working_dir))
+        .as_ref()
+}
+
+/// Walk upward from `start` looking for a `.git` entry. Returns the first
+/// ancestor that contains one, or `None` if the walk hits the filesystem root.
+///
+/// Notes:
+/// - `.git` may be a directory (regular repo) or a file (git worktree). Either
+///   satisfies the check, so a `.try_exists()` is sufficient.
+/// - We do not follow symlinks explicitly; `Path::try_exists` is consistent
+///   with how `git` itself locates the repo.
+fn detect_repo_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start;
+    loop {
+        if current.join(".git").try_exists().unwrap_or(false) {
+            return Some(current.to_path_buf());
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => return None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,8 +188,14 @@ mod tests {
             "working_dir should be a valid UTF-8 path"
         );
 
-        // repo_root defaults to None
-        assert!(ctx.repo_root.is_none(), "repo_root should default to None");
+        // repo_root is populated lazily from a process-lifetime cache. In
+        // the cargo test harness we are inside the alephcore worktree, so a
+        // `.git` entry is reachable from cwd — we accept either a populated
+        // `Some(path)` or a `None`, but reject any populated path that
+        // doesn't exist on disk.
+        if let Some(ref repo) = ctx.repo_root {
+            assert!(repo.exists(), "repo_root must point at a real path");
+        }
 
         // current_model should match what we passed in
         assert_eq!(ctx.current_model, "test-model-v1");
@@ -198,6 +244,72 @@ mod tests {
             lines[1].contains(" | "),
             "data line should use pipe separators"
         );
+    }
+
+    #[test]
+    fn detect_repo_root_finds_dot_git_at_start() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
+
+        let found = detect_repo_root(dir.path());
+        assert_eq!(found.as_deref(), Some(dir.path()));
+    }
+
+    #[test]
+    fn detect_repo_root_walks_up_to_parent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
+        let nested = dir.path().join("a/b/c");
+        std::fs::create_dir_all(&nested).expect("nested dirs");
+
+        let found = detect_repo_root(&nested);
+        // Canonicalize both sides — on macOS tempdir is under /var/folders
+        // which is a symlink to /private/var/folders.
+        let found_canon = std::fs::canonicalize(found.expect("found")).expect("canon found");
+        let expect_canon = std::fs::canonicalize(dir.path()).expect("canon dir");
+        assert_eq!(found_canon, expect_canon);
+    }
+
+    #[test]
+    fn detect_repo_root_accepts_dot_git_file_for_worktrees() {
+        // git worktrees use a .git file (not directory) pointing at the
+        // shared gitdir. `try_exists` returns true for both shapes.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(".git"), b"gitdir: /tmp/shared\n").expect("write .git");
+
+        let found = detect_repo_root(dir.path());
+        assert_eq!(found.as_deref(), Some(dir.path()));
+    }
+
+    #[test]
+    fn detect_repo_root_returns_none_when_no_git_found() {
+        // A tempdir without any .git anywhere up to the root is rare in
+        // practice, but the function must terminate at the filesystem root.
+        // Use /tmp/<unique> + canonicalize so we don't depend on macOS's
+        // /private/var/folders symlink quirks.
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Walk up: as long as no ancestor has `.git`, return None.
+        // We can't guarantee that across all CI environments, so probe the
+        // ancestors explicitly and skip if any has `.git`.
+        let mut probe = dir.path();
+        let mut has_git_ancestor = false;
+        loop {
+            if probe.join(".git").try_exists().unwrap_or(false) {
+                has_git_ancestor = true;
+                break;
+            }
+            match probe.parent() {
+                Some(p) => probe = p,
+                None => break,
+            }
+        }
+        if has_git_ancestor {
+            // Environment-dependent; the affirmative tests above already
+            // pin the happy path, so we skip rather than emit a false
+            // failure.
+            return;
+        }
+        assert_eq!(detect_repo_root(dir.path()), None);
     }
 
     #[test]

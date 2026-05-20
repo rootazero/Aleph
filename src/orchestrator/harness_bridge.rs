@@ -565,11 +565,13 @@ impl AgentHarnessRunner {
         // aleph-server's always-on-daemon default — when no manifest
         // is provided (subagent dispatch / internal tooling / tests).
         //
-        // SecurityContext stays permissive: there is no per-channel
-        // SecurityContext source in production today; the layer's
-        // sandbox-baseline note (`Security Level: None`) is correct for
-        // the trusted-self-host posture. A future cycle can introduce
-        // per-channel SecurityContext if/when policy diverges.
+        // Phase 5 (F2): SecurityContext is also paradigm-derived via
+        // `SecurityContext::for_paradigm`. CLI / WebRich / Background /
+        // Embedded stay permissive (trusted-self-host); Messaging surfaces
+        // a Standard sandbox + approval-required posture for elevated
+        // operations, signalling the LLM to be cautious on public-channel
+        // bots. Actual tool enforcement still happens in the tool
+        // dispatcher — this is a prompt-text signal, not a hard gate.
         //
         // Tools list is empty because the harness wires actual tool
         // schemas via native tool_use rather than the prompt;
@@ -584,11 +586,10 @@ impl AgentHarnessRunner {
                 &default_manifest
             }
         };
-        let mut resolved_context = crate::thinker::context::ContextAggregator::resolve(
-            manifest_ref,
-            &crate::thinker::security_context::SecurityContext::permissive(),
-            &[],
-        );
+        let security_ctx =
+            crate::thinker::security_context::SecurityContext::for_paradigm(manifest_ref.paradigm);
+        let mut resolved_context =
+            crate::thinker::context::ContextAggregator::resolve(manifest_ref, &security_ctx, &[]);
         // Phase 4 (F1): populate `runtime_context` so `RuntimeContextLayer`
         // surfaces shell / arch / hostname / timezone / model. EnvironmentLayer
         // emits OS/cwd in a Markdown list (Stable, priority 300);
@@ -596,9 +597,9 @@ impl AgentHarnessRunner {
         // single-line summary (Dynamic, priority 1720) — formats deliberately
         // differ. We accept the minor OS/cwd overlap; the unique fields
         // (arch, shell, repo_root, model, hostname, timezone, current_time)
-        // carry the value. `repo_root` is left as `None` — populating it
-        // would require shelling out to git on every prompt build, which is
-        // disproportionate for the diagnostic gain.
+        // carry the value. Phase 5 (F3) populates `repo_root` via a
+        // `OnceLock`-cached `.git` walk-up — process-lifetime amortized,
+        // no `git` subprocess.
         resolved_context.runtime_context = Some(
             crate::thinker::runtime_context::RuntimeContext::collect(provider.name()),
         );
