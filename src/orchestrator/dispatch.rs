@@ -159,6 +159,11 @@ pub struct Orchestrator {
     /// chain + per-`provider_hint` overrides). `None` for test mocks and the
     /// simple engine; `Some` once `build_failover_chain` has run at boot.
     pub subagent_routing: Option<crate::orchestrator::deps_builder::ProviderChain>,
+    /// Shared `AgentRegistry`. Same `Arc` cloned into `AgentHarnessRunner` at
+    /// boot so all subagent dispatchers see user-defined agents. `None` only
+    /// in test fixtures and the simple engine — the gateway path falls back
+    /// to `AgentRegistry::with_builtins()` in that case.
+    pub agent_registry: Option<Arc<crate::agents::AgentRegistry>>,
     active_sessions: Arc<Mutex<HashSet<String>>>,
 }
 
@@ -209,6 +214,7 @@ impl Orchestrator {
             sandbox_factory,
             harness,
             subagent_routing: None,
+            agent_registry: None,
             active_sessions: Arc::new(Mutex::new(HashSet::new())),
         }
     }
@@ -222,6 +228,15 @@ impl Orchestrator {
         routing: crate::orchestrator::deps_builder::ProviderChain,
     ) -> Self {
         self.subagent_routing = Some(routing);
+        self
+    }
+
+    /// Attach the shared `AgentRegistry` so `SubagentTool` instances spawned
+    /// inside the gateway execution engine can resolve user-defined agents
+    /// (not just built-ins). Without this, `run_loop` falls back to a fresh
+    /// empty registry and subagents silently lose all custom-agent metadata.
+    pub fn with_agent_registry(mut self, registry: Arc<crate::agents::AgentRegistry>) -> Self {
+        self.agent_registry = Some(registry);
         self
     }
 

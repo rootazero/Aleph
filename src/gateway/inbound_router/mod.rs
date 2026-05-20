@@ -13,6 +13,7 @@ mod permission;
 
 mod types;
 
+pub use command_handler::serialize_parsed_command;
 pub use types::{ChannelConfig, DmPolicy, GroupPolicy, RoutingError, SLASH_COMMAND_MODE_KEY};
 
 use crate::sync_primitives::Arc;
@@ -35,7 +36,7 @@ use crate::command::CommandParser;
 use crate::group_chat::GroupChatExecutor;
 use crate::routing::config::{RouteBinding, SessionConfig};
 
-use command_handler::{serialize_intent_result, strip_bot_mention};
+use command_handler::strip_bot_mention;
 use dedup::InboundDedupTracker;
 use types::check_link_access;
 
@@ -688,8 +689,15 @@ impl InboundMessageRouter {
                     if parsed.command_name == "session_new" || parsed.command_name == "new" {
                         return self.handle_new_session(&msg, &ctx).await;
                     }
-                    let result = self.parsed_command_to_intent_result(parsed);
-                    if let Some(mode_json) = serialize_intent_result(&result) {
+                    // Use the rich serializer so Skill / Custom / MCP fields
+                    // (instructions, allowed_tools, system_prompt, server_name)
+                    // are preserved in the mode JSON instead of being lossily
+                    // collapsed to `direct_tool`.
+                    if let Some(mode_json) =
+                        crate::gateway::inbound_router::command_handler::serialize_parsed_command(
+                            &parsed,
+                        )
+                    {
                         info!(
                             "[Router] Slash command resolved: source=unified, name={}",
                             ctx.message.text.split_whitespace().next().unwrap_or("")
@@ -739,6 +747,19 @@ impl InboundMessageRouter {
                                 }
                                 return Ok(());
                             }
+                        }
+
+                        // Last-mile suggestion: surface near-matches before
+                        // falling through to the agent. Avoids the "silent
+                        // typo" footgun where /seasion_new is passed to the
+                        // model as plain text. Only handles namespace-like
+                        // tokens (not shorthand) — and is_shorthand list
+                        // above already short-circuited those.
+                        if self
+                            .try_send_unknown_command_help(&msg, namespace)
+                            .await
+                        {
+                            return Ok(());
                         }
                     }
                 }

@@ -364,43 +364,19 @@ where
         metadata.insert("locale".to_string(), lang.to_string());
     }
 
-    // Slash command detection: if message starts with "/", try to resolve via CommandParser
-    // and inject SLASH_COMMAND_MODE_KEY for fast-path execution in ExecutionEngine.
+    // Slash command detection: resolve via CommandParser and emit the
+    // source-aware mode JSON (preserves Skill instructions / Custom system
+    // prompt / MCP server name so the fast path can act on them).
     if params.message.trim().starts_with('/') {
         if let Some(ref parser) = command_parser {
             let slash_text = params.message.trim();
             if let Some(parsed) = parser.parse_async(slash_text).await {
-                // Convert parsed command to IntentResult and serialize
-                use alephcore::intent::DirectToolSource;
-                let (tool_id, source) = match parsed.context {
-                    alephcore::command::CommandContext::Builtin { tool_name } => {
-                        (tool_name, DirectToolSource::SlashCommand)
-                    }
-                    alephcore::command::CommandContext::Skill { skill_id, .. } => {
-                        (skill_id, DirectToolSource::Skill)
-                    }
-                    alephcore::command::CommandContext::Mcp {
-                        server_name,
-                        tool_name,
-                        ..
-                    } => (tool_name.unwrap_or(server_name), DirectToolSource::Mcp),
-                    alephcore::command::CommandContext::Custom { .. } => {
-                        (parsed.command_name.clone(), DirectToolSource::Custom)
-                    }
-                    alephcore::command::CommandContext::None => {
-                        (parsed.command_name.clone(), DirectToolSource::SlashCommand)
-                    }
-                };
-
-                if let Ok(mode_json) = serde_json::to_string(&serde_json::json!({
-                    "type": "direct_tool",
-                    "tool_id": tool_id,
-                    "args": parsed.arguments.as_deref().unwrap_or(""),
-                    "source": source.as_str(),
-                })) {
+                if let Some(mode_json) =
+                    alephcore::gateway::inbound_router::serialize_parsed_command(&parsed)
+                {
                     tracing::info!(
-                        "[chat.send] Slash command resolved: tool_id={}, args={:?}",
-                        tool_id,
+                        "[chat.send] Slash command resolved: name={}, args={:?}",
+                        parsed.command_name,
                         parsed.arguments
                     );
                     metadata.insert(

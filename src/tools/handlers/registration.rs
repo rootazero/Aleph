@@ -1,21 +1,13 @@
-//! Registration helpers for MCP + Extension tool handlers (Task 4, Step 4.4/4.5).
+//! Registration helpers for MCP tool handlers.
 //!
-//! These helpers encapsulate the "scan → build handler → register" logic so
-//! that the MCP connection lifecycle and the Extension plugin-load lifecycle
-//! can both call a single entry point when a server connects or a plugin is
-//! loaded, and a matching cleanup path when they tear down.
-//!
-//! The helpers take an `Arc<ToolRegistry>` explicitly rather than owning it,
-//! because threading a registry handle through `McpClient` and
-//! `ExtensionManager` would require deep plumbing across 5+ modules. Phase 2
-//! Task 10 (AppContext wiring) will invoke these helpers from the existing
-//! connection/load sites once the registry is plumbed into `AppContext`.
+//! Encapsulates the "scan → build handler → register" logic so that the MCP
+//! connection lifecycle can call a single entry point when a server connects,
+//! and a matching cleanup path when it tears down. Extension/plugin variants
+//! were removed 2026-05-20 — see `tools::handlers::mod` for rationale.
 
 use std::sync::Arc;
 
-use crate::extension::{ExtensionManager, ToolRegistration};
 use crate::mcp::{McpClient, McpTool};
-use crate::tools::handlers::extension::ExtensionHandler;
 use crate::tools::handlers::mcp::McpHandler;
 use crate::tools::handlers::ToolHandler;
 use crate::tools::registry::ToolRegistry;
@@ -67,58 +59,6 @@ pub fn unregister_mcp_tools(registry: &ToolRegistry, server_id: &str) -> Vec<Str
         .iter()
         .filter_map(|(name, handler)| match handler.definition().source {
             ToolSource::Mcp { server_id: ref sid } if sid == server_id => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
-    drop(snapshot);
-    for name in &victims {
-        registry.unregister(name);
-    }
-    victims
-}
-
-/// Register every plugin-declared tool from one extension into the shared
-/// `ToolRegistry`. Should be invoked after `ExtensionManager::load_runtime_plugin`
-/// (or after `load_all` for each plugin that produced tools).
-pub fn register_extension_tools(
-    registry: &ToolRegistry,
-    manager: Arc<ExtensionManager>,
-    plugin_id: &str,
-    tools: &[ToolRegistration],
-) -> Vec<String> {
-    let mut registered = Vec::with_capacity(tools.len());
-    for tool in tools {
-        if tool.plugin_id != plugin_id {
-            continue;
-        }
-        let qualified = format!("ext__{}__{}", plugin_id, tool.name);
-        let handler: Arc<dyn ToolHandler> = Arc::new(ExtensionHandler::new(
-            Arc::clone(&manager),
-            plugin_id.to_string(),
-            tool.handler.clone(),
-            tool.name.clone(),
-            tool.description.clone(),
-            tool.parameters.clone(),
-        ));
-        match registry.register(qualified.clone(), handler) {
-            Ok(()) => registered.push(qualified),
-            Err(e) => tracing::warn!(
-                error = ?e,
-                qualified = %qualified,
-                "extension tool register failed"
-            ),
-        }
-    }
-    registered
-}
-
-/// Unregister every tool previously registered from the given extension.
-pub fn unregister_extension_tools(registry: &ToolRegistry, plugin_id: &str) -> Vec<String> {
-    let snapshot = registry.snapshot();
-    let victims: Vec<String> = snapshot
-        .iter()
-        .filter_map(|(name, handler)| match handler.definition().source {
-            ToolSource::Extension { plugin_id: ref pid } if pid == plugin_id => Some(name.clone()),
             _ => None,
         })
         .collect();

@@ -463,6 +463,32 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // its snapshot for `list_tools` introspection.
     let tool_registry_phase2 = Arc::new(alephcore::tools::ToolRegistry::new());
 
+    // First production consumer of `ToolRegistry::subscribe`. Logs every
+    // MCP-driven register/unregister so operators can see exactly when
+    // remote tools enter or leave the LLM's surface. The channel has a
+    // 256-slot ring buffer; slow logger backlog is dropped (Lagged), not
+    // backpressured onto publishers.
+    {
+        let mut rx = tool_registry_phase2.subscribe();
+        tokio::spawn(async move {
+            use alephcore::tools::registry::RegistryChange;
+            loop {
+                match rx.recv().await {
+                    Ok(RegistryChange::Registered { name, source }) => {
+                        tracing::info!(tool = %name, source = ?source, "tool_registry: registered");
+                    }
+                    Ok(RegistryChange::Unregistered { name, source }) => {
+                        tracing::info!(tool = %name, source = ?source, "tool_registry: unregistered");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "tool_registry: subscriber lagged — events dropped");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
     // MCP: spawn the manager actor and bridge external-server tools into the
     // shared `ToolRegistry`. Warn-only on failure — a missing or malformed
     // MCP config must never abort boot.
