@@ -17,7 +17,6 @@ pub mod service;
 pub mod shim;
 pub mod state;
 pub mod store;
-pub mod streaming;
 pub mod tool_trace;
 
 pub use actor::{ActorCommand, SessionActor};

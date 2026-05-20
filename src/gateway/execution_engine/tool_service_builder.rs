@@ -58,6 +58,12 @@ pub fn build_request_tool_service(
     if let Some(tc) = turn_context {
         svc = svc.with_turn_context(tc);
     }
+    // Layer 2 seam: oversized tool outputs are persisted to disk and the
+    // LLM gets a marker line instead of the raw text. Inert until boot
+    // installs the global store via `set_global_tool_result_store`.
+    if let Some(store) = crate::tools::result_store::global_tool_result_store() {
+        svc = svc.with_result_store(store);
+    }
     // Wire the confirmation seam: confirm-flagged tools route a user prompt
     // before executing. Inert until boot installs the requester.
     if let Some(requester) = CONFIRMATION_REQUESTER.get() {

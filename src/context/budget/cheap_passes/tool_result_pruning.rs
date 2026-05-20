@@ -55,6 +55,13 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
             let Some((tool_name, original_text)) = msg.tool_result_info() else {
                 continue;
             };
+            // Already-persisted markers (Layer 2 of the tool-result budget
+            // produced by `tools::result_processing::apply_result_budget`)
+            // are already compact and carry the disk path the LLM needs.
+            // Re-pruning them would erase the recovery handle.
+            if original_text.starts_with("[Full output persisted: ") {
+                continue;
+            }
             let original_tokens = estimate_tokens_smart(&original_text);
             if original_tokens < self.min_tokens_to_prune {
                 continue;
@@ -149,6 +156,24 @@ mod tests {
         let stage = ToolResultPruningStage::default();
         let freed = stage.prepare(&mut messages, &make_pressure(), 3).await;
         assert_eq!(freed, 0);
+    }
+
+    #[tokio::test]
+    async fn skips_already_persisted_markers() {
+        // Layer 2 (apply_result_budget) emits markers of this shape. The
+        // pruning stage must treat them as already-compact and leave the
+        // path intact so the LLM can still recover the full output via
+        // a subsequent `read_file`.
+        let marker = "[Full output persisted: /tmp/aleph/x.txt (12000 tokens, bash)]";
+        let mut messages = vec![
+            UnifiedMessage::tool_result("call-1", "bash", marker.to_string(), false),
+            UnifiedMessage::user("recent"),
+        ];
+        let stage = ToolResultPruningStage::default();
+        let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
+        assert_eq!(freed, 0, "persisted markers must not be re-pruned");
+        let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
+        assert_eq!(text, marker, "marker text must remain verbatim");
     }
 
     #[tokio::test]

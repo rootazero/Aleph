@@ -750,6 +750,9 @@ mod tests {
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: None,
+            turn_budget: None,
+            result_store: None,
+
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -791,6 +794,9 @@ mod tests {
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: None,
+            turn_budget: None,
+            result_store: None,
+
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -831,6 +837,9 @@ mod tests {
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: Some(std::time::Duration::from_millis(20)),
+            turn_budget: None,
+            result_store: None,
+
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
