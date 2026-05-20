@@ -5,6 +5,7 @@
 //! agent loop (compact, force final reply, or stop on diminishing returns).
 
 pub mod autocompact;
+pub mod cheap_passes;
 pub mod context_collapse;
 pub mod diagnostics;
 pub mod microcompact;
