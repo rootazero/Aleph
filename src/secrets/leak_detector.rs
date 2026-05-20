@@ -79,6 +79,11 @@ static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
             Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
         ),
         (
+            // GitLab personal/group/project access tokens — mirrors SECRET_PATTERN_SOURCES entry
+            "GitLab Token",
+            Regex::new(r"glpat-[A-Za-z0-9_\-]{20,}").unwrap(),
+        ),
+        (
             "Private Key Block",
             Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----").unwrap(),
         ),

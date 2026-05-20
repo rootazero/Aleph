@@ -262,3 +262,41 @@ mod delegation_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod input_blocking_tests {
+    use super::*;
+    use crate::guardrails::decision::GuardrailDecision;
+    use crate::guardrails::traits::InputGuardrail;
+
+    fn pasted(prefix: &str) -> String {
+        format!("My key is {}{}", prefix, "A".repeat(40))
+    }
+
+    #[tokio::test]
+    async fn input_blocks_pasted_api_keys() {
+        let g = PiiSecretsGuardrail::with_resolver(None);
+        let cases = [
+            "sk-proj-",
+            "sk-ant-",
+            "AKIA",
+            "ghp_",
+            "glpat-",
+        ];
+        for prefix in cases {
+            let text = pasted(prefix);
+            let dec = g.evaluate_input(&text).await;
+            match dec {
+                GuardrailDecision::Block { reason, .. } => {
+                    assert!(
+                        reason.to_lowercase().contains("leak")
+                            || reason.to_lowercase().contains("secret")
+                            || reason.to_lowercase().contains("api"),
+                        "Block reason should mention leak/secret/api; got `{reason}` for prefix `{prefix}`"
+                    );
+                }
+                other => panic!("prefix `{prefix}` was NOT blocked; got {other:?}"),
+            }
+        }
+    }
+}
