@@ -110,6 +110,10 @@ impl AgentHarness {
                         },
                     },
                 );
+                // Memo-hit invocations cost 0 ms; record them anyway so the
+                // tool count on the timeline matches what the agent actually
+                // observed (the model saw a result come back).
+                self.push_tool_invocation(call.id.clone(), call.name.clone(), 0, true, None);
                 if let Some(ref tracker) = self.stall_tracker {
                     tracker.record_activity().await;
                 }
@@ -154,6 +158,11 @@ impl AgentHarness {
                         .session
                         .emit_event(session_id, result_event)
                         .await?;
+                    let dur_ms: u64 = started
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u64::MAX);
                     self.emit(
                         || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                             iteration,
@@ -161,16 +170,19 @@ impl AgentHarness {
                                 tool_id: call.id.clone(),
                                 tool_name: call.name.clone(),
                                 input: call.arguments.clone(),
-                                duration_ms: started
-                                    .elapsed()
-                                    .as_millis()
-                                    .try_into()
-                                    .unwrap_or(u64::MAX),
+                                duration_ms: dur_ms,
                             },
                             result: crate::tools::runtime::ToolResult::Success {
                                 output: output_value,
                             },
                         },
+                    );
+                    self.push_tool_invocation(
+                        call.id.clone(),
+                        call.name.clone(),
+                        dur_ms,
+                        true,
+                        None,
                     );
                 }
                 Err(e) => {
@@ -191,6 +203,12 @@ impl AgentHarness {
                             "failed to persist ToolError event",
                         );
                     }
+                    let dur_ms: u64 = started
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u64::MAX);
+                    let error_for_timeline = error_msg.clone();
                     self.emit(
                         || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                             iteration,
@@ -198,17 +216,20 @@ impl AgentHarness {
                                 tool_id: call.id.clone(),
                                 tool_name: call.name.clone(),
                                 input: call.arguments.clone(),
-                                duration_ms: started
-                                    .elapsed()
-                                    .as_millis()
-                                    .try_into()
-                                    .unwrap_or(u64::MAX),
+                                duration_ms: dur_ms,
                             },
                             result: crate::tools::runtime::ToolResult::Error {
                                 error: error_msg,
                                 retryable: false,
                             },
                         },
+                    );
+                    self.push_tool_invocation(
+                        call.id.clone(),
+                        call.name.clone(),
+                        dur_ms,
+                        false,
+                        Some(error_for_timeline),
                     );
                     // Do NOT abort — continue processing remaining tool calls.
                     // The error is persisted to session log; the next Think

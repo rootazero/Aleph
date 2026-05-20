@@ -367,17 +367,25 @@ impl HarnessRunner for AgentHarnessRunner {
         // and the budget-sensor flag. `total_tokens` saturates into the
         // `u32` field (`as u32` would truncate; a run is realistically far
         // below `u32::MAX` tokens).
-        // Phase 2 will fill `terminate_reason / duration_ms / token_breakdown /
-        // tool_timeline / estimated_cost` from the harness side. P1 ships the
-        // field shape only — defaults preserve the legacy semantics
-        // (Completed reason, empty timeline) until P2 wires it.
+        // P2: pull the rich signals from harness accessors. The harness loop
+        // recorded the precise terminate cause, per-tool timeline, and
+        // per-component token breakdown — no second session read needed.
+        let terminate_reason = harness.terminate_reason();
+        let token_breakdown = harness.token_breakdown();
         let outcome = FlowOutcome {
             final_text,
             iterations,
             tool_calls_made,
             total_tokens: u32::try_from(harness.total_tokens()).unwrap_or(u32::MAX),
-            hit_limit: harness.hit_limit(),
-            ..Default::default()
+            hit_limit: terminate_reason.is_hit_limit(),
+            terminate_reason,
+            duration_ms: harness.duration_ms(),
+            token_breakdown,
+            tool_timeline: harness.tool_timeline(),
+            // `estimated_cost` is populated by the Cost task once the
+            // pricing table is wired; default `None` preserves the legacy
+            // shape until then.
+            estimated_cost: None,
         };
 
         // Emit `Complete(outcome)` as the terminal broadcast event.

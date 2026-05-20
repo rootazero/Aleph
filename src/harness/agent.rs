@@ -22,6 +22,8 @@
 //!   * `guardrails.rs` — `apply_input_guardrail`, `apply_tool_call_guardrail`
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -30,6 +32,7 @@ use tokio_util::sync::CancellationToken;
 use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::{Harness, HarnessError, TurnState};
+use crate::orchestrator::dispatch::{TerminateReason, TokenBreakdown, ToolInvocation};
 use crate::providers::adapter::NativeToolCall;
 
 use crate::session::events::{SessionEvent, SessionEventRecord, ToolOutput, TurnId};
@@ -77,6 +80,23 @@ pub struct AgentHarness {
     /// and subagent spawner. A harness instance serves a single run, so the
     /// counter is never reset.
     total_tokens: AtomicU64,
+    /// Precise loop-exit cause. Defaults to `Completed` and is overwritten
+    /// at each cap site inside `run()`. Granular complement to
+    /// [`hit_limit`]; read after the run via [`AgentHarness::terminate_reason`].
+    /// One run per harness instance — never reset.
+    terminate_reason: Mutex<TerminateReason>,
+    /// One push per `ToolCallCompleted` trace event so the timeline carries
+    /// the same metadata trace consumers see (name, duration, success). Read
+    /// after the run via [`AgentHarness::tool_timeline`].
+    tool_timeline: Mutex<Vec<ToolInvocation>>,
+    /// Per-component token breakdown accumulated alongside [`total_tokens`].
+    /// Each successful LLM call in `think.rs` folds its `TokenUsage` here
+    /// via [`TokenBreakdown::accumulate`]. Read after the run via
+    /// [`AgentHarness::token_breakdown`].
+    token_breakdown: Mutex<TokenBreakdown>,
+    /// Wall-clock start of `run()`. Read after the run via
+    /// [`AgentHarness::duration_ms`] to derive elapsed milliseconds.
+    started_at: OnceLock<Instant>,
 }
 
 impl AgentHarness {
@@ -90,6 +110,10 @@ impl AgentHarness {
             stall_tracker,
             hit_limit: AtomicBool::new(false),
             total_tokens: AtomicU64::new(0),
+            terminate_reason: Mutex::new(TerminateReason::Completed),
+            tool_timeline: Mutex::new(Vec::new()),
+            token_breakdown: Mutex::new(TokenBreakdown::default()),
+            started_at: OnceLock::new(),
         }
     }
 
@@ -111,6 +135,105 @@ impl AgentHarness {
     /// exactly one run, so this counter is never reset.
     pub fn total_tokens(&self) -> u64 {
         self.total_tokens.load(Ordering::Relaxed)
+    }
+
+    /// Precise loop-exit cause for the most recent run. Defaults to
+    /// `Completed` for a clean exit. Set at each cap site inside `run()`.
+    pub fn terminate_reason(&self) -> TerminateReason {
+        self.terminate_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Per-component token breakdown. Granular complement to
+    /// [`total_tokens`] — surfaces cache hit ratio and reasoning-token
+    /// spend that the single sum hides.
+    pub fn token_breakdown(&self) -> TokenBreakdown {
+        self.token_breakdown
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Tool invocation timeline in run order. Sourced from the same trace
+    /// emissions the harness sends to `ToolCallCompleted`, so trace
+    /// consumers and the FlowOutcome see the same metadata.
+    pub fn tool_timeline(&self) -> Vec<ToolInvocation> {
+        self.tool_timeline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Wall-clock duration since `run()` entry. Returns `0` when the loop
+    /// has not started (test fixtures that call accessors without driving
+    /// the loop).
+    pub fn duration_ms(&self) -> u64 {
+        self.started_at
+            .get()
+            .map(|t| {
+                t.elapsed()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX)
+            })
+            .unwrap_or(0)
+    }
+
+    /// Helper for `act.rs` — append one tool invocation to the timeline.
+    /// `error` is `Some` iff `success == false`.
+    pub(crate) fn push_tool_invocation(
+        &self,
+        id: String,
+        name: String,
+        duration_ms: u64,
+        success: bool,
+        error: Option<String>,
+    ) {
+        let mut guard = self
+            .tool_timeline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        guard.push(ToolInvocation {
+            id,
+            name,
+            duration_ms,
+            success,
+            error,
+        });
+    }
+
+    /// Set the `TerminateReason` for the run. Called at each cap site in
+    /// `run()` (stall, turn timeout, consecutive-failure, verifier-veto,
+    /// max-iter) and at cancellation. Last writer wins — the loop is
+    /// single-threaded and only writes once per run anyway.
+    pub(crate) fn set_terminate_reason(&self, reason: TerminateReason) {
+        *self
+            .terminate_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = reason;
+    }
+
+    /// Fold one provider `TokenUsage` into the accumulated breakdown.
+    /// Called from `think.rs` alongside the existing `total_tokens`
+    /// fetch_add so the two counters stay in lockstep.
+    pub(crate) fn accumulate_token_breakdown(
+        &self,
+        usage: &Option<crate::providers::adapter::TokenUsage>,
+    ) {
+        if let Some(u) = usage {
+            self.token_breakdown
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .accumulate(
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.cache_read_tokens,
+                    u.cache_creation_tokens,
+                    u.thinking_tokens,
+                );
+        }
     }
 
     /// Read-only accessor for this harness's position in the subagent chain.
@@ -181,6 +304,10 @@ impl Harness for AgentHarness {
         callback: &mut dyn HarnessCallback,
         cancel: &CancellationToken,
     ) -> Result<(), HarnessError> {
+        // Stamp run start so `duration_ms()` is meaningful. `set` is a no-op
+        // when the same harness is reused — single-run instances see one
+        // entry only.
+        let _ = self.started_at.set(Instant::now());
         let cap = self.deps.max_iterations;
         let mut iterations: usize = 0;
         let mut tool_calls_made: usize = 0;
@@ -192,6 +319,7 @@ impl Harness for AgentHarness {
             std::collections::HashMap::new();
         let result: Result<crate::harness::trace::LoopTraceSessionOutcome, HarnessError> = loop {
             if cancel.is_cancelled() {
+                self.set_terminate_reason(TerminateReason::Cancelled);
                 break Err(HarnessError::Cancelled);
             }
             if let Some(ref tracker) = self.stall_tracker {
@@ -203,6 +331,9 @@ impl Harness for AgentHarness {
                         "stall watchdog tripped; forcing Done with hit_limit",
                     );
                     self.hit_limit.store(true, Ordering::Relaxed);
+                    self.set_terminate_reason(TerminateReason::StallTimeout {
+                        elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
+                    });
                     callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
@@ -227,10 +358,20 @@ impl Harness for AgentHarness {
                         "per-turn timeout tripped; forcing Done with hit_limit",
                     );
                     self.hit_limit.store(true, Ordering::Relaxed);
+                    self.set_terminate_reason(TerminateReason::TurnTimeout {
+                        phase: phase.to_string(),
+                        elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
+                    });
                     callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                 }
-                Err(e) => break Err(e),
+                Err(e) => {
+                    // Any other error path collapses to "Cancelled" for the
+                    // outer outcome (see Err branch below). Recording it here
+                    // keeps `terminate_reason` consistent with the trace.
+                    self.set_terminate_reason(TerminateReason::Cancelled);
+                    break Err(e);
+                }
                 Ok((TurnState::Continue, executed, is_veto)) => {
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
@@ -261,6 +402,11 @@ impl Harness for AgentHarness {
                                         "consecutive total-failure cap reached; forcing Done",
                                     );
                                     self.hit_limit.store(true, Ordering::Relaxed);
+                                    self.set_terminate_reason(
+                                        TerminateReason::ConsecutiveFailureCap {
+                                            consecutive: consecutive_failure_turns as u32,
+                                        },
+                                    );
                                     callback.on_complete();
                                     break Ok(
                                         crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
@@ -282,6 +428,9 @@ impl Harness for AgentHarness {
                                 "verifier veto limit reached; forcing Done to prevent infinite loop",
                             );
                             self.hit_limit.store(true, Ordering::Relaxed);
+                            self.set_terminate_reason(TerminateReason::VerifierVeto {
+                                vetos: verifier_veto_count as u32,
+                            });
                             callback.on_complete();
                             break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                         }
@@ -291,6 +440,9 @@ impl Harness for AgentHarness {
                     if let Some(limit) = cap {
                         if iterations >= limit {
                             self.hit_limit.store(true, Ordering::Relaxed);
+                            self.set_terminate_reason(TerminateReason::HitMaxIterations {
+                                used: iterations as u32,
+                            });
                             callback.on_complete();
                             break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                         }
@@ -303,6 +455,35 @@ impl Harness for AgentHarness {
             }
         };
 
+        // P2: read the last AssistantMessage text once at exit so the
+        // SessionCompleted trace event is self-sufficient. Trace consumers
+        // no longer need to re-read the session log to recover `final_text`.
+        // A read failure here is non-fatal — the trace event is still emitted
+        // with `final_text: None`, matching the legacy behaviour.
+        let final_text = self
+            .deps
+            .session
+            .get_events(session_id, None, None)
+            .await
+            .ok()
+            .and_then(|events| {
+                events.iter().rev().find_map(|r| match &r.event {
+                    SessionEvent::AssistantMessage { content, .. } => {
+                        if content.text.is_empty() {
+                            content.thinking.clone()
+                        } else {
+                            Some(content.text.clone())
+                        }
+                    }
+                    _ => None,
+                })
+            });
+
+        let terminate_reason = Some(self.terminate_reason());
+        let duration_ms = Some(self.duration_ms());
+        let token_breakdown = Some(self.token_breakdown());
+        let tool_timeline = self.tool_timeline();
+
         match result {
             Ok(outcome) => {
                 self.emit(|| crate::harness::trace::LoopTraceEvent::SessionCompleted {
@@ -314,7 +495,11 @@ impl Harness for AgentHarness {
                         outcome,
                         crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
                     ),
-                    final_text: None,
+                    final_text: final_text.clone(),
+                    terminate_reason: terminate_reason.clone(),
+                    duration_ms,
+                    token_breakdown: token_breakdown.clone(),
+                    tool_timeline: tool_timeline.clone(),
                 });
                 Ok(())
             }
@@ -341,7 +526,11 @@ impl Harness for AgentHarness {
                     tool_calls_made,
                     total_tokens: self.total_tokens.load(Ordering::Relaxed) as usize,
                     hit_limit: false,
-                    final_text: None,
+                    final_text,
+                    terminate_reason,
+                    duration_ms,
+                    token_breakdown,
+                    tool_timeline,
                 });
                 Err(e)
             }
@@ -758,6 +947,25 @@ mod tests {
         // Single text-only turn: input + output + cache_read + cache_creation
         // = 10 + 20 + 5 + 3 = 38. thinking_tokens (99) is excluded.
         assert_eq!(harness.total_tokens(), 38);
+
+        // P2: token_breakdown captures per-component figures including the
+        // reasoning slot that `total_tokens` deliberately drops.
+        let bd = harness.token_breakdown();
+        assert_eq!(bd.input, 10);
+        assert_eq!(bd.output, 20);
+        assert_eq!(bd.cache_read, 5);
+        assert_eq!(bd.cache_creation, 3);
+        assert_eq!(bd.reasoning, 99);
+        assert_eq!(bd.total(), 38, "breakdown.total() must agree with total_tokens()");
+
+        // Clean text-only run keeps the default Completed terminate reason.
+        assert_eq!(
+            harness.terminate_reason(),
+            crate::orchestrator::dispatch::TerminateReason::Completed,
+        );
+        // Wall-clock duration was stamped on entry — non-zero (or zero if
+        // the run finished within sub-ms; just check it doesn't panic).
+        let _ = harness.duration_ms();
     }
 
     #[tokio::test]
@@ -798,6 +1006,23 @@ mod tests {
         assert!(harness.hit_limit(), "hit_limit should be true after cap");
         // 3 iterations = 3 calls to provider (0, 1, 2)
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        // P2: terminate_reason precisely identifies the max-iter cap (the
+        // legacy hit_limit:bool could not distinguish this from stall /
+        // verifier-veto / consecutive-failure / turn-timeout).
+        assert_eq!(
+            harness.terminate_reason(),
+            crate::orchestrator::dispatch::TerminateReason::HitMaxIterations { used: 3 },
+        );
+
+        // P2: tool_timeline captured one entry per executed tool call.
+        // LoopingProvider returns a `echo(text:"loop")` tool_call each turn,
+        // executed by AlwaysOkTools — 3 iterations → 1 unique call deduped
+        // by the same-run memo (entries 2 and 3 hit cache, duration_ms = 0).
+        let timeline = harness.tool_timeline();
+        assert_eq!(timeline.len(), 3, "one timeline entry per Act-phase call");
+        assert!(timeline.iter().all(|i| i.success));
+        assert_eq!(timeline[0].name, "echo");
     }
 
     #[tokio::test]
@@ -838,5 +1063,20 @@ mod tests {
             harness.hit_limit(),
             "hit_limit should be true after timeout"
         );
+
+        // P2: TurnTimeout is distinguishable from other cap reasons. The
+        // phase string comes from `TurnPhase::Think` because the sleeping
+        // provider hangs the LLM call (not a tool call).
+        match harness.terminate_reason() {
+            crate::orchestrator::dispatch::TerminateReason::TurnTimeout {
+                phase, ..
+            } => {
+                assert!(
+                    phase.to_lowercase().contains("think"),
+                    "expected think-phase timeout, got phase={phase}",
+                );
+            }
+            other => panic!("expected TurnTimeout, got {other:?}"),
+        }
     }
 }

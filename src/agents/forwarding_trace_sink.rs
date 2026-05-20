@@ -251,6 +251,10 @@ mod tests {
             total_tokens: 1000,
             hit_limit: false,
             final_text: None,
+            terminate_reason: None,
+            duration_ms: None,
+            token_breakdown: None,
+            tool_timeline: Vec::new(),
         });
         let snap = tracker.progress_snapshot("rid", 10);
         assert_eq!(snap.len(), 1);

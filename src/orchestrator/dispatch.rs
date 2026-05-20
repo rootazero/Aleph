@@ -123,6 +123,11 @@ pub enum TerminateReason {
     /// `max_iterations` cap reached. `used` is the iteration count that
     /// tripped the guard.
     HitMaxIterations { used: u32 },
+    /// `context_budget` directive forced an early `FinalReply` because the
+    /// running prompt would otherwise blow the model's context window.
+    /// Distinct from `HitMaxIterations` — same outward symptom, different
+    /// cause (tokens vs iterations).
+    ContextBudgetExhausted,
     /// `stall_config` watchdog tripped before the loop emitted progress.
     StallTimeout { elapsed_ms: u64 },
     /// Per-turn timeout exhausted in `phase` (think / act).
@@ -155,6 +160,7 @@ impl TerminateReason {
         match self {
             Self::Completed => "completed",
             Self::HitMaxIterations { .. } => "hit_max_iterations",
+            Self::ContextBudgetExhausted => "context_budget_exhausted",
             Self::StallTimeout { .. } => "stall_timeout",
             Self::TurnTimeout { .. } => "turn_timeout",
             Self::ConsecutiveFailureCap { .. } => "consecutive_failure_cap",
@@ -508,6 +514,7 @@ mod outcome_tests {
 
         // Every other variant IS a cap.
         assert!(TerminateReason::HitMaxIterations { used: 200 }.is_hit_limit());
+        assert!(TerminateReason::ContextBudgetExhausted.is_hit_limit());
         assert!(TerminateReason::StallTimeout { elapsed_ms: 30_000 }.is_hit_limit());
         assert!(TerminateReason::TurnTimeout {
             phase: "think".into(),
@@ -524,6 +531,10 @@ mod outcome_tests {
         assert_eq!(
             TerminateReason::HitMaxIterations { used: 5 }.as_static_str(),
             "hit_max_iterations"
+        );
+        assert_eq!(
+            TerminateReason::ContextBudgetExhausted.as_static_str(),
+            "context_budget_exhausted"
         );
         assert_eq!(
             TerminateReason::StallTimeout { elapsed_ms: 0 }.as_static_str(),

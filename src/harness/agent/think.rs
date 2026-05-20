@@ -105,6 +105,9 @@ impl AgentHarness {
         // message already on the session log is the final text.
         if matches!(budget_directive, Some(LoopDirective::FinalReply)) {
             self.hit_limit.store(true, Ordering::Relaxed);
+            self.set_terminate_reason(
+                crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
+            );
             callback.on_complete_via_harness();
             return Ok((TurnState::Done, 0, false));
         }
@@ -151,6 +154,12 @@ impl AgentHarness {
         // billed. Excludes `thinking_tokens`; see `turn_token_total`.
         let turn_tokens = super::turn_token_total(&response.usage);
         self.total_tokens.fetch_add(turn_tokens, Ordering::Relaxed);
+        // P2: per-component breakdown — captures cache hit ratio and
+        // reasoning-token spend that the single `total_tokens` sum hides.
+        // Reasoning is folded as `thinking_tokens` even when `total_tokens`
+        // excludes it (Anthropic already includes it in `output`; Gemini
+        // reports it separately).
+        self.accumulate_token_breakdown(&response.usage);
 
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = super::current_turn_id(&events);

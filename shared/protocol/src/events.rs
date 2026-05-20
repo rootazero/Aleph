@@ -267,6 +267,19 @@ pub enum AgentTraceEvent {
         total_tokens: usize,
         hit_limit: bool,
         final_text: Option<String>,
+        /// Precise loop-exit cause. Encoded as opaque JSON so the protocol
+        /// crate stays free of `alephcore` types. `None` on legacy blobs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminate_reason: Option<Value>,
+        /// Wall-clock harness duration. `None` on legacy blobs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        /// Per-component token breakdown encoded as opaque JSON.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_breakdown: Option<Value>,
+        /// Tool invocation timeline encoded as opaque JSON entries.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tool_timeline: Vec<Value>,
     },
     /// Subagent worktree isolation primitive created (P3 Stage H).
     WorktreeCreated { path: std::path::PathBuf },
