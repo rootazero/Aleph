@@ -79,6 +79,9 @@ impl FlowRunTool {
             depth: ctx.current_depth.saturating_add(1),
             tool_service: None,
             trace_sink: None,
+            // Subagent flows have no originating channel; fall back to
+            // the harness bridge's Background paradigm default.
+            interaction_manifest: None,
         };
         let handle = self.orchestrator.dispatch(req).await?;
         let outcome = handle

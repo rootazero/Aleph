@@ -174,6 +174,12 @@ pub struct PromptBuilder {
     /// bridge from `AiProvider::model_behavior_override()` falling back
     /// to `AiProvider::protocol()`.
     provider_protocol: Option<String>,
+    /// Static per-run Think→Act iteration cap. Threaded into every
+    /// `LayerInput` as `iteration_cap` so `SessionBudgetLayer` can
+    /// surface it. Sourced by the harness bridge from
+    /// `resolve_max_iterations(...)` (`FlowOverrides.max_iterations`
+    /// override winning over the boot-time default).
+    iteration_cap: Option<u32>,
 }
 
 impl PromptBuilder {
@@ -191,6 +197,7 @@ impl PromptBuilder {
             chain_context: None,
             resolved_context: None,
             provider_protocol: None,
+            iteration_cap: None,
         }
     }
 
@@ -287,6 +294,14 @@ impl PromptBuilder {
         self
     }
 
+    /// Attach the resolved Think→Act iteration cap so
+    /// `SessionBudgetLayer` can surface it. The harness bridge sources
+    /// the value from `resolve_max_iterations(...)` once per run.
+    pub fn with_iteration_cap(mut self, cap: u32) -> Self {
+        self.iteration_cap = Some(cap);
+        self
+    }
+
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
         let (path, input) = match &self.soul {
@@ -313,6 +328,7 @@ impl PromptBuilder {
         let input = input.with_chain_context_opt(self.chain_context.as_ref());
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(path, &input)
     }
 
@@ -326,7 +342,8 @@ impl PromptBuilder {
             .with_curated_envelope(self.curated_memory_envelope.clone())
             .with_chain_context_opt(self.chain_context.as_ref())
             .with_resolved_context_opt(self.resolved_context.as_ref())
-            .with_provider_protocol_opt(self.provider_protocol.as_deref());
+            .with_provider_protocol_opt(self.provider_protocol.as_deref())
+            .with_iteration_cap_opt(self.iteration_cap);
         self.pipeline
             .execute_cached(AssemblyPath::Hydration, &input)
     }
@@ -354,6 +371,7 @@ impl PromptBuilder {
         let input = input.with_chain_context_opt(self.chain_context.as_ref());
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -396,6 +414,9 @@ impl PromptBuilder {
         if let Some(protocol) = self.provider_protocol.clone() {
             builder = builder.with_provider_protocol(protocol);
         }
+        if let Some(cap) = self.iteration_cap {
+            builder = builder.with_iteration_cap(cap);
+        }
         let mut prompt = builder.build_system_prompt_with_soul(tools, soul, profile);
 
         // After hooks
@@ -429,6 +450,7 @@ impl PromptBuilder {
         let input = input.with_chain_context_opt(self.chain_context.as_ref());
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -451,6 +473,7 @@ impl PromptBuilder {
         let input = input.with_chain_context_opt(self.chain_context.as_ref());
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Basic, &input)
     }
 
@@ -473,6 +496,7 @@ impl PromptBuilder {
         let input = input.with_chain_context_opt(self.chain_context.as_ref());
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         let stable_prefix = self.pipeline.execute_stable_only(path, &input);
         PromptSnapshot {
             stable_prefix,
@@ -501,6 +525,7 @@ impl PromptBuilder {
         let input = input.with_chain_context_opt(self.chain_context.as_ref());
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
 
         let dynamic_suffix = self.pipeline.execute_dynamic_only(snapshot.path, &input);
         let mut result = String::with_capacity(snapshot.stable_prefix.len() + dynamic_suffix.len());
@@ -539,6 +564,7 @@ impl PromptBuilder {
         let input = input.with_chain_context_opt(self.chain_context.as_ref());
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline
             .execute_with_mode(AssemblyPath::Soul, &input, mode)
     }
@@ -568,6 +594,7 @@ impl PromptBuilder {
         let input = input.with_chain_context_opt(self.chain_context.as_ref());
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline
             .assemble(AssemblyPath::Soul, &input, mode, budget)
     }
@@ -600,6 +627,7 @@ impl PromptBuilder {
         let input = input.with_chain_context_opt(self.chain_context.as_ref());
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -616,7 +644,8 @@ impl PromptBuilder {
         let input = LayerInput::context(&self.config, ctx)
             .with_curated_envelope(self.curated_memory_envelope.clone())
             .with_chain_context_opt(self.chain_context.as_ref())
-            .with_provider_protocol_opt(self.provider_protocol.as_deref());
+            .with_provider_protocol_opt(self.provider_protocol.as_deref())
+            .with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Context, &input)
     }
 }

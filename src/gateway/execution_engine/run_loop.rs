@@ -403,6 +403,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let flow_input =
                 super::helpers::history_to_flow_input(history.clone(), request.input.clone());
 
+            // Phase 4 (F4): derive the channel's InteractionManifest from
+            // the platform string already carried in request.metadata.
+            // `paradigm_for_channel_type` maps "cli" → CLI, the messaging
+            // channels (telegram/feishu/slack/whatsapp/etc.) → Messaging,
+            // web variants → WebRich, and anything unknown → Background.
+            // The harness bridge will adapt `OperationalGuidelinesLayer`,
+            // `ProtocolTokensLayer`, etc. accordingly.
+            let interaction_manifest = request.metadata.get("platform").map(|p| {
+                crate::thinker::interaction::InteractionManifest::new(
+                    crate::gateway::channel::paradigm_for_channel_type(p),
+                )
+            });
+
             let req = crate::orchestrator::FlowRequest {
                 flow_id: None,
                 agent_id: agent.id().to_string(),
@@ -413,6 +426,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 depth: 0,
                 tool_service: Some(tool_service),
                 trace_sink: Some(trace_sink),
+                interaction_manifest,
             };
 
             // Dispatch via the orchestrator

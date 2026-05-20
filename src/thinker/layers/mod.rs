@@ -44,6 +44,7 @@ mod protocol_tokens;
 mod provider_guidance;
 mod runtime_context;
 mod security;
+mod session_budget;
 mod voice_mode;
 
 // --- Identity files layer ---
@@ -104,6 +105,7 @@ pub use protocol_tokens::ProtocolTokensLayer;
 pub use provider_guidance::ProviderGuidanceLayer;
 pub use runtime_context::RuntimeContextLayer;
 pub use security::SecurityLayer;
+pub use session_budget::SessionBudgetLayer;
 pub use session_context_guide::SessionContextGuideLayer;
 pub use session_resume::SessionResumeLayer;
 pub use voice_mode::VoiceModeLayer;

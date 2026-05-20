@@ -797,6 +797,29 @@ pub trait NativeStreamHandler: Send + Sync {
 
 /// Provider of interaction manifest for a channel
 ///
+/// Map a channel-type string (as reported by
+/// [`Channel::channel_type`] / [`ChannelInfo::channel_type`]) to the
+/// `InteractionParadigm` that best describes its UX shape.
+///
+/// Used by the gateway run-loop when constructing
+/// `FlowRequest.interaction_manifest` for Phase 4 channel-aware prompt
+/// assembly. The mapping is intentionally conservative — when a new
+/// channel type is added without an entry, it falls through to
+/// `Background`, which is the safest default (subagent-style execution
+/// without user-facing chrome).
+pub fn paradigm_for_channel_type(
+    channel_type: &str,
+) -> crate::thinker::interaction::InteractionParadigm {
+    use crate::thinker::interaction::InteractionParadigm;
+    match channel_type {
+        "cli" => InteractionParadigm::CLI,
+        "webchat" | "webrich" | "web" | "webhook" => InteractionParadigm::WebRich,
+        "telegram" | "feishu" | "slack" | "whatsapp" | "discord" | "irc" | "msteams" | "wechat"
+        | "line" => InteractionParadigm::Messaging,
+        _ => InteractionParadigm::Background,
+    }
+}
+
 /// Channels implement this to declare their interaction capabilities.
 /// The manifest is used by ContextAggregator to filter tools and
 /// generate appropriate system prompts.
