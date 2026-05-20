@@ -126,6 +126,13 @@ pub struct LayerInput<'a> {
     /// the section entirely when the chain is at root (`depth == 0`) or
     /// the field is `None`, so the top-level harness path stays unaffected.
     pub chain_context: Option<&'a crate::harness::chain_context::ChainContext>,
+    /// Wire-protocol family identifier reported by
+    /// `AiProvider::protocol()` (with `model_behavior_override()` taking
+    /// precedence). Used by `ProviderGuidanceLayer` to dispatch the
+    /// appropriate per-family operational guidance block. `None` keeps
+    /// the layer silent — desirable on non-LLM-driven paths (capture,
+    /// snapshot, tests).
+    pub provider_protocol: Option<&'a str>,
 }
 
 impl<'a> LayerInput<'a> {
@@ -149,6 +156,7 @@ impl<'a> LayerInput<'a> {
             session_snapshot: None,
             curated_memory_envelope: None,
             chain_context: None,
+            provider_protocol: None,
         }
     }
 
@@ -172,6 +180,7 @@ impl<'a> LayerInput<'a> {
             session_snapshot: None,
             curated_memory_envelope: None,
             chain_context: None,
+            provider_protocol: None,
         }
     }
 
@@ -195,6 +204,7 @@ impl<'a> LayerInput<'a> {
             session_snapshot: None,
             curated_memory_envelope: None,
             chain_context: None,
+            provider_protocol: None,
         }
     }
 
@@ -218,6 +228,7 @@ impl<'a> LayerInput<'a> {
             session_snapshot: None,
             curated_memory_envelope: None,
             chain_context: None,
+            provider_protocol: None,
         }
     }
 
@@ -326,6 +337,33 @@ impl<'a> LayerInput<'a> {
         chain: Option<&'a crate::harness::chain_context::ChainContext>,
     ) -> Self {
         self.chain_context = chain;
+        self
+    }
+
+    /// Attach an optional `ResolvedContext` to this input.
+    ///
+    /// Used by the Basic / Hydration / Soul entry points so the Phase 2
+    /// widened layers (security, operational_guidelines, protocol_tokens,
+    /// runtime_context) can consume context on every assembly path
+    /// without forcing a switch to the dedicated `Context` route. The
+    /// `Context` path's `LayerInput::context` constructor already sets
+    /// this field, so callers on that path leave it alone.
+    pub fn with_resolved_context_opt(mut self, ctx: Option<&'a ResolvedContext>) -> Self {
+        self.context = ctx;
+        self
+    }
+
+    /// Attach the wire-protocol family identifier so `ProviderGuidanceLayer`
+    /// can dispatch the right per-family operational directives.
+    pub fn with_provider_protocol(mut self, protocol: &'a str) -> Self {
+        self.provider_protocol = Some(protocol);
+        self
+    }
+
+    /// Same as `with_provider_protocol` but accepts an `Option` for
+    /// ergonomic threading from optional config.
+    pub fn with_provider_protocol_opt(mut self, protocol: Option<&'a str>) -> Self {
+        self.provider_protocol = protocol;
         self
     }
 

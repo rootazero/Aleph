@@ -216,6 +216,7 @@ impl PromptPipeline {
     ///  700  ProtocolTokensLayer
     ///  710  HeartbeatLayer
     ///  800  OperationalGuidelinesLayer
+    ///  810  ProviderGuidanceLayer
     ///  900  CitationStandardsLayer
     /// 1000  GenerationModelsLayer
     /// 1050  SkillInstructionsLayer
@@ -262,6 +263,7 @@ impl PromptPipeline {
             Box::new(ProtocolTokensLayer),
             Box::new(HeartbeatLayer),
             Box::new(OperationalGuidelinesLayer),
+            Box::new(ProviderGuidanceLayer),
             Box::new(CitationStandardsLayer),
             Box::new(GenerationModelsLayer),
             Box::new(SkillInstructionsLayer),
@@ -474,10 +476,11 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        // 35 after ChainContextLayer was added (Phase 2, 2026-05-20). The
-        // previous count was 34 (ResponseFormatLayer was unregistered
-        // 2026-05-10) — see `default_layers` for the full layer table.
-        assert_eq!(pipeline.layer_count(), 35);
+        // 36 after ProviderGuidanceLayer was added (Phase 3, 2026-05-20)
+        // alongside ChainContextLayer (Phase 2, 2026-05-20). The
+        // previous count was 35 — see `default_layers` for the full
+        // layer table.
+        assert_eq!(pipeline.layer_count(), 36);
     }
 
     #[test]
@@ -529,6 +532,7 @@ mod mode_tests {
             "protocol_tokens",
             "heartbeat",
             "operational_guidelines",
+            "provider_guidance",
             "citation_standards",
             "generation_models",
             "skill_instructions",

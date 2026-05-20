@@ -89,6 +89,118 @@ fn test_thinking_guidance_with_soul() {
 }
 
 #[test]
+fn phase3_with_resolved_context_basic_path_emits_operational_guidelines() {
+    // Phase 3 wiring: `PromptBuilder::with_resolved_context(...)` must
+    // thread a `ResolvedContext` into the `Basic` assembly path so the
+    // Phase 2 widened layers fire on the harness route (which calls
+    // `build_system_prompt`, not `build_system_prompt_with_context`).
+    //
+    // The harness-bridge default is `Background` paradigm + permissive
+    // security — under those settings `OperationalGuidelinesLayer` must
+    // emit its `## System Operational Awareness` block.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::Background);
+    let security = SecurityContext::permissive();
+    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+    let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
+    let prompt = builder.build_system_prompt(&[]);
+
+    assert!(
+        prompt.contains("## System Operational Awareness"),
+        "OperationalGuidelinesLayer must emit on Basic path when resolved_context is attached"
+    );
+    assert!(
+        prompt.contains("Diagnostic Capabilities"),
+        "Diagnostic Capabilities sub-section missing from operational guidelines"
+    );
+    // SecurityLayer always renders a "Security Level: …" note (sandbox
+    // baseline) even under permissive — that's the documented envelope
+    // surface for the LLM. Verify the header + the permissive note both
+    // arrive on Basic.
+    assert!(
+        prompt.contains("## Security & Constraints"),
+        "SecurityLayer should emit the section header when context is attached"
+    );
+    assert!(
+        prompt.contains("Security Level: None"),
+        "SecurityLayer must surface the sandbox baseline note under permissive"
+    );
+    // ProtocolTokensLayer guards on the `SilentReply` capability —
+    // Background paradigm includes it by default, so the harness path
+    // gets the protocol token block automatically.
+    assert!(
+        prompt.contains("ALEPH_SILENT_COMPLETE"),
+        "ProtocolTokensLayer must emit when Background paradigm enables SilentReply"
+    );
+    // RuntimeContextLayer requires `runtime_context` to be populated on
+    // the ResolvedContext — left as None here, so layer is silent.
+    assert!(
+        !prompt.contains("## Runtime Environment"),
+        "RuntimeContextLayer should stay silent without runtime_context attached"
+    );
+}
+
+#[test]
+fn phase3_with_provider_protocol_openai_emits_guidance_on_basic_path() {
+    // `PromptBuilder::with_provider_protocol(...)` must thread the
+    // wire-protocol family into the `Basic` assembly path so
+    // `ProviderGuidanceLayer` selects the right per-family block. The
+    // harness bridge sources the protocol from
+    // `AiProvider::model_behavior_override()` falling back to
+    // `AiProvider::protocol()`.
+    let builder = PromptBuilder::new(PromptConfig::default()).with_provider_protocol("openai");
+    let prompt = builder.build_system_prompt(&[]);
+    assert!(
+        prompt.contains("## Tool-Use Enforcement"),
+        "OpenAI protocol must surface tool-use enforcement on Basic path"
+    );
+    assert!(
+        prompt.contains("## Execution Discipline"),
+        "OpenAI protocol must surface execution discipline on Basic path"
+    );
+}
+
+#[test]
+fn phase3_with_provider_protocol_anthropic_stays_silent_on_basic_path() {
+    let builder = PromptBuilder::new(PromptConfig::default()).with_provider_protocol("anthropic");
+    let prompt = builder.build_system_prompt(&[]);
+    assert!(
+        !prompt.contains("## Tool-Use Enforcement"),
+        "Anthropic protocol must not emit tool-use enforcement (Claude is well-behaved)"
+    );
+    assert!(
+        !prompt.contains("## Execution Discipline"),
+        "Anthropic protocol must not emit execution discipline"
+    );
+    assert!(
+        !prompt.contains("## Google Model Operational Directives"),
+        "Anthropic protocol must not emit Google directives"
+    );
+}
+
+#[test]
+fn phase3_basic_path_without_resolved_context_stays_silent() {
+    // Symmetric to the above: without `with_resolved_context`, the
+    // widened layers must still graceful-noop on Basic so we don't
+    // accidentally render half-headers.
+    let builder = PromptBuilder::new(PromptConfig::default());
+    let prompt = builder.build_system_prompt(&[]);
+
+    assert!(
+        !prompt.contains("## System Operational Awareness"),
+        "OperationalGuidelinesLayer must not emit when no resolved_context attached"
+    );
+    assert!(
+        !prompt.contains("## Security & Constraints"),
+        "SecurityLayer must not emit when no resolved_context attached"
+    );
+}
+
+#[test]
 fn test_build_system_prompt_with_context_includes_runtime_context() {
     use crate::thinker::context::ContextAggregator;
     use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
