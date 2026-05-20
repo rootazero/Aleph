@@ -99,6 +99,16 @@ pub struct HarnessDeps {
     /// Exceeding the budget yields `HarnessError::StalledTurn` with the
     /// hung phase. `None` disables (legacy behavior). Recommended `Some(300s)`.
     pub turn_timeout: Option<std::time::Duration>,
+    /// Layer 3 of the tool-result budget: per-turn aggregate token tracker
+    /// that spills overflowing results to disk via `result_store`. `None`
+    /// disables Layer 3 entirely; Layer 2 (per-tool cap) still runs inside
+    /// `ScopedToolService` if a store is wired there.
+    pub turn_budget: Option<Arc<crate::tools::turn_budget::TurnResultBudget>>,
+    /// Shared `ToolResultStore` used by Layer 3 spill instructions to
+    /// persist large outputs to disk. Should match the store injected
+    /// into `ScopedToolService` so all persisted markers land in the
+    /// same session-scoped directory.
+    pub result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
 }
 
 // ---------------------------------------------------------------------------
