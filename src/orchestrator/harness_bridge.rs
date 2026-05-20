@@ -24,7 +24,7 @@ use crate::agents::AgentRegistry;
 use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::harness::agent::AgentHarness;
-
+use crate::harness::callback::HarnessCallback;
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::Harness;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
@@ -388,10 +388,18 @@ impl HarnessRunner for AgentHarnessRunner {
             estimated_cost: None,
         };
 
-        // Emit `Complete(outcome)` as the terminal broadcast event.
-        // `BroadcastCallback::on_complete` is a no-op; this is the only place
-        // that fires the `Complete` variant so it is always last on the channel.
-        let _ = events.send(FlowStreamEvent::Complete(outcome.clone()));
+        // P4: single-source the terminal `Complete(outcome)` emit. The
+        // callback owns the broadcast channel and now fires the event from
+        // `on_complete_with_outcome`, so the previous `events.send` here
+        // would duplicate it. Reply emitters already de-dupe by run-id
+        // (see streaming.rs:run_complete_handled), but emitting twice is a
+        // foot-gun — channels that don't de-dupe (telemetry, JSON dump)
+        // would see the same outcome twice.
+        cb.on_complete_with_outcome(&outcome);
+
+        // `events` is unused after this point — kept in scope so the broadcast
+        // channel stays alive until BroadcastCallback drops at end of run.
+        let _ = events;
 
         Ok(outcome)
     }
@@ -580,7 +588,8 @@ mod tests {
         cb.on_delta("world");
         // Use legacy on_tool_call — fires ToolCallStart with id="legacy"
         cb.on_tool_call("read_file");
-        // on_complete is now a no-op; Complete(outcome) is emitted by AgentHarnessRunner
+        // on_complete is now a no-op; Complete(outcome) is emitted by
+        // on_complete_with_outcome (P4).
         cb.on_complete();
 
         let mut received = Vec::new();
@@ -601,6 +610,57 @@ mod tests {
         match &received[2] {
             FlowStreamEvent::ToolCallStart { name, .. } => assert_eq!(name, "read_file"),
             other => panic!("expected ToolCallStart, got {other:?}"),
+        }
+    }
+
+    /// P4: `on_complete_with_outcome` is the single emitter of the terminal
+    /// `Complete(outcome)` event. The outcome payload survives the
+    /// callback → broadcast hop unchanged.
+    #[test]
+    fn broadcast_callback_on_complete_with_outcome_emits_terminal_event() {
+        use crate::orchestrator::dispatch::{
+            FlowOutcome, TerminateReason, TokenBreakdown,
+        };
+
+        let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(16);
+        let mut cb = super::callback::BroadcastCallback::new(tx);
+
+        let outcome = FlowOutcome {
+            final_text: "all done".into(),
+            iterations: 4,
+            tool_calls_made: 2,
+            total_tokens: 1500,
+            hit_limit: true,
+            terminate_reason: TerminateReason::HitMaxIterations { used: 4 },
+            duration_ms: 1234,
+            token_breakdown: TokenBreakdown {
+                input: 800,
+                output: 600,
+                ..Default::default()
+            },
+            tool_timeline: Vec::new(),
+            estimated_cost: None,
+        };
+        cb.on_complete_with_outcome(&outcome);
+
+        let received: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert_eq!(received.len(), 1, "exactly one Complete event");
+        match &received[0] {
+            FlowStreamEvent::Complete(o) => {
+                assert_eq!(o.final_text, "all done");
+                assert_eq!(o.iterations, 4);
+                assert_eq!(o.tool_calls_made, 2);
+                assert_eq!(o.total_tokens, 1500);
+                assert!(o.hit_limit);
+                assert_eq!(
+                    o.terminate_reason,
+                    TerminateReason::HitMaxIterations { used: 4 }
+                );
+                assert_eq!(o.duration_ms, 1234);
+                assert_eq!(o.token_breakdown.input, 800);
+                assert_eq!(o.token_breakdown.output, 600);
+            }
+            other => panic!("expected Complete, got {other:?}"),
         }
     }
 

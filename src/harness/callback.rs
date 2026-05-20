@@ -13,18 +13,19 @@
 
 use std::fmt;
 
-/// Hint passed to `on_complete_with_outcome` so `BroadcastCallback` can
-/// construct a `FlowStreamEvent::Complete(outcome)`.  The full `FlowOutcome`
-/// is assembled by `AgentHarnessRunner` after the inner `AgentHarness::run`
-/// returns; `OutcomeHint` carries the fields that are observable at the harness
-/// callback boundary today.
-///
-/// This type is intentionally kept small — `AgentHarnessRunner::run` builds
-/// the authoritative `FlowOutcome` and emits `Complete(outcome)` itself (see
-/// Task 1 plan §Step 3 note). The hint exists as a forward-compatibility shim
-/// for callers that want an early signal before the runner synthesises the full
-/// outcome.
+use crate::orchestrator::dispatch::FlowOutcome;
+
+/// Legacy hint pre-dating [`HarnessCallback::on_complete_with_outcome`]
+/// taking the full [`FlowOutcome`]. Kept so external callers that
+/// referenced it keep compiling; new code should consume the
+/// `FlowOutcome` reference directly via the trait method.
 #[derive(Debug, Clone, Default)]
+#[deprecated(
+    since = "0.3.0",
+    note = "Use HarnessCallback::on_complete_with_outcome(&FlowOutcome) instead — \
+            OutcomeHint only carried hit_limit:bool, FlowOutcome carries the full \
+            terminate reason, timeline, and breakdown."
+)]
 pub struct OutcomeHint {
     pub hit_limit: bool,
 }
@@ -70,9 +71,22 @@ pub trait HarnessCallback: Send {
     /// Invoked when the harness reaches a terminal `TurnState::Done`.
     fn on_complete(&mut self) {}
 
-    /// Invoked when the harness completes with an outcome hint. Default
-    /// implementation calls `on_complete()` for backward compatibility.
-    fn on_complete_with_outcome(&mut self, _outcome_hint: &OutcomeHint) {
+    /// Invoked by `AgentHarnessRunner` after the inner Think→Act loop
+    /// finishes and the full [`FlowOutcome`] has been synthesised from the
+    /// harness accessors. The default implementation calls
+    /// [`HarnessCallback::on_complete`] for backwards compatibility — the
+    /// callback receives no outcome data, matching the legacy behaviour.
+    ///
+    /// Implementations that need the final terminate reason, token
+    /// breakdown, tool timeline, or cost estimate (e.g. the gateway's
+    /// `BroadcastCallback`, which fires the terminal
+    /// `FlowStreamEvent::Complete(outcome)` from this method) override it.
+    ///
+    /// Lifecycle ordering — `on_complete_with_outcome` always fires AFTER
+    /// `on_complete`. Implementations that emit a terminal "Complete"-style
+    /// event should do so here, not in `on_complete`, so the outcome
+    /// payload is always present.
+    fn on_complete_with_outcome(&mut self, _outcome: &FlowOutcome) {
         self.on_complete();
     }
 }
