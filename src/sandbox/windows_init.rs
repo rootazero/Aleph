@@ -160,7 +160,10 @@ mod imp {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE, HANDLE};
+    // LocalFree lives in Foundation in windows-sys 0.61+ (was Memory in 0.59).
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, LocalFree, INVALID_HANDLE_VALUE, HANDLE,
+    };
     use windows_sys::Win32::Security::{
         CreateRestrictedToken, SetTokenInformation, TokenIntegrityLevel,
         DISABLE_MAX_PRIVILEGE, SE_GROUP_INTEGRITY, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY,
@@ -170,7 +173,6 @@ mod imp {
     use windows_sys::Win32::System::Console::{
         GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
     };
-    use windows_sys::Win32::System::Memory::LocalFree;
     use windows_sys::Win32::System::Threading::{
         CreateProcessAsUserW, CreateProcessW, GetCurrentProcess, GetExitCodeProcess,
         OpenProcessToken, WaitForSingleObject, INFINITE, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
