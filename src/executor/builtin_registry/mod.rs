@@ -1,25 +1,15 @@
 //! Builtin Tool Registry for Agent Loop
 //!
-//! This module provides a `BuiltinToolRegistry` that implements the `ToolRegistry` trait,
-//! allowing the Agent Loop's SingleStepExecutor to directly invoke builtin tools without
-//! going through rig's agent framework.
-//!
-//! # Safety Features
-//!
-//! Tool execution safety is enforced by:
-//! - CommandChecker: Blocks dangerous shell commands (rm -rf /, sudo, etc.)
-//! - PathPermissionChecker: Sandboxes file operations to allowed directories
-//!
-//! TODO: Tool policy will be reimplemented following OpenClaw's sandbox/tool-policy pattern.
-//! See: /Volumes/TBU4/Workspace/openclaw/src/agents/sandbox/
+//! This module provides a `BuiltinToolRegistry` that implements the
+//! `ToolRegistry` trait, letting the agent loop's tool stack invoke builtin
+//! tools directly without going through rig's agent framework.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! use alephcore::executor::{BuiltinToolRegistry, SingleStepExecutor};
+//! use alephcore::executor::BuiltinToolRegistry;
 //!
-//! let registry = BuiltinToolRegistry::new();
-//! let executor = SingleStepExecutor::new(Arc::new(registry));
+//! let registry = BuiltinToolRegistry::new().await;
 //! ```
 
 mod builder;
@@ -29,11 +19,14 @@ mod groups;
 mod registry;
 
 pub use config::BuiltinToolConfig;
-pub use definitions::{create_tool_boxed, get_builtin_tool_names, BUILTIN_TOOL_DEFINITIONS};
+pub use definitions::{
+    create_tool_boxed, get_builtin_tool_names, BUILTIN_TOOL_DEFINITIONS,
+    CONFIRMATION_REQUIRED_TOOLS,
+};
 pub use groups::TOOL_CATEGORIES;
 pub use registry::BuiltinToolRegistry;
 
-// Re-import ToolRegistry from single_step for internal use
+// Re-import the ToolRegistry trait for the `impl ToolRegistry for ...` block.
 use super::ToolRegistry;
 
 #[cfg(test)]

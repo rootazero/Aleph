@@ -51,19 +51,28 @@ pub mod markdown_skill;
 // Schema strictification for strict-mode tool calling
 pub mod schema_strictify;
 
-// Phase 2 Tool Service façade — consumer-side trait + decorator chain scaffold.
-pub mod dispatch;
-pub mod facade;
+// Consumer-side `ToolService` trait + production `ScopedToolService` adapter.
+// The pre-`ScopedToolService` decorator chain (Phase 2 facade — `facade.rs`,
+// `dispatch.rs`, `middleware/`) has been deleted: gateway always supplies a
+// per-request `ScopedToolService` via
+// `tool_service_builder::build_request_tool_service`, leaving the chain
+// unreachable. `NullToolService` is the fail-closed default that fills the
+// harness fallback slot.
+//
+// `tools::registry::ToolRegistry` + `tools::handlers::*` survive — they are
+// the live target of `mcp::tool_bridge`, which mutates the registry as MCP
+// servers advertise / drop tools.
 pub mod handlers;
-pub mod middleware;
-pub mod registry;
 pub mod mcp_scope_view;
+pub mod null;
+pub mod registry;
 pub mod scoped;
 pub mod service;
+pub mod turn_context;
 pub use scoped::ScopedToolService;
 
 pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
-pub use facade::{build_tool_service, build_tool_service_with_handles, ToolServiceHandles};
+pub use null::NullToolService;
 pub use registry::ToolRegistry;
 pub use server::{AlephToolServer, AlephToolServerHandle};
 pub use service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource};

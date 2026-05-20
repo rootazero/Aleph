@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::agents::subagent_tool::SubagentTool;
+use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::refresh::ToolRefreshSource;
@@ -58,6 +59,16 @@ pub struct ScopedToolService {
     subagent_tool: Option<Arc<SubagentTool>>,
     refresh: Option<Arc<dyn ToolRefreshSource>>,
     hook_decorator: Option<Arc<dyn ToolHookDecorator>>,
+    /// Tool names that require user confirmation before they execute.
+    confirm_tools: BTreeSet<String>,
+    /// Transport used to obtain that confirmation. `None` = no approval
+    /// channel wired, so confirm-required tools fail closed (denied).
+    approval_requester: Option<Arc<dyn ApprovalRequester>>,
+    /// Routing context of the agent turn this service serves. When set,
+    /// `execute()` scopes it into the `TURN_CONTEXT` task-local so HITL tools
+    /// (sandbox escalation, `requires_confirmation`, `ask_user`) can route a
+    /// prompt back to the originating channel.
+    turn_context: Option<crate::tools::turn_context::TurnContext>,
     schema_cache: ArcSwap<Option<(u64, Arc<[crate::dispatcher::ToolDefinition]>)>>,
     cache_generation: std::sync::atomic::AtomicU64,
 }
@@ -73,9 +84,38 @@ impl ScopedToolService {
             subagent_tool: None,
             refresh: None,
             hook_decorator: None,
+            confirm_tools: BTreeSet::new(),
+            approval_requester: None,
+            turn_context: None,
             schema_cache: ArcSwap::from_pointee(None),
             cache_generation: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Require user confirmation for the named tools before they execute.
+    ///
+    /// When a tool in `confirm_tools` is invoked, `execute()` first routes a
+    /// confirmation request through `requester`; the tool runs only on an
+    /// `Approved` outcome. With no requester wired, confirm-required tools
+    /// fail closed.
+    pub fn with_confirmation(
+        mut self,
+        confirm_tools: BTreeSet<String>,
+        requester: Arc<dyn ApprovalRequester>,
+    ) -> Self {
+        self.confirm_tools = confirm_tools;
+        self.approval_requester = Some(requester);
+        self
+    }
+
+    /// Attach the routing context of the agent turn this service serves.
+    ///
+    /// `execute()` scopes it into the `TURN_CONTEXT` task-local for the
+    /// duration of every tool call, letting HITL tools route a prompt back to
+    /// the originating channel.
+    pub fn with_turn_context(mut self, ctx: crate::tools::turn_context::TurnContext) -> Self {
+        self.turn_context = Some(ctx);
+        self
     }
 
     /// Attach a `SubagentTool` that will appear in listings and can be executed.
@@ -221,42 +261,18 @@ impl ToolService for ScopedToolService {
     }
 
     async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
-        // Enforce allowed filter.
-        if !self.is_allowed(name) {
-            return Err(ToolError::NotFound {
-                name: name.to_string(),
-            });
+        // Scope the turn's routing context so HITL tools (sandbox escalation,
+        // `requires_confirmation`, `ask_user`) can reach the originating
+        // channel. Scoped here — the immediate caller of every tool's
+        // `execute` — so it stays visible without crossing a `tokio::spawn`.
+        match self.turn_context.clone() {
+            Some(turn) => {
+                crate::tools::turn_context::TURN_CONTEXT
+                    .scope(turn, self.execute_inner(name, input))
+                    .await
+            }
+            None => self.execute_inner(name, input).await,
         }
-
-        // Fire pre-hook.
-        if let Some(ref hook) = self.hook_decorator {
-            hook.before_execute(name, &input);
-        }
-
-        // Route to subagent tool if name matches.
-        let result = if self
-            .subagent_tool
-            .as_ref()
-            .is_some_and(|st| st.name() == name)
-        {
-            let st = self.subagent_tool.as_ref().unwrap();
-            let raw = st.execute(input).await;
-            Self::tool_result_to_output(name, raw)
-        } else if self.inner.get(name).is_some() || self.inner.resolve(name).is_some() {
-            let raw = self.inner.execute(name, input).await;
-            Self::tool_result_to_output(name, raw)
-        } else {
-            Err(ToolError::NotFound {
-                name: name.to_string(),
-            })
-        };
-
-        // Fire post-hook.
-        if let Some(ref hook) = self.hook_decorator {
-            hook.after_execute(name, &result);
-        }
-
-        result
     }
 
     fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
@@ -302,6 +318,84 @@ impl ToolService for ScopedToolService {
         self.schema_cache
             .store(Arc::new(Some((gen_now, Arc::clone(&schema)))));
         schema
+    }
+}
+
+impl ScopedToolService {
+    /// Tool dispatch proper. Wrapped by the `ToolService::execute` trait
+    /// method, which scopes `TURN_CONTEXT` around it.
+    async fn execute_inner(
+        &self,
+        name: &str,
+        input: Value,
+    ) -> Result<ToolOutput, ToolError> {
+        // Enforce allowed filter.
+        if !self.is_allowed(name) {
+            return Err(ToolError::NotFound {
+                name: name.to_string(),
+            });
+        }
+
+        // Confirmation gate: tools flagged `requires_confirmation` must be
+        // approved by the user before they run. Fails closed when no approval
+        // transport is wired.
+        if self.confirm_tools.contains(name) {
+            match &self.approval_requester {
+                Some(requester) => {
+                    let reason =
+                        format!("Tool `{name}` requires your confirmation to run.");
+                    let outcome = requester.request_approval(name, &reason).await;
+                    if outcome != ApprovalOutcome::Approved {
+                        return Err(ToolError::Execution {
+                            name: name.to_string(),
+                            cause: format!(
+                                "User did not approve running `{name}` ({outcome:?}). \
+                                 Do not retry; ask the user how to proceed."
+                            ),
+                        });
+                    }
+                }
+                None => {
+                    return Err(ToolError::Execution {
+                        name: name.to_string(),
+                        cause: format!(
+                            "Tool `{name}` requires confirmation but no approval \
+                             channel is available. Do not retry."
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Fire pre-hook.
+        if let Some(ref hook) = self.hook_decorator {
+            hook.before_execute(name, &input);
+        }
+
+        // Route to subagent tool if name matches.
+        let result = if self
+            .subagent_tool
+            .as_ref()
+            .is_some_and(|st| st.name() == name)
+        {
+            let st = self.subagent_tool.as_ref().unwrap();
+            let raw = st.execute(input).await;
+            Self::tool_result_to_output(name, raw)
+        } else if self.inner.get(name).is_some() || self.inner.resolve(name).is_some() {
+            let raw = self.inner.execute(name, input).await;
+            Self::tool_result_to_output(name, raw)
+        } else {
+            Err(ToolError::NotFound {
+                name: name.to_string(),
+            })
+        };
+
+        // Fire post-hook.
+        if let Some(ref hook) = self.hook_decorator {
+            hook.after_execute(name, &result);
+        }
+
+        result
     }
 }
 

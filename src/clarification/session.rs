@@ -1,319 +1,187 @@
 //! Clarification Session Management
 //!
-//! This module provides session management for parameter collection workflows.
-//! It tracks pending clarification requests and manages their lifecycle including
-//! creation, retrieval, completion, and expiration cleanup.
+//! Tracks pending clarification requests. The agent asks the user a question
+//! mid-task via the `ask_user` tool, parks on a oneshot, and resumes when the
+//! user's reply is routed back here by the inbound router.
+//!
+//! This is the clarification twin of [`crate::exec::manager::ExecApprovalManager`]:
+//! a per-session registry of pending interactions, each backed by a
+//! `oneshot::Sender` the resolver fires.
 //!
 //! # Example
 //!
 //! ```rust,no_run
-//! use alephcore::clarification::session::{ClarificationManager, SessionConfig};
+//! use std::time::Duration;
+//! use alephcore::clarification::{ClarificationManager, ClarificationRequest};
 //!
 //! # async fn example() {
-//! let config = SessionConfig::default();
-//! let manager = ClarificationManager::new(config);
-//!
-//! // Create a session for missing parameter
-//! let session = manager.create_session(
-//!     "location",
-//!     "weather_search",
-//!     "weather_tool",
-//!     "what's the weather",
-//! ).await;
-//!
-//! // Later, complete the session when user provides input
-//! let completed = manager.complete_session(&session.session_id).await;
+//! let manager = ClarificationManager::new();
+//! let request = ClarificationRequest::text("ask-1", "Which language?", None);
+//! let rx = manager
+//!     .register("telegram:bot:123:user", request, Duration::from_secs(600))
+//!     .await;
+//! // ... inbound router calls `manager.resolve(session_key, reply)` ...
+//! let result = rx.await;
+//! # let _ = result;
 //! # }
 //! ```
 
-use super::{ClarificationOption, ClarificationRequest};
+use super::{ClarificationRequest, ClarificationResult, ClarificationType};
 use crate::sync_primitives::{Arc, AsyncRwLock};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use uuid::Uuid;
+use tokio::sync::oneshot;
 
-/// A pending clarification session
+/// Default time a clarification waits for the user before timing out.
 ///
-/// Represents an active session where we're waiting for user input
-/// to complete a parameter collection.
-#[derive(Debug, Clone)]
-pub struct PendingClarification {
-    /// Unique session identifier (UUID v4)
-    pub session_id: String,
+/// Generous on purpose: users type thoughtful answers, unlike a yes/no
+/// approval. Mirrors hermes-agent's 600s `clarify` timeout.
+pub const DEFAULT_CLARIFY_TIMEOUT: Duration = Duration::from_secs(600);
 
-    /// Name of the parameter being requested
-    pub param_name: String,
-
-    /// Intent type that requires this parameter
-    pub intent_type: String,
-
-    /// Tool name that needs the parameter
-    pub tool_name: String,
-
-    /// When this session was created
-    pub created_at: Instant,
-
-    /// Session timeout duration
-    pub timeout: Duration,
-
-    /// Original user input that triggered this clarification
-    pub original_input: String,
+/// A clarification awaiting the user's reply.
+struct PendingEntry {
+    request: ClarificationRequest,
+    sender: Option<oneshot::Sender<ClarificationResult>>,
+    created_at: Instant,
+    timeout: Duration,
 }
 
-impl PendingClarification {
-    /// Create a new pending clarification session
-    ///
-    /// # Arguments
-    ///
-    /// * `param_name` - Name of the parameter being requested
-    /// * `intent_type` - Intent type requiring this parameter
-    /// * `tool_name` - Tool that needs the parameter
-    /// * `original_input` - Original user input
-    /// * `timeout_secs` - Timeout in seconds
-    pub fn new(
-        param_name: impl Into<String>,
-        intent_type: impl Into<String>,
-        tool_name: impl Into<String>,
-        original_input: impl Into<String>,
-        timeout_secs: u64,
-    ) -> Self {
-        Self {
-            session_id: Uuid::new_v4().to_string(),
-            param_name: param_name.into(),
-            intent_type: intent_type.into(),
-            tool_name: tool_name.into(),
-            created_at: Instant::now(),
-            timeout: Duration::from_secs(timeout_secs),
-            original_input: original_input.into(),
-        }
-    }
-
-    /// Check if this session has expired
-    pub fn is_expired(&self) -> bool {
+impl PendingEntry {
+    fn is_expired(&self) -> bool {
         self.created_at.elapsed() > self.timeout
     }
-
-    /// Get remaining time before expiration
-    ///
-    /// Returns Duration::ZERO if already expired
-    pub fn remaining_time(&self) -> Duration {
-        self.timeout.saturating_sub(self.created_at.elapsed())
-    }
-
-    /// Convert to a ClarificationRequest for UI display
-    ///
-    /// # Arguments
-    ///
-    /// * `prompt` - The prompt text to display to user
-    /// * `options` - Options for select-type clarification (empty = text type)
-    pub fn to_request(
-        &self,
-        prompt: &str,
-        options: Vec<ClarificationOption>,
-    ) -> ClarificationRequest {
-        if options.is_empty() {
-            ClarificationRequest::text(&self.session_id, prompt, None)
-                .with_source(&format!("intent:{}", self.intent_type))
-        } else {
-            ClarificationRequest::select(&self.session_id, prompt, options)
-                .with_source(&format!("intent:{}", self.intent_type))
-        }
-    }
-
-    /// Convert to a multi-group ClarificationRequest for UI display
-    ///
-    /// # Arguments
-    ///
-    /// * `prompt` - The prompt text to display to user
-    /// * `groups` - Question groups for multi-group clarification
-    pub fn to_multi_group_request(
-        &self,
-        prompt: &str,
-        groups: Vec<super::QuestionGroup>,
-    ) -> super::ClarificationRequest {
-        super::ClarificationRequest::multi_group(&self.session_id, prompt, groups)
-            .with_source(&format!("intent:{}", self.intent_type))
-    }
 }
 
-/// Configuration for clarification session management
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionConfig {
-    /// Default timeout for sessions in seconds
-    #[serde(default = "default_timeout_secs")]
-    pub default_timeout_secs: u64,
-
-    /// Maximum number of concurrent sessions (0 = unlimited)
-    #[serde(default = "default_max_sessions")]
-    pub max_sessions: usize,
-}
-
-fn default_timeout_secs() -> u64 {
-    60
-}
-
-fn default_max_sessions() -> usize {
-    10
-}
-
-impl Default for SessionConfig {
-    fn default() -> Self {
-        Self {
-            default_timeout_secs: default_timeout_secs(),
-            max_sessions: default_max_sessions(),
-        }
-    }
-}
-
-/// Manager for clarification sessions
+/// Per-session registry of pending clarifications.
 ///
-/// Handles the lifecycle of clarification sessions including creation,
-/// retrieval, completion, and expiration cleanup.
-#[derive(Clone)]
+/// Keyed by channel session key. At most one clarification is pending per
+/// session — registering a second one supersedes the first, and the
+/// superseded waiter receives [`ClarificationResult::cancelled`] so its
+/// `ask_user` tool call unblocks instead of hanging.
+#[derive(Clone, Default)]
 pub struct ClarificationManager {
-    /// Active sessions indexed by session_id
-    sessions: Arc<AsyncRwLock<HashMap<String, PendingClarification>>>,
-
-    /// Configuration
-    config: SessionConfig,
+    pending: Arc<AsyncRwLock<HashMap<String, PendingEntry>>>,
 }
 
 impl ClarificationManager {
-    /// Create a new clarification manager
-    pub fn new(config: SessionConfig) -> Self {
-        Self {
-            sessions: Arc::new(AsyncRwLock::new(HashMap::new())),
-            config,
-        }
+    /// Create an empty manager.
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Create a new clarification session
+    /// Register a clarification for `session_key`.
     ///
-    /// # Arguments
-    ///
-    /// * `param_name` - Name of the parameter being requested
-    /// * `intent_type` - Intent type requiring this parameter
-    /// * `tool_name` - Tool that needs the parameter
-    /// * `original_input` - Original user input
-    ///
-    /// # Returns
-    ///
-    /// The newly created PendingClarification session
-    pub async fn create_session(
+    /// Returns a receiver that resolves when the user replies (via
+    /// [`resolve`](Self::resolve)), is superseded, or times out
+    /// ([`cleanup_expired`](Self::cleanup_expired)).
+    pub async fn register(
         &self,
-        param_name: impl Into<String>,
-        intent_type: impl Into<String>,
-        tool_name: impl Into<String>,
-        original_input: impl Into<String>,
-    ) -> PendingClarification {
-        let session = PendingClarification::new(
-            param_name,
-            intent_type,
-            tool_name,
-            original_input,
-            self.config.default_timeout_secs,
-        );
-
-        let session_id = session.session_id.clone();
-        let session_clone = session.clone();
-
-        {
-            let mut sessions = self.sessions.write().await;
-
-            // Enforce max sessions limit: remove expired first, then oldest active
-            if self.config.max_sessions > 0 && sessions.len() >= self.config.max_sessions {
-                let expired_ids: Vec<String> = sessions
-                    .iter()
-                    .filter(|(_, s)| s.is_expired())
-                    .map(|(id, _)| id.clone())
-                    .collect();
-
-                if !expired_ids.is_empty() {
-                    for id in expired_ids {
-                        sessions.remove(&id);
-                    }
-                }
-
-                // If still at capacity after removing expired, evict oldest active
-                if sessions.len() >= self.config.max_sessions {
-                    if let Some(oldest_id) = self.find_oldest_active_session(&sessions) {
-                        sessions.remove(&oldest_id);
-                    }
-                }
+        session_key: impl Into<String>,
+        request: ClarificationRequest,
+        timeout: Duration,
+    ) -> oneshot::Receiver<ClarificationResult> {
+        let (tx, rx) = oneshot::channel();
+        let entry = PendingEntry {
+            request,
+            sender: Some(tx),
+            created_at: Instant::now(),
+            timeout,
+        };
+        let mut pending = self.pending.write().await;
+        if let Some(mut old) = pending.insert(session_key.into(), entry) {
+            // Supersede: unblock the old waiter so its tool call doesn't hang.
+            if let Some(sender) = old.sender.take() {
+                let _ = sender.send(ClarificationResult::cancelled());
             }
-
-            sessions.insert(session_id, session_clone);
         }
-
-        session
+        rx
     }
 
-    /// Get a session by ID
+    /// Whether `session_key` has a live (non-expired) pending clarification.
+    pub async fn has_pending(&self, session_key: &str) -> bool {
+        self.pending
+            .read()
+            .await
+            .get(session_key)
+            .is_some_and(|e| !e.is_expired())
+    }
+
+    /// Resolve the pending clarification for `session_key` from the user's
+    /// reply text. Returns `true` if a pending entry was resolved.
     ///
-    /// Returns None if session doesn't exist or has expired.
-    /// Expired sessions are removed from storage on access.
-    pub async fn get_session(&self, session_id: &str) -> Option<PendingClarification> {
-        let mut sessions = self.sessions.write().await;
-        match sessions.get(session_id) {
-            Some(s) if !s.is_expired() => Some(s.clone()),
-            Some(_) => {
-                sessions.remove(session_id);
-                None
-            }
-            None => None,
+    /// The reply is interpreted against the request: for a select-type
+    /// request a 1-based numeric reply picks that option, a reply matching an
+    /// option label/value (case-insensitive) selects it, and anything else is
+    /// taken as free text.
+    pub async fn resolve(&self, session_key: &str, reply: &str) -> bool {
+        let mut pending = self.pending.write().await;
+        let Some(mut entry) = pending.remove(session_key) else {
+            return false;
+        };
+        let result = interpret_reply(&entry.request, reply);
+        match entry.sender.take() {
+            Some(sender) => sender.send(result).is_ok(),
+            None => false,
         }
     }
 
-    /// Complete and remove a session
-    ///
-    /// Returns the session if it existed (even if expired)
-    pub async fn complete_session(&self, session_id: &str) -> Option<PendingClarification> {
-        let mut sessions = self.sessions.write().await;
-        sessions.remove(session_id)
+    /// Cancel the pending clarification for `session_key`, if any, unblocking
+    /// its waiter with [`ClarificationResult::cancelled`].
+    pub async fn cancel(&self, session_key: &str) -> bool {
+        let mut pending = self.pending.write().await;
+        match pending.remove(session_key) {
+            Some(mut entry) => {
+                if let Some(sender) = entry.sender.take() {
+                    let _ = sender.send(ClarificationResult::cancelled());
+                }
+                true
+            }
+            None => false,
+        }
     }
 
-    /// Cleanup all expired sessions
-    ///
-    /// Returns the number of sessions that were removed
+    /// Drop expired entries, unblocking their waiters with a timeout result.
+    /// Returns the number of entries reaped.
     pub async fn cleanup_expired(&self) -> usize {
-        let mut sessions = self.sessions.write().await;
-        let expired_ids: Vec<String> = sessions
+        let mut pending = self.pending.write().await;
+        let expired: Vec<String> = pending
             .iter()
-            .filter(|(_, s)| s.is_expired())
-            .map(|(id, _)| id.clone())
+            .filter(|(_, e)| e.is_expired())
+            .map(|(k, _)| k.clone())
             .collect();
-
-        let count = expired_ids.len();
-        for id in expired_ids {
-            sessions.remove(&id);
+        for key in &expired {
+            if let Some(mut entry) = pending.remove(key) {
+                if let Some(sender) = entry.sender.take() {
+                    let _ = sender.send(ClarificationResult::timeout());
+                }
+            }
         }
-
-        count
+        expired.len()
     }
+}
 
-    /// Get count of active (non-expired) sessions
-    pub async fn active_session_count(&self) -> usize {
-        let sessions = self.sessions.read().await;
-        sessions.values().filter(|s| !s.is_expired()).count()
+/// Map a user's free-text reply onto a [`ClarificationResult`] for `request`.
+fn interpret_reply(request: &ClarificationRequest, reply: &str) -> ClarificationResult {
+    let trimmed = reply.trim();
+    if request.clarification_type == ClarificationType::Select {
+        if let Some(options) = &request.options {
+            // 1-based numeric selection.
+            if let Ok(n) = trimmed.parse::<usize>() {
+                if n >= 1 && n <= options.len() {
+                    let opt = &options[n - 1];
+                    return ClarificationResult::selected((n - 1) as u32, opt.value.clone());
+                }
+            }
+            // Match against an option value or label (case-insensitive).
+            let lower = trimmed.to_lowercase();
+            for (i, opt) in options.iter().enumerate() {
+                if opt.value.to_lowercase() == lower || opt.label.to_lowercase() == lower {
+                    return ClarificationResult::selected(i as u32, opt.value.clone());
+                }
+            }
+        }
     }
-
-    /// Find the oldest non-expired session by creation time
-    fn find_oldest_active_session(
-        &self,
-        sessions: &HashMap<String, PendingClarification>,
-    ) -> Option<String> {
-        sessions
-            .iter()
-            .filter(|(_, s)| !s.is_expired())
-            .min_by_key(|(_, s)| s.created_at)
-            .map(|(id, _)| id.clone())
-    }
-
-    /// Get the configuration
-    pub fn config(&self) -> &SessionConfig {
-        &self.config
-    }
+    ClarificationResult::text_input(trimmed.to_string())
 }
 
 // =============================================================================
@@ -323,362 +191,143 @@ impl ClarificationManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use crate::clarification::ClarificationOption;
 
-    #[test]
-    fn test_pending_clarification_new() {
-        let session = PendingClarification::new(
-            "location",
-            "weather_search",
-            "weather_tool",
-            "what's the weather",
-            60,
-        );
-
-        assert!(!session.session_id.is_empty());
-        assert_eq!(session.param_name, "location");
-        assert_eq!(session.intent_type, "weather_search");
-        assert_eq!(session.tool_name, "weather_tool");
-        assert_eq!(session.original_input, "what's the weather");
-        assert_eq!(session.timeout, Duration::from_secs(60));
+    fn text_request() -> ClarificationRequest {
+        ClarificationRequest::text("ask-1", "Which language?", None)
     }
 
-    #[test]
-    fn test_pending_clarification_uuid_uniqueness() {
-        let session1 = PendingClarification::new("p1", "i1", "t1", "input1", 60);
-        let session2 = PendingClarification::new("p2", "i2", "t2", "input2", 60);
-
-        assert_ne!(session1.session_id, session2.session_id);
-    }
-
-    #[test]
-    fn test_pending_clarification_is_expired() {
-        let session = PendingClarification::new("param", "intent", "tool", "input", 0);
-
-        // With 0 second timeout, should be expired immediately
-        std::thread::sleep(Duration::from_millis(10));
-        assert!(session.is_expired());
-    }
-
-    #[test]
-    fn test_pending_clarification_not_expired() {
-        let session = PendingClarification::new("param", "intent", "tool", "input", 60);
-
-        assert!(!session.is_expired());
-    }
-
-    #[test]
-    fn test_pending_clarification_remaining_time() {
-        let session = PendingClarification::new("param", "intent", "tool", "input", 60);
-
-        let remaining = session.remaining_time();
-        assert!(remaining.as_secs() <= 60);
-        assert!(remaining.as_secs() >= 59); // Should be close to 60
-    }
-
-    #[test]
-    fn test_pending_clarification_remaining_time_expired() {
-        let session = PendingClarification::new("param", "intent", "tool", "input", 0);
-
-        std::thread::sleep(Duration::from_millis(10));
-        let remaining = session.remaining_time();
-        assert_eq!(remaining, Duration::ZERO);
-    }
-
-    #[test]
-    fn test_pending_clarification_to_request_with_options() {
-        let session = PendingClarification::new(
-            "location",
-            "weather_search",
-            "weather_tool",
-            "what's the weather",
-            60,
-        );
-
-        let options = vec![
-            ClarificationOption::new("beijing", "Beijing"),
-            ClarificationOption::new("shanghai", "Shanghai"),
-        ];
-
-        let request = session.to_request("Select a location:", options);
-
-        assert_eq!(request.id, session.session_id);
-        assert_eq!(request.prompt, "Select a location:");
-        assert!(request.options.is_some());
-        assert_eq!(request.options.as_ref().unwrap().len(), 2);
-        assert_eq!(request.source, Some("intent:weather_search".to_string()));
-    }
-
-    #[test]
-    fn test_pending_clarification_to_request_text() {
-        let session = PendingClarification::new(
-            "location",
-            "weather_search",
-            "weather_tool",
-            "what's the weather",
-            60,
-        );
-
-        let request = session.to_request("Enter a location:", vec![]);
-
-        assert_eq!(request.id, session.session_id);
-        assert_eq!(request.prompt, "Enter a location:");
-        assert!(request.options.is_none());
-        assert_eq!(request.source, Some("intent:weather_search".to_string()));
-    }
-
-    #[test]
-    fn test_session_config_default() {
-        let config = SessionConfig::default();
-
-        assert_eq!(config.default_timeout_secs, 60);
-        assert_eq!(config.max_sessions, 10);
-    }
-
-    #[test]
-    fn test_session_config_serialize_deserialize() {
-        let config = SessionConfig {
-            default_timeout_secs: 120,
-            max_sessions: 20,
-        };
-
-        let json = serde_json::to_string(&config).unwrap();
-        let deserialized: SessionConfig = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.default_timeout_secs, 120);
-        assert_eq!(deserialized.max_sessions, 20);
+    fn select_request() -> ClarificationRequest {
+        ClarificationRequest::select(
+            "ask-2",
+            "Pick a style:",
+            vec![
+                ClarificationOption::new("pro", "Professional"),
+                ClarificationOption::new("casual", "Casual"),
+            ],
+        )
     }
 
     #[tokio::test]
-    async fn test_clarification_manager_new() {
-        let config = SessionConfig::default();
-        let manager = ClarificationManager::new(config);
+    async fn register_then_resolve_delivers_text_reply() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-a", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+        assert!(mgr.has_pending("sess-a").await);
 
-        assert_eq!(manager.active_session_count().await, 0);
+        assert!(mgr.resolve("sess-a", "  Spanish  ").await);
+        let result = rx.await.unwrap();
+        assert_eq!(result.get_value(), Some("Spanish"));
+        assert!(!mgr.has_pending("sess-a").await);
     }
 
     #[tokio::test]
-    async fn test_clarification_manager_create_session() {
-        let config = SessionConfig::default();
-        let manager = ClarificationManager::new(config);
-
-        let session = manager
-            .create_session(
-                "location",
-                "weather_search",
-                "weather_tool",
-                "weather input",
-            )
+    async fn resolve_select_by_number_picks_option() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-b", select_request(), DEFAULT_CLARIFY_TIMEOUT)
             .await;
 
-        assert_eq!(session.param_name, "location");
-        assert_eq!(session.intent_type, "weather_search");
-        assert_eq!(session.tool_name, "weather_tool");
-        assert_eq!(session.original_input, "weather input");
-        assert_eq!(manager.active_session_count().await, 1);
+        assert!(mgr.resolve("sess-b", "2").await);
+        let result = rx.await.unwrap();
+        assert_eq!(result.selected_index, Some(1));
+        assert_eq!(result.get_value(), Some("casual"));
     }
 
     #[tokio::test]
-    async fn test_clarification_manager_get_session() {
-        let config = SessionConfig::default();
-        let manager = ClarificationManager::new(config);
-
-        let session = manager
-            .create_session("param", "intent", "tool", "input")
+    async fn resolve_select_by_label_picks_option() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-c", select_request(), DEFAULT_CLARIFY_TIMEOUT)
             .await;
 
-        let retrieved = manager.get_session(&session.session_id).await;
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().session_id, session.session_id);
+        assert!(mgr.resolve("sess-c", "professional").await);
+        let result = rx.await.unwrap();
+        assert_eq!(result.selected_index, Some(0));
+        assert_eq!(result.get_value(), Some("pro"));
     }
 
     #[tokio::test]
-    async fn test_clarification_manager_get_session_not_found() {
-        let config = SessionConfig::default();
-        let manager = ClarificationManager::new(config);
-
-        let retrieved = manager.get_session("non-existent-id").await;
-        assert!(retrieved.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_clarification_manager_get_session_expired() {
-        let config = SessionConfig {
-            default_timeout_secs: 0, // Immediate expiration
-            ..Default::default()
-        };
-        let manager = ClarificationManager::new(config);
-
-        let session = manager
-            .create_session("param", "intent", "tool", "input")
+    async fn resolve_select_out_of_range_falls_back_to_text() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-d", select_request(), DEFAULT_CLARIFY_TIMEOUT)
             .await;
 
-        // Wait for expiration
+        // "9" is not a valid 1-based index for a 2-option request.
+        assert!(mgr.resolve("sess-d", "9").await);
+        let result = rx.await.unwrap();
+        assert_eq!(result.selected_index, None);
+        assert_eq!(result.get_value(), Some("9"));
+    }
+
+    #[tokio::test]
+    async fn resolve_unknown_session_returns_false() {
+        let mgr = ClarificationManager::new();
+        assert!(!mgr.resolve("nope", "anything").await);
+    }
+
+    #[tokio::test]
+    async fn registering_again_supersedes_and_cancels_old_waiter() {
+        let mgr = ClarificationManager::new();
+        let rx_old = mgr
+            .register("sess-e", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+        let _rx_new = mgr
+            .register("sess-e", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+
+        // The superseded waiter is cancelled, not left hanging.
+        let old = rx_old.await.unwrap();
+        assert_eq!(
+            old.result_type,
+            crate::clarification::ClarificationResultType::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_unblocks_waiter() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-f", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+
+        assert!(mgr.cancel("sess-f").await);
+        let result = rx.await.unwrap();
+        assert_eq!(
+            result.result_type,
+            crate::clarification::ClarificationResultType::Cancelled
+        );
+        assert!(!mgr.has_pending("sess-f").await);
+    }
+
+    #[tokio::test]
+    async fn cleanup_expired_times_out_stale_entries() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-g", text_request(), Duration::from_millis(1))
+            .await;
         tokio::time::sleep(Duration::from_millis(10)).await;
 
-        let retrieved = manager.get_session(&session.session_id).await;
-        assert!(retrieved.is_none());
+        assert!(!mgr.has_pending("sess-g").await);
+        assert_eq!(mgr.cleanup_expired().await, 1);
+        let result = rx.await.unwrap();
+        assert_eq!(
+            result.result_type,
+            crate::clarification::ClarificationResultType::Timeout
+        );
     }
 
     #[tokio::test]
-    async fn test_clarification_manager_complete_session() {
-        let config = SessionConfig::default();
-        let manager = ClarificationManager::new(config);
-
-        let session = manager
-            .create_session("param", "intent", "tool", "input")
+    async fn manager_clone_shares_state() {
+        let mgr = ClarificationManager::new();
+        let clone = mgr.clone();
+        let _rx = mgr
+            .register("sess-h", text_request(), DEFAULT_CLARIFY_TIMEOUT)
             .await;
-        let session_id = session.session_id.clone();
-
-        assert_eq!(manager.active_session_count().await, 1);
-
-        let completed = manager.complete_session(&session_id).await;
-        assert!(completed.is_some());
-        assert_eq!(completed.unwrap().session_id, session_id);
-        assert_eq!(manager.active_session_count().await, 0);
-    }
-
-    #[tokio::test]
-    async fn test_clarification_manager_complete_session_not_found() {
-        let config = SessionConfig::default();
-        let manager = ClarificationManager::new(config);
-
-        let completed = manager.complete_session("non-existent-id").await;
-        assert!(completed.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_clarification_manager_cleanup_expired() {
-        let config = SessionConfig {
-            default_timeout_secs: 0, // Immediate expiration
-            max_sessions: 10,
-            ..Default::default()
-        };
-        let manager = ClarificationManager::new(config);
-
-        // Create multiple sessions
-        manager
-            .create_session("param1", "intent1", "tool1", "input1")
-            .await;
-        manager
-            .create_session("param2", "intent2", "tool2", "input2")
-            .await;
-        manager
-            .create_session("param3", "intent3", "tool3", "input3")
-            .await;
-
-        // Wait for expiration
-        tokio::time::sleep(Duration::from_millis(10)).await;
-
-        let cleaned = manager.cleanup_expired().await;
-        assert_eq!(cleaned, 3);
-        assert_eq!(manager.active_session_count().await, 0);
-    }
-
-    #[tokio::test]
-    async fn test_clarification_manager_max_sessions_enforcement() {
-        let config = SessionConfig {
-            default_timeout_secs: 60,
-            max_sessions: 2,
-            ..Default::default()
-        };
-        let manager = ClarificationManager::new(config);
-
-        // Create sessions up to and beyond limit
-        let _session1 = manager
-            .create_session("param1", "intent1", "tool1", "input1")
-            .await;
-        let _session2 = manager
-            .create_session("param2", "intent2", "tool2", "input2")
-            .await;
-        let session3 = manager
-            .create_session("param3", "intent3", "tool3", "input3")
-            .await;
-
-        // Should still only have max_sessions
-        assert_eq!(manager.active_session_count().await, 2);
-
-        // The newest session should still exist
-        let retrieved = manager.get_session(&session3.session_id).await;
-        assert!(retrieved.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_clarification_manager_clone() {
-        let config = SessionConfig::default();
-        let manager = ClarificationManager::new(config);
-
-        let session = manager
-            .create_session("param", "intent", "tool", "input")
-            .await;
-
-        // Clone the manager
-        let manager_clone = manager.clone();
-
-        // Both should see the same session
-        assert!(manager.get_session(&session.session_id).await.is_some());
-        assert!(manager_clone
-            .get_session(&session.session_id)
-            .await
-            .is_some());
-
-        // Completing via clone should affect original
-        manager_clone.complete_session(&session.session_id).await;
-        assert!(manager.get_session(&session.session_id).await.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_clarification_manager_concurrent_access() {
-        let config = SessionConfig::default();
-        let manager = ClarificationManager::new(config);
-
-        // Spawn multiple tasks that create sessions concurrently
-        let handles: Vec<_> = (0..10)
-            .map(|i| {
-                let manager = manager.clone();
-                tokio::spawn(async move {
-                    manager
-                        .create_session(
-                            format!("param{}", i),
-                            format!("intent{}", i),
-                            format!("tool{}", i),
-                            format!("input{}", i),
-                        )
-                        .await
-                })
-            })
-            .collect();
-
-        // Wait for all to complete
-        for handle in handles {
-            handle.await.unwrap();
-        }
-
-        // All sessions should be created (up to max)
-        assert_eq!(manager.active_session_count().await, 10);
-    }
-
-    #[test]
-    fn test_session_config_with_custom_values() {
-        let config = SessionConfig {
-            default_timeout_secs: 300,
-            max_sessions: 50,
-        };
-
-        assert_eq!(config.default_timeout_secs, 300);
-        assert_eq!(config.max_sessions, 50);
-    }
-
-    #[tokio::test]
-    async fn test_clarification_manager_get_config() {
-        let config = SessionConfig {
-            default_timeout_secs: 90,
-            max_sessions: 15,
-        };
-        let manager = ClarificationManager::new(config);
-
-        let retrieved_config = manager.config();
-        assert_eq!(retrieved_config.default_timeout_secs, 90);
-        assert_eq!(retrieved_config.max_sessions, 15);
+        // The clone sees the same pending entry.
+        assert!(clone.has_pending("sess-h").await);
+        assert!(clone.resolve("sess-h", "via clone").await);
     }
 }

@@ -453,62 +453,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     initialize_extension_manager(args.daemon).await;
 
-    // Phase 2 Task 10: assemble the ToolService decorator chain.
-    //
-    // The chain is built once here and held as a local `tool_service`. As
-    // agent_loop migrates to `Arc<dyn ToolService>` dispatch (Task 11+), this
-    // binding will be threaded into the downstream builders; today it is
-    // enough to materialise the registry so MCP + Extension setters can wire
-    // into it, and the Phase 5 Orchestrator (`initialize_orchestrator` below)
-    // consumes it. Any failure is warn-only — never aborts boot.
-    //
-    // Phase 3 H3 fix: use `build_tool_service_with_handles` so we can attach
-    // the Phase 3 `LayeredPermissionResolver` + `ApprovalGate`-as-Approver
-    // onto the `PermissionLayer` below. Previously the layer had a default
-    // `Allow` classifier attached and Ask-tier tools could not route through
-    // a real approver.
-    let (tool_service, tool_registry_phase2, tool_service_handles) = {
-        let tool_cfg = loaded_app_config.tool_service.clone();
-        // Use an empty AlephToolServer here: the aleph-server bin currently
-        // builds its active tool catalogue via BuiltinToolRegistry inside
-        // register_agent_handlers. Handlers synchronised with that catalogue
-        // will flow into the Phase 2 registry in Task 11 when agent_loop
-        // migrates. Builtins register lazily via MCP / Extension lifecycle
-        // hooks injected below.
-        let server = Arc::new(alephcore::tools::AlephToolServer::new());
-        let (svc, reg, handles) =
-            alephcore::tools::build_tool_service_with_handles(server, &tool_cfg).await;
-        if !args.daemon {
-            println!("ToolService chain assembled (Phase 2)");
-        }
-        (svc, reg, handles)
-    };
-
-    // Phase 2 Task 10: inject the shared ToolRegistry into ExtensionManager
-    // so plugin load/unload lifecycles populate the registry via
-    // `tools::handlers::registration`. Warn-only on failure.
-    {
-        use alephcore::gateway::handlers::plugins::get_extension_manager;
-        match get_extension_manager() {
-            Ok(ext_manager) => {
-                ext_manager.set_tool_registry(tool_registry_phase2.clone());
-                if !args.daemon {
-                    println!("  ExtensionManager: tool registry wired");
-                }
-            }
-            Err(_) => {
-                tracing::warn!(
-                    "ExtensionManager not initialised — Phase 2 tool registry \
-                     will not receive plugin tools this run"
-                );
-            }
-        }
-    }
+    // Shared MCP-target ToolRegistry. The Phase 2 facade chain
+    // (`build_tool_service`, `PermissionLayer`, `TimeoutLayer`, etc.) was
+    // deleted in 2026-05-20 — gateway always overrides the harness's
+    // `tool_service` slot with a per-request `ScopedToolService`, so the
+    // chain was unreachable. The registry alone is still live: the MCP
+    // tool bridge below mutates it as external servers advertise / drop
+    // tools, and `BuiltinToolRegistry` (the production tool stack) shares
+    // its snapshot for `list_tools` introspection.
+    let tool_registry_phase2 = Arc::new(alephcore::tools::ToolRegistry::new());
 
     // MCP: spawn the manager actor and bridge external-server tools into the
-    // Phase-2 `ToolRegistry`, so the live agent loop (registry → CoreDispatch →
-    // harness `think`) sees external MCP tools. Warn-only on failure — a
-    // missing or malformed MCP config must never abort boot.
+    // shared `ToolRegistry`. Warn-only on failure — a missing or malformed
+    // MCP config must never abort boot.
     let mcp_handle: Option<alephcore::mcp::McpManagerHandle> =
         match alephcore::mcp::McpManagerActor::new(None).await {
             Ok((actor, handle)) => {
@@ -528,6 +485,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         };
 
+
     // Phase 3 Task 7: compose the shared `Arc<dyn Sandbox>` once at boot.
     //
     // Exec-class tools will consume this sandbox through their constructors
@@ -541,8 +499,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // 通道就绪后（initialize_channels 之后）再经 set_requester 注入 adapter。
     let exec_approval_manager = Arc::new(alephcore::exec::ExecApprovalManager::new());
 
-    // ApprovalGate 在 Sandbox capability 升级路径与 PermissionLayer Ask-tier
-    // 确认路径间共享。先以空 requester 构造，通道就绪后注入 requester。
+    // Build a single ApprovalGate shared between the Sandbox capability
+    // escalation path and the `ScopedToolService` `requires_confirmation`
+    // confirm path (HITL P3). Constructed with no requester because the
+    // `ChannelRegistry` it needs is built later in
+    // `builder/subsystems.rs::initialize_channels`. Once channels are up,
+    // the HITL wiring just after `initialize_channels` calls `set_requester`
+    // to install the `ChannelApprovalBridgeAdapter`. Until then
+    // `request_approval_for_tool` denies — never a silent auto-approve.
     let approval_gate = {
         use alephcore::sandbox::exec_approval::gate::ApprovalGate;
         use alephcore::sandbox::exec_approval::types::ApprovalConfig;
@@ -570,50 +534,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         } else {
             println!("Sandbox: disabled (NoopSandbox) — exec-class tools will refuse execution");
         }
-    }
-
-    // Phase 3 H3 fix: wire the LayeredPermissionResolver into the
-    // PermissionLayer so global (+ boot-time default per-agent) permissions
-    // actually gate tool invocations instead of defaulting to Allow.
-    //
-    // Per-agent filters plug in when Phase 4 migrates per-session agent
-    // activation; boot uses the global config merged against an empty
-    // per-agent config, which means Deny/Ask in global immediately take
-    // effect for every call. Approver is the shared ApprovalGate above.
-    //
-    // Double-prompt mitigation (H4): exec-class tools (`bash`, `code_exec`)
-    // own their own sandbox-level approval path. PermissionLayer's own
-    // Ask-tier prompt on those tools would produce two prompts. Until H4
-    // introduces a clean exclude-list parameter, we document this risk in
-    // SANDBOX.md. Shipping global default `Allow` for exec tools (the
-    // current config) avoids the double-prompt in practice.
-    {
-        use alephcore::tools::middleware::permission::{AgentPermissionFilter, Approver};
-
-        let global = loaded_app_config.policies.tool_permissions.clone();
-        // Per-agent default: clone and reset so we get a ToolPermissionsConfig
-        // with no overrides (Default impl lives in the private config module).
-        // Phase 4 session activation replaces this with the real per-agent
-        // config via `PermissionLayer::set_smart_filter`.
-        let per_agent_default = {
-            let mut c = global.clone();
-            c.overrides.clear();
-            c
-        };
-        let filter = AgentPermissionFilter::build(&global, &per_agent_default);
-        tool_service_handles
-            .permission_layer
-            .set_smart_filter(Some(filter));
-        tool_service_handles
-            .permission_layer
-            .set_approver(Some(approval_gate.clone() as Arc<dyn Approver>));
-
-        tracing::info!(
-            default = ?global.default,
-            overrides = global.overrides.len(),
-            "wired LayeredPermissionResolver into PermissionLayer with global tool permissions \
-             (per-agent overrides plug in at Phase 4 session activation)"
-        );
     }
 
     // Log desktop capability mode
@@ -1153,12 +1073,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .default_provider
             .clone()
             .unwrap_or_default();
+        // Gateway always supplies a per-request `ScopedToolService` via
+        // `FlowRequest::tool_service`, so the runner's fallback is never
+        // reached in production — `NullToolService` is the fail-closed
+        // placeholder. See `src/tools/null.rs` and the deletion record in
+        // `docs/superpowers/specs/2026-05-19-hitl-loop-closure-design.md` §8.
+        let tool_service: Arc<dyn alephcore::tools::service::ToolService> =
+            Arc::new(alephcore::tools::NullToolService::new());
         match initialize_orchestrator(
             &cfg_snapshot,
             &primary_provider_key,
             orchestrator_agent_registry,
             session_service,
-            tool_service.clone(),
+            tool_service,
             default_handle,
             sandbox.clone(),
             &stop_hook_configs,
@@ -1760,28 +1687,47 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
-    // ── exec-approval 闭环接线（channel_registry 已就绪）──────────────────
+    // ── HITL channel-backed approval & clarification wiring ─────────────
+    // Now that `channel_registry` exists, wire the full HITL loop:
+    //   • exec.approval.* RPC handlers — main flow + tests resolve approvals
+    //     out-of-band through these handlers (already registered as the
+    //     server's only owner of `exec_approval_manager`).
+    //   • Approval requester — adapter feeds both the sandbox capability
+    //     escalation path (`ApprovalGate.set_requester`) and the
+    //     `ScopedToolService.with_confirmation` `requires_confirmation` seam
+    //     (`set_confirmation_requester`, HITL P3).
+    //   • Clarification manager — registered for HITL P4 `ask_user`, injected
+    //     into `BuiltinToolRegistry` via the cell set up at agent boot.
+    let clarification_manager =
+        Arc::new(alephcore::clarification::ClarificationManager::new());
     {
         use alephcore::approval::adapters::ChannelApprovalBridgeAdapter;
         use alephcore::exec::approval::channel_bridge::ChannelApprovalBridge;
 
-        // 注册 exec.approval.* RPC 处理器（server handlers 此刻引用计数为 1）。
+        // exec.approval.* RPC handlers — server handlers refcount is 1 here.
         alephcore::gateway::handlers::exec_approvals::register_handlers(
             server.handlers_mut(),
             exec_approval_manager.clone(),
         );
 
-        // 构造 bridge + adapter，注入 ApprovalGate requester。
+        // Single requester instance shared by P1 (sandbox) and P3 (tool confirm).
         let bridge = Arc::new(ChannelApprovalBridge::new(channel_registry.clone()));
-        let adapter = Arc::new(ChannelApprovalBridgeAdapter::new(
+        let approval_requester: Arc<
+            dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester,
+        > = Arc::new(ChannelApprovalBridgeAdapter::new(
             bridge,
             exec_approval_manager.clone(),
         ));
-        approval_gate.set_requester(adapter);
+
+        // P1: sandbox capability escalations reach the user via this requester.
+        approval_gate.set_requester(approval_requester.clone());
+        // P3: `requires_confirmation` tools route through the same requester.
+        alephcore::gateway::execution_engine::set_confirmation_requester(approval_requester);
 
         if !args.daemon {
             println!(
-                "exec-approval: ApprovalGate requester wired (Telegram channel approvals enabled)"
+                "exec-approval: ApprovalGate + ScopedToolService.with_confirmation \
+                 requester wired (Telegram channel approvals enabled)"
             );
         }
     }
@@ -1794,11 +1740,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
+    // Inject ClarificationManager into BuiltinToolRegistry (deferred) — enables `ask_user` (HITL P4).
+    if let Some(ref cell) = agent_result.clarification_manager_cell {
+        let _ = cell.set(clarification_manager.clone());
+        tracing::info!("ClarificationManager injected into BuiltinToolRegistry for ask_user tool");
+    }
+
+    // Approval-button callback sink — intercepts `cb_` callback messages in
+    // the inbound router and routes them through `exec_approval_manager`.
     let approval_callback_sink: Option<
         Arc<dyn alephcore::gateway::inbound_router::approval_callback::ApprovalCallbackSink>,
     > = Some(Arc::new(
         alephcore::approval::callback_sink::ManagerCallbackSink::new(exec_approval_manager.clone()),
     ));
+
     initialize_inbound_router(
         channel_registry,
         agent_result.execution_adapter,
@@ -1814,6 +1769,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.generation_registry,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
         approval_callback_sink,
+        exec_approval_manager,
+        clarification_manager.clone(),
         args.daemon,
     )
     .await;

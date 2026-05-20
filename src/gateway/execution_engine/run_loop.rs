@@ -191,6 +191,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             },
         )));
 
+        // Routing context for HITL tools (sandbox escalation,
+        // `requires_confirmation`, `ask_user`). Constant across retries.
+        // Channel id / conversation id come from the inbound router's metadata;
+        // empty for non-channel turns (cron, webhook) — HITL tools degrade.
+        let turn_context = crate::tools::turn_context::TurnContext {
+            session_key: request.session_key.clone(),
+            channel_id: request
+                .metadata
+                .get("channel_id")
+                .cloned()
+                .unwrap_or_default(),
+            conversation_id: request
+                .metadata
+                .get("conversation_id")
+                .cloned()
+                .unwrap_or_default(),
+        };
+
         loop {
             attempt += 1;
 
@@ -292,6 +310,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     allowed_names.clone(),
                     None,
                     tool_refresh.clone(),
+                    Some(turn_context.clone()),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -377,6 +396,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 allowed_names,
                 Some(subagent_tool),
                 tool_refresh,
+                Some(turn_context.clone()),
             );
 
             // Build FlowRequest

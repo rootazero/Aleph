@@ -28,12 +28,6 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 ### SandboxCapabilities
 **Aleph-specific:** What a subprocess is allowed to do (`src/sandbox/capabilities.rs`): `fs_read`, `fs_write`, `network` (`None`/`AllowHosts`/`AllowAll`), `spawn_subprocess`. `::strict()` is the workspace baseline (no fs outside cwd, no network, no spawn). `is_within(&baseline)` enforces monotonic subset semantics: prefix-subset for paths, ordered `None ⊆ AllowHosts ⊆ AllowAll` for network, and `false ⊆ any` for spawn.
 
-### LayeredPermissionResolver
-**Aleph-specific:** Concrete `SmartFilter` implementation (`src/tools/middleware/permission/resolver.rs`) backed by a merged two-tier `ToolPermissionsConfig` (global + per-agent, most-restrictive-wins). Classifies each tool call as `Allow` / `Confirm` / `Deny` by consulting `PermissionAction::Allow/Ask/Deny`. Live-reloadable via `ArcSwap`. Backfills the Phase 2 placeholder filter with real policy.
-
-### AgentPermissionFilter
-**Aleph-specific:** Convenience builder (`src/tools/middleware/permission/agent_filter.rs`) that takes a global + per-agent `ToolPermissionsConfig`, merges them, and returns an `Arc<dyn SmartFilter>` ready to hand to `PermissionLayer::set_smart_filter`. Used by orchestrator paths that know which agent is running.
-
 ### Session
 **Anthropic meaning:** Append-only log recording everything that happened during an agent's work. Persists independently outside the harness; accessed via `getEvents()` / `emitEvent()`.
 
@@ -42,13 +36,14 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 ### Tools
 **Anthropic meaning:** The "hands" — custom tools, MCP servers, execution environments — all reached through one `execute()` surface. The brain is agnostic to the backing.
 
-**Aleph today:** `ToolService` trait (`src/tools/service.rs`), backed by
-`CoreDispatch` + `ArcSwap`-backed `ToolRegistry`, with a five-layer decorator
-chain (Audit / Permission / ContextRule / Timeout / Core). Three handler sources
-(`BuiltinHandler`, `McpHandler`, `ExtensionHandler`) adapt existing tools without
-changing their author-side `AlephTool` trait. Gateway `tools.*` RPC still routes
-through the legacy `AlephToolServer` in Phase 2 (future phase migrates).
-See [TOOL_SYSTEM.md](./TOOL_SYSTEM.md).
+**Aleph today:** `ToolService` trait (`src/tools/service.rs`), backed in
+production by `ScopedToolService` (`src/tools/scoped.rs`) — a per-request
+adapter built by `gateway::execution_engine::tool_service_builder` that
+exposes an allow-listed view over `LoopToolRegistry`, carries
+`with_confirmation` (HITL `requires_confirmation` gate) and
+`with_turn_context` (HITL routing). The harness fallback is
+`NullToolService`; production never reaches it because Gateway always
+overrides. See [TOOL_SYSTEM.md](./TOOL_SYSTEM.md).
 
 ### Orchestrator
 **Anthropic meaning:** Infrastructure managing session state, sandbox provisioning, and routing between brains and hands.

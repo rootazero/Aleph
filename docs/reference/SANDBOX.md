@@ -178,73 +178,32 @@ pub fn build_sandbox(
 ```
 
 `src/bin/aleph-server/commands/start/mod.rs` wires this during start-up:
-build a single `ApprovalGate` (currently requesterless — see *Known
-Limitations* in `CHANGELOG.md`) → build the `OsSandboxAdapter` → wrap in
-`OsSandboxDriver` → call `build_sandbox(&loaded_app_config.sandbox,
-os_driver, approval_gate)`. The resulting `Arc<dyn Sandbox>` is threaded
-through tool registration into every exec-class tool constructor
-(`CodeExecTool::with_sandbox`, `BashExecTool::with_sandbox`, …).
+build a single `ApprovalGate` (requesterless at construction —
+`ChannelApprovalBridgeAdapter` is injected via `set_requester` after the
+channel registry comes up; see HITL P1 in
+`docs/superpowers/specs/2026-05-19-hitl-loop-closure-design.md`) → build
+the `OsSandboxAdapter` → wrap in `OsSandboxDriver` → call
+`build_sandbox(&loaded_app_config.sandbox, os_driver, approval_gate)`.
+The resulting `Arc<dyn Sandbox>` is threaded through tool registration
+into every exec-class tool constructor (`CodeExecTool::with_sandbox`,
+`BashExecTool::with_sandbox`, …).
 
-The same `approval_gate` is also attached to the `PermissionLayer` via
-`PermissionLayer::set_approver`, so Ask-tier tool confirmations and
-sandbox capability escalations share one gate. The global
-`[policies.tool_permissions]` table plus an empty per-agent default are
-merged into a `LayeredPermissionResolver` (via
-`AgentPermissionFilter::build`) and attached via
-`PermissionLayer::set_smart_filter`. Boot logs
-`"wired LayeredPermissionResolver into PermissionLayer..."` on success.
-Per-agent overrides plug in at Phase 4 session activation.
+The same `approval_gate` is also handed to the `ScopedToolService` via
+`with_confirmation(confirm_tools, requester)`, so the `requires_confirmation`
+tool seam (HITL P3: `vault_store` / `agent_delete` / `team_disband`) and
+sandbox capability escalations share one gate. The pre-`ScopedToolService`
+`PermissionLayer` / `LayeredPermissionResolver` / `AgentPermissionFilter`
+chain was deleted in 2026-05-20 — it was unreachable because every
+gateway request overrode it. Per-agent permission policy is a future
+follow-up cycle.
 
-### Exec-class double-prompt risk (H4)
+## Relation to `file_write` / `file_edit`
 
-When `bash` / `code_exec` are classified `Ask` in
-`[policies.tool_permissions]`, `PermissionLayer` and `WorkspaceSandbox`
-would each request approval independently — two prompts. The current
-global-default `Allow` for exec tools avoids this in practice. A Phase 4
-follow-up will add an exec-class exclude-list to
-`LayeredPermissionResolver` so the sandbox owns the prompt for those
-tools.
-
-## Relation to `ExecSecurityGate`
-
-`ExecSecurityGate` (`src/executor/exec_security_gate.rs`) is a **pre-exec
-filesystem-write guard** for `file_write` / `file_edit`. It sits at a
-different layer: it validates target paths and scopes against the exec policy
-*before* any subprocess is spawned. The Sandbox subsystem, by contrast, owns
-the *how-it-runs* side — workspace, capabilities, OS isolation — for tools
-that do spawn processes.
-
-Today's split:
-
-- `file_write`, `file_edit` stay behind `ExecSecurityGate` (direct disk I/O,
-  no subprocess).
-- `code_exec`, `bash_exec`, and future exec-class tools route through
-  `Arc<dyn Sandbox>`.
-
-The two can coexist in a single tool pipeline without double-guarding, because
-they check different concerns: gate = "is this path allowed to change?",
-sandbox = "is this process allowed to do what it's asking to do?".
-
-## Two-tier permissions → `SmartFilter`
-
-Phase 3 Task 2 backfilled the placeholder `SmartFilter` trait (introduced in
-Phase 2) with a concrete policy-backed resolver:
-
-- `LayeredPermissionResolver` (`src/tools/middleware/permission/resolver.rs`)
-  wraps an `ArcSwap<ToolPermissionsConfig>` that holds the already-merged
-  global + per-agent config (most-restrictive-wins via
-  `ToolPermissionsConfig::merge`). Its `classify(name, _input)` returns
-  `Classification::Allow` / `Confirm` / `Deny` based on
-  `PermissionAction::Allow` / `Ask` / `Deny`. `swap(new_merged)` supports
-  live-reload without swapping the filter.
-- `AgentPermissionFilter::build(global, agent)`
-  (`src/tools/middleware/permission/agent_filter.rs`) is the convenience
-  constructor orchestrator paths use when they know which agent is running.
-
-This is the *tool-level* policy lane — it gates the `ToolService::execute`
-call itself. The Sandbox's capability check is the *capability-level* policy
-lane: once a tool call is allowed through, the Sandbox still scrutinizes what
-the subprocess is allowed to read / write / network / spawn.
+`file_write` and `file_edit` enforce path/scope rules inline (see
+`src/builtin_tools/`); they do not spawn subprocesses, so they do not
+route through `Arc<dyn Sandbox>`. The Sandbox subsystem owns the
+*how-it-runs* side — workspace, capabilities, OS isolation — for tools
+that do spawn processes (`code_exec`, `bash_exec`).
 
 ## Exec-class tool consumption pattern
 
@@ -328,8 +287,6 @@ returns `NoopSandbox`.
 | `src/sandbox/context.rs` | `SESSION_ID` task-local + `current_session()` |
 | `src/exec/sandbox/executor.rs` | `OsSandboxDriver` (macOS `sandbox-exec` driver) |
 | `src/session/tool_trace.rs` | `invoke_with_session_trace` — sets `SESSION_ID.scope(...)` |
-| `src/tools/middleware/permission/resolver.rs` | `LayeredPermissionResolver` → `SmartFilter` |
-| `src/tools/middleware/permission/agent_filter.rs` | `AgentPermissionFilter::build` |
 | `tests/sandbox_capability_approval.rs` | End-to-end capability approval flow |
 
 ## Desktop Bridge boundary
@@ -361,5 +318,4 @@ Hard rules that must not be violated by any bridge handler:
 - **Spec:** `docs/superpowers/specs/2026-04-19-sandbox-workspace-design.md`
 - **Plan:** `docs/superpowers/plans/2026-04-19-managed-agents-phase-3-sandbox.md`
 - **Glossary:** [GLOSSARY.md](./GLOSSARY.md) — `Sandbox`, `WorkspaceSandbox`,
-  `OsSandboxDriver`, `SandboxCapabilities`, `LayeredPermissionResolver`,
-  `AgentPermissionFilter`
+  `OsSandboxDriver`, `SandboxCapabilities`

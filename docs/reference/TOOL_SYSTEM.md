@@ -4,35 +4,44 @@
 
 ---
 
-## ToolService façade (post-Phase-2)
+## ToolService — production stack
 
-Consumers (future Harness in Phase 4) depend on `Arc<dyn ToolService>` exclusively:
+Harness consumers depend on `Arc<dyn ToolService>` exclusively:
 
 ```rust
 pub trait ToolService: Send + Sync + 'static {
     async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError>;
     async fn list(&self) -> Vec<ToolDefinition>;
     async fn describe(&self, name: &str) -> Option<ToolDefinition>;
+    fn dispatcher_schema(&self) -> Arc<[crate::dispatcher::ToolDefinition]>;
 }
 ```
 
-Runtime stack (outer to inner):
-  ExecAuditLayer → PermissionLayer → ContextRuleLayer → TimeoutLayer → CoreDispatch
+Production impl: **`ScopedToolService`** (`src/tools/scoped.rs`). The Gateway
+builds one per request via
+`gateway::execution_engine::tool_service_builder::build_request_tool_service`
+and supplies it as `FlowRequest::tool_service` so each turn sees an
+allow-listed view over the shared `LoopToolRegistry`.
 
-`CoreDispatch` holds an `ArcSwap`-backed `ToolRegistry` of three handler sources:
-  `BuiltinHandler`, `McpHandler`, `ExtensionHandler`.
+`ScopedToolService` carries the HITL seams natively:
+- `with_confirmation(confirm_tools, requester)` — gates `requires_confirmation`
+  tools through `ApprovalRequester` (wired at boot to
+  `ChannelApprovalBridgeAdapter`).
+- `with_turn_context(TurnContext)` — scopes the `TURN_CONTEXT` task-local for
+  every tool call so HITL tools (`ask_user`, sandbox escalations, channel
+  approval) can route back to the originating channel.
 
-Tool authors continue to implement `AlephTool` — the façade adapts them via `BuiltinHandler`.
-No author-side API change.
+Tool authors implement `AlephTool` (typed) or `LoopTool` (untyped via
+`RegistryToolAdapter`). The harness fallback `AgentHarnessRunner.tool_service`
+is `NullToolService` (`src/tools/null.rs`) — production never reaches it
+because Gateway always supplies the per-request override; a `NotFound` from
+that service signals upstream wiring regression.
 
-`SmartFilter` and `ContextRule` are trait surfaces (no concrete policy shipped yet);
-production policy registers against those traits via `PermissionLayer::set_smart_filter`
-and `ContextRuleLayer::set_rules`.
-
-Session-event tracing: callers bundle `ToolService` dispatch + SessionService event
-emission via `crate::session::invoke_with_session_trace(tool_svc, session_svc, ...)`.
-
-See: docs/superpowers/specs/2026-04-18-tool-service-facade-design.md
+The pre-`ScopedToolService` Phase 2 decorator chain (`facade.rs` /
+`dispatch.rs` / `registry.rs` / `middleware/` / `handlers/`, ~2700 lines) was
+deleted in 2026-05-20; it was unreachable because every gateway request
+overrode it. See
+`docs/superpowers/specs/2026-05-19-hitl-loop-closure-design.md` §8.
 
 ---
 

@@ -1084,6 +1084,9 @@ impl BuiltinToolRegistry {
                 }
                 cell
             },
+            // ClarificationManager is always injected via deferred wiring at
+            // boot (created alongside channels) — start the cell empty.
+            clarification_manager_cell: Arc::new(tokio::sync::OnceCell::new()),
             clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool::new(),
             gateway_route_tool: crate::builtin_tools::gateway_route::GatewayRouteTool::default(),
             task_create_tool,

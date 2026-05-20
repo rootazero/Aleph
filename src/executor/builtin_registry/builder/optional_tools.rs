@@ -378,6 +378,23 @@ impl BuiltinToolRegistry {
             info!("Registered channel_pairing tool in BuiltinToolRegistry");
         }
 
+        // ask_user clarification tool — always register metadata
+        // (ChannelRegistry + ClarificationManager injected later via deferred
+        // OnceCell wiring). Execution checks both cells at call time.
+        {
+            use crate::builtin_tools::ask_user::AskUserTool;
+            reg(
+                tools,
+                "ask_user",
+                AskUserTool::DESCRIPTION,
+                serde_json::to_value(schemars::schema_for!(
+                    crate::builtin_tools::ask_user::AskUserArgs
+                ))
+                .unwrap_or_default(),
+            );
+            info!("Registered ask_user tool in BuiltinToolRegistry");
+        }
+
         // Sessions tools — always register metadata so LLM sees them.
         // GatewayContext may be injected later via set_gateway_context().
         // Execution checks OnceCell at call time.

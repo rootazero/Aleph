@@ -13,9 +13,9 @@
 //!   root materialised lazily by `WorkspaceSandbox`
 //! - macOS seatbelt profile + per-command timeout + output truncation
 //!
-//! Dangerous command blocking remains the responsibility of `ExecSecurityGate`
-//! at the executor layer; this tool is now a thin adapter from `CodeExecArgs`
-//! to `SandboxCommand`.
+//! Dangerous command blocking is the responsibility of the sandbox layer
+//! (`WorkspaceSandbox` + seatbelt profile); this tool is a thin adapter from
+//! `CodeExecArgs` to `SandboxCommand`.
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
