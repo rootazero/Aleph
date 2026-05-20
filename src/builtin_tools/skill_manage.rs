@@ -87,6 +87,11 @@ impl AlephTool for SkillManageTool {
                 .map_err(|e| AlephError::tool(format!("Failed to set scope: {}", e)))?;
         }
 
+        // Mutation succeeded — record as a patch event so the curator /
+        // status surface can distinguish actively-tuned skills from
+        // never-touched ones.
+        self.system.record_patch(&skill_id).await;
+
         Ok(SkillManageOutput {
             success: true,
             message: format!("Skill {} configuration updated", args.skill_id),

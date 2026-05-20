@@ -76,7 +76,38 @@ impl AgentHarness {
         let ctx = crate::harness::prompt::TurnContext::new(&events, tail_start);
         let mut messages = self.deps.prompt_builder.assemble(&ctx).await?;
 
-        // 2a. Task-10 budget check: evaluate context pressure before issuing
+        // 2a. Preflight cheap passes (hermes-inspired). Run BEFORE the budget
+        // check so token-saving transforms — tool_result pruning + historical
+        // image stripping — happen unconditionally, even if the compactor's
+        // side-channel LLM call later fails. No LLM cost in this step.
+        if let Some(pipeline) = self.deps.preflight_pipeline.as_ref() {
+            // Stages mostly key off `fresh_tail_count`; the pressure ratio is
+            // not currently consulted by the two shipped stages. Pass a max-
+            // pressure placeholder so any future pressure-gated stage still
+            // fires when wired in.
+            let placeholder_pressure = crate::context::budget::ContextPressure {
+                used_tokens: 0,
+                budget_tokens: 0,
+                ratio: 1.0,
+                overhead_tokens: 0,
+                available_for_messages: 0,
+            };
+            // Mirror the compactor's fresh_tail default when no explicit
+            // config is in scope; 6 matches `CompactorConfig::default`.
+            let fresh_tail = 6usize;
+            let freed = pipeline
+                .run(&mut messages, &placeholder_pressure, fresh_tail)
+                .await;
+            if freed > 0 {
+                tracing::debug!(
+                    ?session_id,
+                    tokens_freed = freed,
+                    "preflight cheap passes saved tokens",
+                );
+            }
+        }
+
+        // 2b. Task-10 budget check: evaluate context pressure before issuing
         // the LLM call. `FinalReply` forces a terminal turn with no tools.
         let budget_directive = if let Some(budget) = self.deps.context_budget.as_ref() {
             let mut guard = budget.lock().await;
@@ -85,7 +116,7 @@ impl AgentHarness {
             None
         };
 
-        // 2b. Compact when directive calls for it and a compactor is wired.
+        // 2c. Compact when directive calls for it and a compactor is wired.
         if matches!(budget_directive, Some(LoopDirective::CompactAndContinue)) {
             if let Some(compactor) = self.deps.context_compactor.as_ref() {
                 // `fresh_tail = 0` lets the compactor fall back to its own
@@ -100,7 +131,7 @@ impl AgentHarness {
             }
         }
 
-        // 2c. `FinalReply` directive — record hit_limit and short-circuit to
+        // 2d. `FinalReply` directive — record hit_limit and short-circuit to
         // Done without calling the LLM or running tools. The last assistant
         // message already on the session log is the final text.
         if matches!(budget_directive, Some(LoopDirective::FinalReply)) {

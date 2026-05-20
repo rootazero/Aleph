@@ -190,6 +190,7 @@ mod tests {
             metadata: HashMap::new(),
             attachments: Vec::new(),
             pending_media: PendingMedia::default(),
+            sandbox_override: None,
         };
 
         let result = adapter.execute(request, agent, emitter).await;

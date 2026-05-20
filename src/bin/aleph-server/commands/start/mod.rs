@@ -463,16 +463,44 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // its snapshot for `list_tools` introspection.
     let tool_registry_phase2 = Arc::new(alephcore::tools::ToolRegistry::new());
 
-    // MCP: spawn the manager actor and bridge external-server tools into the
-    // shared `ToolRegistry`. Warn-only on failure — a missing or malformed
-    // MCP config must never abort boot.
+    // First production consumer of `ToolRegistry::subscribe`. Logs every
+    // MCP-driven register/unregister so operators can see exactly when
+    // remote tools enter or leave the LLM's surface. The channel has a
+    // 256-slot ring buffer; slow logger backlog is dropped (Lagged), not
+    // backpressured onto publishers.
+    {
+        let mut rx = tool_registry_phase2.subscribe();
+        tokio::spawn(async move {
+            use alephcore::tools::registry::RegistryChange;
+            loop {
+                match rx.recv().await {
+                    Ok(RegistryChange::Registered { name, source }) => {
+                        tracing::info!(tool = %name, source = ?source, "tool_registry: registered");
+                    }
+                    Ok(RegistryChange::Unregistered { name, source }) => {
+                        tracing::info!(tool = %name, source = ?source, "tool_registry: unregistered");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "tool_registry: subscriber lagged — events dropped");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
+    // MCP: spawn the manager actor here so dependent handlers can resolve
+    // `mcp_handle` below. The tool bridge is spawned later — after
+    // `agent_result` materialises — so it can carry the dispatcher's
+    // `ToolHealthCache` handle for `McpServerProbe` registration.
+    // Warn-only on failure — a missing or malformed MCP config must never
+    // abort boot.
     let mcp_handle: Option<alephcore::mcp::McpManagerHandle> =
         match alephcore::mcp::McpManagerActor::new(None).await {
             Ok((actor, handle)) => {
                 tokio::spawn(actor.run());
-                alephcore::mcp::spawn_tool_bridge(handle.clone(), tool_registry_phase2.clone());
                 if !args.daemon {
-                    println!("MCP Manager spawned + tool bridge wired");
+                    println!("MCP Manager spawned");
                 }
                 Some(handle)
             }
@@ -927,6 +955,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
+    // MCP tool bridge — now that `agent_result.dispatch_registry` exists,
+    // spawn the bridge with the dispatcher handle so each registered MCP
+    // tool also gets an `McpServerProbe` attached to the shared
+    // `ToolHealthCache`. The bridge subscribes to manager events; any
+    // servers that connect from this point on flow through it.
+    if let Some(ref h) = mcp_handle {
+        alephcore::mcp::spawn_tool_bridge(
+            h.clone(),
+            tool_registry_phase2.clone(),
+            agent_result.dispatch_registry.clone(),
+        );
+        if !args.daemon {
+            println!("MCP tool bridge wired");
+        }
+    }
+
     // Register TeamEventLogger on GlobalBus.
     // The handler is fire-and-forget (handle returns empty vec), so we pass a
     // dummy EventContext — it never calls ctx.bus.publish().
@@ -1090,6 +1134,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             sandbox.clone(),
             &stop_hook_configs,
             agent_result.memory_context_provider.clone(),
+            agent_result.dispatch_registry.clone(),
         )
         .await
         {
@@ -1728,6 +1773,38 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             println!(
                 "exec-approval: ApprovalGate + ScopedToolService.with_confirmation \
                  requester wired (Telegram channel approvals enabled)"
+            );
+        }
+    }
+
+    // Tool-result budget — install Layer 2 store + Layer 3 turn-budget
+    // singletons. The store roots at `~/.aleph/data/tool_results/global/`;
+    // per-session scoping is deferred (file names embed a UUID so concurrent
+    // sessions cannot collide). Layer 3 uses the default `MAX_TURN_TOKENS`
+    // (~50 000 = 200KB chars equivalent). Failure to create the store is
+    // not fatal — Layer 2 silently falls back to in-line truncation.
+    match alephcore::tools::result_store::ToolResultStore::new("global") {
+        Ok(store) => {
+            let store = std::sync::Arc::new(store);
+            alephcore::tools::result_store::set_global_tool_result_store(store);
+            let budget = std::sync::Arc::new(
+                alephcore::tools::turn_budget::TurnResultBudget::new(
+                    alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
+                ),
+            );
+            alephcore::tools::turn_budget::set_global_turn_result_budget(budget);
+            if !args.daemon {
+                println!(
+                    "tool-result-budget: ToolResultStore + TurnResultBudget wired \
+                     (~/.aleph/data/tool_results/global/, max_turn_tokens={})",
+                    alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "tool-result-budget store init failed; Layer 2 + Layer 3 disabled"
             );
         }
     }

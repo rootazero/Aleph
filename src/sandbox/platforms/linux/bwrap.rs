@@ -19,6 +19,27 @@ pub struct LinuxSandboxOptions {
     pub mount_proc: bool,
     pub no_new_privs: bool,
     pub include_platform_defaults: bool,
+    /// SP-2: when `true`, sandbox-init exits non-zero if the kernel
+    /// does not expose landlock ABI ≥ 1 (kernels < 5.13). Defaults to
+    /// `false` → soft-degrade with a warning, keeping bwrap + seccomp +
+    /// rlimit active. Hardened production deployments can flip this on.
+    pub require_landlock: bool,
+
+    /// SP-5: try to create a cgroup v2 sub-cgroup around the sandboxed
+    /// process to enforce RSS-based memory + CPU + pid limits. Disabled
+    /// → cgroup is never attempted (RLIMIT_AS still applies).
+    pub cgroup_enabled: bool,
+
+    /// SP-5: when `true`, the driver fails (rather than soft-degrades)
+    /// if cgroup v2 setup is impossible (e.g. no delegation).
+    pub require_cgroups: bool,
+
+    /// SP-5: `cpu.max` quota as a percentage of one CPU. See
+    /// [`crate::sandbox::cgroup_v2::cpu_quota_max_line`].
+    pub cpu_quota_percent: Option<u32>,
+
+    /// SP-5: `pids.max` ceiling.
+    pub max_pids: Option<u32>,
 }
 
 impl Default for LinuxSandboxOptions {
@@ -27,6 +48,11 @@ impl Default for LinuxSandboxOptions {
             mount_proc: true,
             no_new_privs: true,
             include_platform_defaults: true,
+            require_landlock: false,
+            cgroup_enabled: true,
+            require_cgroups: false,
+            cpu_quota_percent: None,
+            max_pids: Some(200),
         }
     }
 }
@@ -113,21 +139,24 @@ impl BubblewrapDriver {
                 args.push("--unshare-net".into());
             }
             NetworkPolicy::AllowAll => {}
-            NetworkPolicy::AllowHosts(hosts) => {
-                warn!(
-                    "AllowHosts network policy requested but not fully supported on Linux. \
-                     Falling back to --unshare-net. Allowed hosts: {:?}",
-                    hosts
-                );
-                args.push("--unshare-net".into());
+            NetworkPolicy::AllowHosts(_) => {
+                return Err(SandboxError::UnsupportedPolicy {
+                    platform: "linux/bwrap",
+                    feature: "NetworkPolicy::AllowHosts".into(),
+                    reason: "bubblewrap offers only all-or-nothing network isolation; \
+                             per-host filtering requires Landlock+seccomp or iptables \
+                             (deferred to spec SP-2). Use AllowAll or None."
+                        .into(),
+                });
             }
-            NetworkPolicy::ProxyOnly { ports } => {
-                warn!(
-                    "ProxyOnly network policy requested but not fully supported on Linux. \
-                     Falling back to --unshare-net. Proxy ports: {:?}",
-                    ports
-                );
-                args.push("--unshare-net".into());
+            NetworkPolicy::ProxyOnly { .. } => {
+                return Err(SandboxError::UnsupportedPolicy {
+                    platform: "linux/bwrap",
+                    feature: "NetworkPolicy::ProxyOnly".into(),
+                    reason: "proxy-only mode requires a managed proxy backend on the host \
+                             namespace (deferred to spec SP-4). Use AllowAll or None."
+                        .into(),
+                });
             }
         }
 
@@ -281,6 +310,27 @@ impl BubblewrapDriver {
             }
         }
     }
+
+    /// Apply `setrlimit(RLIMIT_AS)` on the bwrap process; the limit is
+    /// inherited by the eventual target binary via exec.
+    fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
+        let bytes = mb.saturating_mul(1024 * 1024);
+        unsafe {
+            // SAFETY: setrlimit with RLIMIT_AS is async-signal-safe and
+            // well-defined. No allocator, mutex, or other handler-unsafe
+            // call is made between fork and exec.
+            cmd.pre_exec(move || {
+                let rlim = libc::rlimit {
+                    rlim_cur: bytes as libc::rlim_t,
+                    rlim_max: bytes as libc::rlim_t,
+                };
+                if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
 }
 
 #[async_trait]
@@ -301,7 +351,22 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         let policy = SandboxPolicy::from(capabilities);
         let args = self.generate_args(&policy, cwd)?;
         let contents = args.join("\n");
-        Ok(OsSandboxProfile { contents })
+        // SP-2: serialize the landlock/seccomp policy for sandbox-init.
+        // The init binary applies these inside bwrap's namespace before
+        // exec'ing the target.
+        let init_policy = crate::sandbox::sandbox_init::policy_from_capabilities(
+            capabilities,
+            cwd,
+            self.options.require_landlock,
+        );
+        let init_policy_json = serde_json::to_string(&init_policy)
+            .map_err(|e| SandboxError::ProfileGeneration(format!("init policy serialize: {e}")))?;
+        Ok(OsSandboxProfile {
+            contents,
+            max_memory_mb: policy.process.max_memory_mb,
+            linux_init_policy: Some(init_policy_json),
+            windows_init_policy: None,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -320,15 +385,52 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             .find_bwrap()
             .ok_or_else(|| SandboxError::ExecutionFailed("bubblewrap (bwrap) not found".into()))?;
 
-        let bwrap_args: Vec<String> = profile.contents.lines().map(|s| s.to_string()).collect();
+        let mut bwrap_args: Vec<String> =
+            profile.contents.lines().map(|s| s.to_string()).collect();
+
+        // SP-2: bind-mount the currently-running aleph-server binary
+        // read-only inside the bwrap namespace at a fixed path, then
+        // launch it as `sandbox-init` to apply landlock + seccomp before
+        // exec'ing the target. Skipped when the profile has no init
+        // policy (e.g. a future caller using OsSandboxProfile in a
+        // non-bwrap path).
+        let init_policy_json = profile.linux_init_policy.as_deref();
+        if init_policy_json.is_some() {
+            let aleph_exe = std::env::current_exe()
+                .and_then(std::fs::canonicalize)
+                .map_err(|e| SandboxError::ExecutionFailed(
+                    format!("cannot determine aleph-server path: {e}"),
+                ))?;
+            bwrap_args.push("--ro-bind".into());
+            bwrap_args.push(aleph_exe.to_string_lossy().into_owned());
+            bwrap_args.push("/aleph-sandbox-init".into());
+        }
 
         debug!("running bubblewrap with {} arguments", bwrap_args.len());
 
         let mut cmd = Command::new(bwrap_path);
-        cmd.args(&bwrap_args)
-            .arg(program)
-            .args(args)
-            .current_dir(cwd)
+        cmd.args(&bwrap_args);
+
+        // Compose the target invocation. With an init policy in hand we
+        // exec the target indirectly:
+        //   /aleph-sandbox-init sandbox-init --policy <json> -- <program> <args...>
+        // Otherwise fall back to direct exec (matches pre-SP-2 behavior).
+        match init_policy_json {
+            Some(policy) => {
+                cmd.arg("/aleph-sandbox-init")
+                    .arg("sandbox-init")
+                    .arg("--policy")
+                    .arg(policy)
+                    .arg("--")
+                    .arg(program)
+                    .args(args);
+            }
+            None => {
+                cmd.arg(program).args(args);
+            }
+        }
+
+        cmd.current_dir(cwd)
             .env_clear()
             .envs(env)
             .stdout(std::process::Stdio::piped())
@@ -336,6 +438,46 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             .stdin(std::process::Stdio::piped());
 
         self.apply_no_new_privs(&mut cmd);
+        if let Some(mb) = profile.max_memory_mb {
+            Self::apply_memory_rlimit(&mut cmd, mb);
+        }
+
+        // SP-5: build cgroup v2 sub-cgroup before spawn so the child can
+        // be attached via pre_exec. The scope is owned by this `run()`
+        // frame; its Drop fires after `wait_with_output()` completes and
+        // rmdir's the cgroup directory. RLIMIT_AS (above) continues to
+        // apply as a fallback when cgroups are unavailable.
+        let _cgroup_scope: Option<crate::sandbox::cgroup_v2::CgroupV2Scope> = if self
+            .options
+            .cgroup_enabled
+        {
+            let limits = crate::sandbox::cgroup_v2::CgroupV2Limits {
+                memory_mb: profile.max_memory_mb,
+                cpu_quota_percent: self.options.cpu_quota_percent,
+                max_pids: self.options.max_pids,
+            };
+            let scope = crate::sandbox::cgroup_v2::CgroupV2Scope::try_create(limits);
+            if scope.is_none() && self.options.require_cgroups {
+                return Err(SandboxError::ExecutionFailed(
+                    "cgroup v2 setup failed and require_cgroups=true".into(),
+                ));
+            }
+            // Capture the child's cgroup.procs path by clone so pre_exec
+            // doesn't share Arc state with the parent (which would
+            // double-leak the ref count across fork+exec).
+            if let Some(ref s) = scope {
+                let procs_path = s.procs_path();
+                unsafe {
+                    cmd.pre_exec(move || {
+                        let pid = std::process::id();
+                        std::fs::write(&procs_path, pid.to_string().as_bytes())
+                    });
+                }
+            }
+            scope
+        } else {
+            None
+        };
 
         let mut child = cmd
             .spawn()
@@ -474,16 +616,42 @@ mod tests {
     }
 
     #[test]
-    fn generate_args_allow_hosts_fallback() {
+    fn generate_args_allow_hosts_returns_unsupported() {
         let driver = BubblewrapDriver::new();
         let policy = SandboxPolicy {
             network: NetworkPolicy::AllowHosts(vec!["example.com".into()]),
             ..Default::default()
         };
         let cwd = Path::new("/tmp/ws");
-        let args = driver.generate_args(&policy, cwd).unwrap();
+        let err = driver
+            .generate_args(&policy, cwd)
+            .expect_err("AllowHosts must hard-fail on linux/bwrap");
+        match err {
+            SandboxError::UnsupportedPolicy {
+                platform,
+                feature,
+                reason,
+            } => {
+                assert_eq!(platform, "linux/bwrap");
+                assert!(feature.contains("AllowHosts"));
+                assert!(reason.contains("Landlock") || reason.contains("iptables"));
+            }
+            other => panic!("expected UnsupportedPolicy, got {other:?}"),
+        }
+    }
 
-        assert!(args.contains(&"--unshare-net".into()));
+    #[test]
+    fn generate_args_proxy_only_returns_unsupported() {
+        let driver = BubblewrapDriver::new();
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::ProxyOnly { ports: vec![8080] },
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let err = driver
+            .generate_args(&policy, cwd)
+            .expect_err("ProxyOnly must hard-fail on linux/bwrap");
+        assert!(matches!(err, SandboxError::UnsupportedPolicy { .. }));
     }
 
     #[test]
@@ -502,5 +670,17 @@ mod tests {
 
         assert!(!args.contains(&"--unshare-pid".into()));
         assert!(!args.contains(&"--cap-drop".into()));
+    }
+
+    #[test]
+    fn profile_for_threads_max_memory_mb() {
+        let driver = BubblewrapDriver::new();
+        let caps = SandboxCapabilities {
+            max_memory_mb: Some(256),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.profile_for(&caps, cwd).unwrap();
+        assert_eq!(profile.max_memory_mb, Some(256));
     }
 }

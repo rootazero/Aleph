@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::agents::subagent_tool::SubagentTool;
+use crate::dispatcher::ToolHealthCache;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
@@ -36,6 +37,18 @@ pub trait ToolHookDecorator: Send + Sync {
 
     /// Called after a tool invocation completes (success or error).
     fn after_execute(&self, name: &str, output: &Result<ToolOutput, ToolError>);
+
+    /// Called after [`after_execute`] with the wall-clock duration of the
+    /// dispatch (including retry). Default no-op so existing implementations
+    /// keep compiling. Implement to surface duration metrics without taking
+    /// on per-call latency tracking inside every adapter.
+    fn after_execute_with_duration(
+        &self,
+        _name: &str,
+        _output: &Result<ToolOutput, ToolError>,
+        _duration_ms: u64,
+    ) {
+    }
 }
 
 // =============================================================================
@@ -69,8 +82,21 @@ pub struct ScopedToolService {
     /// (sandbox escalation, `requires_confirmation`, `ask_user`) can route a
     /// prompt back to the originating channel.
     turn_context: Option<crate::tools::turn_context::TurnContext>,
+    /// Layer 2 of the tool-result budget: persists oversized outputs to
+    /// disk and replaces them with a compact marker before they enter
+    /// the conversation history.
+    result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
     schema_cache: ArcSwap<Option<(u64, Arc<[crate::dispatcher::ToolDefinition]>)>>,
     cache_generation: std::sync::atomic::AtomicU64,
+    /// Optional runtime health cache. When set, `list()` and
+    /// `dispatcher_schema()` strip tools whose probe reports Unhealthy
+    /// (and the entry hasn't expired) so the LLM never sees a tool whose
+    /// dependencies are dead.
+    health: Option<Arc<ToolHealthCache>>,
+    /// Last observed health-cache generation. Bumping this on a generation
+    /// drift invalidates the `schema_cache`, so a tool flipping
+    /// healthy↔unhealthy retransmits to the LLM on the next turn.
+    last_health_generation: std::sync::atomic::AtomicU64,
 }
 
 impl ScopedToolService {
@@ -87,9 +113,37 @@ impl ScopedToolService {
             confirm_tools: BTreeSet::new(),
             approval_requester: None,
             turn_context: None,
+            result_store: None,
             schema_cache: ArcSwap::from_pointee(None),
             cache_generation: std::sync::atomic::AtomicU64::new(0),
+            health: None,
+            last_health_generation: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Attach the dispatcher's runtime health cache.
+    ///
+    /// When set, `list()` and `dispatcher_schema()` consult the cache and
+    /// silently strip any tool whose registered probe reports a non-expired
+    /// `Unhealthy`. Cache-key drift on the underlying health generation is
+    /// detected on every read so a flip propagates within one turn.
+    pub fn with_health(mut self, health: Arc<ToolHealthCache>) -> Self {
+        self.health = Some(health);
+        self
+    }
+
+    /// Attach a Layer 2 result store. When the underlying tool returns a
+    /// result whose token estimate exceeds the tool's `max_result_tokens`,
+    /// the full text is written to `~/.aleph/data/tool_results/<sess>/...`
+    /// and the LLM sees `[Full output persisted: <path> (<n> tokens, <tool>)]`
+    /// instead. Without a store wired the service falls back to head+tail
+    /// truncation when the budget is exceeded.
+    pub fn with_result_store(
+        mut self,
+        store: Arc<crate::tools::result_store::ToolResultStore>,
+    ) -> Self {
+        self.result_store = Some(store);
+        self
     }
 
     /// Require user confirmation for the named tools before they execute.
@@ -194,6 +248,20 @@ impl ScopedToolService {
                     metadata: ToolOutputMetadata::default(),
                 })
             }
+            // Map `retryable=true` to `ToolError::Transport` so the
+            // one-shot retry helper (which keys off `ToolError::is_retryable`,
+            // currently `true` for `Timeout` / `Transport` only) actually
+            // fires. Semantically the LoopTool layer reports "this is a
+            // transient failure that may succeed if tried again"; `Transport`
+            // is the best-fitting carrier in the public `ToolError` enum
+            // without expanding its variant set.
+            ToolResult::Error {
+                error,
+                retryable: true,
+            } => Err(ToolError::Transport {
+                name: name.to_string(),
+                cause: error,
+            }),
             ToolResult::Error { error, .. } => Err(ToolError::Execution {
                 name: name.to_string(),
                 cause: error,
@@ -214,6 +282,10 @@ impl ToolService for ScopedToolService {
                 let _ = refresh.fetch_tools();
             }
         }
+
+        // Take a single health snapshot so the filter is consistent across
+        // every tool in this list call.
+        let health_snap = self.health.as_ref().map(|h| h.snapshot());
 
         let mut defs: Vec<ToolDefinition> = self
             .inner
@@ -238,6 +310,13 @@ impl ToolService for ScopedToolService {
         // and doesn't list "subagent" (which it never does — see is_allowed).
         if !self.allowed.is_empty() {
             defs.retain(|d| self.is_allowed(&d.name));
+        }
+
+        // Health gate: strip any tool whose probe reports a non-expired
+        // Unhealthy. Tools without a registered probe pass through (the
+        // snapshot reports them healthy by default).
+        if let Some(snap) = &health_snap {
+            defs.retain(|d| snap.is_healthy(&d.name));
         }
 
         defs
@@ -285,6 +364,19 @@ impl ToolService for ScopedToolService {
                 self.cache_generation.fetch_add(1, Ordering::AcqRel);
             }
         }
+
+        // Bump generation if the health cache rotated (a probe flipped
+        // healthy↔unhealthy or `invalidate_all` fired). This keeps the
+        // dispatcher schema cache aligned with the same gating snapshot
+        // that `list()` sees.
+        if let Some(health) = &self.health {
+            let live_gen = health.generation();
+            let prev = self.last_health_generation.swap(live_gen, Ordering::AcqRel);
+            if prev != live_gen {
+                self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
         let gen_now = self.cache_generation.load(Ordering::Acquire);
 
         // Cache hit?
@@ -293,6 +385,9 @@ impl ToolService for ScopedToolService {
                 return Arc::clone(&cached.1);
             }
         }
+
+        // Take a snapshot for filter application — same as list().
+        let health_snap = self.health.as_ref().map(|h| h.snapshot());
 
         // Cache miss: rebuild loop-side defs (matching list() body), then convert.
         let mut defs: Vec<ToolDefinition> = self
@@ -313,6 +408,9 @@ impl ToolService for ScopedToolService {
         if !self.allowed.is_empty() {
             // Mirror list() — subagent is exempt from allow-filter via is_allowed.
             defs.retain(|d| self.is_allowed(&d.name));
+        }
+        if let Some(snap) = &health_snap {
+            defs.retain(|d| snap.is_healthy(&d.name));
         }
         let schema = to_dispatcher_form(&defs);
         self.schema_cache
@@ -372,31 +470,155 @@ impl ScopedToolService {
             hook.before_execute(name, &input);
         }
 
-        // Route to subagent tool if name matches.
-        let result = if self
+        let started = std::time::Instant::now();
+
+        // Route to subagent tool if name matches; otherwise route into the
+        // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize
+        // pipeline below.
+        let routing = if self
             .subagent_tool
             .as_ref()
             .is_some_and(|st| st.name() == name)
         {
-            let st = self.subagent_tool.as_ref().unwrap();
-            let raw = st.execute(input).await;
-            Self::tool_result_to_output(name, raw)
+            RoutingTarget::Subagent
         } else if self.inner.get(name).is_some() || self.inner.resolve(name).is_some() {
-            let raw = self.inner.execute(name, input).await;
-            Self::tool_result_to_output(name, raw)
+            RoutingTarget::Inner
         } else {
-            Err(ToolError::NotFound {
-                name: name.to_string(),
-            })
+            RoutingTarget::Missing
         };
 
-        // Fire post-hook.
+        let result = match routing {
+            RoutingTarget::Missing => Err(ToolError::NotFound {
+                name: name.to_string(),
+            }),
+            target => {
+                // One-shot retry: if the inner Loop tool returned
+                // `retryable: true` (mapped to `ToolError::Transport` in
+                // `tool_result_to_output`), the helper sleeps 100ms and
+                // retries exactly once. R10-safe: no policy selection.
+                let raw_outcome = crate::tools::retry::execute_with_one_shot_backoff(|| {
+                    let input = input.clone();
+                    let name_owned = name.to_string();
+                    async move {
+                        let raw = match target {
+                            RoutingTarget::Subagent => {
+                                let st = self.subagent_tool.as_ref().expect("checked above");
+                                st.execute(input).await
+                            }
+                            RoutingTarget::Inner => self.inner.execute(&name_owned, input).await,
+                            RoutingTarget::Missing => unreachable!(),
+                        };
+                        Self::tool_result_to_output(&name_owned, raw)
+                    }
+                })
+                .await;
+                match raw_outcome {
+                    Ok(output) => Ok(self.apply_layer_two(name, output)),
+                    Err(err) => Err(Self::sanitize_tool_error(name, err)),
+                }
+            }
+        };
+
+        let duration_ms: u64 = started
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+
+        // Fire post-hooks. Both for back-compat (v1) and with-duration (v2).
         if let Some(ref hook) = self.hook_decorator {
             hook.after_execute(name, &result);
+            hook.after_execute_with_duration(name, &result, duration_ms);
         }
 
         result
     }
+
+    /// Apply Layer 2 of the budget pipeline (`compress → persist-if-large
+    /// → truncate`) to a successful tool output. Reuses the existing
+    /// per-tool compression hook (`compress_tool_output`) and the shared
+    /// `result_store` if one is wired; falls back to head+tail truncation
+    /// otherwise.
+    fn apply_layer_two(&self, name: &str, mut out: ToolOutput) -> ToolOutput {
+        // Compress first: hands JSON to the per-tool summarizer that
+        // already exists in `tool_output::compressor`. The text we feed
+        // into Layer 2 reflects what the LLM will ultimately see.
+        let raw = match &out.value {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let compressed = crate::tool_output::compressor::compress_tool_output(name, &raw);
+
+        let explicit = self.inner.max_result_tokens_for(name);
+        let budget = crate::tools::result_processing::resolve_result_budget(name, explicit);
+
+        // Generate a per-call file name suffix so concurrent calls to the
+        // same tool do not collide on disk. The LLM correlates the result
+        // through the surrounding conversation history, not the path.
+        let call_id = uuid::Uuid::new_v4().simple().to_string();
+
+        let processed = crate::tools::result_processing::apply_result_budget(
+            &call_id,
+            name,
+            &compressed,
+            self.result_store.as_deref(),
+            budget,
+        );
+
+        // Mark `metadata.truncated` whenever Layer 2 shortened the text.
+        if processed.persisted_path.is_some() || processed.text.contains("[output truncated") {
+            out.metadata.truncated = true;
+        }
+        out.value = Value::String(processed.text);
+        out
+    }
+
+    /// Wrap a `ToolError` text payload with the standard external-content
+    /// fence so reflected user input / scraped remote data inside the
+    /// error message cannot smuggle prompt-injection patterns back into
+    /// the LLM. The fence labels the source as `tool_error:<tool>` so the
+    /// model can pattern-match consistently with `tool_error` outputs
+    /// from other channels.
+    fn sanitize_tool_error(name: &str, err: ToolError) -> ToolError {
+        use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
+        // Preserve the original variant so callers can keep matching on
+        // `Timeout` / `Transport` / `Execution`; only the `cause` /
+        // message string is sanitized.
+        match err {
+            ToolError::Execution { name: n, cause } => ToolError::Execution {
+                name: n,
+                cause: wrap_external_content(
+                    &cause,
+                    ContentSource::ToolError {
+                        tool: name.to_string(),
+                    },
+                ),
+            },
+            ToolError::Transport { name: n, cause } => ToolError::Transport {
+                name: n,
+                cause: wrap_external_content(
+                    &cause,
+                    ContentSource::ToolError {
+                        tool: name.to_string(),
+                    },
+                ),
+            },
+            // Other variants either have no untrusted payload (NotFound,
+            // PermissionDenied, Duplicate, ValidationFailed) or are
+            // structured enough not to need wrapping (Timeout). Pass
+            // through unchanged.
+            other => other,
+        }
+    }
+}
+
+/// Which dispatch branch `execute_inner` is routing into. Kept as a
+/// fieldless enum so the retry closure can capture it by value.
+#[derive(Copy, Clone)]
+enum RoutingTarget {
+    Subagent,
+    Inner,
+    Missing,
 }
 
 // =============================================================================
@@ -837,5 +1059,74 @@ mod tests {
         let s = svc.dispatcher_schema();
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].name, "a");
+    }
+
+    // -------------------------------------------------------------------------
+    // Health gate tests
+    // -------------------------------------------------------------------------
+
+    use crate::dispatcher::{HealthReason, ProbeResult, ToolHealthCache, ToolHealthProbe};
+    use std::borrow::Cow;
+
+    struct AlwaysDead;
+
+    #[async_trait::async_trait]
+    impl ToolHealthProbe for AlwaysDead {
+        async fn probe(&self) -> ProbeResult {
+            ProbeResult::Unhealthy {
+                reason: HealthReason::DependencyDown(Cow::Borrowed("test fixture")),
+                retry_after: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn list_strips_unhealthy_tools() {
+        let registry = make_registry(&["alive", "dead"]);
+        let health = Arc::new(ToolHealthCache::new());
+        health.register_probe("dead", Arc::new(AlwaysDead));
+        health.refresh("dead").await;
+        let svc = ScopedToolService::new(registry, BTreeSet::new()).with_health(health);
+        let defs = svc.list().await;
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"alive"));
+        assert!(!names.contains(&"dead"), "got: {names:?}");
+    }
+
+    #[test]
+    fn dispatcher_schema_strips_unhealthy_tools_and_invalidates_on_flip() {
+        // Driven sync from outside an async runtime — populate the cache via
+        // a small block_on island.
+        let registry = make_registry(&["alive", "dead"]);
+        let health = Arc::new(ToolHealthCache::new());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            health.register_probe("dead", Arc::new(AlwaysDead));
+            health.refresh("dead").await;
+        });
+        let svc =
+            ScopedToolService::new(registry, BTreeSet::new()).with_health(Arc::clone(&health));
+
+        let s1 = svc.dispatcher_schema();
+        let names: Vec<&str> = s1.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"alive"));
+        assert!(!names.contains(&"dead"), "first call should strip dead");
+
+        // Flip "dead" healthy via invalidation; the schema cache must
+        // invalidate so the next call surfaces "dead" again.
+        health.invalidate_all();
+        let s2 = svc.dispatcher_schema();
+        assert!(
+            !Arc::ptr_eq(&s1, &s2),
+            "cache must rotate when health generation flips"
+        );
+        let names2: Vec<&str> = s2.iter().map(|d| d.name.as_str()).collect();
+        assert!(
+            names2.contains(&"dead"),
+            "after invalidation, dead reappears; got: {names2:?}"
+        );
     }
 }

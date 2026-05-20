@@ -178,6 +178,43 @@ where
             *sk_handle.write().await = request.session_key.to_key_string();
         }
 
+        // Pre-extract skill context from the slash mode JSON so the agent
+        // loop (run_loop.rs) can apply `allowed_tools` intersection without
+        // re-parsing the envelope on every Think→Act iteration. Two keys are
+        // emitted: `slash_skill_instructions` (raw markdown for prompt
+        // overlay) and `slash_skill_allowed_tools` (comma-separated tool name
+        // whitelist). The keys are absent unless the slash command resolves
+        // to a Skill source with a non-empty allowed_tools list / non-empty
+        // instructions.
+        if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY).cloned() {
+            if let Ok(mode) = serde_json::from_str::<serde_json::Value>(&mode_json) {
+                if mode.get("type").and_then(|v| v.as_str()) == Some("skill") {
+                    if let Some(instructions) =
+                        mode.get("instructions").and_then(|v| v.as_str())
+                    {
+                        if !instructions.is_empty() {
+                            request.metadata.insert(
+                                "slash_skill_instructions".to_string(),
+                                instructions.to_string(),
+                            );
+                        }
+                    }
+                    if let Some(allowed) = mode.get("allowed_tools").and_then(|v| v.as_array()) {
+                        let tools: Vec<String> = allowed
+                            .iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect();
+                        if !tools.is_empty() {
+                            request.metadata.insert(
+                                "slash_skill_allowed_tools".to_string(),
+                                tools.join(","),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         // Slash command fast path (L0): bypass full agent loop
         if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY) {
             let fast_result = self

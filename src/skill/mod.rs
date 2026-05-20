@@ -212,7 +212,7 @@ impl SkillSystem {
             .into_iter()
             .map(|m| {
                 let result = self.inner.eligibility.evaluate(m, &config_value);
-                SkillStatusEntry::build(m, &result, None, false)
+                SkillStatusEntry::build(m, &result, None, false, None)
             })
             .collect();
         entries.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
@@ -254,6 +254,10 @@ impl SkillSystem {
     }
 
     /// Build full status entries for all skills, incorporating user config.
+    ///
+    /// Also merges per-skill activity telemetry from every registered
+    /// `<skills_dir>/.usage.json` sidecar so consumers (Panel UI / LLM /
+    /// CLI) can see usage counts and lifecycle state at a glance.
     pub async fn full_status(&self) -> Vec<SkillStatusEntry> {
         let config_value = crate::config::Config::load()
             .ok()
@@ -261,6 +265,7 @@ impl SkillSystem {
             .unwrap_or_else(|| serde_json::json!({}));
         let registry = self.inner.registry.read().await;
         let config = self.inner.config.read().await;
+        let usage_index = self.collect_usage_snapshot().await;
 
         let mut entries: Vec<SkillStatusEntry> = registry
             .list_all()
@@ -270,11 +275,54 @@ impl SkillSystem {
                 let entry_config = config.get_entry(manifest.id());
                 // Vault integration wired in RPC layer
                 let api_key_set = false;
-                SkillStatusEntry::build(manifest, &eligibility, entry_config, api_key_set)
+                let usage = usage_index.get(manifest.id().as_str()).cloned();
+                SkillStatusEntry::build(manifest, &eligibility, entry_config, api_key_set, usage)
             })
             .collect();
         entries.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
         entries
+    }
+
+    /// Read every registered skill dir's `.usage.json` and merge into a
+    /// single `id → UsageStats` map. Later dirs overwrite earlier on the
+    /// rare same-id collision (the registry would normally have already
+    /// deduped at load time).
+    async fn collect_usage_snapshot(&self) -> std::collections::HashMap<String, UsageStats> {
+        let dirs = self.inner.skill_dirs.read().await.clone();
+        let mut merged: std::collections::HashMap<String, UsageStats> = Default::default();
+        for dir in &dirs {
+            let store = UsageStore::new(dir);
+            for (id, stats) in store.snapshot() {
+                merged.insert(id, stats);
+            }
+        }
+        merged
+    }
+
+    /// Record an LLM-driven mutation to a skill (install / enable / scope
+    /// change). Bumps `patch_count` on the sidecar belonging to whichever
+    /// registered dir owns this skill's `SKILL.md`. Best-effort — silently
+    /// no-ops if the skill cannot be located on disk.
+    pub async fn record_patch(&self, id: &SkillId) {
+        let dirs = self.inner.skill_dirs.read().await.clone();
+        for dir in &dirs {
+            let candidate = dir.join(id.as_str()).join("SKILL.md");
+            if candidate.exists() {
+                UsageStore::new(dir).record_patch(id.as_str());
+                return;
+            }
+        }
+        // Skill lives in a nested layout (e.g. plugin-installed under
+        // `<dir>/<plugin>/<id>/SKILL.md`). Fall back to bumping any sidecar
+        // that already has a row for this id so we update the right one
+        // without creating fresh orphans in unrelated dirs.
+        for dir in &dirs {
+            let store = UsageStore::new(dir);
+            if store.get(id.as_str()).is_some() {
+                store.record_patch(id.as_str());
+                return;
+            }
+        }
     }
 
     /// Update a skill's configuration and persist to disk.
@@ -343,6 +391,10 @@ impl SkillSystem {
     }
 
     /// Remove a skill from the registry. Bundled skills cannot be removed.
+    /// On successful removal, also drops the skill's row from every
+    /// registered `.usage.json` so the sidecar does not accumulate orphan
+    /// telemetry over time. `forget` is idempotent so a missing row is
+    /// silently ignored.
     pub async fn remove_skill(&self, id: &SkillId) -> Result<bool, std::io::Error> {
         let mut registry = self.inner.registry.write().await;
         if let Some(m) = registry.get(id) {
@@ -356,6 +408,10 @@ impl SkillSystem {
         let removed = registry.remove(id);
         drop(registry);
         if removed {
+            let dirs = self.inner.skill_dirs.read().await.clone();
+            for dir in &dirs {
+                UsageStore::new(dir).forget(id.as_str());
+            }
             self.emit_event(SkillSystemEvent::removed(id.as_str()));
             self.rebuild_snapshot().await;
         }
@@ -521,7 +577,7 @@ fn guess_source(path: &Path) -> SkillSource {
     use std::sync::OnceLock;
 
     // Cache the bundled manifest to avoid re-reading from disk on every call.
-    static CACHED_MANIFEST: OnceLock<Option<crate::bundled::manifest::SkillManifest>> =
+    static CACHED_MANIFEST: OnceLock<Option<crate::bundled::manifest::InstallRegistry>> =
         OnceLock::new();
 
     let path_str = path.to_string_lossy();
@@ -532,7 +588,7 @@ fn guess_source(path: &Path) -> SkillSource {
             if path.starts_with(&home_skills) {
                 // Under ~/.aleph/skills/ — check manifest to distinguish official from user
                 let manifest = CACHED_MANIFEST
-                    .get_or_init(|| crate::bundled::manifest::SkillManifest::load(&home_skills));
+                    .get_or_init(|| crate::bundled::manifest::InstallRegistry::load(&home_skills));
                 if let Some(manifest) = manifest {
                     if let Ok(relative) = path.strip_prefix(&home_skills) {
                         if let Some(skill_name) = relative.components().next() {

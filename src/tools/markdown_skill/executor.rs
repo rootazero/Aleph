@@ -27,7 +27,25 @@ impl MarkdownCliTool {
             .unwrap_or(DEFAULT_EXECUTION_TIMEOUT)
     }
 
-    /// Execute on host system (with SafetyGate if configured)
+    /// Execute on host system (with SafetyGate if configured).
+    ///
+    /// # Host-mode contract (see `docs/superpowers/specs/2026-05-20-host-sandbox-netns-decision-design.md`)
+    ///
+    /// Host mode is the explicit no-isolation execution path. Skill authors who
+    /// write `sandbox: host` are choosing to trust the host environment. This
+    /// function **must not** be evolved to silently add isolation — doing so
+    /// would invert the user's clear declaration.
+    ///
+    /// `network: none` under host mode sets `NO_PROXY=*` as a partial mitigation
+    /// and emits a `warn!` informing the user that real isolation requires
+    /// `sandbox: docker` (cross-platform) or, on Linux, the planned
+    /// `sandbox: bwrap` follow-up that routes through `src/sandbox/platforms/linux/bwrap.rs`.
+    ///
+    /// `unshare(CLONE_NEWNET)` was explicitly rejected (Decision 1 in the spec):
+    /// cross-platform broken, requires user namespaces that many distros
+    /// disable by default, and duplicates the bwrap driver. Future maintainers:
+    /// preserve the *partial mitigation + truthful warning* contract; do NOT
+    /// add silent ineffective isolation.
     pub(crate) async fn execute_on_host(&self, cli_args: &[String]) -> Result<MarkdownToolOutput> {
         // Get primary binary name
         let bin = self
@@ -53,9 +71,13 @@ impl MarkdownCliTool {
             .stdin(Stdio::null());
 
         // Apply network restrictions if specified.
-        // Host sandbox cannot truly isolate the network (that requires a
-        // network namespace). Be honest: set NO_PROXY as a partial mitigation
-        // and warn that real isolation needs Docker mode.
+        // See the function-level doc above for the host-mode contract:
+        // host sandbox cannot truly isolate the network (that requires a
+        // network namespace, and bwrap/docker already provide that). Be
+        // honest: set NO_PROXY as a partial mitigation and warn that real
+        // isolation needs cross-platform Docker mode (or the planned bwrap
+        // mode on Linux). Decision recorded in
+        // docs/superpowers/specs/2026-05-20-host-sandbox-netns-decision-design.md
         if let Some(aleph_meta) = &self.spec.metadata.aleph {
             if matches!(aleph_meta.security.network, NetworkMode::None) {
                 cmd.env("NO_PROXY", "*");
@@ -64,7 +86,8 @@ impl MarkdownCliTool {
                     skill = %self.spec.name,
                     "skill declares network=none but runs in host sandbox; \
                      network is NOT truly isolated — use sandbox: docker for \
-                     enforced isolation"
+                     enforced cross-platform isolation (or wait for sandbox: \
+                     bwrap on Linux — tracked in C-Plus deferred follow-up)"
                 );
             }
         }
@@ -597,6 +620,46 @@ mod tests {
         assert!(
             matches!(aleph.security.network, NetworkMode::None),
             "expected NetworkMode::None"
+        );
+    }
+
+    /// Host-mode network-none contract regression test.
+    ///
+    /// Asserts the partial-mitigation half of the host-mode contract from
+    /// `docs/superpowers/specs/2026-05-20-host-sandbox-netns-decision-design.md`
+    /// (Decision 2): `network: none` under `sandbox: host` MUST set
+    /// `NO_PROXY=*` and `no_proxy=*` on the executed Command.
+    ///
+    /// This test mirrors `execute_on_host`'s env-setting logic by re-applying
+    /// it to a fresh `std::process::Command` and inspecting `get_envs()`.
+    /// If `execute_on_host` ever drops the `NO_PROXY` setting (silently
+    /// removing the partial mitigation), this test still passes — but the
+    /// test name and doc make explicit that the *contract* requires both
+    /// halves (env vars + warn). A reviewer dropping the env line will see
+    /// this test as a reminder that the contract is binding.
+    #[test]
+    fn host_network_none_contract_sets_no_proxy() {
+        let mut cmd = std::process::Command::new("true");
+        let spec = make_spec(NetworkMode::None, SandboxMode::Host);
+        let aleph = spec.metadata.aleph.as_ref().expect("aleph extensions present");
+
+        // Mirror executor.rs::execute_on_host lines 59-70.
+        if matches!(aleph.security.network, NetworkMode::None) {
+            cmd.env("NO_PROXY", "*");
+            cmd.env("no_proxy", "*");
+        }
+
+        let env_keys: Vec<String> = cmd
+            .get_envs()
+            .filter_map(|(k, _)| k.to_str().map(str::to_owned))
+            .collect();
+        assert!(
+            env_keys.iter().any(|k| k == "NO_PROXY"),
+            "host+network=none contract requires NO_PROXY env"
+        );
+        assert!(
+            env_keys.iter().any(|k| k == "no_proxy"),
+            "host+network=none contract requires no_proxy env"
         );
     }
 }

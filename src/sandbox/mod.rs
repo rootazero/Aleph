@@ -10,9 +10,11 @@
 use async_trait::async_trait;
 
 pub mod capabilities;
+pub(crate) mod cgroup_v2;
 pub mod command;
 pub mod config;
 pub mod context;
+pub(crate) mod dns;
 pub mod driver;
 pub mod exec_approval;
 pub mod factory;
@@ -20,6 +22,8 @@ pub mod hooks;
 pub mod platforms;
 pub mod policy;
 pub mod rate_limit;
+pub mod sandbox_init;
+pub mod windows_init;
 pub mod workspace;
 pub mod worktree;
 

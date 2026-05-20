@@ -13,6 +13,7 @@ use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_PROCESS_MEMORY;
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_DESKTOP;
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_DISPLAYSETTINGS;
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_EXITWINDOWS;
@@ -28,6 +29,7 @@ use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_WRITECLIPBOARD;
 /// - Active process limit (prevents fork bombs)
 /// - Kill on job close (cleanup when parent exits)
 /// - UI restrictions (limits desktop access)
+/// - Optional virtual-memory ceiling per process
 pub struct SandboxJob {
     handle: HANDLE,
 }
@@ -37,9 +39,16 @@ unsafe impl Send for SandboxJob {}
 impl SandboxJob {
     /// Create a new sandbox job with default restrictions.
     ///
+    /// `max_memory_mb`, when `Some`, sets `JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    /// .ProcessMemoryLimit` so each process in the job is killed if it tries
+    /// to commit more than that many megabytes.
+    ///
     /// # Safety
     /// Caller must ensure the job object is properly closed.
-    pub unsafe fn new(max_active_processes: u32) -> Result<Self, String> {
+    pub unsafe fn new(
+        max_active_processes: u32,
+        max_memory_mb: Option<u64>,
+    ) -> Result<Self, String> {
         let handle = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
         if handle.is_null() {
             return Err(format!("CreateJobObjectW failed: {}", GetLastError()));
@@ -47,9 +56,17 @@ impl SandboxJob {
 
         // Set extended limits
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+        let mut flags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS
             | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+        if let Some(mb) = max_memory_mb {
+            flags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+            // SIZE_T is usize in windows-sys bindings. saturating_mul guards
+            // against 32-bit-host overflow when mb is large enough to overflow
+            // usize::MAX bytes.
+            limits.ProcessMemoryLimit = (mb as usize).saturating_mul(1024 * 1024);
+        }
+        limits.BasicLimitInformation.LimitFlags = flags;
         limits.BasicLimitInformation.ActiveProcessLimit = max_active_processes;
 
         let ok = SetInformationJobObject(

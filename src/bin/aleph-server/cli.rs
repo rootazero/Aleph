@@ -114,6 +114,23 @@ pub enum Command {
     },
     /// Bootstrap runtime dependencies (fnm, node, uv, playwright-cli, chromium, venv)
     BootstrapRuntime(BootstrapRuntimeArgs),
+    /// SP-2 internal: apply landlock + seccomp then exec target. Invoked
+    /// by BubblewrapDriver inside the bwrap namespace; not for users.
+    #[command(hide = true)]
+    SandboxInit {
+        /// Remaining argv passed through to sandbox_init::run_init.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// SP-3a internal: apply restricted token + Low IL then spawn target
+    /// via CreateProcessAsUserW. Invoked by WindowsSandboxDriver; not
+    /// for users.
+    #[command(hide = true)]
+    SandboxInitWindows {
+        /// Remaining argv passed through to windows_init::run_init.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 /// Pairing subcommands

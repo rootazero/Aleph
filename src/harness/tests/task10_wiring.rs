@@ -264,6 +264,7 @@ async fn budget_final_reply_short_circuits_to_done_with_hit_limit() {
         verifier_chain: None,
         context_budget: Some(Arc::new(AsyncMutex::new(budget))),
         context_compactor: None,
+        preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -274,6 +275,9 @@ async fn budget_final_reply_short_circuits_to_done_with_hit_limit() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     };
     let harness = AgentHarness::new(deps);
 
@@ -327,6 +331,7 @@ async fn budget_warning_invokes_compactor_before_llm() {
         verifier_chain: None,
         context_budget: Some(Arc::new(AsyncMutex::new(budget))),
         context_compactor: Some(compactor.clone()),
+        preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -337,6 +342,9 @@ async fn budget_warning_invokes_compactor_before_llm() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     };
     let harness = AgentHarness::new(deps);
 
@@ -409,6 +417,7 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
         verifier_chain: Some(chain),
         context_budget: None,
         context_compactor: None,
+        preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -419,6 +428,9 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     };
     let harness = AgentHarness::new(deps);
 
@@ -513,6 +525,7 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
         verifier_chain: Some(chain),
         context_budget: None,
         context_compactor: None,
+        preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -523,6 +536,9 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     };
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();

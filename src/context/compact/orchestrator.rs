@@ -1,5 +1,20 @@
 //! Compaction orchestrator — evaluates pressure, dispatches strategies in
 //! priority order, and runs the post-compaction cleanup chain.
+//!
+//! ## Status (2026-05-20)
+//!
+//! **Scaffolding without production consumers.** The harness invokes
+//! [`super::compactor::ContextCompactor::compact`] directly from
+//! `src/harness/agent/think.rs` and bypasses this orchestrator entirely.
+//!
+//! Kept because the multi-strategy / cleanup-chain shape would be useful
+//! if/when more `CompactionStrategy` impls land (current single-strategy
+//! wiring doesn't need it). If no consumer materialises in the next 2
+//! cycles, delete this file together with `OrchestratorBuilder` to retire
+//! the dead code per CLAUDE.md "屎山清理" guidance.
+//!
+//! Tracked in:
+//! `docs/superpowers/specs/2026-05-20-history-compression-wiring-design.md` §4.
 
 use crate::sync_primitives::Arc;
 

@@ -8,6 +8,7 @@
 //! the factory function (`build_sandbox`) returns `Arc<dyn Sandbox>` directly,
 //! so we hold the sandbox instance rather than a factory.
 
+use crate::context::budget::preflight::PreflightPipeline;
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
 use crate::harness::chain_context::ChainContext;
@@ -49,6 +50,12 @@ pub struct HarnessDeps {
     /// `CompactAndContinue`. Falls back to deterministic truncation on
     /// provider failure (see `ContextCompactor::compact`).
     pub context_compactor: Option<Arc<ContextCompactor>>,
+    /// Cheap-pass preflight pipeline (tool_result pruning + historical
+    /// image stripping) that runs BEFORE the budget check + compactor so
+    /// token savings happen even when the compactor's LLM call fails.
+    /// `None` when `[context_budget]` is disabled — same gating as
+    /// `context_compactor`. See `src/context/budget/cheap_passes/`.
+    pub preflight_pipeline: Option<Arc<PreflightPipeline>>,
     /// Gateway-side observability sink. `None` falls back to no-op tracing.
     /// Production path: Gateway wraps its persistence callback in `GatewayTraceSink`.
     pub trace_sink: Option<Arc<dyn TraceSink>>,
@@ -92,6 +99,16 @@ pub struct HarnessDeps {
     /// Exceeding the budget yields `HarnessError::StalledTurn` with the
     /// hung phase. `None` disables (legacy behavior). Recommended `Some(300s)`.
     pub turn_timeout: Option<std::time::Duration>,
+    /// Layer 3 of the tool-result budget: per-turn aggregate token tracker
+    /// that spills overflowing results to disk via `result_store`. `None`
+    /// disables Layer 3 entirely; Layer 2 (per-tool cap) still runs inside
+    /// `ScopedToolService` if a store is wired there.
+    pub turn_budget: Option<Arc<crate::tools::turn_budget::TurnResultBudget>>,
+    /// Shared `ToolResultStore` used by Layer 3 spill instructions to
+    /// persist large outputs to disk. Should match the store injected
+    /// into `ScopedToolService` so all persisted markers land in the
+    /// same session-scoped directory.
+    pub result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
 }
 
 // ---------------------------------------------------------------------------

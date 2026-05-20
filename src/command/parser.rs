@@ -95,15 +95,6 @@ impl CommandParser {
         })
     }
 
-    /// Synchronous parse (for backward compatibility with ExecutionDecider)
-    ///
-    /// Returns `None` if not running within a Tokio runtime.
-    /// Requires a multi-threaded runtime (will panic on `current_thread` flavor).
-    pub fn parse(&self, input: &str) -> Option<ParsedCommand> {
-        let handle = tokio::runtime::Handle::try_current().ok()?;
-        tokio::task::block_in_place(|| handle.block_on(self.parse_async(input)))
-    }
-
     /// Get a reference to the underlying ToolRegistry
     pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
         &self.tool_registry
@@ -181,19 +172,4 @@ mod tests {
         assert!(parser.parse_async("hello").await.is_none());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_parse_sync_compatibility() {
-        let registry = create_test_registry();
-        let rules = vec![RoutingRuleConfig {
-            regex: "^/help".to_string(),
-            provider: None,
-            system_prompt: Some("Help".to_string()),
-            ..Default::default()
-        }];
-        registry.register_custom_commands(&rules).await;
-
-        let parser = CommandParser::new(registry);
-        let result = parser.parse("/help");
-        assert!(result.is_some());
-    }
 }

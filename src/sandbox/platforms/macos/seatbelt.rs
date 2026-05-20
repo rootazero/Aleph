@@ -110,6 +110,57 @@ fn escape_sbpl(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Recognise the four forms in which a caller may pass an IP-literal host:
+///
+/// - Bare IPv4: `127.0.0.1`
+/// - Bare IPv6: `::1` / `2606:2800:220:1:248:1893:25c8:1946`
+/// - IPv4 with port: `127.0.0.1:443`
+/// - Bracketed IPv6 (with or without port): `[::1]`, `[::1]:443`
+fn host_is_ip_literal(host: &str) -> bool {
+    use std::net::IpAddr;
+    use std::str::FromStr;
+    // Bare IP — catches IPv4 and unbracketed IPv6.
+    if IpAddr::from_str(host).is_ok() {
+        return true;
+    }
+    // Bracketed IPv6 with optional `:port`.
+    if let Some(rest) = host.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            return IpAddr::from_str(&rest[..end]).is_ok();
+        }
+    }
+    // IPv4:port (exactly one `:`). Unbracketed IPv6 has multiple colons and
+    // was handled by the bare-IP branch above, so this only matches v4:port.
+    if host.matches(':').count() == 1 {
+        if let Some((addr, _port)) = host.split_once(':') {
+            return IpAddr::from_str(addr).is_ok();
+        }
+    }
+    false
+}
+
+/// Apply a virtual-address-space ceiling via `setrlimit(RLIMIT_AS)` in the
+/// pre-exec hook. The limit is inherited by the eventual target binary that
+/// `sandbox-exec` execs. `tokio::process::Command` exposes `pre_exec` as an
+/// inherent method, so no `CommandExt` import is needed.
+fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
+    let bytes = mb.saturating_mul(1024 * 1024);
+    unsafe {
+        // SAFETY: setrlimit with RLIMIT_AS is async-signal-safe and well-defined.
+        // No allocator, mutex, or other handler-unsafe call is made.
+        cmd.pre_exec(move || {
+            let rlim = libc::rlimit {
+                rlim_cur: bytes as libc::rlim_t,
+                rlim_max: bytes as libc::rlim_t,
+            };
+            if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 impl SeatbeltDriver {
     pub fn new() -> Self {
         Self
@@ -134,7 +185,7 @@ impl SeatbeltDriver {
         self.add_fs_policy(&mut profile, &policy.filesystem, cwd)?;
 
         // Network policy
-        self.add_network_policy(&mut profile, &policy.network);
+        self.add_network_policy(&mut profile, &policy.network)?;
 
         // Process policy
         self.add_process_policy(&mut profile, &policy.process);
@@ -233,7 +284,11 @@ impl SeatbeltDriver {
         Ok(())
     }
 
-    fn add_network_policy(&self, profile: &mut String, network: &NetworkPolicy) {
+    fn add_network_policy(
+        &self,
+        profile: &mut String,
+        network: &NetworkPolicy,
+    ) -> Result<(), SandboxError> {
         match network {
             NetworkPolicy::None => {
                 profile.push_str("; no network access\n(deny network*)\n");
@@ -242,6 +297,24 @@ impl SeatbeltDriver {
                 profile.push_str("; full network access\n(allow network*)\n");
             }
             NetworkPolicy::AllowHosts(hosts) => {
+                // Seatbelt's `(remote ip "...")` matcher takes IP literals only;
+                // hostnames silently never match (silent policy violation). Reject
+                // hostnames at profile-generation time so the caller learns
+                // immediately rather than discovering at runtime.
+                for host in hosts {
+                    if !host_is_ip_literal(host) {
+                        return Err(SandboxError::UnsupportedPolicy {
+                            platform: "macos/seatbelt",
+                            feature: "NetworkPolicy::AllowHosts (hostname)".into(),
+                            reason: format!(
+                                "Seatbelt's `(remote ip ...)` accepts IP literals only; \
+                                 '{host}' is not an IP. Pre-resolve hostnames to IPs at \
+                                 the call site, or use AllowAll. Hostname-based filtering \
+                                 is deferred to spec SP-4."
+                            ),
+                        });
+                    }
+                }
                 profile.push_str(RESTRICTED_NETWORK_POLICY);
                 for host in hosts {
                     let escaped = escape_sbpl(host);
@@ -262,6 +335,7 @@ impl SeatbeltDriver {
                 }
             }
         }
+        Ok(())
     }
 
     fn add_process_policy(&self, profile: &mut String, process: &ProcessPolicy) {
@@ -305,7 +379,12 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
     ) -> Result<OsSandboxProfile, SandboxError> {
         let policy = SandboxPolicy::from(capabilities);
         let contents = self.generate_profile(&policy, cwd)?;
-        Ok(OsSandboxProfile { contents })
+        Ok(OsSandboxProfile {
+            contents,
+            max_memory_mb: policy.process.max_memory_mb,
+            linux_init_policy: None,
+            windows_init_policy: None,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -349,6 +428,10 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::piped());
+
+        if let Some(mb) = profile.max_memory_mb {
+            apply_memory_rlimit(&mut cmd, mb);
+        }
 
         let mut child = cmd.spawn().map_err(|e| {
             SandboxError::ExecutionFailed(format!("failed to spawn sandbox-exec: {e}"))
@@ -466,20 +549,43 @@ mod tests {
     }
 
     #[test]
-    fn generate_profile_with_network() {
+    fn generate_profile_with_ip_allow_hosts_succeeds() {
         let driver = SeatbeltDriver::new();
         let policy = SandboxPolicy {
             network: NetworkPolicy::AllowHosts(vec![
-                "example.com".into(),
-                "api.example.com".into(),
+                "93.184.216.34".into(),
+                "2606:2800:220:1:248:1893:25c8:1946".into(),
+                "10.0.0.1:443".into(),
             ]),
             ..Default::default()
         };
         let cwd = Path::new("/tmp/ws");
         let profile = driver.generate_profile(&policy, cwd).unwrap();
 
-        assert!(profile.contains("(allow network-outbound (remote ip \"example.com\"))"));
-        assert!(profile.contains("(allow network-outbound (remote ip \"api.example.com\"))"));
+        assert!(profile.contains("(allow network-outbound (remote ip \"93.184.216.34\"))"));
+        assert!(profile.contains("(allow network-outbound (remote ip \"10.0.0.1:443\"))"));
+    }
+
+    #[test]
+    fn generate_profile_with_hostname_allow_hosts_returns_unsupported() {
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::AllowHosts(vec!["example.com".into()]),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let err = driver
+            .generate_profile(&policy, cwd)
+            .expect_err("hostnames must hard-fail on macos/seatbelt");
+        match err {
+            SandboxError::UnsupportedPolicy {
+                platform, reason, ..
+            } => {
+                assert_eq!(platform, "macos/seatbelt");
+                assert!(reason.contains("Pre-resolve") || reason.contains("IP literals"));
+            }
+            other => panic!("expected UnsupportedPolicy, got {other:?}"),
+        }
     }
 
     #[test]
@@ -543,5 +649,46 @@ mod tests {
 
         assert!(profile.contents.contains("(allow network*)"));
         assert!(!profile.contents.contains("(deny process-fork)"));
+    }
+
+    #[test]
+    fn profile_for_threads_max_memory_mb() {
+        let driver = SeatbeltDriver::new();
+        let caps = SandboxCapabilities {
+            max_memory_mb: Some(128),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.profile_for(&caps, cwd).unwrap();
+        assert_eq!(profile.max_memory_mb, Some(128));
+    }
+
+    #[test]
+    fn host_is_ip_literal_accepts_all_canonical_forms() {
+        // Bare IPv4
+        assert!(host_is_ip_literal("127.0.0.1"));
+        assert!(host_is_ip_literal("93.184.216.34"));
+        // Bare IPv6
+        assert!(host_is_ip_literal("::1"));
+        assert!(host_is_ip_literal("2606:2800:220:1:248:1893:25c8:1946"));
+        // IPv4 with port
+        assert!(host_is_ip_literal("127.0.0.1:443"));
+        assert!(host_is_ip_literal("10.0.0.1:8080"));
+        // Bracketed IPv6 with/without port
+        assert!(host_is_ip_literal("[::1]"));
+        assert!(host_is_ip_literal("[::1]:443"));
+        assert!(host_is_ip_literal("[2606:2800::1]:80"));
+    }
+
+    #[test]
+    fn host_is_ip_literal_rejects_hostnames() {
+        assert!(!host_is_ip_literal("example.com"));
+        assert!(!host_is_ip_literal("api.example.com"));
+        assert!(!host_is_ip_literal("api.example.com:443"));
+        assert!(!host_is_ip_literal("localhost"));
+        assert!(!host_is_ip_literal(""));
+        // Malformed brackets
+        assert!(!host_is_ip_literal("[::1"));
+        assert!(!host_is_ip_literal("[example.com]"));
     }
 }
