@@ -1939,17 +1939,41 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // bypassing the LLM agent loop. Intended for E2E test harnesses
         // (note_layer probes, deterministic tool exercising). Production
         // callers should still go through agent.run.
+        //
+        // D2/P3 fix: pass the live AgentRegistry so handle_invoke can apply
+        // the same allowlist that the LLM faces — preventing arbitrary
+        // operators from bypassing per-agent tool scoping.
+        //
         // Only wire when a real BuiltinToolRegistry is present (real mode);
-        // in simulated mode the stub from HandlerRegistry::new remains.
+        // in simulated mode the SERVICE_UNAVAILABLE placeholder from
+        // HandlerRegistry::new remains.
         if let Some(reg) = tool_reg_out.clone() {
+            let agents_for_invoke: std::sync::Arc<alephcore::agents::AgentRegistry> = {
+                let r = std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
+                let aleph_home = alephcore::discovery::aleph_home_dir().ok();
+                let project_dir = std::env::current_dir().ok();
+                if let Some(home) = aleph_home.as_deref() {
+                    if let Err(e) = r.register_from_dirs(home, project_dir.as_deref()) {
+                        tracing::warn!(
+                            error = %e,
+                            "tools.invoke: failed to load user agent defs; allowlist degrades to builtins-only"
+                        );
+                    }
+                }
+                r
+            };
             server.handlers_mut().register("tools.invoke", move |req| {
                 let registry = reg.clone();
+                let agents = Some(agents_for_invoke.clone());
                 async move {
-                    alephcore::gateway::handlers::tools_invoke::handle_invoke(req, registry).await
+                    alephcore::gateway::handlers::tools_invoke::handle_invoke(
+                        req, registry, agents,
+                    )
+                    .await
                 }
             });
             if !daemon {
-                println!("  tools.invoke: wired to BuiltinToolRegistry (bypasses agent loop)");
+                println!("  tools.invoke: wired with agent allowlist gating");
             }
         }
 
