@@ -33,6 +33,45 @@ const BASE_POLICY: &str = r#"(version 1)
 (allow signal (target same-sandbox))
 (allow process-info* (target same-sandbox))
 
+; Platform read-only defaults (codex-inspired). Without these, even
+; loading /bin/echo's dyld stack fails because file-read* is denied
+; by default — meaning no standard binary could ever run inside the
+; sandbox. We grant read + executable-mmap access to the immutable
+; system trees so the loader, frameworks, and core utilities work,
+; while leaving /Users, /private, /tmp scoped by the per-call
+; writable policy.
+;
+; This is a minimal port of codex's `restricted_read_only_platform_defaults.sbpl`.
+; The full codex profile is ~7.6KB and covers IOSurface, mach lookups,
+; and dozens of other macOS-isms. We start small and grow as concrete
+; programs need more — see the sandbox-debug CLI for diagnostics.
+(allow file-read*
+  (subpath "/System")
+  (subpath "/Library")
+  (subpath "/usr")
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/var/db/timezone")
+  (subpath "/private/var/db/dyld")
+  (subpath "/private/var/db/timezone")
+  (subpath "/private/etc")
+  (literal "/dev/null")
+  (literal "/dev/random")
+  (literal "/dev/urandom")
+  (literal "/dev/zero")
+  (literal "/dev/tty"))
+
+; Required for dyld to mmap binaries as executable — file-read* alone
+; is not enough on recent macOS releases; without this, /bin/echo
+; aborts with SIGABRT before producing any output.
+(allow file-map-executable
+  (subpath "/System")
+  (subpath "/Library")
+  (subpath "/usr/lib")
+  (subpath "/usr/libexec")
+  (subpath "/bin")
+  (subpath "/sbin"))
+
 ; essential device access
 (allow file-write-data
   (require-all
@@ -207,6 +246,12 @@ impl SeatbeltDriver {
             SandboxError::ProfileGeneration("workspace path contains invalid UTF-8".into())
         })?);
 
+        // Codex-inspired metadata protection: even in writable workspace
+        // modes, certain repository-level dirs (.git, .aleph, .codex,
+        // .agents) stay read-only so the agent cannot rewrite its own
+        // history / audit trail. SBPL evaluates rules in order; later
+        // rules win — emit the deny *after* the workspace allow.
+        let mut writable_roots: Vec<&Path> = Vec::new();
         match fs {
             FsPolicy::WorkspaceOnly => {
                 profile.push_str(&format!(
@@ -215,6 +260,7 @@ impl SeatbeltDriver {
                      (allow file-write* (subpath \"{}\"))\n",
                     cwd_str, cwd_str
                 ));
+                writable_roots.push(cwd);
             }
             FsPolicy::ReadPaths(paths) => {
                 profile.push_str(&format!(
@@ -223,6 +269,7 @@ impl SeatbeltDriver {
                      (allow file-write* (subpath \"{}\"))\n",
                     cwd_str, cwd_str
                 ));
+                writable_roots.push(cwd);
                 for path in paths {
                     let path_str = escape_sbpl(path.to_str().ok_or_else(|| {
                         SandboxError::ProfileGeneration(format!(
@@ -240,6 +287,7 @@ impl SeatbeltDriver {
                      (allow file-write* (subpath \"{}\"))\n",
                     cwd_str, cwd_str
                 ));
+                writable_roots.push(cwd);
                 for path in paths {
                     let path_str = escape_sbpl(path.to_str().ok_or_else(|| {
                         SandboxError::ProfileGeneration(format!(
@@ -251,6 +299,7 @@ impl SeatbeltDriver {
                         "(allow file-read* file-write* (subpath \"{}\"))\n",
                         path_str
                     ));
+                    writable_roots.push(path);
                 }
             }
             FsPolicy::FullRead { exclude } => {
@@ -278,6 +327,28 @@ impl SeatbeltDriver {
                         "(deny file-read* file-write* (subpath \"{}\"))\n",
                         path_str
                     ));
+                }
+                // FullWrite is explicit danger-full-access — caller opted out
+                // of containment. We do not auto-protect metadata here; the
+                // explicit `exclude` list is the user's contract.
+            }
+        }
+
+        // Append metadata-protection deny rules. Last-match-wins in SBPL,
+        // so these override the writable allow above.
+        if !writable_roots.is_empty() {
+            let protected =
+                crate::sandbox::protected_paths::protected_paths_for(writable_roots.iter().copied());
+            if !protected.is_empty() {
+                profile.push_str("; protected metadata subpaths (read-only inside writable roots)\n");
+                for path in &protected {
+                    if let Some(path_str) = path.to_str() {
+                        let path_str = escape_sbpl(path_str);
+                        profile.push_str(&format!(
+                            "(deny file-write* (subpath \"{}\"))\n",
+                            path_str
+                        ));
+                    }
                 }
             }
         }
@@ -345,18 +416,21 @@ impl SeatbeltDriver {
     }
 
     fn add_env_policy(&self, profile: &mut String, env: &EnvPolicy) {
+        // Environment restriction is applied at the `Command::env_clear()`
+        // boundary before sandbox-exec is invoked (see the `run` method
+        // below); SBPL itself has no `(with environment)` modifier and
+        // emitting one silently produces an invalid profile that
+        // sandbox-exec rejects at runtime. We therefore only annotate
+        // the profile here so the policy intent is visible in dumps.
         match env {
             EnvPolicy::Inherit => {
-                // Default — no restrictions
+                // Default — no annotation needed.
             }
             EnvPolicy::Restricted => {
-                profile.push_str(
-                    "; restricted environment\n(allow process-exec (with environment))\n",
-                );
+                profile.push_str("; environment policy: restricted (enforced at exec layer)\n");
             }
             EnvPolicy::Minimal => {
-                profile
-                    .push_str("; minimal environment\n(allow process-exec (with environment))\n");
+                profile.push_str("; environment policy: minimal (enforced at exec layer)\n");
             }
         }
     }
@@ -546,6 +620,79 @@ mod tests {
         let profile = driver.generate_profile(&policy, cwd).unwrap();
 
         assert!(profile.contains("(allow file-read* file-write* (subpath \"/tmp/output\"))"));
+    }
+
+    #[test]
+    fn workspace_only_protects_git_and_aleph_subpaths() {
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy {
+            filesystem: FsPolicy::WorkspaceOnly,
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        // Allow comes first.
+        let allow_idx = profile
+            .find("(allow file-write* (subpath \"/tmp/ws\"))")
+            .expect("workspace allow must be present");
+        // Deny rules come AFTER allow so last-match-wins makes them read-only.
+        let git_idx = profile
+            .find("(deny file-write* (subpath \"/tmp/ws/.git\"))")
+            .expect("metadata .git must be deny-listed");
+        let aleph_idx = profile
+            .find("(deny file-write* (subpath \"/tmp/ws/.aleph\"))")
+            .expect("metadata .aleph must be deny-listed");
+        assert!(allow_idx < git_idx, "deny must come after allow");
+        assert!(allow_idx < aleph_idx, "deny must come after allow");
+        // And the codex-aligned .codex / .agents are also covered.
+        assert!(profile.contains("(deny file-write* (subpath \"/tmp/ws/.codex\"))"));
+        assert!(profile.contains("(deny file-write* (subpath \"/tmp/ws/.agents\"))"));
+    }
+
+    #[test]
+    fn write_paths_protects_metadata_in_each_writable_root() {
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy {
+            filesystem: FsPolicy::WritePaths(vec![
+                PathBuf::from("/tmp/extra1"),
+                PathBuf::from("/tmp/extra2"),
+            ]),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        // cwd is the first writable root + each WritePaths entry.
+        for root in ["/tmp/ws", "/tmp/extra1", "/tmp/extra2"] {
+            assert!(
+                profile.contains(&format!(
+                    "(deny file-write* (subpath \"{root}/.git\"))"
+                )),
+                "missing .git protection under {root}"
+            );
+            assert!(
+                profile.contains(&format!(
+                    "(deny file-write* (subpath \"{root}/.aleph\"))"
+                )),
+                "missing .aleph protection under {root}"
+            );
+        }
+    }
+
+    #[test]
+    fn full_write_does_not_auto_protect_metadata() {
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy {
+            filesystem: FsPolicy::FullWrite { exclude: vec![] },
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        // FullWrite is explicit danger-full-access. We do not auto-protect
+        // here; the caller's explicit `exclude` list is the contract.
+        assert!(!profile.contains("(deny file-write* (subpath \"/tmp/ws/.git\"))"));
     }
 
     #[test]

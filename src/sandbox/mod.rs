@@ -15,6 +15,7 @@ pub mod command;
 pub mod scrub;
 pub mod config;
 pub mod context;
+pub mod denial_logger;
 pub(crate) mod dns;
 pub mod driver;
 pub mod exec_approval;
@@ -22,8 +23,10 @@ pub mod factory;
 pub mod hooks;
 pub mod platforms;
 pub mod policy;
+pub mod protected_paths;
 pub mod rate_limit;
 pub mod sandbox_init;
+pub mod summary;
 pub mod windows_init;
 pub mod workspace;
 pub mod worktree;
@@ -36,6 +39,7 @@ pub use driver::{OsSandboxDriverTrait, OsSandboxProfile};
 pub use factory::{build_sandbox, NoopSandbox};
 pub use hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
 pub use platforms::{create_platform_driver, create_platform_driver_from_config};
+pub use summary::{NetworkState, SandboxSummary};
 pub use worktree::{WorktreeError, WorktreeHandle, WorktreeSandbox};
 pub use policy::{
     EnvPolicy, FsPolicy, NetworkPolicy as PolicyNetworkPolicy, ProcessPolicy, SandboxPolicy,
@@ -45,6 +49,13 @@ pub use scrub::{scrub_secrets_bytes, ScrubResult};
 #[async_trait]
 pub trait Sandbox: Send + Sync + 'static {
     async fn execute(&self, command: SandboxCommand) -> Result<SandboxOutput, SandboxError>;
+
+    /// Codex-inspired prompt surfacing — returns the active sandbox posture
+    /// for injection into the LLM system prompt. Default `None` keeps
+    /// mock / no-op implementations silent. See [`SandboxSummary`].
+    fn summary(&self) -> Option<SandboxSummary> {
+        None
+    }
 }
 
 /// Test helpers exposed under `#[cfg(test)]` so unit tests across the crate

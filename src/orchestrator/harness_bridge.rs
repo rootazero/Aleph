@@ -226,6 +226,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 llm.as_ref(),
                 resolved_max_iterations,
                 interaction_manifest.as_ref(),
+                sandbox.as_ref(),
             )
             .await;
 
@@ -487,6 +488,7 @@ impl AgentHarnessRunner {
         provider: &dyn AiProvider,
         iteration_cap: usize,
         channel_manifest: Option<&crate::thinker::InteractionManifest>,
+        sandbox: &dyn Sandbox,
     ) -> Option<String> {
         use crate::providers::message::UnifiedMessage;
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
@@ -664,6 +666,13 @@ impl AgentHarnessRunner {
         // layer emits nothing.
         resolved_context.runtime_state_blocks =
             compute_runtime_state_blocks(self.dispatch_registry.as_ref());
+        // Codex-inspired: surface active sandbox posture (backend tag,
+        // policy tier, writable roots, network state) to the LLM so it
+        // can plan within its envelope instead of probing limits at runtime.
+        // `Sandbox::summary()` defaults to `None`, so mock/noop sandboxes
+        // in tests leave this absent and the SecurityLayer skips the
+        // sandbox bullet block.
+        resolved_context.sandbox_summary = sandbox.summary();
         builder = builder.with_resolved_context(resolved_context);
         // Phase 3: thread the provider's wire-protocol family so
         // `ProviderGuidanceLayer` can pick the right per-family
