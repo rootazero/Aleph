@@ -20,9 +20,14 @@ impl MemoryContextProvider {
             MemoryInjectionMode::Context | MemoryInjectionMode::Hybrid => {}
         }
 
-        // Approximate token count (4 chars ≈ 1 token for English; CJK may be 1–2 chars/token).
+        // Convert char-budget to token-budget using the WORST-CASE chars/token
+        // ratio (CJK ≈ 1.5 chars/tok). The English-only ratio (~4 chars/tok)
+        // would severely under-allocate the token budget for CJK content,
+        // causing the assembler to include far fewer memory entries than the
+        // configured char budget actually allows. The 2/3 form is integer
+        // math for `max_output_chars / 1.5`.
         let budget = AssemblyBudget {
-            total_tokens: (self.config.max_output_chars / 4) as u32,
+            total_tokens: (self.config.max_output_chars as u64 * 2 / 3) as u32,
         };
         let mut envelope = self
             .assembler
