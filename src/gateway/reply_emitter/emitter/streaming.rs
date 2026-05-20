@@ -339,6 +339,14 @@ impl EventEmitter for ReplyEmitter {
                     }
                 }
 
+                // Hermes-summary-wiring: append a one-line cap notice when
+                // the run did not complete cleanly. Pulls `terminate_reason`
+                // off the enriched RunSummary; silent when the field is
+                // missing (legacy producers) or equals "completed".
+                if let Some(notice) = cap_notice_for(&summary) {
+                    self.buffer.lock().await.push_str(&notice);
+                }
+
                 // Append fallback notice for non-Panel channels (Telegram, CLI, etc.)
                 if let Some(info) = self.fallback_info.lock().await.take() {
                     let original = info.original_model.as_deref().unwrap_or("unknown");
@@ -545,5 +553,74 @@ impl EventEmitter for ReplyEmitter {
 
     fn next_seq(&self) -> u64 {
         self.seq_counter.fetch_add(1, Ordering::SeqCst)
+    }
+}
+
+/// Append a one-line notice when the run hit a cap. Returns `None` for a
+/// clean exit so the user sees just the model's reply on the happy path.
+///
+/// `summary.terminate_reason` is the stable string from
+/// `TerminateReason::as_static_str()` (populated by P3a/P3 wiring). Missing
+/// or `"completed"` → no notice; anything else → user-facing tag.
+fn cap_notice_for(summary: &crate::gateway::event_emitter::RunSummary) -> Option<String> {
+    let reason = summary.terminate_reason.as_deref()?;
+    if reason == "completed" {
+        return None;
+    }
+    let label = match reason {
+        "hit_max_iterations" => "max iterations",
+        "context_budget_exhausted" => "context budget",
+        "stall_timeout" => "stalled",
+        "turn_timeout" => "turn timeout",
+        "consecutive_failure_cap" => "repeated failures",
+        "verifier_veto" => "verifier blocked",
+        "cancelled" => "cancelled",
+        other => other,
+    };
+    Some(format!("\n\n\u{26a0}\u{fe0f} {label}"))
+}
+
+#[cfg(test)]
+mod cap_notice_tests {
+    use super::cap_notice_for;
+    use crate::gateway::event_emitter::RunSummary;
+
+    fn summary_with(reason: Option<&str>) -> RunSummary {
+        RunSummary {
+            terminate_reason: reason.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn completed_returns_none() {
+        assert!(cap_notice_for(&summary_with(Some("completed"))).is_none());
+    }
+
+    #[test]
+    fn missing_reason_returns_none() {
+        assert!(cap_notice_for(&summary_with(None)).is_none());
+    }
+
+    #[test]
+    fn hit_max_iterations_renders_label() {
+        let s = cap_notice_for(&summary_with(Some("hit_max_iterations")))
+            .expect("notice");
+        assert!(s.contains("max iterations"));
+        assert!(s.starts_with("\n\n"));
+    }
+
+    #[test]
+    fn verifier_veto_uses_human_label() {
+        let s = cap_notice_for(&summary_with(Some("verifier_veto"))).expect("notice");
+        assert!(s.contains("verifier blocked"));
+    }
+
+    #[test]
+    fn unknown_reason_falls_through_to_raw_string() {
+        // A future TerminateReason variant lands here without code change —
+        // user sees the canonical name instead of "completed" or nothing.
+        let s = cap_notice_for(&summary_with(Some("new_future_cap"))).expect("notice");
+        assert!(s.contains("new_future_cap"));
     }
 }
