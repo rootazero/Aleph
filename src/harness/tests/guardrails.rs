@@ -320,6 +320,9 @@ fn make_deps(
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     }
 }
 
@@ -605,6 +608,9 @@ fn make_deps_with_tools(
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     }
 }
 

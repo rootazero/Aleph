@@ -1777,6 +1777,38 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Tool-result budget — install Layer 2 store + Layer 3 turn-budget
+    // singletons. The store roots at `~/.aleph/data/tool_results/global/`;
+    // per-session scoping is deferred (file names embed a UUID so concurrent
+    // sessions cannot collide). Layer 3 uses the default `MAX_TURN_TOKENS`
+    // (~50 000 = 200KB chars equivalent). Failure to create the store is
+    // not fatal — Layer 2 silently falls back to in-line truncation.
+    match alephcore::tools::result_store::ToolResultStore::new("global") {
+        Ok(store) => {
+            let store = std::sync::Arc::new(store);
+            alephcore::tools::result_store::set_global_tool_result_store(store);
+            let budget = std::sync::Arc::new(
+                alephcore::tools::turn_budget::TurnResultBudget::new(
+                    alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
+                ),
+            );
+            alephcore::tools::turn_budget::set_global_turn_result_budget(budget);
+            if !args.daemon {
+                println!(
+                    "tool-result-budget: ToolResultStore + TurnResultBudget wired \
+                     (~/.aleph/data/tool_results/global/, max_turn_tokens={})",
+                    alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "tool-result-budget store init failed; Layer 2 + Layer 3 disabled"
+            );
+        }
+    }
+
     // Inject ChannelRegistry into BuiltinToolRegistry (deferred — channels created after tools)
     if let Some(ref cell) = agent_result.channel_registry_cell {
         let _ = cell.set(channel_registry.clone());

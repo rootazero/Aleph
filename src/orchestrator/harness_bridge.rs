@@ -109,6 +109,15 @@ pub struct AgentHarnessRunner {
     pub consecutive_failure_cap: Option<usize>,
     pub turn_timeout: Option<std::time::Duration>,
 
+    /// Layer 3 of the tool-result budget (per-turn aggregate spill).
+    /// `None` disables Layer 3; Layer 2 still runs inside
+    /// `ScopedToolService` independently.
+    pub turn_budget: Option<Arc<crate::tools::turn_budget::TurnResultBudget>>,
+    /// Shared `ToolResultStore` used by Layer 3 spills; should be the
+    /// same `Arc` injected into `ScopedToolService::with_result_store`
+    /// at boot so persisted markers all land in one session directory.
+    pub result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
+
     /// Boot-time default for the harness Think→Act iteration cap, sourced from
     /// `[execution] max_iterations`. A per-flow `FlowOverrides.max_iterations`
     /// overrides it on a run-by-run basis. The harness loop is never left
@@ -284,6 +293,19 @@ impl HarnessRunner for AgentHarnessRunner {
             stall_config: self.stall_config.clone(),
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,
+            // Layer 3 turn budget + Layer 2 shared store. Prefer the
+            // bridge's explicit field (set via direct injection / tests);
+            // fall back to the process-wide singleton installed at boot.
+            // `None` (no field, no singleton) keeps the legacy behavior —
+            // Layer 2 / Layer 3 are inert.
+            turn_budget: self
+                .turn_budget
+                .clone()
+                .or_else(crate::tools::turn_budget::global_turn_result_budget),
+            result_store: self
+                .result_store
+                .clone()
+                .or_else(crate::tools::result_store::global_tool_result_store),
         };
         // Stage 7 (#12): emit init-seam visibility before the harness
         // starts its Think→Act loop. Order mirrors HarnessDeps field

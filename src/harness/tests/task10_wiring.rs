@@ -275,6 +275,9 @@ async fn budget_final_reply_short_circuits_to_done_with_hit_limit() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     };
     let harness = AgentHarness::new(deps);
 
@@ -339,6 +342,9 @@ async fn budget_warning_invokes_compactor_before_llm() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     };
     let harness = AgentHarness::new(deps);
 
@@ -422,6 +428,9 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     };
     let harness = AgentHarness::new(deps);
 
@@ -527,6 +536,9 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     };
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();
