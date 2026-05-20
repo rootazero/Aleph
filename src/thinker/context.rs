@@ -100,6 +100,17 @@ pub enum DisableReason {
         /// Prompt to display for approval
         prompt: String,
     },
+
+    /// Tool's runtime health probe reports unhealthy (transparent to AI)
+    ///
+    /// The dispatcher's `ToolHealthCache` ran a probe (Docker daemon
+    /// liveness, auth token presence, depth budget, etc.) and recorded
+    /// an Unhealthy result. The AI is shown the short label so it can
+    /// explain to the user why the capability is dormant.
+    Unhealthy {
+        /// Short reason label from the health probe.
+        reason: String,
+    },
 }
 
 /// A tool that is disabled with a specific reason

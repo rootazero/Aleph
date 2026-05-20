@@ -2,7 +2,10 @@
 //!
 //! Methods for generating tool indices and smart prompts.
 
+use std::sync::Arc;
+
 use super::super::types::{ToolIndex, ToolIndexCategory, ToolIndexEntry, UnifiedTool};
+use super::health::{HealthSnapshot, ToolHealthCache};
 use super::types::ToolStorage;
 
 /// Smart discovery functionality for ToolRegistry
@@ -20,11 +23,12 @@ impl ToolDiscovery {
     ///
     /// Returns a markdown-formatted list of all active tools
     /// suitable for injection into L3 router system prompt.
-    pub async fn to_prompt_block(&self) -> String {
+    pub async fn to_prompt_block(&self, health: &HealthSnapshot) -> String {
         let tools = self.tools.read().await;
         let mut lines: Vec<String> = tools
             .values()
             .filter(|t| t.is_active)
+            .filter(|t| health.is_healthy(&t.name))
             .map(|t| t.to_prompt_line())
             .collect();
 
@@ -40,11 +44,21 @@ impl ToolDiscovery {
     /// # Arguments
     ///
     /// * `core_tools` - List of tool names that should be marked as core
-    pub async fn generate_tool_index(&self, core_tools: &[&str]) -> ToolIndex {
+    /// * `health` - snapshot of the runtime health cache; unhealthy tools
+    ///   are skipped so the LLM never sees them
+    pub async fn generate_tool_index(
+        &self,
+        core_tools: &[&str],
+        health: &HealthSnapshot,
+    ) -> ToolIndex {
         let tools = self.tools.read().await;
         let mut index = ToolIndex::new();
 
-        for tool in tools.values().filter(|t| t.is_active) {
+        for tool in tools
+            .values()
+            .filter(|t| t.is_active)
+            .filter(|t| health.is_healthy(&t.name))
+        {
             let entry = tool.to_index_entry(core_tools);
             index.add(entry);
         }
@@ -74,13 +88,18 @@ impl ToolDiscovery {
         &self,
         core_tools: &[&str],
         filtered_tools: &[&str],
+        health: &HealthSnapshot,
     ) -> (Vec<UnifiedTool>, String) {
         let tools = self.tools.read().await;
 
         let mut full_schema_tools = Vec::new();
         let mut index = ToolIndex::new();
 
-        for tool in tools.values().filter(|t| t.is_active) {
+        for tool in tools
+            .values()
+            .filter(|t| t.is_active)
+            .filter(|t| health.is_healthy(&t.name))
+        {
             let is_core = core_tools.contains(&tool.name.as_str());
             let is_filtered = filtered_tools.contains(&tool.name.as_str());
 
@@ -102,6 +121,27 @@ impl ToolDiscovery {
         });
 
         (full_schema_tools, index.to_prompt())
+    }
+
+    /// Trigger detached background refreshes for every active tool whose
+    /// probe entry is missing or expired. Callers typically run this
+    /// just before a prompt assembly so the *next* turn sees fresh
+    /// results; the current turn still uses whatever the snapshot held.
+    ///
+    /// This is intentionally fire-and-forget: a slow probe never blocks
+    /// prompt construction. The `tokio::spawn` is detached because the
+    /// cache itself owns the result via `ArcSwap`.
+    pub async fn trigger_health_refresh(&self, cache: &Arc<ToolHealthCache>) {
+        let tools = self.tools.read().await;
+        for tool in tools.values().filter(|t| t.is_active) {
+            if cache.needs_refresh(&tool.name) {
+                let cache = Arc::clone(cache);
+                let name = tool.name.clone();
+                tokio::spawn(async move {
+                    cache.refresh(&name).await;
+                });
+            }
+        }
     }
 
     /// Get full tool definition by name
@@ -132,13 +172,18 @@ impl ToolDiscovery {
     /// # Returns
     ///
     /// Vector of tool index entries matching the category
-    pub async fn list_tools_by_category(&self, category: Option<&str>) -> Vec<ToolIndexEntry> {
+    pub async fn list_tools_by_category(
+        &self,
+        category: Option<&str>,
+        health: &HealthSnapshot,
+    ) -> Vec<ToolIndexEntry> {
         let tools = self.tools.read().await;
         let core_tools: Vec<&str> = vec![]; // Empty for listing
 
         tools
             .values()
             .filter(|t| t.is_active)
+            .filter(|t| health.is_healthy(&t.name))
             .filter(|t| {
                 if let Some(cat) = category {
                     let tool_cat = ToolIndexCategory::from(&t.source);
