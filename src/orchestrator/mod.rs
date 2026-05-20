@@ -15,6 +15,7 @@ pub mod presets;
 pub mod resolver;
 pub mod retry;
 pub mod sandbox_factory;
+pub mod summary_format;
 
 pub use deps_builder::{
     build_context_budget_config, build_failover_chain, build_stability_triple, ProviderChain,
