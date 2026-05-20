@@ -412,6 +412,17 @@ Limitations (intentional, see SP-6 spec § 1 out-of-scope):
   `UnsupportedPolicy` from `WindowsSandboxDriver::profile_for`. SP-3b
   is deferred indefinitely (admin-only).
 
+**SP-6 v2 (2026-05-20)**: the workspace DACL grant promised by SP-6 v1
+§ 2.4 is now wired. Before each AppContainer launch, the init process
+adds an inheritable `GENERIC_ALL` allow ACE for the per-execution
+AppContainer SID on the session workspace directory; after the target
+exits, the same helper revokes the ACE (best-effort). Failure at any
+step logs to stderr and continues — DACL is an enabler, not a sandbox
+enforcement primitive, so the sandbox itself never blocks on it.
+Targets that don't need workspace writes (computation-only) are
+unaffected. Targets requiring system paths (`~/.gitconfig`, `%TEMP%`)
+remain an accepted AppContainer limitation.
+
 ### Linux resource limits (SP-5 — shipped 2026-05-20)
 
 On Linux with cgroup v2 delegated to the user, `BubblewrapDriver::run`
