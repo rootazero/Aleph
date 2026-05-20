@@ -16,13 +16,32 @@ use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
 use crate::sandbox::policy::{FsPolicy, NetworkPolicy, SandboxPolicy};
+use crate::sandbox::windows_init::WindowsInitPolicy;
+
+/// Driver-side knobs sourced from `WindowsSandboxConfig`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowsSandboxOptions {
+    pub use_restricted_token: bool,
+    pub require_restricted_token: bool,
+}
 
 #[derive(Debug, Clone)]
-pub struct WindowsSandboxDriver;
+pub struct WindowsSandboxDriver {
+    options: WindowsSandboxOptions,
+}
 
 impl WindowsSandboxDriver {
     pub fn new() -> Self {
-        Self
+        Self {
+            options: WindowsSandboxOptions {
+                use_restricted_token: true,
+                require_restricted_token: false,
+            },
+        }
+    }
+
+    pub fn with_options(options: WindowsSandboxOptions) -> Self {
+        Self { options }
     }
 
     /// Generate a profile description from the sandbox policy.
@@ -121,10 +140,25 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
     ) -> Result<OsSandboxProfile, SandboxError> {
         let policy = SandboxPolicy::from(capabilities);
         let contents = self.generate_profile(&policy, cwd)?;
+        // SP-3a: serialize the WindowsInitPolicy so run() can wrap the
+        // target with `sandbox-init-windows`. Skipped when restricted
+        // token is disabled in config — falls through to plain
+        // CreateProcessW path (cycle 1 behavior).
+        let windows_init_policy = if self.options.use_restricted_token {
+            let p = WindowsInitPolicy {
+                require_restricted_token: self.options.require_restricted_token,
+            };
+            Some(serde_json::to_string(&p).map_err(|e| {
+                SandboxError::ProfileGeneration(format!("WindowsInitPolicy serialize: {e}"))
+            })?)
+        } else {
+            None
+        };
         Ok(OsSandboxProfile {
             contents,
             max_memory_mb: policy.process.max_memory_mb,
             linux_init_policy: None,
+            windows_init_policy,
         })
     }
 
@@ -149,9 +183,37 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
             use super::job::SandboxJob;
             use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
 
-            let mut cmd = tokio::process::Command::new(program);
-            cmd.args(args)
-                .current_dir(cwd)
+            // SP-3a: when the profile carries a windows_init_policy,
+            // wrap the target with `aleph-server sandbox-init-windows
+            // --policy <json> -- <program> <args>`. The init child
+            // applies the restricted token + Low IL before launching
+            // the target via CreateProcessAsUserW (which inherits the
+            // JobObject membership we're about to assign below). Skip
+            // when policy is absent (use_restricted_token=false) — the
+            // target runs directly under the host token.
+            let mut cmd = match &profile.windows_init_policy {
+                Some(policy_json) => {
+                    let aleph_exe = std::env::current_exe()
+                        .and_then(std::fs::canonicalize)
+                        .map_err(|e| SandboxError::ExecutionFailed(format!(
+                            "cannot determine aleph-server path: {e}"
+                        )))?;
+                    let mut c = tokio::process::Command::new(aleph_exe);
+                    c.arg("sandbox-init-windows")
+                        .arg("--policy")
+                        .arg(policy_json)
+                        .arg("--")
+                        .arg(program)
+                        .args(args);
+                    c
+                }
+                None => {
+                    let mut c = tokio::process::Command::new(program);
+                    c.args(args);
+                    c
+                }
+            };
+            cmd.current_dir(cwd)
                 .env_clear()
                 .envs(env)
                 .stdout(std::process::Stdio::piped())

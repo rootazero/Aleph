@@ -383,6 +383,7 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
             contents,
             max_memory_mb: policy.process.max_memory_mb,
             linux_init_policy: None,
+            windows_init_policy: None,
         })
     }
 

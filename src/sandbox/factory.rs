@@ -92,6 +92,7 @@ mod tests {
                 contents: String::new(),
                 max_memory_mb: None,
                 linux_init_policy: None,
+                windows_init_policy: None,
             })
         }
 
@@ -229,6 +230,7 @@ mod tests {
                 contents: String::new(),
                 max_memory_mb: None,
                 linux_init_policy: None,
+                windows_init_policy: None,
             })
         }
 

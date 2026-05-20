@@ -16,8 +16,17 @@ use crate::sandbox::rate_limit::{SandboxRateLimitConfig, ToolCategory, WindowCon
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WindowsSandboxConfig {
+    /// SP-3a: when `true`, the sandbox-init-windows subcommand attempts
+    /// to launch the target via a restricted token at Low IL. Soft-
+    /// degrades to plain CreateProcessW + JobObject if the host lacks
+    /// `SE_INCREASE_QUOTA` (ERROR_PRIVILEGE_NOT_HELD).
     #[serde(default = "default_windows_use_restricted_token")]
     pub use_restricted_token: bool,
+
+    /// SP-3a: when `true`, refuse to spawn (rather than soft-degrade)
+    /// on ERROR_PRIVILEGE_NOT_HELD. Default `false`.
+    #[serde(default)]
+    pub require_restricted_token: bool,
 
     #[serde(default = "default_windows_use_job_object")]
     pub use_job_object: bool,
@@ -42,6 +51,7 @@ impl Default for WindowsSandboxConfig {
     fn default() -> Self {
         Self {
             use_restricted_token: default_windows_use_restricted_token(),
+            require_restricted_token: false,
             use_job_object: default_windows_use_job_object(),
             max_active_processes: default_windows_max_active_processes(),
         }

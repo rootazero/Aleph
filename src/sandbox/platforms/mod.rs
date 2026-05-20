@@ -38,17 +38,17 @@ pub fn create_platform_driver_from_config(
 
 pub fn create_platform_driver_with_config(
     linux_config: &crate::sandbox::config::LinuxSandboxConfig,
-    _windows_config: &crate::sandbox::config::WindowsSandboxConfig,
+    windows_config: &crate::sandbox::config::WindowsSandboxConfig,
 ) -> Arc<dyn crate::sandbox::driver::OsSandboxDriverTrait> {
     #[cfg(target_os = "macos")]
     {
-        let _ = (linux_config, _windows_config);
+        let _ = (linux_config, windows_config);
         Arc::new(macos::seatbelt::SeatbeltDriver::new())
     }
     #[cfg(target_os = "linux")]
     {
         use linux::bwrap::{BubblewrapDriver, LinuxSandboxOptions};
-        let _ = _windows_config;
+        let _ = windows_config;
         let options = LinuxSandboxOptions {
             mount_proc: linux_config.mount_proc,
             no_new_privs: linux_config.no_new_privs,
@@ -63,8 +63,13 @@ pub fn create_platform_driver_with_config(
     }
     #[cfg(target_os = "windows")]
     {
+        use windows::driver::{WindowsSandboxDriver, WindowsSandboxOptions};
         let _ = linux_config;
-        Arc::new(windows::driver::WindowsSandboxDriver::new())
+        let options = WindowsSandboxOptions {
+            use_restricted_token: windows_config.use_restricted_token,
+            require_restricted_token: windows_config.require_restricted_token,
+        };
+        Arc::new(WindowsSandboxDriver::with_options(options))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {

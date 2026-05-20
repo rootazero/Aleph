@@ -122,6 +122,15 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// SP-3a internal: apply restricted token + Low IL then spawn target
+    /// via CreateProcessAsUserW. Invoked by WindowsSandboxDriver; not
+    /// for users.
+    #[command(hide = true)]
+    SandboxInitWindows {
+        /// Remaining argv passed through to windows_init::run_init.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 /// Pairing subcommands

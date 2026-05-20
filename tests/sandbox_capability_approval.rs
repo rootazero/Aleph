@@ -88,6 +88,7 @@ impl OsSandboxDriverTrait for RecordingDriver {
             contents: String::new(),
             max_memory_mb: max_mem,
             linux_init_policy: None,
+            windows_init_policy: None,
         })
     }
 

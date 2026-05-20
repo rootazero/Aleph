@@ -365,6 +365,7 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             contents,
             max_memory_mb: policy.process.max_memory_mb,
             linux_init_policy: Some(init_policy_json),
+            windows_init_policy: None,
         })
     }
 

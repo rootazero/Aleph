@@ -29,6 +29,13 @@ pub struct OsSandboxProfile {
     /// the target executes. macOS / Windows leave as `None`.
     #[doc(hidden)]
     pub linux_init_policy: Option<String>,
+    /// SP-3a (Windows only): when `Some(json)`, the driver wraps the
+    /// target program with `aleph-server sandbox-init-windows --policy
+    /// <json> --`, which applies a Chrome-pattern restricted token + Low
+    /// integrity level before launching the target via
+    /// `CreateProcessAsUserW`. Linux / macOS leave as `None`.
+    #[doc(hidden)]
+    pub windows_init_policy: Option<String>,
 }
 
 #[async_trait]

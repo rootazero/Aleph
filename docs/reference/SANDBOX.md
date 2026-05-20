@@ -369,12 +369,29 @@ delete, not preserve for hypothetical future use. A future spec that
 implements RestrictedToken / WFP / AppContainer can re-introduce focused,
 working modules without inheriting the stub skeletons.
 
-### Current Windows defense surface (post-Cycle 1)
+### Current Windows defense surface (post-SP-3a)
 
-- Job Object: active-process limit (fork-bomb defense), kill-on-close,
-  die-on-unhandled-exception, virtual-memory ceiling (new), UI restrictions.
-- That's it. No restricted token, no AppContainer, no WFP. This is honest
-  documentation of what the code actually does, not aspirational claims.
+- **Job Object** (cycle 1): active-process limit (fork-bomb defense),
+  kill-on-close, die-on-unhandled-exception, virtual-memory ceiling,
+  UI restrictions.
+- **Restricted token + Low IL** (SP-3a, shipped 2026-05-20):
+  `WindowsSandboxDriver::run` wraps the target with
+  `aleph-server sandbox-init-windows`, which calls
+  `CreateRestrictedToken(self, DISABLE_MAX_PRIVILEGE)` →
+  `SetTokenInformation(TokenIntegrityLevel = S-1-16-4096)` →
+  `CreateProcessAsUserW(target)`. Result: target runs with no
+  privileges and at Low integrity, isolated by both the JobObject
+  container and the token-level authority drop. Stdio passes through
+  via inherited HANDLEs.
+- Soft-degrade: if `CreateProcessAsUserW` returns
+  `ERROR_PRIVILEGE_NOT_HELD` (host lacks `SE_INCREASE_QUOTA`, common
+  on locked-down server policies), the init falls back to plain
+  `CreateProcessW` (JobObject still applies). Flip
+  `WindowsSandboxConfig.require_restricted_token = true` to escalate
+  to a hard spawn failure.
+- **Not yet**: AppContainer (SP-6), WFP per-host network filtering
+  (SP-3b — requires admin; likely superseded by SP-6), workspace DACL
+  grants for Low-IL writes (separate small cycle).
 
 ### Linux resource limits (SP-5 — shipped 2026-05-20)
 
@@ -459,7 +476,8 @@ and `profile_for` (5):
 | ID | Scope | Why deferred |
 |---|---|---|
 | ~~SP-2~~ | ~~Linux Landlock + seccomp-bpf~~ | **Shipped (2026-05-20)** as `aleph-server sandbox-init` subcommand invoked by bwrap. See "Linux defense-in-depth" below. |
-| SP-3 | Windows RestrictedToken + WFP | ~200 lines of unsafe Win32 with `CreateProcessAsUserW` + manual stdio pipe wiring; not testable from a Mac dev box, needs CI coverage first. |
+| ~~SP-3a~~ | ~~Windows RestrictedToken + Low IL~~ | **Shipped (2026-05-20)** via `sandbox-init-windows` subcommand using CreateRestrictedToken + SetTokenInformation. See "Current Windows defense surface" above. |
+| SP-3b | Windows WFP per-host network filtering | Requires admin for filter installation. Likely superseded by SP-6 (AppContainer's network capability model) for most use cases. |
 | ~~SP-4~~ | ~~Hostname-based filtering~~ | **Shipped (2026-05-20)** as workspace-layer DNS pre-resolution; macOS-scoped. See "Hostname support" below. |
 | ~~SP-5~~ | ~~cgroups v2 Linux memory + CPU~~ | **Shipped (2026-05-20)** as host-side `CgroupV2Scope` in `BubblewrapDriver::run`. See "Linux resource limits" below. |
 | SP-6 | Windows AppContainer | Requires `windows-sys` major-version upgrade. |

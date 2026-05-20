@@ -133,6 +133,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::SandboxInit { args: init_args }) => {
             alephcore::sandbox::sandbox_init::run_init(init_args);
         }
+        // SP-3a: never returns; applies restricted token + Low IL then
+        // CreateProcessAsUserW + WaitForSingleObject + ExitProcess.
+        Some(Command::SandboxInitWindows { args: init_args }) => {
+            alephcore::sandbox::windows_init::run_init(init_args);
+        }
         other => {
             args.command = other;
         }
@@ -214,7 +219,8 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         | Some(Command::Secret { .. })
         | Some(Command::Status { .. })
         | Some(Command::Devices { .. })
-        | Some(Command::SandboxInit { .. }) => unreachable!(),
+        | Some(Command::SandboxInit { .. })
+        | Some(Command::SandboxInitWindows { .. }) => unreachable!(),
     }
 
     // Start the gateway server
