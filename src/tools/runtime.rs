@@ -415,4 +415,62 @@ mod tests {
         assert!(registry.get("beta").is_none());
         assert!(registry.get("gamma").is_some());
     }
+
+    // -----------------------------------------------------------------
+    // LoopTool::max_result_tokens — wires the previously-dead
+    // ToolDefinition.max_result_tokens field end-to-end.
+    // -----------------------------------------------------------------
+
+    /// A tool that opts into the Layer 2 budget hint via the trait method.
+    struct BudgetedTool;
+
+    #[async_trait]
+    impl LoopTool for BudgetedTool {
+        fn name(&self) -> &str {
+            "budgeted"
+        }
+        fn description(&self) -> &str {
+            "Declares a 4000-token result budget"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
+        async fn execute(&self, _input: Value) -> ToolResult {
+            ToolResult::Success {
+                output: json!({}),
+            }
+        }
+        fn max_result_tokens(&self) -> Option<usize> {
+            Some(4_000)
+        }
+    }
+
+    #[test]
+    fn max_result_tokens_default_is_none() {
+        let tool = EchoTool;
+        assert_eq!(tool.max_result_tokens(), None);
+    }
+
+    #[test]
+    fn registry_propagates_max_result_tokens_to_definitions() {
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(BudgetedTool));
+        registry.register(Box::new(EchoTool));
+        let defs = registry.tool_definitions();
+        let budgeted = defs.iter().find(|d| d.name == "budgeted").expect("found");
+        assert_eq!(budgeted.max_result_tokens, Some(4_000));
+        let echo = defs.iter().find(|d| d.name == "echo").expect("found");
+        assert_eq!(echo.max_result_tokens, None);
+    }
+
+    #[test]
+    fn registry_max_result_tokens_for_returns_per_tool_value() {
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(BudgetedTool));
+        registry.register(Box::new(EchoTool));
+        assert_eq!(registry.max_result_tokens_for("budgeted"), Some(4_000));
+        assert_eq!(registry.max_result_tokens_for("echo"), None);
+        // Unknown tool returns None.
+        assert_eq!(registry.max_result_tokens_for("nonexistent"), None);
+    }
 }
