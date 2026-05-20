@@ -1953,11 +1953,39 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
-        // Wire tools.effective to return tools available to a specific agent
+        // Wire tools.effective to return tools available to a specific agent.
+        // D1 fix: previously rebuilt a builtins-only AgentRegistry per call,
+        // hiding user-customized agents. Mirror the orchestrator's setup
+        // (mod.rs ~1112 + orchestrator_init.rs:70) by loading user/project
+        // AgentDefs from filesystem so the visibility surface matches what
+        // the agent loop actually sees.
         {
             let reg = dispatch_registry.clone();
-            let agent_def_registry =
-                std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
+            let agent_def_registry = {
+                let r = std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
+                let aleph_home = alephcore::discovery::aleph_home_dir().ok();
+                let project_dir = std::env::current_dir().ok();
+                if let Some(home) = aleph_home.as_deref() {
+                    match r.register_from_dirs(home, project_dir.as_deref()) {
+                        Ok(shadows) => {
+                            if !daemon && !shadows.is_empty() {
+                                println!(
+                                    "  tools.effective: loaded user agents (+{} shadow overrides)",
+                                    shadows.len()
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "tools.effective: failed to load user agent defs; \
+                                 falling back to builtins-only"
+                            );
+                        }
+                    }
+                }
+                r
+            };
             server
                 .handlers_mut()
                 .register("tools.effective", move |req| {
