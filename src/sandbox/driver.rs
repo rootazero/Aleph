@@ -23,6 +23,12 @@ use crate::sandbox::command::{SandboxError, SandboxOutput};
 pub struct OsSandboxProfile {
     pub contents: String,
     pub max_memory_mb: Option<u64>,
+    /// SP-2 (Linux only): when `Some(json)`, the driver wraps the target
+    /// program with `aleph-server sandbox-init --policy <json> --`
+    /// inside the bwrap namespace, applying landlock + seccomp before
+    /// the target executes. macOS / Windows leave as `None`.
+    #[doc(hidden)]
+    pub linux_init_policy: Option<String>,
 }
 
 #[async_trait]

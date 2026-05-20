@@ -124,6 +124,7 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
         Ok(OsSandboxProfile {
             contents,
             max_memory_mb: policy.process.max_memory_mb,
+            linux_init_policy: None,
         })
     }
 

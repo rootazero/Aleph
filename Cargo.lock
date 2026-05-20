@@ -379,6 +379,7 @@ dependencies = [
  "jsonwebtoken",
  "k256",
  "keyring",
+ "landlock",
  "lettre",
  "libc",
  "log",
@@ -411,6 +412,7 @@ dependencies = [
  "rust-embed",
  "schemars",
  "scraper",
+ "seccompiler",
  "secrecy 0.10.3",
  "semver",
  "serde",
@@ -5920,6 +5922,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "landlock"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49fefd6652c57d68aaa32544a4c0e642929725bdc1fd929367cdeb673ab81088"
+dependencies = [
+ "enumflags2",
+ "libc",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "language-tags"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10096,6 +10109,15 @@ dependencies = [
  "pkcs8",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "seccompiler"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4ae55de56877481d112a559bbc12667635fdaf5e005712fd4e2b2fa50ffc884"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

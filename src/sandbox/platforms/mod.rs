@@ -53,6 +53,7 @@ pub fn create_platform_driver_with_config(
             mount_proc: linux_config.mount_proc,
             no_new_privs: linux_config.no_new_privs,
             include_platform_defaults: linux_config.include_platform_defaults,
+            require_landlock: linux_config.require_landlock,
         };
         Arc::new(BubblewrapDriver::with_options(options))
     }

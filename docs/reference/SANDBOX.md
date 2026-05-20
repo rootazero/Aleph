@@ -376,6 +376,34 @@ working modules without inheriting the stub skeletons.
 - That's it. No restricted token, no AppContainer, no WFP. This is honest
   documentation of what the code actually does, not aspirational claims.
 
+### Linux defense-in-depth (SP-2 — shipped 2026-05-20)
+
+bwrap's namespace isolation now sits underneath two additional Linux LSM
+mechanisms, applied by a hidden `aleph-server sandbox-init` subcommand
+that bwrap launches inside its mount namespace:
+
+- **Landlock** (kernel ≥ 5.13): in-process FS ACL inside the mounts that
+  bwrap already gave the child. `READ_FILE | READ_DIR | EXECUTE` on
+  `SYSTEM_READ_PATHS` (`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`,
+  `/etc`) + `SandboxCapabilities.fs_read`; full RW + Exec on
+  `SandboxCapabilities.fs_write` + the session cwd. On kernels < 5.13
+  landlock is soft-skipped with a warning unless
+  `LinuxSandboxConfig.require_landlock = true`.
+- **seccomp-bpf** (kernel ≥ 3.5, universal in practice): syscall
+  denylist returning `EPERM` for ~28 entries covering filesystem
+  manipulation (`mount`/`umount`/`pivot_root`/`chroot`), kernel reload
+  (`kexec_*`), module loading (`*_module`), eBPF, perf, ptrace, kernel
+  keyring, `userfaultfd`, io_uring, `mknodat`, swap, `syslog`,
+  `reboot`, namespace switching, and `clone`/`unshare` with
+  `CLONE_NEWUSER` (nested user-ns escape). Snapshot-pinned by the
+  `seccomp_denylist_is_frozen` unit test.
+
+The init subcommand is wired into the existing `aleph-server` binary
+(no separate helper artifact — R3 core minimalism); bwrap bind-mounts
+the running aleph-server read-only at `/aleph-sandbox-init` inside the
+namespace, then exec's it. Two new crates pulled in Linux-only:
+`landlock 0.4` and `seccompiler 0.5`.
+
 ### Hostname support (macOS, SP-4 — shipped 2026-05-20)
 
 `NetworkPolicy::AllowHosts { hosts: ["github.com", "1.2.3.4"] }` is now
@@ -403,7 +431,7 @@ and `profile_for` (5):
 
 | ID | Scope | Why deferred |
 |---|---|---|
-| SP-2 | Linux Landlock + seccomp-bpf | Defense-in-depth layered on bwrap; standalone design needed. |
+| ~~SP-2~~ | ~~Linux Landlock + seccomp-bpf~~ | **Shipped (2026-05-20)** as `aleph-server sandbox-init` subcommand invoked by bwrap. See "Linux defense-in-depth" below. |
 | SP-3 | Windows RestrictedToken + WFP | ~200 lines of unsafe Win32 with `CreateProcessAsUserW` + manual stdio pipe wiring; not testable from a Mac dev box, needs CI coverage first. |
 | ~~SP-4~~ | ~~Hostname-based filtering~~ | **Shipped (2026-05-20)** as workspace-layer DNS pre-resolution; macOS-scoped. See "Hostname support" below. |
 | SP-5 | cgroups v2 Linux memory + CPU | `RLIMIT_AS` covers the common case; cgroup adds enforcement against `mmap` games but is more invasive. |

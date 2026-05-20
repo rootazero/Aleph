@@ -91,6 +91,7 @@ mod tests {
             Ok(OsSandboxProfile {
                 contents: String::new(),
                 max_memory_mb: None,
+                linux_init_policy: None,
             })
         }
 
@@ -227,6 +228,7 @@ mod tests {
             Ok(OsSandboxProfile {
                 contents: String::new(),
                 max_memory_mb: None,
+                linux_init_policy: None,
             })
         }
 

@@ -251,6 +251,10 @@ aleph-desktop-macos = { path = "desktop/macos" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 aleph-desktop-linux = { path = "desktop/linux" }
+# SP-2: Landlock LSM (FS ACL) — kernel ≥ 5.13. Single small crate, official-ish.
+landlock = "0.4"
+# SP-2: seccomp-bpf syscall denylist. AWS Firecracker's own filter library.
+seccompiler = "0.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 aleph-desktop-windows = { path = "desktop/windows" }

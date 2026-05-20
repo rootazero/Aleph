@@ -19,6 +19,11 @@ pub struct LinuxSandboxOptions {
     pub mount_proc: bool,
     pub no_new_privs: bool,
     pub include_platform_defaults: bool,
+    /// SP-2: when `true`, sandbox-init exits non-zero if the kernel
+    /// does not expose landlock ABI ≥ 1 (kernels < 5.13). Defaults to
+    /// `false` → soft-degrade with a warning, keeping bwrap + seccomp +
+    /// rlimit active. Hardened production deployments can flip this on.
+    pub require_landlock: bool,
 }
 
 impl Default for LinuxSandboxOptions {
@@ -27,6 +32,7 @@ impl Default for LinuxSandboxOptions {
             mount_proc: true,
             no_new_privs: true,
             include_platform_defaults: true,
+            require_landlock: false,
         }
     }
 }
@@ -325,9 +331,20 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         let policy = SandboxPolicy::from(capabilities);
         let args = self.generate_args(&policy, cwd)?;
         let contents = args.join("\n");
+        // SP-2: serialize the landlock/seccomp policy for sandbox-init.
+        // The init binary applies these inside bwrap's namespace before
+        // exec'ing the target.
+        let init_policy = crate::sandbox::sandbox_init::policy_from_capabilities(
+            capabilities,
+            cwd,
+            self.options.require_landlock,
+        );
+        let init_policy_json = serde_json::to_string(&init_policy)
+            .map_err(|e| SandboxError::ProfileGeneration(format!("init policy serialize: {e}")))?;
         Ok(OsSandboxProfile {
             contents,
             max_memory_mb: policy.process.max_memory_mb,
+            linux_init_policy: Some(init_policy_json),
         })
     }
 
@@ -347,15 +364,52 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             .find_bwrap()
             .ok_or_else(|| SandboxError::ExecutionFailed("bubblewrap (bwrap) not found".into()))?;
 
-        let bwrap_args: Vec<String> = profile.contents.lines().map(|s| s.to_string()).collect();
+        let mut bwrap_args: Vec<String> =
+            profile.contents.lines().map(|s| s.to_string()).collect();
+
+        // SP-2: bind-mount the currently-running aleph-server binary
+        // read-only inside the bwrap namespace at a fixed path, then
+        // launch it as `sandbox-init` to apply landlock + seccomp before
+        // exec'ing the target. Skipped when the profile has no init
+        // policy (e.g. a future caller using OsSandboxProfile in a
+        // non-bwrap path).
+        let init_policy_json = profile.linux_init_policy.as_deref();
+        if init_policy_json.is_some() {
+            let aleph_exe = std::env::current_exe()
+                .and_then(std::fs::canonicalize)
+                .map_err(|e| SandboxError::ExecutionFailed(
+                    format!("cannot determine aleph-server path: {e}"),
+                ))?;
+            bwrap_args.push("--ro-bind".into());
+            bwrap_args.push(aleph_exe.to_string_lossy().into_owned());
+            bwrap_args.push("/aleph-sandbox-init".into());
+        }
 
         debug!("running bubblewrap with {} arguments", bwrap_args.len());
 
         let mut cmd = Command::new(bwrap_path);
-        cmd.args(&bwrap_args)
-            .arg(program)
-            .args(args)
-            .current_dir(cwd)
+        cmd.args(&bwrap_args);
+
+        // Compose the target invocation. With an init policy in hand we
+        // exec the target indirectly:
+        //   /aleph-sandbox-init sandbox-init --policy <json> -- <program> <args...>
+        // Otherwise fall back to direct exec (matches pre-SP-2 behavior).
+        match init_policy_json {
+            Some(policy) => {
+                cmd.arg("/aleph-sandbox-init")
+                    .arg("sandbox-init")
+                    .arg("--policy")
+                    .arg(policy)
+                    .arg("--")
+                    .arg(program)
+                    .args(args);
+            }
+            None => {
+                cmd.arg(program).args(args);
+            }
+        }
+
+        cmd.current_dir(cwd)
             .env_clear()
             .envs(env)
             .stdout(std::process::Stdio::piped())

@@ -185,6 +185,11 @@ pub struct LinuxSandboxConfig {
 
     #[serde(default = "default_linux_include_platform_defaults")]
     pub include_platform_defaults: bool,
+
+    /// SP-2: when `true`, sandbox-init exits non-zero if the kernel
+    /// lacks landlock ABI ≥ 1. Default `false` → soft-degrade.
+    #[serde(default)]
+    pub require_landlock: bool,
 }
 
 fn default_linux_mount_proc() -> bool {
@@ -205,6 +210,7 @@ impl Default for LinuxSandboxConfig {
             mount_proc: default_linux_mount_proc(),
             no_new_privs: default_linux_no_new_privs(),
             include_platform_defaults: default_linux_include_platform_defaults(),
+            require_landlock: false,
         }
     }
 }

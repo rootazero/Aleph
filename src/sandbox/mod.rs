@@ -21,6 +21,7 @@ pub mod hooks;
 pub mod platforms;
 pub mod policy;
 pub mod rate_limit;
+pub mod sandbox_init;
 pub mod workspace;
 pub mod worktree;
 
