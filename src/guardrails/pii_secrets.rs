@@ -157,15 +157,6 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
     }
 }
 
-impl PiiSecretsGuardrail {
-    /// Compatibility wrapper — constructs a guardrail with no resolver and
-    /// a fresh default orchestrator. Prefer `with_guard_and_resolver` for
-    /// new call sites. Removed in Task 3.
-    pub fn from_globals() -> Self {
-        Self::with_resolver(None)
-    }
-}
-
 #[cfg(test)]
 mod delegation_tests {
     use super::*;
