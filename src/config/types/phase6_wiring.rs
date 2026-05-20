@@ -11,7 +11,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// `[guardrails]` — single switch wiring `PiiSecretsGuardrail::from_globals()`
+/// `[guardrails]` — single switch wiring `PiiSecretsGuardrail`
 /// onto Input + Output + ToolCall trait surfaces. Phase-6 has only one real
 /// `GuardrailImpl`; future detectors (e.g. content_safety) extend this struct
 /// additively without breaking existing toml.
