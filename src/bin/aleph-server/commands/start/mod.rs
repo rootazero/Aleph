@@ -489,16 +489,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         });
     }
 
-    // MCP: spawn the manager actor and bridge external-server tools into the
-    // shared `ToolRegistry`. Warn-only on failure — a missing or malformed
-    // MCP config must never abort boot.
+    // MCP: spawn the manager actor here so dependent handlers can resolve
+    // `mcp_handle` below. The tool bridge is spawned later — after
+    // `agent_result` materialises — so it can carry the dispatcher's
+    // `ToolHealthCache` handle for `McpServerProbe` registration.
+    // Warn-only on failure — a missing or malformed MCP config must never
+    // abort boot.
     let mcp_handle: Option<alephcore::mcp::McpManagerHandle> =
         match alephcore::mcp::McpManagerActor::new(None).await {
             Ok((actor, handle)) => {
                 tokio::spawn(actor.run());
-                alephcore::mcp::spawn_tool_bridge(handle.clone(), tool_registry_phase2.clone());
                 if !args.daemon {
-                    println!("MCP Manager spawned + tool bridge wired");
+                    println!("MCP Manager spawned");
                 }
                 Some(handle)
             }
@@ -953,6 +955,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
+    // MCP tool bridge — now that `agent_result.dispatch_registry` exists,
+    // spawn the bridge with the dispatcher handle so each registered MCP
+    // tool also gets an `McpServerProbe` attached to the shared
+    // `ToolHealthCache`. The bridge subscribes to manager events; any
+    // servers that connect from this point on flow through it.
+    if let Some(ref h) = mcp_handle {
+        alephcore::mcp::spawn_tool_bridge(
+            h.clone(),
+            tool_registry_phase2.clone(),
+            agent_result.dispatch_registry.clone(),
+        );
+        if !args.daemon {
+            println!("MCP tool bridge wired");
+        }
+    }
+
     // Register TeamEventLogger on GlobalBus.
     // The handler is fire-and-forget (handle returns empty vec), so we pass a
     // dummy EventContext — it never calls ctx.bus.publish().
@@ -1116,6 +1134,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             sandbox.clone(),
             &stop_hook_configs,
             agent_result.memory_context_provider.clone(),
+            agent_result.dispatch_registry.clone(),
         )
         .await
         {

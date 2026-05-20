@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::builtin_tools::mcp_prompt::McpGetPromptTool;
 use crate::builtin_tools::mcp_resource::McpReadResourceTool;
+use crate::dispatcher::ToolRegistry as DispatchRegistry;
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
 use crate::tools::handlers::builtin::BuiltinHandler;
 use crate::tools::handlers::registration::{register_mcp_tools, unregister_mcp_tools};
@@ -36,17 +37,22 @@ const PROMPT_TOOL: &str = "mcp_get_prompt";
 /// in sync with every server's discovered tools. Returns the `JoinHandle` so
 /// callers may abort it on shutdown; dropping the handle merely detaches the
 /// task, which exits on its own once the manager's event channel closes.
-pub fn spawn_tool_bridge(handle: McpManagerHandle, registry: Arc<ToolRegistry>) -> JoinHandle<()> {
+pub fn spawn_tool_bridge(
+    handle: McpManagerHandle,
+    registry: Arc<ToolRegistry>,
+    dispatch_registry: Option<Arc<DispatchRegistry>>,
+) -> JoinHandle<()> {
     let mut events = handle.subscribe();
     tokio::spawn(async move {
         tracing::info!("MCP tool bridge started");
         // Whether each capability builtin is currently in the registry.
         let mut resource_live = false;
         let mut prompt_live = false;
+        let disp_ref = dispatch_registry.as_ref();
         loop {
             match events.recv().await {
                 Ok(event) => {
-                    apply_event(&handle, &registry, event).await;
+                    apply_event(&handle, &registry, disp_ref, event).await;
                     reconcile_capability_tools(
                         &handle,
                         &registry,
@@ -60,7 +66,7 @@ pub fn spawn_tool_bridge(handle: McpManagerHandle, registry: Arc<ToolRegistry>) 
                     // have missed a transition, so reconcile every server
                     // against the registry rather than guessing.
                     tracing::warn!(skipped, "MCP tool bridge lagged; resyncing all servers");
-                    resync_all(&handle, &registry).await;
+                    resync_all(&handle, &registry, disp_ref).await;
                     reconcile_capability_tools(
                         &handle,
                         &registry,
@@ -79,16 +85,21 @@ pub fn spawn_tool_bridge(handle: McpManagerHandle, registry: Arc<ToolRegistry>) 
 }
 
 /// Translate a single manager event into registry mutations.
-async fn apply_event(handle: &McpManagerHandle, registry: &ToolRegistry, event: McpManagerEvent) {
+async fn apply_event(
+    handle: &McpManagerHandle,
+    registry: &ToolRegistry,
+    dispatch_registry: Option<&Arc<DispatchRegistry>>,
+    event: McpManagerEvent,
+) {
     match event {
         McpManagerEvent::ServerStarted { server_id, .. }
         | McpManagerEvent::ToolsChanged { server_id, .. } => {
-            sync_server(handle, registry, &server_id).await;
+            sync_server(handle, registry, dispatch_registry, &server_id).await;
         }
         McpManagerEvent::ServerStopped { server_id, .. }
         | McpManagerEvent::ServerCrashed { server_id, .. }
         | McpManagerEvent::ServerRemoved { server_id, .. } => {
-            let removed = unregister_mcp_tools(registry, &server_id);
+            let removed = unregister_mcp_tools(registry, dispatch_registry, &server_id);
             if !removed.is_empty() {
                 tracing::info!(
                     server_id = %server_id,
@@ -107,7 +118,12 @@ async fn apply_event(handle: &McpManagerHandle, registry: &ToolRegistry, event: 
 ///
 /// Stale entries are cleared first so a server that drops a tool (a shrinking
 /// `tools/list`) does not leave a dangling registry handler behind.
-async fn sync_server(handle: &McpManagerHandle, registry: &ToolRegistry, server_id: &str) {
+async fn sync_server(
+    handle: &McpManagerHandle,
+    registry: &ToolRegistry,
+    dispatch_registry: Option<&Arc<DispatchRegistry>>,
+    server_id: &str,
+) {
     let client = match handle.get_client(server_id).await {
         Ok(Some(client)) => client,
         Ok(None) => {
@@ -123,8 +139,8 @@ async fn sync_server(handle: &McpManagerHandle, registry: &ToolRegistry, server_
         }
     };
     let tools = client.list_tools().await;
-    unregister_mcp_tools(registry, server_id);
-    let registered = register_mcp_tools(registry, client, server_id, &tools);
+    unregister_mcp_tools(registry, dispatch_registry, server_id);
+    let registered = register_mcp_tools(registry, dispatch_registry, client, server_id, &tools);
     tracing::info!(
         server_id,
         count = registered.len(),
@@ -134,11 +150,15 @@ async fn sync_server(handle: &McpManagerHandle, registry: &ToolRegistry, server_
 
 /// Reconcile every known server against the registry. Used after a broadcast
 /// lag, where individual transitions may have been dropped.
-async fn resync_all(handle: &McpManagerHandle, registry: &ToolRegistry) {
+async fn resync_all(
+    handle: &McpManagerHandle,
+    registry: &ToolRegistry,
+    dispatch_registry: Option<&Arc<DispatchRegistry>>,
+) {
     match handle.list_servers().await {
         Ok(servers) => {
             for info in servers {
-                sync_server(handle, registry, &info.id).await;
+                sync_server(handle, registry, dispatch_registry, &info.id).await;
             }
         }
         Err(e) => {

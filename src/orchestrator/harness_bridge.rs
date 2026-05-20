@@ -137,6 +137,12 @@ pub struct AgentHarnessRunner {
     /// behaviour (boot path for tests / env without a memory backend).
     pub memory_context_provider:
         Option<Arc<crate::thinker::memory_context_provider::MemoryContextProvider>>,
+
+    /// Dispatcher-side `ToolRegistry` — owns the `ToolHealthCache` whose
+    /// snapshots drive the `<tool_runtime_state>` block emitted by
+    /// `ToolRuntimeStateLayer` @502. `None` in test/early-boot paths keeps
+    /// `runtime_state_blocks` empty (the layer then renders nothing).
+    pub dispatch_registry: Option<Arc<crate::dispatcher::ToolRegistry>>,
 }
 
 #[async_trait]
@@ -437,6 +443,31 @@ impl HarnessRunner for AgentHarnessRunner {
     }
 }
 
+/// Snapshot the dispatcher's `ToolHealthCache` and convert every
+/// currently-cached `Unhealthy` entry into a `RuntimeStateFragment` for
+/// `ToolRuntimeStateLayer` to render. Returns `vec![]` when
+/// `dispatch_registry` is `None` (test / early-boot).
+///
+/// Free function so unit tests can exercise the conversion without
+/// constructing a full `AgentHarnessRunner`.
+pub fn compute_runtime_state_blocks(
+    dispatch_registry: Option<&Arc<crate::dispatcher::ToolRegistry>>,
+) -> Vec<crate::tools::runtime_state::RuntimeStateFragment> {
+    let Some(registry) = dispatch_registry else {
+        return Vec::new();
+    };
+    let snapshot = registry.health().snapshot();
+    snapshot
+        .unhealthy_iter()
+        .map(|(name, reason)| {
+            crate::tools::runtime_state::RuntimeStateFragment::unavailable(
+                name,
+                reason.short_label(),
+            )
+        })
+        .collect()
+}
+
 impl AgentHarnessRunner {
     /// Assemble the per-turn system prompt with curated memory + hybrid
     /// retrieval. Returns `None` when no `MemoryContextProvider` is wired
@@ -625,6 +656,14 @@ impl AgentHarnessRunner {
         resolved_context.runtime_context = Some(
             crate::thinker::runtime_context::RuntimeContext::collect(provider.name()),
         );
+        // Populate runtime-state fragments from the dispatcher's
+        // `ToolHealthCache`. Each currently-cached `Unhealthy` entry becomes
+        // a `RuntimeStateFragment::unavailable(name, reason)` that
+        // `ToolRuntimeStateLayer` @502 renders into `<tool_runtime_state>`.
+        // `None` dispatch_registry (test / early boot) → empty vec → the
+        // layer emits nothing.
+        resolved_context.runtime_state_blocks =
+            compute_runtime_state_blocks(self.dispatch_registry.as_ref());
         builder = builder.with_resolved_context(resolved_context);
         // Phase 3: thread the provider's wire-protocol family so
         // `ProviderGuidanceLayer` can pick the right per-family

@@ -7,13 +7,18 @@
 
 use std::sync::Arc;
 
+use crate::dispatcher::ToolRegistry as DispatchRegistry;
 use crate::mcp::{McpClient, McpTool};
 use crate::tools::handlers::mcp::McpHandler;
 use crate::tools::handlers::ToolHandler;
+use crate::tools::probes::mcp::McpServerProbe;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::service::ToolSource;
 
-/// Register every tool from one MCP server into the shared `ToolRegistry`.
+/// Register every tool from one MCP server into the shared executor `ToolRegistry`,
+/// and (when a dispatcher registry is supplied) attach a single
+/// [`McpServerProbe`] per qualified name so the `<tool_runtime_state>` block
+/// can surface a "server transport down" hint to the LLM.
 ///
 /// Should be invoked *after* a successful `McpClient::start_external_server`
 /// or `start_remote_server` for the matching `server_id`. Safe to call
@@ -22,6 +27,7 @@ use crate::tools::service::ToolSource;
 /// in a matching `unregister_mcp_tools` on disconnect.
 pub fn register_mcp_tools(
     registry: &ToolRegistry,
+    dispatch_registry: Option<&Arc<DispatchRegistry>>,
     client: Arc<McpClient>,
     server_id: &str,
     tools: &[McpTool],
@@ -37,7 +43,15 @@ pub fn register_mcp_tools(
             tool.input_schema.clone(),
         ));
         match registry.register(qualified.clone(), handler) {
-            Ok(()) => registered.push(qualified),
+            Ok(()) => {
+                if let Some(disp) = dispatch_registry {
+                    disp.register_health_probe(
+                        qualified.clone(),
+                        Arc::new(McpServerProbe::new(Arc::clone(&client), server_id)),
+                    );
+                }
+                registered.push(qualified);
+            }
             Err(e) => tracing::warn!(
                 error = ?e,
                 qualified = %qualified,
@@ -51,9 +65,14 @@ pub fn register_mcp_tools(
 /// Unregister every tool previously registered from the given MCP server.
 ///
 /// Walks the registry snapshot and removes every handler whose
-/// `ToolSource` matches `Mcp { server_id }`. Returns the set of qualified
-/// names that were removed.
-pub fn unregister_mcp_tools(registry: &ToolRegistry, server_id: &str) -> Vec<String> {
+/// `ToolSource` matches `Mcp { server_id }`. When `dispatch_registry` is
+/// supplied, also tears down the matching health probes. Returns the set of
+/// qualified names that were removed.
+pub fn unregister_mcp_tools(
+    registry: &ToolRegistry,
+    dispatch_registry: Option<&Arc<DispatchRegistry>>,
+    server_id: &str,
+) -> Vec<String> {
     let snapshot = registry.snapshot();
     let victims: Vec<String> = snapshot
         .iter()
@@ -65,6 +84,9 @@ pub fn unregister_mcp_tools(registry: &ToolRegistry, server_id: &str) -> Vec<Str
     drop(snapshot);
     for name in &victims {
         registry.unregister(name);
+        if let Some(disp) = dispatch_registry {
+            disp.health().unregister_probe(name);
+        }
     }
     victims
 }
@@ -92,7 +114,7 @@ mod tests {
         let reg = ToolRegistry::new();
         let client = Arc::new(McpClient::new());
         let tools = [tool("get_time", "a"), tool("set_tz", "b")];
-        let names = register_mcp_tools(&reg, client, "clock", &tools);
+        let names = register_mcp_tools(&reg, None, client, "clock", &tools);
         assert_eq!(names, vec!["clock__get_time", "clock__set_tz"]);
         let snap = reg.snapshot();
         assert!(snap.contains_key("clock__get_time"));
@@ -103,10 +125,10 @@ mod tests {
     fn unregister_mcp_tools_removes_only_matching_server() {
         let reg = ToolRegistry::new();
         let client = Arc::new(McpClient::new());
-        register_mcp_tools(&reg, Arc::clone(&client), "alpha", &[tool("x", "d")]);
-        register_mcp_tools(&reg, Arc::clone(&client), "beta", &[tool("y", "d")]);
+        register_mcp_tools(&reg, None, Arc::clone(&client), "alpha", &[tool("x", "d")]);
+        register_mcp_tools(&reg, None, Arc::clone(&client), "beta", &[tool("y", "d")]);
         assert_eq!(reg.snapshot().len(), 2);
-        let removed = unregister_mcp_tools(&reg, "alpha");
+        let removed = unregister_mcp_tools(&reg, None, "alpha");
         assert_eq!(removed, vec!["alpha__x"]);
         let remaining: Vec<String> = reg.snapshot().keys().cloned().collect();
         assert_eq!(remaining, vec!["beta__y"]);
@@ -117,10 +139,51 @@ mod tests {
         let reg = ToolRegistry::new();
         let client = Arc::new(McpClient::new());
         let t = [tool("dup", "d")];
-        let first = register_mcp_tools(&reg, Arc::clone(&client), "s", &t);
-        let second = register_mcp_tools(&reg, client, "s", &t);
+        let first = register_mcp_tools(&reg, None, Arc::clone(&client), "s", &t);
+        let second = register_mcp_tools(&reg, None, client, "s", &t);
         assert_eq!(first, vec!["s__dup"]);
         assert!(second.is_empty());
         assert_eq!(reg.snapshot().len(), 1);
+    }
+
+    #[test]
+    fn register_with_dispatch_registry_attaches_probe() {
+        let reg = ToolRegistry::new();
+        let disp = Arc::new(DispatchRegistry::new());
+        let client = Arc::new(McpClient::new());
+        register_mcp_tools(
+            &reg,
+            Some(&disp),
+            client,
+            "srv",
+            &[tool("a", "d"), tool("b", "d")],
+        );
+        // No public introspection of registered probes; instead, force a
+        // refresh and observe that an entry materialises (since fresh
+        // McpClient reports no live servers, the probe returns Unhealthy).
+        let cache = disp.health();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let _ = cache.refresh("srv__a").await;
+        });
+        let snap = cache.snapshot();
+        // `is_healthy` returns true for empty entries; an entry now exists
+        // and reports unhealthy, so the snapshot's `reason` is Some.
+        assert!(snap.reason("srv__a").is_some());
+    }
+
+    #[test]
+    fn unregister_with_dispatch_registry_drops_probe() {
+        let reg = ToolRegistry::new();
+        let disp = Arc::new(DispatchRegistry::new());
+        let client = Arc::new(McpClient::new());
+        register_mcp_tools(&reg, Some(&disp), client, "srv", &[tool("a", "d")]);
+        let removed = unregister_mcp_tools(&reg, Some(&disp), "srv");
+        assert_eq!(removed, vec!["srv__a"]);
+        // Re-registering immediately should not collide with a leftover probe
+        // (no public assertion on probe count exists, but unregister_probe
+        // returns true only when a probe was actually removed; a second
+        // unregister returns false).
+        assert!(!disp.health().unregister_probe("srv__a"));
     }
 }
