@@ -36,7 +36,8 @@ impl BuiltinToolRegistry {
     /// # Safety Notes
     /// - Dangerous commands are still blocked by CommandChecker (rm -rf /, sudo, etc.)
     /// - File operations are sandboxed by PathPermissionChecker
-    /// - TODO: Tool policy will be reimplemented following OpenClaw's sandbox pattern
+    /// - Tool policy is enforced layered (Guardrails + Sandbox + ApprovalGate).
+    ///   See docs/reference/SANDBOX.md.
     pub async fn with_config(config: BuiltinToolConfig) -> Self {
         let search_tool = if let Some(ref registry) = config.search_registry {
             SearchTool::with_registry(Arc::clone(registry))

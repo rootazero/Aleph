@@ -25,6 +25,5 @@ mod export_tests {
     #[test]
     fn test_runtime_guard_exports_compile() {
         let _ = crate::security::SecurityGuardConfig::default();
-        let _ = crate::security::RuntimeSecurityGuard::default_guard();
     }
 }

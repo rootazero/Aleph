@@ -61,7 +61,12 @@ pub(crate) fn resolve_plugin_handler_from_sources(
 ///
 /// Holds instances of builtin tools and provides direct invocation capabilities.
 ///
-/// TODO: Security enforcement will be reimplemented following OpenClaw's sandbox/tool-policy pattern.
+/// Security enforcement is layered, not centralised in this registry:
+/// - `GuardrailRegistry` (input / output / tool-call) covers content checks.
+/// - `WorkspaceSandbox` covers OS-level isolation.
+/// - `ApprovalGate` covers HITL escalation.
+///
+/// See docs/reference/SANDBOX.md and docs/reference/SECURITY.md.
 pub struct BuiltinToolRegistry {
     /// Search tool instance
     pub(crate) search_tool: crate::builtin_tools::SearchTool,
@@ -416,14 +421,12 @@ impl BuiltinToolRegistry {
 
     /// Check if an operation is permitted
     ///
-    /// TODO: Implement tool policy following OpenClaw's sandbox/tool-policy pattern.
-    /// Currently all operations are permitted; safety is enforced by:
-    /// - CommandChecker (blocks dangerous shell commands)
-    /// - PathPermissionChecker (sandboxes file operations)
+    /// Currently a pass-through; safety is enforced layered:
+    /// - `CommandChecker` (blocks dangerous shell commands)
+    /// - `PathPermissionChecker` (sandboxes file operations)
+    /// - See docs/reference/SANDBOX.md and docs/reference/SECURITY.md.
     #[allow(unused_variables)]
     pub(crate) fn check_capability(&self, tool_name: &str, arguments: &Value) -> Result<()> {
-        // TODO: Implement OpenClaw-style tool policy
-        // See: /Volumes/TBU4/Workspace/openclaw/src/agents/pi-tools.policy.ts
         Ok(())
     }
 }
