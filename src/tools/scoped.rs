@@ -495,8 +495,13 @@ impl ScopedToolService {
                 // One-shot retry: if the inner Loop tool returned
                 // `retryable: true` (mapped to `ToolError::Transport` in
                 // `tool_result_to_output`), the helper sleeps 100ms and
-                // retries exactly once. R10-safe: no policy selection.
-                let raw_outcome = crate::tools::retry::execute_with_one_shot_backoff(|| {
+                // retries exactly once — but ONLY for tools declared
+                // idempotent. Non-idempotent tools (default) skip the
+                // retry to avoid duplicate side effects on a timeout that
+                // may have already reached the server. R10-safe: no policy
+                // selection beyond the static idempotency classification.
+                let idempotent = crate::tools::retry::is_idempotent_builtin_name(name);
+                let raw_outcome = crate::tools::retry::execute_with_one_shot_backoff(idempotent, || {
                     let input = input.clone();
                     let name_owned = name.to_string();
                     async move {

@@ -58,6 +58,15 @@ pub struct ToolDefinitionMetadata {
     pub requires_approval: bool,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// True when re-running this tool with the same input is safe even if
+    /// the previous attempt may have reached the server. Read-only / pure
+    /// query tools (memory_search, search, web_fetch, recall_context) set
+    /// this to true; side-effecting tools (write/exec/send_*) leave it
+    /// false. Consumed by `tools::retry::execute_with_one_shot_backoff` to
+    /// gate retries on `Timeout` / `Transport` errors — non-idempotent
+    /// tools never auto-retry to avoid duplicate side effects.
+    #[serde(default)]
+    pub idempotent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
