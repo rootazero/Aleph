@@ -135,6 +135,7 @@ impl HarnessRunner for StubHarnessRunner {
         cancel: CancellationToken,
         tool_service_override: Option<Arc<dyn ToolService>>,
         trace_sink: Option<Arc<dyn alephcore::harness::TraceSink>>,
+        _interaction_manifest: Option<alephcore::thinker::InteractionManifest>,
     ) -> Result<FlowOutcome, FlowError> {
         let ctx = StubContext {
             session_key,
@@ -223,5 +224,6 @@ pub fn basic_request() -> FlowRequest {
         depth: 0,
         tool_service: None,
         trace_sink: None,
+        interaction_manifest: None,
     }
 }

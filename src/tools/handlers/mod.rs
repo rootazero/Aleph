@@ -1,4 +1,12 @@
-//! ToolHandler implementations for builtin / MCP / extension sources.
+//! ToolHandler implementations for builtin / MCP sources.
+//!
+//! The `extension` submodule was removed 2026-05-20: it was a Phase-2-era
+//! placeholder for WASM plugin tools that flowed into `tools::ToolRegistry`,
+//! but the boot wiring (Phase 2 Task 10 — AppContext plumbing) never
+//! landed. Plugin tools today reach the LLM exclusively via the
+//! `dispatcher::ToolRegistry` path that `run_loop` consults. Re-introduce
+//! `ExtensionHandler` only when the Gap 1 unification of Phase-2 vs
+//! dispatcher registries is settled (see CLAUDE.md memory notes).
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -7,7 +15,6 @@ use crate::session::events::ToolOutput;
 use crate::tools::service::{ToolDefinition, ToolError};
 
 pub mod builtin;
-pub mod extension;
 pub mod mcp;
 pub mod registration;
 

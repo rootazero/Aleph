@@ -16,14 +16,37 @@ use crate::sandbox::rate_limit::{SandboxRateLimitConfig, ToolCategory, WindowCon
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WindowsSandboxConfig {
+    /// SP-3a: when `true`, the sandbox-init-windows subcommand attempts
+    /// to launch the target via a restricted token at Low IL. Soft-
+    /// degrades to plain CreateProcessW + JobObject if the host lacks
+    /// `SE_INCREASE_QUOTA` (ERROR_PRIVILEGE_NOT_HELD).
     #[serde(default = "default_windows_use_restricted_token")]
     pub use_restricted_token: bool,
+
+    /// SP-3a: when `true`, refuse to spawn (rather than soft-degrade)
+    /// on ERROR_PRIVILEGE_NOT_HELD. Default `false`.
+    #[serde(default)]
+    pub require_restricted_token: bool,
+
+    /// SP-6: try AppContainer first (strongest Windows sandbox primitive).
+    /// Soft-degrades to SP-3a restricted-token on failure. Default `true`.
+    #[serde(default = "default_windows_use_app_container")]
+    pub use_app_container: bool,
+
+    /// SP-6: when `true`, refuse to spawn if AppContainer setup fails.
+    /// Default `false` → soft-degrade.
+    #[serde(default)]
+    pub require_app_container: bool,
 
     #[serde(default = "default_windows_use_job_object")]
     pub use_job_object: bool,
 
     #[serde(default = "default_windows_max_active_processes")]
     pub max_active_processes: u32,
+}
+
+fn default_windows_use_app_container() -> bool {
+    true
 }
 
 fn default_windows_use_restricted_token() -> bool {
@@ -42,6 +65,9 @@ impl Default for WindowsSandboxConfig {
     fn default() -> Self {
         Self {
             use_restricted_token: default_windows_use_restricted_token(),
+            require_restricted_token: false,
+            use_app_container: default_windows_use_app_container(),
+            require_app_container: false,
             use_job_object: default_windows_use_job_object(),
             max_active_processes: default_windows_max_active_processes(),
         }
@@ -185,6 +211,40 @@ pub struct LinuxSandboxConfig {
 
     #[serde(default = "default_linux_include_platform_defaults")]
     pub include_platform_defaults: bool,
+
+    /// SP-2: when `true`, sandbox-init exits non-zero if the kernel
+    /// lacks landlock ABI ≥ 1. Default `false` → soft-degrade.
+    #[serde(default)]
+    pub require_landlock: bool,
+
+    /// SP-5: enable cgroup v2 containment. Default `true`; soft-degrade
+    /// if the kernel/host does not expose cgroup v2 with delegation.
+    #[serde(default = "default_linux_cgroup_enabled")]
+    pub cgroup_enabled: bool,
+
+    /// SP-5: when `true`, the sandbox refuses to spawn if cgroup v2
+    /// setup fails. Default `false` (degrade to `RLIMIT_AS`).
+    #[serde(default)]
+    pub require_cgroups: bool,
+
+    /// SP-5: `cpu.max` quota as a percentage of one CPU. `None` →
+    /// unlimited CPU (kernel default). `100` = one full core; `200` =
+    /// two cores.
+    #[serde(default)]
+    pub cpu_quota_percent: Option<u32>,
+
+    /// SP-5: `pids.max` ceiling. Default 200 — defends against fork
+    /// bombs beyond what bwrap's active-process limit provides.
+    #[serde(default = "default_linux_max_pids")]
+    pub max_pids: Option<u32>,
+}
+
+fn default_linux_cgroup_enabled() -> bool {
+    true
+}
+
+fn default_linux_max_pids() -> Option<u32> {
+    Some(200)
 }
 
 fn default_linux_mount_proc() -> bool {
@@ -205,6 +265,11 @@ impl Default for LinuxSandboxConfig {
             mount_proc: default_linux_mount_proc(),
             no_new_privs: default_linux_no_new_privs(),
             include_platform_defaults: default_linux_include_platform_defaults(),
+            require_landlock: false,
+            cgroup_enabled: default_linux_cgroup_enabled(),
+            require_cgroups: false,
+            cpu_quota_percent: None,
+            max_pids: default_linux_max_pids(),
         }
     }
 }

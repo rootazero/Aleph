@@ -318,8 +318,11 @@ impl AlephTool for GetToolSchemaTool {
 // Helper Functions
 // ============================================================================
 
-/// Simple Levenshtein distance for fuzzy matching
-fn levenshtein_distance(a: &str, b: &str) -> usize {
+/// Simple Levenshtein distance for fuzzy matching.
+///
+/// Exposed at `pub(crate)` so the inbound router can reuse it for slash-
+/// command "did you mean" suggestions without duplicating the algorithm.
+pub(crate) fn levenshtein_distance(a: &str, b: &str) -> usize {
     let a_chars: Vec<char> = a.chars().collect();
     let b_chars: Vec<char> = b.chars().collect();
     let a_len = a_chars.len();

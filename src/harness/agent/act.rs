@@ -32,6 +32,15 @@ impl AgentHarness {
     ) -> Result<usize, HarnessError> {
         let mut executed_count: usize = 0;
 
+        // Layer 3 turn-budget boundary. `begin_turn` is idempotent — re-entering
+        // the same `TurnId` is a no-op, so this is safe even if the caller
+        // somehow loops on the same turn. `end_turn` runs at the bottom of
+        // this function (and at every early return) to clear per-turn state.
+        let budget_turn_id = crate::tools::turn_budget::TurnId::new(turn_id);
+        if let Some(budget) = self.deps.turn_budget.as_ref() {
+            budget.begin_turn(budget_turn_id);
+        }
+
         for mut call in tool_calls {
             callback.on_tool_call(&call.name);
             let started = Instant::now();
@@ -140,8 +149,70 @@ impl AgentHarness {
                 Err(stalled) => return Err(stalled),
             };
             match inner {
-                Ok(output) => {
+                Ok(mut output) => {
                     executed_count = executed_count.saturating_add(1);
+
+                    // Layer 3 — per-turn aggregate budget. Record the result
+                    // and, if the running total exceeds the configured cap,
+                    // persist the LIFO-newest non-persisted entries to disk
+                    // via the shared `result_store` and rewrite the in-flight
+                    // `output.value` to the marker the LLM will see. This
+                    // happens BEFORE `emit_event` so the persisted SessionEvent
+                    // matches what the next Think turn will read back.
+                    if let Some(budget) = self.deps.turn_budget.as_ref() {
+                        let text = match &output.value {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        let already_persisted = text.starts_with("[Full output persisted: ");
+                        let tokens = crate::context::budget::pressure::estimate_tokens_smart(&text);
+                        let record = crate::tools::turn_budget::TurnResult {
+                            call_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                            tokens_in_context: tokens,
+                            in_context_text: text,
+                            already_persisted,
+                        };
+                        let spills = budget.record(&budget_turn_id, record);
+                        if !spills.is_empty() {
+                            if let Some(store) = self.deps.result_store.as_ref() {
+                                for spill in spills {
+                                    if spill.call_id != call.id {
+                                        // The spilled entry was recorded on an
+                                        // earlier iteration; the corresponding
+                                        // SessionEvent::ToolResult is already
+                                        // persisted in the session store, so
+                                        // rewriting it post-emit is not
+                                        // possible from here. The marker file
+                                        // is still written for recovery, and
+                                        // cheap_passes will surface it on the
+                                        // next preflight pass.
+                                        let _ = store.persist_if_large(
+                                            &spill.call_id,
+                                            &spill.tool_name,
+                                            &spill.original_text,
+                                            0,
+                                        );
+                                        continue;
+                                    }
+                                    // Same-turn newest spill: rewrite `output`
+                                    // before the SessionEvent is emitted so
+                                    // the LLM sees the marker instead of the
+                                    // full text on its next Think.
+                                    if let Some(marker) = store.persist_if_large(
+                                        &spill.call_id,
+                                        &spill.tool_name,
+                                        &spill.original_text,
+                                        0,
+                                    ) {
+                                        output.value = serde_json::Value::String(marker);
+                                        output.metadata.truncated = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     tool_call_cache.insert(cache_key.clone(), output.clone());
                     let output_value = output.value.clone();
                     let result_event = SessionEvent::ToolResult {
@@ -221,6 +292,13 @@ impl AgentHarness {
             if let Some(ref tracker) = self.stall_tracker {
                 tracker.record_activity().await;
             }
+        }
+
+        // Layer 3 — release per-turn state. Failure here is impossible
+        // (`end_turn` is infallible) but the option-guard mirrors the
+        // begin-turn site for symmetry.
+        if let Some(budget) = self.deps.turn_budget.as_ref() {
+            budget.end_turn(&budget_turn_id);
         }
 
         Ok(executed_count)

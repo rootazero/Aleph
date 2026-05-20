@@ -12,8 +12,7 @@ use crate::world::{AlephWorld, SkillsContext};
 use alephcore::gateway::handlers::HandlerRegistry;
 use alephcore::gateway::protocol::JsonRpcRequest;
 use alephcore::tools::markdown_skill::{
-    load_skills_from_dir, MarkdownSkillGenerator, MarkdownSkillGeneratorConfig, SkillLoader,
-    SkillWatcher, SkillWatcherConfig,
+    load_skills_from_dir, SkillLoader, SkillWatcher, SkillWatcherConfig,
 };
 use alephcore::tools::AlephToolServer;
 
@@ -140,26 +139,6 @@ async fn given_fixtures_directory(w: &mut AlephWorld) {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/markdown_skills");
     ctx.skill_dir = Some(fixtures_dir);
 }
-
-// =============================================================================
-// Given Steps - Skill Generator
-// =============================================================================
-
-#[given("a skill generator with temp output directory")]
-async fn given_skill_generator(w: &mut AlephWorld) {
-    let ctx = w.skills.get_or_insert_with(SkillsContext::default);
-    let temp_dir = TempDir::new().unwrap();
-    let config = MarkdownSkillGeneratorConfig {
-        output_dir: temp_dir.path().to_path_buf(),
-        ..Default::default()
-    };
-    ctx.generator = Some(MarkdownSkillGenerator::with_config(config));
-    ctx.temp_dir = Some(temp_dir);
-}
-
-// TODO: removed — SolidificationSuggestion type deleted (skill_evolution module):
-// given_suggestion, given_suggestion_pattern_id, given_suggestion_sample_contexts,
-// given_suggestion_instructions steps removed
 
 // =============================================================================
 // Given Steps - Hot Reload
@@ -389,9 +368,6 @@ async fn when_execute_skill(w: &mut AlephWorld) {
 // =============================================================================
 // When Steps - Skill Generator
 // =============================================================================
-
-// TODO: removed — SolidificationSuggestion type deleted:
-// when_generate_skill step removed
 
 #[when("I load the generated skill")]
 async fn when_load_generated_skill(w: &mut AlephWorld) {

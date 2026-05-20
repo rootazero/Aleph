@@ -1,8 +1,10 @@
 //! LoopCallback — streaming event callback for tool batch execution.
 //!
-//! Relocated from `agent_loop/loop_core.rs` during Phase 6c deletion.
-//! The trait is retained as the seam between `tools::orchestrator::execute_tool_batch`
-//! and its callers (currently only the orchestrator's own test suite).
+//! Trait surface kept available for callers that want to observe
+//! `LoopTraceEvent`s without owning a trace sink. `NoopCallback` is the
+//! drop-in default. The previous primary consumer (`tools::orchestrator::execute_tool_batch`)
+//! has been dissolved; the trait is preserved for future revival without
+//! breaking the export surface.
 
 use serde_json::Value;
 

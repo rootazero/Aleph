@@ -31,6 +31,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
         _cancel: CancellationToken,
         _tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
         _trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+        _interaction_manifest: Option<crate::thinker::InteractionManifest>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         self.invocations
             .lock()
@@ -117,6 +118,7 @@ async fn dispatch_happy_path_returns_handle_and_completes() {
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            interaction_manifest: None,
             sandbox_override: None,
         })
         .await
@@ -144,6 +146,7 @@ async fn dispatch_unknown_flow_id_returns_error() {
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            interaction_manifest: None,
             sandbox_override: None,
         })
         .await
@@ -165,6 +168,7 @@ async fn dispatch_unknown_agent_returns_error() {
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            interaction_manifest: None,
             sandbox_override: None,
         })
         .await
@@ -188,6 +192,7 @@ async fn dispatch_above_max_depth_returns_recursion_error() {
             depth: MAX_FLOW_DEPTH + 1,
             tool_service: None,
             trace_sink: None,
+            interaction_manifest: None,
             sandbox_override: None,
         })
         .await
@@ -231,6 +236,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
             cancel: CancellationToken,
             _tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
             _trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+            _interaction_manifest: Option<crate::thinker::InteractionManifest>,
         ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
             cancel.cancelled().await;
             Ok(crate::orchestrator::dispatch::FlowOutcome {
@@ -260,6 +266,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
         depth: 0,
         tool_service: None,
         trace_sink: None,
+        interaction_manifest: None,
         sandbox_override: None,
     };
 
@@ -284,6 +291,7 @@ async fn dispatch_releases_session_lock_after_completion() {
         depth: 0,
         tool_service: None,
         trace_sink: None,
+        interaction_manifest: None,
         sandbox_override: None,
     };
 
@@ -327,6 +335,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for CapturingHarness {
         _cancel: CancellationToken,
         tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
         trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+        _interaction_manifest: Option<crate::thinker::InteractionManifest>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         *self
             .received_tool_service
@@ -440,6 +449,7 @@ async fn dispatch_forwards_tool_service_override() {
             depth: 0,
             tool_service: Some(tool_service),
             trace_sink: None,
+            interaction_manifest: None,
             sandbox_override: None,
         })
         .await
@@ -472,6 +482,7 @@ async fn dispatch_forwards_trace_sink() {
             depth: 0,
             tool_service: None,
             trace_sink: Some(trace_sink),
+            interaction_manifest: None,
             sandbox_override: None,
         })
         .await

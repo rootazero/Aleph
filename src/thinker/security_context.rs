@@ -40,6 +40,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::interaction::InteractionParadigm;
+
 /// Sandbox isolation level for tool execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -168,6 +170,39 @@ impl SecurityContext {
             filesystem_scope: Some(workspace),
             network_allowed: true,
             elevated_policy: ElevatedPolicy::Ask,
+        }
+    }
+
+    /// Channel-aware default policy mapped from the interaction paradigm.
+    ///
+    /// This is the prompt-level security posture surfaced to the LLM via
+    /// [`SecurityContext::security_notes`]. Tool enforcement at runtime
+    /// happens in the tool dispatcher; this constructor only determines
+    /// *what the LLM is told* about its current envelope.
+    ///
+    /// - `CLI` / `WebRich` / `Background` / `Embedded` → [`permissive`] —
+    ///   the trusted-self-host posture (user controls the device).
+    /// - `Messaging` → Standard sandbox with elevated operations requiring
+    ///   approval. Public-channel bots can be addressed by parties other
+    ///   than the operator, so the LLM is told to be more cautious with
+    ///   exec/bash. No filesystem-scope restriction is set because the
+    ///   gateway has no canonical workspace path to attach.
+    ///
+    /// [`permissive`]: SecurityContext::permissive
+    pub fn for_paradigm(paradigm: InteractionParadigm) -> Self {
+        match paradigm {
+            InteractionParadigm::CLI
+            | InteractionParadigm::WebRich
+            | InteractionParadigm::Background
+            | InteractionParadigm::Embedded => Self::permissive(),
+            InteractionParadigm::Messaging => Self {
+                sandbox_level: SandboxLevel::Standard,
+                allowed_tools: None,
+                denied_tools: HashSet::new(),
+                filesystem_scope: None,
+                network_allowed: true,
+                elevated_policy: ElevatedPolicy::Ask,
+            },
         }
     }
 
@@ -593,6 +628,73 @@ mod tests {
         assert!(is_network_tool("search"));
         assert!(!is_network_tool("file_ops"));
         assert!(!is_network_tool("bash"));
+    }
+
+    #[test]
+    fn for_paradigm_cli_is_permissive() {
+        let ctx = SecurityContext::for_paradigm(InteractionParadigm::CLI);
+        assert_eq!(ctx.sandbox_level, SandboxLevel::None);
+        assert!(ctx.network_allowed);
+        assert!(matches!(ctx.elevated_policy, ElevatedPolicy::Full));
+        assert!(matches!(ctx.check_tool("bash"), ToolPermission::Allowed));
+    }
+
+    #[test]
+    fn for_paradigm_webrich_background_embedded_are_permissive() {
+        for paradigm in [
+            InteractionParadigm::WebRich,
+            InteractionParadigm::Background,
+            InteractionParadigm::Embedded,
+        ] {
+            let ctx = SecurityContext::for_paradigm(paradigm);
+            assert_eq!(ctx.sandbox_level, SandboxLevel::None, "{:?}", paradigm);
+            assert!(matches!(ctx.elevated_policy, ElevatedPolicy::Full));
+        }
+    }
+
+    #[test]
+    fn for_paradigm_messaging_requires_approval_for_exec() {
+        let ctx = SecurityContext::for_paradigm(InteractionParadigm::Messaging);
+        assert_eq!(ctx.sandbox_level, SandboxLevel::Standard);
+        assert!(ctx.network_allowed); // messaging bots typically need network
+        assert!(matches!(ctx.elevated_policy, ElevatedPolicy::Ask));
+        assert!(ctx.filesystem_scope.is_none());
+
+        // bash/exec must require approval — that's the entire point of
+        // the channel-aware posture
+        assert!(matches!(
+            ctx.check_tool("bash"),
+            ToolPermission::RequiresApproval { .. }
+        ));
+        assert!(matches!(
+            ctx.check_tool("exec"),
+            ToolPermission::RequiresApproval { .. }
+        ));
+    }
+
+    #[test]
+    fn for_paradigm_messaging_security_notes_announce_approval_policy() {
+        let ctx = SecurityContext::for_paradigm(InteractionParadigm::Messaging);
+        let notes = ctx.security_notes();
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("Elevated Operations: Require user approval")),
+            "messaging paradigm must surface approval-required posture, got: {notes:?}"
+        );
+        assert!(
+            notes.iter().any(|n| n.contains("Standard")),
+            "messaging paradigm must surface Standard sandbox level"
+        );
+    }
+
+    #[test]
+    fn for_paradigm_cli_security_notes_stay_minimal() {
+        let ctx = SecurityContext::for_paradigm(InteractionParadigm::CLI);
+        let notes = ctx.security_notes();
+        // Permissive ⇒ only the baseline "Security Level: None" line.
+        assert_eq!(notes.len(), 1, "permissive should emit only the baseline");
+        assert!(notes[0].contains("Security Level: None"));
     }
 
     #[test]

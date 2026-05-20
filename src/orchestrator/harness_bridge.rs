@@ -109,6 +109,15 @@ pub struct AgentHarnessRunner {
     pub consecutive_failure_cap: Option<usize>,
     pub turn_timeout: Option<std::time::Duration>,
 
+    /// Layer 3 of the tool-result budget (per-turn aggregate spill).
+    /// `None` disables Layer 3; Layer 2 still runs inside
+    /// `ScopedToolService` independently.
+    pub turn_budget: Option<Arc<crate::tools::turn_budget::TurnResultBudget>>,
+    /// Shared `ToolResultStore` used by Layer 3 spills; should be the
+    /// same `Arc` injected into `ScopedToolService::with_result_store`
+    /// at boot so persisted markers all land in one session directory.
+    pub result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
+
     /// Boot-time default for the harness Think→Act iteration cap, sourced from
     /// `[execution] max_iterations`. A per-flow `FlowOverrides.max_iterations`
     /// overrides it on a run-by-run basis. The harness loop is never left
@@ -142,6 +151,7 @@ impl HarnessRunner for AgentHarnessRunner {
         cancel: CancellationToken,
         tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
         trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+        interaction_manifest: Option<crate::thinker::InteractionManifest>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -190,12 +200,27 @@ impl HarnessRunner for AgentHarnessRunner {
         let user_query = last_user_query(&input);
         session_seed::seed_session(self.session_service.as_ref(), &session_id, input).await?;
 
+        // Phase 4 (F2): resolve the per-run Think→Act iteration cap once
+        // here so the same value flows into both the system prompt
+        // (`SessionBudgetLayer` surfaces it to the LLM) and `HarnessDeps`
+        // below (where it enforces the cap on the loop). Computing in
+        // one place avoids the two consumers drifting.
+        let resolved_max_iterations =
+            resolve_max_iterations(spec.overrides.max_iterations, self.default_max_iterations);
+
         // Step 5b (BUG-2/BUG-3 fix, Phase 6 follow-up): assemble the system
         // prompt from per-agent curated memory + hybrid retrieval before the
         // harness loop starts. Failures are warned and degraded to `None` so
         // memory issues never block a turn.
         let system_prompt = self
-            .build_system_prompt(&spec.agent, &session_id, &user_query)
+            .build_system_prompt(
+                &spec.agent,
+                &session_id,
+                &user_query,
+                llm.as_ref(),
+                resolved_max_iterations,
+                interaction_manifest.as_ref(),
+            )
             .await;
 
         // Step 6: assemble HarnessDeps and run the inner Think→Act loop.
@@ -210,20 +235,35 @@ impl HarnessRunner for AgentHarnessRunner {
         // diminishing-returns counters must not leak across concurrent
         // sessions. The compactor reuses this run's provider for side-channel
         // summarization (deterministic-truncation fallback on provider error).
-        let (context_budget, context_compactor) = match self.context_budget_config.as_ref() {
-            Some(cfg) => {
-                let budget = Arc::new(Mutex::new(ContextBudget::new(cfg)));
-                let compactor = Arc::new(ContextCompactor::new(
-                    llm.clone(),
-                    CompactorConfig {
-                        fresh_tail: cfg.fresh_tail_count,
-                        ..CompactorConfig::default()
-                    },
-                ));
-                (Some(budget), Some(compactor))
-            }
-            None => (None, None),
-        };
+        let (context_budget, context_compactor, preflight_pipeline) =
+            match self.context_budget_config.as_ref() {
+                Some(cfg) => {
+                    let budget = Arc::new(Mutex::new(ContextBudget::new(cfg)));
+                    let compactor = Arc::new(ContextCompactor::new(
+                        llm.clone(),
+                        CompactorConfig {
+                            fresh_tail: cfg.fresh_tail_count,
+                            ..CompactorConfig::default()
+                        },
+                    ));
+                    // Cheap-pass preflight: runs unconditionally before the budget
+                    // check so token savings happen even when the compactor's LLM
+                    // call fails. Same gating as the compactor (config-presence).
+                    let pipeline = {
+                        use crate::context::budget::cheap_passes::{
+                            HistoricalImageStrippingStage, ToolResultPruningStage,
+                        };
+                        use crate::context::budget::preflight::{PreflightPipeline, PreflightStage};
+                        let stages: Vec<Box<dyn PreflightStage>> = vec![
+                            Box::new(ToolResultPruningStage::default()),
+                            Box::new(HistoricalImageStrippingStage),
+                        ];
+                        Arc::new(PreflightPipeline::new(stages))
+                    };
+                    (Some(budget), Some(compactor), Some(pipeline))
+                }
+                None => (None, None, None),
+            };
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
@@ -232,6 +272,7 @@ impl HarnessRunner for AgentHarnessRunner {
             verifier_chain: self.verifier_chain.clone(),
             context_budget,
             context_compactor,
+            preflight_pipeline,
             trace_sink: trace_sink.clone(),
             system_prompt,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -239,14 +280,26 @@ impl HarnessRunner for AgentHarnessRunner {
             guardrails: self.guardrails.clone(),
             // H1: the Think→Act loop is always capped. Per-flow override wins;
             // otherwise the boot-time `[execution] max_iterations` default.
-            max_iterations: Some(resolve_max_iterations(
-                spec.overrides.max_iterations,
-                self.default_max_iterations,
-            )),
+            // Computed earlier (Phase 4 F2) so the cap also threads into
+            // `SessionBudgetLayer` via `build_system_prompt`.
+            max_iterations: Some(resolved_max_iterations),
             power,
             stall_config: self.stall_config.clone(),
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,
+            // Layer 3 turn budget + Layer 2 shared store. Prefer the
+            // bridge's explicit field (set via direct injection / tests);
+            // fall back to the process-wide singleton installed at boot.
+            // `None` (no field, no singleton) keeps the legacy behavior —
+            // Layer 2 / Layer 3 are inert.
+            turn_budget: self
+                .turn_budget
+                .clone()
+                .or_else(crate::tools::turn_budget::global_turn_result_budget),
+            result_store: self
+                .result_store
+                .clone()
+                .or_else(crate::tools::result_store::global_tool_result_store),
         };
         // Stage 7 (#12): emit init-seam visibility before the harness
         // starts its Think→Act loop. Order mirrors HarnessDeps field
@@ -400,6 +453,9 @@ impl AgentHarnessRunner {
         agent_id: &str,
         session_id: &SessionId,
         user_query: &str,
+        provider: &dyn AiProvider,
+        iteration_cap: usize,
+        channel_manifest: Option<&crate::thinker::InteractionManifest>,
     ) -> Option<String> {
         use crate::providers::message::UnifiedMessage;
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
@@ -450,13 +506,36 @@ impl AgentHarnessRunner {
 
         let agent_def = self.agent_registry.get(agent_id);
 
+        // Load user-editable identity files from `~/.aleph/agents/{agent_id}/`
+        // (SOUL.md / IDENTITY.md / AGENTS.md / TOOLS.md / HEARTBEAT.md). The
+        // loader was previously only exercised from its own tests — wiring it
+        // here is what gets `IdentityFilesLayer` (and the soul / profile layers
+        // that read the same source) usable content on the harness path.
+        // Tolerant of missing home / dir / IO failure: returns IdentityFiles
+        // with all-None content, which the layer treats as "skip".
+        let identity_files = crate::discovery::aleph_agents_dir().ok().map(|agents_dir| {
+            crate::thinker::identity_files::IdentityFiles::load(
+                &agents_dir.join(agent_id),
+                &crate::thinker::identity_files::IdentityFilesConfig::default(),
+            )
+        });
+        let has_identity = identity_files
+            .as_ref()
+            .map(|f| f.files.iter().any(|file| file.content.is_some()))
+            .unwrap_or(false);
+
         let has_skills = skill_snapshot
             .as_ref()
             .map(|s| !s.eligible_manifests.is_empty())
             .unwrap_or(false);
         // Skip prompt assembly entirely when there is nothing to inject:
-        // no memory, no AgentDef, and no eligible skills.
-        if curated_text.is_none() && memory_text.is_none() && agent_def.is_none() && !has_skills {
+        // no memory, no AgentDef, no eligible skills, and no identity files.
+        if curated_text.is_none()
+            && memory_text.is_none()
+            && agent_def.is_none()
+            && !has_skills
+            && !has_identity
+        {
             return None;
         }
 
@@ -485,6 +564,86 @@ impl AgentHarnessRunner {
         if let Some(text) = memory_text {
             builder = builder.with_memory_user_message(text);
         }
+        let identity_chars = identity_files
+            .as_ref()
+            .map(|f| {
+                f.files
+                    .iter()
+                    .filter_map(|file| file.content.as_ref().map(String::len))
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+        if let Some(files) = identity_files {
+            if has_identity {
+                builder = builder.with_identity_files(files);
+            }
+        }
+        // Phase 4 (F4): channel-aware `ResolvedContext`. When the
+        // caller (Gateway, subagent dispatcher, etc.) supplies a
+        // channel-specific `InteractionManifest`, use it so per-channel
+        // paradigm, capabilities, and constraints flow into the prompt
+        // (`SecurityLayer`, `OperationalGuidelinesLayer`,
+        // `ProtocolTokensLayer`). Fall back to `Background` paradigm —
+        // aleph-server's always-on-daemon default — when no manifest
+        // is provided (subagent dispatch / internal tooling / tests).
+        //
+        // Phase 5 (F2): SecurityContext is also paradigm-derived via
+        // `SecurityContext::for_paradigm`. CLI / WebRich / Background /
+        // Embedded stay permissive (trusted-self-host); Messaging surfaces
+        // a Standard sandbox + approval-required posture for elevated
+        // operations, signalling the LLM to be cautious on public-channel
+        // bots. Actual tool enforcement still happens in the tool
+        // dispatcher — this is a prompt-text signal, not a hard gate.
+        //
+        // Tools list is empty because the harness wires actual tool
+        // schemas via native tool_use rather than the prompt;
+        // `disabled_tools` therefore stays empty too.
+        let default_manifest;
+        let manifest_ref = match channel_manifest {
+            Some(m) => m,
+            None => {
+                default_manifest = crate::thinker::InteractionManifest::new(
+                    crate::thinker::InteractionParadigm::Background,
+                );
+                &default_manifest
+            }
+        };
+        let security_ctx =
+            crate::thinker::security_context::SecurityContext::for_paradigm(manifest_ref.paradigm);
+        let mut resolved_context =
+            crate::thinker::context::ContextAggregator::resolve(manifest_ref, &security_ctx, &[]);
+        // Phase 4 (F1): populate `runtime_context` so `RuntimeContextLayer`
+        // surfaces shell / arch / hostname / timezone / model. EnvironmentLayer
+        // emits OS/cwd in a Markdown list (Stable, priority 300);
+        // `RuntimeContext::to_prompt_section()` emits a pipe-separated
+        // single-line summary (Dynamic, priority 1720) — formats deliberately
+        // differ. We accept the minor OS/cwd overlap; the unique fields
+        // (arch, shell, repo_root, model, hostname, timezone, current_time)
+        // carry the value. Phase 5 (F3) populates `repo_root` via a
+        // `OnceLock`-cached `.git` walk-up — process-lifetime amortized,
+        // no `git` subprocess.
+        resolved_context.runtime_context = Some(
+            crate::thinker::runtime_context::RuntimeContext::collect(provider.name()),
+        );
+        builder = builder.with_resolved_context(resolved_context);
+        // Phase 3: thread the provider's wire-protocol family so
+        // `ProviderGuidanceLayer` can pick the right per-family
+        // operational directives. `model_behavior_override()` wins over
+        // the raw protocol so providers like OpenRouter that proxy a
+        // different model family can advertise the correct target
+        // (e.g., `protocol = "openai"`, override = `"anthropic"`).
+        let provider_protocol = provider
+            .model_behavior_override()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| provider.protocol().to_string());
+        builder = builder.with_provider_protocol(provider_protocol);
+        // Phase 4 (F2): surface the resolved iteration cap to
+        // `SessionBudgetLayer`. Saturating to `u32::MAX` (instead of
+        // truncating) preserves "no practical cap" semantics for callers
+        // that pass a huge value; the layer's own zero-guard keeps the
+        // unset case silent.
+        let cap_for_prompt = u32::try_from(iteration_cap).unwrap_or(u32::MAX);
+        builder = builder.with_iteration_cap(cap_for_prompt);
         let prompt = builder.build_system_prompt(&[]);
         // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
         // Logs character counts (not contents) so prompts are observable
@@ -495,6 +654,7 @@ impl AgentHarnessRunner {
             session = %session_key_str,
             curated_chars,
             memory_chars,
+            identity_chars,
             role_present,
             prompt_chars = prompt.len(),
             "system prompt assembled"

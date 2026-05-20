@@ -739,6 +739,7 @@ mod tests {
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
+            preflight_pipeline: None,
             trace_sink: None,
             system_prompt: None,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -749,6 +750,9 @@ mod tests {
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: None,
+            turn_budget: None,
+            result_store: None,
+
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -779,6 +783,7 @@ mod tests {
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
+            preflight_pipeline: None,
             trace_sink: None,
             system_prompt: None,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -789,6 +794,9 @@ mod tests {
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: None,
+            turn_budget: None,
+            result_store: None,
+
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -818,6 +826,7 @@ mod tests {
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
+            preflight_pipeline: None,
             trace_sink: None,
             system_prompt: None,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -828,6 +837,9 @@ mod tests {
             stall_config: None,
             consecutive_failure_cap: None,
             turn_timeout: Some(std::time::Duration::from_millis(20)),
+            turn_budget: None,
+            result_store: None,
+
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;

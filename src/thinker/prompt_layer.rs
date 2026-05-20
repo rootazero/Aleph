@@ -119,6 +119,26 @@ pub struct LayerInput<'a> {
     /// (priority 60, Stable) injects this text verbatim, preserving the prompt
     /// prefix cache.
     pub curated_memory_envelope: Option<String>,
+    /// Subagent call-chain position for `ChainContextLayer`.
+    ///
+    /// Threaded through from `HarnessDeps.chain_context` (the value the
+    /// orchestrator and subagent_spawner already maintain). Layer omits
+    /// the section entirely when the chain is at root (`depth == 0`) or
+    /// the field is `None`, so the top-level harness path stays unaffected.
+    pub chain_context: Option<&'a crate::harness::chain_context::ChainContext>,
+    /// Wire-protocol family identifier reported by
+    /// `AiProvider::protocol()` (with `model_behavior_override()` taking
+    /// precedence). Used by `ProviderGuidanceLayer` to dispatch the
+    /// appropriate per-family operational guidance block. `None` keeps
+    /// the layer silent — desirable on non-LLM-driven paths (capture,
+    /// snapshot, tests).
+    pub provider_protocol: Option<&'a str>,
+    /// Static per-run Think→Act iteration cap, resolved by the harness
+    /// bridge from `FlowOverrides.max_iterations` falling back to the
+    /// boot-time `[execution] max_iterations` default. Used by
+    /// `SessionBudgetLayer` to surface the cap to the LLM as a planning
+    /// hint. `None` or `Some(0)` keeps the layer silent.
+    pub iteration_cap: Option<u32>,
 }
 
 impl<'a> LayerInput<'a> {
@@ -141,6 +161,9 @@ impl<'a> LayerInput<'a> {
             mcp_tool_index: None,
             session_snapshot: None,
             curated_memory_envelope: None,
+            chain_context: None,
+            provider_protocol: None,
+            iteration_cap: None,
         }
     }
 
@@ -163,6 +186,9 @@ impl<'a> LayerInput<'a> {
             mcp_tool_index: None,
             session_snapshot: None,
             curated_memory_envelope: None,
+            chain_context: None,
+            provider_protocol: None,
+            iteration_cap: None,
         }
     }
 
@@ -185,6 +211,9 @@ impl<'a> LayerInput<'a> {
             mcp_tool_index: None,
             session_snapshot: None,
             curated_memory_envelope: None,
+            chain_context: None,
+            provider_protocol: None,
+            iteration_cap: None,
         }
     }
 
@@ -207,6 +236,9 @@ impl<'a> LayerInput<'a> {
             mcp_tool_index: None,
             session_snapshot: None,
             curated_memory_envelope: None,
+            chain_context: None,
+            provider_protocol: None,
+            iteration_cap: None,
         }
     }
 
@@ -294,6 +326,69 @@ impl<'a> LayerInput<'a> {
         snapshot: &'a crate::memory::session_resume::SessionSnapshot,
     ) -> Self {
         self.session_snapshot = Some(snapshot);
+        self
+    }
+
+    /// Attach a subagent call-chain context. Used by `ChainContextLayer`
+    /// to surface depth / chain_id to the LLM. Root chains (depth=0) and
+    /// `None` both render an empty section.
+    pub fn with_chain_context(
+        mut self,
+        chain: &'a crate::harness::chain_context::ChainContext,
+    ) -> Self {
+        self.chain_context = Some(chain);
+        self
+    }
+
+    /// Same as `with_chain_context` but accepts an `Option` for ergonomic
+    /// threading from optional config.
+    pub fn with_chain_context_opt(
+        mut self,
+        chain: Option<&'a crate::harness::chain_context::ChainContext>,
+    ) -> Self {
+        self.chain_context = chain;
+        self
+    }
+
+    /// Attach an optional `ResolvedContext` to this input.
+    ///
+    /// Used by the Basic / Hydration / Soul entry points so the Phase 2
+    /// widened layers (security, operational_guidelines, protocol_tokens,
+    /// runtime_context) can consume context on every assembly path
+    /// without forcing a switch to the dedicated `Context` route. The
+    /// `Context` path's `LayerInput::context` constructor already sets
+    /// this field, so callers on that path leave it alone.
+    pub fn with_resolved_context_opt(mut self, ctx: Option<&'a ResolvedContext>) -> Self {
+        self.context = ctx;
+        self
+    }
+
+    /// Attach the wire-protocol family identifier so `ProviderGuidanceLayer`
+    /// can dispatch the right per-family operational directives.
+    pub fn with_provider_protocol(mut self, protocol: &'a str) -> Self {
+        self.provider_protocol = Some(protocol);
+        self
+    }
+
+    /// Same as `with_provider_protocol` but accepts an `Option` for
+    /// ergonomic threading from optional config.
+    pub fn with_provider_protocol_opt(mut self, protocol: Option<&'a str>) -> Self {
+        self.provider_protocol = protocol;
+        self
+    }
+
+    /// Attach the per-run iteration cap so `SessionBudgetLayer` can
+    /// surface it. Pass the resolved (post-`resolve_max_iterations`)
+    /// value, not the raw override.
+    pub fn with_iteration_cap(mut self, cap: u32) -> Self {
+        self.iteration_cap = Some(cap);
+        self
+    }
+
+    /// Same as `with_iteration_cap` but accepts an `Option` for
+    /// ergonomic threading from optional config.
+    pub fn with_iteration_cap_opt(mut self, cap: Option<u32>) -> Self {
+        self.iteration_cap = cap;
         self
     }
 

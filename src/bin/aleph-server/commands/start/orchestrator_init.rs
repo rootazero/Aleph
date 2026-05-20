@@ -182,6 +182,14 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         stall_config: stall_cfg,
         consecutive_failure_cap: failure_cap,
         turn_timeout: turn_to,
+        // Layer 3 tool-result budget + shared store. Plumbed lazily —
+        // bridge passes `None` here; each `run()` invocation constructs a
+        // fresh per-session `ToolResultStore` and `TurnResultBudget` so
+        // state is naturally session-scoped. T13 (`build_request_tool_service`)
+        // is the wiring point; the bridge field is for tests / direct
+        // injection paths.
+        turn_budget: None,
+        result_store: None,
         // H1: wire the (previously orphaned) `[execution] max_iterations`
         // config so every harness run is capped. Default 200.
         default_max_iterations: config.execution.max_iterations,
@@ -190,6 +198,9 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.
+    // Also clones the same `Arc<AgentRegistry>` that the harness received so
+    // the gateway-spawned `SubagentTool` resolves user-defined agents instead
+    // of an empty fallback registry.
     let orchestrator = Orchestrator::new(
         flow_registry,
         Arc::new(RoutingOverrides::default()),
@@ -198,7 +209,8 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         sandbox_factory,
         harness,
     )
-    .with_subagent_routing(provider_chain);
+    .with_subagent_routing(provider_chain)
+    .with_agent_registry(agent_registry.clone());
 
     tracing::info!("Orchestrator assembled (Phase 5)");
     Ok(Arc::new(orchestrator))

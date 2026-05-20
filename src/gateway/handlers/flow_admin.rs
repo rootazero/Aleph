@@ -143,6 +143,7 @@ mod tests {
                     std::sync::Arc<dyn crate::tools::service::ToolService>,
                 >,
                 _trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+                _interaction_manifest: Option<crate::thinker::InteractionManifest>,
             ) -> Result<
                 crate::orchestrator::dispatch::FlowOutcome,
                 crate::orchestrator::errors::FlowError,

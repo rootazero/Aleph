@@ -279,7 +279,7 @@ impl AlephToolServer {
             let tools = crate::tools::markdown_skill::load_skills_from_dir(dir).await;
 
             for tool in tools {
-                let name = tool.spec.name.clone();
+                let name = crate::tools::AlephToolDyn::name(&tool).to_string();
                 if let Err(e) = server.add_tool_dyn(Box::new(tool)).await {
                     error!(skill = %name, error = %e, "Failed to register skill");
                 } else {
