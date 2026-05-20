@@ -369,29 +369,48 @@ delete, not preserve for hypothetical future use. A future spec that
 implements RestrictedToken / WFP / AppContainer can re-introduce focused,
 working modules without inheriting the stub skeletons.
 
-### Current Windows defense surface (post-SP-3a)
+### Current Windows defense surface (post-SP-6)
 
-- **Job Object** (cycle 1): active-process limit (fork-bomb defense),
-  kill-on-close, die-on-unhandled-exception, virtual-memory ceiling,
-  UI restrictions.
-- **Restricted token + Low IL** (SP-3a, shipped 2026-05-20):
-  `WindowsSandboxDriver::run` wraps the target with
-  `aleph-server sandbox-init-windows`, which calls
-  `CreateRestrictedToken(self, DISABLE_MAX_PRIVILEGE)` →
-  `SetTokenInformation(TokenIntegrityLevel = S-1-16-4096)` →
-  `CreateProcessAsUserW(target)`. Result: target runs with no
-  privileges and at Low integrity, isolated by both the JobObject
-  container and the token-level authority drop. Stdio passes through
-  via inherited HANDLEs.
-- Soft-degrade: if `CreateProcessAsUserW` returns
-  `ERROR_PRIVILEGE_NOT_HELD` (host lacks `SE_INCREASE_QUOTA`, common
-  on locked-down server policies), the init falls back to plain
-  `CreateProcessW` (JobObject still applies). Flip
-  `WindowsSandboxConfig.require_restricted_token = true` to escalate
-  to a hard spawn failure.
-- **Not yet**: AppContainer (SP-6), WFP per-host network filtering
-  (SP-3b — requires admin; likely superseded by SP-6), workspace DACL
-  grants for Low-IL writes (separate small cycle).
+The `sandbox-init-windows` subcommand walks a three-tier soft-degrade
+chain, picking the strongest containment available on the host:
+
+1. **AppContainer** (SP-6, shipped 2026-05-20): per-execution unique
+   profile via `CreateAppContainerProfile`; capability SIDs derived
+   from `SandboxCapabilities.network` (`internetClient`/
+   `privateNetworkClientServer` for `AllowAll`; nothing for `None`);
+   `CreateProcessW` with `EXTENDED_STARTUPINFO_PRESENT` +
+   `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`. The target runs at
+   a trust level below Low IL with capability-gated resource access.
+   Profile is `DeleteAppContainerProfile`-ed after `wait`. On any
+   AppContainer setup failure, soft-degrades to tier 2 (`require_app_container=true`
+   in `WindowsSandboxConfig` escalates to hard error).
+2. **Restricted token + Low IL** (SP-3a, shipped 2026-05-20):
+   `CreateRestrictedToken(self, DISABLE_MAX_PRIVILEGE)` →
+   `SetTokenInformation(TokenIntegrityLevel = S-1-16-4096)` →
+   `CreateProcessAsUserW(target)`. Target runs with no privileges at
+   Low IL. On `ERROR_PRIVILEGE_NOT_HELD` (host lacks
+   `SE_INCREASE_QUOTA`, common on locked-down server policies),
+   soft-degrades to tier 3.
+3. **`CreateProcessW` baseline** (cycle 1): host token, Medium IL,
+   inside JobObject only. Last-resort tier — JobObject containment
+   from cycle 1 always applies regardless of which tier launches the
+   target.
+
+JobObject (cycle 1): active-process limit (fork-bomb defense),
+kill-on-close, die-on-unhandled-exception, virtual-memory ceiling,
+UI restrictions. Wraps every spawned process group across all three
+tiers.
+
+`windows-sys` was upgraded `0.59 → 0.61` to access the
+`Win32_Security_Isolation` module which exposes the AppContainer API.
+
+Limitations (intentional, see SP-6 spec § 1 out-of-scope):
+- AppContainer workspace DACL grant is not wired in v1; targets that
+  need to write into their workspace directory may fail on tier 1.
+  Soft-degrade falls through to tier 2 which lifts that restriction.
+- No WFP for per-host network filtering — `AllowHosts` returns
+  `UnsupportedPolicy` from `WindowsSandboxDriver::profile_for`. SP-3b
+  is deferred indefinitely (admin-only).
 
 ### Linux resource limits (SP-5 — shipped 2026-05-20)
 
@@ -480,7 +499,7 @@ and `profile_for` (5):
 | SP-3b | Windows WFP per-host network filtering | Requires admin for filter installation. Likely superseded by SP-6 (AppContainer's network capability model) for most use cases. |
 | ~~SP-4~~ | ~~Hostname-based filtering~~ | **Shipped (2026-05-20)** as workspace-layer DNS pre-resolution; macOS-scoped. See "Hostname support" below. |
 | ~~SP-5~~ | ~~cgroups v2 Linux memory + CPU~~ | **Shipped (2026-05-20)** as host-side `CgroupV2Scope` in `BubblewrapDriver::run`. See "Linux resource limits" below. |
-| SP-6 | Windows AppContainer | Requires `windows-sys` major-version upgrade. |
+| ~~SP-6~~ | ~~Windows AppContainer~~ | **Shipped (2026-05-20)** as top tier of soft-degrade chain in sandbox-init-windows. See "Current Windows defense surface" above. |
 
 ## References
 

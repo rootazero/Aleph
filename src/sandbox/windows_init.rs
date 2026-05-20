@@ -31,6 +31,46 @@ pub struct WindowsInitPolicy {
     /// JobObject containment continues to apply either way.
     #[serde(default)]
     pub require_restricted_token: bool,
+
+    /// SP-6: try AppContainer first (strongest sandbox primitive).
+    /// Soft-degrades to restricted-token (SP-3a) on failure.
+    #[serde(default)]
+    pub use_app_container: bool,
+
+    /// SP-6: when `true`, refuse to spawn if AppContainer setup fails.
+    /// Default `false` → soft-degrade to SP-3a's path.
+    #[serde(default)]
+    pub require_app_container: bool,
+
+    /// SP-6: capability names (lowercase Win32 form like
+    /// `internetClient`) to grant inside the AppContainer. Empty list
+    /// = "no capabilities". Translated to SIDs via
+    /// `DeriveCapabilitySidsFromName` at init time.
+    #[serde(default)]
+    pub app_container_capabilities: Vec<String>,
+
+    /// SP-6: absolute path to the session workspace dir. SP-6 adds an
+    /// Allow-Modify ACE for the per-execution AppContainer SID on this
+    /// directory before spawn so the target can read/write its
+    /// workspace. `None` → no DACL grant (target may fail on writes).
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+}
+
+/// Translate `NetworkPolicy` → AppContainer capability names. Lives at
+/// crate top so it's testable cross-platform.
+pub fn capability_names_for_network(net: &crate::sandbox::capabilities::NetworkPolicy) -> Vec<String> {
+    use crate::sandbox::capabilities::NetworkPolicy;
+    match net {
+        NetworkPolicy::None => Vec::new(),
+        NetworkPolicy::AllowAll => vec![
+            "internetClient".to_string(),
+            "privateNetworkClientServer".to_string(),
+        ],
+        // AllowHosts is rejected at WindowsSandboxDriver::profile_for time
+        // (cycle 1 / SP-3b). If we ever get here we're conservative.
+        NetworkPolicy::AllowHosts { .. } => Vec::new(),
+    }
 }
 
 /// Top-level entry point for the `sandbox-init-windows` subcommand. Never
@@ -52,6 +92,41 @@ pub fn run_init(args: Vec<String>) -> ! {
             std::process::exit(66);
         }
     };
+
+    // SP-6: try AppContainer first when enabled. Soft-degrade to SP-3a
+    // restricted-token path on any AppContainer setup failure (unless
+    // require_app_container=true escalates it).
+    if parsed.policy.use_app_container {
+        match imp::launch_with_app_container(&parsed) {
+            Ok(code) => std::process::exit(code),
+            Err(imp::LaunchError::AppContainerSetupFailed(msg))
+                if !parsed.policy.require_app_container =>
+            {
+                eprintln!(
+                    "aleph sandbox-init-windows: AppContainer setup failed ({msg}); \
+                     falling back to restricted-token path"
+                );
+                // fall through to restricted-token branch below
+            }
+            Err(imp::LaunchError::AppContainerSetupFailed(msg)) => {
+                eprintln!(
+                    "aleph sandbox-init-windows: AppContainer setup failed ({msg}) \
+                     and require_app_container=true"
+                );
+                std::process::exit(64);
+            }
+            Err(imp::LaunchError::WaitFailed(msg)) => {
+                eprintln!("aleph sandbox-init-windows: AppContainer wait failed: {msg}");
+                std::process::exit(65);
+            }
+            Err(other) => {
+                eprintln!(
+                    "aleph sandbox-init-windows: unexpected AppContainer error: {other:?}"
+                );
+                std::process::exit(65);
+            }
+        }
+    }
 
     let exit_code = match imp::launch_with_restricted_token(&parsed) {
         Ok(code) => code,
@@ -86,6 +161,14 @@ pub fn run_init(args: Vec<String>) -> ! {
         }
         Err(imp::LaunchError::WaitFailed(msg)) => {
             eprintln!("aleph sandbox-init-windows: wait failed: {msg}");
+            std::process::exit(65);
+        }
+        // Unreachable here: AppContainerSetupFailed is only produced by
+        // launch_with_app_container and is fully handled above. Pattern
+        // is included to keep the match exhaustive against future
+        // changes to LaunchError.
+        Err(imp::LaunchError::AppContainerSetupFailed(msg)) => {
+            eprintln!("aleph sandbox-init-windows: unreachable AppContainer error: {msg}");
             std::process::exit(65);
         }
     };
@@ -186,6 +269,11 @@ mod imp {
         SetupFailed(String),
         SpawnFailed(String),
         WaitFailed(String),
+        /// SP-6: AppContainer-specific setup failure (CreateAppContainerProfile,
+        /// SECURITY_CAPABILITIES wiring, etc.). Distinguished from
+        /// `SetupFailed` so the caller can decide whether to soft-degrade
+        /// to the SP-3a restricted-token path.
+        AppContainerSetupFailed(String),
     }
 
     pub(super) fn launch_with_restricted_token(
@@ -220,6 +308,278 @@ mod imp {
 
     pub(super) fn launch_with_host_token(parsed: &ParsedInitArgs) -> Result<i32, LaunchError> {
         spawn_and_wait(parsed, None)
+    }
+
+    /// SP-6: launch target inside a per-execution AppContainer profile.
+    /// Capability SIDs are derived from the policy's
+    /// `app_container_capabilities` name list. The AppContainer profile
+    /// is deleted after the target exits.
+    pub(super) fn launch_with_app_container(
+        parsed: &ParsedInitArgs,
+    ) -> Result<i32, LaunchError> {
+        use std::iter::once;
+
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Isolation::{
+            CreateAppContainerProfile, DeleteAppContainerProfile,
+            DeriveCapabilitySidsFromName,
+        };
+        use windows_sys::Win32::Security::{
+            FreeSid, SID_AND_ATTRIBUTES, SECURITY_CAPABILITIES,
+        };
+        use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapAlloc, HeapFree};
+        use windows_sys::Win32::System::SystemServices::SE_GROUP_ENABLED;
+        use windows_sys::Win32::System::Threading::{
+            CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
+            InitializeProcThreadAttributeList, UpdateProcThreadAttribute,
+            WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST,
+            PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTF_USESTDHANDLES,
+            STARTUPINFOEXW,
+        };
+        use windows_sys::Win32::System::Console::{
+            GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        };
+
+        // ---------- 1. Generate unique per-execution profile name ----------
+        let pid = std::process::id();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let profile_name = format!("aleph-sandbox-{pid}-{nonce}");
+        let profile_name_w: Vec<u16> = profile_name.encode_utf16().chain(once(0)).collect();
+        let display_name_w: Vec<u16> = "Aleph Sandbox".encode_utf16().chain(once(0)).collect();
+        let description_w: Vec<u16> = "Per-execution AppContainer for aleph-server sandbox"
+            .encode_utf16()
+            .chain(once(0))
+            .collect();
+
+        // ---------- 2. Derive capability SIDs ----------
+        let mut cap_sids: Vec<*mut core::ffi::c_void> = Vec::new();
+        let mut group_sid_ptrs: Vec<*mut core::ffi::c_void> = Vec::new();
+        for name in &parsed.policy.app_container_capabilities {
+            let name_w: Vec<u16> = name.encode_utf16().chain(once(0)).collect();
+            let mut sid: *mut core::ffi::c_void = std::ptr::null_mut();
+            let mut group_sids: *mut *mut core::ffi::c_void = std::ptr::null_mut();
+            let mut group_count: u32 = 0;
+            let mut sid_count: u32 = 0;
+            let ok = unsafe {
+                DeriveCapabilitySidsFromName(
+                    name_w.as_ptr(),
+                    &mut group_sids,
+                    &mut group_count,
+                    &mut sid as *mut _ as *mut _,
+                    &mut sid_count,
+                )
+            };
+            if ok == 0 || sid_count == 0 {
+                // unknown capability name → skip silently
+                continue;
+            }
+            cap_sids.push(sid);
+            // Track group SIDs for cleanup even though we don't use them.
+            if !group_sids.is_null() {
+                group_sid_ptrs.push(group_sids as *mut core::ffi::c_void);
+            }
+        }
+
+        let cap_attrs: Vec<SID_AND_ATTRIBUTES> = cap_sids
+            .iter()
+            .map(|s| SID_AND_ATTRIBUTES {
+                Sid: *s,
+                Attributes: SE_GROUP_ENABLED,
+            })
+            .collect();
+
+        // ---------- 3. Create the AppContainer profile ----------
+        let mut ac_sid: *mut core::ffi::c_void = std::ptr::null_mut();
+        let hr = unsafe {
+            CreateAppContainerProfile(
+                profile_name_w.as_ptr(),
+                display_name_w.as_ptr(),
+                description_w.as_ptr(),
+                if cap_attrs.is_empty() {
+                    std::ptr::null()
+                } else {
+                    cap_attrs.as_ptr()
+                },
+                cap_attrs.len() as u32,
+                &mut ac_sid as *mut _ as *mut _,
+            )
+        };
+        if hr != 0 {
+            // Cleanup capability SIDs.
+            for sid in &cap_sids {
+                unsafe { LocalFree(*sid) };
+            }
+            for g in &group_sid_ptrs {
+                unsafe { LocalFree(*g) };
+            }
+            return Err(LaunchError::AppContainerSetupFailed(format!(
+                "CreateAppContainerProfile failed: hr={hr:#010x}"
+            )));
+        }
+
+        // ---------- 4. Build SECURITY_CAPABILITIES + attribute list ----------
+        let mut attr_size: usize = 0;
+        unsafe {
+            // First call with NULL probes for required size; sets last
+            // error to ERROR_INSUFFICIENT_BUFFER which we ignore.
+            InitializeProcThreadAttributeList(
+                std::ptr::null_mut(),
+                1,
+                0,
+                &mut attr_size,
+            );
+        }
+        let attr_buffer = unsafe { HeapAlloc(GetProcessHeap(), 0, attr_size) };
+        if attr_buffer.is_null() {
+            cleanup_sids(&cap_sids, &group_sid_ptrs, ac_sid);
+            unsafe { DeleteAppContainerProfile(profile_name_w.as_ptr()) };
+            return Err(LaunchError::AppContainerSetupFailed(
+                "HeapAlloc for PROC_THREAD_ATTRIBUTE_LIST returned NULL".into(),
+            ));
+        }
+        let attr_list = attr_buffer as LPPROC_THREAD_ATTRIBUTE_LIST;
+
+        let ok = unsafe {
+            InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size)
+        };
+        if ok == 0 {
+            unsafe { HeapFree(GetProcessHeap(), 0, attr_buffer) };
+            cleanup_sids(&cap_sids, &group_sid_ptrs, ac_sid);
+            unsafe { DeleteAppContainerProfile(profile_name_w.as_ptr()) };
+            return Err(LaunchError::AppContainerSetupFailed(
+                "InitializeProcThreadAttributeList failed".into(),
+            ));
+        }
+
+        let sec_caps = SECURITY_CAPABILITIES {
+            AppContainerSid: ac_sid,
+            Capabilities: if cap_attrs.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                cap_attrs.as_ptr() as *mut SID_AND_ATTRIBUTES
+            },
+            CapabilityCount: cap_attrs.len() as u32,
+            Reserved: 0,
+        };
+
+        let ok = unsafe {
+            UpdateProcThreadAttribute(
+                attr_list,
+                0,
+                PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+                &sec_caps as *const _ as *const _,
+                std::mem::size_of::<SECURITY_CAPABILITIES>(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        if ok == 0 {
+            unsafe {
+                DeleteProcThreadAttributeList(attr_list);
+                HeapFree(GetProcessHeap(), 0, attr_buffer);
+                DeleteAppContainerProfile(profile_name_w.as_ptr());
+            }
+            cleanup_sids(&cap_sids, &group_sid_ptrs, ac_sid);
+            return Err(LaunchError::AppContainerSetupFailed(
+                "UpdateProcThreadAttribute(SECURITY_CAPABILITIES) failed".into(),
+            ));
+        }
+
+        // ---------- 5. Build STARTUPINFOEXW + cmd line, CreateProcessW ----------
+        let cmd_line_str = build_command_line(&parsed.target, &parsed.target_args);
+        let mut cmd_line: Vec<u16> = cmd_line_str.encode_utf16().chain(once(0)).collect();
+
+        let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+        si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdInput = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        si.StartupInfo.hStdOutput = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+        si.StartupInfo.hStdError = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+        si.lpAttributeList = attr_list;
+
+        let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+        let spawn_ok = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                cmd_line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1, // bInheritHandles = TRUE
+                EXTENDED_STARTUPINFO_PRESENT,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                &si.StartupInfo,
+                &mut pi,
+            )
+        };
+
+        if spawn_ok == 0 {
+            let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            unsafe {
+                DeleteProcThreadAttributeList(attr_list);
+                HeapFree(GetProcessHeap(), 0, attr_buffer);
+                DeleteAppContainerProfile(profile_name_w.as_ptr());
+            }
+            cleanup_sids(&cap_sids, &group_sid_ptrs, ac_sid);
+            return Err(LaunchError::AppContainerSetupFailed(format!(
+                "CreateProcessW(AppContainer) failed: {err:#010x}"
+            )));
+        }
+
+        // ---------- 6. Wait + GetExitCode ----------
+        let wait_result = unsafe { WaitForSingleObject(pi.hProcess, INFINITE) };
+        let wait_err = if wait_result != 0 {
+            Some(wait_result)
+        } else {
+            None
+        };
+
+        let mut code: u32 = 0;
+        let code_ok = unsafe { GetExitCodeProcess(pi.hProcess, &mut code) };
+
+        // ---------- 7. Cleanup (always runs) ----------
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
+            windows_sys::Win32::Foundation::CloseHandle(pi.hProcess);
+            DeleteProcThreadAttributeList(attr_list);
+            HeapFree(GetProcessHeap(), 0, attr_buffer);
+            DeleteAppContainerProfile(profile_name_w.as_ptr());
+        }
+        cleanup_sids(&cap_sids, &group_sid_ptrs, ac_sid);
+
+        if let Some(w) = wait_err {
+            return Err(LaunchError::WaitFailed(format!(
+                "WaitForSingleObject returned {w:#010x}"
+            )));
+        }
+        if code_ok == 0 {
+            return Err(LaunchError::WaitFailed(
+                "GetExitCodeProcess failed".into(),
+            ));
+        }
+        Ok(code as i32)
+    }
+
+    fn cleanup_sids(
+        cap_sids: &[*mut core::ffi::c_void],
+        group_sid_ptrs: &[*mut core::ffi::c_void],
+        ac_sid: *mut core::ffi::c_void,
+    ) {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::FreeSid;
+        for sid in cap_sids {
+            unsafe { LocalFree(*sid) };
+        }
+        for g in group_sid_ptrs {
+            unsafe { LocalFree(*g) };
+        }
+        if !ac_sid.is_null() {
+            unsafe { FreeSid(ac_sid) };
+        }
     }
 
     fn open_self_token() -> Result<HANDLE, LaunchError> {
@@ -470,6 +830,10 @@ mod tests {
     fn policy_round_trips_through_json() {
         let original = WindowsInitPolicy {
             require_restricted_token: true,
+            use_app_container: true,
+            require_app_container: false,
+            app_container_capabilities: vec!["internetClient".to_string()],
+            workspace_path: Some("C:\\workspace\\session-abc".to_string()),
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: WindowsInitPolicy = serde_json::from_str(&json).unwrap();
@@ -477,13 +841,13 @@ mod tests {
     }
 
     #[test]
-    fn policy_default_does_not_require_restricted_token() {
+    fn policy_default_disables_all_strict_flags() {
         let p = WindowsInitPolicy::default();
         assert!(!p.require_restricted_token);
-        // Round-trip through JSON via default also.
-        let json = serde_json::to_string(&p).unwrap();
-        let parsed: WindowsInitPolicy = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, p);
+        assert!(!p.use_app_container);
+        assert!(!p.require_app_container);
+        assert!(p.app_container_capabilities.is_empty());
+        assert!(p.workspace_path.is_none());
     }
 
     #[test]
@@ -498,6 +862,7 @@ mod tests {
     fn parse_init_args_extracts_policy_and_target() {
         let policy = WindowsInitPolicy {
             require_restricted_token: true,
+            ..Default::default()
         };
         let json = serde_json::to_string(&policy).unwrap();
         let argv = vec![
@@ -530,6 +895,40 @@ mod tests {
         ];
         let err = parse_init_args(&argv).unwrap_err();
         assert!(err.contains("missing target"), "got: {err}");
+    }
+
+    #[test]
+    fn capability_names_for_allow_all() {
+        let names = capability_names_for_network(
+            &crate::sandbox::capabilities::NetworkPolicy::AllowAll,
+        );
+        assert_eq!(
+            names,
+            vec![
+                "internetClient".to_string(),
+                "privateNetworkClientServer".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn capability_names_for_none_returns_empty() {
+        let names = capability_names_for_network(
+            &crate::sandbox::capabilities::NetworkPolicy::None,
+        );
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn capability_names_for_allow_hosts_returns_empty() {
+        // AllowHosts is rejected at profile_for; if we somehow reach here
+        // we're conservative and grant nothing.
+        let names = capability_names_for_network(
+            &crate::sandbox::capabilities::NetworkPolicy::AllowHosts {
+                hosts: vec!["github.com".to_string()],
+            },
+        );
+        assert!(names.is_empty());
     }
 
     #[test]

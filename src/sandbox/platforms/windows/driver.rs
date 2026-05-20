@@ -23,6 +23,8 @@ use crate::sandbox::windows_init::WindowsInitPolicy;
 pub struct WindowsSandboxOptions {
     pub use_restricted_token: bool,
     pub require_restricted_token: bool,
+    pub use_app_container: bool,
+    pub require_app_container: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +38,8 @@ impl WindowsSandboxDriver {
             options: WindowsSandboxOptions {
                 use_restricted_token: true,
                 require_restricted_token: false,
+                use_app_container: true,
+                require_app_container: false,
             },
         }
     }
@@ -140,20 +144,28 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
     ) -> Result<OsSandboxProfile, SandboxError> {
         let policy = SandboxPolicy::from(capabilities);
         let contents = self.generate_profile(&policy, cwd)?;
-        // SP-3a: serialize the WindowsInitPolicy so run() can wrap the
-        // target with `sandbox-init-windows`. Skipped when restricted
-        // token is disabled in config — falls through to plain
-        // CreateProcessW path (cycle 1 behavior).
-        let windows_init_policy = if self.options.use_restricted_token {
-            let p = WindowsInitPolicy {
-                require_restricted_token: self.options.require_restricted_token,
+        // SP-3a/SP-6: serialize the WindowsInitPolicy so run() can wrap
+        // the target with `sandbox-init-windows`. Skipped only when
+        // BOTH restricted-token AND app-container are disabled — falls
+        // through to plain CreateProcessW (cycle 1 behavior).
+        let windows_init_policy =
+            if self.options.use_restricted_token || self.options.use_app_container {
+                let p = WindowsInitPolicy {
+                    require_restricted_token: self.options.require_restricted_token,
+                    use_app_container: self.options.use_app_container,
+                    require_app_container: self.options.require_app_container,
+                    app_container_capabilities:
+                        crate::sandbox::windows_init::capability_names_for_network(
+                            &capabilities.network,
+                        ),
+                    workspace_path: Some(cwd.to_string_lossy().into_owned()),
+                };
+                Some(serde_json::to_string(&p).map_err(|e| {
+                    SandboxError::ProfileGeneration(format!("WindowsInitPolicy serialize: {e}"))
+                })?)
+            } else {
+                None
             };
-            Some(serde_json::to_string(&p).map_err(|e| {
-                SandboxError::ProfileGeneration(format!("WindowsInitPolicy serialize: {e}"))
-            })?)
-        } else {
-            None
-        };
         Ok(OsSandboxProfile {
             contents,
             max_memory_mb: policy.process.max_memory_mb,

@@ -68,6 +68,8 @@ pub fn create_platform_driver_with_config(
         let options = WindowsSandboxOptions {
             use_restricted_token: windows_config.use_restricted_token,
             require_restricted_token: windows_config.require_restricted_token,
+            use_app_container: windows_config.use_app_container,
+            require_app_container: windows_config.require_app_container,
         };
         Arc::new(WindowsSandboxDriver::with_options(options))
     }

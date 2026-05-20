@@ -28,11 +28,25 @@ pub struct WindowsSandboxConfig {
     #[serde(default)]
     pub require_restricted_token: bool,
 
+    /// SP-6: try AppContainer first (strongest Windows sandbox primitive).
+    /// Soft-degrades to SP-3a restricted-token on failure. Default `true`.
+    #[serde(default = "default_windows_use_app_container")]
+    pub use_app_container: bool,
+
+    /// SP-6: when `true`, refuse to spawn if AppContainer setup fails.
+    /// Default `false` → soft-degrade.
+    #[serde(default)]
+    pub require_app_container: bool,
+
     #[serde(default = "default_windows_use_job_object")]
     pub use_job_object: bool,
 
     #[serde(default = "default_windows_max_active_processes")]
     pub max_active_processes: u32,
+}
+
+fn default_windows_use_app_container() -> bool {
+    true
 }
 
 fn default_windows_use_restricted_token() -> bool {
@@ -52,6 +66,8 @@ impl Default for WindowsSandboxConfig {
         Self {
             use_restricted_token: default_windows_use_restricted_token(),
             require_restricted_token: false,
+            use_app_container: default_windows_use_app_container(),
+            require_app_container: false,
             use_job_object: default_windows_use_job_object(),
             max_active_processes: default_windows_max_active_processes(),
         }
