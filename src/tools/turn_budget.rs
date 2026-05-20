@@ -124,7 +124,7 @@ impl TurnResultBudget {
     /// entries; already-persisted entries are skipped.
     pub fn record(&self, id: &TurnId, result: TurnResult) -> Vec<SpillInstruction> {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let state = g.entry(id.clone()).or_default();
+        let state = g.entry(*id).or_default();
         state.cumulative = state.cumulative.saturating_add(result.tokens_in_context);
         state.results.push(result);
 
@@ -198,7 +198,7 @@ mod tests {
     fn begin_end_lifecycle_clears_state() {
         let b = TurnResultBudget::new(100);
         let id = tid(1);
-        b.begin_turn(id.clone());
+        b.begin_turn(id);
         let spilled = b.record(&id, result("c1", 30));
         assert!(spilled.is_empty());
         assert_eq!(b.cumulative(&id), 30);
@@ -210,7 +210,7 @@ mod tests {
     fn under_budget_no_spill() {
         let b = TurnResultBudget::new(100);
         let id = tid(1);
-        b.begin_turn(id.clone());
+        b.begin_turn(id);
         let s = b.record(&id, result("c1", 50));
         assert!(s.is_empty());
         assert_eq!(b.cumulative(&id), 50);
@@ -220,7 +220,7 @@ mod tests {
     fn over_budget_spills_newest_first() {
         let b = TurnResultBudget::new(100);
         let id = tid(1);
-        b.begin_turn(id.clone());
+        b.begin_turn(id);
         b.record(&id, result("c1", 40));
         b.record(&id, result("c2", 40));
         let instr = b.record(&id, result("c3", 40));
@@ -234,7 +234,7 @@ mod tests {
     fn already_persisted_entries_are_not_respilled() {
         let b = TurnResultBudget::new(50);
         let id = tid(1);
-        b.begin_turn(id.clone());
+        b.begin_turn(id);
         let mut already = result("c1", 100);
         already.already_persisted = true;
         let instr = b.record(&id, already);
@@ -248,7 +248,7 @@ mod tests {
     fn multiple_spills_until_under_budget() {
         let b = TurnResultBudget::new(40);
         let id = tid(1);
-        b.begin_turn(id.clone());
+        b.begin_turn(id);
         b.record(&id, result("c1", 30));
         b.record(&id, result("c2", 30));
         // After c2: cumulative = 60 > 40 → spill c2 (credit 27) → 33 → under.
