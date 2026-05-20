@@ -195,7 +195,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // harness loop starts. Failures are warned and degraded to `None` so
         // memory issues never block a turn.
         let system_prompt = self
-            .build_system_prompt(&spec.agent, &session_id, &user_query)
+            .build_system_prompt(&spec.agent, &session_id, &user_query, llm.as_ref())
             .await;
 
         // Step 6: assemble HarnessDeps and run the inner Think→Act loop.
@@ -400,6 +400,7 @@ impl AgentHarnessRunner {
         agent_id: &str,
         session_id: &SessionId,
         user_query: &str,
+        provider: &dyn AiProvider,
     ) -> Option<String> {
         use crate::providers::message::UnifiedMessage;
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
@@ -522,6 +523,36 @@ impl AgentHarnessRunner {
                 builder = builder.with_identity_files(files);
             }
         }
+        // Phase 3: thread a default `ResolvedContext` so the Phase 2
+        // widened layers — `SecurityLayer`, `OperationalGuidelinesLayer`,
+        // `ProtocolTokensLayer`, `RuntimeContextLayer` — emit on the
+        // harness path. aleph-server is the always-on daemon, so default
+        // to the `Background` interaction paradigm + permissive security
+        // (channel-aware paths can later override via a stricter
+        // manifest/security pair). Tools list is empty because the
+        // harness wires actual tool schemas via native tool_use rather
+        // than the prompt; `disabled_tools` therefore stays empty too,
+        // and the `SecurityLayer` / `ProtocolTokensLayer` remain
+        // graceful no-ops until a channel needs them.
+        let resolved_context = crate::thinker::context::ContextAggregator::resolve(
+            &crate::thinker::InteractionManifest::new(
+                crate::thinker::InteractionParadigm::Background,
+            ),
+            &crate::thinker::security_context::SecurityContext::permissive(),
+            &[],
+        );
+        builder = builder.with_resolved_context(resolved_context);
+        // Phase 3: thread the provider's wire-protocol family so
+        // `ProviderGuidanceLayer` can pick the right per-family
+        // operational directives. `model_behavior_override()` wins over
+        // the raw protocol so providers like OpenRouter that proxy a
+        // different model family can advertise the correct target
+        // (e.g., `protocol = "openai"`, override = `"anthropic"`).
+        let provider_protocol = provider
+            .model_behavior_override()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| provider.protocol().to_string());
+        builder = builder.with_provider_protocol(provider_protocol);
         let prompt = builder.build_system_prompt(&[]);
         // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
         // Logs character counts (not contents) so prompts are observable
