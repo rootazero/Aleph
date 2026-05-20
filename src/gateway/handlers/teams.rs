@@ -174,3 +174,121 @@ pub async fn handle_agent_teams(
         ),
     }
 }
+
+// =============================================================================
+// Kanban-facing handlers (task list / task update)
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ListTasksParams {
+    pub team_id: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
+}
+
+/// Handle teams.list_tasks — list all CoordTasks for a team with optional status/owner filter
+pub async fn handle_list_tasks(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.list_tasks request");
+
+    let params: ListTasksParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    use crate::agents::swarm::tasks::CoordTaskStatus;
+    let status_filter = params.status.as_deref().and_then(|s| match s {
+        "pending" => Some(CoordTaskStatus::Pending),
+        "blocked" => Some(CoordTaskStatus::Blocked),
+        "in_progress" => Some(CoordTaskStatus::InProgress),
+        "completed" => Some(CoordTaskStatus::Completed),
+        "failed" => Some(CoordTaskStatus::Failed),
+        "cancelled" => Some(CoordTaskStatus::Cancelled),
+        _ => None,
+    });
+
+    let filter = CoordTaskFilter {
+        team_id: Some(params.team_id.clone()),
+        status: status_filter,
+        owner: params.owner.clone(),
+    };
+
+    match coord_store.list_tasks(filter).await {
+        Ok(tasks) => JsonRpcResponse::success(request.id, json!({ "tasks": tasks })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to list tasks for team '{}': {}", params.team_id, e),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateTaskParams {
+    pub task_id: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub result: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Handle teams.update_task — patch a CoordTask. Topic emission happens
+/// inside the store, so any subscriber sees the change automatically.
+pub async fn handle_update_task(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.update_task request");
+
+    let params: UpdateTaskParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    use crate::agents::swarm::tasks::{CoordTaskStatus, CoordTaskUpdate};
+
+    let status = params.status.as_deref().and_then(|s| match s {
+        "pending" => Some(CoordTaskStatus::Pending),
+        "in_progress" => Some(CoordTaskStatus::InProgress),
+        "completed" => Some(CoordTaskStatus::Completed),
+        "failed" => Some(CoordTaskStatus::Failed),
+        "cancelled" => Some(CoordTaskStatus::Cancelled),
+        // "blocked" is derived, not stored — refuse it
+        _ => None,
+    });
+
+    if params.status.is_some() && status.is_none() {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!(
+                "Unknown or unsettable status '{}' (blocked is derived, not stored)",
+                params.status.as_deref().unwrap_or("")
+            ),
+        );
+    }
+
+    let update = CoordTaskUpdate {
+        status,
+        owner: params.owner.clone(),
+        result: params.result.clone(),
+        metadata: params.metadata.clone(),
+    };
+
+    match coord_store.update_task(&params.task_id, update).await {
+        Ok(task) => JsonRpcResponse::success(request.id, json!({ "task": task })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to update task '{}': {}", params.task_id, e),
+        ),
+    }
+}

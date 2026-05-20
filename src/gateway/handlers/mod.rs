@@ -584,6 +584,20 @@ impl HandlerRegistry {
                 "agents.teams requires TeamStore — wire in Gateway startup".to_string(),
             )
         });
+        registry.register("teams.list_tasks", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "teams.list_tasks requires CoordTaskStore — wire in Gateway startup".to_string(),
+            )
+        });
+        registry.register("teams.update_task", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "teams.update_task requires CoordTaskStore — wire in Gateway startup".to_string(),
+            )
+        });
 
         // Runtime capability handlers (ad-hoc ledger per call — no shared state required)
         registry.register("runtimes.list", |req| async move {
