@@ -18,7 +18,18 @@ impl PromptLayer for SecurityLayer {
         !matches!(mode, PromptMode::Minimal)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Context]
+        // Phase 2 wiring: participate in every non-minimal path so the
+        // layer fires on the harness `Basic` path. The inject() guard
+        // keeps output empty until a `ResolvedContext` is threaded into
+        // `LayerInput::context` (Phase 3 work), so widening here is a
+        // pure no-op today and ready to emit when context arrives.
+        &[
+            AssemblyPath::Basic,
+            AssemblyPath::Hydration,
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+            AssemblyPath::Cached,
+        ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         let ctx = match input.context {
@@ -105,7 +116,27 @@ mod tests {
     #[test]
     fn test_security_paths() {
         let paths = SecurityLayer.paths();
-        assert_eq!(paths.len(), 1);
+        // Phase 2: layer now participates in every non-minimal path so it
+        // fires on the harness `Basic` route — graceful no-op until a
+        // ResolvedContext is threaded in.
+        assert!(paths.contains(&AssemblyPath::Basic));
+        assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Context));
+        assert!(paths.contains(&AssemblyPath::Hydration));
+        assert!(paths.contains(&AssemblyPath::Cached));
+    }
+
+    #[test]
+    fn graceful_noop_on_basic_path_without_context() {
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        // Basic path doesn't carry a ResolvedContext; the layer must emit
+        // nothing instead of a half-rendered "## Security & Constraints"
+        // header.
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+        assert!(out.is_empty());
     }
 }
