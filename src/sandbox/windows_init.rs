@@ -73,6 +73,21 @@ pub fn capability_names_for_network(net: &crate::sandbox::capabilities::NetworkP
     }
 }
 
+/// SP-6 v2: DACL inheritance flags applied to AppContainer workspace
+/// grants. `CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE` so the ACE
+/// propagates to existing children whose default DACL inheritance is
+/// enabled (the NTFS default) plus all future children.
+///
+/// MSDN documents `OBJECT_INHERIT_ACE = 0x1`,
+/// `CONTAINER_INHERIT_ACE = 0x2`. Hard-coded so this constant — and
+/// the regression test for it — work on the macOS / Linux dev boxes
+/// without dragging in Win32 headers.
+// Intentionally kept non-cfg-gated so the regression test below
+// compiles on all platforms.  The Win32 consumer is Windows-only, so
+// this triggers dead_code on non-Windows dev boxes.
+#[allow(dead_code)]
+pub(crate) const DACL_INHERIT_FLAGS_FOR_APPCONTAINER: u32 = 0x2 | 0x1;
+
 /// Top-level entry point for the `sandbox-init-windows` subcommand. Never
 /// returns: either calls `ExitProcess` with the target's exit code, or
 /// `ExitProcess`es with a diagnostic code on init-side failure.
@@ -252,7 +267,7 @@ mod imp {
         DISABLE_MAX_PRIVILEGE, SE_GROUP_INTEGRITY, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY,
         TOKEN_DUPLICATE, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
     };
-    use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+    use windows_sys::Win32::Security::Authorization::{ACCESS_MODE, ConvertStringSidToSidW};
     use windows_sys::Win32::System::Console::{
         GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
     };
@@ -261,6 +276,31 @@ mod imp {
         OpenProcessToken, WaitForSingleObject, INFINITE, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
         STARTUPINFOW,
     };
+
+    /// SP-6 v2: RAII guard that calls `LocalFree` on `Drop`. Used for
+    /// `PSECURITY_DESCRIPTOR` (returned by `GetNamedSecurityInfoW`'s
+    /// `ppSecurityDescriptor` out-param) and `PACL` (returned by
+    /// `SetEntriesInAclW`'s `NewAcl` out-param) — both system-
+    /// allocated and documented to be freed with `LocalFree`.
+    ///
+    /// IMPORTANT: do NOT wrap the `ppDacl` output of
+    /// `GetNamedSecurityInfoW` in this guard — that pointer is interior
+    /// to the security descriptor buffer and is freed transitively when
+    /// the surrounding `PSECURITY_DESCRIPTOR` is freed. Wrapping it
+    /// would double-free.
+    ///
+    /// Holds a raw `*mut c_void`. Caller is responsible for not double-
+    /// freeing — we don't take ownership beyond running `LocalFree` on
+    /// drop.
+    struct LocalFreeGuard(*mut core::ffi::c_void);
+
+    impl Drop for LocalFreeGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe { LocalFree(self.0) };
+            }
+        }
+    }
 
     /// Per-error-class outcome of a launch attempt.
     #[derive(Debug)]
@@ -420,6 +460,26 @@ mod imp {
             )));
         }
 
+        // ---------- 3.5. SP-6 v2: grant workspace DACL ----------
+        // Best-effort: if the grant fails, the target may fail on
+        // workspace writes but the sandbox itself stays up. We never
+        // hard-fail this step (per spec § 3, even when
+        // require_app_container=true).
+        if let Some(ref ws) = parsed.policy.workspace_path {
+            if let Err(e) = unsafe {
+                set_workspace_dacl_entry(
+                    ws,
+                    ac_sid,
+                    windows_sys::Win32::Security::Authorization::GRANT_ACCESS,
+                )
+            } {
+                eprintln!(
+                    "aleph sandbox-init-windows: workspace DACL grant failed ({e}); \
+                     target may fail on workspace writes"
+                );
+            }
+        }
+
         // ---------- 4. Build SECURITY_CAPABILITIES + attribute list ----------
         let mut attr_size: usize = 0;
         unsafe {
@@ -541,6 +601,26 @@ mod imp {
         let mut code: u32 = 0;
         let code_ok = unsafe { GetExitCodeProcess(pi.hProcess, &mut code) };
 
+        // ---------- 6.5. SP-6 v2: revoke workspace DACL ----------
+        // Best-effort. The SID is about to be invalidated by
+        // DeleteAppContainerProfile, which makes any leftover ACE dead
+        // weight (spec § 7 risk register), so revoke failure is logged
+        // but ignored.
+        if let Some(ref ws) = parsed.policy.workspace_path {
+            if let Err(e) = unsafe {
+                set_workspace_dacl_entry(
+                    ws,
+                    ac_sid,
+                    windows_sys::Win32::Security::Authorization::REVOKE_ACCESS,
+                )
+            } {
+                eprintln!(
+                    "aleph sandbox-init-windows: workspace DACL revoke failed ({e}); \
+                     AppContainer SID is about to be invalidated, ACE will become dead weight"
+                );
+            }
+        }
+
         // ---------- 7. Cleanup (always runs) ----------
         unsafe {
             windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
@@ -580,6 +660,90 @@ mod imp {
         if !ac_sid.is_null() {
             unsafe { FreeSid(ac_sid) };
         }
+    }
+
+    /// SP-6 v2: Add or remove an inheritable allow ACE for `ac_sid` on
+    /// `workspace_path`. Same code path for both grant (`mode =
+    /// GRANT_ACCESS`) and revoke (`mode = REVOKE_ACCESS`) since the
+    /// only difference is one field in `EXPLICIT_ACCESS_W`.
+    ///
+    /// Best-effort: any failure returns `Err(String)` and the caller
+    /// logs + continues. Never panics.
+    ///
+    /// Caveat: assumes `workspace_path` is already canonical (the
+    /// driver populates the policy with the resolved session workspace
+    /// dir; we do not resolve symlinks here).
+    unsafe fn set_workspace_dacl_entry(
+        workspace_path: &str,
+        ac_sid: *mut core::ffi::c_void,
+        mode: ACCESS_MODE,
+    ) -> Result<(), String> {
+        use std::iter::once;
+        use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+        use windows_sys::Win32::Security::Authorization::{
+            GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW,
+            EXPLICIT_ACCESS_W, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
+        };
+        use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION};
+        use windows_sys::Win32::System::SystemServices::GENERIC_ALL;
+
+        let path_w: Vec<u16> = workspace_path.encode_utf16().chain(once(0)).collect();
+
+        // 1. Read existing DACL so we merge (not replace).
+        let mut old_dacl: *mut ACL = std::ptr::null_mut();
+        let mut sd: *mut core::ffi::c_void = std::ptr::null_mut();
+        let status = GetNamedSecurityInfoW(
+            path_w.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut old_dacl,
+            std::ptr::null_mut(),
+            &mut sd,
+        );
+        if status != ERROR_SUCCESS {
+            return Err(format!(
+                "GetNamedSecurityInfoW({workspace_path}) failed: {status:#010x}"
+            ));
+        }
+        let _sd_guard = LocalFreeGuard(sd);
+
+        // 2. Build EXPLICIT_ACCESS_W for the AppContainer SID.
+        let mut ea: EXPLICIT_ACCESS_W = std::mem::zeroed();
+        ea.grfAccessPermissions = GENERIC_ALL;
+        ea.grfAccessMode = mode;
+        ea.grfInheritance = crate::sandbox::windows_init::DACL_INHERIT_FLAGS_FOR_APPCONTAINER;
+        ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        ea.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+        ea.Trustee.ptstrName = ac_sid as *mut u16;
+        // pMultipleTrustee / MultipleTrusteeOperation already zeroed
+        // (= NO_MULTIPLE_TRUSTEE).
+
+        // 3. Merge ACE into existing DACL.
+        let mut new_dacl: *mut ACL = std::ptr::null_mut();
+        let status = SetEntriesInAclW(1, &ea, old_dacl, &mut new_dacl);
+        if status != ERROR_SUCCESS {
+            return Err(format!("SetEntriesInAclW({workspace_path}) failed: {status:#010x}"));
+        }
+        let _dacl_guard = LocalFreeGuard(new_dacl as *mut core::ffi::c_void);
+
+        // 4. Write the merged DACL back to the workspace.
+        let status = SetNamedSecurityInfoW(
+            path_w.as_ptr() as *mut u16,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            new_dacl,
+            std::ptr::null_mut(),
+        );
+        if status != ERROR_SUCCESS {
+            return Err(format!(
+                "SetNamedSecurityInfoW({workspace_path}) failed: {status:#010x}"
+            ));
+        }
+        Ok(())
     }
 
     fn open_self_token() -> Result<HANDLE, LaunchError> {
@@ -941,5 +1105,15 @@ mod tests {
         ];
         let err = parse_init_args(&argv).unwrap_err();
         assert!(err.contains("JSON parse error"), "got: {err}");
+    }
+
+    #[test]
+    fn dacl_inherit_flags_matches_msdn_documented_bits() {
+        // OBJECT_INHERIT_ACE = 0x1, CONTAINER_INHERIT_ACE = 0x2 per
+        // Microsoft Windows SDK winnt.h. If this fires, the constant
+        // drifted and SP-6 v2 workspace DACL grant is no longer
+        // inheritable, which means AppContainer targets cannot read
+        // or write subdirectories of their workspace.
+        assert_eq!(DACL_INHERIT_FLAGS_FOR_APPCONTAINER, 0x3);
     }
 }
