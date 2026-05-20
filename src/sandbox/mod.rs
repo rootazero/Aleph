@@ -10,6 +10,7 @@
 use async_trait::async_trait;
 
 pub mod capabilities;
+pub(crate) mod cgroup_v2;
 pub mod command;
 pub mod config;
 pub mod context;

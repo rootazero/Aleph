@@ -376,6 +376,33 @@ working modules without inheriting the stub skeletons.
 - That's it. No restricted token, no AppContainer, no WFP. This is honest
   documentation of what the code actually does, not aspirational claims.
 
+### Linux resource limits (SP-5 — shipped 2026-05-20)
+
+On Linux with cgroup v2 delegated to the user, `BubblewrapDriver::run`
+creates a per-execution sub-cgroup under the aleph-server process's own
+cgroup and applies:
+
+- **`memory.max`** from `SandboxCapabilities.max_memory_mb`. RSS-based,
+  so `mmap(PROT_NONE)` tricks that bypass `RLIMIT_AS` are caught.
+  `memory.swap.max=0` always (no swap-pressure escape).
+- **`cpu.max`** from `LinuxSandboxConfig.cpu_quota_percent`. `None` →
+  unlimited; `Some(50)` → 50% of one core.
+- **`pids.max`** from `LinuxSandboxConfig.max_pids` (default `Some(200)`).
+  Hard cap on process count — defends against fork bombs beyond what
+  bwrap's active-process limit provides.
+
+The bwrap child PID is written to `cgroup.procs` via `pre_exec` so
+membership is inherited through the bwrap → sandbox-init → target exec
+chain. `Drop` on `CgroupV2Scope` runs after `wait_with_output()` and
+`rmdir`s the cgroup directory; no orphan accumulation.
+
+When cgroup v2 is unavailable (cgroup-v1-only systems, containers
+without delegation, non-systemd hosts), `try_create` returns `None` and
+the sandbox runs anyway — `RLIMIT_AS` continues to enforce a memory
+ceiling, with one `tracing::warn!` explaining the degradation. Flip
+`LinuxSandboxConfig.require_cgroups = true` to escalate to a hard
+spawn failure instead.
+
 ### Linux defense-in-depth (SP-2 — shipped 2026-05-20)
 
 bwrap's namespace isolation now sits underneath two additional Linux LSM
@@ -434,7 +461,7 @@ and `profile_for` (5):
 | ~~SP-2~~ | ~~Linux Landlock + seccomp-bpf~~ | **Shipped (2026-05-20)** as `aleph-server sandbox-init` subcommand invoked by bwrap. See "Linux defense-in-depth" below. |
 | SP-3 | Windows RestrictedToken + WFP | ~200 lines of unsafe Win32 with `CreateProcessAsUserW` + manual stdio pipe wiring; not testable from a Mac dev box, needs CI coverage first. |
 | ~~SP-4~~ | ~~Hostname-based filtering~~ | **Shipped (2026-05-20)** as workspace-layer DNS pre-resolution; macOS-scoped. See "Hostname support" below. |
-| SP-5 | cgroups v2 Linux memory + CPU | `RLIMIT_AS` covers the common case; cgroup adds enforcement against `mmap` games but is more invasive. |
+| ~~SP-5~~ | ~~cgroups v2 Linux memory + CPU~~ | **Shipped (2026-05-20)** as host-side `CgroupV2Scope` in `BubblewrapDriver::run`. See "Linux resource limits" below. |
 | SP-6 | Windows AppContainer | Requires `windows-sys` major-version upgrade. |
 
 ## References

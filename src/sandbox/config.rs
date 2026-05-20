@@ -190,6 +190,35 @@ pub struct LinuxSandboxConfig {
     /// lacks landlock ABI ≥ 1. Default `false` → soft-degrade.
     #[serde(default)]
     pub require_landlock: bool,
+
+    /// SP-5: enable cgroup v2 containment. Default `true`; soft-degrade
+    /// if the kernel/host does not expose cgroup v2 with delegation.
+    #[serde(default = "default_linux_cgroup_enabled")]
+    pub cgroup_enabled: bool,
+
+    /// SP-5: when `true`, the sandbox refuses to spawn if cgroup v2
+    /// setup fails. Default `false` (degrade to `RLIMIT_AS`).
+    #[serde(default)]
+    pub require_cgroups: bool,
+
+    /// SP-5: `cpu.max` quota as a percentage of one CPU. `None` →
+    /// unlimited CPU (kernel default). `100` = one full core; `200` =
+    /// two cores.
+    #[serde(default)]
+    pub cpu_quota_percent: Option<u32>,
+
+    /// SP-5: `pids.max` ceiling. Default 200 — defends against fork
+    /// bombs beyond what bwrap's active-process limit provides.
+    #[serde(default = "default_linux_max_pids")]
+    pub max_pids: Option<u32>,
+}
+
+fn default_linux_cgroup_enabled() -> bool {
+    true
+}
+
+fn default_linux_max_pids() -> Option<u32> {
+    Some(200)
 }
 
 fn default_linux_mount_proc() -> bool {
@@ -211,6 +240,10 @@ impl Default for LinuxSandboxConfig {
             no_new_privs: default_linux_no_new_privs(),
             include_platform_defaults: default_linux_include_platform_defaults(),
             require_landlock: false,
+            cgroup_enabled: default_linux_cgroup_enabled(),
+            require_cgroups: false,
+            cpu_quota_percent: None,
+            max_pids: default_linux_max_pids(),
         }
     }
 }

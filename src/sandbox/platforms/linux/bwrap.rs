@@ -24,6 +24,22 @@ pub struct LinuxSandboxOptions {
     /// `false` → soft-degrade with a warning, keeping bwrap + seccomp +
     /// rlimit active. Hardened production deployments can flip this on.
     pub require_landlock: bool,
+
+    /// SP-5: try to create a cgroup v2 sub-cgroup around the sandboxed
+    /// process to enforce RSS-based memory + CPU + pid limits. Disabled
+    /// → cgroup is never attempted (RLIMIT_AS still applies).
+    pub cgroup_enabled: bool,
+
+    /// SP-5: when `true`, the driver fails (rather than soft-degrades)
+    /// if cgroup v2 setup is impossible (e.g. no delegation).
+    pub require_cgroups: bool,
+
+    /// SP-5: `cpu.max` quota as a percentage of one CPU. See
+    /// [`crate::sandbox::cgroup_v2::cpu_quota_max_line`].
+    pub cpu_quota_percent: Option<u32>,
+
+    /// SP-5: `pids.max` ceiling.
+    pub max_pids: Option<u32>,
 }
 
 impl Default for LinuxSandboxOptions {
@@ -33,6 +49,10 @@ impl Default for LinuxSandboxOptions {
             no_new_privs: true,
             include_platform_defaults: true,
             require_landlock: false,
+            cgroup_enabled: true,
+            require_cgroups: false,
+            cpu_quota_percent: None,
+            max_pids: Some(200),
         }
     }
 }
@@ -420,6 +440,43 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         if let Some(mb) = profile.max_memory_mb {
             Self::apply_memory_rlimit(&mut cmd, mb);
         }
+
+        // SP-5: build cgroup v2 sub-cgroup before spawn so the child can
+        // be attached via pre_exec. The scope is owned by this `run()`
+        // frame; its Drop fires after `wait_with_output()` completes and
+        // rmdir's the cgroup directory. RLIMIT_AS (above) continues to
+        // apply as a fallback when cgroups are unavailable.
+        let _cgroup_scope: Option<crate::sandbox::cgroup_v2::CgroupV2Scope> = if self
+            .options
+            .cgroup_enabled
+        {
+            let limits = crate::sandbox::cgroup_v2::CgroupV2Limits {
+                memory_mb: profile.max_memory_mb,
+                cpu_quota_percent: self.options.cpu_quota_percent,
+                max_pids: self.options.max_pids,
+            };
+            let scope = crate::sandbox::cgroup_v2::CgroupV2Scope::try_create(limits);
+            if scope.is_none() && self.options.require_cgroups {
+                return Err(SandboxError::ExecutionFailed(
+                    "cgroup v2 setup failed and require_cgroups=true".into(),
+                ));
+            }
+            // Capture the child's cgroup.procs path by clone so pre_exec
+            // doesn't share Arc state with the parent (which would
+            // double-leak the ref count across fork+exec).
+            if let Some(ref s) = scope {
+                let procs_path = s.procs_path();
+                unsafe {
+                    cmd.pre_exec(move || {
+                        let pid = std::process::id();
+                        std::fs::write(&procs_path, pid.to_string().as_bytes())
+                    });
+                }
+            }
+            scope
+        } else {
+            None
+        };
 
         let mut child = cmd
             .spawn()
