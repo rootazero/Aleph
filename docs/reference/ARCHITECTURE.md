@@ -825,3 +825,4 @@ Default `max_total_chars` is 80,000. When the assembled prompt exceeds the budge
 - [Security](SECURITY.md) - Exec approval and permissions
 - [Sandbox](SANDBOX.md) - `Sandbox` trait, `WorkspaceSandbox`, capability pipeline
 - [Skill Sandboxing](SKILL_SANDBOXING.md) - OS-native sandboxing for evolved skills
+- [Markdown Skill Authoring](MARKDOWN_SKILL_AUTHORING.md) - SKILL.md frontmatter + sandbox modes + host-mode contract
