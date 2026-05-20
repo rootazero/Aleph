@@ -21,6 +21,7 @@ use tokio::sync::RwLock;
 
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
+use crate::sandbox::dns;
 use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::sandbox::hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
@@ -156,10 +157,17 @@ fn session_key_to_filename(sid: &SessionId) -> String {
 
 #[async_trait]
 impl Sandbox for WorkspaceSandbox {
-    async fn execute(&self, cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
-        let ctx = SandboxHookContext::new(&cmd.program, &cmd);
-
-        if let SandboxHookResult::Deny { reason } = self.hooks.run_before(&ctx).await {
+    async fn execute(&self, mut cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
+        // Hook context is created on-demand at each call site rather than
+        // once at the top: it borrows `&cmd`, which would block the SP-4
+        // DNS step from acquiring `&mut cmd.capabilities`. Per-call ctx
+        // construction is zero-cost (two pointer copies) and matches NLL
+        // semantics.
+        if let SandboxHookResult::Deny { reason } = self
+            .hooks
+            .run_before(&SandboxHookContext::new(&cmd.program, &cmd))
+            .await
+        {
             return Err(SandboxError::Other(format!("hook denied: {reason}")));
         }
 
@@ -176,7 +184,10 @@ impl Sandbox for WorkspaceSandbox {
                         reason: "cwd outside workspace root".into(),
                     };
                     self.hooks
-                        .run_after(&ctx, Err("cwd outside workspace root"))
+                        .run_after(
+                            &SandboxHookContext::new(&cmd.program, &cmd),
+                            Err("cwd outside workspace root"),
+                        )
                         .await;
                     return Err(err);
                 }
@@ -205,11 +216,30 @@ impl Sandbox for WorkspaceSandbox {
                         let err = SandboxError::CapabilityDenied {
                             reason: "user denied elevated capability request".into(),
                         };
-                        self.hooks.run_after(&ctx, Err("user denied")).await;
+                        self.hooks
+                            .run_after(
+                                &SandboxHookContext::new(&cmd.program, &cmd),
+                                Err("user denied"),
+                            )
+                            .await;
                         return Err(err);
                     }
                 }
             }
+        }
+
+        // SP-4: pre-resolve any hostnames in AllowHosts to IPs before the
+        // driver builds its profile. Driver-level matchers (Seatbelt
+        // `(remote ip ...)`) accept IP literals only. Fail-closed on DNS
+        // failure.
+        if let Err(e) = dns::resolve_hosts_in_capabilities(&mut cmd.capabilities).await {
+            self.hooks
+                .run_after(
+                    &SandboxHookContext::new(&cmd.program, &cmd),
+                    Err("dns resolution failed"),
+                )
+                .await;
+            return Err(e);
         }
 
         let profile = self.os_driver.profile_for(&cmd.capabilities, &cwd)?;
@@ -256,7 +286,9 @@ impl Sandbox for WorkspaceSandbox {
             }
         };
 
-        self.hooks.run_after(&ctx, outcome).await;
+        self.hooks
+            .run_after(&SandboxHookContext::new(&cmd.program, &cmd), outcome)
+            .await;
 
         output
     }

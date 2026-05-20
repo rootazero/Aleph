@@ -376,13 +376,36 @@ working modules without inheriting the stub skeletons.
 - That's it. No restricted token, no AppContainer, no WFP. This is honest
   documentation of what the code actually does, not aspirational claims.
 
+### Hostname support (macOS, SP-4 — shipped 2026-05-20)
+
+`NetworkPolicy::AllowHosts { hosts: ["github.com", "1.2.3.4"] }` is now
+accepted on macOS. The pipeline gained one new step between approval (4)
+and `profile_for` (5):
+
+- `src/sandbox/dns.rs::resolve_hosts_in_capabilities` walks the hosts list,
+  leaves IP literals untouched (`1.2.3.4`, `[::1]`, `1.2.3.4:443`, bare
+  IPv6), and resolves hostnames via `tokio::net::lookup_host` with a 5 s
+  timeout per hostname.
+- On failure (NXDOMAIN, timeout, empty result), the command is rejected
+  with `SandboxError::DnsResolutionFailed { hostname, source }` — fail
+  closed, matching cycle 1's P7 posture.
+- The resolved IPs replace the hostnames in `cmd.capabilities.network`
+  before the driver sees them, so Seatbelt's `(remote ip ...)` matcher
+  sees IP-only input. Defense-in-depth: the seatbelt driver still rejects
+  non-IPs if called directly, so a future caller bypassing the workspace
+  pipeline can't generate malformed SBPL.
+- Linux (`bwrap`) and Windows (`JobObject`-only) continue to return
+  `SandboxError::UnsupportedPolicy` for any `AllowHosts` — they have no
+  IP-level matcher to feed. SP-2 / SP-3b / SP-6 will plug into the same
+  DNS layer when those mechanisms land.
+
 ### Deferred follow-up specs
 
 | ID | Scope | Why deferred |
 |---|---|---|
 | SP-2 | Linux Landlock + seccomp-bpf | Defense-in-depth layered on bwrap; standalone design needed. |
 | SP-3 | Windows RestrictedToken + WFP | ~200 lines of unsafe Win32 with `CreateProcessAsUserW` + manual stdio pipe wiring; not testable from a Mac dev box, needs CI coverage first. |
-| SP-4 | Hostname-based filtering | Proxy-based pattern across all three OSes (codex uses port-allowlist for the same reason); standalone design. |
+| ~~SP-4~~ | ~~Hostname-based filtering~~ | **Shipped (2026-05-20)** as workspace-layer DNS pre-resolution; macOS-scoped. See "Hostname support" below. |
 | SP-5 | cgroups v2 Linux memory + CPU | `RLIMIT_AS` covers the common case; cgroup adds enforcement against `mmap` games but is more invasive. |
 | SP-6 | Windows AppContainer | Requires `windows-sys` major-version upgrade. |
 

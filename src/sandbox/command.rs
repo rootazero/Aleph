@@ -60,6 +60,18 @@ pub enum SandboxError {
         reason: String,
     },
 
+    /// DNS pre-resolution for `NetworkPolicy::AllowHosts` failed. The hostname
+    /// could not be turned into one or more IP literals to feed the OS
+    /// sandbox's IP-allowlist mechanism. Fail-closed: the command is refused
+    /// rather than running with an empty allowlist (which would deny all
+    /// outbound traffic confusingly).
+    #[error("dns resolution failed for host '{hostname}': {source}")]
+    DnsResolutionFailed {
+        hostname: String,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("{0}")]
     Other(String),
 }

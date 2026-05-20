@@ -13,6 +13,7 @@ pub mod capabilities;
 pub mod command;
 pub mod config;
 pub mod context;
+pub(crate) mod dns;
 pub mod driver;
 pub mod exec_approval;
 pub mod factory;
