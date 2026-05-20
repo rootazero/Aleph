@@ -275,6 +275,57 @@ fn phase4_channel_aware_resolved_context_messaging_paradigm() {
 }
 
 #[test]
+fn phase5_messaging_paradigm_security_context_announces_approval_required() {
+    // Phase 5 F2: harness_bridge now derives SecurityContext from the
+    // InteractionManifest paradigm via `SecurityContext::for_paradigm`.
+    // Messaging paradigm must surface the Standard-sandbox + approval-
+    // required posture in the SecurityLayer output so the LLM is told
+    // to be cautious about elevated operations on public-channel bots.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::Messaging);
+    let security = SecurityContext::for_paradigm(InteractionParadigm::Messaging);
+    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+    let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
+    let prompt = builder.build_system_prompt(&[]);
+
+    assert!(
+        prompt.contains("Security Level: Standard"),
+        "Messaging paradigm must surface Standard sandbox baseline"
+    );
+    assert!(
+        prompt.contains("Elevated Operations: Require user approval"),
+        "Messaging paradigm must surface approval-required posture"
+    );
+}
+
+#[test]
+fn phase5_cli_paradigm_security_context_stays_permissive() {
+    // Phase 5 F2 negative test: CLI paradigm must preserve the existing
+    // permissive baseline — the LLM sees "Security Level: None" and is
+    // not told about elevated-operation restrictions.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::CLI);
+    let security = SecurityContext::for_paradigm(InteractionParadigm::CLI);
+    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+    let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
+    let prompt = builder.build_system_prompt(&[]);
+
+    assert!(prompt.contains("Security Level: None"));
+    assert!(
+        !prompt.contains("Elevated Operations: Require user approval"),
+        "CLI paradigm must not announce approval requirement (permissive posture)"
+    );
+}
+
+#[test]
 fn phase4_without_iteration_cap_session_budget_stays_silent() {
     let builder = PromptBuilder::new(PromptConfig::default());
     let prompt = builder.build_system_prompt(&[]);
