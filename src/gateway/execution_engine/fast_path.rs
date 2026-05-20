@@ -53,6 +53,7 @@ where
                     tool_calls: 1,
                     loops: steps_completed,
                     final_response: Some(response),
+                    ..Default::default()
                 },
                 total_duration_ms: duration_ms,
             })
@@ -136,6 +137,7 @@ where
                     tool_calls: 1,
                     loops: 0,
                     final_response: Some(error_response),
+                    ..Default::default()
                 },
                 total_duration_ms: duration_ms,
             })

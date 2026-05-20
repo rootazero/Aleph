@@ -465,14 +465,68 @@ impl ToolResult {
     }
 }
 
-/// Summary of a completed agent run
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Summary of a completed agent run.
+///
+/// The first four fields are the legacy shape — preserved verbatim so older
+/// channels and persisted blobs keep deserializing. Every new field carries
+/// `#[serde(default)]` plus a `skip_serializing_if` so legacy producers
+/// (which omit them) round-trip cleanly and minimal blobs stay minimal.
+///
+/// Hermes-agent surfaces these signals on every turn; Aleph used to swallow
+/// them. The harness already records every one (token breakdown via
+/// `LoopTraceEvent::ProviderUsage`, per-tool duration via
+/// `ToolCallCompleted`, terminate cause via `TerminateReason`) — this struct
+/// is the renderable seam.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunSummary {
     pub total_tokens: u64,
     pub tool_calls: u32,
     pub loops: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_response: Option<String>,
+    /// Wall-clock harness duration. Often duplicated with
+    /// `RunComplete.total_duration_ms`; channels typically prefer the
+    /// outer field but the summary carries it so persistence stays
+    /// self-contained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Stable string form of `TerminateReason::as_static_str()` —
+    /// `"completed"`, `"hit_max_iterations"`, … Channels that want richer
+    /// formatting reconstruct the enum on the alephcore side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminate_reason: Option<String>,
+    /// Per-component provider token usage. Granular complement to
+    /// `total_tokens`; surfaces cache hit ratio + reasoning spend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_breakdown: Option<TokenBreakdownView>,
+    /// Best-effort USD estimate. `None` when the pricing module had no
+    /// rate for this provider/model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost_usd: Option<f64>,
+    /// Confidence band on `estimated_cost_usd` — `"complete"`,
+    /// `"partial_missing_price"`, `"unknown"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_status: Option<String>,
+    /// One entry per tool invocation in run order. Empty when no tool ran
+    /// or when the executor did not record a timeline. Shape matches
+    /// `EnhancedRunSummary.tool_summaries` so renderers can reuse code.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_summaries: Vec<ToolSummaryItem>,
+    /// Errors that surfaced during the run; one per failed tool call.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<ToolErrorItem>,
+}
+
+/// Lightweight view of `alephcore::orchestrator::dispatch::TokenBreakdown`
+/// that lives in the protocol crate so channels can render without pulling
+/// `alephcore`.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct TokenBreakdownView {
+    pub input: u32,
+    pub output: u32,
+    pub cache_read: u32,
+    pub cache_creation: u32,
+    pub reasoning: u32,
 }
 
 /// Configuration changed event
@@ -657,6 +711,7 @@ mod tests {
             tool_calls: 5,
             loops: 2,
             final_response: Some("Done".to_string()),
+            ..Default::default()
         };
 
         let mut enhanced = EnhancedRunSummary::from_basic(&basic, 5000);

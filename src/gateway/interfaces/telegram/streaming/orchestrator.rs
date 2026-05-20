@@ -230,6 +230,7 @@ mod tests {
                 tool_calls: 0,
                 loops: 1,
                 final_response: Some("hi".to_string()),
+                ..Default::default()
             },
             total_duration_ms: 100,
         })
@@ -301,6 +302,7 @@ mod tests {
                 tool_calls: 0,
                 loops: 1,
                 final_response: Some("<think>step 1</think> answer".to_string()),
+                ..Default::default()
             },
             total_duration_ms: 100,
         })
