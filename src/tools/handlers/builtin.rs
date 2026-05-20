@@ -46,6 +46,7 @@ impl ToolHandler for BuiltinHandler {
 
     fn definition(&self) -> ToolDefinition {
         let inner_def = self.inner.definition();
+        let idempotent = crate::tools::retry::is_idempotent_builtin_name(&self.name);
         ToolDefinition {
             name: self.name.clone(),
             description: inner_def.description,
@@ -55,6 +56,7 @@ impl ToolHandler for BuiltinHandler {
                 hidden_from_llm: false,
                 requires_approval: inner_def.requires_confirmation,
                 tags: Vec::new(),
+                idempotent,
             },
         }
     }
