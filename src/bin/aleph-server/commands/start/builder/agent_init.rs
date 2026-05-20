@@ -1580,20 +1580,43 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         });
 
-        if let Some(trace_db) = resilience_db.clone() {
-            let trace_list_db = trace_db.clone();
-            server.handlers_mut().register("trace.list", move |req| {
-                let db = trace_list_db.clone();
-                async move {
-                    alephcore::gateway::handlers::trace_replay::handle_list(req, db).await
-                }
-            });
+        // Phase-2 always overrides phase-1 to guarantee a deterministic response.
+        // When state DB is absent, the override returns SERVICE_UNAVAILABLE with
+        // a tighter, environment-specific reason — never the phase-1 generic.
+        match resilience_db.clone() {
+            Some(trace_db) => {
+                let trace_list_db = trace_db.clone();
+                server.handlers_mut().register("trace.list", move |req| {
+                    let db = trace_list_db.clone();
+                    async move {
+                        alephcore::gateway::handlers::trace_replay::handle_list(req, db).await
+                    }
+                });
 
-            let trace_get_db = trace_db;
-            server.handlers_mut().register("trace.get", move |req| {
-                let db = trace_get_db.clone();
-                async move { alephcore::gateway::handlers::trace_replay::handle_get(req, db).await }
-            });
+                let trace_get_db = trace_db;
+                server.handlers_mut().register("trace.get", move |req| {
+                    let db = trace_get_db.clone();
+                    async move {
+                        alephcore::gateway::handlers::trace_replay::handle_get(req, db).await
+                    }
+                });
+            }
+            None => {
+                server.handlers_mut().register("trace.list", |req| async move {
+                    alephcore::gateway::protocol::JsonRpcResponse::error(
+                        req.id,
+                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                        "trace.list disabled: no state_database configured".to_string(),
+                    )
+                });
+                server.handlers_mut().register("trace.get", |req| async move {
+                    alephcore::gateway::protocol::JsonRpcResponse::error(
+                        req.id,
+                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                        "trace.get disabled: no state_database configured".to_string(),
+                    )
+                });
+            }
         }
 
         // Capture for inbound router
@@ -1918,25 +1941,77 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // bypassing the LLM agent loop. Intended for E2E test harnesses
         // (note_layer probes, deterministic tool exercising). Production
         // callers should still go through agent.run.
+        //
+        // D2/P3 fix: pass the live AgentRegistry so handle_invoke can apply
+        // the same allowlist that the LLM faces — preventing arbitrary
+        // operators from bypassing per-agent tool scoping.
+        //
         // Only wire when a real BuiltinToolRegistry is present (real mode);
-        // in simulated mode the stub from HandlerRegistry::new remains.
+        // in simulated mode the SERVICE_UNAVAILABLE placeholder from
+        // HandlerRegistry::new remains.
         if let Some(reg) = tool_reg_out.clone() {
+            let agents_for_invoke: std::sync::Arc<alephcore::agents::AgentRegistry> = {
+                let r = std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
+                let aleph_home = alephcore::discovery::aleph_home_dir().ok();
+                let project_dir = std::env::current_dir().ok();
+                if let Some(home) = aleph_home.as_deref() {
+                    if let Err(e) = r.register_from_dirs(home, project_dir.as_deref()) {
+                        tracing::warn!(
+                            error = %e,
+                            "tools.invoke: failed to load user agent defs; allowlist degrades to builtins-only"
+                        );
+                    }
+                }
+                r
+            };
             server.handlers_mut().register("tools.invoke", move |req| {
                 let registry = reg.clone();
+                let agents = Some(agents_for_invoke.clone());
                 async move {
-                    alephcore::gateway::handlers::tools_invoke::handle_invoke(req, registry).await
+                    alephcore::gateway::handlers::tools_invoke::handle_invoke(
+                        req, registry, agents,
+                    )
+                    .await
                 }
             });
             if !daemon {
-                println!("  tools.invoke: wired to BuiltinToolRegistry (bypasses agent loop)");
+                println!("  tools.invoke: wired with agent allowlist gating");
             }
         }
 
-        // Wire tools.effective to return tools available to a specific agent
+        // Wire tools.effective to return tools available to a specific agent.
+        // D1 fix: previously rebuilt a builtins-only AgentRegistry per call,
+        // hiding user-customized agents. Mirror the orchestrator's setup
+        // (mod.rs ~1112 + orchestrator_init.rs:70) by loading user/project
+        // AgentDefs from filesystem so the visibility surface matches what
+        // the agent loop actually sees.
         {
             let reg = dispatch_registry.clone();
-            let agent_def_registry =
-                std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
+            let agent_def_registry = {
+                let r = std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
+                let aleph_home = alephcore::discovery::aleph_home_dir().ok();
+                let project_dir = std::env::current_dir().ok();
+                if let Some(home) = aleph_home.as_deref() {
+                    match r.register_from_dirs(home, project_dir.as_deref()) {
+                        Ok(shadows) => {
+                            if !daemon && !shadows.is_empty() {
+                                println!(
+                                    "  tools.effective: loaded user agents (+{} shadow overrides)",
+                                    shadows.len()
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "tools.effective: failed to load user agent defs; \
+                                 falling back to builtins-only"
+                            );
+                        }
+                    }
+                }
+                r
+            };
             server
                 .handlers_mut()
                 .register("tools.effective", move |req| {

@@ -125,7 +125,17 @@ use std::pin::Pin;
 
 use super::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND,
+    SERVICE_UNAVAILABLE,
 };
+
+/// Build a phase-1 placeholder response indicating the named feature exists
+/// but is not wired by the boot path in this build/mode. Used by
+/// `HandlerRegistry::new()` to register a deterministic error in place of
+/// fake-success stubs — phase-2 (boot) overrides with the real handler when
+/// the dependency is available.
+fn service_unavailable(req: JsonRpcRequest, reason: &'static str) -> JsonRpcResponse {
+    JsonRpcResponse::error(req.id, SERVICE_UNAVAILABLE, reason.to_string())
+}
 
 /// Create an ad-hoc `CapabilityLedger` for stateless runtime handlers.
 ///
@@ -500,8 +510,13 @@ impl HandlerRegistry {
         // Daemon control handlers
         // daemon.logs is stateless (reads from filesystem) — register directly
         registry.register("daemon.logs", daemon_control::handle_logs);
-        registry.register("trace.list", trace_replay::handle_list_stub);
-        registry.register("trace.get", trace_replay::handle_get_stub);
+        // Phase-1 placeholders — agent_init.rs overrides at boot.
+        registry.register("trace.list", |req| async move {
+            service_unavailable(req, "trace.list requires state database (boot phase 2)")
+        });
+        registry.register("trace.get", |req| async move {
+            service_unavailable(req, "trace.get requires state database (boot phase 2)")
+        });
         // daemon.status and daemon.shutdown need runtime state — placeholders
         registry.register("daemon.status", |req| async move {
             JsonRpcResponse::error(
@@ -629,10 +644,16 @@ impl HandlerRegistry {
         registry.register("graph.node_detail", graph::handle_node_detail);
         registry.register("graph.search", graph::handle_search);
 
-        // Tools visibility handlers (placeholders — actual handlers wired with ToolRegistry)
-        registry.register("tools.catalog", tools_visibility::handle_catalog_stub);
-        registry.register("tools.effective", tools_visibility::handle_effective_stub);
-        registry.register("tools.invoke", tools_invoke::handle_invoke_stub);
+        // Tools visibility handlers — phase-1 placeholders; agent_init.rs overrides at boot.
+        registry.register("tools.catalog", |req| async move {
+            service_unavailable(req, "tools.catalog requires ToolRegistry (boot phase 2)")
+        });
+        registry.register("tools.effective", |req| async move {
+            service_unavailable(req, "tools.effective requires ToolRegistry (boot phase 2)")
+        });
+        registry.register("tools.invoke", |req| async move {
+            service_unavailable(req, "tools.invoke requires ToolRegistry (boot phase 2)")
+        });
 
         // Dreaming admin handler — bypasses scheduler for deterministic E2E.
         // The handler always reads DREAM_DAEMON (a OnceCell) so it does not
