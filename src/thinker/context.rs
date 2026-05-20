@@ -205,6 +205,12 @@ pub struct ResolvedContext {
     /// Optional runtime context for micro-environmental awareness
     #[serde(skip)]
     pub runtime_context: Option<super::runtime_context::RuntimeContext>,
+    /// Aggregated per-tool runtime state fragments. Populated by the
+    /// orchestrator before prompt assembly; rendered by
+    /// `ToolRuntimeStateLayer` (priority 502) as `<tool_runtime_state>`
+    /// XML. Empty when no opt-in tools have anything to say.
+    #[serde(skip, default)]
+    pub runtime_state_blocks: Vec<crate::tools::runtime_state::RuntimeStateFragment>,
 }
 
 /// Context Aggregator for reconciling interaction and security layers
@@ -276,6 +282,7 @@ impl ContextAggregator {
             disabled_tools,
             environment_contract,
             runtime_context: None,
+            runtime_state_blocks: Vec::new(),
         }
     }
 
