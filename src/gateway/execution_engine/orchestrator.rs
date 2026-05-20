@@ -42,6 +42,7 @@ where
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            sandbox_override: None,
         };
 
         let handle = orchestrator

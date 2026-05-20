@@ -413,6 +413,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 depth: 0,
                 tool_service: Some(tool_service),
                 trace_sink: Some(trace_sink),
+                // G2 — forward the per-run sandbox override so the team
+                // dispatcher's WorktreeSandbox replaces the orchestrator's
+                // sandbox_factory output for this run.
+                sandbox_override: request.sandbox_override.clone(),
             };
 
             // Dispatch via the orchestrator

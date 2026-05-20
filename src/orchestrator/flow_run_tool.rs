@@ -79,6 +79,7 @@ impl FlowRunTool {
             depth: ctx.current_depth.saturating_add(1),
             tool_service: None,
             trace_sink: None,
+            sandbox_override: None,
         };
         let handle = self.orchestrator.dispatch(req).await?;
         let outcome = handle

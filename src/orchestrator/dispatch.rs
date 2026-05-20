@@ -114,6 +114,15 @@ pub struct FlowRequest {
     /// Gateway-side observability sink. `None` is a no-op.
     /// Not included in `Debug` output because `Arc<dyn TraceSink>` is not `Debug`.
     pub trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+    /// Per-request sandbox override. `None` falls back to
+    /// `Orchestrator::sandbox_factory(spec.sandbox_kind, &session_key)` — the
+    /// pre-G2 default. `Some(sandbox)` short-circuits the factory; used by the
+    /// team dispatcher to inject a `WorktreeSandbox` so concurrent team
+    /// members write to isolated git worktrees and cannot corrupt each
+    /// other's index.
+    ///
+    /// Not included in `Debug` output because `Arc<dyn Sandbox>` is not `Debug`.
+    pub sandbox_override: Option<std::sync::Arc<dyn crate::sandbox::Sandbox>>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -267,17 +276,22 @@ impl Orchestrator {
 
         // Step 5: brain pick deferred to HarnessRunner (ProviderRegistry lives there).
 
-        // Step 6: sandbox provision.
-        let sandbox = match (self.sandbox_factory)(spec.sandbox_kind, &session_res.session_key) {
-            Ok(sb) => sb,
-            Err(e) => {
-                let mut guard = self
-                    .active_sessions
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                guard.remove(&session_res.session_key);
-                return Err(e);
-            }
+        // Step 6: sandbox provision. Per-request `sandbox_override` short-circuits
+        // the factory — the team dispatcher uses it to inject a `WorktreeSandbox`
+        // for per-task git isolation. Falls back to the factory when None.
+        let sandbox = match req.sandbox_override.clone() {
+            Some(sb) => sb,
+            None => match (self.sandbox_factory)(spec.sandbox_kind, &session_res.session_key) {
+                Ok(sb) => sb,
+                Err(e) => {
+                    let mut guard = self
+                        .active_sessions
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    guard.remove(&session_res.session_key);
+                    return Err(e);
+                }
+            },
         };
 
         // Step 7: spawn harness, plumbing events + completion + cancel.

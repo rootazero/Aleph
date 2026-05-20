@@ -58,6 +58,7 @@ impl AgentLoopBridge {
             metadata: HashMap::new(),
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            sandbox_override: None,
         }
     }
 

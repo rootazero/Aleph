@@ -68,7 +68,7 @@ impl Default for ExecutionEngineConfig {
 }
 
 /// A run request
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RunRequest {
     /// Unique run ID
     pub run_id: String,
@@ -84,6 +84,28 @@ pub struct RunRequest {
     pub attachments: Vec<crate::gateway::channel::Attachment>,
     /// Shared pending media buffer (for media attachment delivery)
     pub pending_media: PendingMedia,
+    /// G2 — per-run sandbox override. `None` defers to the orchestrator's
+    /// sandbox factory (production default); `Some(sandbox)` short-circuits
+    /// the factory and is used by the team dispatcher to wrap each member
+    /// task in an isolated git worktree.
+    pub sandbox_override: Option<std::sync::Arc<dyn crate::sandbox::Sandbox>>,
+}
+
+impl std::fmt::Debug for RunRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunRequest")
+            .field("run_id", &self.run_id)
+            .field("input", &self.input)
+            .field("session_key", &self.session_key)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("metadata", &self.metadata)
+            .field("attachments", &self.attachments)
+            .field(
+                "sandbox_override",
+                &self.sandbox_override.as_ref().map(|_| "<dyn Sandbox>"),
+            )
+            .finish()
+    }
 }
 
 /// Run state

@@ -323,6 +323,7 @@ pub async fn handle(
         metadata: HashMap::new(),
         attachments: Vec::new(),
         pending_media,
+        sandbox_override: None,
     };
 
     let is_streaming = req.stream.unwrap_or(false);

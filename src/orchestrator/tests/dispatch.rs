@@ -117,6 +117,7 @@ async fn dispatch_happy_path_returns_handle_and_completes() {
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            sandbox_override: None,
         })
         .await
         .expect("dispatch ok");
@@ -143,6 +144,7 @@ async fn dispatch_unknown_flow_id_returns_error() {
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            sandbox_override: None,
         })
         .await
         .unwrap_err();
@@ -163,6 +165,7 @@ async fn dispatch_unknown_agent_returns_error() {
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            sandbox_override: None,
         })
         .await
         .unwrap_err();
@@ -185,6 +188,7 @@ async fn dispatch_above_max_depth_returns_recursion_error() {
             depth: MAX_FLOW_DEPTH + 1,
             tool_service: None,
             trace_sink: None,
+            sandbox_override: None,
         })
         .await
         .unwrap_err();
@@ -256,6 +260,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
         depth: 0,
         tool_service: None,
         trace_sink: None,
+        sandbox_override: None,
     };
 
     let first = orch.dispatch(mk_req()).await.expect("first ok");
@@ -279,6 +284,7 @@ async fn dispatch_releases_session_lock_after_completion() {
         depth: 0,
         tool_service: None,
         trace_sink: None,
+        sandbox_override: None,
     };
 
     // First dispatch — await completion.
@@ -434,6 +440,7 @@ async fn dispatch_forwards_tool_service_override() {
             depth: 0,
             tool_service: Some(tool_service),
             trace_sink: None,
+            sandbox_override: None,
         })
         .await
         .expect("dispatch ok");
@@ -465,6 +472,7 @@ async fn dispatch_forwards_trace_sink() {
             depth: 0,
             tool_service: None,
             trace_sink: Some(trace_sink),
+            sandbox_override: None,
         })
         .await
         .expect("dispatch ok");

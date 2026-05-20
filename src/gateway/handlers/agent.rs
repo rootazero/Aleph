@@ -203,6 +203,7 @@ impl AgentRunManager {
             metadata,
             attachments: vec![],
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            sandbox_override: None,
         };
 
         let emitter: Arc<dyn EventEmitter + Send + Sync> =
