@@ -213,6 +213,7 @@ impl BubblewrapDriver {
                 args.push("--bind".into());
                 args.push(cwd_str.into());
                 args.push(cwd_str.into());
+                push_metadata_protection_args(&mut args, std::iter::once(cwd));
             }
             FsPolicy::ReadPaths(paths) => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
@@ -233,6 +234,7 @@ impl BubblewrapDriver {
                     args.push(path_str.into());
                     args.push(path_str.into());
                 }
+                push_metadata_protection_args(&mut args, std::iter::once(cwd));
             }
             FsPolicy::WritePaths(paths) => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
@@ -253,6 +255,13 @@ impl BubblewrapDriver {
                     args.push(path_str.into());
                     args.push(path_str.into());
                 }
+                // Protect metadata in cwd AND every additional writable
+                // path. bwrap evaluates mounts in order: later mounts
+                // shadow earlier ones, so emitting `--ro-bind-try` after
+                // the writable `--bind` is what makes these read-only.
+                let mut all = vec![cwd];
+                all.extend(paths.iter().map(|p| p.as_path()));
+                push_metadata_protection_args(&mut args, all.into_iter());
             }
             FsPolicy::FullRead { exclude } => {
                 args.push("--ro-bind".into());
@@ -294,6 +303,20 @@ impl BubblewrapDriver {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn build_args_for_test(
+        &self,
+        policy: &crate::sandbox::policy::SandboxPolicy,
+        cwd: &std::path::Path,
+    ) -> Result<Vec<String>, SandboxError> {
+        // Test entry-point: feeds policy + cwd into the same path the
+        // driver uses, so unit tests can assert on the generated
+        // argument vector without depending on a real bubblewrap.
+        let mut args = Vec::new();
+        self.add_fs_policy(&mut args, &policy.filesystem, cwd)?;
+        Ok(args)
+    }
+
     fn apply_no_new_privs(&self, cmd: &mut Command) {
         if self.options.no_new_privs {
             debug!("Applying PR_SET_NO_NEW_PRIVS via pre-exec");
@@ -330,6 +353,27 @@ impl BubblewrapDriver {
                 Ok(())
             });
         }
+    }
+}
+
+/// Append codex-inspired metadata-protection mounts to a bubblewrap
+/// argument vector. For every writable root, each protected subpath
+/// (e.g. `.git`, `.aleph`) is remounted read-only via `--ro-bind-try`,
+/// which silently no-ops when the source does not exist — safe for
+/// brand-new workspaces. Must be emitted *after* the writable `--bind`
+/// because bwrap mounts override in declaration order.
+fn push_metadata_protection_args<'a, I>(args: &mut Vec<String>, writable_roots: I)
+where
+    I: IntoIterator<Item = &'a std::path::Path>,
+{
+    let roots: Vec<&std::path::Path> = writable_roots.into_iter().collect();
+    let protected =
+        crate::sandbox::protected_paths::protected_paths_for(roots.iter().copied());
+    for path in protected {
+        let Some(path_str) = path.to_str() else { continue };
+        args.push("--ro-bind-try".into());
+        args.push(path_str.into());
+        args.push(path_str.into());
     }
 }
 
@@ -586,6 +630,73 @@ mod tests {
 
         assert!(args.contains(&"--tmpfs".into()));
         assert!(!args.iter().any(|a| a == "/usr"));
+    }
+
+    #[test]
+    fn workspace_only_adds_ro_bind_try_for_metadata_paths() {
+        let driver = BubblewrapDriver::new();
+        let policy = SandboxPolicy::default();
+        let cwd = Path::new("/tmp/ws");
+        let args = driver.generate_args(&policy, cwd).unwrap();
+
+        // The writable --bind comes first, then --ro-bind-try for each
+        // protected subpath — bwrap mounts override in order, so the
+        // ro-bind must follow.
+        let bind_idx = args
+            .windows(3)
+            .position(|w| w == ["--bind", "/tmp/ws", "/tmp/ws"])
+            .expect("workspace --bind must be present");
+        let git_idx = args
+            .windows(3)
+            .position(|w| w == ["--ro-bind-try", "/tmp/ws/.git", "/tmp/ws/.git"])
+            .expect(".git --ro-bind-try must be present");
+        let aleph_idx = args
+            .windows(3)
+            .position(|w| w == ["--ro-bind-try", "/tmp/ws/.aleph", "/tmp/ws/.aleph"])
+            .expect(".aleph --ro-bind-try must be present");
+        assert!(bind_idx < git_idx);
+        assert!(bind_idx < aleph_idx);
+    }
+
+    #[test]
+    fn write_paths_protects_metadata_in_each_writable_root() {
+        let driver = BubblewrapDriver::new();
+        let policy = SandboxPolicy {
+            filesystem: FsPolicy::WritePaths(vec![PathBuf::from("/tmp/extra")]),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let args = driver.generate_args(&policy, cwd).unwrap();
+
+        // Both cwd and the additional writable path get metadata protection.
+        for root in ["/tmp/ws", "/tmp/extra"] {
+            for sub in [".git", ".aleph", ".codex", ".agents"] {
+                let p = format!("{root}/{sub}");
+                assert!(
+                    args.windows(3)
+                        .any(|w| w == ["--ro-bind-try", p.as_str(), p.as_str()]),
+                    "missing --ro-bind-try for {p}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn full_write_does_not_auto_protect_metadata() {
+        let driver = BubblewrapDriver::new();
+        let policy = SandboxPolicy {
+            filesystem: FsPolicy::FullWrite { exclude: vec![] },
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let args = driver.generate_args(&policy, cwd).unwrap();
+        // FullWrite = danger-full-access; explicit caller contract, no
+        // auto metadata protection.
+        assert!(
+            !args
+                .windows(3)
+                .any(|w| w == ["--ro-bind-try", "/tmp/ws/.git", "/tmp/ws/.git"])
+        );
     }
 
     #[test]

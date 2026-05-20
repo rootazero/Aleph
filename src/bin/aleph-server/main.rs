@@ -211,6 +211,24 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             let code = commands::bootstrap_runtime::run(br_args).await;
             std::process::exit(code);
         }
+        Some(Command::SandboxDebug {
+            network,
+            fs_write,
+            fs_read,
+            show_summary,
+            log_denials,
+            command,
+        }) => {
+            return commands::handle_sandbox_debug(
+                network,
+                fs_write,
+                fs_read,
+                show_summary,
+                log_denials,
+                command,
+            )
+            .await;
+        }
         Some(Command::Start) | None => {
             // Continue with start logic
         }

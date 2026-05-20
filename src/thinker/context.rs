@@ -211,6 +211,12 @@ pub struct ResolvedContext {
     /// XML. Empty when no opt-in tools have anything to say.
     #[serde(skip, default)]
     pub runtime_state_blocks: Vec<crate::tools::runtime_state::RuntimeStateFragment>,
+    /// Active sandbox posture for system-prompt injection (codex-inspired).
+    /// Populated by the orchestrator from `Sandbox::summary()` before
+    /// prompt assembly; rendered by `SecurityLayer` (priority 600). `None`
+    /// keeps the sandbox section absent (e.g. mock sandboxes in tests).
+    #[serde(skip, default)]
+    pub sandbox_summary: Option<crate::sandbox::SandboxSummary>,
 }
 
 /// Context Aggregator for reconciling interaction and security layers
@@ -283,6 +289,7 @@ impl ContextAggregator {
             environment_contract,
             runtime_context: None,
             runtime_state_blocks: Vec::new(),
+            sandbox_summary: None,
         }
     }
 
