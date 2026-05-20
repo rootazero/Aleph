@@ -90,6 +90,7 @@ mod tests {
         ) -> Result<OsSandboxProfile, SandboxError> {
             Ok(OsSandboxProfile {
                 contents: String::new(),
+                max_memory_mb: None,
             })
         }
 
@@ -225,6 +226,7 @@ mod tests {
         ) -> Result<OsSandboxProfile, SandboxError> {
             Ok(OsSandboxProfile {
                 contents: String::new(),
+                max_memory_mb: None,
             })
         }
 

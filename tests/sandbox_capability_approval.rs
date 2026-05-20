@@ -26,21 +26,24 @@ use alephcore::sandbox::{
     SandboxCapabilities, SandboxCommand, SandboxConfig, SandboxError, SandboxOutput,
 };
 
-/// Recording driver — every `run` call increments `run_count` and returns a
-/// canned successful `SandboxOutput`. Used so tests can assert whether the
-/// pipeline reached the OS driver stage (step 5) without touching the real
-/// `sandbox-exec` binary.
+/// Recording driver — every `run` call increments `run_count` and stashes
+/// the `profile.max_memory_mb` it received. Tests can assert whether the
+/// pipeline reached the OS driver stage (step 5) and what policy fields
+/// threaded all the way through, without touching the real `sandbox-exec`.
 struct RecordingDriver {
     run_count: Arc<RwLock<u32>>,
+    last_max_memory_mb: Arc<RwLock<Option<u64>>>,
 }
 
 impl RecordingDriver {
-    fn new() -> (Arc<Self>, Arc<RwLock<u32>>) {
+    fn new() -> (Arc<Self>, Arc<RwLock<u32>>, Arc<RwLock<Option<u64>>>) {
         let run_count = Arc::new(RwLock::new(0u32));
+        let last_max_memory_mb = Arc::new(RwLock::new(None));
         let driver = Arc::new(Self {
             run_count: run_count.clone(),
+            last_max_memory_mb: last_max_memory_mb.clone(),
         });
-        (driver, run_count)
+        (driver, run_count, last_max_memory_mb)
     }
 }
 
@@ -56,11 +59,14 @@ impl OsSandboxDriverTrait for RecordingDriver {
 
     fn profile_for(
         &self,
-        _capabilities: &SandboxCapabilities,
+        capabilities: &SandboxCapabilities,
         _cwd: &Path,
     ) -> Result<OsSandboxProfile, SandboxError> {
+        // Thread capabilities.max_memory_mb into the profile so the
+        // integration test can verify the foundation layer (S1) wiring.
         Ok(OsSandboxProfile {
             contents: String::new(),
+            max_memory_mb: capabilities.max_memory_mb,
         })
     }
 
@@ -71,11 +77,12 @@ impl OsSandboxDriverTrait for RecordingDriver {
         _env: &HashMap<String, String>,
         _stdin: Option<&[u8]>,
         _cwd: &Path,
-        _profile: &OsSandboxProfile,
+        profile: &OsSandboxProfile,
         _timeout: Duration,
         _max_output_bytes: usize,
     ) -> Result<SandboxOutput, SandboxError> {
         *self.run_count.write().await += 1;
+        *self.last_max_memory_mb.write().await = profile.max_memory_mb;
         Ok(SandboxOutput {
             stdout: b"ok".to_vec(),
             stderr: Vec::new(),
@@ -124,6 +131,7 @@ fn build_test_sandbox(
     Arc<dyn Sandbox>,
     Arc<RwLock<u32>>, // driver run_count
     Arc<RwLock<u32>>, // approval call count
+    Arc<RwLock<Option<u64>>>, // last profile.max_memory_mb seen by driver
     tempfile::TempDir,
 ) {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -136,7 +144,7 @@ fn build_test_sandbox(
         windows: Default::default(),
         rate_limit: Default::default(),
     };
-    let (driver, run_count) = RecordingDriver::new();
+    let (driver, run_count, last_mem) = RecordingDriver::new();
     let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver;
     let (requester, calls) = FixedRequester::new(outcome);
     let gate = Arc::new(ApprovalGate::new(
@@ -144,7 +152,7 @@ fn build_test_sandbox(
         Some(Arc::from(requester) as Arc<dyn ApprovalRequester>),
     ));
     let sandbox = build_sandbox(&cfg, driver_trait, gate, SandboxRateLimitConfig::default());
-    (sandbox, run_count, calls, tmp)
+    (sandbox, run_count, calls, last_mem, tmp)
 }
 
 /// Single session id reused across a test — `SessionKey::ephemeral` mints a
@@ -203,7 +211,7 @@ fn spawn_cmd(session: SessionKey) -> SandboxCommand {
 async fn strict_capabilities_execute_without_approval() {
     // Strict caps are always ⊆ baseline, so the pipeline should skip step 3
     // (approval) entirely and reach the driver with an exit code of 0.
-    let (sandbox, runs, approvals, _tmp) = build_test_sandbox(ApprovalOutcome::Denied);
+    let (sandbox, runs, approvals, _last_mem, _tmp) = build_test_sandbox(ApprovalOutcome::Denied);
 
     let output = sandbox
         .execute(strict_cmd(test_session()))
@@ -227,7 +235,7 @@ async fn strict_capabilities_execute_without_approval() {
 async fn elevated_network_triggers_approval_and_proceeds_on_approve() {
     // Network escalation is outside the strict baseline, so step 3 must
     // consult the gate. Approval → driver runs.
-    let (sandbox, runs, approvals, _tmp) = build_test_sandbox(ApprovalOutcome::Approved);
+    let (sandbox, runs, approvals, _last_mem, _tmp) = build_test_sandbox(ApprovalOutcome::Approved);
 
     let output = sandbox
         .execute(network_cmd(test_session()))
@@ -243,7 +251,7 @@ async fn elevated_network_triggers_approval_and_proceeds_on_approve() {
 async fn elevated_subprocess_denied_by_approval_returns_error() {
     // Subprocess spawn is outside the strict baseline. Gate denies → the
     // sandbox must refuse with `CapabilityDenied` and never call the driver.
-    let (sandbox, runs, approvals, _tmp) = build_test_sandbox(ApprovalOutcome::Denied);
+    let (sandbox, runs, approvals, _last_mem, _tmp) = build_test_sandbox(ApprovalOutcome::Denied);
 
     let err = sandbox
         .execute(spawn_cmd(test_session()))
@@ -270,7 +278,7 @@ async fn elevated_subprocess_denied_by_approval_returns_error() {
 async fn approval_outcome_is_cached_per_session() {
     // First elevated call triggers approval; second call with same cap in
     // same session uses the cached grant and does not ask again.
-    let (sandbox, runs, approvals, _tmp) = build_test_sandbox(ApprovalOutcome::Approved);
+    let (sandbox, runs, approvals, _last_mem, _tmp) = build_test_sandbox(ApprovalOutcome::Approved);
 
     let session = test_session();
 
@@ -290,4 +298,40 @@ async fn approval_outcome_is_cached_per_session() {
         "cached grant must suppress the second approval request"
     );
     assert_eq!(*runs.read().await, 2, "both calls must reach the driver");
+}
+
+#[tokio::test]
+async fn max_memory_mb_threads_capabilities_to_driver_profile() {
+    // Foundation S1 guarantee: a per-call max_memory_mb on the caller's
+    // SandboxCapabilities must reach the platform driver's OsSandboxProfile
+    // unchanged. The driver is then responsible for applying it via the
+    // OS-specific mechanism (rlimit on macOS/Linux, JobObject on Windows);
+    // here we assert only that the value made the trip.
+    let (sandbox, runs, _approvals, last_mem, _tmp) =
+        build_test_sandbox(ApprovalOutcome::Approved);
+
+    let cmd = SandboxCommand {
+        session_id: test_session(),
+        program: "echo".into(),
+        args: vec!["hi".into()],
+        env: HashMap::new(),
+        stdin: None,
+        cwd: None,
+        capabilities: SandboxCapabilities {
+            max_memory_mb: Some(128),
+            ..SandboxCapabilities::strict()
+        },
+        timeout: None,
+    };
+
+    sandbox
+        .execute(cmd)
+        .await
+        .expect("strict-plus-memory command should execute");
+    assert_eq!(*runs.read().await, 1, "driver should be invoked");
+    assert_eq!(
+        *last_mem.read().await,
+        Some(128),
+        "profile.max_memory_mb must equal capabilities.max_memory_mb"
+    );
 }

@@ -113,21 +113,24 @@ impl BubblewrapDriver {
                 args.push("--unshare-net".into());
             }
             NetworkPolicy::AllowAll => {}
-            NetworkPolicy::AllowHosts(hosts) => {
-                warn!(
-                    "AllowHosts network policy requested but not fully supported on Linux. \
-                     Falling back to --unshare-net. Allowed hosts: {:?}",
-                    hosts
-                );
-                args.push("--unshare-net".into());
+            NetworkPolicy::AllowHosts(_) => {
+                return Err(SandboxError::UnsupportedPolicy {
+                    platform: "linux/bwrap",
+                    feature: "NetworkPolicy::AllowHosts".into(),
+                    reason: "bubblewrap offers only all-or-nothing network isolation; \
+                             per-host filtering requires Landlock+seccomp or iptables \
+                             (deferred to spec SP-2). Use AllowAll or None."
+                        .into(),
+                });
             }
-            NetworkPolicy::ProxyOnly { ports } => {
-                warn!(
-                    "ProxyOnly network policy requested but not fully supported on Linux. \
-                     Falling back to --unshare-net. Proxy ports: {:?}",
-                    ports
-                );
-                args.push("--unshare-net".into());
+            NetworkPolicy::ProxyOnly { .. } => {
+                return Err(SandboxError::UnsupportedPolicy {
+                    platform: "linux/bwrap",
+                    feature: "NetworkPolicy::ProxyOnly".into(),
+                    reason: "proxy-only mode requires a managed proxy backend on the host \
+                             namespace (deferred to spec SP-4). Use AllowAll or None."
+                        .into(),
+                });
             }
         }
 
@@ -281,6 +284,27 @@ impl BubblewrapDriver {
             }
         }
     }
+
+    /// Apply `setrlimit(RLIMIT_AS)` on the bwrap process; the limit is
+    /// inherited by the eventual target binary via exec.
+    fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
+        let bytes = mb.saturating_mul(1024 * 1024);
+        unsafe {
+            // SAFETY: setrlimit with RLIMIT_AS is async-signal-safe and
+            // well-defined. No allocator, mutex, or other handler-unsafe
+            // call is made between fork and exec.
+            cmd.pre_exec(move || {
+                let rlim = libc::rlimit {
+                    rlim_cur: bytes as libc::rlim_t,
+                    rlim_max: bytes as libc::rlim_t,
+                };
+                if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
 }
 
 #[async_trait]
@@ -301,7 +325,10 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         let policy = SandboxPolicy::from(capabilities);
         let args = self.generate_args(&policy, cwd)?;
         let contents = args.join("\n");
-        Ok(OsSandboxProfile { contents })
+        Ok(OsSandboxProfile {
+            contents,
+            max_memory_mb: policy.process.max_memory_mb,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -336,6 +363,9 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             .stdin(std::process::Stdio::piped());
 
         self.apply_no_new_privs(&mut cmd);
+        if let Some(mb) = profile.max_memory_mb {
+            Self::apply_memory_rlimit(&mut cmd, mb);
+        }
 
         let mut child = cmd
             .spawn()
@@ -474,16 +504,42 @@ mod tests {
     }
 
     #[test]
-    fn generate_args_allow_hosts_fallback() {
+    fn generate_args_allow_hosts_returns_unsupported() {
         let driver = BubblewrapDriver::new();
         let policy = SandboxPolicy {
             network: NetworkPolicy::AllowHosts(vec!["example.com".into()]),
             ..Default::default()
         };
         let cwd = Path::new("/tmp/ws");
-        let args = driver.generate_args(&policy, cwd).unwrap();
+        let err = driver
+            .generate_args(&policy, cwd)
+            .expect_err("AllowHosts must hard-fail on linux/bwrap");
+        match err {
+            SandboxError::UnsupportedPolicy {
+                platform,
+                feature,
+                reason,
+            } => {
+                assert_eq!(platform, "linux/bwrap");
+                assert!(feature.contains("AllowHosts"));
+                assert!(reason.contains("Landlock") || reason.contains("iptables"));
+            }
+            other => panic!("expected UnsupportedPolicy, got {other:?}"),
+        }
+    }
 
-        assert!(args.contains(&"--unshare-net".into()));
+    #[test]
+    fn generate_args_proxy_only_returns_unsupported() {
+        let driver = BubblewrapDriver::new();
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::ProxyOnly { ports: vec![8080] },
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let err = driver
+            .generate_args(&policy, cwd)
+            .expect_err("ProxyOnly must hard-fail on linux/bwrap");
+        assert!(matches!(err, SandboxError::UnsupportedPolicy { .. }));
     }
 
     #[test]
@@ -502,5 +558,17 @@ mod tests {
 
         assert!(!args.contains(&"--unshare-pid".into()));
         assert!(!args.contains(&"--cap-drop".into()));
+    }
+
+    #[test]
+    fn profile_for_threads_max_memory_mb() {
+        let driver = BubblewrapDriver::new();
+        let caps = SandboxCapabilities {
+            max_memory_mb: Some(256),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.profile_for(&caps, cwd).unwrap();
+        assert_eq!(profile.max_memory_mb, Some(256));
     }
 }

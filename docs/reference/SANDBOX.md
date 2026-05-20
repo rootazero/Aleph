@@ -313,9 +313,83 @@ Hard rules that must not be violated by any bridge handler:
   justifying why it does not touch `~/.aleph/`. Bridge code review checks this
   invariant.
 
+## Cycle 1 hardening (2026-05-20)
+
+Comparison against codex's three-OS sandbox (`/Volumes/TBU4/Github/codex`)
+surfaced four classes of defect that Cycle 1 fixed end-to-end. See
+[`docs/superpowers/specs/2026-05-20-sandbox-hardening-cycle1-design.md`][cycle1]
+for the full design.
+
+[cycle1]: ../superpowers/specs/2026-05-20-sandbox-hardening-cycle1-design.md
+
+### Behavior changes (breaking)
+
+- **`NetworkPolicy::AllowHosts` and `NetworkPolicy::ProxyOnly` now hard-fail**
+  on Linux and Windows. Both used to silently degrade — Linux fell back to
+  `--unshare-net` (no network at all), Windows wrote a no-op profile line.
+  Callers that depended on the silent fallback get
+  `SandboxError::UnsupportedPolicy` instead; the error message points at the
+  follow-up spec that will implement the feature.
+- **macOS `AllowHosts` now validates each entry parses as an IP address**.
+  Seatbelt's `(remote ip ...)` matcher only accepts IP literals; hostnames
+  silently never matched (the rule was a no-op). The new validation rejects
+  hostnames with a remediation hint to pre-resolve to IPs.
+
+### New capabilities
+
+- **`SandboxCapabilities.max_memory_mb`** caps the sandboxed process's
+  virtual address space on all three OSes:
+  - **macOS / Linux**: `setrlimit(RLIMIT_AS)` applied via `pre_exec` on the
+    sandbox helper (`sandbox-exec` / `bwrap`). The limit is inherited by the
+    eventual target binary through exec.
+  - **Windows**: `JOBOBJECT_EXTENDED_LIMIT_INFORMATION.ProcessMemoryLimit` on
+    the Job Object that contains the sandboxed process.
+- **`SandboxCapabilities.timeout_secs`** is a per-call override of the
+  `SandboxConfig.default_timeout_seconds` ceiling.
+
+### Dissolution — 937 lines of dead Windows code removed
+
+The following modules contained stub façades pretending to implement Windows
+security primitives but were verifiably never called from production code:
+
+- `src/sandbox/platforms/windows/wfp.rs` — every method either returned a
+  hardcoded `Err` or a no-op `Ok(())`.
+- `src/sandbox/platforms/windows/appcontainer.rs` — every method returned
+  `Err("requires windows-sys 0.61+")`.
+- `src/sandbox/platforms/windows/acl.rs` — `dacl_allows_access` had zero
+  callers tree-wide.
+- `src/sandbox/platforms/windows/filter.rs` — `FilterSet` referenced only by
+  its own `#[cfg(test)]` module.
+- `src/sandbox/platforms/windows/token.rs` — `create_restricted_token` was
+  imported by `driver.rs` but never invoked; the spawn path used plain
+  `tokio::process::Command` with only a JobObject for protection.
+
+Removing them follows R10's "YAGNI 撤回模式" — zero current consumers means
+delete, not preserve for hypothetical future use. A future spec that
+implements RestrictedToken / WFP / AppContainer can re-introduce focused,
+working modules without inheriting the stub skeletons.
+
+### Current Windows defense surface (post-Cycle 1)
+
+- Job Object: active-process limit (fork-bomb defense), kill-on-close,
+  die-on-unhandled-exception, virtual-memory ceiling (new), UI restrictions.
+- That's it. No restricted token, no AppContainer, no WFP. This is honest
+  documentation of what the code actually does, not aspirational claims.
+
+### Deferred follow-up specs
+
+| ID | Scope | Why deferred |
+|---|---|---|
+| SP-2 | Linux Landlock + seccomp-bpf | Defense-in-depth layered on bwrap; standalone design needed. |
+| SP-3 | Windows RestrictedToken + WFP | ~200 lines of unsafe Win32 with `CreateProcessAsUserW` + manual stdio pipe wiring; not testable from a Mac dev box, needs CI coverage first. |
+| SP-4 | Hostname-based filtering | Proxy-based pattern across all three OSes (codex uses port-allowlist for the same reason); standalone design. |
+| SP-5 | cgroups v2 Linux memory + CPU | `RLIMIT_AS` covers the common case; cgroup adds enforcement against `mmap` games but is more invasive. |
+| SP-6 | Windows AppContainer | Requires `windows-sys` major-version upgrade. |
+
 ## References
 
 - **Spec:** `docs/superpowers/specs/2026-04-19-sandbox-workspace-design.md`
+- **Spec (Cycle 1):** `docs/superpowers/specs/2026-05-20-sandbox-hardening-cycle1-design.md`
 - **Plan:** `docs/superpowers/plans/2026-04-19-managed-agents-phase-3-sandbox.md`
 - **Glossary:** [GLOSSARY.md](./GLOSSARY.md) — `Sandbox`, `WorkspaceSandbox`,
   `OsSandboxDriver`, `SandboxCapabilities`

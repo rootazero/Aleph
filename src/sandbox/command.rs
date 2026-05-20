@@ -48,6 +48,18 @@ pub enum SandboxError {
     #[error("execution failed: {0}")]
     ExecutionFailed(String),
 
+    /// The requested policy combination is not implementable on the current
+    /// platform with the currently-wired sandbox mechanism. Callers should
+    /// either downgrade the policy or wait for the relevant follow-up spec
+    /// (Landlock+seccomp on Linux, WFP on Windows, proxy-based hostname
+    /// filtering on macOS).
+    #[error("sandbox policy unsupported on {platform}: {feature} — {reason}")]
+    UnsupportedPolicy {
+        platform: &'static str,
+        feature: String,
+        reason: String,
+    },
+
     #[error("{0}")]
     Other(String),
 }
