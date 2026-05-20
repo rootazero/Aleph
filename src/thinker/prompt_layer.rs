@@ -133,6 +133,12 @@ pub struct LayerInput<'a> {
     /// the layer silent — desirable on non-LLM-driven paths (capture,
     /// snapshot, tests).
     pub provider_protocol: Option<&'a str>,
+    /// Static per-run Think→Act iteration cap, resolved by the harness
+    /// bridge from `FlowOverrides.max_iterations` falling back to the
+    /// boot-time `[execution] max_iterations` default. Used by
+    /// `SessionBudgetLayer` to surface the cap to the LLM as a planning
+    /// hint. `None` or `Some(0)` keeps the layer silent.
+    pub iteration_cap: Option<u32>,
 }
 
 impl<'a> LayerInput<'a> {
@@ -157,6 +163,7 @@ impl<'a> LayerInput<'a> {
             curated_memory_envelope: None,
             chain_context: None,
             provider_protocol: None,
+            iteration_cap: None,
         }
     }
 
@@ -181,6 +188,7 @@ impl<'a> LayerInput<'a> {
             curated_memory_envelope: None,
             chain_context: None,
             provider_protocol: None,
+            iteration_cap: None,
         }
     }
 
@@ -205,6 +213,7 @@ impl<'a> LayerInput<'a> {
             curated_memory_envelope: None,
             chain_context: None,
             provider_protocol: None,
+            iteration_cap: None,
         }
     }
 
@@ -229,6 +238,7 @@ impl<'a> LayerInput<'a> {
             curated_memory_envelope: None,
             chain_context: None,
             provider_protocol: None,
+            iteration_cap: None,
         }
     }
 
@@ -364,6 +374,21 @@ impl<'a> LayerInput<'a> {
     /// ergonomic threading from optional config.
     pub fn with_provider_protocol_opt(mut self, protocol: Option<&'a str>) -> Self {
         self.provider_protocol = protocol;
+        self
+    }
+
+    /// Attach the per-run iteration cap so `SessionBudgetLayer` can
+    /// surface it. Pass the resolved (post-`resolve_max_iterations`)
+    /// value, not the raw override.
+    pub fn with_iteration_cap(mut self, cap: u32) -> Self {
+        self.iteration_cap = Some(cap);
+        self
+    }
+
+    /// Same as `with_iteration_cap` but accepts an `Option` for
+    /// ergonomic threading from optional config.
+    pub fn with_iteration_cap_opt(mut self, cap: Option<u32>) -> Self {
+        self.iteration_cap = cap;
         self
     }
 

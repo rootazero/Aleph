@@ -114,6 +114,14 @@ pub struct FlowRequest {
     /// Gateway-side observability sink. `None` is a no-op.
     /// Not included in `Debug` output because `Arc<dyn TraceSink>` is not `Debug`.
     pub trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+    /// Phase 4 (F4): channel-aware interaction envelope. When `Some`, the
+    /// harness bridge threads this `InteractionManifest` into the
+    /// `ResolvedContext` used for prompt assembly, so per-channel
+    /// constraints (paradigm, capabilities, output limits) reach the
+    /// LLM. `None` keeps the legacy `Background` default — appropriate
+    /// for subagent dispatch and internal tooling that runs without a
+    /// channel.
+    pub interaction_manifest: Option<crate::thinker::interaction::InteractionManifest>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -194,6 +202,7 @@ pub trait HarnessRunner: Send + Sync {
         cancel: CancellationToken,
         tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
         trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+        interaction_manifest: Option<crate::thinker::interaction::InteractionManifest>,
     ) -> Result<FlowOutcome, FlowError>;
 }
 
@@ -310,6 +319,7 @@ impl Orchestrator {
         let session_for_release = session_res.session_key.clone();
         let tool_service_override = req.tool_service.clone();
         let trace_sink = req.trace_sink.clone();
+        let interaction_manifest = req.interaction_manifest.clone();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -326,6 +336,7 @@ impl Orchestrator {
                     cancel_clone,
                     tool_service_override,
                     trace_sink,
+                    interaction_manifest,
                 )
                 .await;
             // `done_tx.send` returns Err only when `done_rx` was dropped by the

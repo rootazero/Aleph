@@ -142,6 +142,7 @@ impl HarnessRunner for AgentHarnessRunner {
         cancel: CancellationToken,
         tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
         trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+        interaction_manifest: Option<crate::thinker::InteractionManifest>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -190,12 +191,27 @@ impl HarnessRunner for AgentHarnessRunner {
         let user_query = last_user_query(&input);
         session_seed::seed_session(self.session_service.as_ref(), &session_id, input).await?;
 
+        // Phase 4 (F2): resolve the per-run Think→Act iteration cap once
+        // here so the same value flows into both the system prompt
+        // (`SessionBudgetLayer` surfaces it to the LLM) and `HarnessDeps`
+        // below (where it enforces the cap on the loop). Computing in
+        // one place avoids the two consumers drifting.
+        let resolved_max_iterations =
+            resolve_max_iterations(spec.overrides.max_iterations, self.default_max_iterations);
+
         // Step 5b (BUG-2/BUG-3 fix, Phase 6 follow-up): assemble the system
         // prompt from per-agent curated memory + hybrid retrieval before the
         // harness loop starts. Failures are warned and degraded to `None` so
         // memory issues never block a turn.
         let system_prompt = self
-            .build_system_prompt(&spec.agent, &session_id, &user_query, llm.as_ref())
+            .build_system_prompt(
+                &spec.agent,
+                &session_id,
+                &user_query,
+                llm.as_ref(),
+                resolved_max_iterations,
+                interaction_manifest.as_ref(),
+            )
             .await;
 
         // Step 6: assemble HarnessDeps and run the inner Think→Act loop.
@@ -239,10 +255,9 @@ impl HarnessRunner for AgentHarnessRunner {
             guardrails: self.guardrails.clone(),
             // H1: the Think→Act loop is always capped. Per-flow override wins;
             // otherwise the boot-time `[execution] max_iterations` default.
-            max_iterations: Some(resolve_max_iterations(
-                spec.overrides.max_iterations,
-                self.default_max_iterations,
-            )),
+            // Computed earlier (Phase 4 F2) so the cap also threads into
+            // `SessionBudgetLayer` via `build_system_prompt`.
+            max_iterations: Some(resolved_max_iterations),
             power,
             stall_config: self.stall_config.clone(),
             consecutive_failure_cap: self.consecutive_failure_cap,
@@ -401,6 +416,8 @@ impl AgentHarnessRunner {
         session_id: &SessionId,
         user_query: &str,
         provider: &dyn AiProvider,
+        iteration_cap: usize,
+        channel_manifest: Option<&crate::thinker::InteractionManifest>,
     ) -> Option<String> {
         use crate::providers::message::UnifiedMessage;
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
@@ -523,23 +540,51 @@ impl AgentHarnessRunner {
                 builder = builder.with_identity_files(files);
             }
         }
-        // Phase 3: thread a default `ResolvedContext` so the Phase 2
-        // widened layers — `SecurityLayer`, `OperationalGuidelinesLayer`,
-        // `ProtocolTokensLayer`, `RuntimeContextLayer` — emit on the
-        // harness path. aleph-server is the always-on daemon, so default
-        // to the `Background` interaction paradigm + permissive security
-        // (channel-aware paths can later override via a stricter
-        // manifest/security pair). Tools list is empty because the
-        // harness wires actual tool schemas via native tool_use rather
-        // than the prompt; `disabled_tools` therefore stays empty too,
-        // and the `SecurityLayer` / `ProtocolTokensLayer` remain
-        // graceful no-ops until a channel needs them.
-        let resolved_context = crate::thinker::context::ContextAggregator::resolve(
-            &crate::thinker::InteractionManifest::new(
-                crate::thinker::InteractionParadigm::Background,
-            ),
+        // Phase 4 (F4): channel-aware `ResolvedContext`. When the
+        // caller (Gateway, subagent dispatcher, etc.) supplies a
+        // channel-specific `InteractionManifest`, use it so per-channel
+        // paradigm, capabilities, and constraints flow into the prompt
+        // (`SecurityLayer`, `OperationalGuidelinesLayer`,
+        // `ProtocolTokensLayer`). Fall back to `Background` paradigm —
+        // aleph-server's always-on-daemon default — when no manifest
+        // is provided (subagent dispatch / internal tooling / tests).
+        //
+        // SecurityContext stays permissive: there is no per-channel
+        // SecurityContext source in production today; the layer's
+        // sandbox-baseline note (`Security Level: None`) is correct for
+        // the trusted-self-host posture. A future cycle can introduce
+        // per-channel SecurityContext if/when policy diverges.
+        //
+        // Tools list is empty because the harness wires actual tool
+        // schemas via native tool_use rather than the prompt;
+        // `disabled_tools` therefore stays empty too.
+        let default_manifest;
+        let manifest_ref = match channel_manifest {
+            Some(m) => m,
+            None => {
+                default_manifest = crate::thinker::InteractionManifest::new(
+                    crate::thinker::InteractionParadigm::Background,
+                );
+                &default_manifest
+            }
+        };
+        let mut resolved_context = crate::thinker::context::ContextAggregator::resolve(
+            manifest_ref,
             &crate::thinker::security_context::SecurityContext::permissive(),
             &[],
+        );
+        // Phase 4 (F1): populate `runtime_context` so `RuntimeContextLayer`
+        // surfaces shell / arch / hostname / timezone / model. EnvironmentLayer
+        // emits OS/cwd in a Markdown list (Stable, priority 300);
+        // `RuntimeContext::to_prompt_section()` emits a pipe-separated
+        // single-line summary (Dynamic, priority 1720) — formats deliberately
+        // differ. We accept the minor OS/cwd overlap; the unique fields
+        // (arch, shell, repo_root, model, hostname, timezone, current_time)
+        // carry the value. `repo_root` is left as `None` — populating it
+        // would require shelling out to git on every prompt build, which is
+        // disproportionate for the diagnostic gain.
+        resolved_context.runtime_context = Some(
+            crate::thinker::runtime_context::RuntimeContext::collect(provider.name()),
         );
         builder = builder.with_resolved_context(resolved_context);
         // Phase 3: thread the provider's wire-protocol family so
@@ -553,6 +598,13 @@ impl AgentHarnessRunner {
             .map(|s| s.to_string())
             .unwrap_or_else(|| provider.protocol().to_string());
         builder = builder.with_provider_protocol(provider_protocol);
+        // Phase 4 (F2): surface the resolved iteration cap to
+        // `SessionBudgetLayer`. Saturating to `u32::MAX` (instead of
+        // truncating) preserves "no practical cap" semantics for callers
+        // that pass a huge value; the layer's own zero-guard keeps the
+        // unset case silent.
+        let cap_for_prompt = u32::try_from(iteration_cap).unwrap_or(u32::MAX);
+        builder = builder.with_iteration_cap(cap_for_prompt);
         let prompt = builder.build_system_prompt(&[]);
         // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
         // Logs character counts (not contents) so prompts are observable

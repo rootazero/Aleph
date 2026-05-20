@@ -183,6 +183,108 @@ fn phase3_with_provider_protocol_anthropic_stays_silent_on_basic_path() {
 }
 
 #[test]
+fn phase4_with_runtime_context_populated_emits_runtime_environment_on_basic_path() {
+    // Phase 4 F1: when a `ResolvedContext` carries a populated
+    // `runtime_context`, `RuntimeContextLayer` (priority 1720, Dynamic)
+    // must emit its single-line `## Runtime Environment` summary even on
+    // the Basic path. Mirrors `harness_bridge::build_system_prompt`
+    // populating the field with `RuntimeContext::collect(...)`.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::runtime_context::RuntimeContext;
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::Background);
+    let security = SecurityContext::permissive();
+    let mut resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+    resolved.runtime_context = Some(RuntimeContext {
+        os: "linux".to_string(),
+        arch: "aarch64".to_string(),
+        shell: "fish".to_string(),
+        working_dir: std::path::PathBuf::from("/srv/aleph"),
+        repo_root: None,
+        current_model: "test-provider".to_string(),
+        hostname: "ci-runner".to_string(),
+        current_time: "2026-05-20 12:00:00".to_string(),
+        current_time_ms: 1779789600000,
+        timezone: "UTC".to_string(),
+    });
+
+    let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
+    let prompt = builder.build_system_prompt(&[]);
+
+    assert!(
+        prompt.contains("## Runtime Environment"),
+        "RuntimeContextLayer must emit on Basic path when runtime_context is populated"
+    );
+    assert!(prompt.contains("arch=aarch64"));
+    assert!(prompt.contains("shell=fish"));
+    assert!(prompt.contains("model=test-provider"));
+    assert!(prompt.contains("host=ci-runner"));
+    assert!(prompt.contains("(UTC)"));
+}
+
+#[test]
+fn phase4_with_iteration_cap_emits_session_budget_block() {
+    // Phase 4 F2: harness_bridge resolves the per-run iteration cap
+    // once via `resolve_max_iterations` and threads it into the prompt
+    // via `PromptBuilder::with_iteration_cap(...)`. `SessionBudgetLayer`
+    // must surface it as a `## Session Budget` block on the Basic path.
+    let builder = PromptBuilder::new(PromptConfig::default()).with_iteration_cap(64);
+    let prompt = builder.build_system_prompt(&[]);
+    assert!(prompt.contains("## Session Budget"));
+    assert!(prompt.contains("Iteration cap**: 64"));
+    assert!(prompt.contains("decisive action"));
+}
+
+#[test]
+fn phase4_channel_aware_resolved_context_messaging_paradigm() {
+    // Phase 4 F4: when the gateway threads a channel-specific
+    // InteractionManifest (e.g., Messaging paradigm for Telegram) into
+    // `FlowRequest.interaction_manifest`, the harness bridge constructs
+    // the `ResolvedContext` from that manifest instead of the
+    // `Background` default. Messaging paradigm doesn't include
+    // SilentReply (Background does), so the protocol tokens block must
+    // NOT emit — the test pins the contract by paradigm choice.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::Messaging);
+    let security = SecurityContext::permissive();
+    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+    let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
+    let prompt = builder.build_system_prompt(&[]);
+
+    // OperationalGuidelinesLayer gates on `Background | CLI` only — the
+    // Messaging paradigm must keep that section silent.
+    assert!(
+        !prompt.contains("## System Operational Awareness"),
+        "Messaging paradigm must not emit operational guidelines (gates on Background/CLI)"
+    );
+    // ProtocolTokensLayer gates on `SilentReply` — Messaging paradigm
+    // doesn't enable it by default.
+    assert!(
+        !prompt.contains("ALEPH_SILENT_COMPLETE"),
+        "Messaging paradigm must not emit silent-complete protocol tokens"
+    );
+    // SecurityLayer fires whenever any disabled_tools / security_notes
+    // arrive — the permissive sandbox baseline note still shows up.
+    assert!(prompt.contains("Security Level: None"));
+}
+
+#[test]
+fn phase4_without_iteration_cap_session_budget_stays_silent() {
+    let builder = PromptBuilder::new(PromptConfig::default());
+    let prompt = builder.build_system_prompt(&[]);
+    assert!(
+        !prompt.contains("## Session Budget"),
+        "SessionBudgetLayer must not emit when no iteration cap was attached"
+    );
+}
+
+#[test]
 fn phase3_basic_path_without_resolved_context_stays_silent() {
     // Symmetric to the above: without `with_resolved_context`, the
     // widened layers must still graceful-noop on Basic so we don't
