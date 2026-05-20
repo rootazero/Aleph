@@ -302,57 +302,25 @@ impl HarnessRunner for AgentHarnessRunner {
         for r in &records {
             match &r.event {
                 SessionEvent::AssistantMessage { content, .. } => {
-                    // Use thinking content as fallback when text is empty
-                    // (extended-thinking models may put output in thinking field)
-                    let mut text = if content.text.is_empty() {
+                    // P5: dropped the 8-layer JSON field extraction
+                    // (action.summary / action.content / action.text / summary
+                    // / content / message / text / reasoning) that previously
+                    // tried to recover a "real" message from the legacy
+                    // {reasoning, action} envelope. `ResponseFormatLayer` was
+                    // unregistered from the prompt pipeline on 2026-05-10
+                    // (see memory: project_response_format_layer_cleanup),
+                    // so the model no longer emits that envelope and the
+                    // fallback only served to silently rewrite valid JSON
+                    // payloads. Native tool_use is the canonical egress now.
+                    //
+                    // Thinking-only completions (extended-thinking providers
+                    // that may put output in the `thinking` field on a
+                    // text-empty assistant turn) keep the explicit fallback.
+                    final_text = if content.text.is_empty() {
                         content.thinking.clone().unwrap_or_default()
                     } else {
                         content.text.clone()
                     };
-
-                    let trimmed = text.trim();
-                    let payload = if trimmed.starts_with("```") {
-                        trimmed
-                            .lines()
-                            .skip(1)
-                            .take_while(|l| !l.trim_start().starts_with("```"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    } else {
-                        trimmed.to_string()
-                    };
-
-                    let json_trimmed = payload.trim_start();
-                    if json_trimmed.starts_with('{') || json_trimmed.starts_with('[') {
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&payload) {
-                            // Try to extract a human-readable field (prefer longer content)
-                            let candidates = [
-                                json.get("action")
-                                    .and_then(|a| a.get("summary"))
-                                    .and_then(|v| v.as_str()),
-                                json.get("action")
-                                    .and_then(|a| a.get("content"))
-                                    .and_then(|v| v.as_str()),
-                                json.get("action")
-                                    .and_then(|a| a.get("text"))
-                                    .and_then(|v| v.as_str()),
-                                json.get("summary").and_then(|v| v.as_str()),
-                                json.get("content").and_then(|v| v.as_str()),
-                                json.get("message").and_then(|v| v.as_str()),
-                                json.get("text").and_then(|v| v.as_str()),
-                                json.get("reasoning").and_then(|v| v.as_str()),
-                            ];
-                            // Pick the longest candidate to avoid short reasoning over full report
-                            if let Some(best) =
-                                candidates.iter().filter_map(|&c| c).max_by_key(|c| c.len())
-                            {
-                                text = best.to_string();
-                            }
-                            // If no known field found, keep original JSON
-                        }
-                    }
-
-                    final_text = text;
                     iterations = iterations.saturating_add(1);
                 }
                 SessionEvent::ToolCallRequested { .. } => {
