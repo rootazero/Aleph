@@ -317,6 +317,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
+            preflight_pipeline: None,
             // Stage A (P1) — was None; now inherited from parent SpawnerBase.
             trace_sink: base.trace_sink.clone(),
             system_prompt: Some(system_prompt),

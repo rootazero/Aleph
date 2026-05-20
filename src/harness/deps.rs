@@ -8,6 +8,7 @@
 //! the factory function (`build_sandbox`) returns `Arc<dyn Sandbox>` directly,
 //! so we hold the sandbox instance rather than a factory.
 
+use crate::context::budget::preflight::PreflightPipeline;
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
 use crate::harness::chain_context::ChainContext;
@@ -49,6 +50,12 @@ pub struct HarnessDeps {
     /// `CompactAndContinue`. Falls back to deterministic truncation on
     /// provider failure (see `ContextCompactor::compact`).
     pub context_compactor: Option<Arc<ContextCompactor>>,
+    /// Cheap-pass preflight pipeline (tool_result pruning + historical
+    /// image stripping) that runs BEFORE the budget check + compactor so
+    /// token savings happen even when the compactor's LLM call fails.
+    /// `None` when `[context_budget]` is disabled — same gating as
+    /// `context_compactor`. See `src/context/budget/cheap_passes/`.
+    pub preflight_pipeline: Option<Arc<PreflightPipeline>>,
     /// Gateway-side observability sink. `None` falls back to no-op tracing.
     /// Production path: Gateway wraps its persistence callback in `GatewayTraceSink`.
     pub trace_sink: Option<Arc<dyn TraceSink>>,

@@ -226,20 +226,35 @@ impl HarnessRunner for AgentHarnessRunner {
         // diminishing-returns counters must not leak across concurrent
         // sessions. The compactor reuses this run's provider for side-channel
         // summarization (deterministic-truncation fallback on provider error).
-        let (context_budget, context_compactor) = match self.context_budget_config.as_ref() {
-            Some(cfg) => {
-                let budget = Arc::new(Mutex::new(ContextBudget::new(cfg)));
-                let compactor = Arc::new(ContextCompactor::new(
-                    llm.clone(),
-                    CompactorConfig {
-                        fresh_tail: cfg.fresh_tail_count,
-                        ..CompactorConfig::default()
-                    },
-                ));
-                (Some(budget), Some(compactor))
-            }
-            None => (None, None),
-        };
+        let (context_budget, context_compactor, preflight_pipeline) =
+            match self.context_budget_config.as_ref() {
+                Some(cfg) => {
+                    let budget = Arc::new(Mutex::new(ContextBudget::new(cfg)));
+                    let compactor = Arc::new(ContextCompactor::new(
+                        llm.clone(),
+                        CompactorConfig {
+                            fresh_tail: cfg.fresh_tail_count,
+                            ..CompactorConfig::default()
+                        },
+                    ));
+                    // Cheap-pass preflight: runs unconditionally before the budget
+                    // check so token savings happen even when the compactor's LLM
+                    // call fails. Same gating as the compactor (config-presence).
+                    let pipeline = {
+                        use crate::context::budget::cheap_passes::{
+                            HistoricalImageStrippingStage, ToolResultPruningStage,
+                        };
+                        use crate::context::budget::preflight::{PreflightPipeline, PreflightStage};
+                        let stages: Vec<Box<dyn PreflightStage>> = vec![
+                            Box::new(ToolResultPruningStage::default()),
+                            Box::new(HistoricalImageStrippingStage),
+                        ];
+                        Arc::new(PreflightPipeline::new(stages))
+                    };
+                    (Some(budget), Some(compactor), Some(pipeline))
+                }
+                None => (None, None, None),
+            };
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
@@ -248,6 +263,7 @@ impl HarnessRunner for AgentHarnessRunner {
             verifier_chain: self.verifier_chain.clone(),
             context_budget,
             context_compactor,
+            preflight_pipeline,
             trace_sink: trace_sink.clone(),
             system_prompt,
             prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
