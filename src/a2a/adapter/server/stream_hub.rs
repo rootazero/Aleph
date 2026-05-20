@@ -152,6 +152,11 @@ impl A2AStreamingHandler for StreamHub {
         let _ = sender.send(UpdateEvent::ArtifactUpdate(update));
         Ok(())
     }
+
+    async fn cleanup_task(&self, task_id: &str) -> A2AResult<()> {
+        self.remove_channel(task_id).await;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
