@@ -625,6 +625,9 @@ mod scrub_integration_tests {
         ) -> Result<OsSandboxProfile, SandboxError> {
             Ok(OsSandboxProfile {
                 contents: String::new(),
+                max_memory_mb: None,
+                linux_init_policy: None,
+                windows_init_policy: None,
             })
         }
         async fn run(
