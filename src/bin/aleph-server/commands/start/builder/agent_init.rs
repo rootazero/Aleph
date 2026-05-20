@@ -147,7 +147,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let db_path = dir.join("coord.db");
                 match alephcore::utils::sqlite_open::open_sqlite_safe(&db_path) {
                     Ok(conn) => {
-                        let store = Arc::new(SqliteCoordTaskStore::new(conn));
+                        let store = Arc::new(
+                            SqliteCoordTaskStore::new(conn).with_event_bus(event_bus.clone()),
+                        );
                         // Run schema migration synchronously-ish via block_in_place
                         let store_clone = store.clone();
                         match tokio::task::block_in_place(|| {
