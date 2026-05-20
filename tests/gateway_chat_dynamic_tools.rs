@@ -94,6 +94,7 @@ async fn per_request_tool_service_reaches_harness_runner() {
                 tool_calls_made: 0,
                 total_tokens: 0,
                 hit_limit: false,
+                ..Default::default()
             };
             let _ = ctx.events.send(FlowStreamEvent::Complete(outcome.clone()));
             Ok(outcome)

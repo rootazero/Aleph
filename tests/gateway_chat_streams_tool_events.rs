@@ -46,6 +46,7 @@ async fn tool_events_preserve_order() {
                 tool_calls_made: 1,
                 total_tokens: 0,
                 hit_limit: false,
+                ..Default::default()
             };
             let _ = ctx.events.send(FlowStreamEvent::Complete(outcome.clone()));
             Ok(outcome)

@@ -70,6 +70,7 @@ pub mod memory;
 pub mod metrics;
 pub mod orchestrator;
 pub mod pii;
+pub mod pricing;
 pub mod providers;
 pub mod routing;
 pub mod runtimes;

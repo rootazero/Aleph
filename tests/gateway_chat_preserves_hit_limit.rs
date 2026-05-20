@@ -27,6 +27,7 @@ async fn hit_limit_with_empty_text_emits_i18n_message() {
                 tool_calls_made: 17,
                 total_tokens: 0,
                 hit_limit: true,
+                ..Default::default()
             };
             let _ = ctx
                 .events
@@ -79,6 +80,7 @@ async fn hit_limit_with_text_uses_text() {
                 tool_calls_made: 2,
                 total_tokens: 0,
                 hit_limit: true,
+                ..Default::default()
             };
             let _ = ctx
                 .events

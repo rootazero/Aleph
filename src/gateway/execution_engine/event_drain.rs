@@ -347,6 +347,7 @@ mod tests {
             tool_calls_made: 2,
             total_tokens: 100,
             hit_limit: false,
+            ..Default::default()
         };
 
         emit_flow_event(
