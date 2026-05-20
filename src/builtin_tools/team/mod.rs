@@ -4,6 +4,9 @@ mod create;
 mod delegate;
 mod disband;
 pub mod inbox_read;
+pub mod lifecycle_idle;
+pub mod lifecycle_request_shutdown;
+pub mod lifecycle_resolve_shutdown;
 mod member_remove;
 pub mod message_send;
 pub mod plan_resolve;
@@ -22,6 +25,13 @@ pub use create::{
 pub use delegate::{DelegateStatus, TeamDelegateArgs, TeamDelegateOutput, TeamDelegateTool};
 pub use disband::{TeamDisbandArgs, TeamDisbandOutput, TeamDisbandTool};
 pub use inbox_read::{InboxReadArgs, InboxReadOutput, InboxReadTool};
+pub use lifecycle_idle::{LifecycleIdleArgs, LifecycleIdleOutput, LifecycleIdleTool};
+pub use lifecycle_request_shutdown::{
+    LifecycleRequestShutdownArgs, LifecycleRequestShutdownOutput, LifecycleRequestShutdownTool,
+};
+pub use lifecycle_resolve_shutdown::{
+    LifecycleResolveShutdownArgs, LifecycleResolveShutdownOutput, LifecycleResolveShutdownTool,
+};
 pub use member_remove::{TeamMemberRemoveArgs, TeamMemberRemoveOutput, TeamMemberRemoveTool};
 pub use message_send::{MessageSendArgs, MessageSendOutput, MessageSendTool};
 pub use plan_resolve::{PlanResolveArgs, PlanResolveOutput, PlanResolveTool};
