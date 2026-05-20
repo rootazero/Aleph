@@ -99,7 +99,7 @@ fn render_compact(o: &FlowOutcome) -> String {
             .tool_timeline
             .iter()
             .take(4)
-            .map(|inv| format_tool_glyph(inv))
+            .map(format_tool_glyph)
             .collect::<Vec<_>>()
             .join("  ");
         if o.tool_timeline.len() > 4 {

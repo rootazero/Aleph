@@ -114,11 +114,12 @@ pub struct FlowOutcome {
 /// Loop-exit cause for an agent run. Each variant corresponds to a distinct
 /// branch in [`AgentHarness::run`](crate::harness::agent::AgentHarness)
 /// that previously collapsed into a single `hit_limit: bool`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum TerminateReason {
     /// Model emitted a terminal `TurnState::Done` and the loop exited cleanly.
+    #[default]
     Completed,
     /// `max_iterations` cap reached. `used` is the iteration count that
     /// tripped the guard.
@@ -139,12 +140,6 @@ pub enum TerminateReason {
     VerifierVeto { vetos: u32 },
     /// `CancellationToken` fired before the loop reached `Done`.
     Cancelled,
-}
-
-impl Default for TerminateReason {
-    fn default() -> Self {
-        Self::Completed
-    }
 }
 
 impl TerminateReason {
