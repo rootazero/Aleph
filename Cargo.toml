@@ -251,18 +251,25 @@ aleph-desktop-macos = { path = "desktop/macos" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 aleph-desktop-linux = { path = "desktop/linux" }
+# SP-2: Landlock LSM (FS ACL) — kernel ≥ 5.13. Single small crate, official-ish.
+landlock = "0.4"
+# SP-2: seccomp-bpf syscall denylist. AWS Firecracker's own filter library.
+seccompiler = "0.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 aleph-desktop-windows = { path = "desktop/windows" }
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Isolation",      # SP-6: AppContainer profile API (Create/Delete/DeriveSid)
     "Win32_Security_Authorization",
     "Win32_System_Threading",
     "Win32_System_JobObjects",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Pipes",
+    "Win32_System_Memory",           # SP-3a (LocalFree) + SP-6 (HeapAlloc/HeapFree)
+    "Win32_System_SystemServices",   # SP-6: PROC_THREAD_ATTRIBUTE_* constants
 ] }
 
 [build-dependencies]
