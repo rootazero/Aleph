@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::policy::ApprovalPolicy;
 use super::types::{ActionRequest, ActionType, ApprovalDecision, DefaultDecision};
@@ -127,7 +127,7 @@ fn compile_rules_grouped(rules: &[PolicyRule]) -> HashMap<ActionType, Vec<Compil
                     });
             }
             Err(e) => {
-                tracing::warn!(
+                warn!(
                     pattern = %rule.pattern,
                     error = %e,
                     "Failed to compile glob pattern; skipping rule"
@@ -187,7 +187,7 @@ impl ConfigApprovalPolicy {
                     Self::new(config)
                 }
                 Err(e) => {
-                    tracing::error!(
+                    error!(
                         "Failed to parse approval policy at {}: {}. Using defaults.",
                         path.display(),
                         e
@@ -203,7 +203,7 @@ impl ConfigApprovalPolicy {
                 Self::default()
             }
             Err(e) => {
-                tracing::error!(
+                error!(
                     "Failed to read approval policy at {}: {}. Using defaults.",
                     path.display(),
                     e

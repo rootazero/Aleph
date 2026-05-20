@@ -25,6 +25,7 @@
 //! an explicit warning. Never a silent auto-approve.
 
 use async_trait::async_trait;
+use tracing::warn;
 
 use crate::sync_primitives::Arc;
 
@@ -93,7 +94,7 @@ impl ChannelApprovalBridgeAdapter {
 impl ApprovalRequester for ChannelApprovalBridgeAdapter {
     async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
         let Some((channel_id, conversation_id)) = Self::resolve_channel_route() else {
-            tracing::warn!(
+            warn!(
                 tool = %tool_name,
                 "ChannelApprovalBridgeAdapter: no channel route from TURN_CONTEXT \
                  or SESSION_ID — cannot route approval prompt, denying"
