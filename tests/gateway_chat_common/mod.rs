@@ -200,6 +200,8 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         power: None,
         memory_context_provider: None,
         dispatch_registry: None,
+        turn_budget: None,
+        result_store: None,
     };
 
     Arc::new(Orchestrator::new(
