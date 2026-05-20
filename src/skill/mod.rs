@@ -521,7 +521,7 @@ fn guess_source(path: &Path) -> SkillSource {
     use std::sync::OnceLock;
 
     // Cache the bundled manifest to avoid re-reading from disk on every call.
-    static CACHED_MANIFEST: OnceLock<Option<crate::bundled::manifest::SkillManifest>> =
+    static CACHED_MANIFEST: OnceLock<Option<crate::bundled::manifest::InstallRegistry>> =
         OnceLock::new();
 
     let path_str = path.to_string_lossy();
@@ -532,7 +532,7 @@ fn guess_source(path: &Path) -> SkillSource {
             if path.starts_with(&home_skills) {
                 // Under ~/.aleph/skills/ — check manifest to distinguish official from user
                 let manifest = CACHED_MANIFEST
-                    .get_or_init(|| crate::bundled::manifest::SkillManifest::load(&home_skills));
+                    .get_or_init(|| crate::bundled::manifest::InstallRegistry::load(&home_skills));
                 if let Some(manifest) = manifest {
                     if let Ok(relative) = path.strip_prefix(&home_skills) {
                         if let Some(skill_name) = relative.components().next() {
