@@ -340,6 +340,21 @@ impl HarnessRunner for AgentHarnessRunner {
         // per-component token breakdown — no second session read needed.
         let terminate_reason = harness.terminate_reason();
         let token_breakdown = harness.token_breakdown();
+        // Cost task: best-effort estimate against the static price table.
+        // `None` when the run produced no tokens (no LLM call observed) —
+        // the renderer treats `None` and `Unknown` differently (None ==
+        // "did not attempt"; Unknown == "attempted, no rate").
+        let estimated_cost = if token_breakdown == crate::orchestrator::dispatch::TokenBreakdown::default() {
+            None
+        } else {
+            let model: &str = match &spec.brain {
+                crate::orchestrator::flow_spec::BrainRef::Strict {
+                    model: Some(m), ..
+                } => m.as_str(),
+                _ => provider_name.as_str(),
+            };
+            Some(crate::pricing::estimate(&provider_name, model, &token_breakdown))
+        };
         let outcome = FlowOutcome {
             final_text,
             iterations,
@@ -350,10 +365,7 @@ impl HarnessRunner for AgentHarnessRunner {
             duration_ms: harness.duration_ms(),
             token_breakdown,
             tool_timeline: harness.tool_timeline(),
-            // `estimated_cost` is populated by the Cost task once the
-            // pricing table is wired; default `None` preserves the legacy
-            // shape until then.
-            estimated_cost: None,
+            estimated_cost,
         };
 
         // P4: single-source the terminal `Complete(outcome)` emit. The
