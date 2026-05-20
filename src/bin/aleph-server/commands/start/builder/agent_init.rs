@@ -1578,20 +1578,43 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         });
 
-        if let Some(trace_db) = resilience_db.clone() {
-            let trace_list_db = trace_db.clone();
-            server.handlers_mut().register("trace.list", move |req| {
-                let db = trace_list_db.clone();
-                async move {
-                    alephcore::gateway::handlers::trace_replay::handle_list(req, db).await
-                }
-            });
+        // Phase-2 always overrides phase-1 to guarantee a deterministic response.
+        // When state DB is absent, the override returns SERVICE_UNAVAILABLE with
+        // a tighter, environment-specific reason — never the phase-1 generic.
+        match resilience_db.clone() {
+            Some(trace_db) => {
+                let trace_list_db = trace_db.clone();
+                server.handlers_mut().register("trace.list", move |req| {
+                    let db = trace_list_db.clone();
+                    async move {
+                        alephcore::gateway::handlers::trace_replay::handle_list(req, db).await
+                    }
+                });
 
-            let trace_get_db = trace_db;
-            server.handlers_mut().register("trace.get", move |req| {
-                let db = trace_get_db.clone();
-                async move { alephcore::gateway::handlers::trace_replay::handle_get(req, db).await }
-            });
+                let trace_get_db = trace_db;
+                server.handlers_mut().register("trace.get", move |req| {
+                    let db = trace_get_db.clone();
+                    async move {
+                        alephcore::gateway::handlers::trace_replay::handle_get(req, db).await
+                    }
+                });
+            }
+            None => {
+                server.handlers_mut().register("trace.list", |req| async move {
+                    alephcore::gateway::protocol::JsonRpcResponse::error(
+                        req.id,
+                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                        "trace.list disabled: no state_database configured".to_string(),
+                    )
+                });
+                server.handlers_mut().register("trace.get", |req| async move {
+                    alephcore::gateway::protocol::JsonRpcResponse::error(
+                        req.id,
+                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                        "trace.get disabled: no state_database configured".to_string(),
+                    )
+                });
+            }
         }
 
         // Capture for inbound router
