@@ -215,7 +215,7 @@ impl Sandbox for WorkspaceSandbox {
         let profile = self.os_driver.profile_for(&cmd.capabilities, &cwd)?;
 
         let timeout = cmd.timeout.unwrap_or(self.default_timeout);
-        let output = self
+        let mut output = self
             .os_driver
             .run(
                 &cmd.program,
@@ -228,6 +228,25 @@ impl Sandbox for WorkspaceSandbox {
                 self.max_output_bytes,
             )
             .await;
+
+        // Byte-level secret scrub before any downstream consumer touches stdout/stderr.
+        // Whitelist is fed via SecurityContext.injected_secrets when threaded; for
+        // direct sandbox callers (no security context) this scrubs with an empty
+        // whitelist, which is the safe default.
+        if let Ok(ref mut out) = output {
+            let injected: &[crate::secrets::injection::InjectedSecret] = &[];
+            let stdout_scrub = crate::sandbox::scrub_secrets_bytes(&out.stdout, injected);
+            let stderr_scrub = crate::sandbox::scrub_secrets_bytes(&out.stderr, injected);
+            if !stdout_scrub.hits.is_empty() || !stderr_scrub.hits.is_empty() {
+                tracing::warn!(
+                    stdout_hits = ?stdout_scrub.hits,
+                    stderr_hits = ?stderr_scrub.hits,
+                    "sandbox bytes-scrub redacted secrets in command output"
+                );
+            }
+            out.stdout = stdout_scrub.bytes.into_owned();
+            out.stderr = stderr_scrub.bytes.into_owned();
+        }
 
         let outcome = match &output {
             Ok(out) => {
@@ -537,5 +556,156 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.len(), 32, "16-byte digest hex = 32 chars");
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+}
+
+#[cfg(test)]
+mod scrub_integration_tests {
+    use super::*;
+    use crate::sandbox::driver::OsSandboxProfile;
+    use crate::sandbox::exec_approval::gate::ApprovalGate;
+    use crate::sandbox::exec_approval::types::ApprovalConfig;
+    use crate::sandbox::hooks::SandboxHooks;
+    use std::path::Path;
+
+    /// Driver that injects a caller-supplied stdout payload, allowing tests to
+    /// plant a known secret in the output and verify it is scrubbed.
+    struct LeakDriver {
+        stdout_payload: Vec<u8>,
+        stderr_payload: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl OsSandboxDriverTrait for LeakDriver {
+        fn platform(&self) -> &'static str {
+            "leak-test"
+        }
+        fn is_supported(&self) -> bool {
+            true
+        }
+        fn profile_for(
+            &self,
+            _capabilities: &SandboxCapabilities,
+            _cwd: &Path,
+        ) -> Result<OsSandboxProfile, SandboxError> {
+            Ok(OsSandboxProfile {
+                contents: String::new(),
+            })
+        }
+        async fn run(
+            &self,
+            _program: &str,
+            _args: &[String],
+            _env: &HashMap<String, String>,
+            _stdin: Option<&[u8]>,
+            _cwd: &Path,
+            _profile: &OsSandboxProfile,
+            _timeout: Duration,
+            _max_output_bytes: usize,
+        ) -> Result<SandboxOutput, SandboxError> {
+            Ok(SandboxOutput {
+                stdout: self.stdout_payload.clone(),
+                stderr: self.stderr_payload.clone(),
+                exit_code: Some(0),
+                signal: None,
+                truncated: false,
+                duration_ms: 1,
+            })
+        }
+    }
+
+    fn build_leak_sandbox(
+        tmp: &tempfile::TempDir,
+        stdout_payload: Vec<u8>,
+        stderr_payload: Vec<u8>,
+    ) -> WorkspaceSandbox {
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(LeakDriver {
+            stdout_payload,
+            stderr_payload,
+        });
+        let gate = Arc::new(ApprovalGate::new(ApprovalConfig::default(), None));
+        WorkspaceSandbox::new(tmp.path().to_path_buf(), driver, gate, SandboxHooks::new())
+    }
+
+    fn mk_cmd() -> SandboxCommand {
+        SandboxCommand {
+            session_id: crate::routing::session_key::SessionKey::ephemeral("scrub-test"),
+            program: "echo".into(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: SandboxCapabilities::strict(),
+            timeout: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_scrubs_leaked_secret_in_stdout() {
+        // Plant a recognisable OpenAI-style key in stdout.
+        let mut leak = b"out:".to_vec();
+        leak.extend_from_slice(b"sk-proj-");
+        leak.extend(std::iter::repeat(b'Z').take(40));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = build_leak_sandbox(&tmp, leak.clone(), Vec::new());
+        let output = sandbox.execute(mk_cmd()).await.expect("execute");
+
+        // The raw key must not appear in the returned bytes.
+        let raw_key: Vec<u8> = {
+            let mut k = b"sk-proj-".to_vec();
+            k.extend(std::iter::repeat(b'Z').take(40));
+            k
+        };
+        assert!(
+            !output.stdout.windows(raw_key.len()).any(|w| w == raw_key),
+            "raw secret must be redacted from stdout"
+        );
+        // The redaction marker must be present.
+        assert!(
+            output.stdout.windows(b"[REDACTED".len()).any(|w| w == b"[REDACTED"),
+            "stdout must contain [REDACTED marker"
+        );
+        // stderr is untouched (nothing was planted there).
+        assert!(output.stderr.is_empty());
+    }
+
+    #[tokio::test]
+    async fn workspace_scrubs_leaked_secret_in_stderr() {
+        // Plant a recognisable key in stderr.
+        let mut leak = b"err:".to_vec();
+        leak.extend_from_slice(b"sk-proj-");
+        leak.extend(std::iter::repeat(b'A').take(40));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = build_leak_sandbox(&tmp, Vec::new(), leak.clone());
+        let output = sandbox.execute(mk_cmd()).await.expect("execute");
+
+        let raw_key: Vec<u8> = {
+            let mut k = b"sk-proj-".to_vec();
+            k.extend(std::iter::repeat(b'A').take(40));
+            k
+        };
+        assert!(
+            !output.stderr.windows(raw_key.len()).any(|w| w == raw_key),
+            "raw secret must be redacted from stderr"
+        );
+        assert!(
+            output.stderr.windows(b"[REDACTED".len()).any(|w| w == b"[REDACTED"),
+            "stderr must contain [REDACTED marker"
+        );
+    }
+
+    #[tokio::test]
+    async fn clean_output_passes_through_unchanged() {
+        let stdout = b"hello world\n".to_vec();
+        let stderr = b"no secrets here\n".to_vec();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = build_leak_sandbox(&tmp, stdout.clone(), stderr.clone());
+        let output = sandbox.execute(mk_cmd()).await.expect("execute");
+
+        assert_eq!(output.stdout, stdout, "clean stdout must be unchanged");
+        assert_eq!(output.stderr, stderr, "clean stderr must be unchanged");
     }
 }
