@@ -57,6 +57,8 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // feeds `runtime_state_blocks`. Threaded so `build_system_prompt` can
     // populate `<tool_runtime_state>` fragments.
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
+    shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
+    security_store: Arc<alephcore::gateway::security::SecurityStore>,
 ) -> anyhow::Result<Arc<Orchestrator>> {
     // P2 Stage E: load user/project agent definitions from filesystem.
     // Shadow events (higher-tier overrides) are logged at info level; the
@@ -182,7 +184,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // Stage 7 (#12) wiring placeholders — PHASE-6 will load these from
         // aleph.toml. Path is now plumbed end-to-end; defaults stay None
         // so behavior matches pre-Stage-7 main exactly.
-        guardrails: build_guardrail_registry(config),
+        guardrails: build_guardrail_registry(config, shared_token_mgr, security_store),
         stall_config: stall_cfg,
         consecutive_failure_cap: failure_cap,
         turn_timeout: turn_to,
@@ -231,12 +233,36 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
 /// onto Input + Output + ToolCall surfaces (one struct, three traits).
 fn build_guardrail_registry(
     config: &Config,
+    shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
+    security_store: Arc<alephcore::gateway::security::SecurityStore>,
 ) -> Option<Arc<alephcore::guardrails::GuardrailRegistry>> {
     let g = config.guardrails.as_ref()?;
     if !g.enabled {
         return None;
     }
-    let pii = Arc::new(alephcore::guardrails::PiiSecretsGuardrail::from_globals());
+
+    // PiiSecretsGuardrail wiring — pass vault-backed resolver so {{secret:NAME}}
+    // in tool args resolves at the tool_call surface (LLM→tool boundary).
+    let resolver: Option<Arc<dyn alephcore::secrets::AsyncSecretResolver>> = Some(
+        Arc::new(alephcore::secrets::VaultSecretResolver::new(
+            shared_token_mgr,
+        )) as Arc<dyn alephcore::secrets::AsyncSecretResolver>,
+    );
+
+    let (guard, audit_rx) = alephcore::security::RuntimeSecurityGuard::new_with_audit(
+        alephcore::security::SecurityGuardConfig::default(),
+    );
+    let guard = Arc::new(guard);
+
+    // Drain audit events to the security_audit_log table.
+    // Holds an Arc<SecurityStore> for the task's lifetime. Task exits on
+    // channel close (server shutdown drops the orchestrator → its sender).
+    let _drain_handle = alephcore::security::spawn_audit_drain(audit_rx, security_store);
+    // Handle deliberately not awaited; task lives for the server process lifetime.
+
+    let pii = Arc::new(
+        alephcore::guardrails::PiiSecretsGuardrail::with_guard_and_resolver(guard, resolver),
+    );
     Some(Arc::new(
         alephcore::guardrails::GuardrailRegistry::builder()
             .with_input(pii.clone())
@@ -278,24 +304,39 @@ mod tests {
         }
     }
 
+    fn test_security_store() -> Arc<alephcore::gateway::security::SecurityStore> {
+        Arc::new(
+            alephcore::gateway::security::SecurityStore::in_memory()
+                .expect("in-memory SecurityStore"),
+        )
+    }
+
+    fn test_shared_token_mgr() -> Arc<alephcore::gateway::security::SharedTokenManager> {
+        Arc::new(alephcore::gateway::security::SharedTokenManager::new(
+            test_security_store(),
+            "/tmp/aleph_test_orch.vault",
+        ))
+    }
+
     #[test]
     fn guardrails_missing_section_returns_none() {
         let cfg = Config::default();
-        let r = build_guardrail_registry(&cfg);
+        let r = build_guardrail_registry(&cfg, test_shared_token_mgr(), test_security_store());
         assert!(r.is_none(), "missing [guardrails] should yield None");
     }
 
     #[test]
     fn guardrails_disabled_returns_none() {
         let cfg = cfg_with_guardrails(Some(GuardrailsToml { enabled: false }));
-        let r = build_guardrail_registry(&cfg);
+        let r = build_guardrail_registry(&cfg, test_shared_token_mgr(), test_security_store());
         assert!(r.is_none(), "[guardrails] enabled=false should yield None");
     }
 
     #[test]
     fn guardrails_enabled_wires_pii_secrets() {
         let cfg = cfg_with_guardrails(Some(GuardrailsToml { enabled: true }));
-        let r = build_guardrail_registry(&cfg).expect("enabled=true should yield Some");
+        let r = build_guardrail_registry(&cfg, test_shared_token_mgr(), test_security_store())
+            .expect("enabled=true should yield Some");
         assert_eq!(r.input_count(), 1);
         assert_eq!(r.output_count(), 1);
         assert_eq!(r.tool_call_count(), 1);

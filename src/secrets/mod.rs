@@ -10,9 +10,11 @@ pub mod placeholder;
 pub mod provider;
 pub mod types;
 pub mod vault;
+pub mod vault_resolver;
 pub mod web3_signer;
 
 pub use injection::{render_with_secrets, AsyncSecretResolver, InjectedSecret};
+pub use vault_resolver::VaultSecretResolver;
 pub use leak_detector::{LeakDecision, LeakDetector};
 pub use placeholder::{extract_secret_refs, SecretRef};
 pub use provider::ProviderStatus;
