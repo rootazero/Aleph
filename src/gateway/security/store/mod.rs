@@ -173,6 +173,25 @@ impl SecurityStore {
         debug!("Security store initialized (schema v{})", SCHEMA_VERSION);
         Ok(())
     }
+
+    /// Insert a single security audit entry. Used by the audit drain task.
+    pub fn insert_audit_entry(
+        &self,
+        entry: &crate::security::audit::AuditEntry,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            crate::security::audit::AUDIT_INSERT_SQL,
+            rusqlite::params![
+                entry.event_type.to_string(),
+                entry.severity.to_string(),
+                entry.source_ip.as_deref(),
+                entry.session_id.as_deref(),
+                entry.detail.as_str(),
+            ],
+        )?;
+        Ok(())
+    }
 }
 
 /// Get current timestamp in milliseconds

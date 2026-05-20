@@ -30,6 +30,34 @@ impl LeakDecision {
     }
 }
 
+/// Source-of-truth secret regex strings for the byte-level sandbox scrubber.
+///
+/// NOTE: These 5 prefixes are intentionally independent from the `LEAK_PATTERNS`
+/// below. The str-side detector pre-dates this list and uses different pattern
+/// boundaries (e.g. `sk-[a-zA-Z0-9]` catches both OpenAI and sk-proj in one
+/// rule, whereas bytes-side splits them for named redaction tags). Refactoring
+/// `LEAK_PATTERNS` to share this list would change existing redaction behavior
+/// and break tests — kept separate by design.
+pub const SECRET_PATTERN_SOURCES: &[(&str, &str)] = &[
+    ("sk_proj",     r"sk-proj-[A-Za-z0-9_\-]{20,}"),
+    ("sk_ant",      r"sk-ant-[A-Za-z0-9_\-]{20,}"),
+    ("aws_akia",    r"AKIA[0-9A-Z]{16}"),
+    ("github_pat",  r"ghp_[A-Za-z0-9]{20,}"),
+    ("gitlab_pat",  r"glpat-[A-Za-z0-9_\-]{20,}"),
+];
+
+/// Produce bytes-flavored regexes matching the same patterns as
+/// `SECRET_PATTERN_SOURCES`. Used by `sandbox::scrub` to redact raw
+/// stdout/stderr before any UTF-8 conversion.
+pub fn default_patterns_bytes() -> Vec<(&'static str, regex::bytes::Regex)> {
+    SECRET_PATTERN_SOURCES
+        .iter()
+        .map(|(name, src)| {
+            (*name, regex::bytes::Regex::new(src).expect("static pattern compiles"))
+        })
+        .collect()
+}
+
 /// Known secret format patterns.
 static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
     vec![
@@ -49,6 +77,11 @@ static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
         (
             "GitHub Token",
             Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
+        ),
+        (
+            // GitLab personal/group/project access tokens — mirrors SECRET_PATTERN_SOURCES entry
+            "GitLab Token",
+            Regex::new(r"glpat-[A-Za-z0-9_\-]{20,}").unwrap(),
         ),
         (
             "Private Key Block",
