@@ -186,6 +186,7 @@ impl OrchestratorFixture {
             default_max_iterations: 200,
             power: None,
             memory_context_provider: None,
+            dispatch_registry: None,
         });
 
         let orchestrator = Orchestrator::new(

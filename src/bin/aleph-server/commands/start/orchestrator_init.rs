@@ -53,6 +53,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // assemble the system prompt before each turn. None disables only the
     // memory-driven prompt sections; AgentRoleLayer still renders.
     memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
+    // Dispatcher-side ToolRegistry — owns the `ToolHealthCache` whose snapshot
+    // feeds `runtime_state_blocks`. Threaded so `build_system_prompt` can
+    // populate `<tool_runtime_state>` fragments.
+    dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
 ) -> anyhow::Result<Arc<Orchestrator>> {
     // P2 Stage E: load user/project agent definitions from filesystem.
     // Shadow events (higher-tier overrides) are logged at info level; the
@@ -187,6 +191,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         default_max_iterations: config.execution.max_iterations,
         power,
         memory_context_provider,
+        dispatch_registry,
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.
