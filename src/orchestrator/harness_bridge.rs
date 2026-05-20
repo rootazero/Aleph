@@ -450,13 +450,36 @@ impl AgentHarnessRunner {
 
         let agent_def = self.agent_registry.get(agent_id);
 
+        // Load user-editable identity files from `~/.aleph/agents/{agent_id}/`
+        // (SOUL.md / IDENTITY.md / AGENTS.md / TOOLS.md / HEARTBEAT.md). The
+        // loader was previously only exercised from its own tests — wiring it
+        // here is what gets `IdentityFilesLayer` (and the soul / profile layers
+        // that read the same source) usable content on the harness path.
+        // Tolerant of missing home / dir / IO failure: returns IdentityFiles
+        // with all-None content, which the layer treats as "skip".
+        let identity_files = crate::discovery::aleph_agents_dir().ok().map(|agents_dir| {
+            crate::thinker::identity_files::IdentityFiles::load(
+                &agents_dir.join(agent_id),
+                &crate::thinker::identity_files::IdentityFilesConfig::default(),
+            )
+        });
+        let has_identity = identity_files
+            .as_ref()
+            .map(|f| f.files.iter().any(|file| file.content.is_some()))
+            .unwrap_or(false);
+
         let has_skills = skill_snapshot
             .as_ref()
             .map(|s| !s.eligible_manifests.is_empty())
             .unwrap_or(false);
         // Skip prompt assembly entirely when there is nothing to inject:
-        // no memory, no AgentDef, and no eligible skills.
-        if curated_text.is_none() && memory_text.is_none() && agent_def.is_none() && !has_skills {
+        // no memory, no AgentDef, no eligible skills, and no identity files.
+        if curated_text.is_none()
+            && memory_text.is_none()
+            && agent_def.is_none()
+            && !has_skills
+            && !has_identity
+        {
             return None;
         }
 
@@ -485,6 +508,20 @@ impl AgentHarnessRunner {
         if let Some(text) = memory_text {
             builder = builder.with_memory_user_message(text);
         }
+        let identity_chars = identity_files
+            .as_ref()
+            .map(|f| {
+                f.files
+                    .iter()
+                    .filter_map(|file| file.content.as_ref().map(String::len))
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+        if let Some(files) = identity_files {
+            if has_identity {
+                builder = builder.with_identity_files(files);
+            }
+        }
         let prompt = builder.build_system_prompt(&[]);
         // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
         // Logs character counts (not contents) so prompts are observable
@@ -495,6 +532,7 @@ impl AgentHarnessRunner {
             session = %session_key_str,
             curated_chars,
             memory_chars,
+            identity_chars,
             role_present,
             prompt_chars = prompt.len(),
             "system prompt assembled"
