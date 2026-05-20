@@ -2,6 +2,12 @@
 //!
 //! Runtime-loadable CLI tools defined in Markdown (SKILL.md format).
 //! Compatible with OpenClaw ecosystem while adding Aleph-specific extensions.
+//!
+//! Phase 1 of skill data model unification deprecates `AlephSkillSpec` in
+//! favor of `crate::domain::skill::SkillManifest`; the module itself remains
+//! the only legitimate consumer until Phase 2 (≥2026-06-03) absorbs the
+//! types. See docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md.
+#![allow(deprecated)]
 
 mod executor;
 mod loader;
