@@ -405,12 +405,13 @@ tiers.
 `Win32_Security_Isolation` module which exposes the AppContainer API.
 
 Limitations (intentional, see SP-6 spec § 1 out-of-scope):
-- AppContainer workspace DACL grant is not wired in v1; targets that
-  need to write into their workspace directory may fail on tier 1.
-  Soft-degrade falls through to tier 2 which lifts that restriction.
 - No WFP for per-host network filtering — `AllowHosts` returns
   `UnsupportedPolicy` from `WindowsSandboxDriver::profile_for`. SP-3b
   is deferred indefinitely (admin-only).
+- Targets requiring system paths outside their workspace (`~/.gitconfig`,
+  `%TEMP%`, `%APPDATA%`) remain blocked by the AppContainer SID —
+  accepted limitation; users can run outside AppContainer (sandbox
+  degrades to SP-3a tier).
 
 **SP-6 v2 (2026-05-20)**: the workspace DACL grant promised by SP-6 v1
 § 2.4 is now wired. Before each AppContainer launch, the init process
