@@ -114,16 +114,6 @@ where
     }
 }
 
-/// Stub registered at startup; replaced with the real handler once the
-/// `BuiltinToolRegistry` Arc is available (see `agent_init.rs`).
-pub async fn handle_invoke_stub(request: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "tools.invoke requires ToolRegistry — wire in Gateway startup".to_string(),
-    )
-}
-
 /// If the caller supplied a top-level `agent_id`, fold it into the JSON
 /// arguments object under the `agent_id` key. Existing values win so the
 /// caller can still override per-call. Non-object arguments pass through

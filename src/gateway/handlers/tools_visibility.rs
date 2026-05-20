@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::agents::AgentDef;
 use crate::dispatcher::{ToolRegistry, ToolSource, UnifiedTool};
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 // =============================================================================
 // Response Types
@@ -181,24 +181,6 @@ pub async fn handle_effective(
     };
 
     JsonRpcResponse::success(request.id, serde_json::to_value(result).unwrap_or_default())
-}
-
-/// Stub for `tools.catalog` — returns error until wired with ToolRegistry.
-pub async fn handle_catalog_stub(request: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "tools.catalog requires ToolRegistry — wire in Gateway startup".to_string(),
-    )
-}
-
-/// Stub for `tools.effective` — returns error until wired with ToolRegistry.
-pub async fn handle_effective_stub(request: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "tools.effective requires ToolRegistry — wire in Gateway startup".to_string(),
-    )
 }
 
 // =============================================================================

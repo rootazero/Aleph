@@ -100,38 +100,3 @@ pub async fn handle_get(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Json
     }
 }
 
-pub async fn handle_list_stub(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _ = request
-        .params
-        .as_ref()
-        .and_then(|p| p.get("session_id"))
-        .and_then(|v| v.as_str());
-    JsonRpcResponse::success(request.id, json!({ "traces": [] }))
-}
-
-pub async fn handle_get_stub(request: JsonRpcRequest) -> JsonRpcResponse {
-    let trace_id = match request
-        .params
-        .as_ref()
-        .and_then(|p| p.get("trace_id"))
-        .and_then(|v| v.as_str())
-    {
-        Some(id) => id,
-        None => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing trace_id");
-        }
-    };
-
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "trace": {
-                "id": trace_id,
-                "task_id": "",
-                "step_index": 0,
-                "event": null,
-                "timestamp": null
-            }
-        }),
-    )
-}
