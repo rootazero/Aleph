@@ -35,6 +35,7 @@ mod tool_usage_grammar;
 mod tools;
 
 // --- Context layers ---
+mod chain_context;
 mod environment;
 mod heartbeat;
 mod inbound_context;
@@ -89,6 +90,7 @@ pub use tool_usage_grammar::ToolUsageGrammarLayer;
 pub use tools::HydratedToolsLayer;
 pub use tools::ToolsLayer;
 
+pub use chain_context::ChainContextLayer;
 pub use curated_memory::CuratedMemoryLayer;
 pub use environment::EnvironmentLayer;
 pub use heartbeat::HeartbeatLayer;

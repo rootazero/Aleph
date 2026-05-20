@@ -119,6 +119,13 @@ pub struct LayerInput<'a> {
     /// (priority 60, Stable) injects this text verbatim, preserving the prompt
     /// prefix cache.
     pub curated_memory_envelope: Option<String>,
+    /// Subagent call-chain position for `ChainContextLayer`.
+    ///
+    /// Threaded through from `HarnessDeps.chain_context` (the value the
+    /// orchestrator and subagent_spawner already maintain). Layer omits
+    /// the section entirely when the chain is at root (`depth == 0`) or
+    /// the field is `None`, so the top-level harness path stays unaffected.
+    pub chain_context: Option<&'a crate::harness::chain_context::ChainContext>,
 }
 
 impl<'a> LayerInput<'a> {
@@ -141,6 +148,7 @@ impl<'a> LayerInput<'a> {
             mcp_tool_index: None,
             session_snapshot: None,
             curated_memory_envelope: None,
+            chain_context: None,
         }
     }
 
@@ -163,6 +171,7 @@ impl<'a> LayerInput<'a> {
             mcp_tool_index: None,
             session_snapshot: None,
             curated_memory_envelope: None,
+            chain_context: None,
         }
     }
 
@@ -185,6 +194,7 @@ impl<'a> LayerInput<'a> {
             mcp_tool_index: None,
             session_snapshot: None,
             curated_memory_envelope: None,
+            chain_context: None,
         }
     }
 
@@ -207,6 +217,7 @@ impl<'a> LayerInput<'a> {
             mcp_tool_index: None,
             session_snapshot: None,
             curated_memory_envelope: None,
+            chain_context: None,
         }
     }
 
@@ -294,6 +305,27 @@ impl<'a> LayerInput<'a> {
         snapshot: &'a crate::memory::session_resume::SessionSnapshot,
     ) -> Self {
         self.session_snapshot = Some(snapshot);
+        self
+    }
+
+    /// Attach a subagent call-chain context. Used by `ChainContextLayer`
+    /// to surface depth / chain_id to the LLM. Root chains (depth=0) and
+    /// `None` both render an empty section.
+    pub fn with_chain_context(
+        mut self,
+        chain: &'a crate::harness::chain_context::ChainContext,
+    ) -> Self {
+        self.chain_context = Some(chain);
+        self
+    }
+
+    /// Same as `with_chain_context` but accepts an `Option` for ergonomic
+    /// threading from optional config.
+    pub fn with_chain_context_opt(
+        mut self,
+        chain: Option<&'a crate::harness::chain_context::ChainContext>,
+    ) -> Self {
+        self.chain_context = chain;
         self
     }
 

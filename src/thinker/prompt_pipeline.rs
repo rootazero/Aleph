@@ -228,6 +228,7 @@ impl PromptPipeline {
     ///
     /// **Dynamic zone** (per-request, not cacheable):
     /// 1700  InboundContextLayer
+    /// 1702  ChainContextLayer
     /// 1704  AgentCatalogLayer
     /// 1705  McpInstructionsLayer
     /// 1706  McpToolIndexLayer
@@ -244,6 +245,7 @@ impl PromptPipeline {
             Box::new(AgentRoleLayer),
             Box::new(CuratedMemoryLayer),
             Box::new(InboundContextLayer),
+            Box::new(ChainContextLayer),
             Box::new(McpInstructionsLayer),
             Box::new(McpToolIndexLayer),
             Box::new(VoiceModeLayer),
@@ -472,9 +474,10 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        // 34 after ResponseFormatLayer was unregistered (2026-05-10) — see
-        // `default_layers` for rationale.
-        assert_eq!(pipeline.layer_count(), 34);
+        // 35 after ChainContextLayer was added (Phase 2, 2026-05-20). The
+        // previous count was 34 (ResponseFormatLayer was unregistered
+        // 2026-05-10) — see `default_layers` for the full layer table.
+        assert_eq!(pipeline.layer_count(), 35);
     }
 
     #[test]
@@ -532,6 +535,7 @@ mod mode_tests {
             "mcp_instructions",
             "mcp_tool_index",
             "agent_catalog",
+            "chain_context",
             "session_resume",
             "special_actions",
             "guidelines",
@@ -835,10 +839,13 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"mcp_instructions"));
         assert!(dynamic_names.contains(&"mcp_tool_index"));
         assert!(dynamic_names.contains(&"agent_catalog"));
+        // Phase 2 (2026-05-20): ChainContextLayer rendered subagent
+        // delegation depth per request — naturally dynamic.
+        assert!(dynamic_names.contains(&"chain_context"));
         assert_eq!(
             dynamic_names.len(),
-            11,
-            "Exactly 11 dynamic layers expected"
+            12,
+            "Exactly 12 dynamic layers expected"
         );
     }
 
