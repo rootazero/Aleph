@@ -12,6 +12,7 @@ use async_trait::async_trait;
 pub mod capabilities;
 pub(crate) mod cgroup_v2;
 pub mod command;
+pub mod scrub;
 pub mod config;
 pub mod context;
 pub mod denial_logger;
@@ -43,6 +44,7 @@ pub use worktree::{WorktreeError, WorktreeHandle, WorktreeSandbox};
 pub use policy::{
     EnvPolicy, FsPolicy, NetworkPolicy as PolicyNetworkPolicy, ProcessPolicy, SandboxPolicy,
 };
+pub use scrub::{scrub_secrets_bytes, ScrubResult};
 
 #[async_trait]
 pub trait Sandbox: Send + Sync + 'static {

@@ -121,6 +121,7 @@ fn load_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Option<CoordT
 
 pub struct SqliteCoordTaskStore {
     conn: Arc<Mutex<Connection>>,
+    bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 impl SqliteCoordTaskStore {
@@ -129,7 +130,38 @@ impl SqliteCoordTaskStore {
     pub fn new(conn: Connection) -> Self {
         Self {
             conn: Arc::new(Mutex::new(conn)),
+            bus: None,
         }
+    }
+
+    /// Attach an event bus so the store emits topic events on mutations.
+    /// Builder is no-op safe: stores constructed without a bus simply skip emission.
+    pub fn with_event_bus(
+        mut self,
+        bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
+    ) -> Self {
+        self.bus = Some(bus);
+        self
+    }
+
+    /// Publish a `team.<team_id>.task.<verb>` topic for a single task.
+    /// No-op when no bus is attached or the task has no team_id.
+    fn emit_task_topic(&self, task: &CoordTask, verb: &str) {
+        let Some(bus) = &self.bus else { return; };
+        let Some(team_id) = task.team_id.as_deref() else { return; };
+        let topic = format!("team.{team_id}.task.{verb}");
+        let payload = serde_json::json!({
+            "topic": topic,
+            "data": {
+                "task_id": task.id,
+                "team_id": team_id,
+                "status": task.status.as_str(),
+                "owner": task.owner,
+                "priority": task.priority.as_str(),
+                "timestamp": now_epoch(),
+            },
+        });
+        let _ = bus.publish_json(&payload);
     }
 
     /// Run schema migration (creates tables + indexes).
@@ -318,9 +350,12 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         }
 
         // Return the fully loaded task (with derived status)
-        load_task(&conn, &id)
+        let task = load_task(&conn, &id)
             .map_err(db_err)?
-            .ok_or_else(|| db_err("task disappeared after insert"))
+            .ok_or_else(|| db_err("task disappeared after insert"))?;
+        drop(conn); // release lock before emit so subscribers aren't blocked
+        self.emit_task_topic(&task, "created");
+        Ok(task)
     }
 
     async fn get_task(&self, id: &str) -> crate::error::Result<Option<CoordTask>> {
@@ -405,9 +440,18 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             return Err(db_err(format!("task not found: {id}")));
         }
 
-        load_task(&conn, id)
+        let task = load_task(&conn, id)
             .map_err(db_err)?
-            .ok_or_else(|| db_err(format!("task not found after update: {id}")))
+            .ok_or_else(|| db_err(format!("task not found after update: {id}")))?;
+        let verb = match task.status {
+            CoordTaskStatus::Completed => "completed",
+            CoordTaskStatus::Failed => "failed",
+            CoordTaskStatus::Cancelled => "cancelled",
+            _ => "updated",
+        };
+        drop(conn);
+        self.emit_task_topic(&task, verb);
+        Ok(task)
     }
 
     async fn list_tasks(&self, filter: CoordTaskFilter) -> crate::error::Result<Vec<CoordTask>> {
@@ -417,13 +461,11 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut idx = 1usize;
 
-        // If filtering by Blocked, we need to filter pending tasks and post-filter
         let filter_blocked = filter.status == Some(CoordTaskStatus::Blocked);
         let filter_pending = filter.status == Some(CoordTaskStatus::Pending);
 
         if let Some(ref status) = filter.status {
             if *status == CoordTaskStatus::Blocked || *status == CoordTaskStatus::Pending {
-                // Both map to stored 'pending', derive later
                 where_clauses.push(format!("t.status = ?{idx}"));
                 values.push(Box::new("pending".to_string()));
                 idx += 1;
@@ -443,7 +485,6 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         if let Some(ref owner) = filter.owner {
             where_clauses.push(format!("t.owner = ?{idx}"));
             values.push(Box::new(owner.clone()));
-            // idx += 1; // not needed, last use
         }
 
         let where_sql = if where_clauses.is_empty() {
@@ -452,31 +493,56 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             format!("WHERE {}", where_clauses.join(" AND "))
         };
 
+        // Single pass: tasks + unresolved-parent count + a CSV of dependency ids.
+        // GROUP_CONCAT keeps the dependency list inline so we avoid the per-task
+        // load_dependencies() round-trip used previously.
         let sql = format!(
-            "SELECT t.id, t.team_id, t.subject, t.description, t.status, t.owner, t.priority, t.result, t.metadata, t.created_at, t.started_at, t.completed_at, t.locked_by, t.locked_at FROM coord_tasks t {where_sql} ORDER BY t.created_at ASC"
+            r#"
+            SELECT
+                t.id, t.team_id, t.subject, t.description, t.status, t.owner,
+                t.priority, t.result, t.metadata, t.created_at, t.started_at,
+                t.completed_at, t.locked_by, t.locked_at,
+                COALESCE(SUM(CASE WHEN dep.status IS NOT NULL AND dep.status != 'completed' THEN 1 ELSE 0 END), 0) AS unresolved_parents,
+                GROUP_CONCAT(d.depends_on) AS dep_ids
+            FROM coord_tasks t
+            LEFT JOIN coord_task_dependencies d ON d.task_id = t.id
+            LEFT JOIN coord_tasks dep ON dep.id = d.depends_on
+            {where_sql}
+            GROUP BY t.id
+            ORDER BY t.created_at ASC
+            "#
         );
 
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             values.iter().map(|v| v.as_ref()).collect();
         let mut stmt = conn.prepare(&sql).map_err(db_err)?;
+
         let rows = stmt
-            .query_map(params_ref.as_slice(), read_task_row)
+            .query_map(params_ref.as_slice(), |row| {
+                let mut task = read_task_row(row)?;
+                let unresolved: i64 = row.get(14)?;
+                let dep_csv: Option<String> = row.get(15)?;
+                task.dependencies = dep_csv
+                    .map(|s| s.split(',').map(|x| x.to_string()).collect())
+                    .unwrap_or_default();
+                task.status = if task.status == CoordTaskStatus::Pending && unresolved > 0 {
+                    CoordTaskStatus::Blocked
+                } else {
+                    task.status
+                };
+                Ok(task)
+            })
             .map_err(db_err)?;
 
         let mut tasks = Vec::new();
         for row in rows {
-            let mut task = row.map_err(db_err)?;
-            task.dependencies = load_dependencies(&conn, &task.id).map_err(db_err)?;
-            task.status = derive_status(&conn, &task.id, task.status).map_err(db_err)?;
-
-            // Post-filter for Blocked vs Pending
+            let task = row.map_err(db_err)?;
             if filter_blocked && task.status != CoordTaskStatus::Blocked {
                 continue;
             }
             if filter_pending && task.status != CoordTaskStatus::Pending {
                 continue;
             }
-
             tasks.push(task);
         }
 
@@ -962,5 +1028,132 @@ mod tests {
         let t = store.get_task(&task.id).await.unwrap().unwrap();
         assert!(t.locked_by.is_none());
         assert!(t.locked_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn with_event_bus_attaches_bus_without_breaking_existing_methods() {
+        use crate::gateway::event_bus::GatewayEventBus;
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let bus = std::sync::Arc::new(GatewayEventBus::new());
+        let store = SqliteCoordTaskStore::new(conn).with_event_bus(bus);
+        store.migrate().await.expect("migrate");
+
+        // Existing CRUD still works after bus injection
+        let task = store
+            .create_task(NewCoordTask {
+                team_id: Some("team-X".into()),
+                subject: "ping".into(),
+                description: "".into(),
+                owner: None,
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(task.team_id.as_deref(), Some("team-X"));
+    }
+
+    #[tokio::test]
+    async fn create_and_update_emit_team_task_topics() {
+        use crate::gateway::event_bus::GatewayEventBus;
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let bus = std::sync::Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe();
+        let store = SqliteCoordTaskStore::new(conn).with_event_bus(bus);
+        store.migrate().await.expect("migrate");
+
+        let task = store
+            .create_task(NewCoordTask {
+                team_id: Some("team-T".into()),
+                subject: "do".into(),
+                description: "".into(),
+                owner: None,
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let evt = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+            .await
+            .expect("event received in time")
+            .expect("event payload");
+        assert!(evt.contains(r#""topic":"team.team-T.task.created""#), "got: {evt}");
+        assert!(evt.contains(&task.id), "topic payload missing task id: {evt}");
+
+        let _ = store
+            .update_task(
+                &task.id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::InProgress),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let evt2 = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+            .await
+            .expect("update event received in time")
+            .expect("update event payload");
+        assert!(evt2.contains(r#""topic":"team.team-T.task.updated""#), "got: {evt2}");
+    }
+
+    #[tokio::test]
+    async fn list_tasks_derives_blocked_in_a_single_pass() {
+        let store = setup_store().await;
+
+        let a = store
+            .create_task(NewCoordTask {
+                team_id: Some("T".into()),
+                subject: "A".into(),
+                description: "".into(),
+                owner: None,
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+        let b = store
+            .create_task(NewCoordTask {
+                team_id: Some("T".into()),
+                subject: "B".into(),
+                description: "".into(),
+                owner: None,
+                priority: Priority::Normal,
+                blocked_by: vec![a.id.clone()],
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+        let c = store
+            .create_task(NewCoordTask {
+                team_id: Some("T".into()),
+                subject: "C".into(),
+                description: "".into(),
+                owner: None,
+                priority: Priority::Normal,
+                blocked_by: vec![b.id.clone()],
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let all = store
+            .list_tasks(CoordTaskFilter {
+                team_id: Some("T".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let by_id: std::collections::HashMap<_, _> =
+            all.iter().map(|t| (t.id.clone(), t)).collect();
+        assert_eq!(by_id[&a.id].status, CoordTaskStatus::Pending);
+        assert_eq!(by_id[&b.id].status, CoordTaskStatus::Blocked);
+        assert_eq!(by_id[&c.id].status, CoordTaskStatus::Blocked);
     }
 }

@@ -9,9 +9,39 @@ use crate::context::budget::LoopDirective;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
-use crate::session::events::{MessageContent, SessionEvent, ToolOutput};
+use crate::providers::message::UnifiedMessage;
+use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, ToolOutput};
 use crate::session::service::SessionId;
 use crate::verification::{hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict};
+
+/// Ephemeral nudge appended to the message list on the grace turn —
+/// the single tool-less LLM call given when `LoopDirective::FinalReply`
+/// fires and the prior assistant turn ended on an unresolved tool_use.
+/// Tools are also stripped at the request layer (no `.with_tools(...)`),
+/// so the model cannot loop further.
+const GRACE_NUDGE: &str =
+    "You are out of context budget and cannot call any more tools. \
+     Respond now with a final summary for the user based on what you have so far.";
+
+/// True iff the most recent `AssistantMessage` in `events` already carries
+/// displayable text. When false, the budget short-circuit will inject one
+/// grace turn so the user gets a terminal text response instead of a
+/// mid-thought hang.
+///
+/// Returns `false` when there is no `AssistantMessage` yet (budget tripped
+/// on the very first turn) — that path also deserves a grace turn.
+fn last_assistant_has_text(events: &[SessionEventRecord]) -> bool {
+    events
+        .iter()
+        .rev()
+        .find_map(|r| match &r.event {
+            SessionEvent::AssistantMessage { content, .. } => {
+                Some(!content.text.trim().is_empty())
+            }
+            _ => None,
+        })
+        .unwrap_or(false)
+}
 
 impl AgentHarness {
     /// Internal turn execution with pre-computed counters to avoid O(n²)
@@ -132,10 +162,70 @@ impl AgentHarness {
         }
 
         // 2d. `FinalReply` directive — record hit_limit and short-circuit to
-        // Done without calling the LLM or running tools. The last assistant
-        // message already on the session log is the final text.
+        // Done. Hermes-inspired grace turn: if the most recent assistant
+        // turn ended without text (unresolved tool_use, or no assistant
+        // turn yet), issue exactly one tool-less LLM call so the user
+        // gets a terminal text response instead of a mid-thought hang.
+        // Tools are stripped both via `.with_tools(None)` (implicit by
+        // omitting the call) and via the GRACE_NUDGE message, so the LLM
+        // cannot recurse. Fail-soft: any error falls through silently.
+        // R10-safe: one extra LLM call gated by an existing directive,
+        // no new policy, no state machine.
         if matches!(budget_directive, Some(LoopDirective::FinalReply)) {
             self.hit_limit.store(true, Ordering::Relaxed);
+            if !last_assistant_has_text(&events) {
+                let mut grace_messages = messages.clone();
+                grace_messages.push(UnifiedMessage::user(GRACE_NUDGE));
+                let grace_payload = match self.deps.system_prompt.as_deref() {
+                    Some(sp) => RequestPayload::new(&grace_messages).with_system(Some(sp)),
+                    None => RequestPayload::new(&grace_messages),
+                };
+                match self.deps.llm.process(grace_payload).await {
+                    Ok(resp) => {
+                        let text = resp.text_content();
+                        if !text.trim().is_empty() {
+                            let turn_id = super::current_turn_id(&events);
+                            callback.on_delta(&text);
+                            let grace_event = SessionEvent::AssistantMessage {
+                                turn_id,
+                                content: MessageContent {
+                                    text: text.clone(),
+                                    blocks: Vec::new(),
+                                    thinking: resp.thinking.clone(),
+                                    thinking_signature: resp.thinking_signature.clone(),
+                                },
+                                at: crate::session::events::now_ms(),
+                            };
+                            let grace_tokens = super::turn_token_total(&resp.usage);
+                            self.total_tokens.fetch_add(grace_tokens, Ordering::Relaxed);
+                            if let Err(e) = self
+                                .deps
+                                .session
+                                .emit_event(session_id, grace_event)
+                                .await
+                            {
+                                tracing::warn!(
+                                    ?session_id,
+                                    ?e,
+                                    "grace turn assistant emit failed",
+                                );
+                            }
+                            self.emit(|| crate::harness::trace::LoopTraceEvent::TextEmitted {
+                                iteration: iterations,
+                                stream: crate::harness::trace::LoopTraceTextKind::Final,
+                                text,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            ?session_id,
+                            ?e,
+                            "grace turn LLM call failed; falling through to short-circuit",
+                        );
+                    }
+                }
+            }
             callback.on_complete_via_harness();
             return Ok((TurnState::Done, 0, false));
         }
@@ -393,5 +483,99 @@ impl AgentHarness {
             stop_reason,
         };
         chain.verify(&ctx, cancel).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::events::{now_ms, MessageContent, SessionEvent, SessionEventRecord};
+
+    fn mk(seq: u64, event: SessionEvent) -> SessionEventRecord {
+        SessionEventRecord {
+            seq,
+            event,
+            created_at_ms: now_ms(),
+        }
+    }
+
+    fn assistant(text: &str, with_tool_use: bool) -> SessionEvent {
+        let blocks = if with_tool_use {
+            vec![serde_json::json!({
+                "type": "tool_use",
+                "id": "tu",
+                "name": "x",
+                "input": {},
+            })]
+        } else {
+            Vec::new()
+        };
+        SessionEvent::AssistantMessage {
+            turn_id: uuid::Uuid::new_v4(),
+            content: MessageContent {
+                text: text.to_string(),
+                blocks,
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+        }
+    }
+
+    fn user(text: &str) -> SessionEvent {
+        SessionEvent::UserMessage {
+            turn_id: uuid::Uuid::new_v4(),
+            content: MessageContent {
+                text: text.to_string(),
+                blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+        }
+    }
+
+    #[test]
+    fn last_assistant_has_text_true_for_non_empty_text() {
+        let events = vec![
+            mk(0, user("hi")),
+            mk(1, assistant("here is your answer", false)),
+        ];
+        assert!(last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn last_assistant_has_text_false_for_empty_text_with_tool_use_only() {
+        // The rescue path: model wanted to call a tool but was budget-cut,
+        // leaving an assistant turn with text="" and only tool_use blocks.
+        let events = vec![mk(0, user("hi")), mk(1, assistant("", true))];
+        assert!(!last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn last_assistant_has_text_false_when_no_assistant_message_at_all() {
+        // Budget tripped on turn 1, before the model produced anything.
+        let events = vec![mk(0, user("hi"))];
+        assert!(!last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn last_assistant_has_text_uses_most_recent_assistant() {
+        // Older assistant message had text; newer one is empty tool_use —
+        // the grace turn must rescue based on the LATEST turn.
+        let events = vec![
+            mk(0, user("first")),
+            mk(1, assistant("old answer", false)),
+            mk(2, user("follow up")),
+            mk(3, assistant("", true)),
+        ];
+        assert!(!last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn last_assistant_has_text_treats_whitespace_only_text_as_empty() {
+        // "  \n\t" alone does not constitute a terminal text response.
+        let events = vec![mk(0, user("hi")), mk(1, assistant("   \n\t", false))];
+        assert!(!last_assistant_has_text(&events));
     }
 }

@@ -13,6 +13,7 @@ pub enum PanelMode {
     Dashboard,
     Memory,
     Agents,
+    Teams,
     Settings,
 }
 
@@ -23,6 +24,8 @@ impl PanelMode {
             Self::Memory
         } else if path.starts_with("/agents") {
             Self::Agents
+        } else if path.starts_with("/teams") {
+            Self::Teams
         } else if path.starts_with("/dashboard") {
             Self::Dashboard
         } else if path.starts_with("/settings") {
@@ -99,6 +102,18 @@ pub fn BottomBar() -> impl IntoView {
                 <circle cx="12" cy="8" r="4"/>
                 <path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/>
                 <line x1="12" y1="2" x2="12" y2="4"/>
+            </BottomBarItem>
+
+            <BottomBarItem
+                label=Signal::derive(move || t_string!(i18n, nav.teams).to_string())
+                mode=PanelMode::Teams
+                active_mode=Signal::derive(active_mode)
+                on_click=go("/teams")
+            >
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
             </BottomBarItem>
 
             <BottomBarItem

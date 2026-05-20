@@ -1,0 +1,132 @@
+//! Teams Tab (top-level panel mode).
+//!
+//! Houses two sub-views:
+//! - Overview: existing collapsible team-cards list (migrated from /dashboard/teams)
+//! - Kanban: 5-column task board over CoordTask
+//!
+//! A small sidebar lets the user pick between the two sub-views and select
+//! the active team for the kanban.
+
+pub mod components;
+pub mod kanban;
+pub mod overview;
+
+use crate::api::teams::{TeamSummary, TeamsApi};
+use crate::context::DashboardState;
+use crate::i18n::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+
+/// Sub-tab inside the Teams tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TeamsSubTab {
+    Overview,
+    Kanban,
+}
+
+/// Shared signals for the Teams tab. Created once at the top-level and
+/// consumed via context by overview, kanban, and the sidebar.
+#[derive(Clone, Copy)]
+pub struct TeamsTabState {
+    pub sub_tab: RwSignal<TeamsSubTab>,
+    pub teams: RwSignal<Vec<TeamSummary>>,
+    pub selected_team_id: RwSignal<Option<String>>,
+}
+
+#[component]
+pub fn TeamsView() -> impl IntoView {
+    let dash = expect_context::<DashboardState>();
+    let tab_state = TeamsTabState {
+        sub_tab: RwSignal::new(TeamsSubTab::Overview),
+        teams: RwSignal::new(Vec::new()),
+        selected_team_id: RwSignal::new(None),
+    };
+    provide_context(tab_state);
+
+    // Initial + reconnect load of the team list. Each successful load keeps the
+    // active selection if still present, otherwise falls back to the first team.
+    Effect::new(move |_| {
+        if dash.is_connected.get() {
+            spawn_local(async move {
+                if let Ok(list) = TeamsApi::list(&dash).await {
+                    let keep = tab_state
+                        .selected_team_id
+                        .get_untracked()
+                        .filter(|id| list.iter().any(|t| &t.id == id));
+                    let new_sel = keep.or_else(|| list.first().map(|t| t.id.clone()));
+                    tab_state.teams.set(list);
+                    tab_state.selected_team_id.set(new_sel);
+                }
+            });
+        } else {
+            tab_state.teams.set(Vec::new());
+            tab_state.selected_team_id.set(None);
+        }
+    });
+
+    view! {
+        <div class="flex-1 flex flex-col h-full overflow-hidden">
+            {move || match tab_state.sub_tab.get() {
+                TeamsSubTab::Overview => view! { <overview::OverviewView /> }.into_any(),
+                TeamsSubTab::Kanban => view! { <kanban::KanbanView /> }.into_any(),
+            }}
+        </div>
+    }
+}
+
+/// Sidebar for the Teams tab — sub-tab selector + team dropdown.
+#[component]
+pub fn TeamsSidebar() -> impl IntoView {
+    let i18n = use_i18n();
+    let tab_state = expect_context::<TeamsTabState>();
+
+    view! {
+        <div class="flex flex-col h-full">
+            <div class="px-4 py-3">
+                <h2 class="text-xs font-medium text-text-tertiary uppercase tracking-wider">
+                    {move || t_string!(i18n, nav.teams).to_string()}
+                </h2>
+            </div>
+            <nav class="flex-1 overflow-y-auto px-3 space-y-1">
+                <SubTabButton
+                    label=Signal::derive(move || t_string!(i18n, teams.subtab.overview).to_string())
+                    current=tab_state.sub_tab
+                    target=TeamsSubTab::Overview
+                />
+                <SubTabButton
+                    label=Signal::derive(move || t_string!(i18n, teams.subtab.kanban).to_string())
+                    current=tab_state.sub_tab
+                    target=TeamsSubTab::Kanban
+                />
+            </nav>
+            <div class="px-3 py-3 border-t border-border">
+                <components::team_selector::TeamSelector />
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn SubTabButton(
+    label: Signal<String>,
+    current: RwSignal<TeamsSubTab>,
+    target: TeamsSubTab,
+) -> impl IntoView {
+    let is_active = move || current.get() == target;
+    let on_click = move |_| current.set(target);
+
+    view! {
+        <button
+            on:click=on_click
+            class=move || {
+                if is_active() {
+                    "w-full flex items-center px-3 py-2 rounded-lg text-sm bg-sidebar-active text-sidebar-accent font-medium"
+                } else {
+                    "w-full flex items-center px-3 py-2 rounded-lg text-sm hover:bg-sidebar-active/50 text-text-secondary hover:text-text-primary"
+                }
+            }
+        >
+            <span>{label}</span>
+        </button>
+    }
+}
