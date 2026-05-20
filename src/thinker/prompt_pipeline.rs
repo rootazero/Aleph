@@ -258,6 +258,7 @@ impl PromptPipeline {
             Box::new(RuntimeCapabilitiesLayer),
             Box::new(ToolsLayer),
             Box::new(HydratedToolsLayer),
+            Box::new(ToolRuntimeStateLayer),
             Box::new(AgentCatalogLayer),
             Box::new(ToolUsageGrammarLayer),
             Box::new(SecurityLayer),

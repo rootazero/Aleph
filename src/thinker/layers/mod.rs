@@ -31,8 +31,10 @@ mod agent_role;
 pub mod profile;
 
 // --- Tool layers ---
+mod tool_runtime_state;
 mod tool_usage_grammar;
 mod tools;
+pub use tool_runtime_state::ToolRuntimeStateLayer;
 
 // --- Context layers ---
 mod chain_context;

@@ -66,6 +66,7 @@ pub mod handlers;
 pub mod mcp_scope_view;
 pub mod null;
 pub mod registry;
+pub mod runtime_state;
 pub mod scoped;
 pub mod service;
 pub mod turn_context;

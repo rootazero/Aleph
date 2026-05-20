@@ -5,6 +5,7 @@
 
 mod conflict;
 mod discovery;
+pub mod health;
 mod helpers;
 mod query;
 mod registration;
@@ -21,6 +22,11 @@ use crate::skill::SkillInfo;
 use super::types::{ChannelType, ToolIndex, ToolIndexEntry, ToolSourceType, UnifiedTool};
 use conflict::ConflictResolver;
 use discovery::ToolDiscovery;
+// Re-exports for external (integration test, gateway) consumers. The
+// in-crate paths use these via fully-qualified names, hence the lint
+// suppression.
+#[allow(unused_imports)]
+pub use health::{HealthReason, HealthSnapshot, ProbeResult, ToolHealthCache, ToolHealthProbe};
 use query::ToolQuery;
 use registration::ToolRegistrar;
 use state::ToolState;
@@ -68,6 +74,10 @@ pub struct ToolRegistry {
     state: ToolState,
     /// Discovery handler for smart tool discovery
     discovery: ToolDiscovery,
+    /// Runtime health probe cache. Tools opt in via [`register_health_probe`].
+    /// Consulted alongside `is_active` when emitting native tool schemas so
+    /// the LLM never sees a tool whose dependencies are dead.
+    health: Arc<ToolHealthCache>,
 }
 
 impl Default for ToolRegistry {
@@ -86,7 +96,31 @@ impl ToolRegistry {
             query: ToolQuery::new(Arc::clone(&tools)),
             state: ToolState::new(Arc::clone(&tools)),
             discovery: ToolDiscovery::new(tools),
+            health: Arc::new(ToolHealthCache::new()),
         }
+    }
+
+    /// Shared handle to the runtime health cache.
+    ///
+    /// Used by callers that need to register a [`ToolHealthProbe`]
+    /// (typically at boot, alongside the tool that owns the probe) or
+    /// inspect cached probe results.
+    pub fn health(&self) -> Arc<ToolHealthCache> {
+        Arc::clone(&self.health)
+    }
+
+    /// Register a runtime health probe for the named tool.
+    ///
+    /// Tools opt in via this method; absent any registered probe a tool
+    /// is treated as always healthy and continues to surface in the
+    /// model's native tool list as before.
+    pub fn register_health_probe(&self, name: impl Into<String>, probe: Arc<dyn ToolHealthProbe>) {
+        self.health.register_probe(name, probe);
+    }
+
+    /// Remove a previously registered health probe by name.
+    pub fn unregister_health_probe(&self, name: &str) -> bool {
+        self.health.unregister_probe(name)
     }
 
     // =========================================================================
@@ -98,6 +132,7 @@ impl ToolRegistry {
         self.registrar
             .register_builtin_tools(&self.conflict_resolver)
             .await;
+        self.health.invalidate_all();
     }
 
     /// Register skills from SkillInfo list (Flat Namespace Mode)
@@ -105,6 +140,7 @@ impl ToolRegistry {
         self.registrar
             .register_skills(skills, &self.conflict_resolver)
             .await;
+        self.health.invalidate_all();
     }
 
     /// Register plugin tools from manifests (Flat Namespace Mode)
@@ -112,11 +148,13 @@ impl ToolRegistry {
         self.registrar
             .register_plugin_tools(tools, &self.conflict_resolver)
             .await;
+        self.health.invalidate_all();
     }
 
     /// Register custom commands from config rules
     pub async fn register_custom_commands(&self, rules: &[RoutingRuleConfig]) {
         self.registrar.register_custom_commands(rules).await;
+        self.health.invalidate_all();
     }
 
     // =========================================================================
@@ -148,9 +186,12 @@ impl ToolRegistry {
 
     /// Register a tool with automatic conflict resolution
     pub async fn register_with_conflict_resolution(&self, tool: UnifiedTool) -> String {
-        self.conflict_resolver
+        let id = self
+            .conflict_resolver
             .register_with_conflict_resolution(tool)
-            .await
+            .await;
+        self.health.invalidate_all();
+        id
     }
 
     // =========================================================================
@@ -160,46 +201,78 @@ impl ToolRegistry {
     /// Clear all registered tools
     pub async fn clear(&self) {
         self.state.clear().await;
+        // Tool membership changed — invalidate the health cache so the
+        // next `generate_smart_prompt` re-evaluates from a clean slate.
+        self.health.invalidate_all();
     }
 
     /// Atomic refresh - build new HashMap and replace in one operation
     pub async fn refresh_atomic(&self, new_tools: Vec<UnifiedTool>) {
         self.state.refresh_atomic(new_tools).await;
+        self.health.invalidate_all();
     }
 
     /// Remove all tools of a specific source type
     pub async fn remove_by_source_type(&self, source_type: ToolSourceType) -> usize {
-        self.state.remove_by_source_type(source_type).await
+        let n = self.state.remove_by_source_type(source_type).await;
+        if n > 0 {
+            self.health.invalidate_all();
+        }
+        n
     }
 
     /// Remove tools from a specific MCP server
     pub async fn remove_by_mcp_server(&self, server_name: &str) -> usize {
-        self.state.remove_by_mcp_server(server_name).await
+        let n = self.state.remove_by_mcp_server(server_name).await;
+        if n > 0 {
+            self.health.invalidate_all();
+        }
+        n
     }
 
     /// Remove all skill tools
     pub async fn remove_skills(&self) -> usize {
-        self.state.remove_skills().await
+        let n = self.state.remove_skills().await;
+        if n > 0 {
+            self.health.invalidate_all();
+        }
+        n
     }
 
     /// Remove all custom commands
     pub async fn remove_custom_commands(&self) -> usize {
-        self.state.remove_custom_commands().await
+        let n = self.state.remove_custom_commands().await;
+        if n > 0 {
+            self.health.invalidate_all();
+        }
+        n
     }
 
     /// Remove all MCP tools (from all servers)
     pub async fn remove_all_mcp_tools(&self) -> usize {
-        self.state.remove_all_mcp_tools().await
+        let n = self.state.remove_all_mcp_tools().await;
+        if n > 0 {
+            self.health.invalidate_all();
+        }
+        n
     }
 
     /// Remove all native tools
     pub async fn remove_native_tools(&self) -> usize {
-        self.state.remove_native_tools().await
+        let n = self.state.remove_native_tools().await;
+        if n > 0 {
+            self.health.invalidate_all();
+        }
+        n
     }
 
     /// Set tool active state
     pub async fn set_tool_active(&self, id: &str, active: bool) -> bool {
-        self.state.set_tool_active(id, active).await
+        let changed = self.state.set_tool_active(id, active).await;
+        if changed {
+            self.health.invalidate_all();
+        }
+        changed
     }
 
     // =========================================================================
@@ -305,24 +378,40 @@ impl ToolRegistry {
     // Prompt Generation & Smart Discovery
     // =========================================================================
 
-    /// Generate tool list for LLM prompt
+    /// Generate tool list for LLM prompt.
+    ///
+    /// Unhealthy tools (whose registered [`ToolHealthProbe`] reports a
+    /// non-expired Unhealthy result) are filtered out so the LLM never
+    /// sees them. Also kicks off detached background refreshes for any
+    /// tool whose probe cache entry is missing or stale.
     pub async fn to_prompt_block(&self) -> String {
-        self.discovery.to_prompt_block().await
+        self.discovery.trigger_health_refresh(&self.health).await;
+        let snap = self.health.snapshot();
+        self.discovery.to_prompt_block(&snap).await
     }
 
     /// Generate lightweight tool index for smart discovery
     pub async fn generate_tool_index(&self, core_tools: &[&str]) -> ToolIndex {
-        self.discovery.generate_tool_index(core_tools).await
+        self.discovery.trigger_health_refresh(&self.health).await;
+        let snap = self.health.snapshot();
+        self.discovery.generate_tool_index(core_tools, &snap).await
     }
 
-    /// Generate smart prompt with tool index + filtered full schemas
+    /// Generate smart prompt with tool index + filtered full schemas.
+    ///
+    /// Tools whose registered health probe reports `Unhealthy` (and the
+    /// entry hasn't expired) are stripped from both the full-schema set
+    /// and the index. Callers that want to see disabled tools (for UI
+    /// or debugging) should consult [`Self::health`] directly.
     pub async fn generate_smart_prompt(
         &self,
         core_tools: &[&str],
         filtered_tools: &[&str],
     ) -> (Vec<UnifiedTool>, String) {
+        self.discovery.trigger_health_refresh(&self.health).await;
+        let snap = self.health.snapshot();
         self.discovery
-            .generate_smart_prompt(core_tools, filtered_tools)
+            .generate_smart_prompt(core_tools, filtered_tools, &snap)
             .await
     }
 
@@ -333,7 +422,8 @@ impl ToolRegistry {
 
     /// List tools by category for the `list_tools` meta tool
     pub async fn list_tools_by_category(&self, category: Option<&str>) -> Vec<ToolIndexEntry> {
-        self.discovery.list_tools_by_category(category).await
+        let snap = self.health.snapshot();
+        self.discovery.list_tools_by_category(category, &snap).await
     }
 }
 
