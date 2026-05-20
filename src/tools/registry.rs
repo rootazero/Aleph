@@ -62,9 +62,18 @@ impl ToolRegistry {
         self.inner.load_full()
     }
 
-    /// Internal subscribe — not re-exported through ToolService yet. YAGNI per design §5.1.
-    #[cfg(test)]
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<RegistryChange> {
+    /// Subscribe to registry mutation events.
+    ///
+    /// Each receiver gets a 256-slot circular buffer (see channel allocation
+    /// in `new()`). Slow consumers lose the oldest events rather than
+    /// blocking publishers — this is the intended behavior for diagnostic
+    /// taps and dispatcher refresh hooks.
+    ///
+    /// First production consumer: the boot-time RegistryChange logger in
+    /// `aleph-server commands::start` records every MCP server connect /
+    /// disconnect for ops visibility. Treat additional consumers as additive
+    /// — never block on this channel.
+    pub fn subscribe(&self) -> broadcast::Receiver<RegistryChange> {
         self.change_tx.subscribe()
     }
 }

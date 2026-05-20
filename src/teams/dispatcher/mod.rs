@@ -64,6 +64,12 @@ pub struct TeamDispatcher {
     pub(crate) signal: Arc<Notify>,
     pub(crate) semaphore: Arc<Semaphore>,
     pub(crate) running: Arc<Mutex<HashSet<CoordTaskId>>>,
+    /// Cooperative shutdown signal. Fires from `Self::shutdown()` and breaks
+    /// the `spawn_loop` `tokio::select!` so the loop exits cleanly on
+    /// graceful shutdown / signal handling. Without this the dispatcher
+    /// loop only stops when the process dies, which leaks an
+    /// unfinished `dispatch_once` task on every clean restart.
+    pub(crate) shutdown_token: tokio_util::sync::CancellationToken,
 }
 
 impl TeamDispatcher {
@@ -89,6 +95,7 @@ impl TeamDispatcher {
             signal,
             semaphore,
             running: Arc::new(Mutex::new(HashSet::new())),
+            shutdown_token: tokio_util::sync::CancellationToken::new(),
         }
     }
 
@@ -97,11 +104,19 @@ impl TeamDispatcher {
         self.signal.notify_one();
     }
 
+    /// Trigger cooperative shutdown of the loop spawned by
+    /// [`Self::spawn_loop`]. The currently-running `dispatch_once` is allowed
+    /// to finish; no new ticks are scheduled. Idempotent.
+    pub fn shutdown(&self) {
+        self.shutdown_token.cancel();
+    }
+
     /// Spawn the background dispatch loop. Returns immediately.
     ///
-    /// The loop blocks until signalled or until the fallback interval elapses,
-    /// then runs one `dispatch_once`. Because `Notify` stores one permit, a
-    /// signal raised while a tick is in flight is never lost.
+    /// The loop blocks until signalled, until the fallback interval elapses,
+    /// or until [`Self::shutdown`] fires the `shutdown_token`. Because
+    /// `Notify` stores one permit, a signal raised while a tick is in flight
+    /// is never lost.
     pub fn spawn_loop(self: Arc<Self>) {
         tokio::spawn(async move {
             tracing::info!(
@@ -112,6 +127,10 @@ impl TeamDispatcher {
             self.dispatch_once().await;
             loop {
                 tokio::select! {
+                    _ = self.shutdown_token.cancelled() => {
+                        tracing::info!("TeamDispatcher loop received shutdown signal — exiting");
+                        return;
+                    }
                     _ = self.signal.notified() => {}
                     _ = tokio::time::sleep(Duration::from_secs(self.config.fallback_tick_secs)) => {}
                 }
