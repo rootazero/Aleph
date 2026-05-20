@@ -78,8 +78,11 @@ impl PiiSecretsGuardrail {
                 class: ErrorClass::Fixable,
             },
             Err(e) => {
-                tracing::warn!(error = %e, "RuntimeSecurityGuard error; allowing pass-through");
-                GuardrailDecision::Allow
+                tracing::error!(error = %e, "RuntimeSecurityGuard error; failing closed");
+                GuardrailDecision::Block {
+                    reason: format!("Security check unavailable: {e}"),
+                    class: ErrorClass::Unexpected,
+                }
             }
         }
     }
