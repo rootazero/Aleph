@@ -71,6 +71,21 @@ pub trait LoopTool: Send + Sync {
     fn is_concurrent_safe(&self, _input: &Value) -> bool {
         true
     }
+
+    /// Per-result token budget hint used by the Layer 2 result processor.
+    ///
+    /// - `Some(n)` — persist this tool's outputs to disk when they exceed
+    ///   `n` estimated tokens; the LLM sees a `[Full output persisted: ...]`
+    ///   marker instead of the full text.
+    /// - `None` — fall back to the global name table / default budget in
+    ///   [`crate::tools::result_processing::resolve_result_budget`].
+    ///
+    /// Default returns `None`; override on tools whose outputs are large
+    /// enough to warrant offloading (bash, web_fetch, etc.) or whose
+    /// outputs should never be persisted (`read_file`-family).
+    fn max_result_tokens(&self) -> Option<usize> {
+        None
+    }
 }
 
 // =============================================================================
@@ -174,11 +189,20 @@ impl LoopToolRegistry {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 parameters: t.schema(),
-                max_result_tokens: None,
+                max_result_tokens: t.max_result_tokens(),
             })
             .collect();
         defs.sort_by(|a, b| a.name.cmp(&b.name));
         defs
+    }
+
+    /// Return the per-result token budget that the named tool declared via
+    /// [`LoopTool::max_result_tokens`], if the tool is registered. Used by
+    /// `ScopedToolService::apply_layer_two` to look up the budget without
+    /// rebuilding a full `ToolDefinition`.
+    pub fn max_result_tokens_for(&self, name: &str) -> Option<usize> {
+        let tool = self.tools.get(name)?;
+        tool.max_result_tokens()
     }
 }
 

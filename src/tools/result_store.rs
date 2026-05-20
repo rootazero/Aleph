@@ -40,6 +40,16 @@ impl ToolResultStore {
         Ok(Self { base_dir })
     }
 
+    /// Construct a store rooted at an arbitrary base directory. The
+    /// caller must create the directory before this returns. Exposed
+    /// for tests in adjacent modules (e.g. `result_processing`,
+    /// `scoped`) that need a `ToolResultStore` without touching
+    /// `~/.aleph/`.
+    #[doc(hidden)]
+    pub fn with_dir_for_tests(base_dir: PathBuf) -> Self {
+        Self { base_dir }
+    }
+
     /// Persist the content to disk if it exceeds `threshold_tokens`.
     ///
     /// Returns a reference marker string if the content was persisted, or
