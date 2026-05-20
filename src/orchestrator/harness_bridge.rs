@@ -287,13 +287,19 @@ impl HarnessRunner for AgentHarnessRunner {
             stall_config: self.stall_config.clone(),
             consecutive_failure_cap: self.consecutive_failure_cap,
             turn_timeout: self.turn_timeout,
-            // Layer 3 turn budget + Layer 2 shared store. Threaded in via
-            // T13 boot wiring; orchestrator forwards whatever the bridge
-            // was constructed with. `None` is the fail-open default
-            // (Layer 2 still runs inside `ScopedToolService` if a store
-            // was injected there).
-            turn_budget: self.turn_budget.clone(),
-            result_store: self.result_store.clone(),
+            // Layer 3 turn budget + Layer 2 shared store. Prefer the
+            // bridge's explicit field (set via direct injection / tests);
+            // fall back to the process-wide singleton installed at boot.
+            // `None` (no field, no singleton) keeps the legacy behavior —
+            // Layer 2 / Layer 3 are inert.
+            turn_budget: self
+                .turn_budget
+                .clone()
+                .or_else(crate::tools::turn_budget::global_turn_result_budget),
+            result_store: self
+                .result_store
+                .clone()
+                .or_else(crate::tools::result_store::global_tool_result_store),
         };
         // Stage 7 (#12): emit init-seam visibility before the harness
         // starts its Think→Act loop. Order mirrors HarnessDeps field

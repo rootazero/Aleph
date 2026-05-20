@@ -6,11 +6,42 @@
 //! exists but was offloaded.
 
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
 use crate::context::budget::pressure::estimate_tokens_smart;
 
 /// Prefix used to identify persisted-result reference lines.
 const PERSISTED_REF_PREFIX: &str = "[Full output persisted: ";
+
+// =============================================================================
+// Process-wide installer
+// =============================================================================
+//
+// Layer 2 / Layer 3 of the tool-result budget both need access to a shared
+// `Arc<ToolResultStore>` so the marker path the LLM sees matches a real file
+// on disk. Rather than thread the `Arc` through every constructor that builds
+// a `ScopedToolService` (gateway path) or an `AgentHarnessRunner` (orchestrator
+// path), we install one at server boot via `set_global_tool_result_store` and
+// read it back through `global_tool_result_store`. The same singleton is
+// consumed by:
+//   * `gateway::execution_engine::tool_service_builder::build_request_tool_service`
+//   * `orchestrator::harness_bridge::AgentHarnessRunner` (HarnessDeps wiring)
+// Tests or alternative bootstraps that prefer per-instance injection can still
+// use `ScopedToolService::with_result_store` / `HarnessDeps.result_store`
+// directly; the global slot is `Option`-shaped and a `None` value means
+// "fall back to in-line truncation only".
+static GLOBAL_STORE: OnceLock<Arc<ToolResultStore>> = OnceLock::new();
+
+/// Install the process-wide `ToolResultStore`. Idempotent — subsequent calls
+/// are silently ignored so multiple boot paths cannot stomp each other.
+pub fn set_global_tool_result_store(store: Arc<ToolResultStore>) {
+    let _ = GLOBAL_STORE.set(store);
+}
+
+/// Read the process-wide `ToolResultStore`, if installed.
+pub fn global_tool_result_store() -> Option<Arc<ToolResultStore>> {
+    GLOBAL_STORE.get().cloned()
+}
 
 // =============================================================================
 // ToolResultStore

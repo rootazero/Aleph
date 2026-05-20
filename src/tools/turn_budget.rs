@@ -15,11 +15,28 @@
 //! so dropping them adds little value while costing more recall.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Default per-turn budget. Mirrors hermes' `MAX_TURN_BUDGET_CHARS=200_000`,
 /// converted to ~50 000 tokens at the standard ~4 chars/token ratio.
 pub const DEFAULT_MAX_TURN_TOKENS: usize = 50_000;
+
+// =============================================================================
+// Process-wide installer
+// =============================================================================
+
+static GLOBAL_BUDGET: OnceLock<Arc<TurnResultBudget>> = OnceLock::new();
+
+/// Install the process-wide `TurnResultBudget`. Called once at server
+/// boot. Idempotent — subsequent calls are silently ignored.
+pub fn set_global_turn_result_budget(budget: Arc<TurnResultBudget>) {
+    let _ = GLOBAL_BUDGET.set(budget);
+}
+
+/// Read the process-wide `TurnResultBudget`, if installed.
+pub fn global_turn_result_budget() -> Option<Arc<TurnResultBudget>> {
+    GLOBAL_BUDGET.get().cloned()
+}
 
 /// Turn identifier. Wraps the same `Uuid` used by
 /// [`crate::session::events::TurnId`] so the harness can pass its
