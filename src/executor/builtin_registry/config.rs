@@ -52,6 +52,10 @@ pub struct BuiltinToolConfig {
     pub extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
     /// ACP harness manager for delegate tools (claude_code, codex, gemini_cli, acp_switch)
     pub acp_manager: Option<Arc<AcpAdapterManager>>,
+    /// A2A tool handle for the `a2a_delegate` / `a2a_agents` outbound tools.
+    /// Filled by A2A subsystem init *after* the registry is built (late binding).
+    /// `None` → A2A outbound tools are not registered.
+    pub a2a_tool_handle: Option<crate::builtin_tools::A2AToolHandle>,
     /// Cron service for scheduled task management
     pub cron_service: Option<crate::tasks::cron::SharedCronService>,
     /// Heartbeat service for monitoring task management

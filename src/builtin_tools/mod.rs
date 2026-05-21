@@ -27,6 +27,7 @@ use crate::sync_primitives::{Arc, Mutex};
 use once_cell::sync::Lazy;
 use tracing::debug;
 
+pub mod a2a_tools;
 pub mod acp_tools;
 pub mod agent_manage;
 pub mod arena;
@@ -88,6 +89,10 @@ pub mod vision;
 pub mod voice_tools;
 pub mod web_fetch;
 
+pub use a2a_tools::{
+    new_a2a_tool_handle, A2AAgentsArgs, A2AAgentsOutput, A2AAgentsTool, A2ADelegateArgs,
+    A2ADelegateOutput, A2ADelegateTool, A2AToolDeps, A2AToolHandle,
+};
 pub use acp_tools::{
     AcpDelegateArgs, AcpDelegateOutput, AcpDelegateTool, AcpSwitchArgs, AcpSwitchOutput,
     AcpSwitchTool,

@@ -357,12 +357,13 @@ fn TeamDetailPanel(detail: TeamDetail) -> impl IntoView {
                                     "failed" => ("bg-danger", t_string!(i18n, teams.task_failed).to_string()),
                                     _ => ("bg-text-tertiary", task.status.clone()),
                                 };
+                                let owner = task.owner.clone().unwrap_or_else(|| "—".into());
                                 view! {
                                     <div class="flex items-center gap-2 text-xs">
                                         // Status dot
                                         <span class=format!("w-2 h-2 rounded-full flex-shrink-0 {}", dot_class) />
-                                        // Agent id
-                                        <span class="font-mono text-text-tertiary flex-shrink-0">{task.agent_id}</span>
+                                        // Owner agent
+                                        <span class="font-mono text-text-tertiary flex-shrink-0">{owner}</span>
                                         <span class="text-text-tertiary">{"→"}</span>
                                         // Subject
                                         <span class="text-text-primary truncate flex-1">{task.subject}</span>

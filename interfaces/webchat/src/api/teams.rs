@@ -31,23 +31,13 @@ pub struct TeamMember {
     pub joined_at: i64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct TeamTask {
-    pub id: String,
-    pub team_id: String,
-    pub agent_id: String,
-    pub subject: String,
-    pub status: String,
-    pub result: Option<String>,
-    pub created_at: i64,
-    pub completed_at: Option<i64>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct TeamDetail {
     pub team: TeamSummary,
     pub members: Vec<TeamMember>,
-    pub tasks: Vec<TeamTask>,
+    /// Server returns serialized `CoordTask` records — reuse the kanban DTO
+    /// rather than a second, drift-prone shape.
+    pub tasks: Vec<CoordTaskDto>,
 }
 
 // -- API --
@@ -143,6 +133,17 @@ pub struct TaskPatch {
     pub result: Option<String>,
 }
 
+/// Fields for creating a new kanban task. `subject` is required; the rest are
+/// optional and omitted from the request when blank.
+#[derive(Debug, Clone, Default)]
+pub struct NewTaskInput {
+    pub subject: String,
+    pub description: String,
+    pub owner: Option<String>,
+    /// "low" | "normal" | "high" | "critical"
+    pub priority: Option<String>,
+}
+
 impl TeamsApi {
     pub async fn list_tasks(
         state: &DashboardState,
@@ -182,6 +183,33 @@ impl TeamsApi {
         }
         let result = state
             .rpc_call("teams.update_task", Value::Object(params))
+            .await?;
+        let task_value = result.get("task").cloned().unwrap_or(Value::Null);
+        serde_json::from_value(task_value).map_err(|e| e.to_string())
+    }
+
+    pub async fn create_task(
+        state: &DashboardState,
+        team_id: &str,
+        input: NewTaskInput,
+    ) -> Result<CoordTaskDto, String> {
+        let mut params = serde_json::Map::new();
+        params.insert("team_id".to_string(), Value::String(team_id.to_string()));
+        params.insert("subject".to_string(), Value::String(input.subject));
+        if !input.description.is_empty() {
+            params.insert(
+                "description".to_string(),
+                Value::String(input.description),
+            );
+        }
+        if let Some(o) = input.owner.filter(|s| !s.is_empty()) {
+            params.insert("owner".to_string(), Value::String(o));
+        }
+        if let Some(p) = input.priority.filter(|s| !s.is_empty()) {
+            params.insert("priority".to_string(), Value::String(p));
+        }
+        let result = state
+            .rpc_call("teams.create_task", Value::Object(params))
             .await?;
         let task_value = result.get("task").cloned().unwrap_or(Value::Null);
         serde_json::from_value(task_value).map_err(|e| e.to_string())
