@@ -180,15 +180,27 @@ pub struct DeleteParams {
     pub id: String,
 }
 
-/// Delete a single memory (no-op — raw memory storage removed)
+/// Delete a single memory entry.
+///
+/// The notes-based memory model exposes no per-entry delete primitive:
+/// knowledge notes are curated through the `note_manage` tool and aged out by
+/// the dream daemon's decay stage. This handler previously returned a fake
+/// `{ "ok": true }`, silently misleading callers (`aleph memory delete`, the
+/// Panel) into believing a delete happened — it now reports the limitation
+/// honestly so the failure is visible.
 pub async fn handle_delete(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
     let _params: DeleteParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    // Raw memory deletion removed — SessionStore no longer exists.
-    JsonRpcResponse::success(request.id, json!({ "ok": true }))
+    JsonRpcResponse::error(
+        request.id,
+        INTERNAL_ERROR,
+        "Memory entries cannot be deleted individually in the notes-based \
+         memory model; manage knowledge notes via the note_manage tool."
+            .to_string(),
+    )
 }
 
 // ============================================================================
@@ -203,7 +215,12 @@ pub struct ClearParams {
     pub window_title: Option<String>,
 }
 
-/// Clear memories (no-op — raw memory storage removed)
+/// Clear memories in bulk.
+///
+/// Bulk clearing is not a supported operation: raw conversation history lives
+/// in the session store and knowledge notes are curated individually. The
+/// handler previously returned `{ "deletedCount": 0 }`, which made
+/// `aleph memory clear` print "All memory cleared" for a wipe that never ran.
 pub async fn handle_clear(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
     let _params: ClearParams = request
         .params
@@ -211,8 +228,12 @@ pub async fn handle_clear(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRp
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    // Raw memory clearing removed — SessionStore no longer exists.
-    JsonRpcResponse::success(request.id, json!({ "deletedCount": 0 }))
+    JsonRpcResponse::error(
+        request.id,
+        INTERNAL_ERROR,
+        "Bulk memory clearing is not supported in the notes-based memory model."
+            .to_string(),
+    )
 }
 
 // ============================================================================
@@ -299,19 +320,20 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
 // Clear Facts
 // ============================================================================
 
-/// Clear all compressed facts (Layer 2 data)
+/// Clear all knowledge notes.
+///
+/// Notes are not bulk-deletable through this RPC: they are curated
+/// individually via the `note_manage` tool and decayed by the dream daemon.
+/// The handler previously faked `{ "deletedCount": 0 }`, making
+/// `aleph memory clear --facts-only` report a successful wipe that never ran.
 pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
-    // TODO: Implement clear_facts via new store API
-    match Ok::<u64, crate::error::AlephError>(0) {
-        Ok(deleted_count) => {
-            JsonRpcResponse::success(request.id, json!({ "deletedCount": deleted_count }))
-        }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Clear facts failed: {}", e),
-        ),
-    }
+    JsonRpcResponse::error(
+        request.id,
+        INTERNAL_ERROR,
+        "Bulk note clearing is not supported; manage knowledge notes via the \
+         note_manage tool."
+            .to_string(),
+    )
 }
 
 // ============================================================================
@@ -377,26 +399,14 @@ pub async fn handle_compress(
 // App List
 // ============================================================================
 
-/// Get list of windows with memories
+/// List windows that have associated memories.
+///
+/// Window-anchored memory was a pre-notes-era concept; the notes-based model
+/// has no per-window grouping, so this list is always empty. Kept as a
+/// successful empty response for backward compatibility with older clients.
 pub async fn handle_app_list(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
-    // TODO: Implement get_window_list via new store API
-    match Ok::<Vec<(String, usize)>, crate::error::AlephError>(Vec::new()) {
-        Ok(windows) => {
-            let window_list: Vec<WindowMemoryInfo> = windows
-                .into_iter()
-                .map(|(window_title, memory_count)| WindowMemoryInfo {
-                    window_title,
-                    memory_count: memory_count as i64,
-                })
-                .collect();
-            JsonRpcResponse::success(request.id, json!({ "windows": window_list }))
-        }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Get app list failed: {}", e),
-        ),
-    }
+    let windows: Vec<WindowMemoryInfo> = Vec::new();
+    JsonRpcResponse::success(request.id, json!({ "windows": windows }))
 }
 
 // ============================================================================
