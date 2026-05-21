@@ -277,6 +277,8 @@ fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         SessionEvent::SessionCreated { .. }
         | SessionEvent::SessionWoken { .. }
         | SessionEvent::SessionDetached { .. }
+        | SessionEvent::RunStarted { .. }
+        | SessionEvent::RunFinished { .. }
         | SessionEvent::CompactionPerformed { .. } => None,
     }
 }
@@ -290,6 +292,8 @@ fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::SessionCreated { .. } => "session_created",
         SessionEvent::SessionWoken { .. } => "session_woken",
         SessionEvent::SessionDetached { .. } => "session_detached",
+        SessionEvent::RunStarted { .. } => "run_started",
+        SessionEvent::RunFinished { .. } => "run_finished",
         SessionEvent::TurnStarted { .. } => "turn_started",
         SessionEvent::TurnEnded { .. } => "turn_ended",
         SessionEvent::UserMessage { .. } => "user_message",
