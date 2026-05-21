@@ -13,7 +13,13 @@
 
 use std::sync::Arc;
 
+use tokio::sync::Semaphore;
+
 use crate::config::types::ResumeConfig;
+use crate::gateway::agent_instance::AgentRegistry;
+use crate::gateway::event_emitter::CollectingEventEmitter;
+use crate::gateway::execution_adapter::ExecutionAdapter;
+use crate::gateway::execution_engine::RunRequest;
 use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecord};
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
@@ -104,20 +110,32 @@ pub(crate) fn compute_boundary_repairs(
 }
 
 /// Boot-scan coordinator. Constructed at boot with the durable event store,
-/// the config, and (Task 6) the re-trigger collaborators.
+/// the config, and the re-trigger collaborators (execution adapter + agent
+/// registry). Mirrors the cron / heartbeat system-initiated-run precedent.
 pub struct ResumeCoordinator {
     event_store: Arc<dyn SessionEventStore>,
     config: ResumeConfig,
-    // Task 6 adds: execution_adapter, agent_registry, channel_registry cell.
+    execution_adapter: Arc<dyn ExecutionAdapter>,
+    agent_registry: Arc<AgentRegistry>,
+    /// Bounds the boot resume burst. `max_concurrent` permits.
+    semaphore: Arc<Semaphore>,
 }
 
 impl ResumeCoordinator {
-    /// Construct a coordinator. Task 6 widens this signature with the
-    /// re-trigger collaborators.
-    pub fn new(event_store: Arc<dyn SessionEventStore>, config: ResumeConfig) -> Self {
+    /// Construct a coordinator.
+    pub fn new(
+        event_store: Arc<dyn SessionEventStore>,
+        config: ResumeConfig,
+        execution_adapter: Arc<dyn ExecutionAdapter>,
+        agent_registry: Arc<AgentRegistry>,
+    ) -> Self {
+        let permits = config.max_concurrent.max(1);
         Self {
             event_store,
             config,
+            execution_adapter,
+            agent_registry,
+            semaphore: Arc::new(Semaphore::new(permits)),
         }
     }
 
@@ -278,15 +296,65 @@ impl ResumeCoordinator {
             .unwrap_or(1)
     }
 
-    /// Re-trigger an interrupted run. **Stub** — implemented in Task 6.
+    /// Re-trigger an interrupted run. Resolves the agent from the session
+    /// key, builds a `RunRequest` with `metadata["resume"] = "true"` (the
+    /// engine→orchestrator boundary converts that into `FlowInput::Resume`,
+    /// which skips re-seeding), and dispatches it through the same
+    /// `ExecutionAdapter` cron / heartbeat use. A `max_concurrent`
+    /// semaphore bounds the boot burst.
     async fn retrigger(
         &self,
-        _session_id: &SessionId,
+        session_id: &SessionId,
     ) -> Result<(), crate::session::service::SessionError> {
-        // Task 6: resolve the agent, build a RunRequest with
-        // metadata["resume"]="true", call ExecutionAdapter::execute under
-        // a max_concurrent semaphore.
-        Ok(())
+        use crate::session::service::SessionError;
+        use std::collections::HashMap;
+
+        let permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| SessionError::Other(format!("resume semaphore closed: {e}")))?;
+
+        let agent_id = session_id.agent_id().to_string();
+        let agent = self
+            .agent_registry
+            .get(&agent_id)
+            .await
+            .ok_or_else(|| {
+                SessionError::Other(format!("resume: agent '{agent_id}' not registered"))
+            })?;
+
+        let mut metadata: HashMap<String, String> = HashMap::new();
+        metadata.insert("resume".to_string(), "true".to_string());
+
+        let request = RunRequest {
+            run_id: uuid::Uuid::new_v4().to_string(),
+            // Empty input — `FlowInput::Resume` ignores it; the session log
+            // already holds the original UserMessage.
+            input: String::new(),
+            session_key: session_id.clone(),
+            timeout_secs: None,
+            metadata,
+            attachments: Vec::new(),
+            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            sandbox_override: None,
+        };
+
+        let collector = Arc::new(CollectingEventEmitter::new());
+        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
+            Arc::clone(&collector) as _;
+
+        tracing::info!(session = ?session_id, agent_id, "resume: re-triggering interrupted run");
+
+        let result = self
+            .execution_adapter
+            .execute(request, agent, emitter)
+            .await
+            .map_err(|e| SessionError::Other(format!("resume execute failed: {e}")));
+
+        drop(permit);
+        result
     }
 }
 

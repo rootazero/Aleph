@@ -238,7 +238,10 @@ async fn initialize_session_store(
 /// off for this run; the legacy `messages` table remains authoritative).
 fn build_sqlite_session_service(
     db_path: &std::path::Path,
-) -> Option<Arc<dyn alephcore::session::service::SessionService>> {
+) -> Option<(
+    Arc<dyn alephcore::session::service::SessionService>,
+    Arc<dyn alephcore::session::store::SessionEventStore>,
+)> {
     let conn = match alephcore::utils::sqlite_open::open_sqlite_safe(db_path) {
         Ok(c) => c,
         Err(e) => {
@@ -260,9 +263,10 @@ fn build_sqlite_session_service(
     }
     let store: Arc<dyn alephcore::session::store::SessionEventStore> =
         Arc::new(alephcore::session::store::SqliteEventStore::new(conn));
-    Some(Arc::new(
-        alephcore::session::in_process::InProcessActorSessionService::new(store),
-    ))
+    let service: Arc<dyn alephcore::session::service::SessionService> = Arc::new(
+        alephcore::session::in_process::InProcessActorSessionService::new(store.clone()),
+    );
+    Some((service, store))
 }
 
 /// Initialize the ExtensionManager for the plugin system.
@@ -624,8 +628,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // SQLite log lives in a separate DB from the main SessionStore; there
     // is no reason to couple them. (Prior code gated the build behind
     // `sqlite_sm`, which left `file` deployments without an Orchestrator.)
-    let session_service_for_orchestrator =
+    let session_service_and_store =
         build_sqlite_session_service(&alephcore::gateway::SessionManagerConfig::default().db_path);
+    let session_service_for_orchestrator = session_service_and_store
+        .as_ref()
+        .map(|(svc, _store)| svc.clone());
+    let session_event_store_for_resume = session_service_and_store
+        .as_ref()
+        .map(|(_svc, store)| store.clone());
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
         let mut sm = sm
             .with_raw_memory_writer(
@@ -1639,6 +1649,45 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         } else if !args.daemon {
             println!("Heartbeat timer loop: skipped (no execution adapter)");
+        }
+    }
+
+    // Spawn the boot-scan ResumeCoordinator (after cron + heartbeat, so the
+    // execution subsystems exist). Detached — boot is NOT blocked on it.
+    {
+        let app_cfg = app_config_for_channels.read().await;
+        let resume_cfg = app_cfg.resume.clone();
+        drop(app_cfg);
+        if !resume_cfg.enabled {
+            if !args.daemon {
+                println!("Resume coordinator: disabled ([resume] enabled = false)");
+            }
+        } else if let (Some(event_store), Some(exec_adapter), Some(registry)) = (
+            session_event_store_for_resume.clone(),
+            agent_result.execution_adapter.clone(),
+            agent_result.agent_registry.clone(),
+        ) {
+            let coordinator = alephcore::gateway::ResumeCoordinator::new(
+                event_store,
+                resume_cfg,
+                exec_adapter,
+                registry,
+            );
+            tokio::spawn(async move {
+                let report = coordinator.resume_interrupted_runs().await;
+                tracing::info!(
+                    scanned = report.scanned,
+                    resumed = report.resumed,
+                    abandoned = report.abandoned,
+                    skipped = report.skipped,
+                    "ResumeCoordinator boot scan finished"
+                );
+            });
+            if !args.daemon {
+                println!("Resume coordinator: boot scan spawned");
+            }
+        } else if !args.daemon {
+            println!("Resume coordinator: skipped (no session event store / execution adapter)");
         }
     }
 
