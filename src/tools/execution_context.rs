@@ -19,8 +19,8 @@ pub enum CascadePolicy {
 impl CascadePolicy {
     /// Classify a tool by name into its cascade policy.
     pub fn classify(tool_name: &str) -> Self {
-        match tool_name {
-            "Bash" | "Write" | "Edit" | "NotebookEdit" => Self::AbortSiblings,
+        match tool_name.to_lowercase().as_str() {
+            "bash" | "write" | "edit" | "notebookedit" | "notebook_edit" => Self::AbortSiblings,
             _ => Self::Isolated,
         }
     }
@@ -75,7 +75,7 @@ mod tests {
     #[test]
     fn classify_bash_as_abort_siblings() {
         assert_eq!(
-            CascadePolicy::classify("Bash"),
+            CascadePolicy::classify("bash"),
             CascadePolicy::AbortSiblings
         );
     }
@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn classify_write_as_abort_siblings() {
         assert_eq!(
-            CascadePolicy::classify("Write"),
+            CascadePolicy::classify("write"),
             CascadePolicy::AbortSiblings
         );
     }
@@ -91,14 +91,22 @@ mod tests {
     #[test]
     fn classify_edit_as_abort_siblings() {
         assert_eq!(
-            CascadePolicy::classify("Edit"),
+            CascadePolicy::classify("edit"),
+            CascadePolicy::AbortSiblings
+        );
+    }
+
+    #[test]
+    fn classify_notebook_edit_as_abort_siblings() {
+        assert_eq!(
+            CascadePolicy::classify("notebook_edit"),
             CascadePolicy::AbortSiblings
         );
     }
 
     #[test]
     fn classify_read_as_isolated() {
-        assert_eq!(CascadePolicy::classify("Read"), CascadePolicy::Isolated);
+        assert_eq!(CascadePolicy::classify("read"), CascadePolicy::Isolated);
     }
 
     #[test]

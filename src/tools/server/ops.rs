@@ -14,12 +14,14 @@ use crate::tools::types::ToolUpdateInfo;
 
 pub(super) async fn add_tool_impl(tools: &ToolMap, tool: impl AlephToolDyn + 'static) {
     let name = tool.name().to_string();
-    tools.write().await.insert(name, Arc::new(tool));
+    let mut guard = tools.lock().unwrap();
+    guard.insert(name, Arc::new(tool));
 }
 
 pub(super) async fn add_tool_arc_impl(tools: &ToolMap, tool: Arc<dyn AlephToolDyn>) {
     let name = tool.name().to_string();
-    tools.write().await.insert(name, tool);
+    let mut guard = tools.lock().unwrap();
+    guard.insert(name, tool);
 }
 
 pub(super) async fn replace_tool_arc_impl(
@@ -29,7 +31,7 @@ pub(super) async fn replace_tool_arc_impl(
     let name = tool.name().to_string();
     let new_description = tool.definition().description;
 
-    let mut guard = tools.write().await;
+    let mut guard = tools.lock().unwrap();
     let old_tool = guard.insert(name.clone(), tool);
 
     ToolUpdateInfo {
@@ -41,53 +43,58 @@ pub(super) async fn replace_tool_arc_impl(
 }
 
 pub(super) async fn remove_tool_impl(tools: &ToolMap, name: &str) -> bool {
-    tools.write().await.remove(name).is_some()
+    let mut guard = tools.lock().unwrap();
+    guard.remove(name).is_some()
 }
 
 pub(super) async fn has_tool_impl(tools: &ToolMap, name: &str) -> bool {
-    tools.read().await.contains_key(name)
+    let guard = tools.lock().unwrap();
+    guard.contains_key(name)
 }
 
 pub(super) async fn get_definition_impl(tools: &ToolMap, name: &str) -> Option<ToolDefinition> {
-    tools.read().await.get(name).map(|t| t.definition())
+    let guard = tools.lock().unwrap();
+    guard.get(name).map(|t| t.definition())
 }
 
 pub(super) async fn list_definitions_impl(tools: &ToolMap) -> Vec<ToolDefinition> {
-    let mut defs: Vec<_> = tools
-        .read()
-        .await
-        .values()
-        .map(|t| t.definition())
-        .collect();
+    let guard = tools.lock().unwrap();
+    let mut defs: Vec<_> = guard.values().map(|t| t.definition()).collect();
+    drop(guard);
     defs.sort_by(|a, b| a.name.cmp(&b.name));
     defs
 }
 
 pub(super) async fn list_names_impl(tools: &ToolMap) -> Vec<String> {
-    let mut names: Vec<_> = tools.read().await.keys().cloned().collect();
+    let guard = tools.lock().unwrap();
+    let mut names: Vec<_> = guard.keys().cloned().collect();
+    drop(guard);
     names.sort();
     names
 }
 
 pub(super) async fn list_tools_arc_impl(tools: &ToolMap) -> Vec<Arc<dyn AlephToolDyn>> {
-    tools.read().await.values().cloned().collect()
+    let guard = tools.lock().unwrap();
+    guard.values().cloned().collect()
 }
 
 pub(super) async fn len_impl(tools: &ToolMap) -> usize {
-    tools.read().await.len()
+    let guard = tools.lock().unwrap();
+    guard.len()
 }
 
 pub(super) async fn is_empty_impl(tools: &ToolMap) -> bool {
-    tools.read().await.is_empty()
+    let guard = tools.lock().unwrap();
+    guard.is_empty()
 }
 
 pub(super) async fn call_impl(tools: &ToolMap, name: &str, args: Value) -> Result<Value> {
-    let guard = tools.read().await;
+    let guard = tools.lock().unwrap();
     let tool = guard
         .get(name)
         .ok_or_else(|| AlephError::tool_not_found(name))?;
 
-    // Clone the Arc to release the read lock before calling
+    // Clone the Arc to release the lock before calling
     let tool = Arc::clone(tool);
     drop(guard);
 
@@ -95,5 +102,6 @@ pub(super) async fn call_impl(tools: &ToolMap, name: &str, args: Value) -> Resul
 }
 
 pub(super) async fn clear_impl(tools: &ToolMap) {
-    tools.write().await.clear();
+    let mut guard = tools.lock().unwrap();
+    guard.clear();
 }
