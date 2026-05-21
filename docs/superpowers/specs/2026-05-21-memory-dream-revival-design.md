@@ -135,3 +135,55 @@ Net: +411 / −704 lines. Lib + bin compile; touched files are clippy-clean
 - **Dead config tunables** (`ai_retrieval_*`, `query_expansion_enabled`) —
   left as harmless unused fields; removing touches config structs + tests.
 - **Event-sourcing wiring** — large, invasive; see `project_event_sourcing_next`.
+
+## Continuation cycle — 2026-05-22
+
+Re-examined the four deferred items. Two were safe to ship; two were
+confirmed out of scope for a non-destructive cycle.
+
+**Shipped:**
+
+- **Phase 3b — dead-module + dead-config removal** ✅ `9f373232f`.
+  Full-tree grep confirmed `scoring_pipeline/`, `noise_filter.rs`, and
+  `reranker.rs` have zero production consumers (only `mod.rs` re-exports +
+  config struct fields; `noise_filter`'s supposed caller `ingestion.rs` is
+  itself a no-op stub; the live reranking path uses `rerank/provider.rs`).
+  Deleted all three plus the orphaned `MemoryConfig.ai_retrieval_*` /
+  `.query_expansion_enabled` tunables, and the matching dead UI end-to-end
+  (the `aleph-panel` memory-settings DTO fields + `AIRetrievalSettings` card
+  + query-expansion toggle). Net −1,905 lines. `cargo check` clean for
+  `alephcore` / `aleph-server` / `aleph-panel`; `config::types::memory`
+  tests 10/10.
+- **Phase 4 — honest memory-mutation RPCs** ✅ `366d07dd2`.
+  `memory.delete` returned a fake `{ "ok": true }` and `memory.clear` /
+  `memory.clearFacts` returned a fake `{ "deletedCount": 0 }`, so
+  `aleph memory delete/clear` and the Panel delete button reported
+  mutations that never ran. The notes-based model has no per-entry or bulk
+  delete primitive, so all three now return explicit errors;
+  `memory.appList` keeps its honest empty result with the boilerplate and
+  stale TODO removed.
+
+**Confirmed out of scope (not shipped):**
+
+- **7 memory tools in `BUILTIN_TOOL_DEFINITIONS`** — investigation showed
+  this is not a 7-line metadata fix: `groups.rs::test_all_builtin_tools_have_a_group`
+  requires every definition to also be assigned a `TOOL_CATEGORIES` group,
+  and `TOOL_CATEGORIES` feeds `agents.tools_schema` → the Panel per-agent
+  tool-config UI. The 7 tools are internal memory-lifecycle hooks
+  (`memory_reflect`, `session_complete`, `flag_user_correction`, …),
+  conditionally registered from `constructor.rs` and already callable by the
+  LLM. The only consistency consumer, `is_builtin_tool()`, is itself dead
+  code (`#[allow(dead_code)]`, zero callers). Net functional benefit ≈ 0;
+  the change carries a real UX side-effect (exposing lifecycle tools as
+  individually toggleable in the Panel). Left unchanged — needs a product
+  decision, not a wiring fix.
+- **Event-sourcing wiring** — confirmed a destructive write-path overhaul,
+  not a wiring gap. `MemoryCommandHandler` is constructed and threaded into
+  `CompressionService::with_command_handler` but its methods are never
+  called (a dead write-side); `EventProjector` / `MemoryTimeTraveler` are
+  live via the `memory_timeline` tool (read-side). Completing it requires
+  rerouting every `insert_fact` / `update_fact` / `invalidate_fact` write
+  through the handler; removing it requires deleting a live tool. Both are
+  major architectural decisions that violate the "no destructive
+  refactoring" constraint of this effort. Remains a separate scoped effort
+  (`project_event_sourcing_next`).
