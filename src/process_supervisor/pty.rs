@@ -73,6 +73,12 @@ impl ClaudeSupervisor {
     ///
     /// Returns a channel receiver that will emit `SupervisorEvent` as they occur.
     pub fn spawn(&mut self) -> Result<mpsc::UnboundedReceiver<SupervisorEvent>, SupervisorError> {
+        if self.child.is_some() {
+            return Err(SupervisorError::SpawnFailed(
+                "process already running".to_string(),
+            ));
+        }
+
         let pty_system = native_pty_system();
 
         // Create PTY pair
@@ -117,12 +123,13 @@ impl ClaudeSupervisor {
         self.master = Some(pair.master);
         self.writer = Some(writer);
         self.child = Some(child);
-        self.running.store(true, Ordering::Release);
+        // Each spawn gets its own running flag so multiple spawns don't interfere.
+        let running = Arc::new(AtomicBool::new(true));
+        self.running = running.clone();
 
         // Create event channel
         let (tx, rx) = mpsc::unbounded_channel();
         self.event_tx = Some(tx.clone());
-        let running = self.running.clone();
         let masker = self.masker.clone();
 
         // Spawn reader thread
@@ -145,6 +152,8 @@ impl ClaudeSupervisor {
                 }
             }
             running.store(false, Ordering::Release);
+            // Notify that the process has terminated (exact code retrieved later).
+            let _ = tx.send(SupervisorEvent::Exited(-1));
         });
 
         self.reader_handle = Some(handle);
@@ -172,14 +181,24 @@ impl ClaudeSupervisor {
 
     /// Gracefully terminate the supervised process and clean up resources.
     ///
-    /// Sends a kill signal to the child process, waits for the reader thread
-    /// to finish, and emits an `Exited` event with the process exit code.
+    /// Closes the PTY writer to signal EOF, then kills the child if it
+    /// hasn't exited, waits for the reader thread to finish, and emits an
+    /// `Exited` event with the process exit code.
     pub fn shutdown(&mut self) {
         self.running.store(false, Ordering::Release);
 
+        // Close the writer first so the child sees EOF on stdin.
+        self.writer = None;
+
         if let Some(mut child) = self.child.take() {
-            if let Err(e) = child.kill() {
-                tracing::warn!("Failed to kill supervised process: {}", e);
+            // Give the process a moment to exit gracefully after EOF.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            let already_exited = matches!(child.try_wait(), Ok(Some(_)));
+            if !already_exited {
+                if let Err(e) = child.kill() {
+                    tracing::warn!("Failed to kill supervised process: {}", e);
+                }
             }
 
             // Wait for reader thread with timeout to avoid indefinite blocking
@@ -199,10 +218,9 @@ impl ClaudeSupervisor {
                 }
             }
 
-            // Retrieve exit code via non-blocking try_wait
-            let exit_code = match child.try_wait() {
-                Ok(Some(status)) => status.exit_code() as i32,
-                Ok(None) => -1,
+            // Wait for the child process itself to exit so we get a real exit code.
+            let exit_code = match child.wait() {
+                Ok(status) => status.exit_code() as i32,
                 Err(e) => {
                     tracing::warn!("Failed to retrieve exit status: {}", e);
                     -1
@@ -214,7 +232,6 @@ impl ClaudeSupervisor {
             }
         }
 
-        self.writer = None;
         self.master = None;
     }
 }
@@ -233,8 +250,8 @@ impl Drop for ClaudeSupervisor {
 fn strip_ansi(text: &str) -> String {
     let bytes = text.as_bytes();
     let stripped = strip_ansi_escapes::strip(bytes);
-    String::from_utf8(stripped)
-        .unwrap_or_else(|_| String::from_utf8_lossy(&strip_ansi_escapes::strip(bytes)).into_owned())
+    String::from_utf8(stripped.clone())
+        .unwrap_or_else(|_| String::from_utf8_lossy(&stripped).into_owned())
 }
 
 /// Detect semantic events from cleaned output text.
