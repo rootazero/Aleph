@@ -1280,7 +1280,8 @@
         "blocked": "Blocked",
         "in_progress": "In Progress",
         "completed": "Completed",
-        "failed": "Failed"
+        "failed": "Failed",
+        "cancelled": "Cancelled"
       },
       "empty_state": {
         "no_teams": "No teams yet. Ask the assistant to create one.",
@@ -1292,13 +1293,42 @@
         "owner": "Owner",
         "priority": "Priority",
         "description": "Description",
-        "result": "Result"
+        "result": "Result",
+        "created": "Created",
+        "started": "Started",
+        "completed": "Completed",
+        "dependencies": "Depends on"
       },
       "actions": {
         "start": "Start",
         "complete": "Complete",
         "fail": "Fail",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "new_task": "New Task"
+      },
+      "search_placeholder": "Search by subject or owner…",
+      "form": {
+        "title": "New Task",
+        "subject": "Subject",
+        "subject_placeholder": "What needs to be done?",
+        "description": "Description",
+        "description_placeholder": "Details, acceptance criteria…",
+        "owner": "Owner (agent id)",
+        "owner_placeholder": "Optional",
+        "priority": "Priority",
+        "create": "Create",
+        "cancel": "Cancel",
+        "subject_required": "Subject is required"
+      },
+      "error": {
+        "update_failed": "Update failed",
+        "create_failed": "Create failed"
+      },
+      "priority": {
+        "low": "Low",
+        "normal": "Normal",
+        "high": "High",
+        "critical": "Critical"
       }
     }
   }

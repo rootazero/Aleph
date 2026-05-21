@@ -332,6 +332,44 @@ pub fn substitute_variables(template: &str, context: &HookContext, plugin_root: 
     result
 }
 
+/// Fire an observer hook against an explicit executor.
+///
+/// Builds a [`HookContext`] from `session_id` + `env` and dispatches the event
+/// to every matching observer. A no-op when the executor has no hooks.
+async fn fire_observer(
+    executor: &HookExecutor,
+    event: crate::extension::HookEvent,
+    session_id: &str,
+    env: Vec<(&'static str, String)>,
+) {
+    if executor.hook_count() == 0 {
+        return;
+    }
+    let mut ctx = HookContext::new(session_id);
+    for (key, value) in env {
+        ctx = ctx.with_env(key, value);
+    }
+    executor.execute_observers(event, &ctx).await;
+}
+
+/// Fire an observer hook against the process-global extension manager.
+///
+/// For fire-sites that do not already hold a per-run [`HookExecutor`] — gateway
+/// lifecycle, channel I/O, provider calls. Best-effort and fire-and-forget: a
+/// silent no-op when the manager is unregistered or carries no hooks, so hot
+/// paths can call it unconditionally.
+pub async fn fire_global_observer(
+    event: crate::extension::HookEvent,
+    session_id: &str,
+    env: Vec<(&'static str, String)>,
+) {
+    let Some(manager) = crate::extension::try_extension_manager() else {
+        return;
+    };
+    let executor = manager.hook_executor_snapshot().await;
+    fire_observer(&executor, event, session_id, env).await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -898,5 +936,54 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("ungated"));
+    }
+
+    fn observer_command_hook(event: HookEvent, command: &str) -> HookConfig {
+        HookConfig {
+            event,
+            kind: HookKind::Observer,
+            priority: HookPriority::default(),
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: command.to_string(),
+            }],
+            plugin_name: "phase3-test".to_string(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn fire_observer_empty_executor_is_noop() {
+        // Must not panic when no hooks are registered.
+        let executor = HookExecutor::new(vec![]);
+        fire_observer(&executor, HookEvent::GatewayStart, "s", vec![]).await;
+    }
+
+    #[tokio::test]
+    async fn fire_observer_runs_only_the_matching_observer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sentinel = dir.path().join("fired.flag");
+        let cmd = if cfg!(windows) {
+            format!("type nul > \"{}\"", sentinel.display())
+        } else {
+            format!("touch '{}'", sentinel.display())
+        };
+        let executor =
+            HookExecutor::new(vec![observer_command_hook(HookEvent::MessageSent, &cmd)]);
+
+        // A mismatched event must not run the MessageSent observer.
+        fire_observer(&executor, HookEvent::MessageReceived, "s", vec![]).await;
+        assert!(!sentinel.exists(), "wrong-event observer must not run");
+
+        // The matching event runs the observer command.
+        fire_observer(
+            &executor,
+            HookEvent::MessageSent,
+            "s",
+            vec![("CHANNEL_ID", "telegram".to_string())],
+        )
+        .await;
+        assert!(sentinel.exists(), "MessageSent observer must run");
     }
 }

@@ -99,7 +99,8 @@ pub fn launch_app(app_name: &str) -> Result<()> {
 ///
 /// - **macOS**: Uses `NSRunningApplication` to find and terminate the app by bundle ID.
 /// - **Linux**: Uses `pkill -f <app_name>`.
-/// - **Windows**: Not yet implemented.
+/// - **Windows**: Matches running processes by executable name (not window
+///   title) and posts `WM_CLOSE` to each of their visible windows.
 ///
 /// # Errors
 ///
@@ -143,10 +144,7 @@ pub fn quit_app(app_name: &str) -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        let _ = app_name;
-        Err(DesktopError::NotImplemented(
-            "quit_app not yet implemented for Windows".into(),
-        ))
+        windows_quit_app(app_name)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -155,5 +153,138 @@ pub fn quit_app(app_name: &str) -> Result<()> {
         Err(DesktopError::NotImplemented(
             "quit_app not implemented on this platform".into(),
         ))
+    }
+}
+
+/// Returns true when `exe_path` (a full executable path) names the same
+/// application as `target` — compared on the file-name stem, case-insensitively,
+/// with an optional `.exe` suffix on either side.
+///
+/// Split out as a pure function so the Windows `quit_app` matching rule can be
+/// unit-tested on any platform.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn exe_name_matches(exe_path: &str, target: &str) -> bool {
+    fn stem(name: &str) -> String {
+        let base = name.rsplit(['\\', '/']).next().unwrap_or(name);
+        let lower = base.to_ascii_lowercase();
+        lower.strip_suffix(".exe").unwrap_or(&lower).to_string()
+    }
+    let target_stem = stem(target);
+    !target_stem.is_empty() && stem(exe_path) == target_stem
+}
+
+#[cfg(target_os = "windows")]
+fn windows_quit_app(app_name: &str) -> Result<()> {
+    use windows::Win32::Foundation::{BOOL, CloseHandle, HWND, LPARAM, WPARAM};
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
+    };
+
+    struct EnumState {
+        target: String,
+        closed: u32,
+    }
+
+    extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: `EnumWindows` guarantees `hwnd` is valid for this callback,
+        // and `lparam` carries the `&mut EnumState` pointer passed below.
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() {
+                return BOOL(1);
+            }
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == 0 {
+                return BOOL(1);
+            }
+            let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, BOOL(0), pid) else {
+                return BOOL(1);
+            };
+            let mut buf = [0u16; 512];
+            let mut size = buf.len() as u32;
+            let exe = if QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_WIN32,
+                windows::core::PWSTR(buf.as_mut_ptr()),
+                &mut size,
+            )
+            .is_ok()
+            {
+                String::from_utf16_lossy(&buf[..size as usize])
+            } else {
+                String::new()
+            };
+            let _ = CloseHandle(handle);
+
+            let state = &mut *(lparam.0 as *mut EnumState);
+            if exe_name_matches(&exe, &state.target) {
+                let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+                state.closed += 1;
+            }
+        }
+        BOOL(1) // continue — close every window of every matching process
+    }
+
+    let mut state = EnumState {
+        target: app_name.to_string(),
+        closed: 0,
+    };
+    // SAFETY: `enum_proc` matches the `WNDENUMPROC` signature; `state` lives
+    // until `EnumWindows` returns.
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_proc),
+            LPARAM(&mut state as *mut EnumState as isize),
+        );
+    }
+
+    if state.closed == 0 {
+        return Err(DesktopError::InputFailed(format!(
+            "No running application matching '{app_name}' found"
+        )));
+    }
+    info!(
+        app_name,
+        closed = state.closed,
+        "App quit requested (Windows)"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exe_name_matches;
+
+    #[test]
+    fn exe_name_matches_basename_case_insensitive() {
+        assert!(exe_name_matches(r"C:\Windows\System32\notepad.exe", "notepad"));
+        assert!(exe_name_matches(r"C:\Windows\System32\notepad.exe", "Notepad"));
+        assert!(exe_name_matches(r"C:\Windows\System32\notepad.exe", "NOTEPAD.EXE"));
+        assert!(exe_name_matches(r"C:\Program Files\Chrome\chrome.exe", "chrome.exe"));
+    }
+
+    #[test]
+    fn exe_name_matches_forward_slash_paths() {
+        assert!(exe_name_matches("/usr/bin/code", "code"));
+        assert!(exe_name_matches("code.exe", "code"));
+    }
+
+    #[test]
+    fn exe_name_matches_rejects_partial_and_unrelated() {
+        // The old buggy behaviour was a title substring match — "Word" must NOT
+        // match "Password Manager" / "winword"-adjacent names.
+        assert!(!exe_name_matches(r"C:\apps\PasswordManager.exe", "word"));
+        assert!(!exe_name_matches(r"C:\Office\winword.exe", "word"));
+        assert!(!exe_name_matches(r"C:\Windows\notepad.exe", "note"));
+    }
+
+    #[test]
+    fn exe_name_matches_rejects_empty_target() {
+        assert!(!exe_name_matches(r"C:\Windows\notepad.exe", ""));
+        assert!(!exe_name_matches("", ""));
     }
 }

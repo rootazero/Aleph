@@ -97,6 +97,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     agent_manager: Arc<alephcore::AgentManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpAdapterManager>>,
+    // A2A outbound tool handle — filled by A2A subsystem init *after* the
+    // builtin tool registry is built (see commands/start/mod.rs). `None` when
+    // A2A is disabled, in which case the a2a_* tools are not registered.
+    a2a_tool_handle: Option<alephcore::builtin_tools::A2AToolHandle>,
     cron_service: Option<alephcore::tasks::cron::SharedCronService>,
     heartbeat_service: Option<alephcore::tasks::heartbeat::SharedHeartbeatService>,
     daemon: bool,
@@ -784,6 +788,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             agent_manager: Some(agent_manager.clone()),
             extension_manager: extension_manager.clone(),
             acp_manager: acp_manager.clone(),
+            a2a_tool_handle: a2a_tool_handle.clone(),
             cron_service: cron_service.clone(),
             heartbeat_service: heartbeat_service.clone(),
             generation_registry: Some(generation_registry.clone()),

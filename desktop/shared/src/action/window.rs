@@ -7,9 +7,10 @@ use crate::WindowInfo;
 
 /// List all visible on-screen windows.
 ///
-/// - **Linux**: Uses `wmctrl -l -p` to enumerate windows.
-/// - **macOS / Windows**: Returns `NotImplemented` (requires native APIs
-///   not yet ported to this crate).
+/// - **macOS**: CoreGraphics `CGWindowListCopyWindowInfo`.
+/// - **Linux**: `wmctrl -l -p`.
+/// - **Windows**: `EnumWindows` over visible top-level windows; `WindowInfo.id`
+///   carries the `HWND` so [`focus_window`] can round-trip it.
 ///
 /// # Errors
 ///
@@ -28,9 +29,7 @@ pub fn window_list() -> Result<Vec<WindowInfo>> {
 
     #[cfg(target_os = "windows")]
     {
-        Err(DesktopError::NotImplemented(
-            "window_list not yet implemented for Windows in aleph-desktop crate".into(),
-        ))
+        windows_window_list()
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -43,12 +42,15 @@ pub fn window_list() -> Result<Vec<WindowInfo>> {
 
 /// Bring the specified window to the foreground.
 ///
+/// - **macOS**: Activates the owning app via `NSRunningApplication`.
 /// - **Linux**: Uses `wmctrl -i -a <hex_id>` to activate the window.
-/// - **macOS / Windows**: Returns `NotImplemented`.
+/// - **Windows**: Resolves `window_id` as an `HWND`, un-minimizes it if needed,
+///   then calls `SetForegroundWindow`.
 ///
 /// # Errors
 ///
-/// - [`DesktopError::WindowFailed`] if the platform command fails.
+/// - [`DesktopError::WindowFailed`] if the window is not found or the platform
+///   command fails.
 /// - [`DesktopError::NotImplemented`] on platforms without an implementation.
 pub fn focus_window(window_id: u64) -> Result<()> {
     #[cfg(target_os = "macos")]
@@ -63,10 +65,7 @@ pub fn focus_window(window_id: u64) -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        let _ = window_id;
-        Err(DesktopError::NotImplemented(
-            "focus_window not yet implemented for Windows in aleph-desktop crate".into(),
-        ))
+        windows_focus_window(window_id)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -76,6 +75,89 @@ pub fn focus_window(window_id: u64) -> Result<()> {
             "focus_window not implemented on this platform".into(),
         ))
     }
+}
+
+// ── Windows window management helpers ─────────────────────────────
+
+#[cfg(target_os = "windows")]
+fn windows_window_list() -> Result<Vec<WindowInfo>> {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+    };
+
+    struct EnumState {
+        windows: Vec<WindowInfo>,
+    }
+
+    extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: `EnumWindows` guarantees `hwnd` is valid for this callback,
+        // and `lparam` carries the `&mut EnumState` pointer passed below, which
+        // outlives the synchronous enumeration.
+        unsafe {
+            if IsWindowVisible(hwnd).as_bool() {
+                let mut buf = [0u16; 512];
+                let len = GetWindowTextW(hwnd, &mut buf);
+                if len > 0 {
+                    let title = String::from_utf16_lossy(&buf[..len as usize]);
+                    let mut pid: u32 = 0;
+                    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                    let state = &mut *(lparam.0 as *mut EnumState);
+                    state.windows.push(WindowInfo {
+                        id: hwnd.0 as usize as u64,
+                        title,
+                        owner: String::new(),
+                        pid: pid as u64,
+                    });
+                }
+            }
+        }
+        BOOL(1) // continue enumeration
+    }
+
+    let mut state = EnumState {
+        windows: Vec::new(),
+    };
+    // SAFETY: `enum_proc` matches the `WNDENUMPROC` signature; `state` lives
+    // until `EnumWindows` returns.
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_proc),
+            LPARAM(&mut state as *mut EnumState as isize),
+        );
+    }
+
+    info!(count = state.windows.len(), "Window list retrieved (Windows)");
+    Ok(state.windows)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_focus_window(window_id: u64) -> Result<()> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+
+    let hwnd = HWND(window_id as usize as *mut core::ffi::c_void);
+
+    // SAFETY: the handle is validated by `IsWindow` before any state-changing
+    // call; all calls are documented Win32 APIs.
+    unsafe {
+        if !IsWindow(hwnd).as_bool() {
+            return Err(DesktopError::WindowFailed(format!(
+                "No window found with id {window_id}"
+            )));
+        }
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        // `SetForegroundWindow` may return false under Windows' foreground-lock
+        // rules even when the window is raised; that is not a hard failure.
+        let _ = SetForegroundWindow(hwnd);
+    }
+
+    info!(window_id, "Window focused (Windows)");
+    Ok(())
 }
 
 // ── macOS window management helpers ──────────────────────────────

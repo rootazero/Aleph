@@ -369,6 +369,8 @@ mod tests {
             HookEvent::SessionEnd,
             HookEvent::BeforeCompaction,
             HookEvent::AfterCompaction,
+            HookEvent::PreApiRequest,
+            HookEvent::PostApiRequest,
             HookEvent::GatewayStart,
             HookEvent::GatewayStop,
             HookEvent::Notification,
@@ -412,6 +414,16 @@ mod tests {
 
         let event: HookEvent = serde_json::from_str("\"SessionStart\"").unwrap();
         assert_eq!(event, HookEvent::SessionStart);
+
+        let event: HookEvent = serde_json::from_str("\"PreApiRequest\"").unwrap();
+        assert_eq!(event, HookEvent::PreApiRequest);
+
+        let event: HookEvent = serde_json::from_str("\"PostApiRequest\"").unwrap();
+        assert_eq!(event, HookEvent::PostApiRequest);
+
+        // snake_case form (the canonical serialization) also round-trips.
+        let event: HookEvent = serde_json::from_str("\"post_api_request\"").unwrap();
+        assert_eq!(event, HookEvent::PostApiRequest);
     }
 
     #[test]

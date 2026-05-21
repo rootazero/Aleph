@@ -149,6 +149,8 @@ impl BuiltinToolRegistry {
             .with_platform(Arc::clone(&desktop_platform));
         let desktop_ax_query_by_role_tool = crate::builtin_tools::DesktopAxQueryByRole::new()
             .with_platform(Arc::clone(&desktop_platform));
+        let desktop_ax_snapshot_tool = crate::builtin_tools::DesktopAxSnapshot::new()
+            .with_platform(Arc::clone(&desktop_platform));
         let desktop_check_permissions_tool = crate::builtin_tools::DesktopCheckPermissions::new()
             .with_platform(Arc::clone(&desktop_platform));
 
@@ -448,6 +450,35 @@ impl BuiltinToolRegistry {
 
             info!("Registered ACP tools (acp_delegate=true, acp_switch=true)");
             (delegate, sw)
+        } else {
+            (None, None)
+        };
+
+        // Add A2A outbound delegation tools (if the A2A subsystem is enabled).
+        // The handle is filled by A2A subsystem init *after* this registry is
+        // built — see commands/start/mod.rs. Tools register now; calls before
+        // the handle is populated return a clear "not available" error.
+        let (a2a_delegate_tool, a2a_agents_tool) = if let Some(ref handle) =
+            config.a2a_tool_handle
+        {
+            use crate::builtin_tools::a2a_tools::{A2AAgentsTool, A2ADelegateTool};
+            use crate::tools::AlephTool;
+
+            let delegate = A2ADelegateTool::new(handle.clone());
+            let agents = A2AAgentsTool::new(handle.clone());
+            let defs = [delegate.definition(), agents.definition()];
+            for td in &defs {
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered A2A outbound tools (a2a_delegate, a2a_agents)");
+            (Some(delegate), Some(agents))
         } else {
             (None, None)
         };
@@ -756,14 +787,12 @@ impl BuiltinToolRegistry {
                     Arc::clone(team_store),
                     current.clone(),
                 );
-                let resolve = LifecycleResolveShutdownTool::new(Arc::clone(router), current.clone());
+                let resolve =
+                    LifecycleResolveShutdownTool::new(Arc::clone(router), current.clone());
                 (idle, request, resolve)
             };
 
-            let triad = match (
-                config.message_router.as_ref(),
-                config.team_store.as_ref(),
-            ) {
+            let triad = match (config.message_router.as_ref(), config.team_store.as_ref()) {
                 (Some(router), Some(team_store)) => Some(mk(router, team_store)),
                 _ => None,
             };
@@ -1060,6 +1089,7 @@ impl BuiltinToolRegistry {
             desktop_ax_query_focused_tool,
             desktop_ax_query_tree_tool,
             desktop_ax_query_by_role_tool,
+            desktop_ax_snapshot_tool,
             desktop_check_permissions_tool,
             pim_tool,
             system_tool,
@@ -1158,6 +1188,8 @@ impl BuiltinToolRegistry {
             extension_manager: config.extension_manager.clone(),
             acp_delegate_tool,
             acp_switch_tool,
+            a2a_delegate_tool,
+            a2a_agents_tool,
             channel_registry_cell: {
                 let cell = Arc::new(tokio::sync::OnceCell::new());
                 if let Some(ref cr) = config.channel_registry {

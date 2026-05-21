@@ -3,7 +3,6 @@
 //! Handlers for plugin management: list, install, uninstall, enable, disable.
 
 use crate::sync_primitives::Arc;
-use once_cell::sync::OnceCell;
 
 use crate::extension::ExtensionManager;
 use crate::gateway::protocol::{JsonRpcResponse, INTERNAL_ERROR};
@@ -22,48 +21,27 @@ pub use runtime::*;
 // ============================================================================
 // Global Extension Manager (for plugin tool calls)
 // ============================================================================
+//
+// The process-global handle itself lives in `crate::extension` so Core-layer
+// subsystems (providers, tools) can reach it without a reverse dependency on
+// the gateway. The gateway re-exports the registration helpers and adds the
+// RPC-shaped accessor below.
 
-/// Global extension manager for plugin handlers.
-///
-/// This is initialized once at gateway startup via `init_extension_manager()`.
-/// The OnceCell ensures thread-safe lazy initialization.
-static EXTENSION_MANAGER: OnceCell<Arc<ExtensionManager>> = OnceCell::new();
-
-/// Initialize the extension manager for plugin handlers.
-///
-/// This should be called once during gateway startup, before any
-/// `plugins.callTool` requests are processed.
-///
-/// # Arguments
-///
-/// * `manager` - The ExtensionManager instance to use for plugin operations
-///
-/// # Returns
-///
-/// * `Ok(())` if initialization succeeded
-/// * `Err(manager)` if already initialized (returns the passed manager)
-pub fn init_extension_manager(manager: Arc<ExtensionManager>) -> Result<(), Arc<ExtensionManager>> {
-    EXTENSION_MANAGER.set(manager)
-}
+pub use crate::extension::{init_extension_manager, is_extension_manager_initialized};
 
 /// Get the extension manager.
 ///
-/// Returns an error response if the manager hasn't been initialized.
+/// Returns a JSON-RPC error response if the manager hasn't been initialized.
 // JsonRpcResponse is 152+ bytes but boxing it would complicate all handler call sites
 #[allow(clippy::result_large_err)]
 pub fn get_extension_manager() -> Result<&'static Arc<ExtensionManager>, JsonRpcResponse> {
-    EXTENSION_MANAGER.get().ok_or_else(|| {
+    crate::extension::try_extension_manager().ok_or_else(|| {
         JsonRpcResponse::error(
             None,
             INTERNAL_ERROR,
             "Extension manager not initialized. Gateway startup may have failed.".to_string(),
         )
     })
-}
-
-/// Check if the extension manager has been initialized.
-pub fn is_extension_manager_initialized() -> bool {
-    EXTENSION_MANAGER.get().is_some()
 }
 
 // ============================================================================

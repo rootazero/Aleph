@@ -706,3 +706,65 @@ fn tool_use_blocks_round_trip_through_parse_tool_use_block() {
         }
     }
 }
+
+// =============================================================================
+// MED-2 — a retryable tool error is traced with `retryable: true`, not the
+// hardcoded `false` that previously discarded `ToolError::is_retryable()`.
+// =============================================================================
+#[tokio::test]
+async fn tool_error_trace_carries_retryable_flag() {
+    let tool_calls = vec![NativeToolCall {
+        id: "c1".into(),
+        name: "search".into(),
+        arguments: serde_json::json!({}),
+    }];
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("go")]);
+    // `Transport` is a retryable `ToolError` variant (`is_retryable() == true`).
+    let tools = ScriptedTools::new(vec![Err(ToolError::Transport {
+        name: "search".into(),
+        cause: "connection reset".into(),
+    })]);
+    let (sink, traced) = super::stability::RecordingTraceSink::new();
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: tools.clone(),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: Some(sink as Arc<dyn crate::harness::TraceSink>),
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+    };
+    let harness = AgentHarness::new(deps);
+    harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+
+    let events = traced.lock().unwrap();
+    let retryable = events.iter().find_map(|e| match e {
+        crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+            result: crate::tools::runtime::ToolResult::Error { retryable, .. },
+            ..
+        } => Some(*retryable),
+        _ => None,
+    });
+    assert_eq!(
+        retryable,
+        Some(true),
+        "a Transport (retryable) tool error must trace as retryable: true",
+    );
+}

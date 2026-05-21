@@ -1,5 +1,6 @@
 //! TaskCard — compact card rendered inside a KanbanColumn.
 
+use super::format_relative_time;
 use crate::api::teams::CoordTaskDto;
 use leptos::prelude::*;
 
@@ -58,20 +59,5 @@ pub fn TaskCard(task: CoordTaskDto, #[prop(into)] on_click: Callback<String>) ->
                 }
             }
         </div>
-    }
-}
-
-/// Format a unix-epoch (seconds) timestamp as a coarse human delta.
-fn format_relative_time(epoch_secs: u64) -> String {
-    let now = (js_sys::Date::now() / 1000.0) as u64;
-    let delta = now.saturating_sub(epoch_secs);
-    if delta < 60 {
-        "just now".to_string()
-    } else if delta < 3600 {
-        format!("{} min ago", delta / 60)
-    } else if delta < 86_400 {
-        format!("{} h ago", delta / 3600)
-    } else {
-        format!("{} d ago", delta / 86_400)
     }
 }

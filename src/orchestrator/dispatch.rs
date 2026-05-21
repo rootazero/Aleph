@@ -138,6 +138,10 @@ pub enum TerminateReason {
     ConsecutiveFailureCap { consecutive: u32 },
     /// Verifier veto count reached `MAX_VERIFIER_VETOS`.
     VerifierVeto { vetos: u32 },
+    /// The provider returned a response with no text, no tool_calls and no
+    /// thinking on every attempt, including bounded retries. The user
+    /// received no answer — distinct from a clean `Completed`.
+    EmptyResponseExhausted,
     /// `CancellationToken` fired before the loop reached `Done`.
     Cancelled,
 }
@@ -160,6 +164,7 @@ impl TerminateReason {
             Self::TurnTimeout { .. } => "turn_timeout",
             Self::ConsecutiveFailureCap { .. } => "consecutive_failure_cap",
             Self::VerifierVeto { .. } => "verifier_veto",
+            Self::EmptyResponseExhausted => "empty_response_exhausted",
             Self::Cancelled => "cancelled",
         }
     }

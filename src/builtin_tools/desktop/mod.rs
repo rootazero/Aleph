@@ -4,6 +4,7 @@
 mod ax;
 mod native;
 mod perm;
+mod safety;
 pub mod session_lock;
 mod types;
 
@@ -12,7 +13,8 @@ mod tests;
 
 pub use ax::{
     DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
-    DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs,
+    DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopAxSnapshot,
+    DesktopAxSnapshotArgs,
 };
 pub use perm::{DesktopCheckPermissions, DesktopCheckPermissionsArgs};
 pub use types::{DesktopArgs, DesktopOutput};
@@ -97,7 +99,15 @@ impl DesktopTool {
                     .escape_started
                     .load(crate::sync_primitives::Ordering::Acquire)
                 {
-                    let _ = listener.start();
+                    // A failed start means the Escape abort hotkey is
+                    // unavailable — log it once (the flag is still set below so
+                    // we do not retry on every action).
+                    if let Err(e) = listener.start() {
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to start desktop escape listener; abort hotkey unavailable"
+                        );
+                    }
                     self.escape_started
                         .store(true, crate::sync_primitives::Ordering::Release);
                 }
@@ -292,6 +302,34 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
     }
 }
 
+/// Unconditional content-level safety hard-block.
+///
+/// Runs *below* the approval policy: even an approval policy configured to
+/// auto-allow must not let a handful of catastrophic input payloads (remote
+/// code execution, root deletion, session log-out) reach a live desktop.
+/// Returns `Some(output)` when the action must be refused outright.
+///
+/// `batch` is intentionally not inspected here — each sub-action is
+/// dispatched through `AlephTool::call`, which re-runs this check.
+fn check_hard_block(args: &DesktopArgs) -> Option<DesktopOutput> {
+    let reason: Option<String> = match args.action.as_str() {
+        "type_text" | "paste" => args
+            .text
+            .as_deref()
+            .and_then(|t| safety::check_typed_text(t).err()),
+        "key_combo" => args
+            .keys
+            .as_deref()
+            .and_then(|k| safety::check_key_combo(k).err()),
+        _ => None,
+    };
+    reason.map(|message| DesktopOutput {
+        success: false,
+        data: None,
+        message: Some(message),
+    })
+}
+
 impl Default for DesktopTool {
     fn default() -> Self {
         Self::new()
@@ -302,6 +340,11 @@ impl Default for DesktopTool {
 impl AlephTool for DesktopTool {
     const NAME: &'static str = "desktop";
     const DESCRIPTION: &'static str = r#"Control the desktop — see the screen and interact with it.
+
+For reliable clicking, call `desktop_ax_snapshot` first: it returns the app's
+interactable elements with ready-to-use `center` [x, y] coordinates — far more
+accurate than estimating pixels from a screenshot. Use a screenshot only when
+you need to *see* visual state the accessibility tree cannot describe.
 
 Actions:
 - screenshot: Capture screen as base64. Optional region: {x,y,width,height}. Defaults to PNG; pass format/quality/max_width to re-encode (downscaling above 1920 hurts text legibility — keep max_width at 1920+ when you need to read text on screen).
@@ -345,6 +388,11 @@ Examples:
     type Output = DesktopOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // 0. Unconditional safety hard-block (sits below the approval policy).
+        if let Some(out) = check_hard_block(&args) {
+            return Ok(out);
+        }
+
         let is_mutating = classify_approval(&args).is_some();
 
         // 1. Approval check

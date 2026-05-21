@@ -946,6 +946,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         });
     }
 
+    // A2A outbound tool handle — created empty so the builtin tool registry
+    // (built inside register_agent_handlers) can register the `a2a_delegate` /
+    // `a2a_agents` tools. The A2A subsystem fills it below once A2ASubAgent and
+    // CardRegistry exist. `None` when A2A is disabled (tools then not registered).
+    let a2a_tool_handle: Option<alephcore::builtin_tools::A2AToolHandle> =
+        if app_config.read().await.a2a.enabled {
+            Some(alephcore::builtin_tools::new_a2a_tool_handle())
+        } else {
+            None
+        };
+
     let agent_result = register_agent_handlers(
         &mut server,
         session_store.clone(),
@@ -958,6 +969,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         workspace_manager.clone(),
         agent_manager.clone(),
         acp_manager.clone(),
+        a2a_tool_handle.clone(),
         cron_service.clone(),
         heartbeat_service.clone(),
         args.daemon,
@@ -1374,21 +1386,38 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             Arc::new(alephcore::providers::StaticDefault::new(provider.clone()))
                         };
                     let matcher = Arc::new(SemanticLlmMatcher::new(handle));
-                    Arc::new(SmartRouter::new(card_registry).with_llm_matcher(matcher))
+                    Arc::new(SmartRouter::new(card_registry.clone()).with_llm_matcher(matcher))
                 } else {
-                    Arc::new(SmartRouter::new(card_registry))
+                    Arc::new(SmartRouter::new(card_registry.clone()))
                 };
 
                 let client_pool = Arc::new(A2AClientPool::new());
 
-                // 9. Create A2ASubAgent and refresh cached names for can_handle
-                // Spec 1 G2: wire raw-memory writer so delegation hook fires when execute() is called.
-                let _a2a_sub_agent = Arc::new(
+                // 9. Create A2ASubAgent — the outbound delegation engine.
+                // Spec 1 G2: wire raw-memory writer so the delegation hook fires.
+                let a2a_sub_agent = Arc::new(
                     A2ASubAgent::new(smart_router, client_pool)
                         .with_raw_memory_writer(memory_db.clone()
                             as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>),
                 );
-                _a2a_sub_agent.refresh_agent_names().await;
+                a2a_sub_agent.refresh_agent_names().await;
+
+                // 10. Publish the late-bound handle so the `a2a_delegate` and
+                // `a2a_agents` builtin tools (registered earlier in the tool
+                // registry) become live. Before this fix the A2ASubAgent was
+                // constructed here and immediately dropped — the whole A2A
+                // *outbound* path was unreachable dead code.
+                if let Some(ref handle) = a2a_tool_handle {
+                    handle.store(Some(Arc::new(alephcore::builtin_tools::A2AToolDeps {
+                        sub_agent: a2a_sub_agent.clone(),
+                        card_registry: card_registry.clone(),
+                    })));
+                    tracing::info!("A2A outbound tools wired (a2a_delegate, a2a_agents)");
+                } else {
+                    tracing::warn!(
+                        "A2A enabled but tool handle missing — a2a_* tools unavailable"
+                    );
+                }
 
                 if !args.daemon {
                     println!("A2A protocol: enabled");
@@ -1888,6 +1917,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         println!();
     }
 
+    // Notify extension hooks that the gateway is up and fully configured.
+    alephcore::extension::hooks::fire_global_observer(
+        alephcore::extension::HookEvent::GatewayStart,
+        "gateway",
+        vec![
+            ("GATEWAY_VERSION", env!("ALEPH_VERSION").to_string()),
+            ("GATEWAY_BIND", final_bind.to_string()),
+            ("GATEWAY_PORT", final_port.to_string()),
+            ("GATEWAY_PID", std::process::id().to_string()),
+        ],
+    )
+    .await;
+
     // Spec C: write IPC endpoint discovery file. Best-effort — failure does
     // not block startup. Removed after run_until_shutdown returns (success
     // or error) below.
@@ -1913,6 +1955,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if let Some(dir) = ipc_data_dir.as_deref() {
         alephcore::cli::endpoint::remove_endpoint(dir);
     }
+
+    // Notify extension hooks of shutdown (best-effort; the SIGTERM path in
+    // setup_graceful_shutdown calls process::exit and bypasses this).
+    alephcore::extension::hooks::fire_global_observer(
+        alephcore::extension::HookEvent::GatewayStop,
+        "gateway",
+        vec![
+            ("GATEWAY_VERSION", env!("ALEPH_VERSION").to_string()),
+            ("GATEWAY_PID", std::process::id().to_string()),
+        ],
+    )
+    .await;
+
     run_result?;
 
     // Graceful shutdown: stop heartbeat, ACP harnesses, and mDNS
