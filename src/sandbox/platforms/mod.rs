@@ -70,6 +70,8 @@ pub fn create_platform_driver_with_config(
             require_restricted_token: windows_config.require_restricted_token,
             use_app_container: windows_config.use_app_container,
             require_app_container: windows_config.require_app_container,
+            use_job_object: windows_config.use_job_object,
+            max_active_processes: windows_config.max_active_processes,
         };
         Arc::new(WindowsSandboxDriver::with_options(options))
     }

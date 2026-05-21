@@ -119,14 +119,32 @@ impl super::DesktopTool {
 
                 match screenshot_result {
                     Ok(s) => {
-                        if needs_processing {
+                        // A full-resolution screenshot can be tens of MB once
+                        // base64-encoded; the generic tool-result budget would
+                        // then truncate the base64 string into an undecodable
+                        // image. Estimate the decoded size (base64 is ~4/3 of
+                        // raw) and route oversized captures through the
+                        // budget-enforcing re-encoder even when the caller
+                        // passed no processing parameters.
+                        let est_raw_bytes = s.image_base64.len() / 4 * 3;
+                        let over_budget =
+                            est_raw_bytes > aleph_desktop::perception::DEFAULT_SCREENSHOT_MAX_BYTES;
+
+                        if needs_processing || over_budget {
                             use base64::Engine;
                             let raw_bytes = base64::engine::general_purpose::STANDARD
                                 .decode(&s.image_base64)
                                 .map_err(|e| {
                                     crate::error::AlephError::other(format!("base64 decode: {e}"))
                                 })?;
-                            let out_fmt = fmt.unwrap_or_else(|| "png".to_string());
+                            // An explicit request honours the caller's format;
+                            // a budget-only re-encode goes straight to JPEG to
+                            // skip a wasteful full-resolution PNG round-trip.
+                            let out_fmt = match &fmt {
+                                Some(f) => f.clone(),
+                                None if over_budget => "jpeg".to_string(),
+                                None => "png".to_string(),
+                            };
                             // Default JPEG quality 0.9 (was 0.75): screenshots
                             // routinely contain small UI text and 0.75 caused
                             // legibility complaints from the LLM consumer. PNG
@@ -134,7 +152,12 @@ impl super::DesktopTool {
                             let quality_u8 = (quality.unwrap_or(0.9).clamp(0.0, 1.0) * 100.0) as u8;
                             match tokio::task::spawn_blocking(move || {
                                 aleph_desktop::perception::process_screenshot(
-                                    &raw_bytes, max_w, max_h, &out_fmt, quality_u8,
+                                    &raw_bytes,
+                                    max_w,
+                                    max_h,
+                                    &out_fmt,
+                                    quality_u8,
+                                    Some(aleph_desktop::perception::DEFAULT_SCREENSHOT_MAX_BYTES),
                                 )
                             })
                             .await

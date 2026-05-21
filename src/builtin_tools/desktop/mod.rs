@@ -389,7 +389,7 @@ accurate than estimating pixels from a screenshot. Use a screenshot only when
 you need to *see* visual state the accessibility tree cannot describe.
 
 Actions:
-- screenshot: Capture screen as base64. Optional region: {x,y,width,height}. Defaults to PNG; pass format/quality/max_width to re-encode (downscaling above 1920 hurts text legibility — keep max_width at 1920+ when you need to read text on screen).
+- screenshot: Capture screen as base64. Optional region: {x,y,width,height}. Defaults to PNG; pass format/quality/max_width to re-encode (downscaling above 1920 hurts text legibility — keep max_width at 1920+ when you need to read text on screen). Oversized captures are auto-compressed to JPEG to stay within the result budget.
 - ocr: Extract text from screen with bounding boxes. Optional image_base64.
 - click: Click at (x, y). Optional button (left/right/middle).
 - double_click: Double-click at (x, y). Optional button.

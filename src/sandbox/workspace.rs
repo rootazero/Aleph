@@ -195,19 +195,34 @@ impl Sandbox for WorkspaceSandbox {
             None => ws.cwd.clone(),
             Some(p) => {
                 let normalized = normalize_path(p, &ws.cwd);
-                if normalized.starts_with(&ws.cwd) {
-                    normalized
-                } else {
-                    let err = SandboxError::CapabilityDenied {
-                        reason: "cwd outside workspace root".into(),
-                    };
-                    self.hooks
-                        .run_after(
-                            &SandboxHookContext::new(&cmd.program, &cmd),
-                            Err("cwd outside workspace root"),
-                        )
-                        .await;
-                    return Err(err);
+                // Canonicalize before the containment check: a symlink
+                // inside the workspace can satisfy a purely lexical
+                // `starts_with` check while resolving to a target
+                // outside the jail. Both sides are canonicalized so the
+                // comparison is symlink-aware; a cwd that cannot be
+                // resolved (missing directory / dangling link) is
+                // treated as outside and denied.
+                let real_root = tokio::fs::canonicalize(&ws.cwd)
+                    .await
+                    .unwrap_or_else(|_| ws.cwd.clone());
+                let resolved = tokio::fs::canonicalize(&normalized)
+                    .await
+                    .ok()
+                    .filter(|real| real.starts_with(&real_root));
+                match resolved {
+                    Some(real_cwd) => real_cwd,
+                    None => {
+                        let err = SandboxError::CapabilityDenied {
+                            reason: "cwd outside workspace root".into(),
+                        };
+                        self.hooks
+                            .run_after(
+                                &SandboxHookContext::new(&cmd.program, &cmd),
+                                Err("cwd outside workspace root"),
+                            )
+                            .await;
+                        return Err(err);
+                    }
                 }
             }
         };
@@ -556,6 +571,61 @@ mod tests {
             })
             .await
             .expect_err("cwd outside root must be denied");
+        assert!(matches!(err, SandboxError::CapabilityDenied { .. }));
+    }
+
+    #[tokio::test]
+    async fn cwd_real_subdir_inside_workspace_is_accepted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
+        let sandbox = build_sandbox(&tmp, driver, build_gate_auto_deny(), SandboxHooks::new());
+        let session = sid();
+        // Materialise the session workspace dir, then a real subdir in it.
+        let ws_dir = tmp.path().join(session_key_to_filename(&session));
+        tokio::fs::create_dir_all(ws_dir.join("sub")).await.unwrap();
+        sandbox
+            .execute(SandboxCommand {
+                session_id: session,
+                program: "echo".into(),
+                args: vec![],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: Some("sub".into()),
+                capabilities: SandboxCapabilities::strict(),
+                timeout: None,
+            })
+            .await
+            .expect("a real subdirectory inside the workspace must be accepted");
+    }
+
+    /// BUG-3 regression: a symlink that lives inside the workspace but
+    /// resolves outside it passes a purely lexical `starts_with` check.
+    /// Canonicalisation must reject it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cwd_symlink_escaping_workspace_is_denied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
+        let sandbox = build_sandbox(&tmp, driver, build_gate_auto_deny(), SandboxHooks::new());
+        let session = sid();
+        let ws_dir = tmp.path().join(session_key_to_filename(&session));
+        tokio::fs::create_dir_all(&ws_dir).await.unwrap();
+        // `escape` is lexically inside the workspace but points outside it.
+        std::os::unix::fs::symlink(outside.path(), ws_dir.join("escape")).unwrap();
+        let err = sandbox
+            .execute(SandboxCommand {
+                session_id: session,
+                program: "echo".into(),
+                args: vec![],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: Some("escape".into()),
+                capabilities: SandboxCapabilities::strict(),
+                timeout: None,
+            })
+            .await
+            .expect_err("a symlink escaping the workspace must be denied");
         assert!(matches!(err, SandboxError::CapabilityDenied { .. }));
     }
 

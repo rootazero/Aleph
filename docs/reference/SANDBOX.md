@@ -574,6 +574,67 @@ pre-resolved IPs that would be allowed — callers can use this to plan
 around the gap or fall back to `AllowAll` + application-level filtering
 inside the workload.
 
+## Cycle 4 hardening (2026-05-21)
+
+A codex-vs-Aleph deep-dive of the whole `src/sandbox/` subsystem surfaced
+five concrete bugs in Aleph's own code (independent of codex feature
+parity). All are fixed in this cycle:
+
+- **BUG-1 (critical) — Linux test did not compile.**
+  `bwrap.rs`'s `generate_args_workspace_only_without_platform_defaults`
+  test constructed `LinuxSandboxOptions` with 3 of its 8 fields, so
+  `cargo test` failed to build on Linux. Replaced with
+  `..LinuxSandboxOptions::default()`.
+- **BUG-2 (high) — Windows job-object config was dead.**
+  `WindowsSandboxConfig.use_job_object` and `max_active_processes` were
+  never threaded into `WindowsSandboxOptions`; the driver always created
+  a Job Object and hard-coded the active-process limit as
+  `if allow_fork {32} else {1}`. Both fields now flow through:
+  `use_job_object = false` skips the Job Object entirely, and the
+  active-process ceiling for a forking command is `max_active_processes`
+  (`.max(1)` guards a `0` misconfiguration).
+- **BUG-3 (medium, security) — symlink could escape the cwd jail.**
+  `WorkspaceSandbox::execute` validated the requested cwd with a purely
+  lexical `starts_with(workspace_root)` check. A symlink inside the
+  workspace pointing outside it passed that check. The cwd and the
+  workspace root are now both `canonicalize`d before comparison; a cwd
+  that cannot be resolved is denied.
+- **BUG-9 (medium) — `SandboxOutput.signal` was always `None`.**
+  The macOS and Linux drivers never populated it, so a child killed by
+  a signal (SIGSEGV, or a SIGKILL from an rlimit / cgroup breach)
+  reported `exit_code: None, signal: None`. Both Unix drivers now fill
+  it from `ExitStatus::signal()`. Windows has no Unix signals, so its
+  `None` is correct and unchanged.
+- **BUG-10 (low) — output truncation could split a UTF-8 codepoint.**
+  All three drivers sliced the captured `Vec<u8>` at a raw byte index.
+  The truncation logic — triplicated verbatim — is now a single
+  `platforms::common::truncate_output` helper that backs the cut off
+  any UTF-8 continuation byte (project rule P7).
+
+The same deep-dive independently surfaced that `alephcore` did **not
+compile for Windows at all** — `windows-sys` 0.61 API drift in
+`windows_init.rs`, plus an unconditional `libc::getuid()` in
+`daemon.rs`. Those two fixes landed on `main` in parallel
+(`c5f5e384b`, `c0b808ed9`) while this cycle was in flight, so Cycle 4
+does not re-fix them — the merge takes `main`'s version. Installing
+`mingw-w64` so `cargo check --target x86_64-pc-windows-gnu` can
+cross-compile (the `ring` build script needs a Windows C toolchain)
+is what let either effort verify the Windows build.
+
+### Deferred — Linux protected-path creation gap
+
+`push_metadata_protection_args` in `bwrap.rs` uses `--ro-bind-try`,
+which silently no-ops for a protected metadata path
+(`.git`/`.aleph`/`.codex`/`.agents`) that does not yet exist on disk.
+A sandboxed process can therefore `mkdir .git` inside the writable
+workspace and write into it. macOS denies this — its
+`(deny file-write* (subpath ...))` rule applies whether or not the
+path exists — so the two platforms are **inconsistent**. The fix
+(codex-style synthetic empty read-only bind mount for the absent
+paths) is new Linux-only logic that cannot be compile-verified on a
+macOS dev box (`x86_64-unknown-linux-gnu` is not an installed Rust
+target); it is deferred to a Linux-capable session.
+
 ## References
 
 - **Spec:** `docs/superpowers/specs/2026-04-19-sandbox-workspace-design.md`
