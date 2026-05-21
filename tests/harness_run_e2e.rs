@@ -163,6 +163,7 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
+        session_epoch_registrar: None,
     })
 }
 

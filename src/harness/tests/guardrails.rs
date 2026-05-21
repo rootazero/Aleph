@@ -322,7 +322,7 @@ fn make_deps(
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     }
 }
 
@@ -610,7 +610,7 @@ fn make_deps_with_tools(
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     }
 }
 

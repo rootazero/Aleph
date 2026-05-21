@@ -9,6 +9,7 @@
 
 pub mod compactor;
 pub mod constraint_injector;
+pub mod session_split;
 pub mod file_content_tracker;
 pub mod summary_utils;
 pub mod tool_aware_chunker;

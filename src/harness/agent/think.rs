@@ -102,7 +102,9 @@ impl AgentHarness {
     /// Internal turn execution with pre-computed counters to avoid O(n²)
     /// event-log scans in the outer loop.
     ///
-    /// Returns `(TurnState, tool_calls_executed, is_verifier_veto)`.
+    /// Returns `(TurnState, tool_calls_executed, is_verifier_veto, split_child_session_id)`.
+    /// The 4th element is `Some(child)` only when a `SplitSession` directive
+    /// succeeded; `None` in all other cases.
     pub(crate) async fn run_turn_internal(
         &self,
         session_id: &SessionId,
@@ -111,7 +113,7 @@ impl AgentHarness {
         tool_calls_made: usize,
         tool_history: &mut std::collections::VecDeque<ToolCallSummary>,
         parent_cancel: &CancellationToken,
-    ) -> Result<(TurnState, usize, bool), HarnessError> {
+    ) -> Result<(TurnState, usize, bool, Option<SessionId>), HarnessError> {
         // Hold a sleep-inhibit assertion for the duration of this turn so a long
         // Think→Act cycle does not get cut off by macOS idle sleep. Drop happens
         // automatically when this scope exits, releasing the IOPMAssertion.
@@ -147,7 +149,7 @@ impl AgentHarness {
                     InputGuardrailOutcome::Sanitized(events) => events,
                     InputGuardrailOutcome::Blocked(reason) => {
                         callback.on_safety_block(&reason);
-                        return Ok((TurnState::Done, 0, false));
+                        return Ok((TurnState::Done, 0, false, None));
                     }
                 }
             } else {
@@ -215,6 +217,74 @@ impl AgentHarness {
             }
         }
 
+        // 2c-split. `SplitSession` directive — attempt compaction-driven session
+        // split. On success, return `TurnState::Continue` with the child session
+        // id so `run()` can rebind `current_session`. On failure or when the
+        // registrar/compactor is not wired, fall back to the `FinalReply` path.
+        // R10-safe: mechanical dispatch to `perform_session_split` (lives outside
+        // the harness); no intent classification, no new heuristic.
+        if matches!(budget_directive, Some(LoopDirective::SplitSession)) {
+            let split_child = match (
+                self.deps.context_compactor.as_ref(),
+                self.deps.session_epoch_registrar.as_ref(),
+            ) {
+                (Some(compactor), Some(registrar)) => {
+                    match crate::context::compact::session_split::perform_session_split(
+                        self.deps.session.as_ref(),
+                        registrar.as_ref(),
+                        compactor.as_ref(),
+                        session_id,
+                        &events,
+                        tail_start,
+                    )
+                    .await
+                    {
+                        Ok(outcome) => {
+                            if let Some(budget) = self.deps.context_budget.as_ref() {
+                                budget.lock().await.record_split();
+                            }
+                            tracing::info!(
+                                ?session_id,
+                                child = ?outcome.child_session_id,
+                                "session split: continuing run in child session",
+                            );
+                            Some(outcome.child_session_id)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                ?session_id,
+                                %e,
+                                "session split failed; falling back to FinalReply",
+                            );
+                            None
+                        }
+                    }
+                }
+                _ => None, // compactor or registrar not wired — fall back to FinalReply
+            };
+
+            if let Some(child) = split_child {
+                // Continue the run in the child; run() rebinds current_session.
+                return Ok((TurnState::Continue, 0, false, Some(child)));
+            }
+            // Fail-soft: behave like the FinalReply branch.
+            self.hit_limit.store(true, Ordering::Relaxed);
+            self.set_terminate_reason(
+                crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
+            );
+            self.fire_grace_turn(
+                session_id,
+                &events,
+                &messages,
+                callback,
+                iterations,
+                GraceReason::Budget,
+                parent_cancel,
+            )
+            .await;
+            return Ok((TurnState::Done, 0, false, None));
+        }
+
         // 2d. `FinalReply` directive — record hit_limit and short-circuit to
         // Done. Hermes-inspired grace turn: if the most recent assistant
         // turn ended without text (unresolved tool_use, or no assistant
@@ -240,7 +310,7 @@ impl AgentHarness {
                 parent_cancel,
             )
             .await;
-            return Ok((TurnState::Done, 0, false));
+            return Ok((TurnState::Done, 0, false, None));
         }
 
         // 2d. Fetch the cached dispatcher-form tool schema. This is an O(1)
@@ -450,11 +520,11 @@ impl AgentHarness {
                 .await?;
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;
             metrics_for_trace = zero_metrics;
-            result = Ok((TurnState::Continue, 0, true));
+            result = Ok((TurnState::Continue, 0, true, None));
         } else if response.tool_calls.is_empty() {
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Stop;
             metrics_for_trace = zero_metrics;
-            result = Ok((TurnState::Done, 0, false));
+            result = Ok((TurnState::Done, 0, false, None));
         } else {
             self.emit(|| crate::harness::trace::LoopTraceEvent::TurnStateEntered {
                 iteration: iterations,
@@ -478,7 +548,7 @@ impl AgentHarness {
                 consecutive_errors: 0,
                 total_tokens: turn_tokens as usize,
             };
-            result = Ok((TurnState::Continue, executed, false));
+            result = Ok((TurnState::Continue, executed, false, None));
         }
 
         // Cycle 3 — wire DiminishingReturnsDetector. `after_turn` had zero
@@ -491,7 +561,7 @@ impl AgentHarness {
         //
         // The veto flag is the 3rd element of `result`; `verdict` was moved
         // into the if-let binding above and is no longer in scope.
-        let is_verifier_veto = matches!(result, Ok((_, _, true)));
+        let is_verifier_veto = matches!(result, Ok((_, _, true, _)));
         if !is_verifier_veto {
             let after_directive = if let Some(budget) = self.deps.context_budget.as_ref() {
                 let mut guard = budget.lock().await;
@@ -520,7 +590,7 @@ impl AgentHarness {
                     outcome: crate::harness::trace::LoopTraceTurnOutcome::Stop,
                     metrics: metrics_for_trace.clone(),
                 });
-                return Ok((TurnState::Done, metrics_for_trace.executed_tool_calls, false));
+                return Ok((TurnState::Done, metrics_for_trace.executed_tool_calls, false, None));
             }
         }
 

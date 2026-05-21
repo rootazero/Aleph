@@ -239,6 +239,73 @@ impl ContextCompactor {
         }
     }
 
+    /// Summarize a slice of messages and return the raw summary string.
+    ///
+    /// Used by `session_split::summarize_pretail` to produce the seed text for
+    /// a child session without running a full `compact()` in-place.  Falls back
+    /// to deterministic truncation when the LLM call fails (mirrors `compact`).
+    pub(crate) async fn summarize_slice(
+        &self,
+        messages: &[UnifiedMessage],
+    ) -> anyhow::Result<String> {
+        if messages.is_empty() {
+            return Ok(String::new());
+        }
+
+        let transcript = serialize_transcript(messages);
+        let tokens_before = estimate_tokens(&transcript);
+        let token_budget = (tokens_before as f32 * self.config.target_ratio) as usize;
+
+        let prompt = format!(
+            "Summarize the following conversation transcript in at most {token_budget} tokens.\n\
+             \n\
+             First, analyze the conversation in an <analysis> block (this will be stripped):\n\
+             \n\
+             <analysis>\n\
+             1. User's primary request and intent\n\
+             2. Key technical concepts and decisions made\n\
+             3. Files and code sections involved (preserve exact paths)\n\
+             4. Errors encountered and how they were resolved\n\
+             5. Problem-solving approaches tried (what worked, what didn't)\n\
+             </analysis>\n\
+             \n\
+             Then produce the final summary in a <summary> block using these MANDATORY sections:\n\
+             \n\
+             <summary>\n\
+             ## Primary Request\n\
+             [User's primary request and intent — never lose this]\n\
+             \n\
+             ## Key Decisions\n\
+             [Decisions made and their rationale]\n\
+             \n\
+             ## Files & Code\n\
+             [File paths and code sections involved — preserve exact paths]\n\
+             \n\
+             ## Current State\n\
+             [Most recent operations and current work state, detailed]\n\
+             \n\
+             ## Pending\n\
+             [Pending tasks, unresolved problems, and next steps]\n\
+             </summary>\n\
+             \n\
+             Omit: greetings, filler, redundant confirmations.{IDENTIFIER_PRESERVATION}\n\
+             \n\
+             ---TRANSCRIPT---\n{transcript}\n---END---"
+        );
+
+        let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
+
+        match llm_result {
+            Ok(Ok(summary)) if !summary.trim().is_empty() => {
+                Ok(strip_analysis_block(&summary).to_string())
+            }
+            _ => {
+                // Fall back to deterministic truncation.
+                Ok(deterministic_truncation(messages))
+            }
+        }
+    }
+
     /// Side-channel LLM call for summarization.
     async fn call_llm(&self, prompt: &str) -> anyhow::Result<String> {
         let msgs = [UnifiedMessage::user(prompt)];

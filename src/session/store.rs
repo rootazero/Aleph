@@ -277,6 +277,7 @@ fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         SessionEvent::SessionCreated { .. }
         | SessionEvent::SessionWoken { .. }
         | SessionEvent::SessionDetached { .. }
+        | SessionEvent::SessionForked { .. }
         | SessionEvent::CompactionPerformed { .. } => None,
     }
 }
@@ -306,6 +307,7 @@ fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::SubagentReturned { .. } => "subagent_returned",
         SessionEvent::BudgetUpdated { .. } => "budget_updated",
         SessionEvent::CompactionPerformed { .. } => "compaction_performed",
+        SessionEvent::SessionForked { .. } => "session_forked",
         SessionEvent::Error { .. } => "error",
     }
 }

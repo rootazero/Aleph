@@ -626,6 +626,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // `sqlite_sm`, which left `file` deployments without an Orchestrator.)
     let session_service_for_orchestrator =
         build_sqlite_session_service(&alephcore::gateway::SessionManagerConfig::default().db_path);
+    // Capture the epoch registrar from the SQLite SessionManager before it is
+    // consumed into `session_store` below. `SessionManager` implements both
+    // `SessionStore` and `SessionEpochRegistrar`; saving it here lets the
+    // orchestrator enable compaction-driven session-split in the SQLite path.
+    // `None` in file-backend deployments — split degrades to FinalReply there.
+    let epoch_registrar_for_orchestrator: Option<
+        std::sync::Arc<dyn alephcore::session::epoch_registrar::SessionEpochRegistrar>,
+    > = sqlite_sm
+        .as_ref()
+        .map(|sm| std::sync::Arc::new(sm.clone()) as _);
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
         let mut sm = sm
             .with_raw_memory_writer(
@@ -1154,6 +1164,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             agent_result.dispatch_registry.clone(),
             auth_bundle.auth_ctx.shared_token_mgr.clone(),
             auth_bundle.auth_ctx.security_store.clone(),
+            epoch_registrar_for_orchestrator,
         )
         .await
         {

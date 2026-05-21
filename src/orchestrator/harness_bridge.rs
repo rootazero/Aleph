@@ -143,6 +143,13 @@ pub struct AgentHarnessRunner {
     /// `ToolRuntimeStateLayer` @502. `None` in test/early-boot paths keeps
     /// `runtime_state_blocks` empty (the layer then renders nothing).
     pub dispatch_registry: Option<Arc<crate::dispatcher::ToolRegistry>>,
+
+    /// Gateway session-epoch registrar for compaction-driven session-split.
+    /// When `Some`, the harness can mint child sessions at the next epoch and
+    /// make them visible to epoch resolution. `None` degrades gracefully —
+    /// the split budget directive falls back to `FinalReply` (see `HarnessDeps`).
+    pub session_epoch_registrar:
+        Option<Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>>,
 }
 
 #[async_trait]
@@ -307,6 +314,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 .result_store
                 .clone()
                 .or_else(crate::tools::result_store::global_tool_result_store),
+            session_epoch_registrar: self.session_epoch_registrar.clone(),
         };
         // Stage 7 (#12): emit init-seam visibility before the harness
         // starts its Think→Act loop. Order mirrors HarnessDeps field
@@ -348,6 +356,24 @@ impl HarnessRunner for AgentHarnessRunner {
             crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
             other => error::classify_harness_error(other, &provider_name),
         })?;
+
+        // Session-split adoption: if the harness performed a compaction-driven
+        // split, `final_session_id()` returns the child session id. Adopt it so
+        // all post-run reads (session events, trace) target the child session
+        // rather than the now-archived parent. This is safe here because all
+        // pre-run work (seeding, prompt assembly) already completed on the
+        // parent `session_id` before the loop started.
+        let session_id = match harness.final_session_id() {
+            Some(child) if child != session_id => {
+                tracing::info!(
+                    parent = ?session_id,
+                    child = ?child,
+                    "session-split: orchestrator adopting child session id"
+                );
+                child
+            }
+            _ => session_id,
+        };
 
         // Step 7: read final AssistantMessage text + count assistant turns.
         let records = self
