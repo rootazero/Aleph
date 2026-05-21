@@ -102,4 +102,36 @@ Any module found to have a real consumer is **kept**.
 
 No destructive refactor. No new Leptos Panel UI. No event-sourcing wiring. No new
 heavy dependencies (R3). Changes stay inside `src/memory/`, `gateway/handlers/`,
-`executor/builtin_registry/`, and the boot site.
+and the boot site.
+
+## Implementation status — 2026-05-21
+
+**Shipped on `worktree-memory-dream-revival` (verified, not merged):**
+
+- **Phase 1 — Dream Daemon revival** ✅ `c523967b0`. `run_dream` now builds a
+  real `DreamContext` and runs the pipeline; graceful skip without
+  provider/embedder; real `RawMetrics` from the note index. 131 dreaming
+  tests pass (3 new: pipeline-execution + graceful-skip + metrics).
+- **Phase 2 — `memory.search` query fix** ✅ `62d44380a`. Non-empty `query`
+  now runs an FTS5 search over knowledge notes; false doc-comment fixed.
+- **Phase 3 — dead-code removal** ✅ `7e9106fcd`. Deleted `ai_retrieval.rs`
+  (554 lines) + `query_expander.rs` (122 lines) — verified zero consumers.
+
+Net: +411 / −704 lines. Lib + bin compile; touched files are clippy-clean
+(the one clippy error is a pre-existing baseline issue in
+`markdown_skill/spec.rs`, unrelated).
+
+**Deferred (each needs its own focused cycle):**
+
+- **7 memory tools missing from `BUILTIN_TOOL_DEFINITIONS`** — a metadata
+  inconsistency, not a runtime bug (the tools work via `constructor.rs`).
+  Adding them safely needs a check for double-registration.
+- **4 vestigial no-op RPC handlers** (`memory.delete/clear/clearFacts/appList`)
+  — pre-notes-era; "fixing" them means redefining their semantics, which
+  risks breaking the UI contract. Left as-is.
+- **3 entangled dead modules** (`scoring_pipeline/`, `noise_filter.rs`,
+  `reranker.rs`) — referenced from config handlers / `ingestion.rs`; not a
+  clean cut, needs per-reference analysis.
+- **Dead config tunables** (`ai_retrieval_*`, `query_expansion_enabled`) —
+  left as harmless unused fields; removing touches config structs + tests.
+- **Event-sourcing wiring** — large, invasive; see `project_event_sourcing_next`.
