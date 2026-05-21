@@ -88,6 +88,30 @@ pub fn capability_names_for_network(net: &crate::sandbox::capabilities::NetworkP
 #[allow(dead_code)]
 pub(crate) const DACL_INHERIT_FLAGS_FOR_APPCONTAINER: u32 = 0x2 | 0x1;
 
+/// Cycle 3: Compute the absolute paths of protected-metadata
+/// subdirectories that actually exist under `workspace_root`. Cross-
+/// platform on purpose so unit tests can run on macOS / Linux dev
+/// boxes; the Windows-only ACE stamper consumes the result.
+///
+/// We only return paths that exist because `SetNamedSecurityInfoW`
+/// fails with `ERROR_FILE_NOT_FOUND` if the target is missing — there
+/// is no point trying to deny writes to a path the agent will create
+/// later (when it does, DACL inheritance from the workspace root grants
+/// the AppContainer SID `GENERIC_ALL`, which is the failure mode we're
+/// trying to prevent, but we can only know about pre-existing
+/// metadata; spec-deferred follow-up: file-system filter driver or
+/// `CreateFile` hook).
+#[allow(dead_code)]
+pub(crate) fn protected_metadata_targets_under(
+    workspace_root: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    crate::sandbox::protected_paths::PROTECTED_METADATA_SUBPATHS
+        .iter()
+        .map(|sub| workspace_root.join(sub))
+        .filter(|p| p.exists())
+        .collect()
+}
+
 /// Top-level entry point for the `sandbox-init-windows` subcommand. Never
 /// returns: either calls `ExitProcess` with the target's exit code, or
 /// `ExitProcess`es with a diagnostic code on init-side failure.
@@ -465,12 +489,26 @@ mod imp {
         // workspace writes but the sandbox itself stays up. We never
         // hard-fail this step (per spec § 3, even when
         // require_app_container=true).
+        //
+        // Cycle 3 follow-up: after the workspace grant, we also stamp
+        // DENY_ACCESS ACEs on every protected metadata subpath that
+        // actually exists (e.g. `<ws>/.git`, `<ws>/.aleph`). The grant
+        // gives the AppContainer SID `GENERIC_ALL` on the workspace
+        // root, which inherits down to children; the deny ACEs on the
+        // protected children pin them read-only because deny is
+        // evaluated before allow in canonical ACL order.
+        //
+        // `denied_paths` tracks which deny ACEs we successfully applied
+        // so the post-wait cleanup revokes the exact same set.
+        let mut denied_paths: Vec<String> = Vec::new();
         if let Some(ref ws) = parsed.policy.workspace_path {
+            use windows_sys::Win32::System::SystemServices::GENERIC_ALL;
             if let Err(e) = unsafe {
                 set_workspace_dacl_entry(
                     ws,
                     ac_sid,
                     windows_sys::Win32::Security::Authorization::GRANT_ACCESS,
+                    GENERIC_ALL,
                 )
             } {
                 eprintln!(
@@ -478,6 +516,7 @@ mod imp {
                      target may fail on workspace writes"
                 );
             }
+            denied_paths = stamp_protected_metadata_deny(ws, ac_sid);
         }
 
         // ---------- 4. Build SECURITY_CAPABILITIES + attribute list ----------
@@ -601,23 +640,43 @@ mod imp {
         let mut code: u32 = 0;
         let code_ok = unsafe { GetExitCodeProcess(pi.hProcess, &mut code) };
 
-        // ---------- 6.5. SP-6 v2: revoke workspace DACL ----------
+        // ---------- 6.5. SP-6 v2 + Cycle 3: revoke all DACL ACEs ----------
         // Best-effort. The SID is about to be invalidated by
         // DeleteAppContainerProfile, which makes any leftover ACE dead
         // weight (spec § 7 risk register), so revoke failure is logged
-        // but ignored.
+        // but ignored. REVOKE_ACCESS clears every ACE for the trustee
+        // regardless of mask, so a single call per path covers both the
+        // workspace grant and the metadata deny ACE.
         if let Some(ref ws) = parsed.policy.workspace_path {
+            use windows_sys::Win32::System::SystemServices::GENERIC_ALL;
             if let Err(e) = unsafe {
                 set_workspace_dacl_entry(
                     ws,
                     ac_sid,
                     windows_sys::Win32::Security::Authorization::REVOKE_ACCESS,
+                    GENERIC_ALL,
                 )
             } {
                 eprintln!(
                     "aleph sandbox-init-windows: workspace DACL revoke failed ({e}); \
                      AppContainer SID is about to be invalidated, ACE will become dead weight"
                 );
+            }
+            // Revoke each deny ACE we actually stamped earlier.
+            for p in &denied_paths {
+                if let Err(e) = unsafe {
+                    set_workspace_dacl_entry(
+                        p,
+                        ac_sid,
+                        windows_sys::Win32::Security::Authorization::REVOKE_ACCESS,
+                        GENERIC_ALL,
+                    )
+                } {
+                    eprintln!(
+                        "aleph sandbox-init-windows: metadata DACL revoke failed on {p} ({e}); \
+                         AppContainer SID is about to be invalidated, ACE will become dead weight"
+                    );
+                }
             }
         }
 
@@ -662,21 +721,82 @@ mod imp {
         }
     }
 
-    /// SP-6 v2: Add or remove an inheritable allow ACE for `ac_sid` on
-    /// `workspace_path`. Same code path for both grant (`mode =
-    /// GRANT_ACCESS`) and revoke (`mode = REVOKE_ACCESS`) since the
-    /// only difference is one field in `EXPLICIT_ACCESS_W`.
+    /// Cycle 3: Stamp DENY_ACCESS ACEs on every protected metadata
+    /// subpath under `workspace_path_str` that actually exists on disk
+    /// (e.g. `<ws>/.git`, `<ws>/.aleph`). Returns the list of paths
+    /// where we successfully applied the ACE so the caller can revoke
+    /// the exact same set after the target exits.
+    ///
+    /// The mask is `GENERIC_WRITE | DELETE` — the AppContainer SID can
+    /// still *read* `.git` (so the agent can run `git log` / `git
+    /// status`) but cannot mutate the metadata in any way. `DELETE` is
+    /// not part of `GENERIC_WRITE`, so we OR it in explicitly to block
+    /// `rm -rf .git`-style attacks.
+    ///
+    /// Best-effort throughout: a failed ACE stamp is logged and
+    /// skipped; the affected path stays writable but the rest of the
+    /// sandbox is unaffected.
+    pub(super) fn stamp_protected_metadata_deny(
+        workspace_path_str: &str,
+        ac_sid: *mut core::ffi::c_void,
+    ) -> Vec<String> {
+        // GENERIC_WRITE is in SystemServices; DELETE is a standard right
+        // (0x0001_0000) — hard-coding it avoids reaching for the
+        // `windows_sys::Win32::Storage::FileSystem` re-export.
+        const DELETE_RIGHT: u32 = 0x0001_0000;
+        use windows_sys::Win32::Security::Authorization::DENY_ACCESS;
+        use windows_sys::Win32::System::SystemServices::GENERIC_WRITE;
+
+        let mask = GENERIC_WRITE | DELETE_RIGHT;
+        let mut applied = Vec::new();
+        let root = std::path::Path::new(workspace_path_str);
+        for target in
+            crate::sandbox::windows_init::protected_metadata_targets_under(root)
+        {
+            let Some(s) = target.to_str() else {
+                eprintln!(
+                    "aleph sandbox-init-windows: skipping protected metadata path with \
+                     non-UTF-8 chars under {workspace_path_str}"
+                );
+                continue;
+            };
+            match unsafe { set_workspace_dacl_entry(s, ac_sid, DENY_ACCESS, mask) } {
+                Ok(()) => applied.push(s.to_string()),
+                Err(e) => eprintln!(
+                    "aleph sandbox-init-windows: deny ACE on protected metadata {s} \
+                     failed ({e}); target may be able to modify it"
+                ),
+            }
+        }
+        applied
+    }
+
+    /// SP-6 v2 / Cycle 3: Add or remove an inheritable ACE for `ac_sid`
+    /// on `target_path` with the supplied access mask. Same code path
+    /// for grant (`mode = GRANT_ACCESS`), deny (`mode = DENY_ACCESS`),
+    /// and revoke (`mode = REVOKE_ACCESS`) — the only differences are
+    /// `mode` and `permission_mask` inside `EXPLICIT_ACCESS_W`.
+    ///
+    /// Cycle 2 wired this only for the workspace root with `GENERIC_ALL`
+    /// + `GRANT_ACCESS`/`REVOKE_ACCESS`. Cycle 3 generalises so the
+    /// caller can also stamp `DENY_ACCESS` ACEs on protected metadata
+    /// subpaths (`.git`, `.aleph`, …) with a narrower mask. Canonical
+    /// ACL ordering is handled by `SetEntriesInAclW`, which automatically
+    /// places deny ACEs before allow ACEs in the merged DACL.
     ///
     /// Best-effort: any failure returns `Err(String)` and the caller
     /// logs + continues. Never panics.
     ///
-    /// Caveat: assumes `workspace_path` is already canonical (the
-    /// driver populates the policy with the resolved session workspace
-    /// dir; we do not resolve symlinks here).
+    /// Caveat: assumes `target_path` is already canonical (the driver
+    /// populates the policy with the resolved session workspace dir;
+    /// we do not resolve symlinks here). On `REVOKE_ACCESS`, the
+    /// `permission_mask` is ignored by Windows — every ACE for the
+    /// trustee is removed regardless. We still pass it for clarity.
     unsafe fn set_workspace_dacl_entry(
-        workspace_path: &str,
+        target_path: &str,
         ac_sid: *mut core::ffi::c_void,
         mode: ACCESS_MODE,
+        permission_mask: u32,
     ) -> Result<(), String> {
         use std::iter::once;
         use windows_sys::Win32::Foundation::ERROR_SUCCESS;
@@ -685,9 +805,8 @@ mod imp {
             EXPLICIT_ACCESS_W, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
         };
         use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION};
-        use windows_sys::Win32::System::SystemServices::GENERIC_ALL;
 
-        let path_w: Vec<u16> = workspace_path.encode_utf16().chain(once(0)).collect();
+        let path_w: Vec<u16> = target_path.encode_utf16().chain(once(0)).collect();
 
         // 1. Read existing DACL so we merge (not replace).
         let mut old_dacl: *mut ACL = std::ptr::null_mut();
@@ -704,14 +823,14 @@ mod imp {
         );
         if status != ERROR_SUCCESS {
             return Err(format!(
-                "GetNamedSecurityInfoW({workspace_path}) failed: {status:#010x}"
+                "GetNamedSecurityInfoW({target_path}) failed: {status:#010x}"
             ));
         }
         let _sd_guard = LocalFreeGuard(sd);
 
         // 2. Build EXPLICIT_ACCESS_W for the AppContainer SID.
         let mut ea: EXPLICIT_ACCESS_W = std::mem::zeroed();
-        ea.grfAccessPermissions = GENERIC_ALL;
+        ea.grfAccessPermissions = permission_mask;
         ea.grfAccessMode = mode;
         ea.grfInheritance = crate::sandbox::windows_init::DACL_INHERIT_FLAGS_FOR_APPCONTAINER;
         ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
@@ -724,11 +843,11 @@ mod imp {
         let mut new_dacl: *mut ACL = std::ptr::null_mut();
         let status = SetEntriesInAclW(1, &ea, old_dacl, &mut new_dacl);
         if status != ERROR_SUCCESS {
-            return Err(format!("SetEntriesInAclW({workspace_path}) failed: {status:#010x}"));
+            return Err(format!("SetEntriesInAclW({target_path}) failed: {status:#010x}"));
         }
         let _dacl_guard = LocalFreeGuard(new_dacl as *mut core::ffi::c_void);
 
-        // 4. Write the merged DACL back to the workspace.
+        // 4. Write the merged DACL back.
         let status = SetNamedSecurityInfoW(
             path_w.as_ptr() as *mut u16,
             SE_FILE_OBJECT,
@@ -740,7 +859,7 @@ mod imp {
         );
         if status != ERROR_SUCCESS {
             return Err(format!(
-                "SetNamedSecurityInfoW({workspace_path}) failed: {status:#010x}"
+                "SetNamedSecurityInfoW({target_path}) failed: {status:#010x}"
             ));
         }
         Ok(())
@@ -1115,5 +1234,63 @@ mod tests {
         // inheritable, which means AppContainer targets cannot read
         // or write subdirectories of their workspace.
         assert_eq!(DACL_INHERIT_FLAGS_FOR_APPCONTAINER, 0x3);
+    }
+
+    #[test]
+    fn protected_metadata_targets_returns_only_existing_dirs() {
+        // The Windows-only DACL stamper iterates this list to apply
+        // DENY ACEs. If `protected_metadata_targets_under` ever drifts
+        // into returning non-existent paths, `SetNamedSecurityInfoW`
+        // would fail with ERROR_FILE_NOT_FOUND and the deny would
+        // silently no-op. Test on macOS / Linux dev boxes — file-system
+        // semantics are identical here.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ws = tmp.path();
+        // Create two of the four protected subpaths.
+        std::fs::create_dir(ws.join(".git")).unwrap();
+        std::fs::create_dir(ws.join(".aleph")).unwrap();
+        // .codex and .agents intentionally absent.
+
+        let targets = protected_metadata_targets_under(ws);
+        let names: std::collections::HashSet<String> = targets
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|f| f.to_str()).map(String::from))
+            .collect();
+
+        assert_eq!(
+            targets.len(),
+            2,
+            "should return exactly the existing protected dirs, got {targets:?}"
+        );
+        assert!(names.contains(".git"), "got: {names:?}");
+        assert!(names.contains(".aleph"), "got: {names:?}");
+        assert!(!names.contains(".codex"));
+        assert!(!names.contains(".agents"));
+    }
+
+    #[test]
+    fn protected_metadata_targets_empty_when_workspace_missing() {
+        // Non-existent workspace root → empty list (every join is
+        // filtered out by the .exists() check). Confirms the helper
+        // doesn't try to walk a missing directory and panic.
+        let bogus = std::path::PathBuf::from("/this/does/not/exist/.aleph/test/abcdef");
+        let targets = protected_metadata_targets_under(&bogus);
+        assert!(targets.is_empty(), "got: {targets:?}");
+    }
+
+    #[test]
+    fn protected_metadata_targets_skips_file_named_dot_git() {
+        // `.exists()` returns true for both files and dirs, so a stray
+        // *file* named `.git` would also produce a deny-ACE target.
+        // That's fine — Windows can DACL a file just like a directory,
+        // and we'd rather deny writes to a regular file masquerading as
+        // metadata than miss the protection. This test pins the
+        // behavior so a future "directory-only" refactor is intentional.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ws = tmp.path();
+        std::fs::write(ws.join(".git"), b"weird but legal\n").unwrap();
+        let targets = protected_metadata_targets_under(ws);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0], ws.join(".git"));
     }
 }

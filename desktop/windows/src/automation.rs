@@ -25,11 +25,7 @@ impl Default for WindowsAutomation {
 
 #[async_trait]
 impl AutomationCapability for WindowsAutomation {
-    async fn run_script(
-        &self,
-        language: ScriptLanguage,
-        source: &str,
-    ) -> Result<String> {
+    async fn run_script(&self, language: ScriptLanguage, source: &str) -> Result<String> {
         let source = source.to_string();
         let output = match language {
             ScriptLanguage::PowerShell => {
@@ -44,9 +40,7 @@ impl AutomationCapability for WindowsAutomation {
                     .output()
                     .await
             }
-            ScriptLanguage::Shell => {
-                Command::new("cmd.exe").args(["/C", &source]).output().await
-            }
+            ScriptLanguage::Shell => Command::new("cmd.exe").args(["/C", &source]).output().await,
             ScriptLanguage::AppleScript | ScriptLanguage::Jxa => {
                 return Err(DesktopError::NotImplemented(
                     "AppleScript/JXA not available on Windows".into(),

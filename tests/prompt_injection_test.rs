@@ -25,7 +25,10 @@ fn eligible_skills_render_into_system_prompt() {
     let prompt = PromptBuilder::new(config).build_system_prompt(&[]);
 
     assert!(prompt.contains("Available Skills"), "prompt: {prompt}");
-    assert!(prompt.contains("git"), "prompt missing skill name: {prompt}");
+    assert!(
+        prompt.contains("git"),
+        "prompt missing skill name: {prompt}"
+    );
     // sanity: the XML renderer is the one used by the layer
     let _ = build_skills_prompt_xml;
 }

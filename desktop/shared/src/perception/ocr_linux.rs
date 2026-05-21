@@ -18,9 +18,9 @@ pub fn linux_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
         })?;
 
     if let Some(ref mut stdin) = child.stdin {
-        stdin
-            .write_all(png_bytes)
-            .map_err(|e| DesktopError::OcrFailed(format!("Failed to feed PNG to tesseract: {e}")))?;
+        stdin.write_all(png_bytes).map_err(|e| {
+            DesktopError::OcrFailed(format!("Failed to feed PNG to tesseract: {e}"))
+        })?;
     }
 
     let output = child

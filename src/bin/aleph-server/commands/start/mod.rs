@@ -481,7 +481,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         tracing::info!(tool = %name, source = ?source, "tool_registry: unregistered");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "tool_registry: subscriber lagged — events dropped");
+                        tracing::warn!(
+                            skipped = n,
+                            "tool_registry: subscriber lagged — events dropped"
+                        );
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -512,7 +515,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 None
             }
         };
-
 
     // Phase 3 Task 7: compose the shared `Arc<dyn Sandbox>` once at boot.
     //
@@ -1102,7 +1104,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             if let Some(reg) = agent_result.multi_registry.clone() {
                 reg as Arc<dyn alephcore::providers::DefaultProviderHandle>
             } else {
-                Arc::new(alephcore::providers::StaticDefault::new(default_provider.clone()))
+                Arc::new(alephcore::providers::StaticDefault::new(
+                    default_provider.clone(),
+                ))
             };
         // The Orchestrator needs `alephcore::agents::AgentRegistry` (AgentDef
         // catalogue), which is a different type from the
@@ -1409,22 +1413,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 };
                 match SkillWatcher::new(&skills_dir, SkillWatcherConfig::default()) {
                     Ok(watcher) => {
-                        let callback: ReloadCallback =
-                            std::sync::Arc::new(|tools: Vec<alephcore::tools::markdown_skill::MarkdownCliTool>| {
-                                // replace_tool is async; use block_in_place so we can drive it
-                                // from this sync callback without spawning an extra task.
-                                tokio::task::block_in_place(|| {
-                                    let rt = tokio::runtime::Handle::current();
-                                    rt.block_on(async {
-                                        let server = alephcore::gateway::handlers::markdown_skills::markdown_skills_server();
-                                        for tool in tools {
-                                            server.replace_tool(tool).await;
-                                        }
-                                    });
+                        let callback: ReloadCallback = std::sync::Arc::new(
+                            |tools: Vec<alephcore::tools::markdown_skill::MarkdownCliTool>| {
+                                // Spawn an async task to avoid blocking the sync callback thread.
+                                tokio::spawn(async move {
+                                    let server = alephcore::gateway::handlers::markdown_skills::markdown_skills_server();
+                                    for tool in tools {
+                                        server.replace_tool(tool).await;
+                                    }
                                 });
                                 alephcore::gateway::handlers::markdown_skills::bump_markdown_skills_revision();
                                 Ok(())
-                            });
+                            },
+                        );
                         tokio::spawn(watcher.run(skills_dir.clone(), callback));
                         if !args.daemon {
                             println!(
@@ -1633,9 +1634,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // hot-reload only meaningfully applies when a multi-registry
                 // exists (file-config webchat path).
                 let snapshot = reg.default_provider();
-                let handle: Arc<dyn alephcore::providers::DefaultProviderHandle> = Arc::new(
-                    alephcore::providers::StaticDefault::new(snapshot),
-                );
+                let handle: Arc<dyn alephcore::providers::DefaultProviderHandle> =
+                    Arc::new(alephcore::providers::StaticDefault::new(snapshot));
                 Arc::new(
                     GroupChatExecutor::new(handle).with_coordinator_visible(coordinator_visible),
                 )
@@ -1746,8 +1746,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     //     (`set_confirmation_requester`, HITL P3).
     //   • Clarification manager — registered for HITL P4 `ask_user`, injected
     //     into `BuiltinToolRegistry` via the cell set up at agent boot.
-    let clarification_manager =
-        Arc::new(alephcore::clarification::ClarificationManager::new());
+    let clarification_manager = Arc::new(alephcore::clarification::ClarificationManager::new());
     {
         use alephcore::approval::adapters::ChannelApprovalBridgeAdapter;
         use alephcore::exec::approval::channel_bridge::ChannelApprovalBridge;
@@ -1790,11 +1789,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Ok(store) => {
             let store = std::sync::Arc::new(store);
             alephcore::tools::result_store::set_global_tool_result_store(store);
-            let budget = std::sync::Arc::new(
-                alephcore::tools::turn_budget::TurnResultBudget::new(
-                    alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
-                ),
-            );
+            let budget = std::sync::Arc::new(alephcore::tools::turn_budget::TurnResultBudget::new(
+                alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
+            ));
             alephcore::tools::turn_budget::set_global_turn_result_budget(budget);
             if !args.daemon {
                 println!(

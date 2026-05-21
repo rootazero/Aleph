@@ -122,7 +122,11 @@ async fn pipeline_no_op_on_clean_history() {
     let freed = pipeline.run(&mut messages, &fresh_pressure(), 6).await;
 
     assert_eq!(freed, 0, "nothing to save on clean history");
-    assert_eq!(format!("{messages:?}"), original, "messages must be untouched");
+    assert_eq!(
+        format!("{messages:?}"),
+        original,
+        "messages must be untouched"
+    );
 }
 
 #[tokio::test]

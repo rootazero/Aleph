@@ -13,7 +13,7 @@ use aleph_protocol::{
 use chrono::{DateTime, Utc};
 
 use super::command_tree::{CommandEntry, DisplayEntry};
-use super::slash::LocalCommand;
+use super::slash::{LocalCommand, ToolProgressMode};
 
 // ---------------------------------------------------------------------------
 // Action
@@ -191,6 +191,7 @@ pub struct AppState {
 
     // -- Settings --
     pub verbose: bool,
+    pub tool_progress_mode: ToolProgressMode,
 
     // -- Gateway commands (fetched at startup, tree-structured) --
     pub gateway_commands: Vec<CommandEntry>,
@@ -232,6 +233,7 @@ impl AppState {
             current_run_trace_summary_applied: false,
 
             verbose: false,
+            tool_progress_mode: ToolProgressMode::default(),
             gateway_commands: Vec::new(),
 
             focus: Focus::Input,
@@ -754,6 +756,9 @@ impl AppState {
                 if self.current_run_uses_agent_trace {
                     return Action::None;
                 }
+                if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
+                    return Action::None;
+                }
                 self.start_tool_execution(
                     tool_id,
                     tool_name,
@@ -765,6 +770,12 @@ impl AppState {
             StreamEvent::ToolUpdate {
                 tool_id, progress, ..
             } => {
+                // /tools off|new — suppress mid-execution progress updates entirely.
+                // /tools all|verbose — surface them.
+                match self.tool_progress_mode {
+                    ToolProgressMode::Off | ToolProgressMode::New => return Action::None,
+                    ToolProgressMode::All | ToolProgressMode::Verbose => {}
+                }
                 if let Some(tool) = self.find_tool_mut(&tool_id) {
                     tool.progress = Some(progress);
                 }
@@ -778,6 +789,9 @@ impl AppState {
                 ..
             } => {
                 if self.current_run_uses_agent_trace {
+                    return Action::None;
+                }
+                if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
                     return Action::None;
                 }
                 let result = if result.success {

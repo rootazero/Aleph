@@ -1,3 +1,7 @@
+//! Output format parsing for oneshot ACP harnesses.
+//!
+//! Supports plain text extraction and JSON field extraction from stdout.
+
 use crate::config::types::acp::OutputFormatSerde;
 
 /// How to parse stdout from a oneshot harness.

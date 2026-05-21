@@ -269,8 +269,7 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
             continue;
         };
         let subdir_target = target.join(name);
-        std::fs::create_dir_all(&subdir_target)?;
-        extract_dir_contents(subdir, &subdir_target)?;
+        extract_dir_recursive(subdir, &subdir_target)?;
     }
 
     Ok(())

@@ -73,8 +73,8 @@ impl Lane {
             // defensively in case it's ever renamed.
             "gateway.identity.get" => Some(Lane::Query),
             // skills.delete is package management, not a data delete →
-            // System lane. memory.delete / session.delete are data ops
-            // that fall through to default Mutate.
+            // System lane. memory.delete / session.delete / session.truncate
+            // are data ops that fall through to default Mutate.
             "skills.delete" => Some(Lane::System),
             // logs.setLevel changes process-wide runtime config →
             // System lane (preserves pre-G1 hardcode behavior).
@@ -249,6 +249,7 @@ mod tests {
         assert_eq!(Lane::for_method("memory.store"), Lane::Mutate);
         assert_eq!(Lane::for_method("memory.delete"), Lane::Mutate);
         assert_eq!(Lane::for_method("session.compact"), Lane::Mutate);
+        assert_eq!(Lane::for_method("session.truncate"), Lane::Mutate);
         assert_eq!(Lane::for_method("session.delete"), Lane::Mutate);
 
         // System lane
