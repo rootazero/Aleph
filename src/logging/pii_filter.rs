@@ -151,15 +151,21 @@ impl Visit for StringVisitor {
     }
 
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        use std::fmt::Write;
-
         if !self.message.is_empty() {
             self.message.push_str(", ");
         }
 
         if field.name() == "message" {
-            write!(&mut self.message, "{:?}", value).expect("write to String cannot fail");
+            // Strip surrounding quotes from debug-formatted strings to ensure
+            // PII scrubbing works correctly (scrub_pii regex relies on word boundaries)
+            let formatted = format!("{:?}", value);
+            let trimmed = formatted
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(&formatted);
+            self.message.push_str(trimmed);
         } else {
+            use std::fmt::Write;
             write!(&mut self.message, "{}={:?}", field.name(), value)
                 .expect("write to String cannot fail");
         }
@@ -205,12 +211,28 @@ mod tests {
         );
 
         static TEST_CALLSITE: TestCallsite = TestCallsite;
+        static TEST_METADATA: std::sync::OnceLock<tracing::Metadata<'static>> =
+            std::sync::OnceLock::new();
 
         struct TestCallsite;
         impl tracing::callsite::Callsite for TestCallsite {
             fn set_interest(&self, _: tracing::subscriber::Interest) {}
             fn metadata(&self) -> &tracing::Metadata<'_> {
-                unreachable!()
+                TEST_METADATA.get_or_init(|| {
+                    tracing::Metadata::new(
+                        "test",
+                        "test_target",
+                        tracing::Level::INFO,
+                        None,
+                        None,
+                        None,
+                        tracing::field::FieldSet::new(
+                            &["message"],
+                            tracing::callsite::Identifier(&TEST_CALLSITE),
+                        ),
+                        tracing::metadata::Kind::EVENT,
+                    )
+                })
             }
         }
 

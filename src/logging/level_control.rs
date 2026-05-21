@@ -49,13 +49,18 @@ impl LogLevel {
 
     /// Parse from string (case-insensitive)
     pub fn parse(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "error" => Some(LogLevel::Error),
-            "warn" | "warning" => Some(LogLevel::Warn),
-            "info" => Some(LogLevel::Info),
-            "debug" => Some(LogLevel::Debug),
-            "trace" => Some(LogLevel::Trace),
-            _ => None,
+        if s.eq_ignore_ascii_case("error") {
+            Some(LogLevel::Error)
+        } else if s.eq_ignore_ascii_case("warn") || s.eq_ignore_ascii_case("warning") {
+            Some(LogLevel::Warn)
+        } else if s.eq_ignore_ascii_case("info") {
+            Some(LogLevel::Info)
+        } else if s.eq_ignore_ascii_case("debug") {
+            Some(LogLevel::Debug)
+        } else if s.eq_ignore_ascii_case("trace") {
+            Some(LogLevel::Trace)
+        } else {
+            None
         }
     }
 
@@ -104,7 +109,6 @@ pub fn init_log_level() {
 
             if let Some(level) = LogLevel::parse(level_str) {
                 CURRENT_LOG_LEVEL.store(level.to_u8(), Ordering::SeqCst);
-                tracing::debug!(level = ?level, "Initialized log level from RUST_LOG");
             }
         }
     });
