@@ -14,7 +14,6 @@
 //! - `NoteStore`: Knowledge Notes index operations
 
 // Public submodules
-pub mod ai_retrieval;
 pub mod assembler;
 pub mod audit;
 pub mod cli;
@@ -33,7 +32,6 @@ pub mod namespace;
 pub mod noise_filter;
 pub mod note_retrieval;
 pub mod notes;
-pub mod query_expander;
 pub mod reembed;
 pub mod reflector;
 pub mod rerank;
@@ -57,7 +55,6 @@ mod loom_concurrency;
 mod proptest_enums;
 
 // Re-export commonly used types
-pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
 pub use audit::{
     AuditAction, AuditActor, AuditDetails, AuditEntry, ExplainedEvent, FactExplanation,
     ForgettingExplanation,
