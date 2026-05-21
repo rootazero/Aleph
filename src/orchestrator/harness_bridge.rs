@@ -755,6 +755,7 @@ fn last_user_query(input: &FlowInput) -> String {
             .map(str::to_string)
             .unwrap_or_default(),
         FlowInput::History { prompt, .. } => prompt.clone(),
+        FlowInput::Resume => String::new(),
     }
 }
 

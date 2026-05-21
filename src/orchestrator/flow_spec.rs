@@ -28,6 +28,11 @@ pub enum FlowInput {
     /// carry `blocks` referencing images, files, or other non-text payloads;
     /// the harness delegates interpretation to the LLM provider.
     Multimodal(Vec<MessageContent>),
+    /// Resume an interrupted run. Carries no input: the session event log
+    /// already holds the full trajectory (including the original
+    /// `UserMessage`). `seed_session` treats this as a no-op so replay is
+    /// not corrupted by a duplicate user message.
+    Resume,
 }
 
 /// One role-tagged turn in a replayed history. Used only by

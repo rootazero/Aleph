@@ -545,9 +545,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 hook_session_id.clone(),
             );
 
-            // Build FlowRequest
-            let flow_input =
-                super::helpers::history_to_flow_input(history.clone(), request.input.clone());
+            // Build FlowRequest. A resumed run carries no fresh input — the
+            // session event log already holds the full trajectory. The
+            // `ResumeCoordinator` sets `metadata["resume"] = "true"`; the
+            // harness bridge then skips seeding and replays the log.
+            let flow_input = if request.metadata.get("resume").map(String::as_str)
+                == Some("true")
+            {
+                crate::orchestrator::FlowInput::Resume
+            } else {
+                super::helpers::history_to_flow_input(history.clone(), request.input.clone())
+            };
 
             // Phase 4 (F4): derive the channel's InteractionManifest from
             // the platform string already carried in request.metadata.

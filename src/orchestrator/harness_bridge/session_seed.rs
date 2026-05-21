@@ -89,6 +89,12 @@ pub(super) async fn seed_session(
                 emit_message(service, session_id, content, true).await?;
             }
         }
+        FlowInput::Resume => {
+            // No-op: the session log already contains the original
+            // UserMessage and the full prior trajectory. The harness
+            // replays it and continues; re-seeding would duplicate the
+            // user message.
+        }
     }
     Ok(())
 }
