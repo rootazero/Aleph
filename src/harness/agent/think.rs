@@ -10,7 +10,7 @@ use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
-use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, ToolOutput};
+use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord};
 use crate::session::service::SessionId;
 use crate::verification::{hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict};
 
@@ -31,6 +31,21 @@ const GRACE_NUDGE_DIMINISHING: &str =
     "You have not been making measurable progress on this task. \
      Stop calling tools and summarize what you have found so far for the user.";
 
+/// Ephemeral nudge for the grace turn fired when the `max_iterations`
+/// cap trips — same shape as the other nudges but framed around the
+/// iteration limit. Without this turn a runaway that ends on an
+/// unresolved tool_use leaves the user with no terminal text.
+const GRACE_NUDGE_MAX_ITERATIONS: &str =
+    "You have reached the maximum number of tool-calling iterations and \
+     cannot call any more tools. Respond now with a final summary for the \
+     user based on what you have accomplished so far.";
+
+/// Maximum re-issues of the LLM call when the provider returns a response
+/// with no text, no tool_calls and no thinking. A small bound — an empty
+/// response is usually transient; persistent emptiness is a broken
+/// endpoint that more retries will not fix.
+const EMPTY_RESPONSE_RETRIES: u32 = 2;
+
 /// Why a grace turn is being fired. Selects the nudge text; otherwise
 /// the call path is identical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +54,8 @@ enum GraceReason {
     Budget,
     /// `LoopDirective::StopDiminishing` — diminishing-returns detector trip.
     Diminishing,
+    /// `max_iterations` cap reached in the outer loop.
+    MaxIterations,
 }
 
 impl GraceReason {
@@ -46,8 +63,19 @@ impl GraceReason {
         match self {
             Self::Budget => GRACE_NUDGE_BUDGET,
             Self::Diminishing => GRACE_NUDGE_DIMINISHING,
+            Self::MaxIterations => GRACE_NUDGE_MAX_ITERATIONS,
         }
     }
+}
+
+/// True when a provider response carries no usable content at all — no
+/// text, no tool_calls and no thinking. This is a provider failure mode
+/// (degraded endpoint, context degradation), not a legitimate terminal
+/// turn, and must not be reported to the user as a clean completion.
+fn is_empty_response(response: &ProviderResponse) -> bool {
+    response.text_content().trim().is_empty()
+        && response.tool_calls.is_empty()
+        && response.thinking.as_deref().unwrap_or("").trim().is_empty()
 }
 
 /// True iff the most recent `AssistantMessage` in `events` already carries
@@ -82,7 +110,6 @@ impl AgentHarness {
         iterations: usize,
         tool_calls_made: usize,
         tool_history: &mut std::collections::VecDeque<ToolCallSummary>,
-        tool_call_cache: &mut std::collections::HashMap<(String, String), ToolOutput>,
         parent_cancel: &CancellationToken,
     ) -> Result<(TurnState, usize, bool), HarnessError> {
         // Hold a sleep-inhibit assertion for the duration of this turn so a long
@@ -210,6 +237,7 @@ impl AgentHarness {
                 callback,
                 iterations,
                 GraceReason::Budget,
+                parent_cancel,
             )
             .await;
             callback.on_complete_via_harness();
@@ -227,7 +255,9 @@ impl AgentHarness {
             Some(dispatcher_tools.as_ref())
         };
 
-        let payload = match self.deps.system_prompt.as_deref() {
+        // Build the request fresh on each call — H3's empty-response retry
+        // re-issues it, and `RequestPayload` is a cheap borrow of `messages`.
+        let build_payload = || match self.deps.system_prompt.as_deref() {
             Some(sp) => RequestPayload::new(&messages)
                 .with_system(Some(sp))
                 .with_tools(tools_ref),
@@ -244,13 +274,49 @@ impl AgentHarness {
         // breaker — lives inside `deps.llm` itself (`providers::FailoverProvider`),
         // so the harness simply propagates whatever error survives it.
         let started = std::time::Instant::now();
-        let response = match self
-            .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
+        let mut response = match self
+            .race_llm_call(
+                self.deps.llm.process(build_payload()),
+                parent_cancel,
+                started,
+            )
             .await?
         {
             Ok(r) => r,
             Err(primary_err) => return Err(HarnessError::Llm(primary_err)),
         };
+
+        // 3a. Empty-response guard (H3). A response with no text, no
+        // tool_calls and no thinking is a provider failure mode, not a
+        // terminal turn — left unchecked it is misreported to the user as a
+        // clean completion. Re-issue the call up to EMPTY_RESPONSE_RETRIES
+        // times (pure round scheduling, no reasoning). If still empty after
+        // retries, a distinct terminate reason keeps the trace honest.
+        let mut empty_retries = 0u32;
+        while is_empty_response(&response) && empty_retries < EMPTY_RESPONSE_RETRIES {
+            empty_retries += 1;
+            tracing::warn!(
+                ?session_id,
+                empty_retries,
+                "provider returned an empty response; retrying",
+            );
+            response = match self
+                .race_llm_call(
+                    self.deps.llm.process(build_payload()),
+                    parent_cancel,
+                    started,
+                )
+                .await?
+            {
+                Ok(r) => r,
+                Err(primary_err) => return Err(HarnessError::Llm(primary_err)),
+            };
+        }
+        if is_empty_response(&response) {
+            self.set_terminate_reason(
+                crate::orchestrator::dispatch::TerminateReason::EmptyResponseExhausted,
+            );
+        }
 
         // Accumulate this turn's provider-reported token usage. Counted here
         // — right after the LLM call — so a turn whose output is later
@@ -403,7 +469,6 @@ impl AgentHarness {
                     response.tool_calls,
                     callback,
                     iterations,
-                    tool_call_cache,
                 )
                 .await?;
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;
@@ -448,6 +513,7 @@ impl AgentHarness {
                     callback,
                     iterations,
                     GraceReason::Diminishing,
+                    parent_cancel,
                 )
                 .await;
                 callback.on_complete_via_harness();
@@ -516,6 +582,7 @@ impl AgentHarness {
         callback: &mut dyn HarnessCallback,
         iterations: usize,
         reason: GraceReason,
+        parent_cancel: &CancellationToken,
     ) {
         if last_assistant_has_text(events) {
             return; // user already has terminal text; skip.
@@ -526,43 +593,110 @@ impl AgentHarness {
             Some(sp) => RequestPayload::new(&grace_messages).with_system(Some(sp)),
             None => RequestPayload::new(&grace_messages),
         };
-        match self.deps.llm.process(grace_payload).await {
-            Ok(resp) => {
-                let text = resp.text_content();
-                if text.trim().is_empty() {
-                    return;
-                }
-                let turn_id = super::current_turn_id(events);
-                callback.on_delta(&text);
-                let grace_event = SessionEvent::AssistantMessage {
-                    turn_id,
-                    content: MessageContent {
-                        text: text.clone(),
-                        blocks: Vec::new(),
-                        thinking: resp.thinking.clone(),
-                        thinking_signature: resp.thinking_signature.clone(),
-                    },
-                    at: crate::session::events::now_ms(),
-                };
-                let grace_tokens = super::turn_token_total(&resp.usage);
-                self.total_tokens.fetch_add(grace_tokens, Ordering::Relaxed);
-                if let Err(e) = self.deps.session.emit_event(session_id, grace_event).await {
-                    tracing::warn!(?session_id, ?e, "grace turn assistant emit failed");
-                }
-                self.emit(|| crate::harness::trace::LoopTraceEvent::TextEmitted {
-                    iteration: iterations,
-                    stream: crate::harness::trace::LoopTraceTextKind::Final,
-                    text,
-                });
-            }
-            Err(e) => {
+        // Race the grace call against cancel + turn-timeout, like every
+        // other LLM call in the harness. The grace turn fires precisely
+        // when things are already degraded, so a hung provider here must
+        // not hang the whole harness or ignore a user cancel.
+        let started = std::time::Instant::now();
+        let resp = match self
+            .race_llm_call(self.deps.llm.process(grace_payload), parent_cancel, started)
+            .await
+        {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => {
                 tracing::warn!(
                     ?session_id,
                     ?e,
                     "grace turn LLM call failed; falling through to short-circuit",
                 );
+                return;
             }
+            Err(e) => {
+                tracing::warn!(
+                    ?session_id,
+                    ?e,
+                    "grace turn cancelled or timed out; falling through to short-circuit",
+                );
+                return;
+            }
+        };
+        let text = resp.text_content();
+        if text.trim().is_empty() {
+            return;
         }
+        let turn_id = super::current_turn_id(events);
+        callback.on_delta(&text);
+        let grace_event = SessionEvent::AssistantMessage {
+            turn_id,
+            content: MessageContent {
+                text: text.clone(),
+                blocks: Vec::new(),
+                thinking: resp.thinking.clone(),
+                thinking_signature: resp.thinking_signature.clone(),
+            },
+            at: crate::session::events::now_ms(),
+        };
+        let grace_tokens = super::turn_token_total(&resp.usage);
+        self.total_tokens.fetch_add(grace_tokens, Ordering::Relaxed);
+        // Keep the per-component breakdown in lockstep with `total_tokens`
+        // — the documented `breakdown.total() == total_tokens()` invariant.
+        self.accumulate_token_breakdown(&resp.usage);
+        if let Err(e) = self.deps.session.emit_event(session_id, grace_event).await {
+            tracing::warn!(?session_id, ?e, "grace turn assistant emit failed");
+        }
+        self.emit(|| crate::harness::trace::LoopTraceEvent::TextEmitted {
+            iteration: iterations,
+            stream: crate::harness::trace::LoopTraceTextKind::Final,
+            text,
+        });
+    }
+
+    /// Fire a grace turn from the outer loop's `max_iterations` cap site,
+    /// where the per-turn `events` / `messages` are no longer in scope.
+    /// Re-fetches the session log and re-assembles the prompt, then
+    /// delegates to [`AgentHarness::fire_grace_turn`]. Fail-soft: any error
+    /// logs at WARN and returns. Skips entirely when the last assistant
+    /// turn already produced text — well-behaved capped runs pay nothing.
+    pub(crate) async fn fire_max_iterations_grace_turn(
+        &self,
+        session_id: &SessionId,
+        callback: &mut dyn HarnessCallback,
+        iterations: usize,
+        parent_cancel: &CancellationToken,
+    ) {
+        let events = match self.deps.session.get_events(session_id, None, None).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(?session_id, ?e, "max-iter grace turn: get_events failed");
+                return;
+            }
+        };
+        if last_assistant_has_text(&events) {
+            return; // user already has terminal text; skip.
+        }
+        let tail_start = super::tail_start_index(&events);
+        let ctx = crate::harness::prompt::TurnContext::new(&events, tail_start);
+        let messages = match self.deps.prompt_builder.assemble(&ctx).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    ?session_id,
+                    ?e,
+                    "max-iter grace turn: prompt assembly failed"
+                );
+                return;
+            }
+        };
+        self.fire_grace_turn(
+            session_id,
+            &events,
+            &messages,
+            callback,
+            iterations,
+            GraceReason::MaxIterations,
+            parent_cancel,
+        )
+        .await;
     }
 
     /// Stage 6a (#10): dispatch the per-turn verifier chain. `None` chain → noop.
