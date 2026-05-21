@@ -598,12 +598,20 @@ cases does not require harness changes.
 
 ### check_status Output Shape
 
-When status == "running", the response includes a `progress` field:
+`check_status` is **non-destructive** — a completed sub-agent's outcome stays
+queryable until the TTL prune (1h), so the parent may poll the same
+`request_id` more than once without it vanishing.
+
+When status == "running", the response carries elapsed time, a derived
+activity `summary`, and the recent `progress` events:
 
 ```json
 {
   "status": "running",
   "request_id": "...",
+  "task": "...",
+  "elapsed_secs": 12,
+  "summary": { "steps": 1, "last_activity": "tool_called", "last_tool": "grep" },
   "progress": [
     { "step": 0, "kind": "llm_thinking", ... },
     { "step": 1, "kind": "tool_called", "tool_name": "grep", ... },
@@ -612,8 +620,43 @@ When status == "running", the response includes a `progress` field:
 }
 ```
 
-Up to 10 most-recent events are returned. The buffer caps at 50 internally;
-older events are evicted FIFO.
+Up to 10 most-recent progress events are returned. The buffer caps at 50
+internally; older events are evicted FIFO.
+
+When status == "completed", the response carries the same run metrics the
+foreground spawn path returns — `iterations`, `tool_calls_made`,
+`total_tokens` — plus `duration_secs`:
+
+```json
+{
+  "status": "completed",
+  "request_id": "...",
+  "task": "...",
+  "result": "...",
+  "iterations": 4,
+  "tool_calls_made": 9,
+  "total_tokens": 555,
+  "duration_secs": 31
+}
+```
+
+A failed background sub-agent surfaces as a `ToolResult::Error`.
+
+### list Action
+
+`{"action": "list"}` enumerates every background sub-agent the tracker still
+holds — running and recently-completed — so the parent can recover a
+`request_id` it no longer has in context:
+
+```json
+{
+  "running":   [ { "request_id": "...", "task": "...", "elapsed_secs": 12 } ],
+  "running_count": 1,
+  "completed": [ { "status": "completed", "request_id": "...", "task": "...",
+                   "result": "...", "iterations": 4, "duration_secs": 31, ... } ],
+  "completed_count": 1
+}
+```
 
 ### Why cap=50?
 
