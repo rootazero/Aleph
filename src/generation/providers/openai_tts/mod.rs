@@ -294,7 +294,7 @@ impl GenerationProvider for OpenAiTtsProvider {
             // Warn (but allow) unknown voices — third-party proxies and newer
             // models may support different voice names
             if let Some(ref voice) = request.params.voice {
-                if !Self::validate_voice(voice) {
+                if !AVAILABLE_VOICES.contains(&voice.as_str()) {
                     warn!(
                         voice = %voice,
                         known = ?AVAILABLE_VOICES,
