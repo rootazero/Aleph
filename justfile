@@ -260,6 +260,16 @@ deps:
 
 # ─── Release ───
 
+# Verify the three-platform desktop App builds on CI without publishing.
+# Triggers aleph-app-release.yml in build-only mode (publish=off): builds the
+# macOS / Windows / Linux apps + uploads artifacts; no tag, no GitHub Release.
+# Runs against the current origin/main — push local commits first if needed.
+verify-build:
+    gh workflow run aleph-app-release.yml --field publish=false
+    @echo ""
+    @echo "✓ Build-only verification triggered (no tag, no Release)."
+    @echo "  Monitor: gh run list --workflow aleph-app-release.yml --limit 1"
+
 # Release a new version: bump VERSION, commit, push, trigger the app workflow.
 # Runs the workflow in publish mode — builds the three-platform desktop apps
 # and publishes a GitHub Release. CHANGELOG.md must be written by AI (Claude)
