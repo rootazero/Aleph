@@ -620,7 +620,12 @@ impl super::DesktopTool {
 
                 if let Err(e) = screen.key_combo(&[paste_modifier.into()], "v").await {
                     if let Some(ref original) = saved {
-                        let _ = screen.clipboard_write(original).await;
+                        if let Err(restore_err) = screen.clipboard_write(original).await {
+                            tracing::warn!(
+                                error = %restore_err,
+                                "Failed to restore original clipboard after paste"
+                            );
+                        }
                     }
                     return Ok(Some(DesktopOutput {
                         success: false,
@@ -634,7 +639,12 @@ impl super::DesktopTool {
 
                 // Restore original clipboard (best effort)
                 if let Some(original) = saved {
-                    let _ = screen.clipboard_write(&original).await;
+                    if let Err(restore_err) = screen.clipboard_write(&original).await {
+                        tracing::warn!(
+                            error = %restore_err,
+                            "Failed to restore original clipboard after paste"
+                        );
+                    }
                 }
 
                 Ok(Some(DesktopOutput {

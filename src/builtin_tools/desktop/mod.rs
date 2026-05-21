@@ -99,7 +99,15 @@ impl DesktopTool {
                     .escape_started
                     .load(crate::sync_primitives::Ordering::Acquire)
                 {
-                    let _ = listener.start();
+                    // A failed start means the Escape abort hotkey is
+                    // unavailable — log it once (the flag is still set below so
+                    // we do not retry on every action).
+                    if let Err(e) = listener.start() {
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to start desktop escape listener; abort hotkey unavailable"
+                        );
+                    }
                     self.escape_started
                         .store(true, crate::sync_primitives::Ordering::Release);
                 }
