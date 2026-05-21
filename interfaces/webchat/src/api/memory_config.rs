@@ -20,14 +20,6 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub excluded_apps: Vec<String>,
     #[serde(default)]
-    pub ai_retrieval_enabled: bool,
-    #[serde(default)]
-    pub ai_retrieval_timeout_ms: u64,
-    #[serde(default)]
-    pub ai_retrieval_max_candidates: u32,
-    #[serde(default)]
-    pub ai_retrieval_fallback_count: u32,
-    #[serde(default)]
     pub compression_enabled: bool,
     #[serde(default)]
     pub compression_idle_timeout_seconds: u32,
@@ -63,8 +55,6 @@ pub struct MemoryConfig {
     pub rrf_k: u32,
     #[serde(default = "default_bm25_bonus")]
     pub bm25_bonus_weight: f32,
-    #[serde(default)]
-    pub query_expansion_enabled: bool,
 
     // Cross-encoder reranking
     #[serde(default)]

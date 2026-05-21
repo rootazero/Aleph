@@ -79,7 +79,6 @@ pub fn MemoryView() -> impl IntoView {
                                 })}
 
                                 <BasicSettings config=config />
-                                <AIRetrievalSettings config=config />
                                 <CompressionSettings config=config />
                                 <RetrievalPipelineSettings config=config />
                                 <FactDecaySettings config=config />
@@ -188,86 +187,6 @@ fn BasicSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
                             if let Some(mut cfg) = config.get() {
                                 if let Ok(val) = event_target_value(&ev).parse() {
                                     cfg.similarity_threshold = val;
-                                    config.set(Some(cfg));
-                                }
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    />
-                </div>
-            </div>
-        </div>
-    }
-}
-
-#[component]
-fn AIRetrievalSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
-    let i18n = use_i18n();
-    view! {
-        <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-4">{t!(i18n, settings.memory.ai_retrieval)}</h2>
-
-            <div class="space-y-4">
-                <div class="flex items-center">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || config.get().map(|c| c.ai_retrieval_enabled).unwrap_or(false)
-                        on:change=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.ai_retrieval_enabled = event_target_checked(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        class="mr-2"
-                    />
-                    <label class="font-medium">{t!(i18n, settings.memory.enable_ai_retrieval)}</label>
-                </div>
-
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.timeout_ms)}</label>
-                        <input
-                            type="number"
-                            prop:value=move || config.get().map(|c| c.ai_retrieval_timeout_ms).unwrap_or(3000)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.ai_retrieval_timeout_ms = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.max_candidates)}</label>
-                        <input
-                            type="number"
-                            prop:value=move || config.get().map(|c| c.ai_retrieval_max_candidates).unwrap_or(20)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.ai_retrieval_max_candidates = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.fallback_count)}</label>
-                    <input
-                        type="number"
-                        prop:value=move || config.get().map(|c| c.ai_retrieval_fallback_count).unwrap_or(3)
-                        on:input=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                if let Ok(val) = event_target_value(&ev).parse() {
-                                    cfg.ai_retrieval_fallback_count = val;
                                     config.set(Some(cfg));
                                 }
                             }
@@ -860,22 +779,6 @@ fn RetrievalPipelineSettings(config: RwSignal<Option<MemoryConfig>>) -> impl Int
                     />
                     <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.bm25_bonus_weight_hint)}</p>
                 </div>
-
-                <div class="flex items-center">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || config.get().map(|c| c.query_expansion_enabled).unwrap_or(false)
-                        on:change=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.query_expansion_enabled = event_target_checked(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        class="mr-2"
-                    />
-                    <label class="font-medium">{t!(i18n, settings.memory.query_expansion)}</label>
-                </div>
-                <p class="text-xs text-text-tertiary">{t!(i18n, settings.memory.query_expansion_hint)}</p>
             </div>
         </div>
     }
