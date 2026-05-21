@@ -1,13 +1,15 @@
 //! HookExecutor implementation — action dispatch and execution logic
 
 use super::{
-    substitute_variables, ActionResult, HookContext, HookResult, DEFAULT_COMMAND_TIMEOUT_SECS,
+    substitute_variables, ActionResult, HookContext, HookResult, ShellHookConsent,
+    DEFAULT_COMMAND_TIMEOUT_SECS,
 };
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
 use crate::extension::ExtensionError;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -21,6 +23,11 @@ pub struct HookExecutor {
     pub(super) command_timeout: Duration,
     /// Compiled regex cache: matcher string -> compiled Regex (None if invalid)
     regex_cache: HashMap<String, Option<regex::Regex>>,
+    /// Optional shell-hook consent allowlist. When set, `HookAction::Command`
+    /// hooks only run if their command is operator-approved; un-approved
+    /// commands are skipped (fail-safe) and recorded as `pending`. `None`
+    /// disables the gate entirely (the default, so tests run commands freely).
+    consent: Option<Arc<ShellHookConsent>>,
 }
 
 impl HookExecutor {
@@ -31,12 +38,22 @@ impl HookExecutor {
             hooks,
             command_timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
             regex_cache,
+            consent: None,
         }
     }
 
     /// Set the command timeout
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.command_timeout = timeout;
+        self
+    }
+
+    /// Attach a shell-hook consent allowlist. With it set, `HookAction::Command`
+    /// hooks run only when their command is operator-approved; un-approved
+    /// commands are skipped and recorded as `pending` for review via the
+    /// `aleph hooks` CLI.
+    pub fn with_consent(mut self, consent: Arc<ShellHookConsent>) -> Self {
+        self.consent = Some(consent);
         self
     }
 
@@ -121,7 +138,7 @@ impl HookExecutor {
             // Execute all actions for this hook
             for action in &hook.actions {
                 let action_result = self
-                    .execute_action(action, context, &hook.plugin_root)
+                    .execute_action(action, context, &hook.plugin_root, &hook.plugin_name, event)
                     .await;
 
                 match action_result {
@@ -203,10 +220,13 @@ impl HookExecutor {
         action: &HookAction,
         context: &HookContext,
         plugin_root: &std::path::PathBuf,
+        plugin_name: &str,
+        event: HookEvent,
     ) -> Result<ActionResult, ExtensionError> {
         match action {
             HookAction::Command { command } => {
-                self.execute_command(command, context, plugin_root).await
+                self.execute_command(command, context, plugin_root, plugin_name, event)
+                    .await
             }
             HookAction::Prompt { prompt } => {
                 self.execute_prompt(prompt, context, plugin_root).await
@@ -221,7 +241,35 @@ impl HookExecutor {
         command: &str,
         context: &HookContext,
         plugin_root: &std::path::PathBuf,
+        plugin_name: &str,
+        event: HookEvent,
     ) -> Result<ActionResult, ExtensionError> {
+        // Shell-hook consent gate: an un-approved command must not run. It is
+        // recorded as `pending` (so `aleph hooks list` surfaces it) and the
+        // action returns a non-success result with no output — interceptors
+        // treat empty output as "no effect", so a skipped hook never blocks
+        // the tool call. Approving arbitrary code execution is the operator's
+        // explicit decision, not a default.
+        if let Some(consent) = &self.consent {
+            if !consent.is_approved(plugin_name, command) {
+                consent.record_pending(plugin_name, command, &format!("{event:?}"));
+                warn!(
+                    plugin = plugin_name,
+                    event = ?event,
+                    "Shell hook command not approved — skipped. Review with `aleph hooks list`."
+                );
+                return Ok(ActionResult {
+                    success: false,
+                    output: None,
+                    error: Some(format!(
+                        "shell hook from plugin '{plugin_name}' is not approved; \
+                         run `aleph hooks test` to review and approve it"
+                    )),
+                    exit_code: None,
+                });
+            }
+        }
+
         // Substitute variables
         let resolved = substitute_variables(command, context, plugin_root);
         debug!("Executing hook command: {}", resolved);
@@ -382,7 +430,13 @@ impl HookExecutor {
             // Execute all actions for this hook
             for action in &hook.actions {
                 let action_result = self
-                    .execute_action(action, &current_context, &hook.plugin_root)
+                    .execute_action(
+                        action,
+                        &current_context,
+                        &hook.plugin_root,
+                        &hook.plugin_name,
+                        event,
+                    )
                     .await;
 
                 match action_result {
@@ -441,7 +495,7 @@ impl HookExecutor {
             .map(|hook| async move {
                 for action in &hook.actions {
                     if let Err(e) = self
-                        .execute_action(action, context, &hook.plugin_root)
+                        .execute_action(action, context, &hook.plugin_root, &hook.plugin_name, event)
                         .await
                     {
                         warn!(
@@ -498,7 +552,7 @@ impl HookExecutor {
             let mut action_results = Vec::new();
             for action in &hook.actions {
                 match self
-                    .execute_action(action, context, &hook.plugin_root)
+                    .execute_action(action, context, &hook.plugin_root, &hook.plugin_name, event)
                     .await
                 {
                     Ok(ar) => action_results.push(ar),

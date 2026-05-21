@@ -78,7 +78,7 @@ use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::RwLock as StdRwLock;
 use crate::sync_primitives::{AtomicU64, Ordering};
-use hooks::HookExecutor;
+use hooks::{HookExecutor, ShellHookConsent};
 use manifest::adapter::AdapterRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -177,7 +177,9 @@ impl ExtensionManager {
     pub async fn new(config: ExtensionConfig) -> ExtensionResult<Self> {
         let discovery = DiscoveryManager::new(config.discovery.clone())?;
         let config_manager = ConfigManager::new(&discovery).await?;
-        let hook_executor = Arc::new(RwLock::new(HookExecutor::empty()));
+        let hook_executor = Arc::new(RwLock::new(
+            HookExecutor::empty().with_consent(ShellHookConsent::shared()),
+        ));
         let cache_state = Arc::new(RwLock::new(CacheState::default()));
         let plugin_loader = Arc::new(RwLock::new(PluginLoader::new()));
         let plugin_registry = Arc::new(RwLock::new(PluginRegistry::new()));
@@ -367,7 +369,8 @@ impl ExtensionManager {
         }
 
         // Reset hook executor (registry.clear() is called inside load_all)
-        *self.hook_executor.write().await = HookExecutor::empty();
+        *self.hook_executor.write().await =
+            HookExecutor::empty().with_consent(ShellHookConsent::shared());
 
         self.load_all().await
     }

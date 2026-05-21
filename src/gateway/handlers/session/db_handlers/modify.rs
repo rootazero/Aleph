@@ -3,6 +3,27 @@
 use crate::sync_primitives::Arc;
 use serde_json::{json, Value};
 
+/// Fire the `SessionEnd` extension hook (observers) for a deleted session.
+///
+/// Best-effort: a missing extension manager, an empty hook set, or a hook
+/// failure is ignored — session deletion must never depend on hook
+/// availability. Lives here (not in `src/harness/`) so the dumb loop stays
+/// free of lifecycle logic (R10).
+async fn fire_session_end_hook(session_key: &crate::gateway::router::SessionKey) {
+    let Ok(manager) = crate::gateway::handlers::plugins::get_extension_manager() else {
+        return;
+    };
+    let executor = manager.hook_executor_snapshot().await;
+    if executor.hook_count() == 0 {
+        return;
+    }
+    let ctx = crate::extension::hooks::HookContext::new(session_key.to_key_string())
+        .with_env("AGENT_ID", session_key.agent_id());
+    executor
+        .execute_observers(crate::extension::HookEvent::SessionEnd, &ctx)
+        .await;
+}
+
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::SessionStore;
@@ -117,13 +138,18 @@ async fn handle_delete_db_inner(
             }
 
             match manager.delete_session(&session_key).await {
-                Ok(result) => JsonRpcResponse::success(
-                    request.id,
-                    json!({
-                        "session_key": key_str,
-                        "deleted": result.deleted,
-                    }),
-                ),
+                Ok(result) => {
+                    // SessionEnd — the session has been removed; extension
+                    // observers witness the teardown.
+                    fire_session_end_hook(&session_key).await;
+                    JsonRpcResponse::success(
+                        request.id,
+                        json!({
+                            "session_key": key_str,
+                            "deleted": result.deleted,
+                        }),
+                    )
+                }
                 Err(e) => JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,

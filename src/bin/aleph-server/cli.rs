@@ -102,6 +102,11 @@ pub enum Command {
         #[command(subcommand)]
         action: AuditAction,
     },
+    /// Manage shell-hook consent (review/approve plugin shell hooks)
+    Hooks {
+        #[command(subcommand)]
+        action: HooksAction,
+    },
     /// Manage encrypted secrets
     Secret {
         #[command(subcommand)]
@@ -257,6 +262,29 @@ pub enum AuditAction {
         #[arg(long, short = 'l', default_value = "20")]
         limit: usize,
     },
+}
+
+/// Shell-hook consent subcommands.
+///
+/// Shell-command hooks shipped by plugins execute arbitrary code. The server
+/// gates them behind the consent allowlist; these subcommands review and
+/// manage that allowlist.
+#[derive(Subcommand, Debug)]
+pub enum HooksAction {
+    /// List shell-command hooks and their consent status
+    List,
+    /// Run a hook's command to verify it, then optionally approve it
+    Test {
+        /// Hook fingerprint (a unique prefix is accepted)
+        fingerprint: String,
+    },
+    /// Revoke consent for a hook (use `all` to revoke every approval)
+    Revoke {
+        /// Hook fingerprint (a unique prefix is accepted), or `all`
+        fingerprint: String,
+    },
+    /// Diagnose the shell-hook consent registry
+    Doctor,
 }
 
 /// Secret subcommands
@@ -545,6 +573,54 @@ mod tests {
                 }
             }
             _ => panic!("Expected Audit command with Escalations action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_hooks_list() {
+        let args = Args::try_parse_from(["aleph", "hooks", "list"]).unwrap();
+        match args.command {
+            Some(Command::Hooks { action }) => assert!(matches!(action, HooksAction::List)),
+            _ => panic!("Expected Hooks command with List action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_hooks_test() {
+        let args = Args::try_parse_from(["aleph", "hooks", "test", "a1b2c3d4"]).unwrap();
+        match args.command {
+            Some(Command::Hooks { action }) => {
+                if let HooksAction::Test { fingerprint } = action {
+                    assert_eq!(fingerprint, "a1b2c3d4");
+                } else {
+                    panic!("Expected HooksAction::Test");
+                }
+            }
+            _ => panic!("Expected Hooks command with Test action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_hooks_revoke_all() {
+        let args = Args::try_parse_from(["aleph", "hooks", "revoke", "all"]).unwrap();
+        match args.command {
+            Some(Command::Hooks { action }) => {
+                if let HooksAction::Revoke { fingerprint } = action {
+                    assert_eq!(fingerprint, "all");
+                } else {
+                    panic!("Expected HooksAction::Revoke");
+                }
+            }
+            _ => panic!("Expected Hooks command with Revoke action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_hooks_doctor() {
+        let args = Args::try_parse_from(["aleph", "hooks", "doctor"]).unwrap();
+        match args.command {
+            Some(Command::Hooks { action }) => assert!(matches!(action, HooksAction::Doctor)),
+            _ => panic!("Expected Hooks command with Doctor action"),
         }
     }
 
