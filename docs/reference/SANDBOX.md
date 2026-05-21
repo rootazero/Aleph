@@ -538,7 +538,7 @@ canonicalises ACL ordering (deny ACEs before allow), the metadata
 deny pins reads-but-no-writes/delete for the AppContainer even though
 the workspace root grant inherits `GENERIC_ALL` down to children. Mask
 is `GENERIC_WRITE | DELETE` — read stays allowed so `git log` / `git
-status` continue to work.
+status` continue to work. Cycle 5 closes the absent-path gap (below).
 
 ### Network Filtering
 
@@ -652,10 +652,36 @@ The function now branches on `Path::exists()`:
 
 The residual gap is a tiny check→mount TOCTOU window during argument
 generation (before the sandboxed process runs); either outcome still
-yields a protected mount on the next run. Windows has a parallel gap — its
-Cycle 3 DACL deny only covers *existing* metadata dirs — recorded in the
-Cycle 5 spec as a follow-up (it needs a different mechanism: deny-ACL'd
-stub directories pre-created at workspace provisioning).
+yields a protected mount on the next run. Windows had the same parallel
+gap — fixed in the same cycle, see *Windows protected-path creation gap*
+below.
+
+### Windows protected-path creation gap — fixed
+
+Windows had the same shape of gap on a different mechanism. Cycle 3's
+`stamp_protected_metadata_deny` stamped `DENY_ACCESS` ACEs only on the
+metadata dirs that *already existed*; the workspace-root grant inherits
+`GENERIC_ALL` to every child, so a sandboxed process could `mkdir .git`
+and write inside the new directory. NTFS ACLs cannot deny "create a child
+named `.git`" by name, so — mirroring the Linux synthetic-tmpfs fix — the
+deny ACE is given a real object to bind to.
+
+`ensure_protected_metadata_deny` (renamed from `stamp_protected_metadata_deny`)
+now handles each of the four subpaths by existence:
+
+- **Existing** path → stamp the `DENY_ACCESS` ACE, as in Cycle 3.
+- **Absent** path → `create_dir` an empty stub directory first, then stamp
+  the ACE on it. The new cross-platform `classify_protected_metadata`
+  (replacing `protected_metadata_targets_under`) returns all four paths
+  tagged with on-disk existence, keeping the partition logic unit-testable
+  on macOS / Linux dev boxes.
+
+After the target exits, the post-wait cleanup revokes every deny ACE and
+removes every stub it created. Removal uses `remove_dir`, not
+`remove_dir_all`: it only succeeds on an empty directory, so a stub the
+target somehow populated is left in place rather than having data
+destroyed. A real `.git` is never created over — only *absent* paths get a
+stub — so the workspace is left exactly as it was found.
 
 ### Per-host network filtering — phased plan
 
@@ -690,6 +716,14 @@ native `cargo test` (3/3 green — branch logic) plus `cargo-zigbuild check
 --target x86_64-unknown-linux-gnu` (clean Linux compile of the function
 and its `tempfile`/`Vec::windows`/`format!` test patterns). The in-tree
 Linux-gated unit tests still require a Linux host to run.
+
+The Windows protected-path fix is verified **in-tree**, not via a scratch
+crate: `cargo check --target x86_64-pc-windows-gnu` compiles the whole
+`#[cfg(target_os = "windows")]` `imp` module clean (mingw-w64, from
+Cycle 4), and `cargo test windows_init` runs all 14 `windows_init` unit
+tests — including the three new `classify_protected_metadata` tests —
+green natively, since the classifier is cross-platform `std`. The Win32
+ACE / stub-create / stub-remove wiring only runs on a Windows host.
 
 ## References
 

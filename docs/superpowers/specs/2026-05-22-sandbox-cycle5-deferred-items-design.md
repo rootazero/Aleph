@@ -1,9 +1,12 @@
-# Sandbox Cycle 5 — Deferred-Item Planning & Linux Protected-Path Fix
+# Sandbox Cycle 5 — Deferred-Item Planning & Protected-Path Fixes (Linux + Windows)
 
 > Date: 2026-05-22. Plans the two items deferred by
 > [Cycle 4](./2026-05-21-sandbox-cycle4-bugfix-hardening-design.md) and
 > recorded in `docs/reference/SANDBOX.md § Cycle 4`. Item 1 is **implemented
-> this cycle**; Item 2 is **planned only** (genuinely multi-cycle).
+> this cycle**; Item 2 is **planned only** (genuinely multi-cycle). The
+> Windows analogue of Item 1 — originally recorded below as out of scope —
+> was **implemented as a same-cycle follow-up**; see § *Windows parallel
+> gap*.
 
 ## Context
 
@@ -172,17 +175,35 @@ Running the in-tree Linux-gated unit tests (which exercise the full
 `BubblewrapDriver`) still requires a Linux host; they are deterministic
 argument-vector assertions and `generate_args` itself is unchanged.
 
-### Out of scope — Windows parallel gap
+### Windows parallel gap *(implemented as a same-cycle follow-up)*
 
 Windows has the same shape of gap: Cycle 3's protected-metadata DACL deny
-(`windows_init.rs`) stamps `DENY_ACCESS` ACEs only on **existing**
+(`windows_init.rs`) stamped `DENY_ACCESS` ACEs only on **existing**
 `<ws>/{.git,…}` subdirectories, and the workspace-root grant inherits
 `GENERIC_ALL` to children — so a freshly created `.git` would be writable.
-Closing it needs a different mechanism (NTFS ACLs cannot deny "create a
-child named `.git`" by name; the realistic fix is to pre-create the four
-metadata directories as empty deny-ACL'd stubs at workspace provisioning).
-The goal scopes Item 1 to Linux; the Windows variant is recorded here as a
-follow-up, not implemented this cycle.
+NTFS ACLs cannot deny "create a child named `.git`" by name, so the deny
+ACE needs a real object to bind to: pre-create the absent metadata
+directories as empty stubs before spawn.
+
+`ensure_protected_metadata_deny` (renamed from
+`stamp_protected_metadata_deny`) now, for each of the four subpaths: if it
+exists → stamp the deny ACE (Cycle 3 behavior); if it is absent →
+`create_dir` an empty stub, then stamp the ACE. The cross-platform
+classifier `classify_protected_metadata` (replacing
+`protected_metadata_targets_under`) returns all four paths tagged with
+on-disk existence, so the partition logic stays unit-testable off-Windows.
+
+After the target exits, the post-wait cleanup revokes every deny ACE and
+`remove_dir`s every stub it created. `remove_dir` (not `remove_dir_all`)
+only succeeds on an empty directory, so a stub the target somehow
+populated is left in place rather than destroying data — and a real
+`.git` is never touched, because only *absent* paths get a stub.
+
+Verified in-tree: native `cargo test windows_init` 14/14 green (including
+the three new `classify_*` tests) + `cargo check --target
+x86_64-pc-windows-gnu` clean (the Win32 `imp` module compiles). This
+closes the Windows half of the Cycle 4 protected-path gap; only Linux was
+in the original Item 1 scope.
 
 ---
 
@@ -297,6 +318,7 @@ seccomp) and Linux-runtime-bound. The goal explicitly records Item 2 as
 |---|---|
 | 1 — code | scratch crate (verbatim copy of the function): `cargo test` native macOS 3/3 green + `cargo-zigbuild check --target x86_64-unknown-linux-gnu` compiles clean. Full in-tree zigbuild blocked by `wayland-sys` sysroot dep. In-tree Linux unit-test run deferred to a Linux session |
 | 1 — no regression | macOS compile graph untouched — the change is entirely inside the `#[cfg(target_os = "linux")]` `bwrap.rs` module, which macOS never compiles |
+| 1 — Windows follow-up | verified **in-tree**: `cargo test windows_init` 14/14 green native (3 new `classify_*` tests) + `cargo check --target x86_64-pc-windows-gnu` clean (the `#[cfg(target_os = "windows")]` `imp` module compiles). Win32 ACE / stub wiring runs on a Windows host |
 | 2 | none — spec only |
 
 ## Risks
