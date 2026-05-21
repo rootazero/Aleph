@@ -255,6 +255,7 @@ fn tiny_budget_config(budget: u64, warn: f64, critical: f64) -> ContextBudgetCon
         circuit_breaker_max: 10,
         diminishing_window: 16,
         diminishing_threshold: 1,
+        max_splits: 3,
     }
 }
 
