@@ -81,9 +81,155 @@ pub struct FlowOutcome {
     /// after the run completes. Saturates to `u32::MAX` on overflow
     /// (unreachable for a realistic run).
     pub total_tokens: u32,
-    /// `true` if the run stopped because it hit an iteration or token cap.
-    /// Defaults to `false`; actual cap tracking lands in Phase 6a task 6.
+    /// Deprecated. Kept as a backwards-compatibility alias so existing
+    /// `outcome.hit_limit` callers keep compiling. Derived from
+    /// [`terminate_reason`](Self::terminate_reason); new consumers should
+    /// pattern-match the enum so the specific cap (max-iter, stall, turn
+    /// timeout, consecutive-failure, verifier-veto) is distinguishable.
     pub hit_limit: bool,
+    /// Precise loop-exit cause. Mirrors the distinct branches inside
+    /// `AgentHarness::run` that previously collapsed into the boolean
+    /// `hit_limit`. Defaults to `Completed` for a clean exit.
+    pub terminate_reason: TerminateReason,
+    /// Wall-clock duration of the harness run, measured at the orchestrator
+    /// bridge so it includes prompt assembly, the Think→Act loop, and trace
+    /// flush. `0` when the runner did not record it (test fixtures).
+    pub duration_ms: u64,
+    /// Per-component provider-reported token usage accumulated across every
+    /// LLM call in this run. Granular complement to [`total_tokens`] —
+    /// surfaces cache hit ratio and reasoning-token spend that the single
+    /// sum hides.
+    pub token_breakdown: TokenBreakdown,
+    /// One entry per tool invocation in run order. Sourced from the
+    /// `LoopTraceEvent::ToolCallCompleted` stream the harness already emits.
+    /// Empty when no tool fired or when the harness ran without a trace
+    /// sink path that records timeline.
+    pub tool_timeline: Vec<ToolInvocation>,
+    /// Best-effort USD cost estimate. `None` when the pricing module
+    /// could not resolve the provider/model — pricing is non-load-bearing
+    /// (see [`crate::pricing`]).
+    pub estimated_cost: Option<crate::pricing::CostEstimate>,
+}
+
+/// Loop-exit cause for an agent run. Each variant corresponds to a distinct
+/// branch in [`AgentHarness::run`](crate::harness::agent::AgentHarness)
+/// that previously collapsed into a single `hit_limit: bool`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TerminateReason {
+    /// Model emitted a terminal `TurnState::Done` and the loop exited cleanly.
+    #[default]
+    Completed,
+    /// `max_iterations` cap reached. `used` is the iteration count that
+    /// tripped the guard.
+    HitMaxIterations { used: u32 },
+    /// `context_budget` directive forced an early `FinalReply` because the
+    /// running prompt would otherwise blow the model's context window.
+    /// Distinct from `HitMaxIterations` — same outward symptom, different
+    /// cause (tokens vs iterations).
+    ContextBudgetExhausted,
+    /// `stall_config` watchdog tripped before the loop emitted progress.
+    StallTimeout { elapsed_ms: u64 },
+    /// Per-turn timeout exhausted in `phase` (think / act).
+    TurnTimeout { phase: String, elapsed_ms: u64 },
+    /// Consecutive failure cap reached after `consecutive` turns produced
+    /// only `ToolError` events.
+    ConsecutiveFailureCap { consecutive: u32 },
+    /// Verifier veto count reached `MAX_VERIFIER_VETOS`.
+    VerifierVeto { vetos: u32 },
+    /// `CancellationToken` fired before the loop reached `Done`.
+    Cancelled,
+}
+
+impl TerminateReason {
+    /// `true` for every cap-style exit. Equivalent to the legacy
+    /// `hit_limit: bool`; `Completed` and `Cancelled` return `false`. Use
+    /// to populate [`FlowOutcome::hit_limit`] so the two fields never drift.
+    pub fn is_hit_limit(&self) -> bool {
+        !matches!(self, Self::Completed | Self::Cancelled)
+    }
+
+    /// Short stable string for logging / metrics — never localized.
+    pub fn as_static_str(&self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::HitMaxIterations { .. } => "hit_max_iterations",
+            Self::ContextBudgetExhausted => "context_budget_exhausted",
+            Self::StallTimeout { .. } => "stall_timeout",
+            Self::TurnTimeout { .. } => "turn_timeout",
+            Self::ConsecutiveFailureCap { .. } => "consecutive_failure_cap",
+            Self::VerifierVeto { .. } => "verifier_veto",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Per-component provider-reported token usage accumulated across every LLM
+/// call in a run.
+///
+/// Component semantics follow [`crate::providers::adapter::TokenUsage`]:
+/// `input` + `output` form the raw call cost; `cache_read` +
+/// `cache_creation` indicate Anthropic prompt cache behaviour; `reasoning`
+/// is the Gemini `thoughtsTokenCount` / OpenAI o-series reasoning count
+/// (Anthropic folds it into `output`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TokenBreakdown {
+    pub input: u32,
+    pub output: u32,
+    pub cache_read: u32,
+    pub cache_creation: u32,
+    pub reasoning: u32,
+}
+
+impl TokenBreakdown {
+    /// Saturating sum of every component except `reasoning` — matches the
+    /// `turn_token_total` definition in the harness so this stays in lockstep
+    /// with [`FlowOutcome::total_tokens`].
+    pub fn total(&self) -> u64 {
+        u64::from(self.input)
+            + u64::from(self.output)
+            + u64::from(self.cache_read)
+            + u64::from(self.cache_creation)
+    }
+
+    /// Fold one `ProviderUsage` trace event into this breakdown. `None`
+    /// values default to 0; sums are saturating at `u32::MAX`.
+    pub fn accumulate(
+        &mut self,
+        input: u32,
+        output: u32,
+        cache_read: Option<u32>,
+        cache_creation: Option<u32>,
+        reasoning: Option<u32>,
+    ) {
+        self.input = self.input.saturating_add(input);
+        self.output = self.output.saturating_add(output);
+        self.cache_read = self.cache_read.saturating_add(cache_read.unwrap_or(0));
+        self.cache_creation = self
+            .cache_creation
+            .saturating_add(cache_creation.unwrap_or(0));
+        self.reasoning = self.reasoning.saturating_add(reasoning.unwrap_or(0));
+    }
+}
+
+/// One tool invocation in run order. Sourced from
+/// `LoopTraceEvent::ToolCallCompleted` — the harness already records every
+/// field; the timeline is the missing aggregation seam.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ToolInvocation {
+    /// Provider-supplied tool_use id (correlates with the matching
+    /// `FlowStreamEvent::ToolCallStart`).
+    pub id: String,
+    /// Resolved tool name (`bash`, `web_search`, …).
+    pub name: String,
+    /// Wall-clock duration measured by the harness around `tool.execute()`.
+    pub duration_ms: u64,
+    /// `true` when the underlying `ToolResult` was `Success` /
+    /// `SuccessAndStopLoop`; `false` on `Error`.
+    pub success: bool,
+    /// Provider error message when [`success`] is `false`.
+    pub error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -376,5 +522,150 @@ impl Orchestrator {
         self.flow_registry.replace(new_set);
         debug!(count = self.flow_registry.len(), "flow registry reloaded");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    use super::*;
+
+    #[test]
+    fn flow_outcome_default_is_completed_clean_run() {
+        let outcome = FlowOutcome::default();
+        assert_eq!(outcome.terminate_reason, TerminateReason::Completed);
+        assert!(!outcome.hit_limit);
+        assert_eq!(outcome.duration_ms, 0);
+        assert_eq!(outcome.total_tokens, 0);
+        assert_eq!(outcome.token_breakdown, TokenBreakdown::default());
+        assert!(outcome.tool_timeline.is_empty());
+        assert!(outcome.estimated_cost.is_none());
+    }
+
+    #[test]
+    fn terminate_reason_is_hit_limit_matches_legacy_bool_semantics() {
+        // Completed / Cancelled are NOT cap-style exits.
+        assert!(!TerminateReason::Completed.is_hit_limit());
+        assert!(!TerminateReason::Cancelled.is_hit_limit());
+
+        // Every other variant IS a cap.
+        assert!(TerminateReason::HitMaxIterations { used: 200 }.is_hit_limit());
+        assert!(TerminateReason::ContextBudgetExhausted.is_hit_limit());
+        assert!(TerminateReason::StallTimeout { elapsed_ms: 30_000 }.is_hit_limit());
+        assert!(TerminateReason::TurnTimeout {
+            phase: "think".into(),
+            elapsed_ms: 60_000
+        }
+        .is_hit_limit());
+        assert!(TerminateReason::ConsecutiveFailureCap { consecutive: 3 }.is_hit_limit());
+        assert!(TerminateReason::VerifierVeto { vetos: 10 }.is_hit_limit());
+    }
+
+    #[test]
+    fn terminate_reason_static_str_is_stable() {
+        assert_eq!(TerminateReason::Completed.as_static_str(), "completed");
+        assert_eq!(
+            TerminateReason::HitMaxIterations { used: 5 }.as_static_str(),
+            "hit_max_iterations"
+        );
+        assert_eq!(
+            TerminateReason::ContextBudgetExhausted.as_static_str(),
+            "context_budget_exhausted"
+        );
+        assert_eq!(
+            TerminateReason::StallTimeout { elapsed_ms: 0 }.as_static_str(),
+            "stall_timeout"
+        );
+        assert_eq!(
+            TerminateReason::TurnTimeout {
+                phase: "act".into(),
+                elapsed_ms: 0
+            }
+            .as_static_str(),
+            "turn_timeout"
+        );
+        assert_eq!(
+            TerminateReason::ConsecutiveFailureCap { consecutive: 0 }.as_static_str(),
+            "consecutive_failure_cap"
+        );
+        assert_eq!(
+            TerminateReason::VerifierVeto { vetos: 0 }.as_static_str(),
+            "verifier_veto"
+        );
+        assert_eq!(TerminateReason::Cancelled.as_static_str(), "cancelled");
+    }
+
+    #[test]
+    fn token_breakdown_accumulate_sums_components_with_none_as_zero() {
+        let mut b = TokenBreakdown::default();
+        b.accumulate(100, 250, Some(40), Some(10), Some(999));
+        assert_eq!(b.input, 100);
+        assert_eq!(b.output, 250);
+        assert_eq!(b.cache_read, 40);
+        assert_eq!(b.cache_creation, 10);
+        assert_eq!(b.reasoning, 999);
+        // total() mirrors harness `turn_token_total`: input+output+cache_read+cache_creation
+        assert_eq!(b.total(), 400);
+
+        b.accumulate(5, 10, None, None, None);
+        assert_eq!(b.input, 105);
+        assert_eq!(b.output, 260);
+        assert_eq!(b.cache_read, 40);
+        assert_eq!(b.cache_creation, 10);
+        assert_eq!(b.reasoning, 999);
+        assert_eq!(b.total(), 415);
+    }
+
+    #[test]
+    fn token_breakdown_accumulate_saturates_at_u32_max() {
+        let mut b = TokenBreakdown {
+            input: u32::MAX - 1,
+            ..Default::default()
+        };
+        b.accumulate(5, 0, None, None, None);
+        assert_eq!(b.input, u32::MAX);
+    }
+
+    #[test]
+    fn tool_invocation_roundtrips_through_serde() {
+        let inv = ToolInvocation {
+            id: "toolu_01".into(),
+            name: "bash".into(),
+            duration_ms: 1234,
+            success: false,
+            error: Some("exit code 1".into()),
+        };
+        let json = serde_json::to_string(&inv).expect("serialize");
+        let back: ToolInvocation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(inv, back);
+    }
+
+    #[test]
+    fn terminate_reason_roundtrips_through_serde_with_payload() {
+        let r = TerminateReason::TurnTimeout {
+            phase: "think".into(),
+            elapsed_ms: 60_000,
+        };
+        let json = serde_json::to_string(&r).expect("serialize");
+        assert!(json.contains(r#""kind":"turn_timeout""#));
+        assert!(json.contains(r#""phase":"think""#));
+        let back: TerminateReason = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn flow_outcome_hit_limit_field_can_be_derived_from_terminate_reason() {
+        // Demonstrate the construction pattern callers should use to keep
+        // `hit_limit` and `terminate_reason` in lockstep.
+        let reason = TerminateReason::HitMaxIterations { used: 200 };
+        let outcome = FlowOutcome {
+            hit_limit: reason.is_hit_limit(),
+            terminate_reason: reason,
+            ..Default::default()
+        };
+        assert!(outcome.hit_limit);
+        assert_eq!(
+            outcome.terminate_reason,
+            TerminateReason::HitMaxIterations { used: 200 }
+        );
     }
 }

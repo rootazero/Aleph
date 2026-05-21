@@ -24,7 +24,7 @@ use crate::agents::AgentRegistry;
 use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::harness::agent::AgentHarness;
-
+use crate::harness::callback::HarnessCallback;
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::Harness;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
@@ -362,57 +362,25 @@ impl HarnessRunner for AgentHarnessRunner {
         for r in &records {
             match &r.event {
                 SessionEvent::AssistantMessage { content, .. } => {
-                    // Use thinking content as fallback when text is empty
-                    // (extended-thinking models may put output in thinking field)
-                    let mut text = if content.text.is_empty() {
+                    // P5: dropped the 8-layer JSON field extraction
+                    // (action.summary / action.content / action.text / summary
+                    // / content / message / text / reasoning) that previously
+                    // tried to recover a "real" message from the legacy
+                    // {reasoning, action} envelope. `ResponseFormatLayer` was
+                    // unregistered from the prompt pipeline on 2026-05-10
+                    // (see memory: project_response_format_layer_cleanup),
+                    // so the model no longer emits that envelope and the
+                    // fallback only served to silently rewrite valid JSON
+                    // payloads. Native tool_use is the canonical egress now.
+                    //
+                    // Thinking-only completions (extended-thinking providers
+                    // that may put output in the `thinking` field on a
+                    // text-empty assistant turn) keep the explicit fallback.
+                    final_text = if content.text.is_empty() {
                         content.thinking.clone().unwrap_or_default()
                     } else {
                         content.text.clone()
                     };
-
-                    let trimmed = text.trim();
-                    let payload = if trimmed.starts_with("```") {
-                        trimmed
-                            .lines()
-                            .skip(1)
-                            .take_while(|l| !l.trim_start().starts_with("```"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    } else {
-                        trimmed.to_string()
-                    };
-
-                    let json_trimmed = payload.trim_start();
-                    if json_trimmed.starts_with('{') || json_trimmed.starts_with('[') {
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&payload) {
-                            // Try to extract a human-readable field (prefer longer content)
-                            let candidates = [
-                                json.get("action")
-                                    .and_then(|a| a.get("summary"))
-                                    .and_then(|v| v.as_str()),
-                                json.get("action")
-                                    .and_then(|a| a.get("content"))
-                                    .and_then(|v| v.as_str()),
-                                json.get("action")
-                                    .and_then(|a| a.get("text"))
-                                    .and_then(|v| v.as_str()),
-                                json.get("summary").and_then(|v| v.as_str()),
-                                json.get("content").and_then(|v| v.as_str()),
-                                json.get("message").and_then(|v| v.as_str()),
-                                json.get("text").and_then(|v| v.as_str()),
-                                json.get("reasoning").and_then(|v| v.as_str()),
-                            ];
-                            // Pick the longest candidate to avoid short reasoning over full report
-                            if let Some(best) =
-                                candidates.iter().filter_map(|&c| c).max_by_key(|c| c.len())
-                            {
-                                text = best.to_string();
-                            }
-                            // If no known field found, keep original JSON
-                        }
-                    }
-
-                    final_text = text;
                     iterations = iterations.saturating_add(1);
                 }
                 SessionEvent::ToolCallRequested { .. } => {
@@ -427,18 +395,51 @@ impl HarnessRunner for AgentHarnessRunner {
         // and the budget-sensor flag. `total_tokens` saturates into the
         // `u32` field (`as u32` would truncate; a run is realistically far
         // below `u32::MAX` tokens).
+        // P2: pull the rich signals from harness accessors. The harness loop
+        // recorded the precise terminate cause, per-tool timeline, and
+        // per-component token breakdown — no second session read needed.
+        let terminate_reason = harness.terminate_reason();
+        let token_breakdown = harness.token_breakdown();
+        // Cost task: best-effort estimate against the static price table.
+        // `None` when the run produced no tokens (no LLM call observed) —
+        // the renderer treats `None` and `Unknown` differently (None ==
+        // "did not attempt"; Unknown == "attempted, no rate").
+        let estimated_cost = if token_breakdown == crate::orchestrator::dispatch::TokenBreakdown::default() {
+            None
+        } else {
+            let model: &str = match &spec.brain {
+                crate::orchestrator::flow_spec::BrainRef::Strict {
+                    model: Some(m), ..
+                } => m.as_str(),
+                _ => provider_name.as_str(),
+            };
+            Some(crate::pricing::estimate(&provider_name, model, &token_breakdown))
+        };
         let outcome = FlowOutcome {
             final_text,
             iterations,
             tool_calls_made,
             total_tokens: u32::try_from(harness.total_tokens()).unwrap_or(u32::MAX),
-            hit_limit: harness.hit_limit(),
+            hit_limit: terminate_reason.is_hit_limit(),
+            terminate_reason,
+            duration_ms: harness.duration_ms(),
+            token_breakdown,
+            tool_timeline: harness.tool_timeline(),
+            estimated_cost,
         };
 
-        // Emit `Complete(outcome)` as the terminal broadcast event.
-        // `BroadcastCallback::on_complete` is a no-op; this is the only place
-        // that fires the `Complete` variant so it is always last on the channel.
-        let _ = events.send(FlowStreamEvent::Complete(outcome.clone()));
+        // P4: single-source the terminal `Complete(outcome)` emit. The
+        // callback owns the broadcast channel and now fires the event from
+        // `on_complete_with_outcome`, so the previous `events.send` here
+        // would duplicate it. Reply emitters already de-dupe by run-id
+        // (see streaming.rs:run_complete_handled), but emitting twice is a
+        // foot-gun — channels that don't de-dupe (telemetry, JSON dump)
+        // would see the same outcome twice.
+        cb.on_complete_with_outcome(&outcome);
+
+        // `events` is unused after this point — kept in scope so the broadcast
+        // channel stays alive until BroadcastCallback drops at end of run.
+        let _ = events;
 
         Ok(outcome)
     }
@@ -775,7 +776,8 @@ mod tests {
         cb.on_delta("world");
         // Use legacy on_tool_call — fires ToolCallStart with id="legacy"
         cb.on_tool_call("read_file");
-        // on_complete is now a no-op; Complete(outcome) is emitted by AgentHarnessRunner
+        // on_complete is now a no-op; Complete(outcome) is emitted by
+        // on_complete_with_outcome (P4).
         cb.on_complete();
 
         let mut received = Vec::new();
@@ -796,6 +798,57 @@ mod tests {
         match &received[2] {
             FlowStreamEvent::ToolCallStart { name, .. } => assert_eq!(name, "read_file"),
             other => panic!("expected ToolCallStart, got {other:?}"),
+        }
+    }
+
+    /// P4: `on_complete_with_outcome` is the single emitter of the terminal
+    /// `Complete(outcome)` event. The outcome payload survives the
+    /// callback → broadcast hop unchanged.
+    #[test]
+    fn broadcast_callback_on_complete_with_outcome_emits_terminal_event() {
+        use crate::orchestrator::dispatch::{
+            FlowOutcome, TerminateReason, TokenBreakdown,
+        };
+
+        let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(16);
+        let mut cb = super::callback::BroadcastCallback::new(tx);
+
+        let outcome = FlowOutcome {
+            final_text: "all done".into(),
+            iterations: 4,
+            tool_calls_made: 2,
+            total_tokens: 1500,
+            hit_limit: true,
+            terminate_reason: TerminateReason::HitMaxIterations { used: 4 },
+            duration_ms: 1234,
+            token_breakdown: TokenBreakdown {
+                input: 800,
+                output: 600,
+                ..Default::default()
+            },
+            tool_timeline: Vec::new(),
+            estimated_cost: None,
+        };
+        cb.on_complete_with_outcome(&outcome);
+
+        let received: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert_eq!(received.len(), 1, "exactly one Complete event");
+        match &received[0] {
+            FlowStreamEvent::Complete(o) => {
+                assert_eq!(o.final_text, "all done");
+                assert_eq!(o.iterations, 4);
+                assert_eq!(o.tool_calls_made, 2);
+                assert_eq!(o.total_tokens, 1500);
+                assert!(o.hit_limit);
+                assert_eq!(
+                    o.terminate_reason,
+                    TerminateReason::HitMaxIterations { used: 4 }
+                );
+                assert_eq!(o.duration_ms, 1234);
+                assert_eq!(o.token_breakdown.input, 800);
+                assert_eq!(o.token_breakdown.output, 600);
+            }
+            other => panic!("expected Complete, got {other:?}"),
         }
     }
 

@@ -316,14 +316,33 @@ impl ToolResult {
     }
 }
 
-/// Summary of a completed agent run
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Summary of a completed agent run.
+///
+/// Mirrors `aleph_protocol::RunSummary` field-for-field — kept in parallel
+/// because the gateway internal `StreamEvent` enum is distinct from the
+/// wire-protocol enum (see `events.rs` comment). Every new field carries
+/// `#[serde(default)]` so legacy producers round-trip cleanly.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunSummary {
     pub total_tokens: u64,
     pub tool_calls: u32,
     pub loops: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_response: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminate_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_breakdown: Option<aleph_protocol::TokenBreakdownView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_summaries: Vec<ToolSummaryItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<ToolErrorItem>,
 }
 
 /// Enhanced summary with tool details and errors

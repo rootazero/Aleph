@@ -50,6 +50,7 @@ async fn trace_sink_flush_called_after_run() {
                 tool_calls_made: 0,
                 total_tokens: 0,
                 hit_limit: false,
+                ..Default::default()
             };
             let _ = ctx.events.send(FlowStreamEvent::Complete(outcome.clone()));
             Ok(outcome)

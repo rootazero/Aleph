@@ -695,6 +695,10 @@ mod tests {
             total_tokens: 5000,
             hit_limit: false,
             final_text: Some("Done.".into()),
+            terminate_reason: None,
+            duration_ms: None,
+            token_breakdown: None,
+            tool_timeline: Vec::new(),
         };
         let p =
             present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::PanelTrace)

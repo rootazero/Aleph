@@ -363,6 +363,7 @@ where
                             tool_calls: 0,
                             loops: steps_completed,
                             final_response: Some(response.clone()),
+                            ..Default::default()
                         },
                         total_duration_ms: duration_ms,
                     })

@@ -31,7 +31,7 @@ pub use events::{
     AgentTraceEvent, AgentTraceSessionOutcome, AgentTraceState, AgentTraceTextKind,
     AgentTraceToolCallEnd, AgentTraceToolCallStart, AgentTraceToolResult, AgentTraceTurnMetrics,
     AgentTraceTurnOutcome, ConfigChangedEvent, EnhancedRunSummary, RunSummary, StreamEvent,
-    ToolErrorItem, ToolResult, ToolSummaryItem, UncertaintyAction,
+    TokenBreakdownView, ToolErrorItem, ToolResult, ToolSummaryItem, UncertaintyAction,
 };
 pub use invitation::{ActivateInvitationRequest, CreateInvitationRequest, GuestToken, Invitation};
 pub use jsonrpc::{

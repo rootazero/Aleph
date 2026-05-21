@@ -200,6 +200,9 @@ impl AgentHarness {
         // no new policy, no state machine.
         if matches!(budget_directive, Some(LoopDirective::FinalReply)) {
             self.hit_limit.store(true, Ordering::Relaxed);
+            self.set_terminate_reason(
+                crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
+            );
             self.fire_grace_turn(
                 session_id,
                 &events,
@@ -255,6 +258,12 @@ impl AgentHarness {
         // billed. Excludes `thinking_tokens`; see `turn_token_total`.
         let turn_tokens = super::turn_token_total(&response.usage);
         self.total_tokens.fetch_add(turn_tokens, Ordering::Relaxed);
+        // P2: per-component breakdown — captures cache hit ratio and
+        // reasoning-token spend that the single `total_tokens` sum hides.
+        // Reasoning is folded as `thinking_tokens` even when `total_tokens`
+        // excludes it (Anthropic already includes it in `output`; Gemini
+        // reports it separately).
+        self.accumulate_token_breakdown(&response.usage);
         // Cycle 3 — OUTPUT tokens only (not total), required by
         // DiminishingReturnsDetector's window threshold semantics.
         let output_tokens = response

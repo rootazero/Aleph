@@ -50,6 +50,20 @@ pub enum LoopTraceEvent {
         total_tokens: usize,
         hit_limit: bool,
         final_text: Option<String>,
+        /// Precise loop-exit cause. `None` for trace blobs written by older
+        /// Aleph versions; current emitter always populates it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminate_reason: Option<crate::orchestrator::dispatch::TerminateReason>,
+        /// Wall-clock harness duration. `None` on legacy trace blobs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        /// Per-component token breakdown. `None` on legacy trace blobs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_breakdown: Option<crate::orchestrator::dispatch::TokenBreakdown>,
+        /// Tool invocation timeline. Empty by default so the JSON shape is
+        /// stable across producer versions.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tool_timeline: Vec<crate::orchestrator::dispatch::ToolInvocation>,
     },
     /// Subagent worktree isolation primitive created (P3 Stage H).
     WorktreeCreated { path: std::path::PathBuf },
@@ -215,6 +229,10 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 total_tokens,
                 hit_limit,
                 final_text,
+                terminate_reason,
+                duration_ms,
+                token_breakdown,
+                tool_timeline,
             } => aleph_protocol::AgentTraceEvent::SessionCompleted {
                 outcome: outcome.into(),
                 iterations,
@@ -222,6 +240,20 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 total_tokens,
                 hit_limit,
                 final_text,
+                // Re-serialize through JSON so the protocol crate stays
+                // independent of `alephcore` types — keeps the crate-edge
+                // boundary clean (R3 core minimalism).
+                terminate_reason: terminate_reason
+                    .as_ref()
+                    .and_then(|r| serde_json::to_value(r).ok()),
+                duration_ms,
+                token_breakdown: token_breakdown
+                    .as_ref()
+                    .and_then(|b| serde_json::to_value(b).ok()),
+                tool_timeline: tool_timeline
+                    .iter()
+                    .filter_map(|inv| serde_json::to_value(inv).ok())
+                    .collect(),
             },
             LoopTraceEvent::WorktreeCreated { path } => {
                 aleph_protocol::AgentTraceEvent::WorktreeCreated { path }

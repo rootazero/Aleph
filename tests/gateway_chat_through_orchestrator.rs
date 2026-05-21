@@ -32,6 +32,7 @@ async fn dispatch_invokes_harness_runner_once() {
                 tool_calls_made: 0,
                 total_tokens: 0,
                 hit_limit: false,
+                ..Default::default()
             };
             // Terminal event on the stream so the drain loop exits cleanly.
             let _ = ctx
