@@ -1,8 +1,4 @@
-//! PressureSensor — token estimation with API usage anchoring.
-
-use super::ContextPressure;
-use crate::providers::message::UnifiedMessage;
-use crate::tools::runtime::ToolDefinition;
+//! Content-aware token-ratio detection for context-pressure estimation.
 
 // =============================================================================
 // Content-aware ratio detection
@@ -134,129 +130,12 @@ pub fn estimate_tokens_smart(content: &str) -> usize {
 }
 
 // =============================================================================
-// PressureSensor
-// =============================================================================
-
-/// Stores API-reported usage as an anchor point for subsequent estimation.
-struct AnchoredUsage {
-    /// Token count reported by the API at anchor time.
-    input_tokens: usize,
-    /// Number of messages in the conversation at anchor time.
-    message_count_at_anchor: usize,
-}
-
-/// Measures context window pressure using API-anchored token counts
-/// combined with content-aware estimation for new messages.
-pub struct PressureSensor {
-    anchor: Option<AnchoredUsage>,
-    default_ratio: f64,
-}
-
-impl PressureSensor {
-    /// Create a new sensor with a default characters-per-token ratio.
-    pub fn new(default_ratio: f64) -> Self {
-        Self {
-            anchor: None,
-            default_ratio,
-        }
-    }
-
-    /// Store an API-reported token count as an anchor.
-    ///
-    /// Future `measure()` calls will use this anchor plus estimated delta
-    /// for messages after the anchor point.
-    pub fn update_anchor(&mut self, input_tokens: usize, message_count: usize) {
-        self.anchor = Some(AnchoredUsage {
-            input_tokens,
-            message_count_at_anchor: message_count,
-        });
-    }
-
-    /// Measure context pressure given the current message list, system prompt,
-    /// tool definitions, and token budget.
-    ///
-    /// If an anchor is available, uses `anchor.input_tokens + estimate(delta_messages)`.
-    /// Otherwise estimates all messages with content-aware ratio.
-    pub fn measure(
-        &self,
-        messages: &[UnifiedMessage],
-        system_prompt: &str,
-        tool_defs: &[ToolDefinition],
-        token_budget: u64,
-    ) -> ContextPressure {
-        let overhead = self.estimate_overhead(system_prompt, tool_defs);
-
-        let used_tokens = if let Some(ref anchor) = self.anchor {
-            if anchor.message_count_at_anchor <= messages.len() {
-                // Use anchor for messages up to anchor point, estimate delta after
-                let delta_messages = messages
-                    .get(anchor.message_count_at_anchor..)
-                    .unwrap_or(&[]);
-                let delta_tokens = self.estimate_all_messages(delta_messages);
-                anchor.input_tokens + delta_tokens
-            } else {
-                // Anchor is stale (messages were compacted since anchor was set).
-                // Fall back to full estimation.
-                let msg_tokens = self.estimate_all_messages(messages);
-                overhead + msg_tokens
-            }
-        } else {
-            // No anchor — estimate everything from scratch including overhead
-            let msg_tokens = self.estimate_all_messages(messages);
-            overhead + msg_tokens
-        };
-
-        let budget: usize = token_budget.try_into().unwrap_or(usize::MAX);
-        ContextPressure {
-            used_tokens,
-            budget_tokens: budget,
-            ratio: if budget == 0 {
-                1.0
-            } else {
-                used_tokens as f64 / budget as f64
-            },
-            overhead_tokens: overhead,
-            available_for_messages: budget.saturating_sub(overhead),
-        }
-    }
-
-    /// Estimate tokens for a single string using the default ratio.
-    fn estimate_str(&self, s: &str) -> usize {
-        let chars = s.chars().count();
-        ((chars as f64) / self.default_ratio).ceil() as usize
-    }
-
-    /// Estimate overhead tokens for system prompt and tool definitions.
-    fn estimate_overhead(&self, system_prompt: &str, tool_defs: &[ToolDefinition]) -> usize {
-        let prompt_tokens = self.estimate_str(system_prompt);
-        let tool_tokens: usize = tool_defs
-            .iter()
-            .map(|td| {
-                self.estimate_str(&td.name)
-                    + self.estimate_str(&td.description)
-                    + self.estimate_str(&td.parameters.to_string())
-            })
-            .sum();
-        prompt_tokens + tool_tokens
-    }
-
-    /// Estimate total tokens for a slice of messages using content-aware ratio.
-    fn estimate_all_messages(&self, messages: &[UnifiedMessage]) -> usize {
-        messages
-            .iter()
-            .map(|m| estimate_tokens_smart(&m.text_content()))
-            .sum()
-    }
-}
-
-// =============================================================================
 // Tests
 // =============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::message::UnifiedMessage;
 
     #[test]
     fn detect_ratio_pure_english() {
@@ -292,51 +171,5 @@ mod tests {
             ratio < 3.5,
             "mixed with >30% CJK should use lower ratio, got {ratio}"
         );
-    }
-
-    #[test]
-    fn sensor_without_anchor_estimates_from_scratch() {
-        let sensor = PressureSensor::new(3.5);
-        let msgs = vec![UnifiedMessage::user("Hello world")];
-        let pressure = sensor.measure(&msgs, "system prompt", &[], 10_000);
-        assert!(pressure.used_tokens > 0);
-        assert!(pressure.ratio < 1.0);
-    }
-
-    #[test]
-    fn sensor_with_anchor_uses_anchor_plus_delta() {
-        let mut sensor = PressureSensor::new(3.5);
-        sensor.update_anchor(5000, 2);
-        let msgs = vec![
-            UnifiedMessage::user("old msg 1"),
-            UnifiedMessage::assistant("old msg 2"),
-            UnifiedMessage::user("new msg after anchor"),
-        ];
-        let pressure = sensor.measure(&msgs, "system prompt", &[], 10_000);
-        assert!(
-            pressure.used_tokens > 5000,
-            "should include anchor, got {}",
-            pressure.used_tokens
-        );
-        assert!(
-            pressure.used_tokens < 6000,
-            "delta should be small, got {}",
-            pressure.used_tokens
-        );
-    }
-
-    #[test]
-    fn sensor_anchor_update_replaces_previous() {
-        let mut sensor = PressureSensor::new(3.5);
-        sensor.update_anchor(1000, 1);
-        sensor.update_anchor(5000, 3);
-        let msgs = vec![
-            UnifiedMessage::user("a"),
-            UnifiedMessage::assistant("b"),
-            UnifiedMessage::user("c"),
-            UnifiedMessage::user("new"),
-        ];
-        let pressure = sensor.measure(&msgs, "", &[], 10_000);
-        assert!(pressure.used_tokens > 5000);
     }
 }

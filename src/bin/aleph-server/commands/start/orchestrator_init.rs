@@ -53,6 +53,9 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // assemble the system prompt before each turn. None disables only the
     // memory-driven prompt sections; AgentRoleLayer still renders.
     memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
+    // SQLite memory backend, threaded into the per-run `ContextCompactor` so it
+    // can reuse hierarchical session summaries for zero-API-cost compaction.
+    memory_backend: Option<alephcore::memory::store::MemoryBackend>,
     // Dispatcher-side ToolRegistry — owns the `ToolHealthCache` whose snapshot
     // feeds `runtime_state_blocks`. Threaded so `build_system_prompt` can
     // populate `<tool_runtime_state>` fragments.
@@ -208,6 +211,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         default_max_iterations: config.execution.max_iterations,
         power,
         memory_context_provider,
+        memory_backend,
         dispatch_registry,
         session_epoch_registrar,
     });

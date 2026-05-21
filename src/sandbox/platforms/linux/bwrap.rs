@@ -232,7 +232,7 @@ impl BubblewrapDriver {
                 args.push("--bind".into());
                 args.push(cwd_str.into());
                 args.push(cwd_str.into());
-                push_metadata_protection_args(&mut args, std::iter::once(cwd));
+                push_metadata_protection_args(args, std::iter::once(cwd));
             }
             FsPolicy::ReadPaths(paths) => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
@@ -253,7 +253,7 @@ impl BubblewrapDriver {
                     args.push(path_str.into());
                     args.push(path_str.into());
                 }
-                push_metadata_protection_args(&mut args, std::iter::once(cwd));
+                push_metadata_protection_args(args, std::iter::once(cwd));
             }
             FsPolicy::WritePaths(paths) => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
@@ -280,7 +280,7 @@ impl BubblewrapDriver {
                 // the writable `--bind` is what makes these read-only.
                 let mut all = vec![cwd];
                 all.extend(paths.iter().map(|p| p.as_path()));
-                push_metadata_protection_args(&mut args, all.into_iter());
+                push_metadata_protection_args(args, all.into_iter());
             }
             FsPolicy::FullRead { exclude } => {
                 args.push("--ro-bind".into());
