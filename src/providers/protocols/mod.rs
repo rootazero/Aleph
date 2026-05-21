@@ -12,6 +12,7 @@ pub mod openai_chat;
 pub mod openai_common;
 pub mod openai_responses;
 pub mod registry;
+mod stream_idle;
 pub mod template;
 
 pub use anthropic::AnthropicProtocol;
