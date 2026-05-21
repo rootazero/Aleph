@@ -348,7 +348,7 @@ impl From<Config> for FullConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_hotkey: "Grave".to_string(), // Legacy field, kept for backward compatibility
+            default_hotkey: crate::config::types::general::default_hotkey(), // Legacy field, kept for backward compatibility
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),

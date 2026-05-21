@@ -22,15 +22,12 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 /// Cached JSON Schema for Config validation (generated once, reused).
-fn cached_config_schema() -> Result<&'static serde_json::Value> {
+fn cached_config_schema() -> &'static serde_json::Value {
     static SCHEMA: OnceLock<serde_json::Value> = OnceLock::new();
     SCHEMA.get_or_init(|| {
         let schema = generate_config_schema();
         serde_json::to_value(&schema)
             .expect("Config schema serialization should never fail: generated from schemars")
-    });
-    SCHEMA.get().ok_or_else(|| {
-        AlephError::invalid_config("Failed to initialize config schema cache".to_string())
     })
 }
 
@@ -154,7 +151,7 @@ impl ConfigPatcher {
     /// 8. Compute diff
     /// 9. If dry_run: return early with diff
     /// 10. Check conflict (mtime)
-    /// 11. Route secrets to vault
+    /// 11. Route secrets to vault (currently ignored; secrets managed via SharedTokenManager)
     /// 12. Backup snapshot
     /// 13. Write lock -> replace config -> save_incremental([top_section])
     /// 14. Update mtime
@@ -297,7 +294,7 @@ impl ConfigPatcher {
 
     /// Validate a JSON value against the Config JSON Schema.
     pub fn validate_schema(&self, config_json: &serde_json::Value) -> Result<()> {
-        let schema_json = cached_config_schema()?;
+        let schema_json = cached_config_schema();
 
         let validator = jsonschema::validator_for(schema_json)
             .map_err(|e| AlephError::invalid_config(format!("Invalid JSON Schema: {}", e)))?;
