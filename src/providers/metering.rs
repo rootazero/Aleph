@@ -81,6 +81,26 @@ impl AiProvider for MeteringProvider {
     fn color(&self) -> &str {
         self.inner.color()
     }
+
+    fn supports_native_tools(&self) -> bool {
+        self.inner.supports_native_tools()
+    }
+
+    fn supports_thinking(&self) -> bool {
+        self.inner.supports_thinking()
+    }
+
+    fn protocol(&self) -> &str {
+        self.inner.protocol()
+    }
+
+    fn model_behavior_override(&self) -> Option<&str> {
+        self.inner.model_behavior_override()
+    }
+
+    fn as_http_provider(&self) -> Option<&crate::providers::http_provider::HttpProvider> {
+        self.inner.as_http_provider()
+    }
 }
 
 #[cfg(test)]
