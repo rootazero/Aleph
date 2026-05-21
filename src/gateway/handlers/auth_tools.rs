@@ -153,6 +153,7 @@ mod tests {
             event_bus: Arc::new(GatewayEventBus::new()),
             auth_mode: AuthMode::Token,
             shared_token_mgr: Arc::new(SharedTokenManager::new(store, "/tmp/aleph_test.vault")),
+            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
         })
     }
 
