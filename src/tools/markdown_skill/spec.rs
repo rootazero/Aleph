@@ -7,6 +7,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Aleph Skill Specification (parsed from SKILL.md frontmatter)
+///
+/// **Deprecated:** Phase 1 of skill data model unification (see
+/// `docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md`
+/// and `docs/reference/SKILL_MODEL_TAXONOMY.md`).
+/// Phase 2 (earliest 2026-06-03) absorbs the fields into
+/// `crate::domain::skill::SkillManifest` and deletes this type.
+#[deprecated(
+    since = "2026.05.20",
+    note = "use crate::domain::skill::SkillManifest via From impl; will be removed in Phase 2 (≥2026-06-03) per docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlephSkillSpec {
     /// Tool name (e.g., "github-pr")
@@ -235,6 +245,33 @@ impl Default for SecuritySpec {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 1 unification bridge — see
+// docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md
+//
+// The conversion is intentionally lossy: AlephSkillSpec's CLI-tool-flavored
+// metadata (requires.bins, aleph.security, openclaw.*, docker config) does
+// not currently map onto SkillManifest's DDD-aggregate fields (EligibilitySpec,
+// InvocationPolicy, InstallSpec). Phase 2 absorbs those fields onto
+// SkillManifest as `markdown_cli_extras` and `openclaw_compat`; until then,
+// this bridge captures only the identity/content axis.
+// ---------------------------------------------------------------------------
+
+impl From<&AlephSkillSpec> for crate::domain::skill::SkillManifest {
+    fn from(spec: &AlephSkillSpec) -> Self {
+        use crate::domain::skill::{SkillContent, SkillId, SkillManifest, SkillSource};
+        SkillManifest::new(
+            SkillId::new(&spec.name),
+            spec.name.clone(),
+            spec.description.clone(),
+            SkillContent::new(spec.markdown_content.clone()),
+            // Default to Global (most clawhub-installed skills land in ~/.aleph/skills/).
+            // Phase 2 plumbing will derive this from the on-disk path.
+            SkillSource::Global,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,5 +341,28 @@ metadata:
         assert!(matches!(spec.sandbox, SandboxMode::Host));
         assert!(matches!(spec.confirmation, ConfirmationMode::Write));
         assert!(matches!(spec.network, NetworkMode::Internet));
+    }
+
+    #[test]
+    fn test_from_aleph_skill_spec_for_skill_manifest() {
+        let spec = AlephSkillSpec {
+            name: "echo-basic".to_string(),
+            description: "Echo a message".to_string(),
+            metadata: SkillMetadata::default(),
+            markdown_content: "# Echo\n\nUse `echo` to print messages.\n".to_string(),
+        };
+
+        let manifest: crate::domain::skill::SkillManifest = (&spec).into();
+
+        assert_eq!(manifest.name(), "echo-basic");
+        assert_eq!(manifest.description(), "Echo a message");
+        assert_eq!(
+            manifest.content().as_str(),
+            "# Echo\n\nUse `echo` to print messages.\n"
+        );
+        assert!(matches!(
+            manifest.source(),
+            crate::domain::skill::SkillSource::Global
+        ));
     }
 }

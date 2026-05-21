@@ -114,6 +114,49 @@ pub enum Command {
     },
     /// Bootstrap runtime dependencies (fnm, node, uv, playwright-cli, chromium, venv)
     BootstrapRuntime(BootstrapRuntimeArgs),
+    /// SP-2 internal: apply landlock + seccomp then exec target. Invoked
+    /// by BubblewrapDriver inside the bwrap namespace; not for users.
+    #[command(hide = true)]
+    SandboxInit {
+        /// Remaining argv passed through to sandbox_init::run_init.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Smoke-test the active sandbox profile by running a command under it.
+    /// Useful for diagnosing why a tool call failed under sandbox.
+    ///
+    /// Example: `aleph sandbox-debug --network none -- ls /tmp`
+    SandboxDebug {
+        /// Network policy: `none`, `all`, or omit for the default.
+        #[arg(long, value_name = "POLICY")]
+        network: Option<String>,
+        /// Extra paths to grant write access to (repeatable).
+        #[arg(long = "fs-write", value_name = "PATH")]
+        fs_write: Vec<PathBuf>,
+        /// Extra paths to grant read access to (repeatable).
+        #[arg(long = "fs-read", value_name = "PATH")]
+        fs_read: Vec<PathBuf>,
+        /// Print active sandbox summary and exit (no command run).
+        #[arg(long)]
+        show_summary: bool,
+        /// On macOS, stream sandbox denials from `log stream` for the
+        /// duration of the command. Ignored on Linux/Windows.
+        #[arg(long)]
+        log_denials: bool,
+        /// Command and arguments to execute under the sandbox. Use `--`
+        /// to separate from sandbox-debug flags.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+    /// SP-3a internal: apply restricted token + Low IL then spawn target
+    /// via CreateProcessAsUserW. Invoked by WindowsSandboxDriver; not
+    /// for users.
+    #[command(hide = true)]
+    SandboxInitWindows {
+        /// Remaining argv passed through to windows_init::run_init.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 /// Pairing subcommands

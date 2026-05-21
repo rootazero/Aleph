@@ -224,6 +224,82 @@ impl StateDatabase {
         Ok(tasks)
     }
 
+    /// Paginated sibling of `list_trace_tasks`. Returns at most `limit`
+    /// (clamped to 1..200) trace-task summaries whose `last_timestamp` is
+    /// strictly less than `before_timestamp` (when set), ordered DESC.
+    ///
+    /// Keeps each page O(limit) regardless of total trace volume, so
+    /// callers can paginate without scanning the whole table on every
+    /// request. The existing `list_trace_tasks` is preserved for callers
+    /// that want everything in one shot.
+    pub async fn list_trace_tasks_paged(
+        &self,
+        limit: usize,
+        before_timestamp: Option<i64>,
+    ) -> Result<Vec<TaskTraceInfo>, AlephError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let clamped_limit = limit.clamp(1, 200) as i64;
+
+        let row_map = |row: &rusqlite::Row<'_>| {
+            Ok(TaskTraceInfo {
+                task_id: row.get(0)?,
+                event_count: row.get(1)?,
+                last_timestamp: row.get(2)?,
+            })
+        };
+
+        let collect_err =
+            |e: rusqlite::Error| AlephError::config(format!("Failed to collect paged traces: {e}"));
+
+        match before_timestamp {
+            Some(ts) => {
+                let mut stmt = conn
+                    .prepare(
+                        r#"
+                        SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
+                        FROM task_traces
+                        GROUP BY task_id
+                        HAVING MAX(timestamp) < ?1
+                        ORDER BY last_timestamp DESC
+                        LIMIT ?2
+                        "#,
+                    )
+                    .map_err(|e| {
+                        AlephError::config(format!("Failed to prepare paged query: {e}"))
+                    })?;
+                let rows = stmt
+                    .query_map(params![ts, clamped_limit], row_map)
+                    .map_err(|e| {
+                        AlephError::config(format!("Failed to query paged traces: {e}"))
+                    })?;
+                let collected: Result<Vec<_>, _> = rows.collect();
+                collected.map_err(collect_err)
+            }
+            None => {
+                let mut stmt = conn
+                    .prepare(
+                        r#"
+                        SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
+                        FROM task_traces
+                        GROUP BY task_id
+                        ORDER BY last_timestamp DESC
+                        LIMIT ?1
+                        "#,
+                    )
+                    .map_err(|e| {
+                        AlephError::config(format!("Failed to prepare paged query: {e}"))
+                    })?;
+                let rows = stmt
+                    .query_map(params![clamped_limit], row_map)
+                    .map_err(|e| {
+                        AlephError::config(format!("Failed to query paged traces: {e}"))
+                    })?;
+                let collected: Result<Vec<_>, _> = rows.collect();
+                collected.map_err(collect_err)
+            }
+        }
+    }
+
     /// Get a trace by its ID
     pub async fn get_trace_by_id(&self, trace_id: i64) -> Result<Option<TaskTrace>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -288,5 +364,105 @@ mod tests {
                 text: "hello".to_string(),
             }
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // P1 — paginated trace task listing
+    // -------------------------------------------------------------------------
+
+    async fn seed_n_tasks_each_one_trace(db: &StateDatabase, n: usize) {
+        for i in 0..n {
+            let tid = format!("task-{i}");
+            db.insert_agent_task(&AgentTask::new(
+                &tid,
+                "session",
+                "coder",
+                "seeded",
+                RiskLevel::Low,
+            ))
+            .await
+            .unwrap();
+            db.insert_trace(&TaskTrace::new(
+                &tid,
+                0,
+                AgentTraceEvent::TextEmitted {
+                    iteration: 0,
+                    stream: AgentTraceTextKind::Final,
+                    text: format!("payload-{i}"),
+                },
+            ))
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn list_paged_returns_at_most_limit() {
+        let db = StateDatabase::in_memory().unwrap();
+        seed_n_tasks_each_one_trace(&db, 5).await;
+
+        let page = db.list_trace_tasks_paged(3, None).await.unwrap();
+        assert_eq!(page.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn list_paged_clamps_oversize_limit() {
+        let db = StateDatabase::in_memory().unwrap();
+        seed_n_tasks_each_one_trace(&db, 5).await;
+
+        // 9999 must clamp to <=200 (and we only have 5 tasks, so we get 5).
+        let page = db.list_trace_tasks_paged(9999, None).await.unwrap();
+        assert_eq!(page.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn list_paged_cursor_advances_without_overlap() {
+        let db = StateDatabase::in_memory().unwrap();
+        // Timestamps in TaskTrace::new() come from chrono::Utc::now().timestamp()
+        // — Unix epoch SECONDS — so rapid inserts collide. We need strictly
+        // differing timestamps because the cursor uses HAVING MAX(timestamp) < ?.
+        // Build TaskTrace by hand with explicit increasing timestamps.
+        let base_ts = chrono::Utc::now().timestamp();
+        for i in 0..4i64 {
+            let tid = format!("task-{i}");
+            db.insert_agent_task(&AgentTask::new(
+                &tid,
+                "s",
+                "coder",
+                "x",
+                RiskLevel::Low,
+            ))
+            .await
+            .unwrap();
+            let trace = TaskTrace {
+                id: 0,
+                task_id: tid.clone(),
+                step_index: 0,
+                event: AgentTraceEvent::TextEmitted {
+                    iteration: 0,
+                    stream: AgentTraceTextKind::Final,
+                    text: "x".into(),
+                },
+                timestamp: base_ts + i,
+            };
+            db.insert_trace(&trace).await.unwrap();
+        }
+
+        let page_a = db.list_trace_tasks_paged(2, None).await.unwrap();
+        assert_eq!(page_a.len(), 2);
+        let cursor = page_a.last().unwrap().last_timestamp;
+
+        let page_b = db
+            .list_trace_tasks_paged(2, Some(cursor))
+            .await
+            .unwrap();
+        assert!(!page_b.is_empty());
+        for r in &page_b {
+            assert!(
+                page_a.iter().all(|p| p.task_id != r.task_id),
+                "page B leaked page A row: {}",
+                r.task_id
+            );
+        }
     }
 }

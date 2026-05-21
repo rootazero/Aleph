@@ -173,6 +173,8 @@ pub(in crate::commands::start) fn register_teams_handlers(
     register_handler!(server, "teams.disband", teams::handle_disband, store);
     register_handler!(server, "teams.delete", teams::handle_delete, store);
     register_handler!(server, "agents.teams", teams::handle_agent_teams, store);
+    register_handler!(server, "teams.list_tasks", teams::handle_list_tasks, coord_store);
+    register_handler!(server, "teams.update_task", teams::handle_update_task, coord_store);
 }
 
 // ─── register_graph_handlers ──────────────────────────────────────────────────

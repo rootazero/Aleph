@@ -4,6 +4,7 @@
     "dashboard": "Dashboard",
     "agents": "Agents",
     "memory": "Memory",
+    "teams": "Teams",
     "settings": "Settings"
   },
   "common": {
@@ -83,8 +84,7 @@
       "memory_vault": "Memory Vault",
       "scheduled_tasks": "Scheduled Tasks",
       "server_logs": "Server Logs",
-      "runtimes": "Runtimes",
-      "teams": "Teams"
+      "runtimes": "Runtimes"
     }
   },
   "chat": {
@@ -1267,6 +1267,39 @@
     "detail_tasks": "Tasks",
     "task_completed": "completed",
     "task_running": "running",
-    "task_failed": "failed"
+    "task_failed": "failed",
+    "subtab": {
+      "overview": "Overview",
+      "kanban": "Kanban"
+    },
+    "kanban": {
+      "selector_label": "Active Team",
+      "selector_placeholder": "Choose a team",
+      "columns": {
+        "pending": "Pending",
+        "blocked": "Blocked",
+        "in_progress": "In Progress",
+        "completed": "Completed",
+        "failed": "Failed"
+      },
+      "empty_state": {
+        "no_teams": "No teams yet. Ask the assistant to create one.",
+        "pick_a_team": "Choose a team in the sidebar to see its board.",
+        "no_tasks": "No tasks"
+      },
+      "field": {
+        "status": "Status",
+        "owner": "Owner",
+        "priority": "Priority",
+        "description": "Description",
+        "result": "Result"
+      },
+      "actions": {
+        "start": "Start",
+        "complete": "Complete",
+        "fail": "Fail",
+        "cancel": "Cancel"
+      }
+    }
   }
 }

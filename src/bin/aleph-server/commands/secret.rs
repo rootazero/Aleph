@@ -175,8 +175,15 @@ fn handle_secret_providers() -> Result<(), Box<dyn Error>> {
                     .map(secrecy::SecretString::from);
                 let op = OnePasswordProvider::new(provider_config.account.clone(), token);
 
-                let rt = tokio::runtime::Runtime::new()?;
-                match rt.block_on(op.health_check()) {
+                // Avoid nested runtime: reuse existing or create new if absent
+                let health_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.block_on(op.health_check())
+                } else {
+                    let rt = tokio::runtime::Runtime::new()?;
+                    rt.block_on(op.health_check())
+                };
+
+                match health_result {
                     Ok(ProviderStatus::Ready) => {
                         println!("{:<15} {:<15} Ready", key, "1password");
                     }

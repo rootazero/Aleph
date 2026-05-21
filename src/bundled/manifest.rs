@@ -8,7 +8,7 @@ use std::path::Path;
 use tracing::{debug, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillManifest {
+pub struct InstallRegistry {
     /// Version of the last successfully extracted bundled content.
     pub bundled_version: String,
     /// Per-skill metadata keyed by skill directory name.
@@ -45,7 +45,7 @@ pub struct SkillEntry {
     pub installed_at: Option<String>,
 }
 
-impl SkillManifest {
+impl InstallRegistry {
     /// Load manifest from disk. Returns None if file doesn't exist or is corrupt.
     pub fn load(skills_dir: &Path) -> Option<Self> {
         let path = skills_dir.join("manifest.json");

@@ -239,6 +239,7 @@ impl InboundMessageRouter {
             metadata,
             attachments: ctx.message.attachments.clone(),
             pending_media: pending_media.clone(),
+            sandbox_override: None,
         };
 
         if !request.attachments.is_empty() {

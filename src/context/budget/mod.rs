@@ -4,11 +4,7 @@
 //! that tracks context window pressure across turns and issues directives to the
 //! agent loop (compact, force final reply, or stop on diminishing returns).
 
-pub mod autocompact;
-pub mod context_collapse;
-pub mod diagnostics;
-pub mod microcompact;
-pub mod pipeline;
+pub mod cheap_passes;
 pub mod preflight;
 pub mod pressure;
 

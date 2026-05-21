@@ -33,6 +33,45 @@ const BASE_POLICY: &str = r#"(version 1)
 (allow signal (target same-sandbox))
 (allow process-info* (target same-sandbox))
 
+; Platform read-only defaults (codex-inspired). Without these, even
+; loading /bin/echo's dyld stack fails because file-read* is denied
+; by default — meaning no standard binary could ever run inside the
+; sandbox. We grant read + executable-mmap access to the immutable
+; system trees so the loader, frameworks, and core utilities work,
+; while leaving /Users, /private, /tmp scoped by the per-call
+; writable policy.
+;
+; This is a minimal port of codex's `restricted_read_only_platform_defaults.sbpl`.
+; The full codex profile is ~7.6KB and covers IOSurface, mach lookups,
+; and dozens of other macOS-isms. We start small and grow as concrete
+; programs need more — see the sandbox-debug CLI for diagnostics.
+(allow file-read*
+  (subpath "/System")
+  (subpath "/Library")
+  (subpath "/usr")
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/var/db/timezone")
+  (subpath "/private/var/db/dyld")
+  (subpath "/private/var/db/timezone")
+  (subpath "/private/etc")
+  (literal "/dev/null")
+  (literal "/dev/random")
+  (literal "/dev/urandom")
+  (literal "/dev/zero")
+  (literal "/dev/tty"))
+
+; Required for dyld to mmap binaries as executable — file-read* alone
+; is not enough on recent macOS releases; without this, /bin/echo
+; aborts with SIGABRT before producing any output.
+(allow file-map-executable
+  (subpath "/System")
+  (subpath "/Library")
+  (subpath "/usr/lib")
+  (subpath "/usr/libexec")
+  (subpath "/bin")
+  (subpath "/sbin"))
+
 ; essential device access
 (allow file-write-data
   (require-all
@@ -110,6 +149,57 @@ fn escape_sbpl(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Recognise the four forms in which a caller may pass an IP-literal host:
+///
+/// - Bare IPv4: `127.0.0.1`
+/// - Bare IPv6: `::1` / `2606:2800:220:1:248:1893:25c8:1946`
+/// - IPv4 with port: `127.0.0.1:443`
+/// - Bracketed IPv6 (with or without port): `[::1]`, `[::1]:443`
+fn host_is_ip_literal(host: &str) -> bool {
+    use std::net::IpAddr;
+    use std::str::FromStr;
+    // Bare IP — catches IPv4 and unbracketed IPv6.
+    if IpAddr::from_str(host).is_ok() {
+        return true;
+    }
+    // Bracketed IPv6 with optional `:port`.
+    if let Some(rest) = host.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            return IpAddr::from_str(&rest[..end]).is_ok();
+        }
+    }
+    // IPv4:port (exactly one `:`). Unbracketed IPv6 has multiple colons and
+    // was handled by the bare-IP branch above, so this only matches v4:port.
+    if host.matches(':').count() == 1 {
+        if let Some((addr, _port)) = host.split_once(':') {
+            return IpAddr::from_str(addr).is_ok();
+        }
+    }
+    false
+}
+
+/// Apply a virtual-address-space ceiling via `setrlimit(RLIMIT_AS)` in the
+/// pre-exec hook. The limit is inherited by the eventual target binary that
+/// `sandbox-exec` execs. `tokio::process::Command` exposes `pre_exec` as an
+/// inherent method, so no `CommandExt` import is needed.
+fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
+    let bytes = mb.saturating_mul(1024 * 1024);
+    unsafe {
+        // SAFETY: setrlimit with RLIMIT_AS is async-signal-safe and well-defined.
+        // No allocator, mutex, or other handler-unsafe call is made.
+        cmd.pre_exec(move || {
+            let rlim = libc::rlimit {
+                rlim_cur: bytes as libc::rlim_t,
+                rlim_max: bytes as libc::rlim_t,
+            };
+            if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 impl SeatbeltDriver {
     pub fn new() -> Self {
         Self
@@ -134,7 +224,7 @@ impl SeatbeltDriver {
         self.add_fs_policy(&mut profile, &policy.filesystem, cwd)?;
 
         // Network policy
-        self.add_network_policy(&mut profile, &policy.network);
+        self.add_network_policy(&mut profile, &policy.network)?;
 
         // Process policy
         self.add_process_policy(&mut profile, &policy.process);
@@ -156,6 +246,12 @@ impl SeatbeltDriver {
             SandboxError::ProfileGeneration("workspace path contains invalid UTF-8".into())
         })?);
 
+        // Codex-inspired metadata protection: even in writable workspace
+        // modes, certain repository-level dirs (.git, .aleph, .codex,
+        // .agents) stay read-only so the agent cannot rewrite its own
+        // history / audit trail. SBPL evaluates rules in order; later
+        // rules win — emit the deny *after* the workspace allow.
+        let mut writable_roots: Vec<&Path> = Vec::new();
         match fs {
             FsPolicy::WorkspaceOnly => {
                 profile.push_str(&format!(
@@ -164,6 +260,7 @@ impl SeatbeltDriver {
                      (allow file-write* (subpath \"{}\"))\n",
                     cwd_str, cwd_str
                 ));
+                writable_roots.push(cwd);
             }
             FsPolicy::ReadPaths(paths) => {
                 profile.push_str(&format!(
@@ -172,6 +269,7 @@ impl SeatbeltDriver {
                      (allow file-write* (subpath \"{}\"))\n",
                     cwd_str, cwd_str
                 ));
+                writable_roots.push(cwd);
                 for path in paths {
                     let path_str = escape_sbpl(path.to_str().ok_or_else(|| {
                         SandboxError::ProfileGeneration(format!(
@@ -189,6 +287,7 @@ impl SeatbeltDriver {
                      (allow file-write* (subpath \"{}\"))\n",
                     cwd_str, cwd_str
                 ));
+                writable_roots.push(cwd);
                 for path in paths {
                     let path_str = escape_sbpl(path.to_str().ok_or_else(|| {
                         SandboxError::ProfileGeneration(format!(
@@ -200,6 +299,7 @@ impl SeatbeltDriver {
                         "(allow file-read* file-write* (subpath \"{}\"))\n",
                         path_str
                     ));
+                    writable_roots.push(path);
                 }
             }
             FsPolicy::FullRead { exclude } => {
@@ -228,12 +328,38 @@ impl SeatbeltDriver {
                         path_str
                     ));
                 }
+                // FullWrite is explicit danger-full-access — caller opted out
+                // of containment. We do not auto-protect metadata here; the
+                // explicit `exclude` list is the user's contract.
+            }
+        }
+
+        // Append metadata-protection deny rules. Last-match-wins in SBPL,
+        // so these override the writable allow above.
+        if !writable_roots.is_empty() {
+            let protected =
+                crate::sandbox::protected_paths::protected_paths_for(writable_roots.iter().copied());
+            if !protected.is_empty() {
+                profile.push_str("; protected metadata subpaths (read-only inside writable roots)\n");
+                for path in &protected {
+                    if let Some(path_str) = path.to_str() {
+                        let path_str = escape_sbpl(path_str);
+                        profile.push_str(&format!(
+                            "(deny file-write* (subpath \"{}\"))\n",
+                            path_str
+                        ));
+                    }
+                }
             }
         }
         Ok(())
     }
 
-    fn add_network_policy(&self, profile: &mut String, network: &NetworkPolicy) {
+    fn add_network_policy(
+        &self,
+        profile: &mut String,
+        network: &NetworkPolicy,
+    ) -> Result<(), SandboxError> {
         match network {
             NetworkPolicy::None => {
                 profile.push_str("; no network access\n(deny network*)\n");
@@ -242,6 +368,24 @@ impl SeatbeltDriver {
                 profile.push_str("; full network access\n(allow network*)\n");
             }
             NetworkPolicy::AllowHosts(hosts) => {
+                // Seatbelt's `(remote ip "...")` matcher takes IP literals only;
+                // hostnames silently never match (silent policy violation). Reject
+                // hostnames at profile-generation time so the caller learns
+                // immediately rather than discovering at runtime.
+                for host in hosts {
+                    if !host_is_ip_literal(host) {
+                        return Err(SandboxError::UnsupportedPolicy {
+                            platform: "macos/seatbelt",
+                            feature: "NetworkPolicy::AllowHosts (hostname)".into(),
+                            reason: format!(
+                                "Seatbelt's `(remote ip ...)` accepts IP literals only; \
+                                 '{host}' is not an IP. Pre-resolve hostnames to IPs at \
+                                 the call site, or use AllowAll. Hostname-based filtering \
+                                 is deferred to spec SP-4."
+                            ),
+                        });
+                    }
+                }
                 profile.push_str(RESTRICTED_NETWORK_POLICY);
                 for host in hosts {
                     let escaped = escape_sbpl(host);
@@ -262,6 +406,7 @@ impl SeatbeltDriver {
                 }
             }
         }
+        Ok(())
     }
 
     fn add_process_policy(&self, profile: &mut String, process: &ProcessPolicy) {
@@ -271,18 +416,21 @@ impl SeatbeltDriver {
     }
 
     fn add_env_policy(&self, profile: &mut String, env: &EnvPolicy) {
+        // Environment restriction is applied at the `Command::env_clear()`
+        // boundary before sandbox-exec is invoked (see the `run` method
+        // below); SBPL itself has no `(with environment)` modifier and
+        // emitting one silently produces an invalid profile that
+        // sandbox-exec rejects at runtime. We therefore only annotate
+        // the profile here so the policy intent is visible in dumps.
         match env {
             EnvPolicy::Inherit => {
-                // Default — no restrictions
+                // Default — no annotation needed.
             }
             EnvPolicy::Restricted => {
-                profile.push_str(
-                    "; restricted environment\n(allow process-exec (with environment))\n",
-                );
+                profile.push_str("; environment policy: restricted (enforced at exec layer)\n");
             }
             EnvPolicy::Minimal => {
-                profile
-                    .push_str("; minimal environment\n(allow process-exec (with environment))\n");
+                profile.push_str("; environment policy: minimal (enforced at exec layer)\n");
             }
         }
     }
@@ -305,7 +453,12 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
     ) -> Result<OsSandboxProfile, SandboxError> {
         let policy = SandboxPolicy::from(capabilities);
         let contents = self.generate_profile(&policy, cwd)?;
-        Ok(OsSandboxProfile { contents })
+        Ok(OsSandboxProfile {
+            contents,
+            max_memory_mb: policy.process.max_memory_mb,
+            linux_init_policy: None,
+            windows_init_policy: None,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -349,6 +502,10 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::piped());
+
+        if let Some(mb) = profile.max_memory_mb {
+            apply_memory_rlimit(&mut cmd, mb);
+        }
 
         let mut child = cmd.spawn().map_err(|e| {
             SandboxError::ExecutionFailed(format!("failed to spawn sandbox-exec: {e}"))
@@ -466,20 +623,116 @@ mod tests {
     }
 
     #[test]
-    fn generate_profile_with_network() {
+    fn workspace_only_protects_git_and_aleph_subpaths() {
         let driver = SeatbeltDriver::new();
         let policy = SandboxPolicy {
-            network: NetworkPolicy::AllowHosts(vec![
-                "example.com".into(),
-                "api.example.com".into(),
+            filesystem: FsPolicy::WorkspaceOnly,
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        // Allow comes first.
+        let allow_idx = profile
+            .find("(allow file-write* (subpath \"/tmp/ws\"))")
+            .expect("workspace allow must be present");
+        // Deny rules come AFTER allow so last-match-wins makes them read-only.
+        let git_idx = profile
+            .find("(deny file-write* (subpath \"/tmp/ws/.git\"))")
+            .expect("metadata .git must be deny-listed");
+        let aleph_idx = profile
+            .find("(deny file-write* (subpath \"/tmp/ws/.aleph\"))")
+            .expect("metadata .aleph must be deny-listed");
+        assert!(allow_idx < git_idx, "deny must come after allow");
+        assert!(allow_idx < aleph_idx, "deny must come after allow");
+        // And the codex-aligned .codex / .agents are also covered.
+        assert!(profile.contains("(deny file-write* (subpath \"/tmp/ws/.codex\"))"));
+        assert!(profile.contains("(deny file-write* (subpath \"/tmp/ws/.agents\"))"));
+    }
+
+    #[test]
+    fn write_paths_protects_metadata_in_each_writable_root() {
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy {
+            filesystem: FsPolicy::WritePaths(vec![
+                PathBuf::from("/tmp/extra1"),
+                PathBuf::from("/tmp/extra2"),
             ]),
             ..Default::default()
         };
         let cwd = Path::new("/tmp/ws");
         let profile = driver.generate_profile(&policy, cwd).unwrap();
 
-        assert!(profile.contains("(allow network-outbound (remote ip \"example.com\"))"));
-        assert!(profile.contains("(allow network-outbound (remote ip \"api.example.com\"))"));
+        // cwd is the first writable root + each WritePaths entry.
+        for root in ["/tmp/ws", "/tmp/extra1", "/tmp/extra2"] {
+            assert!(
+                profile.contains(&format!(
+                    "(deny file-write* (subpath \"{root}/.git\"))"
+                )),
+                "missing .git protection under {root}"
+            );
+            assert!(
+                profile.contains(&format!(
+                    "(deny file-write* (subpath \"{root}/.aleph\"))"
+                )),
+                "missing .aleph protection under {root}"
+            );
+        }
+    }
+
+    #[test]
+    fn full_write_does_not_auto_protect_metadata() {
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy {
+            filesystem: FsPolicy::FullWrite { exclude: vec![] },
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        // FullWrite is explicit danger-full-access. We do not auto-protect
+        // here; the caller's explicit `exclude` list is the contract.
+        assert!(!profile.contains("(deny file-write* (subpath \"/tmp/ws/.git\"))"));
+    }
+
+    #[test]
+    fn generate_profile_with_ip_allow_hosts_succeeds() {
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::AllowHosts(vec![
+                "93.184.216.34".into(),
+                "2606:2800:220:1:248:1893:25c8:1946".into(),
+                "10.0.0.1:443".into(),
+            ]),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        assert!(profile.contains("(allow network-outbound (remote ip \"93.184.216.34\"))"));
+        assert!(profile.contains("(allow network-outbound (remote ip \"10.0.0.1:443\"))"));
+    }
+
+    #[test]
+    fn generate_profile_with_hostname_allow_hosts_returns_unsupported() {
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::AllowHosts(vec!["example.com".into()]),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let err = driver
+            .generate_profile(&policy, cwd)
+            .expect_err("hostnames must hard-fail on macos/seatbelt");
+        match err {
+            SandboxError::UnsupportedPolicy {
+                platform, reason, ..
+            } => {
+                assert_eq!(platform, "macos/seatbelt");
+                assert!(reason.contains("Pre-resolve") || reason.contains("IP literals"));
+            }
+            other => panic!("expected UnsupportedPolicy, got {other:?}"),
+        }
     }
 
     #[test]
@@ -543,5 +796,46 @@ mod tests {
 
         assert!(profile.contents.contains("(allow network*)"));
         assert!(!profile.contents.contains("(deny process-fork)"));
+    }
+
+    #[test]
+    fn profile_for_threads_max_memory_mb() {
+        let driver = SeatbeltDriver::new();
+        let caps = SandboxCapabilities {
+            max_memory_mb: Some(128),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.profile_for(&caps, cwd).unwrap();
+        assert_eq!(profile.max_memory_mb, Some(128));
+    }
+
+    #[test]
+    fn host_is_ip_literal_accepts_all_canonical_forms() {
+        // Bare IPv4
+        assert!(host_is_ip_literal("127.0.0.1"));
+        assert!(host_is_ip_literal("93.184.216.34"));
+        // Bare IPv6
+        assert!(host_is_ip_literal("::1"));
+        assert!(host_is_ip_literal("2606:2800:220:1:248:1893:25c8:1946"));
+        // IPv4 with port
+        assert!(host_is_ip_literal("127.0.0.1:443"));
+        assert!(host_is_ip_literal("10.0.0.1:8080"));
+        // Bracketed IPv6 with/without port
+        assert!(host_is_ip_literal("[::1]"));
+        assert!(host_is_ip_literal("[::1]:443"));
+        assert!(host_is_ip_literal("[2606:2800::1]:80"));
+    }
+
+    #[test]
+    fn host_is_ip_literal_rejects_hostnames() {
+        assert!(!host_is_ip_literal("example.com"));
+        assert!(!host_is_ip_literal("api.example.com"));
+        assert!(!host_is_ip_literal("api.example.com:443"));
+        assert!(!host_is_ip_literal("localhost"));
+        assert!(!host_is_ip_literal(""));
+        // Malformed brackets
+        assert!(!host_is_ip_literal("[::1"));
+        assert!(!host_is_ip_literal("[example.com]"));
     }
 }

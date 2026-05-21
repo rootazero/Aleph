@@ -32,6 +32,12 @@ pub use aleph_protocol::jsonrpc::{
 pub const AUTH_FAILED: i32 = -32001;
 /// Operation timeout (alias for TIMEOUT_ERROR)
 pub const TIMEOUT: i32 = TIMEOUT_ERROR;
+/// Feature is registered but not yet wired by the boot path. Replaces
+/// fake-success stubs and ambiguous INTERNAL_ERROR placeholders so callers
+/// can distinguish "configured + empty" from "not wired in this build/mode".
+/// JSON-RPC reserves -32000..-32099 for implementation-defined server errors;
+/// -32099 sits at the bottom to avoid collision with future aleph-protocol codes.
+pub const SERVICE_UNAVAILABLE: i32 = -32099;
 
 // ============================================================================
 // JsonRpcRequest with backward-compatible API

@@ -112,6 +112,9 @@ fn MainContent() -> impl IntoView {
         <div style:display=move || if mode.get() == PanelMode::Agents { "contents" } else { "none" }>
             <AgentsRouter />
         </div>
+        <div style:display=move || if mode.get() == PanelMode::Teams { "contents" } else { "none" }>
+            <TeamsView />
+        </div>
         <div style:display=move || if mode.get() == PanelMode::Settings { "contents" } else { "none" }>
             <SettingsRouter />
         </div>
@@ -131,7 +134,6 @@ fn DashboardRouter() -> impl IntoView {
             "/dashboard/cron" => view! { <CronView /> }.into_any(),
             "/dashboard/tasks" => view! { <TasksView /> }.into_any(),
             "/dashboard/logs" => view! { <Logs /> }.into_any(),
-            "/dashboard/teams" => view! { <TeamsView /> }.into_any(),
             "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
             "/dashboard/runtimes" => view! { <RuntimesView /> }.into_any(),
             // Not in dashboard mode — render nothing (div is hidden)

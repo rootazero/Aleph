@@ -42,6 +42,10 @@ where
             depth: 0,
             tool_service: None,
             trace_sink: None,
+            // Legacy `run_flow` helper has no channel handle to query;
+            // the harness bridge falls back to Background paradigm.
+            interaction_manifest: None,
+            sandbox_override: None,
         };
 
         let handle = orchestrator

@@ -152,6 +152,34 @@ pub struct PromptBuilder {
     /// so `CuratedMemoryLayer` (Stable) can inject it verbatim, preserving the
     /// prompt prefix cache.
     curated_memory_envelope: Option<String>,
+    /// Subagent call-chain context. Threaded into every `LayerInput` as
+    /// `chain_context` so `ChainContextLayer` can render the delegation
+    /// depth + chain id for non-root agents. Root chains and `None` both
+    /// produce empty output — the orchestrator path can leave this
+    /// unset, while `subagent_spawner` wires the descended child chain in.
+    chain_context: Option<crate::harness::chain_context::ChainContext>,
+    /// Resolved context (interaction paradigm + security envelope + runtime
+    /// context) for the Phase 2 widened layers — `SecurityLayer`,
+    /// `OperationalGuidelinesLayer`, `ProtocolTokensLayer`,
+    /// `RuntimeContextLayer`. Threaded into every `LayerInput` so those
+    /// layers can render content on the Basic / Hydration / Soul paths
+    /// without forcing a switch to the dedicated `Context` route.
+    /// `build_system_prompt_with_context()` ignores this field — its
+    /// `LayerInput::context` constructor already supplies a context.
+    resolved_context: Option<super::context::ResolvedContext>,
+    /// Wire-protocol family identifier (e.g. "anthropic", "openai",
+    /// "gemini", "ollama"). Threaded into every `LayerInput` as
+    /// `provider_protocol` so `ProviderGuidanceLayer` can pick the
+    /// right per-family operational directives. Sourced by the harness
+    /// bridge from `AiProvider::model_behavior_override()` falling back
+    /// to `AiProvider::protocol()`.
+    provider_protocol: Option<String>,
+    /// Static per-run Think→Act iteration cap. Threaded into every
+    /// `LayerInput` as `iteration_cap` so `SessionBudgetLayer` can
+    /// surface it. Sourced by the harness bridge from
+    /// `resolve_max_iterations(...)` (`FlowOverrides.max_iterations`
+    /// override winning over the boot-time default).
+    iteration_cap: Option<u32>,
 }
 
 impl PromptBuilder {
@@ -166,6 +194,10 @@ impl PromptBuilder {
             identity_files: None,
             memory_user_message: None,
             curated_memory_envelope: None,
+            chain_context: None,
+            resolved_context: None,
+            provider_protocol: None,
+            iteration_cap: None,
         }
     }
 
@@ -221,6 +253,55 @@ impl PromptBuilder {
         self
     }
 
+    /// Attach a subagent call-chain context for `ChainContextLayer`. Root
+    /// chains (`depth == 0`) and `None` both leave the delegation section
+    /// out of the assembled prompt, so the orchestrator path can safely
+    /// leave this unset.
+    pub fn with_chain_context(
+        mut self,
+        chain: crate::harness::chain_context::ChainContext,
+    ) -> Self {
+        self.chain_context = Some(chain);
+        self
+    }
+
+    /// Attach a `ResolvedContext` so the Phase 2 widened layers
+    /// (`SecurityLayer`, `OperationalGuidelinesLayer`,
+    /// `ProtocolTokensLayer`, `RuntimeContextLayer`) can emit content on
+    /// the Basic / Hydration / Soul paths. The harness bridge builds a
+    /// default `ResolvedContext` from `Background` paradigm + permissive
+    /// security; channel-specific paths can override with a stricter one.
+    ///
+    /// `build_system_prompt_with_context()` ignores this builder field —
+    /// it already receives a `ResolvedContext` parameter that the
+    /// `LayerInput::context` constructor wires directly.
+    pub fn with_resolved_context(mut self, ctx: super::context::ResolvedContext) -> Self {
+        self.resolved_context = Some(ctx);
+        self
+    }
+
+    /// Attach the wire-protocol family identifier reported by the
+    /// active provider. `ProviderGuidanceLayer` uses this to dispatch
+    /// the right per-family operational guidance block.
+    ///
+    /// Pass the protocol exactly as `AiProvider::protocol()` returns it
+    /// — typically `"anthropic"`, `"openai"`, `"gemini"`, or `"ollama"`.
+    /// Providers may override via `model_behavior_override()` (e.g.
+    /// OpenRouter routing GPT-4 over OpenAI protocol); the harness
+    /// bridge prefers the override.
+    pub fn with_provider_protocol(mut self, protocol: impl Into<String>) -> Self {
+        self.provider_protocol = Some(protocol.into());
+        self
+    }
+
+    /// Attach the resolved Think→Act iteration cap so
+    /// `SessionBudgetLayer` can surface it. The harness bridge sources
+    /// the value from `resolve_max_iterations(...)` once per run.
+    pub fn with_iteration_cap(mut self, cap: u32) -> Self {
+        self.iteration_cap = Some(cap);
+        self
+    }
+
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
         let (path, input) = match &self.soul {
@@ -244,6 +325,10 @@ impl PromptBuilder {
             None => input,
         };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
+        let input = input.with_chain_context_opt(self.chain_context.as_ref());
+        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
+        let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(path, &input)
     }
 
@@ -254,7 +339,11 @@ impl PromptBuilder {
     /// selection based on query relevance.
     pub fn build_system_prompt_with_hydration(&self, hydration: &HydrationResult) -> String {
         let input = LayerInput::hydration(&self.config, hydration)
-            .with_curated_envelope(self.curated_memory_envelope.clone());
+            .with_curated_envelope(self.curated_memory_envelope.clone())
+            .with_chain_context_opt(self.chain_context.as_ref())
+            .with_resolved_context_opt(self.resolved_context.as_ref())
+            .with_provider_protocol_opt(self.provider_protocol.as_deref())
+            .with_iteration_cap_opt(self.iteration_cap);
         self.pipeline
             .execute_cached(AssemblyPath::Hydration, &input)
     }
@@ -279,6 +368,10 @@ impl PromptBuilder {
             None => input,
         };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
+        let input = input.with_chain_context_opt(self.chain_context.as_ref());
+        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
+        let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -304,10 +397,25 @@ impl PromptBuilder {
         }
 
         // Build with potentially modified config; carry over identity_files
-        // so SoulLayer / IdentityFilesLayer see the agent identity directory.
+        // so SoulLayer / IdentityFilesLayer see the agent identity directory,
+        // chain_context so subagents still surface their delegation depth,
+        // and resolved_context so the Phase 2 widened layers still see the
+        // environment envelope — all even when hooks rewrite the config.
         let mut builder = PromptBuilder::new(config);
         if let Some(files) = self.identity_files.clone() {
             builder = builder.with_identity_files(files);
+        }
+        if let Some(chain) = self.chain_context.clone() {
+            builder = builder.with_chain_context(chain);
+        }
+        if let Some(ctx) = self.resolved_context.clone() {
+            builder = builder.with_resolved_context(ctx);
+        }
+        if let Some(protocol) = self.provider_protocol.clone() {
+            builder = builder.with_provider_protocol(protocol);
+        }
+        if let Some(cap) = self.iteration_cap {
+            builder = builder.with_iteration_cap(cap);
         }
         let mut prompt = builder.build_system_prompt_with_soul(tools, soul, profile);
 
@@ -339,6 +447,10 @@ impl PromptBuilder {
             None => input,
         };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
+        let input = input.with_chain_context_opt(self.chain_context.as_ref());
+        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
+        let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -358,6 +470,10 @@ impl PromptBuilder {
             None => input,
         };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
+        let input = input.with_chain_context_opt(self.chain_context.as_ref());
+        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
+        let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Basic, &input)
     }
 
@@ -377,6 +493,10 @@ impl PromptBuilder {
             None => input,
         };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
+        let input = input.with_chain_context_opt(self.chain_context.as_ref());
+        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
+        let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         let stable_prefix = self.pipeline.execute_stable_only(path, &input);
         PromptSnapshot {
             stable_prefix,
@@ -402,6 +522,10 @@ impl PromptBuilder {
             None => input,
         };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
+        let input = input.with_chain_context_opt(self.chain_context.as_ref());
+        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
+        let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
 
         let dynamic_suffix = self.pipeline.execute_dynamic_only(snapshot.path, &input);
         let mut result = String::with_capacity(snapshot.stable_prefix.len() + dynamic_suffix.len());
@@ -437,6 +561,10 @@ impl PromptBuilder {
             None => input,
         };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
+        let input = input.with_chain_context_opt(self.chain_context.as_ref());
+        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
+        let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline
             .execute_with_mode(AssemblyPath::Soul, &input, mode)
     }
@@ -463,6 +591,10 @@ impl PromptBuilder {
             None => input,
         };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
+        let input = input.with_chain_context_opt(self.chain_context.as_ref());
+        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
+        let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline
             .assemble(AssemblyPath::Soul, &input, mode, budget)
     }
@@ -492,6 +624,10 @@ impl PromptBuilder {
             None => input,
         };
         let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
+        let input = input.with_chain_context_opt(self.chain_context.as_ref());
+        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
+        let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
+        let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -506,7 +642,10 @@ impl PromptBuilder {
         ctx: &super::context::ResolvedContext,
     ) -> String {
         let input = LayerInput::context(&self.config, ctx)
-            .with_curated_envelope(self.curated_memory_envelope.clone());
+            .with_curated_envelope(self.curated_memory_envelope.clone())
+            .with_chain_context_opt(self.chain_context.as_ref())
+            .with_provider_protocol_opt(self.provider_protocol.as_deref())
+            .with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Context, &input)
     }
 }

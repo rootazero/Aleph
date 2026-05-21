@@ -101,8 +101,8 @@ impl From<&SandboxCapabilities> for SandboxPolicy {
 
         let process = ProcessPolicy {
             allow_fork: caps.spawn_subprocess,
-            timeout_secs: 60,
-            max_memory_mb: None,
+            timeout_secs: caps.timeout_secs.unwrap_or(60),
+            max_memory_mb: caps.max_memory_mb,
         };
 
         Self {
@@ -234,6 +234,8 @@ mod tests {
                 hosts: vec!["github.com".into()],
             },
             spawn_subprocess: true,
+            max_memory_mb: None,
+            timeout_secs: None,
         };
         let policy = SandboxPolicy::from(&caps);
         assert_eq!(policy.filesystem, FsPolicy::WritePaths(vec!["/tmp".into()]));
@@ -243,5 +245,32 @@ mod tests {
         );
         assert!(policy.process.allow_fork);
         assert_eq!(policy.environment, EnvPolicy::Minimal);
+    }
+
+    #[test]
+    fn from_caps_threads_memory_limit() {
+        let caps = SandboxCapabilities {
+            max_memory_mb: Some(256),
+            ..Default::default()
+        };
+        let policy = SandboxPolicy::from(&caps);
+        assert_eq!(policy.process.max_memory_mb, Some(256));
+    }
+
+    #[test]
+    fn from_caps_threads_timeout_override() {
+        let caps = SandboxCapabilities {
+            timeout_secs: Some(15),
+            ..Default::default()
+        };
+        let policy = SandboxPolicy::from(&caps);
+        assert_eq!(policy.process.timeout_secs, 15);
+    }
+
+    #[test]
+    fn from_caps_timeout_defaults_to_60_when_none() {
+        let caps = SandboxCapabilities::default();
+        let policy = SandboxPolicy::from(&caps);
+        assert_eq!(policy.process.timeout_secs, 60);
     }
 }
