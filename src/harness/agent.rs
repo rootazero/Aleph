@@ -327,6 +327,8 @@ impl Harness for AgentHarness {
         // Track which session the loop is currently driving. Starts as the
         // caller's session; rebinds to the child session when a SplitSession
         // directive succeeds. Stored in `final_session_id` at loop exit.
+        // Split-safety: StallTracker is time-based (Instant) with no session id — split-safe.
+        // TraceSink receives LoopTraceEvent payloads that carry no session id field — split-safe.
         let mut current_session: SessionId = session_id.clone();
         let cap = self.deps.max_iterations;
         let mut iterations: usize = 0;
@@ -405,7 +407,7 @@ impl Harness for AgentHarness {
                         let events = self
                             .deps
                             .session
-                            .get_events(session_id, None, None)
+                            .get_events(&current_session, None, None)
                             .await
                             .map_err(HarnessError::Session)?;
                         let last_assistant_idx = events
@@ -478,21 +480,16 @@ impl Harness for AgentHarness {
             }
         };
 
-        // Store the final session id — either the original or a split child.
-        *self
-            .final_session_id
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(current_session);
-
         // P2: read the last AssistantMessage text once at exit so the
         // SessionCompleted trace event is self-sufficient. Trace consumers
         // no longer need to re-read the session log to recover `final_text`.
         // A read failure here is non-fatal — the trace event is still emitted
         // with `final_text: None`, matching the legacy behaviour.
+        // Must happen before the `current_session` move below.
         let final_text = self
             .deps
             .session
-            .get_events(session_id, None, None)
+            .get_events(&current_session, None, None)
             .await
             .ok()
             .and_then(|events| {
@@ -507,6 +504,12 @@ impl Harness for AgentHarness {
                     _ => None,
                 })
             });
+
+        // Store the final session id — either the original or a split child.
+        *self
+            .final_session_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(current_session);
 
         let terminate_reason = Some(self.terminate_reason());
         let duration_ms = Some(self.duration_ms());
