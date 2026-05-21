@@ -955,8 +955,21 @@ impl BuiltinToolRegistry {
                     .join("memory")
                     .join("note")
             });
-            let tool =
+            let mut tool =
                 crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone());
+            // Wire the event-sourcing handler so note create/update/delete
+            // actions feed the per-note event log that the memory_timeline
+            // tool reads. Event-log only (no note_indexer) — note_manage owns
+            // the notes-filesystem write path.
+            if let Some(ref state_db) = config.state_db {
+                let handler = Arc::new(
+                    crate::memory::events::handler::MemoryCommandHandler::new(
+                        Arc::clone(state_db),
+                        Some(db.clone()),
+                    ),
+                );
+                tool = tool.with_command_handler(handler);
+            }
 
             // Register note_manage tool schema
             {

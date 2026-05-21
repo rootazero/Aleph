@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
+use crate::memory::context::NoteType;
+use crate::memory::events::handler::MemoryCommandHandler;
+use crate::memory::events::EventActor;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::store::SqliteMemoryBackend;
@@ -148,12 +151,90 @@ pub struct NoteManageResult {
 #[derive(Clone)]
 pub struct NoteManageTool {
     indexer: Arc<NoteIndexer<SqliteMemoryBackend>>,
+    /// Optional event-sourcing handler. When present, note create/update/
+    /// delete actions append a lifecycle event to the per-note event log so
+    /// the `memory_timeline` tool can show a note's history. `None` is a
+    /// graceful no-op.
+    command_handler: Option<Arc<MemoryCommandHandler>>,
 }
 
 impl NoteManageTool {
     pub fn new(memory_dir: PathBuf, store: Arc<SqliteMemoryBackend>) -> Self {
         Self {
             indexer: Arc::new(NoteIndexer::new(memory_dir, store)),
+            command_handler: None,
+        }
+    }
+
+    /// Attach an event-sourcing handler so note mutations are recorded in the
+    /// per-note event log that the `memory_timeline` tool reads.
+    pub fn with_command_handler(mut self, handler: Arc<MemoryCommandHandler>) -> Self {
+        self.command_handler = Some(handler);
+        self
+    }
+
+    /// Append a lifecycle event for a completed write action to the per-note
+    /// event log. Best-effort: the note write has already succeeded, so a
+    /// failure here is logged and swallowed rather than surfaced to the LLM.
+    async fn record_lifecycle_event(&self, args: &NoteManageArgs, result: &NoteManageResult) {
+        let Some(handler) = &self.command_handler else {
+            return;
+        };
+        let Some(note_path) = result.note_path.as_deref() else {
+            return;
+        };
+        let agent = self.resolve_agent_id(args).to_string();
+        let outcome = match &args.action {
+            NoteManageAction::Create => {
+                let note_type = args
+                    .category
+                    .as_deref()
+                    .map(NoteType::from_str_or_other)
+                    .unwrap_or_default();
+                handler
+                    .log_note_created(
+                        note_path,
+                        args.content.clone().unwrap_or_default(),
+                        agent,
+                        note_type,
+                        EventActor::Agent,
+                    )
+                    .await
+            }
+            NoteManageAction::Update => {
+                handler
+                    .log_note_updated(
+                        note_path,
+                        args.content.clone().unwrap_or_default(),
+                        "note_manage update".to_string(),
+                        EventActor::Agent,
+                    )
+                    .await
+            }
+            NoteManageAction::Append => {
+                let appended = args.facts.clone().unwrap_or_default().join("\n");
+                handler
+                    .log_note_updated(
+                        note_path,
+                        appended,
+                        "note_manage append".to_string(),
+                        EventActor::Agent,
+                    )
+                    .await
+            }
+            NoteManageAction::Delete => {
+                handler
+                    .log_note_deleted(
+                        note_path,
+                        "note_manage delete".to_string(),
+                        EventActor::Agent,
+                    )
+                    .await
+            }
+            NoteManageAction::Query | NoteManageAction::List => return,
+        };
+        if let Err(e) = outcome {
+            warn!(path = %note_path, error = %e, "note_manage: failed to record lifecycle event");
         }
     }
 
@@ -603,14 +684,17 @@ impl AlephTool for NoteManageTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        match args.action {
+        let result = match args.action {
             NoteManageAction::Create => self.handle_create(&args).await,
             NoteManageAction::Update => self.handle_update(&args).await,
             NoteManageAction::Append => self.handle_append(&args).await,
             NoteManageAction::Query => self.handle_query(&args).await,
             NoteManageAction::List => self.handle_list(&args).await,
             NoteManageAction::Delete => self.handle_delete(&args).await,
-        }
+        }?;
+        // Best-effort audit trail for the memory_timeline tool.
+        self.record_lifecycle_event(&args, &result).await;
+        Ok(result)
     }
 }
 
