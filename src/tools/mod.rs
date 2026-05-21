@@ -33,6 +33,7 @@
 
 pub mod adapters;
 mod builtin;
+pub mod budget;
 pub mod context;
 pub mod execution_context;
 pub mod info;
