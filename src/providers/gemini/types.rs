@@ -121,6 +121,13 @@ pub struct GenerationConfig {
     /// Extended thinking configuration (Gemini experimental)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_config: Option<ThinkingConfig>,
+    /// Stop sequences — generation halts when any of these strings is produced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
+    /// Media resolution for image inputs
+    /// (`MEDIA_RESOLUTION_LOW` / `MEDIUM` / `HIGH`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_resolution: Option<String>,
 }
 
 /// Thinking configuration for Gemini.
@@ -141,52 +148,44 @@ pub struct ThinkingConfig {
     pub include_thoughts: Option<bool>,
 }
 
-/// Response from Gemini generateContent API
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenerateContentResponse {
-    pub candidates: Option<Vec<Candidate>>,
-    pub error: Option<GeminiError>,
-}
-
-/// Candidate response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Candidate {
-    pub content: CandidateContent,
-    /// Why the model stopped generating (e.g., "STOP", "FUNCTION_CALL", "MAX_TOKENS")
-    pub finish_reason: Option<String>,
-}
-
-/// Content in candidate response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CandidateContent {
-    pub parts: Vec<ResponsePart>,
-}
-
-/// Response part — may contain text, a function call, or both
+/// Error returned by the Gemini API (the `error` field of the JSON envelope).
 ///
-/// Gemini response parts use a flat JSON object with optional keys:
-/// `{"text": "..."}` or `{"functionCall": {"name": "...", "args": {...}}}`
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResponsePart {
-    /// Text content (present for text parts)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    /// Whether this text part is a thinking/reasoning trace
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thought: Option<bool>,
-    /// Function call (present for tool-use parts)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub function_call: Option<GeminiFunctionCall>,
-}
-
-/// Error response from Gemini API
+/// The streaming-first request path parses live candidate responses straight
+/// from the raw SSE JSON in `sse.rs`; only the error envelope still needs a
+/// typed shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiError {
     pub code: i32,
     pub message: String,
     pub status: String,
+    /// Structured error details (`google.rpc.RetryInfo`, `ErrorInfo`, ...).
+    #[serde(default)]
+    pub details: Vec<Value>,
+}
+
+impl GeminiError {
+    /// Extract a retry delay (seconds, as a display string) from a
+    /// `google.rpc.RetryInfo` entry in `details`. Gemini puts the
+    /// authoritative 429 backoff here, often without a `Retry-After` header.
+    pub fn retry_delay_secs(&self) -> Option<String> {
+        for detail in &self.details {
+            let is_retry_info = detail
+                .get("@type")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| t.ends_with("RetryInfo"));
+            if !is_retry_info {
+                continue;
+            }
+            if let Some(delay) = detail.get("retryDelay").and_then(|d| d.as_str()) {
+                // protobuf Duration string, e.g. "30s" / "1.5s"
+                let trimmed = delay.trim_end_matches('s').trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +208,8 @@ mod tests {
                 top_p: None,
                 top_k: None,
                 thinking_config: None,
+                stop_sequences: None,
+                media_resolution: None,
             }),
             tools: None,
         };
@@ -217,38 +218,6 @@ mod tests {
         assert!(json.contains("contents"));
         assert!(json.contains("generationConfig"));
         assert!(!json.contains("tools")); // None should be skipped
-    }
-
-    #[test]
-    fn test_deserialize_response() {
-        let json = r#"{
-            "candidates": [{
-                "content": {
-                    "parts": [{"text": "Hello!"}]
-                }
-            }]
-        }"#;
-
-        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
-        assert!(response.candidates.is_some());
-        let candidates = response.candidates.unwrap();
-        let text = candidates[0].content.parts[0].text.as_deref();
-        assert_eq!(text, Some("Hello!"));
-    }
-
-    #[test]
-    fn test_deserialize_error() {
-        let json = r#"{
-            "error": {
-                "code": 400,
-                "message": "Invalid request",
-                "status": "INVALID_ARGUMENT"
-            }
-        }"#;
-
-        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
-        assert!(response.error.is_some());
-        assert_eq!(response.error.unwrap().code, 400);
     }
 
     #[test]
@@ -263,6 +232,8 @@ mod tests {
                 thinking_level: None,
                 include_thoughts: None,
             }),
+            stop_sequences: None,
+            media_resolution: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -318,76 +289,6 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_response_with_function_call() {
-        let json = r#"{
-            "candidates": [{
-                "content": {
-                    "parts": [{
-                        "functionCall": {
-                            "name": "search",
-                            "args": {"query": "Rust language"}
-                        }
-                    }]
-                },
-                "finishReason": "FUNCTION_CALL"
-            }]
-        }"#;
-
-        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
-        let candidates = response.candidates.unwrap();
-        let part = &candidates[0].content.parts[0];
-
-        assert!(part.text.is_none());
-        let fc = part.function_call.as_ref().unwrap();
-        assert_eq!(fc.name, "search");
-        assert_eq!(fc.args["query"], "Rust language");
-        assert_eq!(
-            candidates[0].finish_reason.as_deref(),
-            Some("FUNCTION_CALL")
-        );
-    }
-
-    #[test]
-    fn test_deserialize_response_with_mixed_parts() {
-        let json = r#"{
-            "candidates": [{
-                "content": {
-                    "parts": [
-                        {"text": "Let me search for that"},
-                        {"functionCall": {"name": "search", "args": {"q": "test"}}}
-                    ]
-                },
-                "finishReason": "FUNCTION_CALL"
-            }]
-        }"#;
-
-        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
-        let parts = &response.candidates.unwrap()[0].content.parts;
-
-        assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0].text.as_deref(), Some("Let me search for that"));
-        assert!(parts[0].function_call.is_none());
-        assert!(parts[1].text.is_none());
-        assert_eq!(parts[1].function_call.as_ref().unwrap().name, "search");
-    }
-
-    #[test]
-    fn test_deserialize_response_with_finish_reason() {
-        let json = r#"{
-            "candidates": [{
-                "content": {
-                    "parts": [{"text": "Done"}]
-                },
-                "finishReason": "STOP"
-            }]
-        }"#;
-
-        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
-        let candidate = &response.candidates.unwrap()[0];
-        assert_eq!(candidate.finish_reason.as_deref(), Some("STOP"));
-    }
-
-    #[test]
     fn test_thinking_config_level_mode() {
         let config = GenerationConfig {
             max_output_tokens: None,
@@ -399,6 +300,8 @@ mod tests {
                 thinking_level: Some("HIGH".to_string()),
                 include_thoughts: Some(true),
             }),
+            stop_sequences: None,
+            media_resolution: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("thinkingLevel"));
@@ -408,46 +311,44 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_response_with_thought_marker() {
-        let json = r#"{
-            "candidates": [{
-                "content": {
-                    "parts": [
-                        {"text": "Let me think...", "thought": true},
-                        {"text": "The answer is 42"}
-                    ]
-                },
-                "finishReason": "STOP"
-            }]
-        }"#;
-        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
-        let parts = &response.candidates.unwrap()[0].content.parts;
-        assert_eq!(parts[0].thought, Some(true));
-        assert_eq!(parts[1].thought, None);
+    fn test_generation_config_serializes_stop_and_media() {
+        let config = GenerationConfig {
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            thinking_config: None,
+            stop_sequences: Some(vec!["STOP".to_string(), "END".to_string()]),
+            media_resolution: Some("MEDIA_RESOLUTION_LOW".to_string()),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("stopSequences"));
+        assert!(json.contains("mediaResolution"));
+        assert!(json.contains("MEDIA_RESOLUTION_LOW"));
     }
 
     #[test]
-    fn test_deserialize_function_call_with_id() {
-        let json = r#"{
-            "candidates": [{
-                "content": {
-                    "parts": [{
-                        "functionCall": {
-                            "name": "search",
-                            "id": "abc123",
-                            "args": {"query": "rust"}
-                        }
-                    }]
-                },
-                "finishReason": "FUNCTION_CALL"
-            }]
-        }"#;
-        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
-        let candidates = response.candidates.unwrap();
-        let fc = candidates[0].content.parts[0]
-            .function_call
-            .as_ref()
-            .unwrap();
-        assert_eq!(fc.id.as_deref(), Some("abc123"));
+    fn test_gemini_error_retry_delay_from_details() {
+        let err: GeminiError = serde_json::from_str(
+            r#"{
+                "code": 429,
+                "message": "Resource exhausted",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "42s"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(err.retry_delay_secs().as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn test_gemini_error_retry_delay_absent() {
+        let err: GeminiError = serde_json::from_str(
+            r#"{"code": 400, "message": "bad", "status": "INVALID_ARGUMENT"}"#,
+        )
+        .unwrap();
+        assert_eq!(err.retry_delay_secs(), None);
     }
 }
