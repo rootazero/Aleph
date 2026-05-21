@@ -4,10 +4,7 @@ use crate::api::teams::CoordTaskDto;
 use leptos::prelude::*;
 
 #[component]
-pub fn TaskCard(
-    task: CoordTaskDto,
-    #[prop(into)] on_click: Callback<String>,
-) -> impl IntoView {
+pub fn TaskCard(task: CoordTaskDto, #[prop(into)] on_click: Callback<String>) -> impl IntoView {
     let task_id = task.id.clone();
     let priority_class = match task.priority.as_str() {
         "critical" => "bg-danger/20 text-danger",

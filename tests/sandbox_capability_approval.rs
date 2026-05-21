@@ -151,10 +151,10 @@ fn build_test_sandbox(
     outcome: ApprovalOutcome,
 ) -> (
     Arc<dyn Sandbox>,
-    Arc<RwLock<u32>>,                     // driver run_count
-    Arc<RwLock<u32>>,                     // approval call count
-    Arc<RwLock<Option<u64>>>,             // last profile.max_memory_mb seen by driver
-    Arc<RwLock<Option<NetworkPolicy>>>,   // last capabilities.network seen by driver
+    Arc<RwLock<u32>>,                   // driver run_count
+    Arc<RwLock<u32>>,                   // approval call count
+    Arc<RwLock<Option<u64>>>,           // last profile.max_memory_mb seen by driver
+    Arc<RwLock<Option<NetworkPolicy>>>, // last capabilities.network seen by driver
     tempfile::TempDir,
 ) {
     let tmp = tempfile::tempdir().expect("tempdir");

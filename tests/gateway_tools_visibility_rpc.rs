@@ -72,11 +72,7 @@ async fn catalog_returns_all_when_no_filter() {
 #[tokio::test]
 async fn catalog_source_filter_exact_match() {
     let reg = registry_with_mixed_sources().await;
-    let req = JsonRpcRequest::with_id(
-        "tools.catalog",
-        Some(json!({"source": "native"})),
-        json!(1),
-    );
+    let req = JsonRpcRequest::with_id("tools.catalog", Some(json!({"source": "native"})), json!(1));
     let resp = handle_catalog(req, &reg).await;
     let result = resp.result.unwrap();
     assert_eq!(result["total"], 1);
@@ -86,11 +82,7 @@ async fn catalog_source_filter_exact_match() {
 #[tokio::test]
 async fn catalog_source_filter_prefix_wildcard() {
     let reg = registry_with_mixed_sources().await;
-    let req = JsonRpcRequest::with_id(
-        "tools.catalog",
-        Some(json!({"source": "mcp:*"})),
-        json!(1),
-    );
+    let req = JsonRpcRequest::with_id("tools.catalog", Some(json!({"source": "mcp:*"})), json!(1));
     let resp = handle_catalog(req, &reg).await;
     let result = resp.result.unwrap();
     assert_eq!(result["total"], 2);

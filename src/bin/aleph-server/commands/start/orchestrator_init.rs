@@ -243,11 +243,10 @@ fn build_guardrail_registry(
 
     // PiiSecretsGuardrail wiring — pass vault-backed resolver so {{secret:NAME}}
     // in tool args resolves at the tool_call surface (LLM→tool boundary).
-    let resolver: Option<Arc<dyn alephcore::secrets::AsyncSecretResolver>> = Some(
-        Arc::new(alephcore::secrets::VaultSecretResolver::new(
-            shared_token_mgr,
-        )) as Arc<dyn alephcore::secrets::AsyncSecretResolver>,
-    );
+    let resolver: Option<Arc<dyn alephcore::secrets::AsyncSecretResolver>> = Some(Arc::new(
+        alephcore::secrets::VaultSecretResolver::new(shared_token_mgr),
+    )
+        as Arc<dyn alephcore::secrets::AsyncSecretResolver>);
 
     let (guard, audit_rx) = alephcore::security::RuntimeSecurityGuard::new_with_audit(
         alephcore::security::SecurityGuardConfig::default(),
@@ -407,5 +406,4 @@ mod tests {
         assert_eq!(cap, Some(8));
         assert_eq!(tt, Some(Duration::from_secs(180)));
     }
-
 }

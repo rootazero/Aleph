@@ -1,4 +1,3 @@
-
 #[test]
 fn test_room_message_fixture() {
     let fixture = include_str!("fixtures/matrix/room_message.json");

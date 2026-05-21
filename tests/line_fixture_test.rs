@@ -1,4 +1,3 @@
-
 #[test]
 fn test_push_response_fixture() {
     let fixture = include_str!("fixtures/line/push_response.json");

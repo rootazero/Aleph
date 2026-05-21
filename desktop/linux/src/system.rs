@@ -40,9 +40,7 @@ impl SystemCapability for LinuxSystem {
                     .arg(&app_name)
                     .status()
                     .map_err(|e| {
-                        DesktopError::InputFailed(format!(
-                            "Failed to launch app '{app_name}': {e}"
-                        ))
+                        DesktopError::InputFailed(format!("Failed to launch app '{app_name}': {e}"))
                     })?,
             };
 
@@ -72,9 +70,7 @@ impl SystemCapability for LinuxSystem {
                     .args(["-f", &app_name])
                     .status()
                     .map_err(|e| {
-                        DesktopError::InputFailed(format!(
-                            "Failed to quit app '{app_name}': {e}"
-                        ))
+                        DesktopError::InputFailed(format!("Failed to quit app '{app_name}': {e}"))
                     })?,
             };
 
@@ -96,9 +92,7 @@ impl SystemCapability for LinuxSystem {
                 .args(["-eo", "comm,pid", "--no-headers"])
                 .output()
                 .map_err(|e| {
-                    DesktopError::PlatformError(format!(
-                        "Failed to list running apps: {e}"
-                    ))
+                    DesktopError::PlatformError(format!("Failed to list running apps: {e}"))
                 })?;
 
             if !output.status.success() {
@@ -233,9 +227,9 @@ impl SystemCapability for LinuxSystem {
                 })?;
 
             if let Some(ref mut stdin) = child.stdin {
-                stdin
-                    .write_all(text.as_bytes())
-                    .map_err(|e| DesktopError::InputFailed(format!("Clipboard write failed: {e}")))?;
+                stdin.write_all(text.as_bytes()).map_err(|e| {
+                    DesktopError::InputFailed(format!("Clipboard write failed: {e}"))
+                })?;
             }
 
             child

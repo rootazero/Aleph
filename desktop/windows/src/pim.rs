@@ -11,11 +11,15 @@ impl WindowsPim {
         Self
     }
 
-    async fn run_powershell(&self,
-        script: &str,
-    ) -> Result<std::process::Output> {
+    async fn run_powershell(&self, script: &str) -> Result<std::process::Output> {
         let output = tokio::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
             .output()
             .await
             .map_err(|e| {
@@ -200,15 +204,19 @@ impl PimCapability for WindowsPim {
 
                 Some(MailMessage {
                     id: v.get("id")?.as_str()?.to_string(),
-                    subject: v.get("subject").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-                    sender: v.get("sender").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-                    recipients,
-                    date,
-                    body_preview: v
-                        .get("body_preview")?
-                        .as_str()
+                    subject: v
+                        .get("subject")
+                        .and_then(|s| s.as_str())
                         .unwrap_or("")
                         .to_string(),
+                    sender: v
+                        .get("sender")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    recipients,
+                    date,
+                    body_preview: v.get("body_preview")?.as_str().unwrap_or("").to_string(),
                     is_read: v.get("is_read")?.as_bool().unwrap_or(true),
                 })
             })
@@ -270,7 +278,10 @@ impl PimCapability for WindowsPim {
             DesktopError::PlatformError(format!("Failed to parse Outlook message detail: {e}"))
         })?;
 
-        let date_str = v.get("date").and_then(|d| d.as_str()).unwrap_or("1970-01-01T00:00:00Z");
+        let date_str = v
+            .get("date")
+            .and_then(|d| d.as_str())
+            .unwrap_or("1970-01-01T00:00:00Z");
         let date = DateTime::parse_from_rfc3339(date_str)
             .ok()
             .map(|d| d.with_timezone(&Utc))
@@ -279,13 +290,21 @@ impl PimCapability for WindowsPim {
         let recipients = v
             .get("recipients")
             .and_then(|r| r.as_array())
-            .map(|arr| arr.iter().filter_map(|r| r.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| r.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let cc = v
             .get("cc")
             .and_then(|r| r.as_array())
-            .map(|arr| arr.iter().filter_map(|r| r.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| r.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let attachments = v
@@ -324,81 +343,137 @@ impl PimCapability for WindowsPim {
             cc,
             bcc: Vec::new(),
             date,
-            body: v.get("body").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+            body: v
+                .get("body")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string(),
             is_read: v.get("is_read").and_then(|b| b.as_bool()).unwrap_or(true),
             attachments,
         })
     }
 
     async fn notes_list(&self, _folder: Option<&str>) -> Result<Vec<NoteInfo>> {
-        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Windows".into(),
+        ))
     }
     async fn notes_read(&self, _note_id: &str) -> Result<NoteContent> {
-        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Windows".into(),
+        ))
     }
     async fn notes_create(&self, _folder: &str, _title: &str, _body: &str) -> Result<String> {
-        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Windows".into(),
+        ))
     }
-    async fn notes_update(&self, _note_id: &str, _title: Option<&str>, _body: Option<&str>) -> Result<()> {
-        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+    async fn notes_update(
+        &self,
+        _note_id: &str,
+        _title: Option<&str>,
+        _body: Option<&str>,
+    ) -> Result<()> {
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Windows".into(),
+        ))
     }
     async fn notes_delete(&self, _note_id: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Windows".into(),
+        ))
     }
     async fn notes_folders(&self) -> Result<Vec<String>> {
-        Err(DesktopError::NotImplemented("Notes not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Windows".into(),
+        ))
     }
 
-    async fn calendar_list_events(&self,
+    async fn calendar_list_events(
+        &self,
         _from: DateTime<Utc>,
         _to: DateTime<Utc>,
         _calendar_id: Option<&str>,
     ) -> Result<Vec<CalendarEvent>> {
-        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Windows".into(),
+        ))
     }
     async fn calendar_get_event(&self, _event_id: &str) -> Result<CalendarEvent> {
-        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Windows".into(),
+        ))
     }
     async fn calendar_create_event(&self, _event: NewCalendarEvent) -> Result<String> {
-        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Windows".into(),
+        ))
     }
     async fn calendar_update_event(&self, _event_id: &str, _event: NewCalendarEvent) -> Result<()> {
-        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Windows".into(),
+        ))
     }
     async fn calendar_delete_event(&self, _event_id: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Windows".into(),
+        ))
     }
     async fn calendar_calendars(&self) -> Result<Vec<CalendarInfo>> {
-        Err(DesktopError::NotImplemented("Calendar not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Windows".into(),
+        ))
     }
 
-    async fn reminders_list(&self, _list_id: Option<&str>, _include_completed: bool) -> Result<Vec<Reminder>> {
-        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+    async fn reminders_list(
+        &self,
+        _list_id: Option<&str>,
+        _include_completed: bool,
+    ) -> Result<Vec<Reminder>> {
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Windows".into(),
+        ))
     }
     async fn reminders_get(&self, _reminder_id: &str) -> Result<Reminder> {
-        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Windows".into(),
+        ))
     }
     async fn reminders_create(&self, _reminder: NewReminder) -> Result<String> {
-        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Windows".into(),
+        ))
     }
     async fn reminders_complete(&self, _reminder_id: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Windows".into(),
+        ))
     }
     async fn reminders_delete(&self, _reminder_id: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Windows".into(),
+        ))
     }
     async fn reminders_lists(&self) -> Result<Vec<ReminderList>> {
-        Err(DesktopError::NotImplemented("Reminders not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Windows".into(),
+        ))
     }
 
     async fn contacts_search(&self, _query: &str) -> Result<Vec<Contact>> {
-        Err(DesktopError::NotImplemented("Contacts not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Contacts not available on Windows".into(),
+        ))
     }
     async fn contacts_get(&self, _contact_id: &str) -> Result<ContactDetail> {
-        Err(DesktopError::NotImplemented("Contacts not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Contacts not available on Windows".into(),
+        ))
     }
     async fn contacts_groups(&self) -> Result<Vec<ContactGroup>> {
-        Err(DesktopError::NotImplemented("Contacts not available on Windows".into()))
+        Err(DesktopError::NotImplemented(
+            "Contacts not available on Windows".into(),
+        ))
     }
 }
 
