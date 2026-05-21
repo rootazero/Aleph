@@ -198,6 +198,43 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Save durable agent-side memory (add/replace/remove) that auto-injects into future system prompts. Curated, bounded — only stable user preferences, environment facts, or workflow conventions. Not for task progress or transient notes.",
         requires_config: true, // Requires MemoryContextProvider (deferred via OnceCell)
     },
+    // Memory lifecycle & knowledge-wiki tools — require a memory backend / wiki /
+    // profile synthesizer; created dynamically in BuiltinToolRegistry::with_config().
+    BuiltinToolDefinition {
+        name: "memory_reflect",
+        description: "Synthesise a distilled answer from long-term memory with cited note paths (vs memory_search's raw hits)",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "recall_context",
+        description: "Retrieve pre-compression conversation details — specific code, error messages, or decisions from earlier in the conversation",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "note_orient",
+        description: "Fetch a compact orientation snapshot of the memory wiki: SCHEMA, index, and recent log entries",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "note_schema",
+        description: "Read or write SCHEMA.md, the file describing the structure of the agent's long-term memory wiki",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "user_profile",
+        description: "Read the current user profile (interests, preferences, context) or view its revision history",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "session_complete",
+        description: "Signal that a self-contained task has completed, triggering a memory retrospective for future similar tasks",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "flag_user_correction",
+        description: "Record a user correction or strong-preference signal so the system can learn from it",
+        requires_config: true,
+    },
     BuiltinToolDefinition {
         name: "session_list",
         description: "List sessions accessible to this agent for cross-session communication",
@@ -764,6 +801,11 @@ pub fn create_tool_boxed(
                 crate::skill::shared_skill_system().clone(),
             ),
         )),
+        // Memory lifecycle & knowledge-wiki tools require a memory backend / wiki /
+        // profile synthesizer + per-session context — built dynamically in
+        // BuiltinToolRegistry::with_config(), same as note_manage below.
+        "memory_reflect" | "recall_context" | "note_orient" | "note_schema" | "user_profile"
+        | "session_complete" | "flag_user_correction" => None,
         // note_manage requires memory backend — cannot create standalone fallback
         "note_manage" => None,
         _ => None,
