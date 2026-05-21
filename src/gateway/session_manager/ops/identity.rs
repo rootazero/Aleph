@@ -103,7 +103,7 @@ impl SessionManager {
         let like_pattern = format!("{}%", base_key_pattern);
         let latest_key: Option<String> = conn
             .query_row(
-                "SELECT key FROM sessions WHERE key LIKE ? ORDER BY created_at DESC LIMIT 1",
+                "SELECT key FROM sessions WHERE key LIKE ? ORDER BY created_at DESC, key DESC LIMIT 1",
                 params![&like_pattern],
                 |row| row.get(0),
             )

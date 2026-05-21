@@ -9,6 +9,7 @@
 
 pub mod actor;
 pub mod driver;
+pub mod epoch_registrar;
 pub mod events;
 pub mod in_process;
 pub mod ingress_safety;
