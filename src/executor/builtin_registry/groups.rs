@@ -16,7 +16,7 @@ pub struct ToolCategory {
     pub tools: &'static [&'static str],
 }
 
-/// All tool categorys (ordered for UI display)
+/// All tool categories (ordered for UI display)
 pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "search_web",
