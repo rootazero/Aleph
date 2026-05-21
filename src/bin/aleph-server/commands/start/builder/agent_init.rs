@@ -2169,6 +2169,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         println!();
     }
 
+    // G2: signal readiness. /ready returns 200 from this point onward;
+    // before this, it returns 503 so proxies don't route to a gateway
+    // whose handler tree is still being wired.
+    server
+        .ready
+        .store(true, std::sync::atomic::Ordering::Release);
+    if !daemon {
+        println!("  Gateway readiness: signaled (ready=true)");
+    }
+
     AgentHandlersResult {
         _run_manager: run_manager
             .expect("run_manager must be set in both real and simulated modes"),
