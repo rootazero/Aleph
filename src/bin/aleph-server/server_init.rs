@@ -31,9 +31,9 @@ pub async fn serve_webchat(
         .fallback(ServeFile::new(&index_path));
 
     let allowed_origins = tower_http::cors::AllowOrigin::predicate(|origin, _| {
-        // `origin` is a raw `HeaderValue` — parse it into a URI so the scheme
-        // and host can be inspected structurally (a bare prefix match would
-        // accept `http://127.evil.com`).
+        // `origin` is the raw `Origin` header value, not a parsed URI — parse it
+        // before inspecting scheme/host. A bare prefix match would otherwise
+        // accept hostile origins like `http://127.evil.com`.
         let Ok(origin_str) = origin.to_str() else {
             return false;
         };

@@ -9,6 +9,7 @@ use ratatui::{
     Frame,
 };
 
+use crate::tui::slash::ToolProgressMode;
 use crate::tui::theme::DEFAULT_THEME;
 
 pub struct StatusBar<'a> {
@@ -16,6 +17,7 @@ pub struct StatusBar<'a> {
     pub session: &'a str,
     pub tokens: u64,
     pub is_connected: bool,
+    pub tool_progress_mode: ToolProgressMode,
 }
 
 impl<'a> StatusBar<'a> {
@@ -42,6 +44,8 @@ impl<'a> StatusBar<'a> {
             Span::styled(format!(" {} ", self.session), text_style),
             Span::styled("\u{2502}", sep_style.bg(DEFAULT_THEME.status_bg)),
             Span::styled(format!(" {} ", token_str), text_style),
+            Span::styled("\u{2502}", sep_style.bg(DEFAULT_THEME.status_bg)),
+            Span::styled(format!(" T:{} ", self.tool_progress_mode.glyph()), text_style),
             Span::styled("\u{2502}", sep_style.bg(DEFAULT_THEME.status_bg)),
             Span::styled(" /help for commands ", text_style),
         ]);

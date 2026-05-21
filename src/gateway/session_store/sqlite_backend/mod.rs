@@ -243,6 +243,122 @@ impl SessionStore for SessionManager {
         }
     }
 
+    async fn truncate_messages(
+        &self,
+        key: &SessionKey,
+        keep_count: usize,
+    ) -> Result<TruncateResult, SessionStoreError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        let total: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if (keep_count as i64) >= total {
+            return Ok(TruncateResult::default());
+        }
+
+        // Find the id of the keep_count-th message in chronological order
+        // (i.e. the last message we want to keep). When keep_count == 0 we
+        // delete all messages for the session, mirroring reset_session.
+        let threshold_id: Option<i64> = if keep_count == 0 {
+            None
+        } else {
+            conn.query_row(
+                "SELECT id FROM messages WHERE session_key = ?
+                 ORDER BY timestamp ASC, id ASC LIMIT 1 OFFSET ?",
+                params![&key_str, (keep_count - 1) as i64],
+                |row| row.get(0),
+            )
+            .ok()
+        };
+
+        // Sum the tokens we are about to drop (best-effort; saturates on err).
+        let tokens_removed: i64 = match threshold_id {
+            Some(threshold) => conn
+                .query_row(
+                    "SELECT COALESCE(SUM(input_tokens + output_tokens), 0)
+                     FROM messages WHERE session_key = ? AND id > ?",
+                    params![&key_str, threshold],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0),
+            None => conn
+                .query_row(
+                    "SELECT COALESCE(SUM(input_tokens + output_tokens), 0)
+                     FROM messages WHERE session_key = ?",
+                    params![&key_str],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0),
+        };
+
+        // Sync FTS index before deleting source rows.
+        match threshold_id {
+            Some(threshold) => {
+                conn.execute(
+                    "DELETE FROM messages_fts WHERE rowid IN (
+                        SELECT id FROM messages WHERE session_key = ? AND id > ?
+                    )",
+                    params![&key_str, threshold],
+                )
+                .ok();
+            }
+            None => {
+                conn.execute(
+                    "DELETE FROM messages_fts WHERE rowid IN (
+                        SELECT id FROM messages WHERE session_key = ?
+                    )",
+                    params![&key_str],
+                )
+                .ok();
+            }
+        }
+
+        let deleted = match threshold_id {
+            Some(threshold) => conn
+                .execute(
+                    "DELETE FROM messages WHERE session_key = ? AND id > ?",
+                    params![&key_str, threshold],
+                )
+                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?,
+            None => conn
+                .execute(
+                    "DELETE FROM messages WHERE session_key = ?",
+                    params![&key_str],
+                )
+                .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?,
+        };
+
+        let new_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        // Keep the session row's message_count consistent. We do NOT bump
+        // compaction_count — this is a manual revert, not a compaction.
+        conn.execute(
+            "UPDATE sessions SET message_count = ? WHERE key = ?",
+            params![new_count, &key_str],
+        )
+        .ok();
+
+        Ok(TruncateResult {
+            messages_removed: deleted,
+            tokens_removed_estimate: tokens_removed.max(0) as u64,
+        })
+    }
+
     async fn list_checkpoints(
         &self,
         _key: &SessionKey,

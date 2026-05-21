@@ -8,8 +8,8 @@ use async_trait::async_trait;
 
 use aleph_desktop::pim_types::*;
 use aleph_desktop::traits::PimCapability;
-use aleph_desktop::{DesktopError, Result};
 use aleph_desktop::SwiftBridge;
+use aleph_desktop::{DesktopError, Result};
 use aleph_protocol::desktop_bridge::methods::pim::*;
 
 /// Simple TTL cache for PIM list data.
@@ -100,18 +100,15 @@ impl MacOSPim {
         P: serde::Serialize,
         R: serde::de::DeserializeOwned,
     {
-        self.bridge
-            .call(method, params)
-            .await
-            .map_err(|e| match e {
-                DesktopError::BridgeDisabled(ref msg) => DesktopError::BridgeDisabled(
-                    format!("PIM {context} unavailable: {msg}")
-                ),
-                DesktopError::BridgeFailed(ref msg) => DesktopError::BridgeFailed(
-                    format!("PIM {context} failed: {msg}")
-                ),
-                other => other,
-            })
+        self.bridge.call(method, params).await.map_err(|e| match e {
+            DesktopError::BridgeDisabled(ref msg) => {
+                DesktopError::BridgeDisabled(format!("PIM {context} unavailable: {msg}"))
+            }
+            DesktopError::BridgeFailed(ref msg) => {
+                DesktopError::BridgeFailed(format!("PIM {context} failed: {msg}"))
+            }
+            other => other,
+        })
     }
 }
 
@@ -138,7 +135,9 @@ impl PimCapability for MacOSPim {
     async fn notes_read(&self, note_id: &str) -> Result<NoteContent> {
         self.call_pim(
             METHOD_NOTES_GET,
-            NotesGetParams { id: note_id.to_string() },
+            NotesGetParams {
+                id: note_id.to_string(),
+            },
             "notes_read",
         )
         .await
@@ -203,7 +202,9 @@ impl PimCapability for MacOSPim {
             .call_pim(METHOD_NOTES_FOLDERS, (), "notes_folders")
             .await?;
         let folders: Vec<String> = resp.folders.into_iter().map(|f| f.name).collect();
-        self.cache.notes_folders.set("notes_folders".to_string(), folders.clone());
+        self.cache
+            .notes_folders
+            .set("notes_folders".to_string(), folders.clone());
         Ok(folders)
     }
 
@@ -254,15 +255,13 @@ impl PimCapability for MacOSPim {
                 "calendar_create_event",
             )
             .await?;
-        self.cache.calendar_calendars.invalidate_prefix("calendar_calendars");
+        self.cache
+            .calendar_calendars
+            .invalidate_prefix("calendar_calendars");
         Ok(resp.id)
     }
 
-    async fn calendar_update_event(
-        &self,
-        event_id: &str,
-        event: NewCalendarEvent,
-    ) -> Result<()> {
+    async fn calendar_update_event(&self, event_id: &str, event: NewCalendarEvent) -> Result<()> {
         let _: serde_json::Value = self
             .call_pim(
                 METHOD_CALENDAR_UPDATE,
@@ -277,7 +276,9 @@ impl PimCapability for MacOSPim {
                 "calendar_update_event",
             )
             .await?;
-        self.cache.calendar_calendars.invalidate_prefix("calendar_calendars");
+        self.cache
+            .calendar_calendars
+            .invalidate_prefix("calendar_calendars");
         Ok(())
     }
 
@@ -291,7 +292,9 @@ impl PimCapability for MacOSPim {
                 "calendar_delete_event",
             )
             .await?;
-        self.cache.calendar_calendars.invalidate_prefix("calendar_calendars");
+        self.cache
+            .calendar_calendars
+            .invalidate_prefix("calendar_calendars");
         Ok(())
     }
 
@@ -302,7 +305,9 @@ impl PimCapability for MacOSPim {
         let resp: CalendarListsResult = self
             .call_pim(METHOD_CALENDAR_LISTS, (), "calendar_calendars")
             .await?;
-        self.cache.calendar_calendars.set("calendar_calendars".to_string(), resp.calendars.clone());
+        self.cache
+            .calendar_calendars
+            .set("calendar_calendars".to_string(), resp.calendars.clone());
         Ok(resp.calendars)
     }
 
@@ -325,7 +330,9 @@ impl PimCapability for MacOSPim {
                 "reminders_list",
             )
             .await?;
-        self.cache.reminders_list.set(cache_key, resp.reminders.clone());
+        self.cache
+            .reminders_list
+            .set(cache_key, resp.reminders.clone());
         Ok(resp.reminders)
     }
 
@@ -354,8 +361,12 @@ impl PimCapability for MacOSPim {
                 "reminders_create",
             )
             .await?;
-        self.cache.reminders_list.invalidate_prefix("reminders_list:");
-        self.cache.reminders_lists.invalidate_prefix("reminders_lists");
+        self.cache
+            .reminders_list
+            .invalidate_prefix("reminders_list:");
+        self.cache
+            .reminders_lists
+            .invalidate_prefix("reminders_lists");
         Ok(resp.id)
     }
 
@@ -369,8 +380,12 @@ impl PimCapability for MacOSPim {
                 "reminders_complete",
             )
             .await?;
-        self.cache.reminders_list.invalidate_prefix("reminders_list:");
-        self.cache.reminders_lists.invalidate_prefix("reminders_lists");
+        self.cache
+            .reminders_list
+            .invalidate_prefix("reminders_list:");
+        self.cache
+            .reminders_lists
+            .invalidate_prefix("reminders_lists");
         Ok(())
     }
 
@@ -384,8 +399,12 @@ impl PimCapability for MacOSPim {
                 "reminders_delete",
             )
             .await?;
-        self.cache.reminders_list.invalidate_prefix("reminders_list:");
-        self.cache.reminders_lists.invalidate_prefix("reminders_lists");
+        self.cache
+            .reminders_list
+            .invalidate_prefix("reminders_list:");
+        self.cache
+            .reminders_lists
+            .invalidate_prefix("reminders_lists");
         Ok(())
     }
 
@@ -396,7 +415,9 @@ impl PimCapability for MacOSPim {
         let resp: RemindersListsResult = self
             .call_pim(METHOD_REMINDERS_LISTS, (), "reminders_lists")
             .await?;
-        self.cache.reminders_lists.set("reminders_lists".to_string(), resp.lists.clone());
+        self.cache
+            .reminders_lists
+            .set("reminders_lists".to_string(), resp.lists.clone());
         Ok(resp.lists)
     }
 

@@ -44,6 +44,7 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
         session: &state.session_key,
         tokens: state.total_tokens,
         is_connected: state.is_connected,
+        tool_progress_mode: state.tool_progress_mode,
     };
     status.render(frame, chunks[2]);
 

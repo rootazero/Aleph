@@ -366,6 +366,15 @@ impl HandlerRegistry {
             )
         });
 
+        // Session truncate (requires SessionStore — placeholder)
+        registry.register("session.truncate", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "session.truncate requires SessionStore — wire in Gateway startup".to_string(),
+            )
+        });
+
         // MCP Approval handlers
         registry.register(
             "mcp.list_pending_approvals",

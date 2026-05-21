@@ -87,20 +87,20 @@ macro_rules! register_handler {
     }};
 }
 
+mod agents;
 mod auth;
-mod session;
 mod config;
 mod mcp;
 mod memory;
+mod session;
 mod settings;
 mod system;
-mod agents;
 
+pub(in crate::commands::start) use agents::*;
 pub(in crate::commands::start) use auth::*;
-pub(in crate::commands::start) use session::*;
 pub(in crate::commands::start) use config::*;
 pub(in crate::commands::start) use mcp::*;
 pub(in crate::commands::start) use memory::*;
+pub(in crate::commands::start) use session::*;
 pub(in crate::commands::start) use settings::*;
 pub(in crate::commands::start) use system::*;
-pub(in crate::commands::start) use agents::*;

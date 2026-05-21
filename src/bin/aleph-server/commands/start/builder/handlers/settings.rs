@@ -666,4 +666,3 @@ pub(in crate::commands::start) fn register_config_handlers(
 }
 
 // ─── register_daemon_handlers ────────────────────────────────────────────────
-

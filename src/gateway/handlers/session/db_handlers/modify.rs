@@ -265,6 +265,59 @@ pub async fn handle_compact_db(
     }
 }
 
+/// Handle session.truncate RPC request with database backend.
+///
+/// Removes messages from the tail of a session, keeping only the first
+/// `keep_count` messages by chronological order. Used by the TUI `/undo`
+/// command to drop the most recent user+assistant turn pair.
+pub async fn handle_truncate_db(
+    request: JsonRpcRequest,
+    manager: Arc<dyn SessionStore>,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(Value::Object(map)) => map,
+        _ => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
+        }
+    };
+
+    let session_key_str = match params.get("session_key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
+    };
+
+    let keep_count = match params.get("keep_count").and_then(|v| v.as_u64()) {
+        Some(n) => n as usize,
+        None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing keep_count"),
+    };
+
+    let key = match SessionKey::from_key_string(session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    match manager.truncate_messages(&key, keep_count).await {
+        Ok(result) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "messages_removed": result.messages_removed,
+                "tokens_removed_estimate": result.tokens_removed_estimate,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Truncate failed: {}", e),
+        ),
+    }
+}
+
 /// Handle sessions.set_topic RPC request with database backend
 ///
 /// Params:
