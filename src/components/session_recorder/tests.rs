@@ -221,6 +221,7 @@ fn test_event_to_part_tool_completed() {
         started_at: 1000,
         completed_at: 2000,
         token_usage: TokenUsage::default(),
+        plan_step_id: None,
         session_id: None,
     });
 

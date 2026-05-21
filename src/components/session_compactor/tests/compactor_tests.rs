@@ -218,6 +218,7 @@ async fn test_handler_handles_tool_call_completed() {
         started_at: 1000,
         completed_at: 2000,
         token_usage: TokenUsage::default(),
+        plan_step_id: None,
         session_id: None,
     };
 

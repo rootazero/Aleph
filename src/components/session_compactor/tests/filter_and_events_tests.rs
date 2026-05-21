@@ -506,6 +506,7 @@ async fn test_event_handler_tool_completed_with_prune_disabled() {
         started_at: 1000,
         completed_at: 2000,
         token_usage: TokenUsage::default(),
+        plan_step_id: None,
         session_id: None,
     };
 
@@ -536,6 +537,7 @@ async fn test_event_handler_tool_completed_with_prune_enabled() {
         started_at: 1000,
         completed_at: 2000,
         token_usage: TokenUsage::default(),
+        plan_step_id: None,
         session_id: None,
     };
 
