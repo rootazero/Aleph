@@ -128,6 +128,11 @@ fn spawn_background(handle: tauri::AppHandle) {
                 }
             };
             rt.block_on(async move {
+                // First launch / post-update: force any stale daemon offline
+                // so the `aleph-server` bundled in this app takes over.
+                let version = handle.package_info().version.to_string();
+                daemon::reconcile_for_version(&version).await;
+
                 match daemon::ensure_ready().await {
                     Ok(()) => reveal_panel(&handle),
                     Err(e) => {

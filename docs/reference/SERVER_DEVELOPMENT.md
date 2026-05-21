@@ -195,15 +195,16 @@ cd apps/macos-native && xcodegen generate && xcodebuild -scheme Aleph -configura
 cd apps/macos-native && xcodebuild -scheme Aleph -configuration Debug test -destination 'platform=macOS'
 ```
 
-### Pure Server Install (no desktop)
+### Server-Only Build (no desktop app)
 
 ```bash
-# Install via curl (downloads latest release)
-curl -fsSL https://raw.githubusercontent.com/user/aleph/main/scripts/install.sh | bash
-
-# Or build from source
+# Build the daemon binary from source
 cargo build --bin aleph-server --release
 ```
+
+End users install the native desktop app (`.dmg` / `.msi` / `.deb` from the
+GitHub releases page), which bundles this daemon. The standalone build above
+is for headless / development use.
 
 ## 发布流程
 

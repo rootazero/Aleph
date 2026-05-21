@@ -16,6 +16,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/aleph-server"],
     "category": "Productivity",
     "icon": [
       "icons/32x32.png",

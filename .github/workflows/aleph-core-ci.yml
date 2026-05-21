@@ -168,6 +168,22 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
             libayatana-appindicator3-dev libssl-dev
 
+      # tauri-build requires the externalBin files to exist; empty
+      # placeholders satisfy `cargo check` / `clippy` without a daemon build.
+      - name: Stage externalBin placeholders
+        shell: bash
+        run: |
+          triple="$(rustc -vV | sed -n 's/host: //p')"
+          mkdir -p desktop/shell/binaries
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            touch "desktop/shell/binaries/aleph-server-$triple.exe"
+          else
+            touch "desktop/shell/binaries/aleph-server-$triple"
+          fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            touch "desktop/shell/binaries/AlephBridge-$triple"
+          fi
+
       - name: Check
         run: cargo check -p aleph-desktop-shell
       - name: Clippy

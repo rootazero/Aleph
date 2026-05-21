@@ -1,7 +1,11 @@
-name: Aleph Server Release
+name: Aleph Release
 
 # Manual trigger only — build from a tested, stable commit.
 # Version is read from the VERSION file in the repo root.
+#
+# Aleph ships as a native desktop app per platform: the Tauri shell bundles
+# the `aleph-server` daemon (and, on macOS, the Swift bridge) inside the app.
+# There is no separate bash-script install path.
 on:
   workflow_dispatch:
 
@@ -9,138 +13,75 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Build (${{ matrix.asset }})
+  desktop-app:
+    name: Desktop App (${{ matrix.asset }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
-            target: aarch64-apple-darwin
-            asset: aleph-darwin-aarch64
+            asset: aleph-macos
           - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            asset: aleph-linux-x86_64
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            asset: aleph-linux-aarch64
+            asset: aleph-linux
           - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            asset: aleph-windows-x86_64
+            asset: aleph-windows
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-
-      - name: Read version from VERSION file
-        id: version
-        shell: bash
-        run: echo "value=v$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
-
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
       - uses: Swatinem/rust-cache@v2
 
       - name: Install protoc (macOS)
         if: startsWith(matrix.os, 'macos')
         run: brew install protobuf
 
-      - name: Build Swift bridge (macOS)
-        if: startsWith(matrix.os, 'macos')
-        run: |
-          cd desktop/macos/bridge && swift build -c release
-          mkdir -p $HOME/.aleph/bin
-          cp .build/release/AlephBridge $HOME/.aleph/bin/aleph-bridge
-
-      - name: Install protoc (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: Install protoc (Windows)
         if: startsWith(matrix.os, 'windows')
         run: choco install protoc -y
 
+      # The daemon needs xcb/X11/etc.; Tauri needs the WebView + GTK headers.
       - name: Install Linux system libraries
         if: startsWith(matrix.os, 'ubuntu')
         run: |
-          sudo apt-get install -y \
+          sudo apt-get update && sudo apt-get install -y \
+            protobuf-compiler \
             libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
             libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
             libx11-dev libxrandr-dev libxi-dev libxtst-dev \
             libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
-            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
-
-      # Panel WASM dist is pre-built and committed to git — no WASM build needed.
-      - name: Build server
-        run: cargo build --bin aleph-server --release --target ${{ matrix.target }}
-
-      - name: Package (macOS — includes Swift bridge)
-        if: startsWith(matrix.os, 'macos')
-        shell: bash
-        run: |
-          cp "target/${{ matrix.target }}/release/aleph-server" aleph-server
-          cp "desktop/macos/bridge/.build/release/AlephBridge" aleph-bridge
-          tar -czf "${{ matrix.asset }}.tar.gz" aleph-server aleph-bridge
-
-      - name: Package (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
-        shell: bash
-        run: |
-          cp "target/${{ matrix.target }}/release/aleph-server" aleph-server
-          tar -czf "${{ matrix.asset }}.tar.gz" aleph-server
-
-      - name: Package (Windows)
-        if: startsWith(matrix.os, 'windows')
-        shell: pwsh
-        run: |
-          Copy-Item "target/${{ matrix.target }}/release/aleph-server.exe" aleph-server.exe
-          Compress-Archive -Path aleph-server.exe -DestinationPath "${{ matrix.asset }}.zip"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.asset }}
-          path: |
-            ${{ matrix.asset }}.tar.gz
-            ${{ matrix.asset }}.zip
-
-    outputs:
-      version: ${{ steps.version.outputs.value }}
-
-  desktop-shell:
-    name: Desktop Shell (${{ matrix.asset }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            asset: aleph-desktop-darwin
-          - os: ubuntu-24.04
-            asset: aleph-desktop-linux
-          - os: windows-latest
-            asset: aleph-desktop-windows
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      # Tauri needs the system WebView + GTK/AppIndicator headers on Linux.
-      # macOS uses the system WKWebView; Windows uses bundled WebView2.
-      - name: Install Tauri Linux dependencies
-        if: startsWith(matrix.os, 'ubuntu')
-        run: |
-          sudo apt-get update && sudo apt-get install -y \
+            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev \
             libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
-            libayatana-appindicator3-dev libssl-dev patchelf
+            libayatana-appindicator3-dev patchelf
+
+      - name: Build Swift bridge (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: cd desktop/macos/bridge && swift build -c release
+
+      # Panel WASM dist is pre-built and committed to git — no WASM build here.
+      - name: Build aleph-server daemon
+        run: cargo build --bin aleph-server --release
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
-      # Tauri cannot cross-compile — each runner bundles its own platform.
-      - name: Build desktop shell installers
-        working-directory: desktop/shell
-        run: cargo tauri build
+      # Stage the daemon (+ Swift bridge) as Tauri externalBin inputs, then
+      # bundle. Tauri cannot cross-compile — each runner builds its own app.
+      - name: Stage bundled binaries and build the app
+        shell: bash
+        run: |
+          triple="$(rustc -vV | sed -n 's/host: //p')"
+          mkdir -p desktop/shell/binaries
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "target/release/aleph-server.exe" "desktop/shell/binaries/aleph-server-$triple.exe"
+          else
+            cp "target/release/aleph-server" "desktop/shell/binaries/aleph-server-$triple"
+          fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp "desktop/macos/bridge/.build/release/AlephBridge" \
+               "desktop/shell/binaries/AlephBridge-$triple"
+          fi
+          version="$(tr -d '[:space:]' < VERSION)"
+          cd desktop/shell && cargo tauri build --config "{\"version\":\"$version\"}"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -156,11 +97,10 @@ jobs:
 
   release:
     name: Create Release
-    needs: [build, desktop-shell]
-    # Release as long as the daemon build succeeded — a desktop-shell build
-    # failure must not block a daemon release; its installers are simply
-    # omitted from the release in that case.
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    needs: [desktop-app]
+    # Release whatever platforms succeeded — one platform's build failure
+    # must not block the others' installers from shipping.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -197,8 +137,6 @@ jobs:
           name: Aleph ${{ steps.version.outputs.value }}
           body_path: /tmp/release_body.md
           files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.zip
             artifacts/**/*.dmg
             artifacts/**/*.deb
             artifacts/**/*.AppImage

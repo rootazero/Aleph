@@ -49,6 +49,130 @@ pub fn stop_daemon() {
     }
 }
 
+/// Force any previously running daemon offline so the `aleph-server` bundled
+/// inside this app takes over. Runs once per app version — first launch and
+/// after every update — tracked by a marker file.
+///
+/// The pre-app bash installers registered a keep-alive autostart service for
+/// a separate `aleph-server`; left in place it would resurrect a stale daemon
+/// and shadow the bundled one. This removes that legacy service and stops
+/// whatever daemon is currently running; `ensure_ready` then launches the
+/// bundled binary.
+pub async fn reconcile_for_version(version: &str) {
+    let Some(marker) = version_marker() else {
+        return;
+    };
+    if std::fs::read_to_string(&marker).is_ok_and(|v| v.trim() == version) {
+        return; // already reconciled for this app version — fast path
+    }
+    tracing::info!("reconciling daemon for app version {version}");
+
+    remove_legacy_autostart();
+    stop_daemon();
+    wait_until_port_closed().await;
+
+    if let Some(parent) = marker.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&marker, version) {
+        tracing::warn!("could not record daemon-version marker: {e}");
+    }
+}
+
+/// Marker file recording the app version the daemon was last reconciled for.
+fn version_marker() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".aleph").join(".desktop-shell-daemon-version"))
+}
+
+/// Poll until the daemon port is free, bounded so a stuck shutdown cannot
+/// hang startup. A still-open port afterwards is harmless — `ensure_ready`
+/// then treats it as a daemon mid-boot and waits on `/ready`.
+async fn wait_until_port_closed() {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
+    while port_open().await {
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!("daemon port still open after stop; continuing anyway");
+            return;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Best-effort removal of the bash-installer-era launchd autostart service so
+/// a stale `aleph-server` cannot resurrect itself. A no-op when none exists.
+#[cfg(target_os = "macos")]
+fn remove_legacy_autostart() {
+    use std::process::Command;
+
+    let Some(plist) =
+        dirs::home_dir().map(|h| h.join("Library/LaunchAgents/com.aleph.server.plist"))
+    else {
+        return;
+    };
+    if !plist.exists() {
+        return;
+    }
+    // `launchctl bootout` needs the GUI domain target; resolve the uid
+    // without pulling in a libc dependency.
+    if let Ok(out) = Command::new("id").arg("-u").output() {
+        let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !uid.is_empty() {
+            let _ = Command::new("launchctl")
+                .args(["bootout", &format!("gui/{uid}/com.aleph.server")])
+                .output();
+        }
+    }
+    let _ = std::fs::remove_file(&plist);
+    tracing::info!("removed legacy launchd autostart service");
+}
+
+/// Best-effort removal of the bash-installer-era systemd autostart service.
+#[cfg(target_os = "linux")]
+fn remove_legacy_autostart() {
+    use std::process::Command;
+
+    let Some(unit) =
+        dirs::home_dir().map(|h| h.join(".config/systemd/user/aleph.service"))
+    else {
+        return;
+    };
+    if !unit.exists() {
+        return;
+    }
+    let _ = Command::new("systemctl")
+        .args(["--user", "disable", "--now", "aleph"])
+        .output();
+    let _ = std::fs::remove_file(&unit);
+    tracing::info!("removed legacy systemd autostart service");
+}
+
+/// Best-effort removal of the PowerShell-installer-era Task Scheduler entry.
+#[cfg(target_os = "windows")]
+fn remove_legacy_autostart() {
+    if !schtasks(&["/Query", "/TN", "AlephServer"]).is_ok_and(|o| o.status.success()) {
+        return; // no legacy task registered
+    }
+    let _ = schtasks(&["/End", "/TN", "AlephServer"]);
+    let _ = schtasks(&["/Delete", "/TN", "AlephServer", "/F"]);
+    tracing::info!("removed legacy Task Scheduler autostart entry");
+}
+
+/// Run `schtasks` without flashing a console window.
+#[cfg(target_os = "windows")]
+fn schtasks(args: &[&str]) -> std::io::Result<std::process::Output> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new("schtasks")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+}
+
+/// Other platforms ship no legacy installer, so there is nothing to remove.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn remove_legacy_autostart() {}
+
 /// Poll `/ready` until it returns 200 or the timeout elapses.
 async fn wait_until_ready() -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
@@ -109,12 +233,13 @@ fn daemon_bin_name() -> &'static str {
     }
 }
 
-/// Resolve the `aleph-server` binary: bundled next to the shell, then a
-/// separately installed copy, then anything on `PATH`.
+/// Resolve the `aleph-server` binary: the copy bundled next to the shell
+/// executable (Tauri `externalBin`, also where `cargo run` leaves it),
+/// falling back to anything on `PATH`.
 fn resolve_daemon_binary() -> Option<PathBuf> {
     let name = daemon_bin_name();
 
-    // 1. Bundled / dev build — a sibling of the shell executable.
+    // 1. Bundled inside the app, or a sibling of the dev build.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(candidate) = exe.parent().map(|d| d.join(name)) {
             if candidate.is_file() {
@@ -122,14 +247,7 @@ fn resolve_daemon_binary() -> Option<PathBuf> {
             }
         }
     }
-    // 2. A separately installed daemon (install.sh / install.ps1 target).
-    if let Some(home) = dirs::home_dir() {
-        let candidate = home.join(".aleph").join("bin").join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    // 3. Anything on PATH.
+    // 2. Anything on `PATH` (covers unusual dev setups).
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(name))

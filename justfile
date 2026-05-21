@@ -46,16 +46,52 @@ build-debug: wasm
     cargo build -p alephcore --bin {{server_bin}}
     @echo "✓ Server (debug): {{debug_dir}}/{{server_bin}}"
 
-# ─── Desktop Shell (Tauri v2 native app) ───
+# ─── Desktop App (Tauri v2 native shell, with aleph-server bundled in) ───
 
-# Run the desktop shell in dev mode (rebuilds the daemon first)
+# Stage the daemon (+ macOS Swift bridge) as Tauri externalBin inputs.
+# `profile` is the target/ subdir to copy the daemon from (debug | release).
+_stage-shell-binaries profile:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    triple="$(rustc -vV | sed -n 's/host: //p')"
+    ext=""; [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]] && ext=".exe"
+    mkdir -p {{shell_dir}}/binaries
+    cp "target/{{profile}}/{{server_bin}}$ext" "{{shell_dir}}/binaries/aleph-server-$triple$ext"
+    if [[ "$OSTYPE" == darwin* ]]; then
+        cp "{{release_dir}}/aleph-bridge" "{{shell_dir}}/binaries/AlephBridge-$triple"
+    fi
+
+# Create empty externalBin placeholders so `cargo check` / `clippy` of the
+# shell crate pass without a full daemon build (tauri-build requires the
+# externalBin files to exist). `touch` leaves any real staged binary intact.
+_stage-shell-placeholders:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    triple="$(rustc -vV | sed -n 's/host: //p')"
+    ext=""; [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]] && ext=".exe"
+    mkdir -p {{shell_dir}}/binaries
+    touch "{{shell_dir}}/binaries/aleph-server-$triple$ext"
+    if [[ "$OSTYPE" == darwin* ]]; then
+        touch "{{shell_dir}}/binaries/AlephBridge-$triple"
+    fi
+
+# Run the desktop app in dev mode (rebuilds + stages the daemon first)
 shell-dev: build-debug
-    cd {{shell_dir}} && cargo tauri dev
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$OSTYPE" == darwin* ]]; then just swift-bridge; fi
+    just _stage-shell-binaries debug
+    version="$(tr -d '[:space:]' < VERSION)"
+    cd {{shell_dir}} && cargo tauri dev --config "{\"version\":\"$version\"}"
 
-# Build the desktop shell installers (.app/.dmg, .msi, .deb, …)
+# Build the desktop app installers (.dmg/.msi/.deb/…), daemon bundled inside
 shell-build: build
-    cd {{shell_dir}} && cargo tauri build
-    @echo "✓ Installers: {{release_dir}}/bundle/"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just _stage-shell-binaries release
+    version="$(tr -d '[:space:]' < VERSION)"
+    cd {{shell_dir}} && cargo tauri build --config "{\"version\":\"$version\"}"
+    echo "✓ Installers: {{release_dir}}/bundle/"
 
 # ─── Single Stage ───
 
@@ -104,7 +140,7 @@ check-desktop:
     cargo check -p aleph-desktop
 
 # Quick check: desktop shell compiles
-check-shell:
+check-shell: _stage-shell-placeholders
     cargo check -p aleph-desktop-shell
 
 # Run core tests
@@ -159,7 +195,7 @@ clippy-desktop-macos:
     cargo clippy -p aleph-desktop-macos -- -D warnings
 
 # Clippy on the desktop shell
-clippy-shell:
+clippy-shell: _stage-shell-placeholders
     cargo clippy -p aleph-desktop-shell -- -D warnings
 
 # Clippy everything

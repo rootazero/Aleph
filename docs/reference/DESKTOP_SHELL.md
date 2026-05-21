@@ -56,8 +56,16 @@ The daemon is **not** a child of the shell. On Unix the shell runs
 `aleph-server --daemon start`, which double-forks and detaches itself; on
 Windows it spawns `aleph-server start` with `DETACHED_PROCESS`. Either way the
 daemon outlives the shell (R5/R6). The OS-level `flock` singleton guarantees
-only one daemon ever runs. Binary discovery order: next to the shell
-executable → `~/.aleph/bin/aleph-server` → `PATH`.
+only one daemon ever runs.
+
+`aleph-server` is bundled inside the app (Tauri `externalBin`), so it resolves
+as a sibling of the shell executable; `PATH` is a dev-only fallback.
+
+On first launch — and after every app update, gated by a per-version marker
+file — the shell **reconciles** the daemon: it removes the pre-app
+bash-installer autostart service (the keep-alive launchd / systemd / Task
+Scheduler entry that would otherwise resurrect a stale `aleph-server`) and
+stops whatever daemon is running, so the version bundled in this app wins.
 
 ### OS notifications
 
@@ -102,16 +110,24 @@ The shell sets DOM flags via an `initialization_script`; the Panel only
 
 ## Build & release
 
+The app **is** the build artifact: `aleph-server` (and, on macOS, the Swift
+bridge) is staged as a Tauri `externalBin` and bundled inside the app, so a
+freshly installed `.dmg` / `.msi` / `.deb` is fully self-contained — there is
+no separate bash-script install path.
+
 | Command | Effect |
 |---|---|
-| `just shell-dev` | Run the shell in dev mode (rebuilds the daemon first) |
-| `just shell-build` | Produce installers (`.app`/`.dmg`, `.msi`, `.deb`, …) |
+| `just shell-dev` | Run the app in dev mode (rebuilds + stages the daemon) |
+| `just shell-build` | Produce installers (`.dmg`, `.msi`, `.deb`, …), daemon bundled in |
 | `just check-shell` / `just clippy-shell` | Compile / lint the crate |
 
-Tauri cannot cross-compile: `.github/workflows/aleph-server-release.yml` has a
-`desktop-shell` matrix job (macOS / Linux / Windows) that bundles each
-platform's installer and attaches it to the release. A daemon-build failure
-never blocks the desktop-shell job and vice versa.
+The bundle version is the `VERSION` file value (`YY.M.D`, e.g. `26.5.7`),
+injected via `cargo tauri build --config`. That form is valid semver and
+satisfies the Windows MSI version constraints.
+
+Tauri cannot cross-compile: `.github/workflows/aleph-server-release.yml`
+builds the daemon and bundles the app on a per-platform matrix
+(macOS / Linux / Windows), attaching each installer to the release.
 
 ## Follow-ups (not in this cycle)
 
@@ -122,8 +138,7 @@ never blocks the desktop-shell job and vice versa.
 - **Window drag region.** Native titlebar drag works; extending the drag
   region across the whole top bar needs a Tauri drag handler on the external
   Panel page.
-- **Self-contained bundle.** The shell currently finds an installed daemon;
-  bundling `aleph-server` inside the `.app` (Tauri `externalBin`) is optional
-  polish.
 - **Code signing / notarization.** Required for warning-free `.dmg` / `.msi`
-  distribution; a one-time account/cert cost, not a code change.
+  distribution. The bundled `externalBin` daemon must be signed with the same
+  identity as the app, or Gatekeeper blocks it — a one-time account/cert
+  cost, not a code change.

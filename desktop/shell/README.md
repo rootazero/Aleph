@@ -34,13 +34,17 @@ logic and no business UI** — those live in the Panel (R2) and the daemon
 
 ## Daemon discovery
 
-The shell looks for `aleph-server` in this order:
+`aleph-server` is bundled **inside the app** as a Tauri `externalBin`, so it
+sits next to the shell executable. The shell looks for it in this order:
 
-1. next to the shell executable (bundled / dev build),
-2. `~/.aleph/bin/aleph-server` (the `install.sh` / `install.ps1` target),
-3. anything on `PATH`.
+1. next to the shell executable (the bundled copy, or a `cargo run` build),
+2. anything on `PATH` (covers unusual dev setups).
 
 If none is found the splash shows an actionable error.
+
+On first launch — and after every app update — the shell forces any stale
+daemon offline (and removes the pre-app bash-installer autostart service) so
+the `aleph-server` bundled in this app always wins.
 
 ## Notifications & authentication
 
