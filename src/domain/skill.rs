@@ -378,6 +378,18 @@ impl SkillContent {
 
 impl ValueObject for SkillContent {}
 
+impl From<&str> for SkillContent {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for SkillContent {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SkillManifest (Aggregate Root)
 // ---------------------------------------------------------------------------
@@ -385,7 +397,7 @@ impl ValueObject for SkillContent {}
 /// The primary aggregate root for the skill system.
 ///
 /// A `SkillManifest` represents a fully resolved skill with its identity,
-/// content, eligibility rules, installation instructions, and invocation
+/// content, eligibility, installation instructions, and invocation
 /// policy. It implements `Entity<Id=SkillId>` and `AggregateRoot`.
 #[derive(Debug, Clone)]
 pub struct SkillManifest {
@@ -420,6 +432,34 @@ pub struct SkillManifest {
     /// Trigger hint — describes when this skill should be proactively invoked.
     when_to_use: Option<String>,
 }
+
+impl SkillManifest {
+    /// Create a new `SkillManifest` with required fields and sensible defaults.
+    pub fn new(
+        id: impl Into<SkillId>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        content: impl Into<SkillContent>,
+        source: SkillSource,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            plugin: None,
+            description: description.into(),
+            content: content.into(),
+            scope: PromptScope::default(),
+            bound_tool: None,
+            eligibility: EligibilitySpec::default(),
+            install_specs: Vec::new(),
+            invocation: InvocationPolicy::default(),
+            source,
+            primary_env: None,
+            homepage: None,
+            emoji: None,
+            when_to_use: None,
+        }
+    }
 
 impl SkillManifest {
     /// Create a new `SkillManifest` with required fields and sensible defaults.
