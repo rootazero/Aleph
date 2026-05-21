@@ -1,7 +1,8 @@
-//! Dashboard Teams View
+//! Teams Overview sub-view.
 //!
 //! Displays all teams (active and disbanded) with collapsible cards.
 //! Each card shows summary info when collapsed and full detail when expanded.
+//! Migrated from the former /dashboard/teams route into the new /teams tab.
 
 use crate::api::teams::{TeamDetail, TeamSummary, TeamsApi};
 use crate::components::ui::*;
@@ -11,11 +12,11 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 // ============================================================================
-// TeamsView — top-level component
+// OverviewView — Teams tab "Overview" sub-view
 // ============================================================================
 
 #[component]
-pub fn TeamsView() -> impl IntoView {
+pub fn OverviewView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
 

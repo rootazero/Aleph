@@ -61,7 +61,12 @@ pub(crate) fn resolve_plugin_handler_from_sources(
 ///
 /// Holds instances of builtin tools and provides direct invocation capabilities.
 ///
-/// TODO: Security enforcement will be reimplemented following OpenClaw's sandbox/tool-policy pattern.
+/// Security enforcement is layered, not centralised in this registry:
+/// - `GuardrailRegistry` (input / output / tool-call) covers content checks.
+/// - `WorkspaceSandbox` covers OS-level isolation.
+/// - `ApprovalGate` covers HITL escalation.
+///
+/// See docs/reference/SANDBOX.md and docs/reference/SECURITY.md.
 pub struct BuiltinToolRegistry {
     /// Search tool instance
     pub(crate) search_tool: crate::builtin_tools::SearchTool,
@@ -189,6 +194,11 @@ pub struct BuiltinToolRegistry {
     pub(crate) browser_press_key_tool: crate::builtin_tools::browser_tools::BrowserPressKeyTool,
     pub(crate) browser_wait_for_tool: crate::builtin_tools::browser_tools::BrowserWaitForTool,
     pub(crate) browser_console_tool: crate::builtin_tools::browser_tools::BrowserConsoleTool,
+    pub(crate) browser_hover_tool: crate::builtin_tools::browser_tools::BrowserHoverTool,
+    pub(crate) browser_scroll_tool: crate::builtin_tools::browser_tools::BrowserScrollTool,
+    pub(crate) browser_pdf_tool: crate::builtin_tools::browser_tools::BrowserPdfTool,
+    pub(crate) browser_network_tool: crate::builtin_tools::browser_tools::BrowserNetworkTool,
+    pub(crate) browser_dialog_tool: crate::builtin_tools::browser_tools::BrowserDialogTool,
     pub(crate) browser_profile_tool: crate::builtin_tools::browser_tools::BrowserProfileTool,
     /// Shared session key handle for memory_search scope=current_session
     pub(super) memory_session_key_handle: Option<Arc<RwLock<String>>>,
@@ -427,14 +437,12 @@ impl BuiltinToolRegistry {
 
     /// Check if an operation is permitted
     ///
-    /// TODO: Implement tool policy following OpenClaw's sandbox/tool-policy pattern.
-    /// Currently all operations are permitted; safety is enforced by:
-    /// - CommandChecker (blocks dangerous shell commands)
-    /// - PathPermissionChecker (sandboxes file operations)
+    /// Currently a pass-through; safety is enforced layered:
+    /// - `CommandChecker` (blocks dangerous shell commands)
+    /// - `PathPermissionChecker` (sandboxes file operations)
+    /// - See docs/reference/SANDBOX.md and docs/reference/SECURITY.md.
     #[allow(unused_variables)]
     pub(crate) fn check_capability(&self, tool_name: &str, arguments: &Value) -> Result<()> {
-        // TODO: Implement OpenClaw-style tool policy
-        // See: /Volumes/TBU4/Workspace/openclaw/src/agents/pi-tools.policy.ts
         Ok(())
     }
 }
@@ -762,6 +770,21 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "browser_console" => {
                 Box::pin(async move { self.browser_console_tool.call_json(arguments).await })
+            }
+            "browser_hover" => {
+                Box::pin(async move { self.browser_hover_tool.call_json(arguments).await })
+            }
+            "browser_scroll" => {
+                Box::pin(async move { self.browser_scroll_tool.call_json(arguments).await })
+            }
+            "browser_pdf" => {
+                Box::pin(async move { self.browser_pdf_tool.call_json(arguments).await })
+            }
+            "browser_network" => {
+                Box::pin(async move { self.browser_network_tool.call_json(arguments).await })
+            }
+            "browser_dialog" => {
+                Box::pin(async move { self.browser_dialog_tool.call_json(arguments).await })
             }
             "browser_profile" => {
                 Box::pin(async move { self.browser_profile_tool.call_json(arguments).await })

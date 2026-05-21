@@ -71,6 +71,12 @@ pub struct TopicEvent {
     /// Timestamp (milliseconds since epoch)
     #[serde(default)]
     pub timestamp: u64,
+    /// Snapshot of the `StateVersionTracker` at emit time. Populated only
+    /// for events emitted right after a presence/health/config bump, via
+    /// [`TopicEvent::with_state_version`]. Skipped from the wire when
+    /// `None` so non-bump events keep their original envelope size.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub state_version: Option<crate::gateway::state_version::StateVersion>,
 }
 
 impl TopicEvent {
@@ -83,7 +89,19 @@ impl TopicEvent {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64,
+            state_version: None,
         }
+    }
+
+    /// Attach a state-version snapshot to this event. Call right after a
+    /// `state_versions.bump_*()` so subscribers can advance their cached
+    /// version baseline without a separate round-trip.
+    pub fn with_state_version(
+        mut self,
+        version: crate::gateway::state_version::StateVersion,
+    ) -> Self {
+        self.state_version = Some(version);
+        self
     }
 
     /// Convert to JSON-RPC notification format
@@ -457,5 +475,38 @@ mod tests {
         let filter = TopicFilter::all();
         assert!(filter.matches("anything"));
         assert!(filter.matches("any.nested.topic"));
+    }
+
+    #[test]
+    fn topic_event_with_state_version_roundtrips() {
+        let snap = crate::gateway::state_version::StateVersion {
+            presence: 7,
+            health: 2,
+            config: 0,
+        };
+        let ev = TopicEvent::new("presence.joined", serde_json::json!({}))
+            .with_state_version(snap);
+        assert_eq!(ev.state_version, Some(snap));
+
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("state_version"));
+
+        let back: TopicEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.state_version, Some(snap));
+    }
+
+    #[test]
+    fn topic_event_without_version_omits_field() {
+        let ev = TopicEvent::new("presence.joined", serde_json::json!({}));
+        assert!(ev.state_version.is_none());
+
+        // skip_serializing_if keeps the wire envelope unchanged for
+        // non-bump events.
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(!json.contains("state_version"));
+
+        // Absent field deserializes back to None via #[serde(default)].
+        let back: TopicEvent = serde_json::from_str(&json).unwrap();
+        assert!(back.state_version.is_none());
     }
 }

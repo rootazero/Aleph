@@ -184,6 +184,12 @@ impl SharedArena {
         current: Option<String>,
         completed: Option<usize>,
     ) -> Result<(), String> {
+        if self.status != ArenaStatus::Active {
+            return Err(format!(
+                "Cannot report progress: arena is {:?}, not Active",
+                self.status
+            ));
+        }
         if !self.slots.contains_key(agent_id) {
             return Err(format!(
                 "Agent '{}' is not a participant in this arena",
@@ -396,6 +402,25 @@ mod tests {
         let drained = arena.drain_shared_facts();
         assert_eq!(drained.len(), 1);
         assert!(arena.shared_facts().is_empty());
+    }
+
+    #[test]
+    fn report_progress_fails_when_not_active() {
+        let mut arena = SharedArena::new(test_manifest(&["agent-a"]));
+        let result = arena.report_progress(
+            &"agent-a".to_string(),
+            Some("task 1".to_string()),
+            Some(1),
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Cannot report progress: arena is Created"));
+
+        arena.activate().unwrap();
+        assert!(arena
+            .report_progress(&"agent-a".to_string(), Some("task 1".to_string()), Some(1))
+            .is_ok());
     }
 
     #[test]

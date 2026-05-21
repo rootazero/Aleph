@@ -208,6 +208,16 @@ impl WorktreeSandbox {
 
 #[async_trait::async_trait]
 impl crate::sandbox::Sandbox for WorktreeSandbox {
+    fn summary(&self) -> Option<crate::sandbox::summary::SandboxSummary> {
+        // Worktree isolation is workspace-tree only — there is no OS-level
+        // process sandbox layered on top. The LLM should know this so it
+        // does not assume seatbelt/landlock enforcement when a subagent
+        // delegates here.
+        Some(crate::sandbox::summary::SandboxSummary::isolated_worktree(
+            self.worktree_path.clone(),
+        ))
+    }
+
     async fn execute(
         &self,
         command: crate::sandbox::SandboxCommand,

@@ -1,6 +1,5 @@
 use super::*;
 
-
 // ─── register_session_handlers ───────────────────────────────────────────────
 
 pub(in crate::commands::start) fn register_session_handlers(
@@ -61,6 +60,12 @@ pub(in crate::commands::start) fn register_session_handlers(
     );
     register_handler!(
         server,
+        "session.truncate",
+        session_handlers::handle_truncate_db,
+        session_store
+    );
+    register_handler!(
+        server,
         "sessions.new",
         session_handlers::handle_new_session_db,
         session_store
@@ -115,6 +120,7 @@ pub(in crate::commands::start) fn register_session_handlers(
         println!("  - session.create     : Create a new session");
         println!("  - session.usage      : Get session token/message stats");
         println!("  - session.compact    : Compact session history");
+        println!("  - session.truncate   : Truncate session history to first N messages");
         println!("  - sessions.compaction.list    : List compaction checkpoints");
         println!("  - sessions.compaction.restore : Restore session to checkpoint");
         println!("  - sessions.compaction.branch  : Branch new session from checkpoint");
@@ -223,4 +229,3 @@ pub(in crate::commands::start) fn register_channel_handlers(
 }
 
 // ─── setup_config_watcher ────────────────────────────────────────────────────
-

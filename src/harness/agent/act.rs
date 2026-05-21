@@ -10,6 +10,16 @@ use crate::providers::adapter::NativeToolCall;
 use crate::session::events::{now_ms, SessionEvent, ToolOutput, TurnId};
 use crate::session::service::SessionId;
 
+/// Pick the effective wall-clock budget for a tool call. Per-tool
+/// metadata wins over the harness-wide `turn_timeout` fallback. Both
+/// unset → no timeout (legacy behaviour).
+fn resolve_effective_budget(
+    per_tool: Option<std::time::Duration>,
+    harness_fallback: Option<std::time::Duration>,
+) -> Option<std::time::Duration> {
+    per_tool.or(harness_fallback)
+}
+
 impl AgentHarness {
     /// Act phase: execute each tool_call sequentially, emitting a
     /// `ToolCallRequested` event before every call and either a `ToolResult`
@@ -130,10 +140,21 @@ impl AgentHarness {
             }
 
             let exec_fut = self.deps.tools.execute(&call.name, call.arguments.clone());
+
+            // Resolve effective wall-clock budget: per-tool metadata > global fallback.
+            let per_tool_budget = self
+                .deps
+                .tools
+                .describe(&call.name)
+                .await
+                .and_then(|d| d.metadata.max_duration_ms)
+                .map(std::time::Duration::from_millis);
+            let effective_budget = resolve_effective_budget(per_tool_budget, self.deps.turn_timeout);
+
             let exec_result: Result<
                 Result<ToolOutput, crate::tools::service::ToolError>,
                 HarnessError,
-            > = match self.deps.turn_timeout {
+            > = match effective_budget {
                 Some(budget) => {
                     let started_call = Instant::now();
                     match tokio::time::timeout(budget, exec_fut).await {
@@ -323,5 +344,34 @@ impl AgentHarness {
         }
 
         Ok(executed_count)
+    }
+}
+
+#[cfg(test)]
+mod per_tool_budget_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_effective_budget_prefers_per_tool_over_global() {
+        let per_tool = Some(std::time::Duration::from_millis(50));
+        let global = Some(std::time::Duration::from_secs(60));
+        assert_eq!(
+            resolve_effective_budget(per_tool, global),
+            Some(std::time::Duration::from_millis(50)),
+        );
+    }
+
+    #[test]
+    fn resolve_effective_budget_falls_back_to_global() {
+        let global = Some(std::time::Duration::from_secs(60));
+        assert_eq!(
+            resolve_effective_budget(None, global),
+            Some(std::time::Duration::from_secs(60)),
+        );
+    }
+
+    #[test]
+    fn resolve_effective_budget_returns_none_when_both_unset() {
+        assert_eq!(resolve_effective_budget(None, None), None);
     }
 }

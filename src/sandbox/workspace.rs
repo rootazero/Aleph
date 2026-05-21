@@ -157,6 +157,24 @@ fn session_key_to_filename(sid: &SessionId) -> String {
 
 #[async_trait]
 impl Sandbox for WorkspaceSandbox {
+    fn summary(&self) -> Option<crate::sandbox::summary::SandboxSummary> {
+        // Static-per-process snapshot: backend mechanism + workspace parent.
+        // Per-call capabilities can be tighter than this; the LLM only needs
+        // the envelope so it understands which enforcer it's facing. The
+        // `os_driver.platform()` tag is the same identifier carried into
+        // logs/telemetry, making correlation easy.
+        Some(crate::sandbox::summary::SandboxSummary {
+            backend: self.os_driver.platform(),
+            policy_tier: "workspace-write",
+            writable_roots: vec![self.workspace_root.clone()],
+            // Default operational posture allows network; per-call
+            // capability checks may tighten this. The summary reflects the
+            // envelope, not any specific call.
+            network: crate::sandbox::summary::NetworkState::AllowAll,
+            max_memory_mb: None,
+        })
+    }
+
     async fn execute(&self, mut cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         // Hook context is created on-demand at each call site rather than
         // once at the top: it borrows `&cmd`, which would block the SP-4
@@ -244,8 +262,29 @@ impl Sandbox for WorkspaceSandbox {
 
         let profile = self.os_driver.profile_for(&cmd.capabilities, &cwd)?;
 
+        // Codex-inspired child-process annotations: spawned processes can
+        // detect they're running under a sandbox without round-tripping
+        // through any API. Useful for scripts that adapt behaviour
+        // (e.g. skip network probes when network is denied). We inject
+        // here — after capability check / DNS resolution, before driver
+        // run — so the env reflects the actual posture this call executes
+        // under. Caller-supplied env wins if it set the same keys
+        // explicitly; otherwise we annotate.
+        let env_tag = sandbox_env_tag(self.os_driver.platform());
+        cmd.env
+            .entry("ALEPH_SANDBOX".to_string())
+            .or_insert_with(|| env_tag.to_string());
+        if matches!(
+            cmd.capabilities.network,
+            crate::sandbox::capabilities::NetworkPolicy::None
+        ) {
+            cmd.env
+                .entry("ALEPH_SANDBOX_NETWORK_DISABLED".to_string())
+                .or_insert_with(|| "1".to_string());
+        }
+
         let timeout = cmd.timeout.unwrap_or(self.default_timeout);
-        let output = self
+        let mut output = self
             .os_driver
             .run(
                 &cmd.program,
@@ -258,6 +297,25 @@ impl Sandbox for WorkspaceSandbox {
                 self.max_output_bytes,
             )
             .await;
+
+        // Byte-level secret scrub before any downstream consumer touches stdout/stderr.
+        // Whitelist is fed via SecurityContext.injected_secrets when threaded; for
+        // direct sandbox callers (no security context) this scrubs with an empty
+        // whitelist, which is the safe default.
+        if let Ok(ref mut out) = output {
+            let injected: &[crate::secrets::injection::InjectedSecret] = &[];
+            let stdout_scrub = crate::sandbox::scrub_secrets_bytes(&out.stdout, injected);
+            let stderr_scrub = crate::sandbox::scrub_secrets_bytes(&out.stderr, injected);
+            if !stdout_scrub.hits.is_empty() || !stderr_scrub.hits.is_empty() {
+                tracing::warn!(
+                    stdout_hits = ?stdout_scrub.hits,
+                    stderr_hits = ?stderr_scrub.hits,
+                    "sandbox bytes-scrub redacted secrets in command output"
+                );
+            }
+            out.stdout = stdout_scrub.bytes.into_owned();
+            out.stderr = stderr_scrub.bytes.into_owned();
+        }
 
         let outcome = match &output {
             Ok(out) => {
@@ -292,6 +350,15 @@ impl Sandbox for WorkspaceSandbox {
 
         output
     }
+}
+
+/// Codex-inspired env-friendly mechanism tag derived from a driver's
+/// `os/mechanism` platform string. We strip the OS prefix so child
+/// processes can branch on `ALEPH_SANDBOX=seatbelt|landlock|bwrap|token`
+/// without parsing slashes. Falls back to the full string when no slash
+/// is present.
+pub(crate) fn sandbox_env_tag(platform: &'static str) -> &'static str {
+    platform.rsplit('/').next().unwrap_or(platform)
 }
 
 /// Format a user-facing capability elevation request string. Used as the
@@ -572,5 +639,331 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.len(), 32, "16-byte digest hex = 32 chars");
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn env_tag_strips_os_prefix() {
+        assert_eq!(sandbox_env_tag("macos/seatbelt"), "seatbelt");
+        assert_eq!(sandbox_env_tag("linux/bwrap"), "bwrap");
+        assert_eq!(sandbox_env_tag("windows/token"), "token");
+        assert_eq!(sandbox_env_tag("fake"), "fake");
+    }
+
+    /// Recording driver that captures the `env` passed to `run()` so tests
+    /// can assert on injected `ALEPH_SANDBOX*` keys.
+    struct EnvRecordingDriver {
+        last_env: Arc<RwLock<HashMap<String, String>>>,
+    }
+
+    impl EnvRecordingDriver {
+        fn new() -> (Self, Arc<RwLock<HashMap<String, String>>>) {
+            let last_env = Arc::new(RwLock::new(HashMap::new()));
+            (
+                Self {
+                    last_env: last_env.clone(),
+                },
+                last_env,
+            )
+        }
+    }
+
+    #[async_trait]
+    impl OsSandboxDriverTrait for EnvRecordingDriver {
+        fn platform(&self) -> &'static str {
+            "macos/seatbelt"
+        }
+        fn is_supported(&self) -> bool {
+            true
+        }
+        fn profile_for(
+            &self,
+            _caps: &SandboxCapabilities,
+            _cwd: &Path,
+        ) -> Result<OsSandboxProfile, SandboxError> {
+            Ok(OsSandboxProfile {
+                contents: String::new(),
+                max_memory_mb: None,
+                linux_init_policy: None,
+                windows_init_policy: None,
+            })
+        }
+        async fn run(
+            &self,
+            _program: &str,
+            _args: &[String],
+            env: &HashMap<String, String>,
+            _stdin: Option<&[u8]>,
+            _cwd: &Path,
+            _profile: &OsSandboxProfile,
+            _timeout: Duration,
+            _max_output_bytes: usize,
+        ) -> Result<SandboxOutput, SandboxError> {
+            *self.last_env.write().await = env.clone();
+            Ok(SandboxOutput {
+                stdout: b"ok".to_vec(),
+                stderr: Vec::new(),
+                exit_code: Some(0),
+                signal: None,
+                truncated: false,
+                duration_ms: 1,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn injects_aleph_sandbox_env_var_with_mechanism_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (driver, last_env) = EnvRecordingDriver::new();
+        let driver_trait: Arc<dyn OsSandboxDriverTrait> = Arc::new(driver);
+        let sandbox = build_sandbox(
+            &tmp,
+            driver_trait,
+            build_gate_auto_deny(),
+            SandboxHooks::new(),
+        );
+        sandbox
+            .execute(SandboxCommand {
+                session_id: sid(),
+                program: "echo".into(),
+                args: vec!["hi".into()],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: None,
+                capabilities: SandboxCapabilities::strict(),
+                timeout: None,
+            })
+            .await
+            .expect("execute");
+        let env = last_env.read().await;
+        assert_eq!(env.get("ALEPH_SANDBOX").map(String::as_str), Some("seatbelt"));
+        assert_eq!(
+            env.get("ALEPH_SANDBOX_NETWORK_DISABLED").map(String::as_str),
+            Some("1"),
+            "strict caps deny network → env var must be set"
+        );
+    }
+
+    #[tokio::test]
+    async fn omits_network_disabled_env_var_when_network_allowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (driver, last_env) = EnvRecordingDriver::new();
+        let driver_trait: Arc<dyn OsSandboxDriverTrait> = Arc::new(driver);
+        // approve any elevation so AllowAll passes
+        let sandbox = build_sandbox(
+            &tmp,
+            driver_trait,
+            build_gate_with(ApprovalOutcome::Approved),
+            SandboxHooks::new(),
+        );
+        sandbox
+            .execute(SandboxCommand {
+                session_id: sid(),
+                program: "curl".into(),
+                args: vec!["https://example.com".into()],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: None,
+                capabilities: SandboxCapabilities {
+                    network: crate::sandbox::capabilities::NetworkPolicy::AllowAll,
+                    ..Default::default()
+                },
+                timeout: None,
+            })
+            .await
+            .expect("execute");
+        let env = last_env.read().await;
+        assert_eq!(env.get("ALEPH_SANDBOX").map(String::as_str), Some("seatbelt"));
+        assert!(
+            !env.contains_key("ALEPH_SANDBOX_NETWORK_DISABLED"),
+            "AllowAll caps must not set the network-disabled annotation"
+        );
+    }
+
+    #[tokio::test]
+    async fn caller_env_wins_over_sandbox_annotation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (driver, last_env) = EnvRecordingDriver::new();
+        let driver_trait: Arc<dyn OsSandboxDriverTrait> = Arc::new(driver);
+        let sandbox = build_sandbox(
+            &tmp,
+            driver_trait,
+            build_gate_auto_deny(),
+            SandboxHooks::new(),
+        );
+        let mut env = HashMap::new();
+        env.insert("ALEPH_SANDBOX".to_string(), "explicit-override".to_string());
+        sandbox
+            .execute(SandboxCommand {
+                session_id: sid(),
+                program: "echo".into(),
+                args: vec!["hi".into()],
+                env,
+                stdin: None,
+                cwd: None,
+                capabilities: SandboxCapabilities::strict(),
+                timeout: None,
+            })
+            .await
+            .expect("execute");
+        let env = last_env.read().await;
+        assert_eq!(
+            env.get("ALEPH_SANDBOX").map(String::as_str),
+            Some("explicit-override"),
+            "explicit caller env must not be overwritten"
+        );
+    }
+}
+
+#[cfg(test)]
+mod scrub_integration_tests {
+    use super::*;
+    use crate::sandbox::driver::OsSandboxProfile;
+    use crate::sandbox::exec_approval::gate::ApprovalGate;
+    use crate::sandbox::exec_approval::types::ApprovalConfig;
+    use crate::sandbox::hooks::SandboxHooks;
+    use std::path::Path;
+
+    /// Driver that injects a caller-supplied stdout payload, allowing tests to
+    /// plant a known secret in the output and verify it is scrubbed.
+    struct LeakDriver {
+        stdout_payload: Vec<u8>,
+        stderr_payload: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl OsSandboxDriverTrait for LeakDriver {
+        fn platform(&self) -> &'static str {
+            "leak-test"
+        }
+        fn is_supported(&self) -> bool {
+            true
+        }
+        fn profile_for(
+            &self,
+            _capabilities: &SandboxCapabilities,
+            _cwd: &Path,
+        ) -> Result<OsSandboxProfile, SandboxError> {
+            Ok(OsSandboxProfile {
+                contents: String::new(),
+                max_memory_mb: None,
+                linux_init_policy: None,
+                windows_init_policy: None,
+            })
+        }
+        async fn run(
+            &self,
+            _program: &str,
+            _args: &[String],
+            _env: &HashMap<String, String>,
+            _stdin: Option<&[u8]>,
+            _cwd: &Path,
+            _profile: &OsSandboxProfile,
+            _timeout: Duration,
+            _max_output_bytes: usize,
+        ) -> Result<SandboxOutput, SandboxError> {
+            Ok(SandboxOutput {
+                stdout: self.stdout_payload.clone(),
+                stderr: self.stderr_payload.clone(),
+                exit_code: Some(0),
+                signal: None,
+                truncated: false,
+                duration_ms: 1,
+            })
+        }
+    }
+
+    fn build_leak_sandbox(
+        tmp: &tempfile::TempDir,
+        stdout_payload: Vec<u8>,
+        stderr_payload: Vec<u8>,
+    ) -> WorkspaceSandbox {
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(LeakDriver {
+            stdout_payload,
+            stderr_payload,
+        });
+        let gate = Arc::new(ApprovalGate::new(ApprovalConfig::default(), None));
+        WorkspaceSandbox::new(tmp.path().to_path_buf(), driver, gate, SandboxHooks::new())
+    }
+
+    fn mk_cmd() -> SandboxCommand {
+        SandboxCommand {
+            session_id: crate::routing::session_key::SessionKey::ephemeral("scrub-test"),
+            program: "echo".into(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: SandboxCapabilities::strict(),
+            timeout: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_scrubs_leaked_secret_in_stdout() {
+        // Plant a recognisable OpenAI-style key in stdout.
+        let mut leak = b"out:".to_vec();
+        leak.extend_from_slice(b"sk-proj-");
+        leak.extend(std::iter::repeat(b'Z').take(40));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = build_leak_sandbox(&tmp, leak.clone(), Vec::new());
+        let output = sandbox.execute(mk_cmd()).await.expect("execute");
+
+        // The raw key must not appear in the returned bytes.
+        let raw_key: Vec<u8> = {
+            let mut k = b"sk-proj-".to_vec();
+            k.extend(std::iter::repeat(b'Z').take(40));
+            k
+        };
+        assert!(
+            !output.stdout.windows(raw_key.len()).any(|w| w == raw_key),
+            "raw secret must be redacted from stdout"
+        );
+        // The redaction marker must be present.
+        assert!(
+            output.stdout.windows(b"[REDACTED".len()).any(|w| w == b"[REDACTED"),
+            "stdout must contain [REDACTED marker"
+        );
+        // stderr is untouched (nothing was planted there).
+        assert!(output.stderr.is_empty());
+    }
+
+    #[tokio::test]
+    async fn workspace_scrubs_leaked_secret_in_stderr() {
+        // Plant a recognisable key in stderr.
+        let mut leak = b"err:".to_vec();
+        leak.extend_from_slice(b"sk-proj-");
+        leak.extend(std::iter::repeat(b'A').take(40));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = build_leak_sandbox(&tmp, Vec::new(), leak.clone());
+        let output = sandbox.execute(mk_cmd()).await.expect("execute");
+
+        let raw_key: Vec<u8> = {
+            let mut k = b"sk-proj-".to_vec();
+            k.extend(std::iter::repeat(b'A').take(40));
+            k
+        };
+        assert!(
+            !output.stderr.windows(raw_key.len()).any(|w| w == raw_key),
+            "raw secret must be redacted from stderr"
+        );
+        assert!(
+            output.stderr.windows(b"[REDACTED".len()).any(|w| w == b"[REDACTED"),
+            "stderr must contain [REDACTED marker"
+        );
+    }
+
+    #[tokio::test]
+    async fn clean_output_passes_through_unchanged() {
+        let stdout = b"hello world\n".to_vec();
+        let stderr = b"no secrets here\n".to_vec();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = build_leak_sandbox(&tmp, stdout.clone(), stderr.clone());
+        let output = sandbox.execute(mk_cmd()).await.expect("execute");
+
+        assert_eq!(output.stdout, stdout, "clean stdout must be unchanged");
+        assert_eq!(output.stderr, stderr, "clean stderr must be unchanged");
     }
 }

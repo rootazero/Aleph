@@ -5,6 +5,7 @@
 
 mod handler;
 mod per_client_buffer;
+mod probe;
 
 use super::control_plane::create_control_plane_router;
 use super::openai_api::{openai_routes, OpenAiApiState};
@@ -93,6 +94,17 @@ pub struct GatewaySharedState {
     pub idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
     pub event_scope_guard: Arc<EventScopeGuard>,
     pub audit_log: Option<crate::security::audit::SecurityAuditLog>,
+    /// Readiness flag — flipped to true after agent_init.rs completes
+    /// phase-2 wiring. Read by `/ready` HTTP probe.
+    pub ready: Arc<std::sync::atomic::AtomicBool>,
+    /// Per-process instance identifier (UUID v4). Stable for the lifetime
+    /// of the server; regenerated on every restart. Clients use it to
+    /// detect server restart vs same-server-came-back.
+    pub instance_id: String,
+    /// Unix epoch seconds at server construction. Surfaced by `/health`
+    /// and `gateway.identity.get` so clients can compute uptime without
+    /// trusting their local clock.
+    pub started_at_unix: i64,
 }
 
 /// Configuration for the Gateway server
@@ -162,6 +174,15 @@ pub struct GatewayServer {
     pub event_scope_guard: Arc<EventScopeGuard>,
     /// Server start time for uptime calculation
     pub start_time: Instant,
+    /// Per-process instance identifier (UUID v4). Stable for the lifetime
+    /// of this `GatewayServer`; regenerated on every restart.
+    pub instance_id: String,
+    /// Unix epoch seconds captured at construction. Sibling of `start_time`
+    /// in JSON-serializable form.
+    pub started_at_unix: i64,
+    /// Readiness flag — flipped to true after boot phase-2 completes.
+    /// Read by `/ready` HTTP probe.
+    pub ready: Arc<std::sync::atomic::AtomicBool>,
     /// Optional A2A server state (set during startup if A2A is enabled)
     a2a_state: Option<Arc<crate::a2a::adapter::server::A2AServerState>>,
     /// Execution adapter for OpenAI-compatible agent completions
@@ -222,6 +243,9 @@ impl GatewayServer {
             )),
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
+            instance_id: uuid::Uuid::new_v4().to_string(),
+            started_at_unix: chrono::Utc::now().timestamp(),
+            ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             a2a_state: None,
             execution_adapter: None,
             openai_agent_registry: None,
@@ -263,6 +287,9 @@ impl GatewayServer {
             )),
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
+            instance_id: uuid::Uuid::new_v4().to_string(),
+            started_at_unix: chrono::Utc::now().timestamp(),
+            ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             a2a_state: None,
             execution_adapter: None,
             openai_agent_registry: None,
@@ -340,6 +367,9 @@ impl GatewayServer {
             idempotency_guard: self.idempotency_guard.clone(),
             event_scope_guard: self.event_scope_guard.clone(),
             audit_log: None,
+            ready: self.ready.clone(),
+            instance_id: self.instance_id.clone(),
+            started_at_unix: self.started_at_unix,
         });
 
         let control_plane = create_control_plane_router();
@@ -366,6 +396,8 @@ impl GatewayServer {
 
         let mut router = Router::new()
             .route("/ws", get(handler::ws_upgrade_handler))
+            .route("/health", get(probe::handle_health))
+            .route("/ready", get(probe::handle_ready))
             .fallback_service(control_plane)
             .with_state(shared)
             .merge(openai);

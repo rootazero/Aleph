@@ -126,6 +126,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 DevicesAction::Revoke { device_id } => commands::handle_devices_revoke(&device_id),
             };
         }
+        // Shell-hook consent: pure file IO against ~/.aleph/, no tokio
+        // runtime and no instance lock required (the consent module guards
+        // its file with fs2 + atomic rename).
+        Some(Command::Hooks { action }) => {
+            return commands::handle_hooks_command(action);
+        }
         // SP-2: never returns; applies landlock+seccomp then execvp's the
         // target. Lives in the synchronous dispatcher because it has no
         // need for tokio (and must not initialize one — we're about to
@@ -211,6 +217,24 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             let code = commands::bootstrap_runtime::run(br_args).await;
             std::process::exit(code);
         }
+        Some(Command::SandboxDebug {
+            network,
+            fs_write,
+            fs_read,
+            show_summary,
+            log_denials,
+            command,
+        }) => {
+            return commands::handle_sandbox_debug(
+                network,
+                fs_write,
+                fs_read,
+                show_summary,
+                log_denials,
+                command,
+            )
+            .await;
+        }
         Some(Command::Start) | None => {
             // Continue with start logic
         }
@@ -219,6 +243,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         | Some(Command::Secret { .. })
         | Some(Command::Status { .. })
         | Some(Command::Devices { .. })
+        | Some(Command::Hooks { .. })
         | Some(Command::SandboxInit { .. })
         | Some(Command::SandboxInitWindows { .. }) => unreachable!(),
     }

@@ -39,13 +39,25 @@ impl PromptLayer for SecurityLayer {
 
         let disabled_tools = &ctx.disabled_tools;
         let security_notes = &ctx.environment_contract.security_notes;
+        let sandbox_summary = ctx.sandbox_summary.as_ref();
 
         // Only add section if there's something to report
-        if security_notes.is_empty() && disabled_tools.is_empty() {
+        if security_notes.is_empty() && disabled_tools.is_empty() && sandbox_summary.is_none() {
             return;
         }
 
         output.push_str("## Security & Constraints\n\n");
+
+        // Sandbox posture (codex-inspired): tells the LLM which enforcer
+        // it is running under so it can plan accordingly instead of
+        // discovering limits through trial-and-error.
+        if let Some(summary) = sandbox_summary {
+            for line in summary.to_prompt_lines() {
+                let line = sanitize_for_prompt(&line, SanitizeLevel::Light);
+                output.push_str(&format!("- {}\n", line));
+            }
+            output.push('\n');
+        }
 
         // Security notes
         for note in security_notes {
@@ -138,5 +150,69 @@ mod tests {
         let mut out = String::new();
         layer.inject(&mut out, &input);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn renders_sandbox_summary_when_attached() {
+        use crate::sandbox::{NetworkState, SandboxSummary};
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::security_context::SecurityContext;
+        use crate::thinker::InteractionManifest;
+        use crate::thinker::InteractionParadigm;
+
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        ctx.sandbox_summary = Some(SandboxSummary {
+            backend: "macos/seatbelt",
+            policy_tier: "workspace-write",
+            writable_roots: vec![std::path::PathBuf::from("/ws/abc")],
+            network: NetworkState::AllowAll,
+            max_memory_mb: Some(512),
+        });
+
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let _tools: Vec<crate::tools::info::ToolInfo> = vec![];
+        let input = LayerInput::context(&config, &ctx);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.contains("## Security & Constraints"));
+        assert!(out.contains("macos/seatbelt"));
+        assert!(out.contains("workspace-write"));
+        assert!(out.contains("/ws/abc"));
+        assert!(out.contains("512 MiB"));
+    }
+
+    #[test]
+    fn omits_sandbox_section_when_summary_is_none() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::security_context::SecurityContext;
+        use crate::thinker::InteractionManifest;
+        use crate::thinker::InteractionParadigm;
+
+        let ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        // sandbox_summary defaults to None; security_notes is still
+        // populated by `permissive` (one note), so the section still emits.
+        assert!(ctx.sandbox_summary.is_none());
+
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let _tools: Vec<crate::tools::info::ToolInfo> = vec![];
+        let input = LayerInput::context(&config, &ctx);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        // Header present (other notes exist) but no sandbox backend tag.
+        assert!(!out.contains("macos/seatbelt"));
+        assert!(!out.contains("linux/bwrap"));
+        assert!(!out.contains("none/disabled"));
     }
 }

@@ -44,6 +44,21 @@ pub struct LinuxInitPolicy {
     /// degrade with a warning.
     #[serde(default)]
     pub require_landlock: bool,
+
+    /// Cycle 3: codex-style defense-in-depth — when `true`, the seccomp
+    /// filter denies `socket(AF_INET|AF_INET6|AF_NETLINK)` and
+    /// `connect` with EPERM. The bubblewrap `--unshare-net` mount-ns
+    /// already removes network interfaces, but a process inside that
+    /// netns can still create `AF_INET` sockets that fail at runtime;
+    /// seccomp denies the syscall earlier so audit logs surface the
+    /// attempt clearly. AF_UNIX sockets stay allowed (needed for IPC).
+    ///
+    /// Set when [`SandboxCapabilities::network`] is
+    /// [`NetworkPolicy::None`]; ignored in `AllowAll` / `AllowHosts`
+    /// modes because seccomp cannot filter by IP, only by syscall +
+    /// constant args.
+    #[serde(default)]
+    pub deny_network_sockets: bool,
 }
 
 /// System-minimum read paths granted unconditionally. Without these,
@@ -111,10 +126,13 @@ pub fn policy_from_capabilities(
     for p in &caps.fs_write {
         write_paths.push(p.clone());
     }
+    use crate::sandbox::capabilities::NetworkPolicy;
+    let deny_network_sockets = matches!(caps.network, NetworkPolicy::None);
     LinuxInitPolicy {
         read_paths,
         write_paths,
         require_landlock,
+        deny_network_sockets,
     }
 }
 
@@ -162,7 +180,7 @@ pub fn run_init(args: Vec<String>) -> ! {
         );
     }
 
-    if let Err(e) = apply_seccomp() {
+    if let Err(e) = apply_seccomp(&parsed.policy) {
         eprintln!("aleph sandbox-init: seccomp filter rejected: {e}");
         std::process::exit(65);
     }
@@ -290,7 +308,7 @@ fn apply_landlock(policy: &LinuxInitPolicy) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn apply_seccomp() -> Result<(), String> {
+fn apply_seccomp(policy: &LinuxInitPolicy) -> Result<(), String> {
     use std::collections::BTreeMap;
 
     use seccompiler::{
@@ -340,6 +358,45 @@ fn apply_seccomp() -> Result<(), String> {
             vec![SeccompRule::new(vec![nuser_cond])
                 .map_err(|e| format!("build unshare rule: {e}"))?],
         );
+    }
+
+    // Cycle 3 / codex-aligned: when network access is disabled
+    // (NetworkPolicy::None on the host side), block every socket family
+    // other than AF_UNIX at the syscall layer. The bwrap `--unshare-net`
+    // netns already strips interfaces, but a process inside it can still
+    // call `socket(AF_INET, ...)` and `connect()` — they fail at runtime
+    // with cryptic errors. Adding the seccomp rules turns those into
+    // early EPERM failures with a clear audit trail.
+    //
+    // We mirror codex's `socket(family != AF_UNIX)` pattern rather than
+    // enumerating AF_INET / AF_INET6 / AF_NETLINK individually so the
+    // policy also catches AF_PACKET, AF_BLUETOOTH, AF_VSOCK, etc.
+    // automatically. Sock-domain args are 32-bit in the syscall ABI, so
+    // use `Dword` even though `libc::AF_UNIX` happens to be small.
+    if policy.deny_network_sockets {
+        let non_unix_rule = SeccompRule::new(vec![SeccompCondition::new(
+            0, // first arg of socket / socketpair = domain
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Ne,
+            libc::AF_UNIX as u64,
+        )
+        .map_err(|e| format!("build AF_UNIX != condition: {e}"))?])
+        .map_err(|e| format!("build non-AF_UNIX socket rule: {e}"))?;
+        if let Some(nr) = syscall_nr("socket") {
+            rules.insert(nr, vec![non_unix_rule.clone()]);
+        }
+        if let Some(nr) = syscall_nr("socketpair") {
+            rules.insert(nr, vec![non_unix_rule]);
+        }
+        // Deny `connect` unconditionally when network is disabled.
+        // codex applies the same gate; AF_UNIX clients that call
+        // connect() on a Unix-domain socket will be hit by this too,
+        // but sandboxed daemons rarely depend on it and the syscall
+        // returns EPERM which clients propagate as a clear error
+        // rather than crashing.
+        if let Some(nr) = syscall_nr("connect") {
+            rules.insert(nr, vec![]);
+        }
     }
 
     let filter = SeccompFilter::new(
@@ -400,6 +457,9 @@ fn syscall_nr(name: &str) -> Option<i64> {
         "setns" => libc::SYS_setns,
         "clone" => libc::SYS_clone,
         "unshare" => libc::SYS_unshare,
+        "socket" => libc::SYS_socket,
+        "socketpair" => libc::SYS_socketpair,
+        "connect" => libc::SYS_connect,
         _ => return None,
     };
     Some(nr)
@@ -462,10 +522,54 @@ mod tests {
             read_paths: vec!["/usr".into(), "/lib".into()],
             write_paths: vec!["/workspace".into()],
             require_landlock: true,
+            deny_network_sockets: true,
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: LinuxInitPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(original, parsed);
+    }
+
+    #[test]
+    fn deny_network_sockets_field_defaults_false_for_forward_compat() {
+        // Existing on-the-wire JSON predates the field; deserialize must
+        // succeed and default to false so old aleph-server binaries can
+        // still talk to new ones.
+        let json = r#"{"read_paths":[],"write_paths":[]}"#;
+        let parsed: LinuxInitPolicy = serde_json::from_str(json).unwrap();
+        assert!(!parsed.deny_network_sockets);
+    }
+
+    #[test]
+    fn policy_threads_deny_network_sockets_from_capabilities() {
+        use crate::sandbox::capabilities::NetworkPolicy;
+        let cwd = std::path::Path::new("/workspace");
+        // NetworkPolicy::None → deny_network_sockets = true (defense in
+        // depth on top of bwrap --unshare-net).
+        let none_caps = SandboxCapabilities {
+            network: NetworkPolicy::None,
+            ..SandboxCapabilities::strict()
+        };
+        assert!(policy_from_capabilities(&none_caps, cwd, false).deny_network_sockets);
+
+        // NetworkPolicy::AllowAll → seccomp lets IP sockets through; the
+        // kernel namespace + driver-level rules carry policy from there.
+        let all_caps = SandboxCapabilities {
+            network: NetworkPolicy::AllowAll,
+            ..SandboxCapabilities::strict()
+        };
+        assert!(!policy_from_capabilities(&all_caps, cwd, false).deny_network_sockets);
+
+        // NetworkPolicy::AllowHosts also leaves seccomp permissive —
+        // seccomp can't filter by IP, only by socket family. The
+        // per-host gate would have to land somewhere else (a future
+        // spec: managed proxy or nftables-in-netns).
+        let hosts_caps = SandboxCapabilities {
+            network: NetworkPolicy::AllowHosts {
+                hosts: vec!["10.0.0.1".into()],
+            },
+            ..SandboxCapabilities::strict()
+        };
+        assert!(!policy_from_capabilities(&hosts_caps, cwd, false).deny_network_sockets);
     }
 
     /// Pins the denylist by hash so any addition / removal / reorder is
@@ -488,6 +592,7 @@ mod tests {
             read_paths: vec!["/usr".into()],
             write_paths: vec!["/workspace".into()],
             require_landlock: false,
+            deny_network_sockets: false,
         };
         let json = serde_json::to_string(&policy).unwrap();
         let argv = vec![

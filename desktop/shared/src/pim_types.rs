@@ -5,20 +5,7 @@
 //! protocol crate.
 
 pub use aleph_protocol::desktop_bridge::methods::pim::{
-    CalendarEvent,
-    CalendarInfo,
-    Contact,
-    ContactDetail,
-    ContactGroup,
-    LabeledValue,
-    MailAttachment,
-    MailFolder,
-    MailMessage,
-    MailMessageDetail,
-    NewCalendarEvent,
-    NewReminder,
-    NoteContent,
-    NoteInfo,
-    Reminder,
-    ReminderList,
+    CalendarEvent, CalendarInfo, Contact, ContactDetail, ContactGroup, LabeledValue,
+    MailAttachment, MailFolder, MailMessage, MailMessageDetail, NewCalendarEvent, NewReminder,
+    NoteContent, NoteInfo, Reminder, ReminderList,
 };

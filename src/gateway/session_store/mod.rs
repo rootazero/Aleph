@@ -45,6 +45,24 @@ pub trait SessionStore: Send + Sync {
         key: &SessionKey,
         strategy: CompactStrategy,
     ) -> Result<CompactResult, SessionStoreError>;
+
+    /// Drop messages from the tail of a session, keeping only the first
+    /// `keep_count` messages by chronological order.
+    ///
+    /// Used by `/undo` in the TUI to remove the last user+assistant turn pair.
+    /// Returning `(0, 0)` when `keep_count >= current_count` is the expected
+    /// no-op behaviour; do not return an error in that case.
+    ///
+    /// Default impl returns `Unsupported` so legacy / test stores need not
+    /// re-implement it; production backends override this.
+    async fn truncate_messages(
+        &self,
+        key: &SessionKey,
+        keep_count: usize,
+    ) -> Result<TruncateResult, SessionStoreError> {
+        let _ = (key, keep_count);
+        Err(SessionStoreError::Unsupported)
+    }
     async fn list_checkpoints(
         &self,
         key: &SessionKey,

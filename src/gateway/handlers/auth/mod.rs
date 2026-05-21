@@ -60,6 +60,10 @@ pub struct ConnectResult {
     pub permissions: Vec<String>,
     /// Token expiry time (ISO 8601)
     pub expires_at: String,
+    /// Snapshot of server state versions {presence, health, config} at
+    /// handshake time. Clients capture this baseline to later detect
+    /// server-side state bumps and skip redundant refreshes.
+    pub state_version: crate::gateway::state_version::StateVersion,
 }
 
 /// Pairing required notification
@@ -84,6 +88,10 @@ pub struct AuthContext {
     pub event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
     pub auth_mode: AuthMode,
     pub shared_token_mgr: Arc<SharedTokenManager>,
+    /// Monotonic state-version tracker, shared with `GatewayServer`.
+    /// Surfaced in the `connect` success response so clients capture a
+    /// baseline snapshot at handshake time.
+    pub state_versions: Arc<crate::gateway::state_version::StateVersionTracker>,
 }
 
 /// Create a "hello" notification to send to newly connected clients
@@ -136,6 +144,7 @@ pub(crate) mod tests {
             event_bus,
             auth_mode: AuthMode::Token,
             shared_token_mgr,
+            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
         })
     }
 }

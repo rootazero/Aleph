@@ -9,9 +9,66 @@ use crate::context::budget::LoopDirective;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
-use crate::session::events::{MessageContent, SessionEvent, ToolOutput};
+use crate::providers::message::UnifiedMessage;
+use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, ToolOutput};
 use crate::session::service::SessionId;
 use crate::verification::{hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict};
+
+/// Ephemeral nudge appended on the grace turn when the budget hits
+/// critical — the single tool-less LLM call given when
+/// `LoopDirective::FinalReply` fires and the prior assistant turn ended
+/// on an unresolved tool_use. Tools are also stripped at the request
+/// layer (no `.with_tools(...)`), so the model cannot loop further.
+const GRACE_NUDGE_BUDGET: &str =
+    "You are out of context budget and cannot call any more tools. \
+     Respond now with a final summary for the user based on what you have so far.";
+
+/// Ephemeral nudge for the grace turn fired by
+/// `LoopDirective::StopDiminishing` — same shape as
+/// `GRACE_NUDGE_BUDGET` but framed around lack of measurable progress
+/// rather than budget exhaustion.
+const GRACE_NUDGE_DIMINISHING: &str =
+    "You have not been making measurable progress on this task. \
+     Stop calling tools and summarize what you have found so far for the user.";
+
+/// Why a grace turn is being fired. Selects the nudge text; otherwise
+/// the call path is identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GraceReason {
+    /// `LoopDirective::FinalReply` — context-budget critical.
+    Budget,
+    /// `LoopDirective::StopDiminishing` — diminishing-returns detector trip.
+    Diminishing,
+}
+
+impl GraceReason {
+    fn nudge(self) -> &'static str {
+        match self {
+            Self::Budget => GRACE_NUDGE_BUDGET,
+            Self::Diminishing => GRACE_NUDGE_DIMINISHING,
+        }
+    }
+}
+
+/// True iff the most recent `AssistantMessage` in `events` already carries
+/// displayable text. When false, the budget short-circuit will inject one
+/// grace turn so the user gets a terminal text response instead of a
+/// mid-thought hang.
+///
+/// Returns `false` when there is no `AssistantMessage` yet (budget tripped
+/// on the very first turn) — that path also deserves a grace turn.
+fn last_assistant_has_text(events: &[SessionEventRecord]) -> bool {
+    events
+        .iter()
+        .rev()
+        .find_map(|r| match &r.event {
+            SessionEvent::AssistantMessage { content, .. } => {
+                Some(!content.text.trim().is_empty())
+            }
+            _ => None,
+        })
+        .unwrap_or(false)
+}
 
 impl AgentHarness {
     /// Internal turn execution with pre-computed counters to avoid O(n²)
@@ -132,13 +189,29 @@ impl AgentHarness {
         }
 
         // 2d. `FinalReply` directive — record hit_limit and short-circuit to
-        // Done without calling the LLM or running tools. The last assistant
-        // message already on the session log is the final text.
+        // Done. Hermes-inspired grace turn: if the most recent assistant
+        // turn ended without text (unresolved tool_use, or no assistant
+        // turn yet), issue exactly one tool-less LLM call so the user
+        // gets a terminal text response instead of a mid-thought hang.
+        // Tools are stripped both via `.with_tools(None)` (implicit by
+        // omitting the call) and via the grace nudge message, so the LLM
+        // cannot recurse. Fail-soft: any error falls through silently.
+        // R10-safe: one extra LLM call gated by an existing directive,
+        // no new policy, no state machine.
         if matches!(budget_directive, Some(LoopDirective::FinalReply)) {
             self.hit_limit.store(true, Ordering::Relaxed);
             self.set_terminate_reason(
                 crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
             );
+            self.fire_grace_turn(
+                session_id,
+                &events,
+                &messages,
+                callback,
+                iterations,
+                GraceReason::Budget,
+            )
+            .await;
             callback.on_complete_via_harness();
             return Ok((TurnState::Done, 0, false));
         }
@@ -191,6 +264,13 @@ impl AgentHarness {
         // excludes it (Anthropic already includes it in `output`; Gemini
         // reports it separately).
         self.accumulate_token_breakdown(&response.usage);
+        // Cycle 3 — OUTPUT tokens only (not total), required by
+        // DiminishingReturnsDetector's window threshold semantics.
+        let output_tokens = response
+            .usage
+            .as_ref()
+            .map(|u| u.output_tokens as usize)
+            .unwrap_or(0);
 
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = super::current_turn_id(&events);
@@ -337,6 +417,49 @@ impl AgentHarness {
             result = Ok((TurnState::Continue, executed, false));
         }
 
+        // Cycle 3 — wire DiminishingReturnsDetector. `after_turn` had zero
+        // production callsites before this commit. Skipped on a verifier veto:
+        // a veto is already a guardrail intervention and must not also feed the
+        // diminishing-returns window. StopDiminishing reuses the Task-5
+        // grace-turn helper to give the user a terminal summary, mirroring
+        // the FinalReply path. R10-safe: no new directive variant, no new
+        // decision category — `StopDiminishing` already existed.
+        //
+        // The veto flag is the 3rd element of `result`; `verdict` was moved
+        // into the if-let binding above and is no longer in scope.
+        let is_verifier_veto = matches!(result, Ok((_, _, true)));
+        if !is_verifier_veto {
+            let after_directive = if let Some(budget) = self.deps.context_budget.as_ref() {
+                let mut guard = budget.lock().await;
+                Some(guard.after_turn(crate::context::budget::TurnMetrics {
+                    output_tokens,
+                    tool_calls: metrics_for_trace.requested_tool_calls,
+                    productive: metrics_for_trace.productive,
+                }))
+            } else {
+                None
+            };
+            if matches!(after_directive, Some(LoopDirective::StopDiminishing)) {
+                self.hit_limit.store(true, Ordering::Relaxed);
+                self.fire_grace_turn(
+                    session_id,
+                    &events,
+                    &messages,
+                    callback,
+                    iterations,
+                    GraceReason::Diminishing,
+                )
+                .await;
+                callback.on_complete_via_harness();
+                self.emit(|| crate::harness::trace::LoopTraceEvent::TurnCompleted {
+                    iteration: iterations,
+                    outcome: crate::harness::trace::LoopTraceTurnOutcome::Stop,
+                    metrics: metrics_for_trace.clone(),
+                });
+                return Ok((TurnState::Done, metrics_for_trace.executed_tool_calls, false));
+            }
+        }
+
         self.emit(|| crate::harness::trace::LoopTraceEvent::TurnCompleted {
             iteration: iterations,
             outcome: outcome_for_trace,
@@ -376,6 +499,72 @@ impl AgentHarness {
         }
     }
 
+    /// Fire one tool-less LLM call so the user gets a terminal text
+    /// response on a forced termination (budget critical or diminishing
+    /// returns). The nudge text is selected by `reason`; the call path is
+    /// identical otherwise. Skips entirely when the latest assistant turn
+    /// already produced displayable text. Fail-soft on any LLM error —
+    /// logs at WARN and returns without persisting.
+    ///
+    /// Caller is responsible for setting `hit_limit`, calling
+    /// `callback.on_complete_via_harness()`, and returning `TurnState::Done`.
+    async fn fire_grace_turn(
+        &self,
+        session_id: &SessionId,
+        events: &[SessionEventRecord],
+        messages: &[UnifiedMessage],
+        callback: &mut dyn HarnessCallback,
+        iterations: usize,
+        reason: GraceReason,
+    ) {
+        if last_assistant_has_text(events) {
+            return; // user already has terminal text; skip.
+        }
+        let mut grace_messages = messages.to_vec();
+        grace_messages.push(UnifiedMessage::user(reason.nudge()));
+        let grace_payload = match self.deps.system_prompt.as_deref() {
+            Some(sp) => RequestPayload::new(&grace_messages).with_system(Some(sp)),
+            None => RequestPayload::new(&grace_messages),
+        };
+        match self.deps.llm.process(grace_payload).await {
+            Ok(resp) => {
+                let text = resp.text_content();
+                if text.trim().is_empty() {
+                    return;
+                }
+                let turn_id = super::current_turn_id(events);
+                callback.on_delta(&text);
+                let grace_event = SessionEvent::AssistantMessage {
+                    turn_id,
+                    content: MessageContent {
+                        text: text.clone(),
+                        blocks: Vec::new(),
+                        thinking: resp.thinking.clone(),
+                        thinking_signature: resp.thinking_signature.clone(),
+                    },
+                    at: crate::session::events::now_ms(),
+                };
+                let grace_tokens = super::turn_token_total(&resp.usage);
+                self.total_tokens.fetch_add(grace_tokens, Ordering::Relaxed);
+                if let Err(e) = self.deps.session.emit_event(session_id, grace_event).await {
+                    tracing::warn!(?session_id, ?e, "grace turn assistant emit failed");
+                }
+                self.emit(|| crate::harness::trace::LoopTraceEvent::TextEmitted {
+                    iteration: iterations,
+                    stream: crate::harness::trace::LoopTraceTextKind::Final,
+                    text,
+                });
+            }
+            Err(e) => {
+                tracing::warn!(
+                    ?session_id,
+                    ?e,
+                    "grace turn LLM call failed; falling through to short-circuit",
+                );
+            }
+        }
+    }
+
     /// Stage 6a (#10): dispatch the per-turn verifier chain. `None` chain → noop.
     pub(crate) async fn run_verifiers(
         &self,
@@ -402,5 +591,114 @@ impl AgentHarness {
             stop_reason,
         };
         chain.verify(&ctx, cancel).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::events::{now_ms, MessageContent, SessionEvent, SessionEventRecord};
+
+    fn mk(seq: u64, event: SessionEvent) -> SessionEventRecord {
+        SessionEventRecord {
+            seq,
+            event,
+            created_at_ms: now_ms(),
+        }
+    }
+
+    fn assistant(text: &str, with_tool_use: bool) -> SessionEvent {
+        let blocks = if with_tool_use {
+            vec![serde_json::json!({
+                "type": "tool_use",
+                "id": "tu",
+                "name": "x",
+                "input": {},
+            })]
+        } else {
+            Vec::new()
+        };
+        SessionEvent::AssistantMessage {
+            turn_id: uuid::Uuid::new_v4(),
+            content: MessageContent {
+                text: text.to_string(),
+                blocks,
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+        }
+    }
+
+    fn user(text: &str) -> SessionEvent {
+        SessionEvent::UserMessage {
+            turn_id: uuid::Uuid::new_v4(),
+            content: MessageContent {
+                text: text.to_string(),
+                blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+        }
+    }
+
+    #[test]
+    fn last_assistant_has_text_true_for_non_empty_text() {
+        let events = vec![
+            mk(0, user("hi")),
+            mk(1, assistant("here is your answer", false)),
+        ];
+        assert!(last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn last_assistant_has_text_false_for_empty_text_with_tool_use_only() {
+        // The rescue path: model wanted to call a tool but was budget-cut,
+        // leaving an assistant turn with text="" and only tool_use blocks.
+        let events = vec![mk(0, user("hi")), mk(1, assistant("", true))];
+        assert!(!last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn last_assistant_has_text_false_when_no_assistant_message_at_all() {
+        // Budget tripped on turn 1, before the model produced anything.
+        let events = vec![mk(0, user("hi"))];
+        assert!(!last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn last_assistant_has_text_uses_most_recent_assistant() {
+        // Older assistant message had text; newer one is empty tool_use —
+        // the grace turn must rescue based on the LATEST turn.
+        let events = vec![
+            mk(0, user("first")),
+            mk(1, assistant("old answer", false)),
+            mk(2, user("follow up")),
+            mk(3, assistant("", true)),
+        ];
+        assert!(!last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn last_assistant_has_text_treats_whitespace_only_text_as_empty() {
+        // "  \n\t" alone does not constitute a terminal text response.
+        let events = vec![mk(0, user("hi")), mk(1, assistant("   \n\t", false))];
+        assert!(!last_assistant_has_text(&events));
+    }
+
+    #[test]
+    fn grace_reason_budget_uses_budget_nudge() {
+        assert_eq!(GraceReason::Budget.nudge(), GRACE_NUDGE_BUDGET);
+    }
+
+    #[test]
+    fn grace_reason_diminishing_uses_diminishing_nudge() {
+        assert_eq!(GraceReason::Diminishing.nudge(), GRACE_NUDGE_DIMINISHING);
+    }
+
+    #[test]
+    fn grace_nudge_budget_and_diminishing_are_distinct_strings() {
+        assert_ne!(GRACE_NUDGE_BUDGET, GRACE_NUDGE_DIMINISHING);
     }
 }

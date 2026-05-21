@@ -404,7 +404,10 @@ pub fn present_agent_trace_event(
             duration_ms: None,
         }),
 
-        AgentTraceEvent::ProviderUsage { .. } => { /* observability passthrough — no presentation */ None }
+        AgentTraceEvent::ProviderUsage { .. } => {
+            /* observability passthrough — no presentation */
+            None
+        }
     }
 }
 

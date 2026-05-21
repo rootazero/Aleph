@@ -115,9 +115,7 @@ async fn migrates_legacy_db_with_null_token_and_compaction_columns() {
     assert!(marker.exists(), "marker file should be written on success");
 
     // NULL columns must surface as 0, never propagate as serialization errors.
-    let metadata_path = store_dir
-        .join("legacy-session-1")
-        .join("metadata.json");
+    let metadata_path = store_dir.join("legacy-session-1").join("metadata.json");
     let raw = std::fs::read_to_string(&metadata_path).expect("metadata.json");
     let meta: SessionMetadata = serde_json::from_str(&raw).expect("parse metadata.json");
     assert_eq!(meta.key, "legacy-session-1");
@@ -126,15 +124,10 @@ async fn migrates_legacy_db_with_null_token_and_compaction_columns() {
         "NULL compaction_count must coerce to 0"
     );
     assert_eq!(meta.input_tokens, 0, "NULL input_tokens must coerce to 0");
-    assert_eq!(
-        meta.output_tokens, 0,
-        "NULL output_tokens must coerce to 0"
-    );
+    assert_eq!(meta.output_tokens, 0, "NULL output_tokens must coerce to 0");
 
     // Transcript should hold both messages, both with 0 tokens.
-    let transcript_path = store_dir
-        .join("legacy-session-1")
-        .join("transcript.jsonl");
+    let transcript_path = store_dir.join("legacy-session-1").join("transcript.jsonl");
     let transcript = std::fs::read_to_string(&transcript_path).expect("transcript.jsonl");
     let lines: Vec<&str> = transcript.lines().collect();
     assert_eq!(lines.len(), 2, "both legacy messages should be appended");

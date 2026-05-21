@@ -58,6 +58,22 @@ pub struct ToolDefinitionMetadata {
     pub requires_approval: bool,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// True when re-running this tool with the same input is safe even if
+    /// the previous attempt may have reached the server. Read-only / pure
+    /// query tools (memory_search, search, web_fetch, recall_context) set
+    /// this to true; side-effecting tools (write/exec/send_*) leave it
+    /// false. Consumed by `tools::retry::execute_with_one_shot_backoff` to
+    /// gate retries on `Timeout` / `Transport` errors — non-idempotent
+    /// tools never auto-retry to avoid duplicate side effects.
+    #[serde(default)]
+    pub idempotent: bool,
+    /// Per-tool wall-clock execution budget hint. `None` falls back to the
+    /// harness-wide `turn_timeout`; if both are `None`, the call is
+    /// unbounded. Populated for builtins via `tools::budget` (see
+    /// `BUILTIN_TOOL_BUDGETS_MS`); MCP / Extension / Markdown-skill tools
+    /// currently leave this as `None` and inherit the global fallback.
+    #[serde(default)]
+    pub max_duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -158,5 +174,31 @@ mod dispatcher_form_tests {
         let out = to_dispatcher_form(&inputs);
         let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b", "c"]);
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_max_duration_ms_round_trips_through_json() {
+        let original = ToolDefinitionMetadata {
+            hidden_from_llm: false,
+            requires_approval: false,
+            tags: Vec::new(),
+            idempotent: true,
+            max_duration_ms: Some(5_000),
+        };
+        let serialized = serde_json::to_string(&original).unwrap();
+        let parsed: ToolDefinitionMetadata = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(parsed.max_duration_ms, Some(5_000));
+    }
+
+    #[test]
+    fn metadata_max_duration_ms_defaults_to_none_when_field_absent() {
+        let legacy_json = r#"{"hidden_from_llm":false,"requires_approval":false,"tags":[],"idempotent":false}"#;
+        let parsed: ToolDefinitionMetadata = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(parsed.max_duration_ms, None);
     }
 }

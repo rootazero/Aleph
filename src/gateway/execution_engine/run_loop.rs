@@ -9,6 +9,8 @@ use tracing::{error, info, warn};
 use crate::sync_primitives::Arc;
 
 use super::{ExecutionError, RunRequest};
+use crate::extension::hooks::{HookContext, HookExecutor};
+use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 
@@ -41,6 +43,101 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         trace_task_id: Option<String>,
         cancel_token: CancellationToken,
     ) -> Result<String, ExecutionError> {
+        // Resolve the extension manager + snapshot its HookExecutor once for
+        // the whole run. Both flow into `run_agent_loop_inner` so tool
+        // dispatch and history compaction can fire hooks without
+        // re-snapshotting per turn.
+        let extension_manager: Option<Arc<crate::extension::ExtensionManager>> =
+            crate::gateway::handlers::plugins::get_extension_manager()
+                .ok()
+                .map(Arc::clone);
+        if let Some(ext_manager) = extension_manager.as_ref() {
+            if let Err(e) = ext_manager.ensure_loaded().await {
+                warn!("Failed to ensure extension manager is loaded: {}", e);
+            }
+        }
+        let hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
+            let snapshot = ext_manager.hook_executor_snapshot().await;
+            (snapshot.hook_count() > 0).then(|| Arc::new(snapshot))
+        } else {
+            None
+        };
+        let hook_session_id = request.session_key.to_key_string();
+
+        // BeforeAgentStart — interceptor-kind hooks may abort the run before
+        // any provider call; observer-kind hooks just witness the start.
+        if let Some(executor) = hook_executor.as_ref() {
+            let ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+            match executor
+                .execute_interceptors(HookEvent::BeforeAgentStart, ctx)
+                .await
+            {
+                Ok((_ctx, hr)) if hr.denied || hr.blocked => {
+                    let reason = hr
+                        .deny_reason
+                        .or(hr.block_reason)
+                        .unwrap_or_else(|| "agent start blocked by hook".to_string());
+                    warn!(
+                        run_id = run_id,
+                        reason = %reason,
+                        "BeforeAgentStart hook aborted the run"
+                    );
+                    return Err(ExecutionError::Failed(format!(
+                        "BeforeAgentStart hook aborted the run: {reason}"
+                    )));
+                }
+                Ok(_) => {}
+                Err(e) => warn!(run_id = run_id, error = %e, "BeforeAgentStart hook failed"),
+            }
+        }
+
+        let result = self
+            .run_agent_loop_inner(
+                run_id,
+                request,
+                agent.clone(),
+                emitter,
+                deadline,
+                trace_task_id,
+                cancel_token,
+                extension_manager,
+                hook_executor.clone(),
+                hook_session_id.clone(),
+            )
+            .await;
+
+        // AgentEnd — observers only; the run is already over, nothing to block.
+        if let Some(executor) = hook_executor.as_ref() {
+            let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+            ctx = ctx.with_env(
+                "AGENT_OUTCOME",
+                if result.is_ok() { "ok" } else { "error" },
+            );
+            if let Err(ref e) = result {
+                ctx = ctx.with_env("AGENT_ERROR", e.to_string());
+            }
+            executor.execute_observers(HookEvent::AgentEnd, &ctx).await;
+        }
+        result
+    }
+
+    /// Inner body of the think→act loop. `run_agent_loop` wraps this with the
+    /// `BeforeAgentStart` / `AgentEnd` lifecycle hooks and supplies the
+    /// pre-resolved extension manager + hook executor snapshot.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_agent_loop_inner<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<E>,
+        deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>,
+        trace_task_id: Option<String>,
+        cancel_token: CancellationToken,
+        extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
+        hook_executor: Option<Arc<HookExecutor>>,
+        hook_session_id: String,
+    ) -> Result<String, ExecutionError> {
         use crate::providers::model_behaviors::{load_model_behavior, protocol_to_behavior};
 
         info!(run_id = run_id, "Starting agent loop (think->act)");
@@ -70,23 +167,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Resolve soul for prompt building (constant across retries).
         let _ = agent.agent_dir();
 
-        let extension_manager: Option<Arc<crate::extension::ExtensionManager>> =
-            crate::gateway::handlers::plugins::get_extension_manager()
-                .ok()
-                .map(Arc::clone);
-
-        if let Some(ext_manager) = extension_manager.as_ref() {
-            if let Err(e) = ext_manager.ensure_loaded().await {
-                tracing::warn!("Failed to ensure extension manager is loaded: {}", e);
-            }
-        }
-
-        let _hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
-            let snapshot = ext_manager.hook_executor_snapshot().await;
-            (snapshot.hook_count() > 0).then(|| Arc::new(snapshot))
-        } else {
-            None
-        };
+        // `extension_manager`, `hook_executor` (snapshotted `BeforeToolCall` /
+        // `AfterToolCall` / compaction hooks) and `hook_session_id` are
+        // resolved once by `run_agent_loop` and threaded in as parameters.
 
         // Build tool registry inputs (filtered by agent whitelist).
         let base_allowed_tools: Vec<crate::dispatcher::UnifiedTool> = self
@@ -151,6 +234,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 &request.session_key,
                 &request.input,
                 token_budget as u64,
+                hook_executor.as_deref(),
             )
             .await
         } else {
@@ -159,6 +243,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let compress_elapsed = before_compress.elapsed();
         if !compress_elapsed.is_zero() {
             *deadline.lock().await += compress_elapsed;
+        }
+
+        // SessionStart — the first turn of a brand-new session has no prior
+        // history. Firing here (not inside `src/harness/`) keeps the dumb
+        // loop free of lifecycle logic (R10). Observers only.
+        if history.is_empty() {
+            if let Some(executor) = hook_executor.as_ref() {
+                let ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+                executor
+                    .execute_observers(HookEvent::SessionStart, &ctx)
+                    .await;
+            }
         }
 
         // Pre-process multimodal attachments (constant across retries)
@@ -341,6 +437,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     None,
                     tool_refresh.clone(),
                     Some(turn_context.clone()),
+                    hook_executor.clone(),
+                    hook_session_id.clone(),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -443,6 +541,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Some(subagent_tool),
                 tool_refresh,
                 Some(turn_context.clone()),
+                hook_executor.clone(),
+                hook_session_id.clone(),
             );
 
             // Build FlowRequest
@@ -596,4 +696,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
     }
+}
+
+/// Build a `HookContext` for an agent/session lifecycle event. Carries the
+/// session id plus `RUN_ID` / `AGENT_ID` env vars so command hooks have
+/// correlation handles. Lifecycle events have no tool, so the tool fields
+/// stay unset.
+fn lifecycle_hook_context(session_id: &str, run_id: &str, agent: &AgentInstance) -> HookContext {
+    HookContext::new(session_id)
+        .with_env("RUN_ID", run_id)
+        .with_env("AGENT_ID", agent.id())
 }
