@@ -218,13 +218,7 @@ fn test_task_traces_use_structured_agent_trace_schema() {
     );
 }
 
-#[test]
-fn test_namespace_required_in_search() {
-    // This test verifies compiler enforcement of namespace parameter
-    // The real test is compile-time: search_facts() requires NamespaceScope
-    let _valid_call = "db.search_facts(embedding, NamespaceScope::Owner, 10, false)";
-    // Placeholder - real test is compile-time
-}
+
 
 #[test]
 fn test_new_with_dim_default() {
