@@ -435,6 +435,11 @@ mod tests {
         assert!(Rect::new(0.0, 0.0, 100.0, f64::NAN).is_err());
         assert!(Rect::new(0.0, 0.0, f64::INFINITY, 80.0).is_err());
         assert!(Rect::new(0.0, 0.0, 100.0, f64::NEG_INFINITY).is_err());
+
+        assert!(Rect::new(f64::NAN, 0.0, 100.0, 80.0).is_err());
+        assert!(Rect::new(0.0, f64::NAN, 100.0, 80.0).is_err());
+        assert!(Rect::new(f64::INFINITY, 0.0, 100.0, 80.0).is_err());
+        assert!(Rect::new(0.0, f64::NEG_INFINITY, 100.0, 80.0).is_err());
     }
 
     #[test]
