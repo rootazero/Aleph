@@ -57,6 +57,7 @@ impl ToolHandler for BuiltinHandler {
                 requires_approval: inner_def.requires_confirmation,
                 tags: Vec::new(),
                 idempotent,
+                max_duration_ms: None,
             },
         }
     }
