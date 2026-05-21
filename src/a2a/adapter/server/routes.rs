@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Json};
@@ -48,9 +48,10 @@ async fn agent_card_handler(State(state): State<Arc<A2AServerState>>) -> Json<Ag
 async fn a2a_handler(
     State(state): State<Arc<A2AServerState>>,
     headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<JsonRpcRequest>,
 ) -> impl IntoResponse {
-    let remote_addr = fallback_addr();
+    let remote_addr = addr;
     let credentials = extract_credentials(&headers);
     let auth_context = A2AAuthContext {
         remote_addr,
@@ -79,9 +80,10 @@ async fn a2a_handler(
 async fn a2a_stream_handler(
     State(state): State<Arc<A2AServerState>>,
     headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<JsonRpcRequest>,
 ) -> impl IntoResponse {
-    let remote_addr = fallback_addr();
+    let remote_addr = addr;
     let credentials = extract_credentials(&headers);
     let auth_context = A2AAuthContext {
         remote_addr,
@@ -238,12 +240,8 @@ fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
 /// Fallback socket address when ConnectInfo is not available.
 /// WARNING: All remote requests appear as loopback — IP-based access control is ineffective.
 /// ConnectInfo must be wired via `.into_make_service_with_connect_info::<SocketAddr>()`.
+#[cfg(test)]
 fn fallback_addr() -> SocketAddr {
-    use std::sync::Once;
-    static WARN: Once = Once::new();
-    WARN.call_once(|| {
-        tracing::warn!("A2A routes using fallback loopback address — IP-based auth is disabled");
-    });
     SocketAddr::from(([127, 0, 0, 1], 0))
 }
 

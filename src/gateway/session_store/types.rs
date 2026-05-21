@@ -147,6 +147,15 @@ pub struct CompactResult {
     pub deleted: usize,
 }
 
+/// Outcome of `SessionStore::truncate_messages`.
+#[derive(Debug, Clone, Default)]
+pub struct TruncateResult {
+    /// Number of messages that were removed from the session.
+    pub messages_removed: usize,
+    /// Rough estimate of the prompt+completion tokens that were dropped.
+    pub tokens_removed_estimate: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointSummary {
     pub checkpoint_id: String,

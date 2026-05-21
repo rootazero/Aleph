@@ -128,7 +128,7 @@ pub struct SnapshotOutput {
 }
 
 /// Screenshot output (raw PNG bytes).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreenshotOutput {
     pub png_bytes: Vec<u8>,
 }

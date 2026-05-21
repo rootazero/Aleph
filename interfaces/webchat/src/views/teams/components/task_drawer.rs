@@ -17,7 +17,9 @@ pub fn TaskDetailDrawer(
     let close = move |_| open_for.set(None);
 
     let patch_status = move |new_status: &'static str| {
-        let Some(task) = open_for.get_untracked() else { return; };
+        let Some(task) = open_for.get_untracked() else {
+            return;
+        };
         let id = task.id.clone();
         spawn_local(async move {
             let _ = TeamsApi::update_task(

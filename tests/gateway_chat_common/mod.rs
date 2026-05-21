@@ -228,5 +228,6 @@ pub fn basic_request() -> FlowRequest {
         tool_service: None,
         trace_sink: None,
         interaction_manifest: None,
+        sandbox_override: None,
     }
 }

@@ -31,12 +31,22 @@ pub async fn serve_webchat(
         .fallback(ServeFile::new(&index_path));
 
     let allowed_origins = tower_http::cors::AllowOrigin::predicate(|origin, _| {
-        origin.as_bytes().starts_with(b"http://127.")
-            || origin.as_bytes().starts_with(b"https://127.")
-            || origin.as_bytes().starts_with(b"http://localhost")
-            || origin.as_bytes().starts_with(b"https://localhost")
-            || origin.as_bytes().starts_with(b"http://[::1]")
-            || origin.as_bytes().starts_with(b"https://[::1]")
+        // `origin` is the raw `Origin` header value, not a parsed URI — parse it
+        // before inspecting scheme/host. A bare prefix match would otherwise
+        // accept hostile origins like `http://127.evil.com`.
+        let Ok(origin_str) = origin.to_str() else {
+            return false;
+        };
+        let Ok(uri) = origin_str.parse::<axum::http::Uri>() else {
+            return false;
+        };
+        let scheme = uri.scheme_str().unwrap_or("");
+        if scheme != "http" && scheme != "https" {
+            return false;
+        }
+        let host = uri.host().unwrap_or("");
+        matches!(host, "127.0.0.1" | "localhost" | "[::1]")
+            || host.starts_with("127.0.0.")
     });
     let app = Router::new().fallback_service(serve_dir).layer(
         tower_http::cors::CorsLayer::new()

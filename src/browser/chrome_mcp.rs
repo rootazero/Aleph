@@ -24,6 +24,8 @@ struct ChromeMcpSession {
 pub struct ChromeMcpDriver {
     sessions: RwLock<HashMap<String, ChromeMcpSession>>,
     config: ChromeMcpConfig,
+    /// Prevents concurrent Chrome launches from racing.
+    chrome_launch_lock: tokio::sync::Mutex<()>,
 }
 
 impl ChromeMcpDriver {
@@ -31,6 +33,7 @@ impl ChromeMcpDriver {
         Self {
             sessions: RwLock::new(HashMap::new()),
             config,
+            chrome_launch_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -165,6 +168,8 @@ impl ChromeMcpDriver {
 
     /// Ensure Chrome is running with remote debugging enabled.
     async fn ensure_chrome_running(&self) -> Result<(), BrowserError> {
+        let _guard = self.chrome_launch_lock.lock().await;
+
         if Self::is_chrome_running() {
             return Err(BrowserError::AttachFailed(
                 "Chrome is running but remote debugging is not enabled. \
@@ -264,6 +269,7 @@ mod integration_tests {
     use super::*;
     use crate::browser::backend::BrowserBackend;
     use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
+    use crate::browser::network_policy::BrowserSsrfGuard;
 
     #[tokio::test]
     #[ignore] // Requires Chrome + npx chrome-devtools-mcp installed
@@ -318,7 +324,11 @@ mod integration_tests {
     async fn test_chrome_mcp_list_tabs() {
         let config = ChromeMcpConfig::default();
         let driver = Arc::new(ChromeMcpDriver::new(config));
-        let backend = ChromeMcpBackend::new(driver, "user".to_string());
+        let backend = ChromeMcpBackend::new(
+            driver,
+            "user".to_string(),
+            Arc::new(BrowserSsrfGuard::default()),
+        );
 
         println!("Calling list_tabs...");
         match backend.list_tabs().await {
@@ -337,7 +347,11 @@ mod integration_tests {
     async fn test_chrome_mcp_snapshot() {
         let config = ChromeMcpConfig::default();
         let driver = Arc::new(ChromeMcpDriver::new(config));
-        let backend = ChromeMcpBackend::new(driver, "user".to_string());
+        let backend = ChromeMcpBackend::new(
+            driver,
+            "user".to_string(),
+            Arc::new(BrowserSsrfGuard::default()),
+        );
 
         let tabs_text = backend.list_tabs().await.expect("list_tabs");
         println!("Tabs for snapshot:\n{tabs_text}");

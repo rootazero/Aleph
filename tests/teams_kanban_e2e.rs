@@ -8,10 +8,10 @@
 //! wrappers (verified by cargo check) — exercising them through the gateway
 //! requires standing up the full server, which is out of scope here.
 
+use alephcore::agents::swarm::tasks::store::SqliteCoordTaskStore;
 use alephcore::agents::swarm::tasks::{
     CoordTaskFilter, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
 };
-use alephcore::agents::swarm::tasks::store::SqliteCoordTaskStore;
 use alephcore::gateway::event_bus::GatewayEventBus;
 use rusqlite::Connection;
 use std::sync::Arc;

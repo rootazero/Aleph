@@ -66,6 +66,7 @@ pub mod events;
 pub mod exec_approvals;
 pub mod execution_config;
 pub mod flow_admin;
+pub mod gateway_identity;
 pub mod general_config;
 pub mod generation;
 pub mod generation_config;
@@ -366,6 +367,15 @@ impl HandlerRegistry {
             )
         });
 
+        // Session truncate (requires SessionStore — placeholder)
+        registry.register("session.truncate", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "session.truncate requires SessionStore — wire in Gateway startup".to_string(),
+            )
+        });
+
         // MCP Approval handlers
         registry.register(
             "mcp.list_pending_approvals",
@@ -516,6 +526,12 @@ impl HandlerRegistry {
         });
         registry.register("trace.get", |req| async move {
             service_unavailable(req, "trace.get requires state database (boot phase 2)")
+        });
+        registry.register("gateway.identity.get", |req| async move {
+            service_unavailable(
+                req,
+                "gateway.identity.get requires gateway state (boot phase 2)",
+            )
         });
         // daemon.status and daemon.shutdown need runtime state — placeholders
         registry.register("daemon.status", |req| async move {

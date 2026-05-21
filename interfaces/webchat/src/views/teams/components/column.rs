@@ -7,7 +7,8 @@ use leptos::prelude::*;
 #[component]
 pub fn KanbanColumn(
     /// Column title — already localized by the caller.
-    #[prop(into)] title: String,
+    #[prop(into)]
+    title: String,
     tasks: Signal<Vec<CoordTaskDto>>,
     #[prop(into)] on_card_click: Callback<String>,
     #[prop(into)] empty_label: String,

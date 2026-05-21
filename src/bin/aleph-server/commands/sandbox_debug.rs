@@ -18,9 +18,7 @@ use alephcore::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 use alephcore::sandbox::command::SandboxCommand;
 use alephcore::sandbox::config::SandboxConfig;
 use alephcore::sandbox::denial_logger::DenialLogger;
-use alephcore::sandbox::exec_approval::gate::{
-    ApprovalGate, ApprovalOutcome, ApprovalRequester,
-};
+use alephcore::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome, ApprovalRequester};
 use alephcore::sandbox::exec_approval::types::ApprovalConfig;
 
 /// Auto-approve every capability elevation. Used only inside the
@@ -73,7 +71,9 @@ pub async fn handle_sandbox_debug(
 
     if show_summary || command.is_empty() {
         if !show_summary && command.is_empty() {
-            eprintln!("\nno command given (pass after `--`); use --show-summary to suppress this warning");
+            eprintln!(
+                "\nno command given (pass after `--`); use --show-summary to suppress this warning"
+            );
         }
         return Ok(());
     }
@@ -97,8 +97,7 @@ pub async fn handle_sandbox_debug(
     }
 
     // 2. Build + execute the command.
-    let session_id =
-        alephcore::routing::session_key::SessionKey::ephemeral("sandbox-debug");
+    let session_id = alephcore::routing::session_key::SessionKey::ephemeral("sandbox-debug");
     let (program, args) = split_program_args(&command);
     let cmd = SandboxCommand {
         session_id,
@@ -139,7 +138,11 @@ pub async fn handle_sandbox_debug(
             println!("\n=== Output ===");
             println!("exit_code: {:?}", out.exit_code);
             println!("signal: {:?}", out.signal);
-            println!("duration: {} ms (wall: {} ms)", out.duration_ms, elapsed.as_millis());
+            println!(
+                "duration: {} ms (wall: {} ms)",
+                out.duration_ms,
+                elapsed.as_millis()
+            );
             println!("truncated: {}", out.truncated);
             if !out.stdout.is_empty() {
                 println!("--- stdout ---");
@@ -185,19 +188,34 @@ mod tests {
 
     #[test]
     fn parse_network_defaults_to_allow_all() {
-        assert!(matches!(parse_network(None).unwrap(), NetworkPolicy::AllowAll));
+        assert!(matches!(
+            parse_network(None).unwrap(),
+            NetworkPolicy::AllowAll
+        ));
     }
 
     #[test]
     fn parse_network_none() {
-        assert!(matches!(parse_network(Some("none")).unwrap(), NetworkPolicy::None));
-        assert!(matches!(parse_network(Some("NONE")).unwrap(), NetworkPolicy::None));
+        assert!(matches!(
+            parse_network(Some("none")).unwrap(),
+            NetworkPolicy::None
+        ));
+        assert!(matches!(
+            parse_network(Some("NONE")).unwrap(),
+            NetworkPolicy::None
+        ));
     }
 
     #[test]
     fn parse_network_all() {
-        assert!(matches!(parse_network(Some("all")).unwrap(), NetworkPolicy::AllowAll));
-        assert!(matches!(parse_network(Some("allow")).unwrap(), NetworkPolicy::AllowAll));
+        assert!(matches!(
+            parse_network(Some("all")).unwrap(),
+            NetworkPolicy::AllowAll
+        ));
+        assert!(matches!(
+            parse_network(Some("allow")).unwrap(),
+            NetworkPolicy::AllowAll
+        ));
     }
 
     #[test]

@@ -101,7 +101,12 @@ pub trait PimCapability: Send + Sync {
     // ── Mail ──────────────────────────────────────────────────────
 
     /// Search mail messages by query string.
-    async fn mail_search(&self, query: &str, folder: Option<&str>, limit: u32) -> Result<Vec<crate::pim_types::MailMessage>>;
+    async fn mail_search(
+        &self,
+        query: &str,
+        folder: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<crate::pim_types::MailMessage>>;
 
     /// Get a single mail message by ID.
     async fn mail_get(&self, message_id: &str) -> Result<crate::pim_types::MailMessageDetail>;

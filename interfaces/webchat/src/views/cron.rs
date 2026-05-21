@@ -834,7 +834,8 @@ fn JobEditor(
                     match CronApi::run_now(&state_for_spawn, &job_id).await {
                         Ok(_) => {
                             error_for_spawn.set(None);
-                            success_for_spawn.set(Some(t_string!(i18n, cron.run_triggered).to_string()));
+                            success_for_spawn
+                                .set(Some(t_string!(i18n, cron.run_triggered).to_string()));
                             // Reload runs after triggering
                             if let Ok(list) = CronApi::runs(&state_for_spawn, &job_id, 20).await {
                                 runs_for_spawn.set(list);

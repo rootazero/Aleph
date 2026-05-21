@@ -45,6 +45,7 @@ pub(in crate::commands::start) fn initialize_auth(
     port: u16,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     auth_mode: alephcore::gateway::config::AuthMode,
+    state_versions: Arc<alephcore::gateway::state_version::StateVersionTracker>,
     daemon: bool,
 ) -> AuthBundle {
     use alephcore::utils::paths;
@@ -145,6 +146,7 @@ pub(in crate::commands::start) fn initialize_auth(
         event_bus: event_bus.clone(),
         auth_mode,
         shared_token_mgr,
+        state_versions,
     });
 
     if !daemon {

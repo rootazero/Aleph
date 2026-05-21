@@ -21,10 +21,10 @@ use super::profile::{
 pub struct ProfileManager {
     profiles: RwLock<HashMap<String, ManagedProfile>>,
     ssrf_guard: Arc<BrowserSsrfGuard>,
-    #[allow(dead_code)]
     config: BrowserSystemConfig,
     chrome_mcp_driver: Arc<ChromeMcpDriver>,
     playwright_cli_driver: Arc<PlaywrightCliDriver>,
+    idle_reaper_started: std::sync::atomic::AtomicBool,
 }
 
 struct ManagedProfile {
@@ -104,7 +104,34 @@ impl ProfileManager {
             config,
             chrome_mcp_driver,
             playwright_cli_driver,
+            idle_reaper_started: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Spawn the idle-profile reaper on a background tokio task, at most once
+    /// per `ProfileManager` instance. The reaper sweeps every `interval_secs`,
+    /// tears down Chrome MCP sessions whose profile is past its idle timeout,
+    /// and resets state to `Idle`. Idempotent — subsequent calls are no-ops.
+    pub fn spawn_idle_reaper(self: &Arc<Self>, interval_secs: u64) {
+        use std::sync::atomic::Ordering;
+        if self.idle_reaper_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        let interval = std::time::Duration::from_secs(interval_secs.max(5));
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                let Some(mgr) = weak.upgrade() else {
+                    tracing::debug!("ProfileManager idle reaper exiting (manager dropped)");
+                    break;
+                };
+                let reaped = mgr.reap_idle().await;
+                if reaped > 0 {
+                    tracing::info!("Browser idle reaper swept {reaped} profile(s)");
+                }
+            }
+        });
     }
 
     /// Get the shared Chrome MCP driver instance.
@@ -143,8 +170,32 @@ impl ProfileManager {
             BrowserDriver::ExistingSession => Ok(Arc::new(ChromeMcpBackend::new(
                 self.chrome_mcp_driver.clone(),
                 profile_name.to_string(),
+                self.ssrf_guard.clone(),
             ))),
         }
+    }
+
+    /// Resolve the effective headless flag for a profile: profile-level override
+    /// falls back to the global `playwright_cli.headless` default.
+    pub fn resolve_headless(&self, profile_name: &str) -> bool {
+        self.get_config(profile_name)
+            .and_then(|c| c.headless)
+            .unwrap_or(self.config.playwright_cli.headless)
+    }
+
+    /// Sweep idle profiles: tear down Chrome MCP sessions for ExistingSession
+    /// profiles past their `idle_timeout_secs`, then reset state to `Idle`.
+    /// Returns the number of profiles reaped (best-effort; safe to call any time).
+    pub async fn reap_idle(&self) -> usize {
+        let idle = self.idle_profiles();
+        let count = idle.len();
+        for name in idle {
+            if let Some(BrowserDriver::ExistingSession) = self.get_driver(&name) {
+                self.chrome_mcp_driver.destroy_session(&name).await;
+            }
+            self.set_state(&name, ProfileState::Idle);
+        }
+        count
     }
 
     /// Get the driver mode for a named profile.

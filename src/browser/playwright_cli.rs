@@ -41,6 +41,7 @@ pub struct PlaywrightCliDriver {
     binary_path: RwLock<Option<PathBuf>>,
     config: PlaywrightCliConfig,
     per_session_locks: RwLock<HashMap<String, Arc<Mutex<()>>>>,
+    binary_resolve_lock: tokio::sync::Mutex<()>,
 }
 
 impl PlaywrightCliDriver {
@@ -49,6 +50,7 @@ impl PlaywrightCliDriver {
             binary_path: RwLock::new(None),
             config,
             per_session_locks: RwLock::new(HashMap::new()),
+            binary_resolve_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -62,6 +64,18 @@ impl PlaywrightCliDriver {
         {
             return Ok(p);
         }
+
+        let _guard = self.binary_resolve_lock.lock().await;
+
+        if let Some(p) = self
+            .binary_path
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            return Ok(p);
+        }
+
         if let Some(explicit) = self.config.binary_path.as_deref() {
             let p = PathBuf::from(explicit);
             if !p.exists() {
@@ -115,15 +129,12 @@ impl PlaywrightCliDriver {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        // Filter secrets from child env.
-        const DENY_ENV: &[&str] = &[
-            "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
-            "GEMINI_API_KEY",
-            "ALEPH_VAULT_KEY",
-        ];
-        for var in DENY_ENV {
-            cmd.env_remove(var);
+        // Strip secret-bearing env vars from the browser child process. The
+        // browser never needs the parent's credentials; over-stripping is safe.
+        for (name, _) in std::env::vars() {
+            if is_secret_env(&name) {
+                cmd.env_remove(&name);
+            }
         }
 
         let child = cmd.spawn().map_err(|e| match e.kind() {
@@ -162,6 +173,71 @@ impl PlaywrightCliDriver {
     pub fn config(&self) -> &PlaywrightCliConfig {
         &self.config
     }
+}
+
+/// Well-known secret-bearing env var names, stripped from the browser child.
+/// Combined with a suffix heuristic in [`is_secret_env`] to catch the long tail.
+const SECRET_ENV_EXACT: &[&str] = &[
+    // Aleph internal
+    "ALEPH_VAULT_KEY",
+    // LLM providers
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "XAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "TOGETHER_API_KEY",
+    "COHERE_API_KEY",
+    "PERPLEXITY_API_KEY",
+    // Cloud / infra
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "AZURE_CLIENT_SECRET",
+    // Developer platforms
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITLAB_TOKEN",
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+    "NPM_TOKEN",
+    "CARGO_REGISTRY_TOKEN",
+    "DOCKER_PASSWORD",
+    // Comms / SaaS
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+    "STRIPE_SECRET_KEY",
+    "TWILIO_AUTH_TOKEN",
+    "SENDGRID_API_KEY",
+    "TAVILY_API_KEY",
+    // Generic
+    "DATABASE_URL",
+];
+
+/// Whether an env var name should be withheld from the browser subprocess —
+/// either an exact match against [`SECRET_ENV_EXACT`] or a credential-shaped suffix.
+fn is_secret_env(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    if SECRET_ENV_EXACT.contains(&upper.as_str()) {
+        return true;
+    }
+    const SECRET_SUFFIXES: &[&str] = &[
+        "_API_KEY",
+        "_SECRET",
+        "_SECRET_KEY",
+        "_TOKEN",
+        "_PASSWORD",
+        "_CREDENTIALS",
+        "_ACCESS_KEY",
+        "_PRIVATE_KEY",
+    ];
+    SECRET_SUFFIXES.iter().any(|s| upper.ends_with(s))
 }
 
 fn classify_stderr(
@@ -268,5 +344,31 @@ mod tests {
     fn test_classify_stderr_generic() {
         let err = classify_stderr("something else", 2, "foo", 5000);
         assert!(matches!(err, BrowserError::PlaywrightCliError(_)));
+    }
+
+    #[test]
+    fn test_is_secret_env_exact_matches() {
+        assert!(is_secret_env("ANTHROPIC_API_KEY"));
+        assert!(is_secret_env("ALEPH_VAULT_KEY"));
+        assert!(is_secret_env("AWS_SECRET_ACCESS_KEY"));
+        assert!(is_secret_env("DATABASE_URL"));
+        // Case-insensitive
+        assert!(is_secret_env("anthropic_api_key"));
+    }
+
+    #[test]
+    fn test_is_secret_env_suffix_heuristic() {
+        assert!(is_secret_env("ACME_API_KEY"));
+        assert!(is_secret_env("SOME_SERVICE_TOKEN"));
+        assert!(is_secret_env("MY_DB_PASSWORD"));
+        assert!(is_secret_env("APP_PRIVATE_KEY"));
+    }
+
+    #[test]
+    fn test_is_secret_env_allows_normal_vars() {
+        assert!(!is_secret_env("PATH"));
+        assert!(!is_secret_env("HOME"));
+        assert!(!is_secret_env("LANG"));
+        assert!(!is_secret_env("ALEPH_CHROME_PATH"));
     }
 }

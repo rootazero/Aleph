@@ -20,7 +20,11 @@ fn priority_project_over_user_over_builtin() {
     std::fs::create_dir_all(&user_dir).unwrap();
     std::fs::create_dir_all(&project_dir).unwrap();
 
-    write_md(&user_dir, "explore.md", "---\nid: explore\ndescription: User explore override\nwhen_to_use: user-tier test\n---\n");
+    write_md(
+        &user_dir,
+        "explore.md",
+        "---\nid: explore\ndescription: User explore override\nwhen_to_use: user-tier test\n---\n",
+    );
     write_md(&project_dir, "explore.md", "---\nid: explore\ndescription: Project explore override\nwhen_to_use: project-tier test\n---\n");
 
     let (agents, shadows) = load_agents(home.path(), Some(project.path())).expect("load_agents");
@@ -29,8 +33,12 @@ fn priority_project_over_user_over_builtin() {
     assert_eq!(explore.source, AgentSource::Project);
     assert_eq!(explore.description, "Project explore override");
     assert_eq!(shadows.len(), 2);
-    assert!(shadows.iter().any(|s| s.id == "explore" && s.winner_source == AgentSource::User && s.shadowed_source == AgentSource::Builtin));
-    assert!(shadows.iter().any(|s| s.id == "explore" && s.winner_source == AgentSource::Project && s.shadowed_source == AgentSource::User));
+    assert!(shadows.iter().any(|s| s.id == "explore"
+        && s.winner_source == AgentSource::User
+        && s.shadowed_source == AgentSource::Builtin));
+    assert!(shadows.iter().any(|s| s.id == "explore"
+        && s.winner_source == AgentSource::Project
+        && s.shadowed_source == AgentSource::User));
 }
 
 #[test]
@@ -38,7 +46,11 @@ fn skip_malformed_file_continues_loading() {
     let home = tempfile::tempdir().unwrap();
     let user_dir = home.path().join("data/agents");
     std::fs::create_dir_all(&user_dir).unwrap();
-    write_md(&user_dir, "good-agent.md", "---\nid: good-agent\ndescription: Loads OK\nwhen_to_use: testing skip\n---\n");
+    write_md(
+        &user_dir,
+        "good-agent.md",
+        "---\nid: good-agent\ndescription: Loads OK\nwhen_to_use: testing skip\n---\n",
+    );
     write_md(&user_dir, "broken.md", "this file has no frontmatter\n");
     let (agents, _shadows) = load_agents(home.path(), None).expect("load_agents");
     let by_id: std::collections::HashMap<_, _> = agents.iter().map(|a| (a.id.clone(), a)).collect();
@@ -51,8 +63,16 @@ fn loader_error_on_id_mismatch_is_skipped_per_file() {
     let home = tempfile::tempdir().unwrap();
     let user_dir = home.path().join("data/agents");
     std::fs::create_dir_all(&user_dir).unwrap();
-    write_md(&user_dir, "foo.md", "---\nid: bar\ndescription: x\nwhen_to_use: x\n---\n");
-    write_md(&user_dir, "valid.md", "---\nid: valid\ndescription: x\nwhen_to_use: x\n---\n");
+    write_md(
+        &user_dir,
+        "foo.md",
+        "---\nid: bar\ndescription: x\nwhen_to_use: x\n---\n",
+    );
+    write_md(
+        &user_dir,
+        "valid.md",
+        "---\nid: valid\ndescription: x\nwhen_to_use: x\n---\n",
+    );
     let (agents, _) = load_agents(home.path(), None).expect("load_agents");
     let ids: Vec<_> = agents.iter().map(|a| a.id.clone()).collect();
     assert!(ids.contains(&"valid".to_string()));

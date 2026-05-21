@@ -33,22 +33,57 @@ pub enum Lane {
 impl Lane {
     /// Map an RPC method name to its corresponding lane.
     ///
-    /// Returns `Lane::Query` for unrecognized methods.
+    /// Resolution order:
+    /// 1. Explicit override map — looked up by full method name.
+    /// 2. Suffix heuristic — last `.`-separated segment of the method name.
+    /// 3. Default — `Lane::Mutate` (fail-safe: new side-effecting RPCs are
+    ///    idempotency-protected by default).
+    ///
+    /// The previous implementation defaulted to `Lane::Query`, which let
+    /// every uncovered side-effecting method silently bypass idempotency
+    /// (Spec 2 / G1 fix).
     pub fn for_method(method: &str) -> Self {
+        if let Some(lane) = Self::override_for(method) {
+            return lane;
+        }
+        if let Some(dot) = method.rfind('.') {
+            let suffix = &method[dot + 1..];
+            match suffix {
+                "get" | "list" | "search" | "status" | "describe" | "history"
+                | "effective" | "catalog" | "neighbors" | "subscribe" | "unsubscribe"
+                | "stats" => return Lane::Query,
+                "install" | "uninstall" => return Lane::System,
+                "run" | "send" | "invoke" | "execute" => return Lane::Execute,
+                _ => {}
+            }
+        }
+        Lane::Mutate
+    }
+
+    /// Explicit overrides for methods whose name doesn't match the
+    /// suffix heuristic or whose family puts them in a non-default lane.
+    fn override_for(method: &str) -> Option<Lane> {
         match method {
-            // Execute lane
-            "agent.run" | "chat.send" | "poe.run" | "poe.prepare" => Lane::Execute,
-
-            // Mutate lane
-            "config.patch" | "config.apply" | "config.set" | "memory.store" | "memory.delete"
-            | "session.compact" | "session.delete" => Lane::Mutate,
-
-            // System lane
-            "plugins.install" | "plugins.uninstall" | "skills.install" | "skills.delete"
-            | "logs.setLevel" => Lane::System,
-
-            // Everything else is a query
-            _ => Lane::Query,
+            // Read-only ops with no dot-suffix (or whose suffix doesn't
+            // match the Query rule).
+            "health" | "echo" | "version" | "system.info" | "request.state" => {
+                Some(Lane::Query)
+            }
+            // gateway.identity.get matches the .get suffix; listed
+            // defensively in case it's ever renamed.
+            "gateway.identity.get" => Some(Lane::Query),
+            // skills.delete is package management, not a data delete →
+            // System lane. memory.delete / session.delete / session.truncate
+            // are data ops that fall through to default Mutate.
+            "skills.delete" => Some(Lane::System),
+            // logs.setLevel changes process-wide runtime config →
+            // System lane (preserves pre-G1 hardcode behavior).
+            "logs.setLevel" => Some(Lane::System),
+            // poe.prepare initiates a Proof-of-Execution flow (LLM call,
+            // tool registry traversal) — Execute lane. The `.prepare`
+            // suffix isn't a generic Execute signal, so it stays here.
+            "poe.prepare" => Some(Lane::Execute),
+            _ => None,
         }
     }
 
@@ -190,12 +225,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_lane_for_method() {
-        // Query lane (explicit + default fallback)
+        // Query lane (explicit overrides + suffix heuristic).
+        // Note: post-G1, the default fallback is Mutate, not Query — any
+        // unknown method without a recognized suffix lands in Mutate so
+        // idempotency-sensitive RPCs aren't silently exempted. See
+        // `unknown_method_with_no_suffix_defaults_to_mutate` and the
+        // module docstring on `Lane::for_method`.
         assert_eq!(Lane::for_method("health"), Lane::Query);
         assert_eq!(Lane::for_method("echo"), Lane::Query);
         assert_eq!(Lane::for_method("config.get"), Lane::Query);
         assert_eq!(Lane::for_method("models.list"), Lane::Query);
-        assert_eq!(Lane::for_method("unknown.method"), Lane::Query);
 
         // Execute lane
         assert_eq!(Lane::for_method("agent.run"), Lane::Execute);
@@ -210,6 +249,7 @@ mod tests {
         assert_eq!(Lane::for_method("memory.store"), Lane::Mutate);
         assert_eq!(Lane::for_method("memory.delete"), Lane::Mutate);
         assert_eq!(Lane::for_method("session.compact"), Lane::Mutate);
+        assert_eq!(Lane::for_method("session.truncate"), Lane::Mutate);
         assert_eq!(Lane::for_method("session.delete"), Lane::Mutate);
 
         // System lane
@@ -277,5 +317,64 @@ mod tests {
             result.is_ok(),
             "query lane should be independent of execute lane"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Spec 2 / G1 — heuristic + override coverage
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn new_rpc_defaults_to_mutate() {
+        // Unknown method that wasn't in the original 17-name hardcode.
+        // Used to fall through to Query → bypassing idempotency.
+        // Spec 2 G1 fix: must now default to Mutate (suffix heuristic),
+        // or to the correct named lane.
+        assert_eq!(Lane::for_method("tools.invoke"), Lane::Execute); // suffix `invoke`
+        assert_eq!(Lane::for_method("agents.create"), Lane::Mutate); // default
+        assert_eq!(Lane::for_method("agents.delete"), Lane::Mutate); // data delete → Mutate
+        assert_eq!(Lane::for_method("cron.toggle"), Lane::Mutate); // default
+        assert_eq!(Lane::for_method("heartbeat.wake"), Lane::Mutate); // default
+        assert_eq!(Lane::for_method("memory.search"), Lane::Query); // suffix `search`
+        assert_eq!(Lane::for_method("graph.neighbors"), Lane::Query); // suffix `neighbors`
+        assert_eq!(Lane::for_method("trace.list"), Lane::Query); // suffix `list`
+        assert_eq!(Lane::for_method("daemon.shutdown"), Lane::Mutate); // default
+        assert_eq!(Lane::for_method("plugins.install"), Lane::System); // suffix `install`
+    }
+
+    #[test]
+    fn explicit_overrides_win_over_heuristic() {
+        // Read-only operations whose name has no dot-suffix that matches
+        // the Query heuristic. Must be explicitly overridden so they
+        // route to Query.
+        assert_eq!(Lane::for_method("health"), Lane::Query);
+        assert_eq!(Lane::for_method("echo"), Lane::Query);
+        assert_eq!(Lane::for_method("version"), Lane::Query);
+        assert_eq!(Lane::for_method("system.info"), Lane::Query);
+        assert_eq!(Lane::for_method("request.state"), Lane::Query);
+    }
+
+    #[test]
+    fn unknown_method_with_no_suffix_defaults_to_mutate() {
+        // Methods without a dot fall to default → Mutate, ensuring
+        // forgotten-to-list methods stay protected.
+        assert_eq!(Lane::for_method("totally_unknown_rpc"), Lane::Mutate);
+    }
+
+    #[test]
+    fn legacy_method_mappings_preserved() {
+        // Methods that were in the original hardcode still land in the
+        // expected lanes after the heuristic flip.
+        assert_eq!(Lane::for_method("agent.run"), Lane::Execute);
+        assert_eq!(Lane::for_method("chat.send"), Lane::Execute);
+        assert_eq!(Lane::for_method("config.patch"), Lane::Mutate);
+        assert_eq!(Lane::for_method("memory.store"), Lane::Mutate);
+        assert_eq!(Lane::for_method("memory.delete"), Lane::Mutate); // data delete → Mutate
+        assert_eq!(Lane::for_method("session.delete"), Lane::Mutate); // data delete → Mutate
+        assert_eq!(Lane::for_method("skills.delete"), Lane::System); // package mgmt override
+        assert_eq!(Lane::for_method("plugins.uninstall"), Lane::System);
+        assert_eq!(Lane::for_method("skills.install"), Lane::System);
+        // logs.setLevel changes process-wide runtime config → System
+        // (explicit override; original hardcode also routed it to System).
+        assert_eq!(Lane::for_method("logs.setLevel"), Lane::System);
     }
 }

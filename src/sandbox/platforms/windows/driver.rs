@@ -96,14 +96,31 @@ impl WindowsSandboxDriver {
             NetworkPolicy::AllowAll => {
                 lines.push("network=allow_all".to_string());
             }
-            NetworkPolicy::AllowHosts(_) => {
+            NetworkPolicy::AllowHosts(hosts) => {
+                // Workspace pre-resolution has already turned hostnames
+                // into IP literals (see `src/sandbox/dns.rs`); we expose
+                // them in the rejection so callers know exactly which
+                // IPs would be allowed if WFP enforcement existed.
+                //
+                // Why not enforced: WFP filter installation requires
+                // SeChangeNotifyPrivilege + admin (or a service running
+                // as LocalSystem). Even the AppContainer path runs
+                // unprivileged in user-session and cannot add WFP
+                // filters. The single-cycle deliverable would be a
+                // managed proxy plus HTTP_PROXY env injection, matching
+                // the Linux path.
+                let allowlist = hosts.join(", ");
                 return Err(SandboxError::UnsupportedPolicy {
                     platform: "windows/token",
                     feature: "NetworkPolicy::AllowHosts".into(),
-                    reason: "WFP-backed per-host filtering is deferred to spec SP-3. \
-                             The current Windows sandbox enforces JobObject + UI \
-                             restrictions only. Use AllowAll or None."
-                        .into(),
+                    reason: format!(
+                        "per-host egress filtering on Windows is not yet enforced. \
+                         Workspace pre-resolved the allowlist to [{allowlist}]; a future \
+                         cycle will land enforcement via a managed proxy or WFP filters \
+                         (the latter requires admin / LocalSystem). For now, use AllowAll \
+                         (unfiltered) or None (no network). Tracked in \
+                         docs/reference/SANDBOX.md § Network Filtering."
+                    ),
                 });
             }
             NetworkPolicy::ProxyOnly { .. } => {
@@ -444,8 +461,13 @@ mod tests {
     #[test]
     fn generate_profile_allow_hosts_returns_unsupported() {
         let driver = WindowsSandboxDriver::new();
+        // Workspace pre-resolution feeds an IP-only allowlist; mirror
+        // that here so the assertion catches IP-bearing rejections.
         let policy = SandboxPolicy {
-            network: NetworkPolicy::AllowHosts(vec!["example.com".into()]),
+            network: NetworkPolicy::AllowHosts(vec![
+                "203.0.113.7".into(),
+                "203.0.113.8".into(),
+            ]),
             ..Default::default()
         };
         let cwd = Path::new("C:\\workspace");
@@ -454,10 +476,20 @@ mod tests {
             .expect_err("AllowHosts must hard-fail on windows/token");
         match err {
             SandboxError::UnsupportedPolicy {
-                platform, feature, ..
+                platform,
+                feature,
+                reason,
             } => {
                 assert_eq!(platform, "windows/token");
                 assert!(feature.contains("AllowHosts"));
+                assert!(reason.contains("203.0.113.7"), "got: {reason}");
+                assert!(reason.contains("203.0.113.8"), "got: {reason}");
+                assert!(
+                    reason.contains("SANDBOX.md")
+                        || reason.contains("WFP")
+                        || reason.contains("managed proxy"),
+                    "rejection must point at the documented gap, got: {reason}"
+                );
             }
             other => panic!("expected UnsupportedPolicy, got {other:?}"),
         }
