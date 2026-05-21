@@ -48,6 +48,10 @@ fn init_theme() {
         Some("light") => {
             let _ = html.class_list().add_1("light");
         }
+        Some("translucent") => {
+            // Vibrant theme — translucent surfaces over the dark palette.
+            let _ = html.class_list().add_2("dark", "translucent");
+        }
         _ => {
             // Follow system preference (CSS @media handles this)
         }

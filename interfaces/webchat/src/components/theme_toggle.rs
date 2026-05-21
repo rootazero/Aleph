@@ -1,5 +1,11 @@
 //
-// Theme mode toggle: System / Light / Dark. Persists choice to localStorage.
+// Theme mode toggle: System / Light / Dark / Vibrant.
+// Persists choice to localStorage.
+//
+// "Vibrant" is the translucent theme — it pairs the dark palette with
+// semi-transparent surfaces. It only looks translucent inside the desktop
+// shell on macOS (where a vibrancy material sits behind the webview);
+// elsewhere it degrades to the solid dark theme. See styles/tailwind.css.
 //
 use leptos::prelude::*;
 
@@ -8,6 +14,7 @@ enum ThemeMode {
     System,
     Light,
     Dark,
+    Vibrant,
 }
 
 impl ThemeMode {
@@ -15,7 +22,8 @@ impl ThemeMode {
         match self {
             Self::System => Self::Light,
             Self::Light => Self::Dark,
-            Self::Dark => Self::System,
+            Self::Dark => Self::Vibrant,
+            Self::Vibrant => Self::System,
         }
     }
 
@@ -24,6 +32,17 @@ impl ThemeMode {
             Self::System => "System",
             Self::Light => "Light",
             Self::Dark => "Dark",
+            Self::Vibrant => "Vibrant",
+        }
+    }
+
+    /// localStorage value, or `None` for System (which clears the key).
+    fn storage_value(self) -> Option<&'static str> {
+        match self {
+            Self::System => None,
+            Self::Light => Some("light"),
+            Self::Dark => Some("dark"),
+            Self::Vibrant => Some("translucent"),
         }
     }
 }
@@ -41,6 +60,7 @@ pub fn ThemeToggle() -> impl IntoView {
         {
             Some("light") => ThemeMode::Light,
             Some("dark") => ThemeMode::Dark,
+            Some("translucent") => ThemeMode::Vibrant,
             _ => ThemeMode::System,
         }
     };
@@ -55,24 +75,28 @@ pub fn ThemeToggle() -> impl IntoView {
         let html = document.document_element().unwrap();
         let class_list = html.class_list();
 
-        let _ = class_list.remove_2("dark", "light");
-
-        let storage: Option<web_sys::Storage> = window.local_storage().ok().flatten();
+        let _ = class_list.remove_3("dark", "light", "translucent");
         match next {
             ThemeMode::Light => {
                 let _ = class_list.add_1("light");
-                if let Some(s) = &storage {
-                    let _ = s.set_item("aleph-theme", "light");
-                }
             }
             ThemeMode::Dark => {
                 let _ = class_list.add_1("dark");
-                if let Some(s) = &storage {
-                    let _ = s.set_item("aleph-theme", "dark");
-                }
             }
-            ThemeMode::System => {
-                if let Some(s) = &storage {
+            ThemeMode::Vibrant => {
+                // Translucent surfaces over the dark palette.
+                let _ = class_list.add_2("dark", "translucent");
+            }
+            ThemeMode::System => {}
+        }
+
+        let storage: Option<web_sys::Storage> = window.local_storage().ok().flatten();
+        if let Some(s) = &storage {
+            match next.storage_value() {
+                Some(value) => {
+                    let _ = s.set_item("aleph-theme", value);
+                }
+                None => {
                     let _ = s.remove_item("aleph-theme");
                 }
             }
@@ -104,6 +128,12 @@ pub fn ThemeToggle() -> impl IntoView {
         ThemeMode::Dark => view! {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+        }.into_any(),
+        ThemeMode::Vibrant => view! {
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="9" cy="9" r="6" />
+                <circle cx="15" cy="15" r="6" />
             </svg>
         }.into_any(),
     }
