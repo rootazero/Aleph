@@ -5,7 +5,7 @@
 //! redundant event processing.
 
 use crate::sync_primitives::{AtomicU64, Ordering};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Tracks monotonically increasing version numbers for distinct state domains.
 ///
@@ -19,7 +19,7 @@ pub struct StateVersionTracker {
 }
 
 /// A point-in-time snapshot of all domain versions.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StateVersion {
     pub presence: u64,
     pub health: u64,

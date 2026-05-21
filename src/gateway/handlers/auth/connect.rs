@@ -86,6 +86,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_millis() as u64,
+                    state_version: None,
                 };
                 let _ = ctx.event_bus.publish_json(&event);
 
