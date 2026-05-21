@@ -115,6 +115,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                             .unwrap_or_else(|| {
                                 (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                             }),
+                        state_version: ctx.state_versions.snapshot(),
                     }),
                 );
             }
@@ -190,6 +191,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                         .unwrap_or_else(
                             || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                         ),
+                        state_version: ctx.state_versions.snapshot(),
                     }),
                 );
             }
@@ -263,6 +265,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     .unwrap_or_else(
                         || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                     ),
+                state_version: ctx.state_versions.snapshot(),
             }),
         );
     }
@@ -313,6 +316,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                             .unwrap_or_else(
                                 || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                             ),
+                            state_version: ctx.state_versions.snapshot(),
                         }),
                     );
                 }
@@ -371,6 +375,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                         .unwrap_or_else(
                             || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                         ),
+                    state_version: ctx.state_versions.snapshot(),
                 }),
             );
         }
@@ -515,6 +520,7 @@ mod tests {
             event_bus,
             auth_mode: AuthMode::None, // Auth not required
             shared_token_mgr,
+            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
         });
 
         let request = JsonRpcRequest::new(
@@ -590,6 +596,7 @@ mod tests {
             guest_session_manager,
             event_bus,
             auth_mode: AuthMode::Token,
+            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
         });
 
         let request = JsonRpcRequest::new(
@@ -608,5 +615,63 @@ mod tests {
         let result = response.result.unwrap();
         assert!(result.get("token").is_some());
         assert!(result.get("device_id").is_some());
+    }
+
+    #[tokio::test]
+    async fn connect_response_includes_state_version() {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id: "test-dev",
+                device_name: "Test",
+                device_type: None,
+                public_key: &[1u8; 32],
+                fingerprint: "fp",
+                role: "operator",
+                scopes: &[],
+            })
+            .unwrap();
+
+        let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
+        let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
+        let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_test.vault",
+        ));
+        let state_versions =
+            Arc::new(crate::gateway::state_version::StateVersionTracker::new());
+        // Bump config once so the snapshot is non-zero and observable.
+        state_versions.bump_config();
+
+        let ctx = Arc::new(AuthContext {
+            token_manager: Arc::new(TokenManager::new(store.clone())),
+            pairing_manager: Arc::new(PairingManager::new(store.clone())),
+            device_store: Arc::new(DeviceStore::in_memory().unwrap()),
+            security_store: store,
+            invitation_manager,
+            guest_session_manager,
+            event_bus,
+            auth_mode: AuthMode::None, // no-auth path → success ConnectResult
+            shared_token_mgr,
+            state_versions,
+        });
+
+        let request = JsonRpcRequest::new(
+            "connect",
+            Some(json!({"device_name": "Test Device"})),
+            Some(json!(1)),
+        );
+
+        let response = handle_connect(request, ctx).await;
+        assert!(response.is_success());
+
+        let result = response.result.unwrap();
+        let sv = result
+            .get("state_version")
+            .expect("connect response must carry state_version");
+        assert_eq!(sv["config"], 1);
+        assert_eq!(sv["presence"], 0);
+        assert_eq!(sv["health"], 0);
     }
 }

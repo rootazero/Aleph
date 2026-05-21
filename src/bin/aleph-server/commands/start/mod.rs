@@ -646,6 +646,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         args.port,
         event_bus.clone(),
         full_config.gateway.auth.mode.clone(),
+        server.state_versions.clone(),
         args.daemon,
     );
     register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
