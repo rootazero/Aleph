@@ -31,12 +31,20 @@ const UNSUPPORTED_KEYWORDS: &[&str] = &[
     "title",
 ];
 
+/// Maximum `$ref` resolution depth. A self-referential schema (`$ref` pointing
+/// at an ancestor `$defs` entry) would otherwise recurse forever and overflow
+/// the stack. Real tool schemas never nest references this deep.
+const MAX_REF_DEPTH: usize = 64;
+
 /// Clean a JSON Schema in-place for Gemini compatibility.
 ///
 /// 1. Resolves `$ref` pointers against local `$defs`/`definitions`
+///    (cycle-safe — bounded by [`MAX_REF_DEPTH`])
 /// 2. Strips unsupported keywords recursively
-/// 3. Flattens `anyOf`/`oneOf` unions where possible
-/// 4. Ensures top-level `type: "object"` if missing
+/// 3. Flattens `anyOf`/`oneOf` unions and merges `allOf` members
+/// 4. Rewrites `const` to a single-element `enum` and a type array
+///    (e.g. `["string","null"]`) to a scalar `type` plus `nullable`
+/// 5. Ensures top-level `type: "object"` if missing
 pub(crate) fn clean_schema_for_gemini(schema: &mut Value) {
     // Step 1: Resolve $ref before anything else (needs $defs intact)
     resolve_refs(schema);
@@ -60,11 +68,14 @@ fn resolve_refs(schema: &mut Value) {
         .unwrap_or(Value::Null);
 
     if !defs.is_null() {
-        resolve_refs_recursive(schema, &defs);
+        resolve_refs_recursive(schema, &defs, 0);
     }
 }
 
-fn resolve_refs_recursive(node: &mut Value, defs: &Value) {
+/// Resolve `$ref` nodes against `defs`. `depth` counts only ref-resolution
+/// hops (not structural nesting), so a cyclic `$ref` chain is bounded by
+/// [`MAX_REF_DEPTH`] instead of overflowing the stack.
+fn resolve_refs_recursive(node: &mut Value, defs: &Value, depth: usize) {
     match node {
         Value::Object(map) => {
             // Check if this node IS a $ref
@@ -80,8 +91,15 @@ fn resolve_refs_recursive(node: &mut Value, defs: &Value) {
 
                 if let Some(name) = name {
                     if let Some(resolved) = defs.get(name) {
+                        if depth >= MAX_REF_DEPTH {
+                            // Cyclic / pathologically deep $ref chain. Stop
+                            // resolving; the leftover $ref is stripped later
+                            // by clean_recursive — graceful degradation
+                            // instead of a stack overflow.
+                            return;
+                        }
                         let mut resolved = resolved.clone();
-                        resolve_refs_recursive(&mut resolved, defs);
+                        resolve_refs_recursive(&mut resolved, defs, depth + 1);
                         *node = resolved;
                         return;
                     }
@@ -89,17 +107,17 @@ fn resolve_refs_recursive(node: &mut Value, defs: &Value) {
                 // Can't resolve — will be stripped by clean_recursive via UNSUPPORTED_KEYWORDS
             }
 
-            // Recurse into all values
+            // Recurse into all values (structural nesting keeps the same depth)
             let keys: Vec<String> = map.keys().cloned().collect();
             for key in keys {
                 if let Some(child) = map.get_mut(&key) {
-                    resolve_refs_recursive(child, defs);
+                    resolve_refs_recursive(child, defs, depth);
                 }
             }
         }
         Value::Array(arr) => {
             for item in arr.iter_mut() {
-                resolve_refs_recursive(item, defs);
+                resolve_refs_recursive(item, defs, depth);
             }
         }
         _ => {}
@@ -124,6 +142,43 @@ fn clean_recursive(node: &mut Value) {
             if let Some(arr) = variants.as_array() {
                 flatten_union(obj, arr);
             }
+        }
+    }
+
+    // Merge `allOf` member schemas — Gemini's OpenAPI subset has no `allOf`.
+    // Object members are intersected: `properties` merged, `required` unioned,
+    // other keys filled in where the parent has none (parent wins on conflict).
+    if let Some(all_of) = obj.remove("allOf") {
+        if let Some(arr) = all_of.as_array() {
+            merge_all_of(obj, arr);
+        }
+    }
+
+    // Gemini has no `const`; express a fixed value as a single-element enum.
+    if let Some(constant) = obj.remove("const") {
+        obj.entry("enum")
+            .or_insert_with(|| Value::Array(vec![constant]));
+    }
+
+    // Gemini wants a scalar `type`. Normalize a JSON-Schema type array
+    // (e.g. ["string","null"]) to a scalar type plus `nullable`.
+    if let Some(Value::Array(types)) = obj.get("type").cloned() {
+        let has_null = types.iter().any(|t| t.as_str() == Some("null"));
+        let first_non_null = types
+            .iter()
+            .filter_map(|t| t.as_str())
+            .find(|t| *t != "null")
+            .map(|s| s.to_string());
+        match first_non_null {
+            Some(ty) => {
+                obj.insert("type".into(), Value::String(ty));
+            }
+            None => {
+                obj.remove("type");
+            }
+        }
+        if has_null {
+            obj.entry("nullable").or_insert(Value::Bool(true));
         }
     }
 
@@ -168,6 +223,8 @@ fn flatten_union(parent: &mut serde_json::Map<String, Value>, variants: &[Value]
                     }
                 }
             }
+            // Preserve nullability — Gemini's OpenAPI subset uses `nullable`.
+            parent.insert("nullable".into(), Value::Bool(true));
             return;
         }
     }
@@ -185,6 +242,52 @@ fn flatten_union(parent: &mut serde_json::Map<String, Value>, variants: &[Value]
             for (k, v) in obj {
                 if !UNSUPPORTED_KEYWORDS.contains(&k.as_str()) {
                     parent.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Merge `allOf` member schemas into the parent object.
+///
+/// `properties` maps are merged key-by-key, `required` arrays are unioned,
+/// and any other supported keyword is filled in only when the parent lacks it
+/// (the parent's own value wins on conflict).
+fn merge_all_of(parent: &mut serde_json::Map<String, Value>, members: &[Value]) {
+    for member in members {
+        let Some(member_obj) = member.as_object() else {
+            continue;
+        };
+        for (key, value) in member_obj {
+            if UNSUPPORTED_KEYWORDS.contains(&key.as_str()) {
+                continue;
+            }
+            match key.as_str() {
+                "properties" => {
+                    let entry = parent
+                        .entry("properties")
+                        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                    if let (Some(dst), Some(src)) = (entry.as_object_mut(), value.as_object()) {
+                        for (prop_key, prop_val) in src {
+                            dst.entry(prop_key.clone())
+                                .or_insert_with(|| prop_val.clone());
+                        }
+                    }
+                }
+                "required" => {
+                    let entry = parent
+                        .entry("required")
+                        .or_insert_with(|| Value::Array(Vec::new()));
+                    if let (Some(dst), Some(src)) = (entry.as_array_mut(), value.as_array()) {
+                        for item in src {
+                            if !dst.contains(item) {
+                                dst.push(item.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    parent.entry(key.clone()).or_insert_with(|| value.clone());
                 }
             }
         }
@@ -409,5 +512,106 @@ mod tests {
         let data = &schema["properties"]["data"];
         assert_eq!(data["type"], "string");
         assert!(data.get("anyOf").is_none());
+    }
+
+    #[test]
+    fn test_cyclic_ref_does_not_overflow() {
+        // A self-referential schema would recurse forever without the depth
+        // cap. This test must simply terminate (not stack-overflow).
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "child": { "$ref": "#/$defs/Node" }
+            },
+            "$defs": {
+                "Node": {
+                    "type": "object",
+                    "properties": {
+                        "next": { "$ref": "#/$defs/Node" }
+                    }
+                }
+            }
+        });
+        clean_schema_for_gemini(&mut schema);
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("$defs").is_none());
+    }
+
+    #[test]
+    fn test_merges_all_of() {
+        let mut schema = json!({
+            "type": "object",
+            "allOf": [
+                {
+                    "type": "object",
+                    "properties": { "a": { "type": "string" } },
+                    "required": ["a"]
+                },
+                {
+                    "type": "object",
+                    "properties": { "b": { "type": "integer" } },
+                    "required": ["b"]
+                }
+            ]
+        });
+
+        clean_schema_for_gemini(&mut schema);
+
+        assert!(schema.get("allOf").is_none());
+        assert_eq!(schema["properties"]["a"]["type"], "string");
+        assert_eq!(schema["properties"]["b"]["type"], "integer");
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.contains(&json!("a")));
+        assert!(required.contains(&json!("b")));
+    }
+
+    #[test]
+    fn test_const_becomes_enum() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "mode": { "type": "string", "const": "fast" }
+            }
+        });
+
+        clean_schema_for_gemini(&mut schema);
+
+        let mode = &schema["properties"]["mode"];
+        assert!(mode.get("const").is_none());
+        assert_eq!(mode["enum"], json!(["fast"]));
+    }
+
+    #[test]
+    fn test_type_array_normalized_to_nullable() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "note": { "type": ["string", "null"] }
+            }
+        });
+
+        clean_schema_for_gemini(&mut schema);
+
+        let note = &schema["properties"]["note"];
+        assert_eq!(note["type"], "string");
+        assert_eq!(note["nullable"], true);
+    }
+
+    #[test]
+    fn test_nullable_anyof_sets_nullable_flag() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "value": {
+                    "anyOf": [ { "type": "string" }, { "type": "null" } ]
+                }
+            }
+        });
+
+        clean_schema_for_gemini(&mut schema);
+
+        let value = &schema["properties"]["value"];
+        assert_eq!(value["type"], "string");
+        assert_eq!(value["nullable"], true);
     }
 }
