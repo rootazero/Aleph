@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="POC.Hotkey.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="POC-2: Global Hotkey Test">
+
+    <Grid Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Title -->
+        <TextBlock
+            Grid.Row="0"
+            Text="POC-2: Global Hotkey Detection"
+            Style="{StaticResource TitleTextBlockStyle}"/>
+
+        <!-- Instructions -->
+        <TextBlock
+            Grid.Row="1"
+            TextWrapping="Wrap"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+            <Run Text="Test Steps:"/>
+            <LineBreak/>
+            <Run Text="1. Minimize this window or switch to another app"/>
+            <LineBreak/>
+            <Run Text="2. Double-tap Shift key quickly (within 400ms)"/>
+            <LineBreak/>
+            <Run Text="3. Press Win + Alt + / together"/>
+            <LineBreak/>
+            <Run Text="4. Check the event log below for detected hotkeys"/>
+        </TextBlock>
+
+        <!-- Hotkey status indicators -->
+        <StackPanel Grid.Row="2" Spacing="12">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <Border
+                    x:Name="HaloBadge"
+                    Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}"
+                    CornerRadius="4"
+                    Padding="12,8">
+                    <TextBlock Text="Double-tap Shift: Waiting..." x:Name="HaloStatus"/>
+                </Border>
+
+                <Border
+                    x:Name="ConversationBadge"
+                    Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}"
+                    CornerRadius="4"
+                    Padding="12,8">
+                    <TextBlock Text="Win+Alt+/: Waiting..." x:Name="ConversationStatus"/>
+                </Border>
+            </StackPanel>
+
+            <TextBlock>
+                <Run Text="Halo triggers: "/>
+                <Run x:Name="HaloCountText" Text="0" FontWeight="Bold"/>
+                <Run Text="    Conversation triggers: "/>
+                <Run x:Name="ConversationCountText" Text="0" FontWeight="Bold"/>
+            </TextBlock>
+        </StackPanel>
+
+        <!-- Event Log -->
+        <Grid Grid.Row="3">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
+                <TextBlock Text="Event Log:" FontWeight="SemiBold"/>
+                <CheckBox x:Name="ShowAllEvents" Content="Show all key events" IsChecked="False"/>
+                <Button Content="Clear Log" Click="ClearLog_Click"/>
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <TextBlock
+                    x:Name="EventLog"
+                    FontFamily="Consolas"
+                    FontSize="12"
+                    TextWrapping="Wrap"
+                    IsTextSelectionEnabled="True"/>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- Footer -->
+        <TextBlock
+            Grid.Row="4"
+            Text="Tip: The hook works globally - hotkeys are detected even when this window is minimized or another app is focused."
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            FontSize="12"/>
+    </Grid>
+</Window>

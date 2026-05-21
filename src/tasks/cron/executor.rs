@@ -156,6 +156,7 @@ async fn execute_cron_job(
                 error_reason: None,
                 delivery_status: Some(delivery_status),
                 agent_used_messaging_tool: false,
+                trigger_source: snapshot.trigger_source.clone(),
             }
         }
         Err(ExecutionError::Timeout) => {
@@ -171,6 +172,7 @@ async fn execute_cron_job(
                 error_reason: Some(ErrorReason::Transient("timeout".to_string())),
                 delivery_status: None,
                 agent_used_messaging_tool: false,
+                trigger_source: snapshot.trigger_source.clone(),
             }
         }
         Err(ExecutionError::AgentBusy(msg)) => {
@@ -186,6 +188,7 @@ async fn execute_cron_job(
                 error_reason: Some(ErrorReason::Transient(msg)),
                 delivery_status: None,
                 agent_used_messaging_tool: false,
+                trigger_source: snapshot.trigger_source.clone(),
             }
         }
         Err(e) => {
@@ -213,6 +216,7 @@ async fn execute_cron_job(
                 started_at,
                 e.to_string(),
                 ErrorReason::Transient(e.to_string()),
+                snapshot.trigger_source.clone(),
             )
         }
     }
@@ -316,7 +320,7 @@ async fn deliver_to_channel(
 }
 
 /// Build an error `ExecutionResult`.
-fn make_error_result(started_at: i64, error: String, reason: ErrorReason) -> ExecutionResult {
+fn make_error_result(started_at: i64, error: String, reason: ErrorReason, trigger_source: TriggerSource) -> ExecutionResult {
     let ended_at = chrono::Utc::now().timestamp_millis();
     ExecutionResult {
         started_at,
@@ -328,6 +332,7 @@ fn make_error_result(started_at: i64, error: String, reason: ErrorReason) -> Exe
         error_reason: Some(reason),
         delivery_status: None,
         agent_used_messaging_tool: false,
+        trigger_source,
     }
 }
 

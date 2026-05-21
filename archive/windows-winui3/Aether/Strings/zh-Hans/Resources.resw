@@ -1,0 +1,350 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" msdata:Ordinal="0" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+
+  <!-- App General -->
+  <data name="AppName" xml:space="preserve">
+    <value>Aether</value>
+  </data>
+  <data name="AppDescription" xml:space="preserve">
+    <value>系统级 AI 中间件</value>
+  </data>
+
+  <!-- x:Uid bindings for Settings Window -->
+  <data name="SettingsWindowTitle" xml:space="preserve">
+    <value>Aether 设置</value>
+  </data>
+  <data name="NavItem_General.Content" xml:space="preserve">
+    <value>通用</value>
+  </data>
+  <data name="NavItem_Providers.Content" xml:space="preserve">
+    <value>提供商</value>
+  </data>
+  <data name="NavItem_Generation.Content" xml:space="preserve">
+    <value>生成</value>
+  </data>
+  <data name="NavItem_Routing.Content" xml:space="preserve">
+    <value>路由规则</value>
+  </data>
+  <data name="NavItem_Shortcuts.Content" xml:space="preserve">
+    <value>快捷键</value>
+  </data>
+  <data name="NavItem_Behavior.Content" xml:space="preserve">
+    <value>行为</value>
+  </data>
+  <data name="NavItem_Memory.Content" xml:space="preserve">
+    <value>记忆管理</value>
+  </data>
+  <data name="NavItem_Search.Content" xml:space="preserve">
+    <value>搜索引擎</value>
+  </data>
+  <data name="NavItem_MCP.Content" xml:space="preserve">
+    <value>MCP 工具</value>
+  </data>
+  <data name="NavItem_Skills.Content" xml:space="preserve">
+    <value>Skills</value>
+  </data>
+  <data name="NavItem_Cowork.Content" xml:space="preserve">
+    <value>协作模式</value>
+  </data>
+  <data name="NavItem_Policies.Content" xml:space="preserve">
+    <value>策略配置</value>
+  </data>
+  <data name="Settings_UnsavedChanges.Text" xml:space="preserve">
+    <value>您有未保存的更改</value>
+  </data>
+  <data name="Common_Cancel.Content" xml:space="preserve">
+    <value>取消</value>
+  </data>
+  <data name="Common_Save.Content" xml:space="preserve">
+    <value>保存</value>
+  </data>
+  <data name="Common_OK.Content" xml:space="preserve">
+    <value>确定</value>
+  </data>
+  <data name="Common_Close.Content" xml:space="preserve">
+    <value>关闭</value>
+  </data>
+  <data name="Common_Error.Text" xml:space="preserve">
+    <value>错误</value>
+  </data>
+  <data name="Common_Success.Text" xml:space="preserve">
+    <value>成功</value>
+  </data>
+
+  <!-- Tray Menu -->
+  <data name="Tray_Settings" xml:space="preserve">
+    <value>设置</value>
+  </data>
+  <data name="Tray_Conversation" xml:space="preserve">
+    <value>对话</value>
+  </data>
+  <data name="Tray_Quit" xml:space="preserve">
+    <value>退出</value>
+  </data>
+
+  <!-- Halo States -->
+  <data name="Halo_Idle" xml:space="preserve">
+    <value></value>
+  </data>
+  <data name="Halo_Listening" xml:space="preserve">
+    <value>正在聆听...</value>
+  </data>
+  <data name="Halo_Thinking" xml:space="preserve">
+    <value>正在思考...</value>
+  </data>
+  <data name="Halo_Processing" xml:space="preserve">
+    <value>正在处理...</value>
+  </data>
+  <data name="Halo_Success" xml:space="preserve">
+    <value>完成</value>
+  </data>
+  <data name="Halo_Error" xml:space="preserve">
+    <value>错误</value>
+  </data>
+  <data name="Halo_ToolExecuting" xml:space="preserve">
+    <value>正在执行工具...</value>
+  </data>
+  <data name="Halo_ToolCompleted" xml:space="preserve">
+    <value>工具执行完成</value>
+  </data>
+  <data name="Halo_ToolFailed" xml:space="preserve">
+    <value>工具执行失败</value>
+  </data>
+  <data name="Halo_ClarificationNeeded" xml:space="preserve">
+    <value>需要澄清</value>
+  </data>
+  <data name="Halo_AgentPlanning" xml:space="preserve">
+    <value>正在规划...</value>
+  </data>
+  <data name="Halo_AgentExecuting" xml:space="preserve">
+    <value>正在执行...</value>
+  </data>
+  <data name="Halo_AgentComplete" xml:space="preserve">
+    <value>已完成</value>
+  </data>
+
+  <!-- Settings Window (legacy keys moved to x:Uid format above) -->
+
+  <!-- General Settings -->
+  <data name="Settings_General_Sound" xml:space="preserve">
+    <value>声音</value>
+  </data>
+  <data name="Settings_General_SoundEffects" xml:space="preserve">
+    <value>音效</value>
+  </data>
+  <data name="Settings_General_Startup" xml:space="preserve">
+    <value>启动</value>
+  </data>
+  <data name="Settings_General_LaunchAtStartup" xml:space="preserve">
+    <value>开机自启动</value>
+  </data>
+  <data name="Settings_General_LaunchAtStartupDesc" xml:space="preserve">
+    <value>登录 Windows 时自动启动 Aether。</value>
+  </data>
+  <data name="Settings_General_Language" xml:space="preserve">
+    <value>语言</value>
+  </data>
+  <data name="Settings_General_LanguagePreference" xml:space="preserve">
+    <value>语言偏好</value>
+  </data>
+  <data name="Settings_General_SystemDefault" xml:space="preserve">
+    <value>跟随系统</value>
+  </data>
+  <data name="Settings_General_Updates" xml:space="preserve">
+    <value>更新</value>
+  </data>
+  <data name="Settings_General_CheckUpdates" xml:space="preserve">
+    <value>检查更新</value>
+  </data>
+  <data name="Settings_General_Logs" xml:space="preserve">
+    <value>日志</value>
+  </data>
+  <data name="Settings_General_ViewLogs" xml:space="preserve">
+    <value>查看日志</value>
+  </data>
+  <data name="Settings_General_OpenConfigFolder" xml:space="preserve">
+    <value>打开配置目录</value>
+  </data>
+  <data name="Settings_General_About" xml:space="preserve">
+    <value>关于</value>
+  </data>
+  <data name="Settings_General_Version" xml:space="preserve">
+    <value>版本</value>
+  </data>
+  <data name="Settings_Saving.Text" xml:space="preserve">
+    <value>正在保存...</value>
+  </data>
+  <data name="Settings_Saved.Text" xml:space="preserve">
+    <value>设置已保存</value>
+  </data>
+
+  <!-- Providers Settings -->
+  <data name="Settings_Providers_DefaultProvider" xml:space="preserve">
+    <value>默认服务商</value>
+  </data>
+  <data name="Settings_Providers_SelectDefault" xml:space="preserve">
+    <value>选择默认 AI 服务商</value>
+  </data>
+  <data name="Settings_Providers_APIKey" xml:space="preserve">
+    <value>API 密钥</value>
+  </data>
+  <data name="Settings_Providers_TestConnection" xml:space="preserve">
+    <value>测试连接</value>
+  </data>
+  <data name="Settings_Providers_GetAPIKey" xml:space="preserve">
+    <value>获取 API 密钥</value>
+  </data>
+  <data name="Settings_Providers_LocalProviders" xml:space="preserve">
+    <value>本地服务商</value>
+  </data>
+  <data name="Settings_Providers_OllamaURL" xml:space="preserve">
+    <value>Ollama 地址</value>
+  </data>
+
+  <!-- Shortcuts Settings -->
+  <data name="Settings_Shortcuts_HaloActivation" xml:space="preserve">
+    <value>Halo 激活</value>
+  </data>
+  <data name="Settings_Shortcuts_PrimaryHotkey" xml:space="preserve">
+    <value>主快捷键</value>
+  </data>
+  <data name="Settings_Shortcuts_HaloHotkeyDesc" xml:space="preserve">
+    <value>双击 Shift 在光标位置激活 Halo</value>
+  </data>
+  <data name="Settings_Shortcuts_ConversationWindow" xml:space="preserve">
+    <value>对话窗口</value>
+  </data>
+  <data name="Settings_Shortcuts_OpenConversation" xml:space="preserve">
+    <value>打开对话</value>
+  </data>
+  <data name="Settings_Shortcuts_QuickActions" xml:space="preserve">
+    <value>快捷操作</value>
+  </data>
+  <data name="Settings_Shortcuts_DismissHalo" xml:space="preserve">
+    <value>关闭 Halo</value>
+  </data>
+  <data name="Settings_Shortcuts_ConfirmSend" xml:space="preserve">
+    <value>确认/发送</value>
+  </data>
+  <data name="Settings_Shortcuts_CopyResponse" xml:space="preserve">
+    <value>复制回复</value>
+  </data>
+
+  <!-- Memory Settings -->
+  <data name="Settings_Memory_StorageUsage" xml:space="preserve">
+    <value>存储使用</value>
+  </data>
+  <data name="Settings_Memory_Database" xml:space="preserve">
+    <value>记忆数据库</value>
+  </data>
+  <data name="Settings_Memory_RetentionPolicy" xml:space="preserve">
+    <value>保留策略</value>
+  </data>
+  <data name="Settings_Memory_KeepHistory" xml:space="preserve">
+    <value>保留对话历史</value>
+  </data>
+  <data name="Settings_Memory_AutoCompact" xml:space="preserve">
+    <value>自动压缩旧对话</value>
+  </data>
+  <data name="Settings_Memory_Management" xml:space="preserve">
+    <value>记忆管理</value>
+  </data>
+  <data name="Settings_Memory_CompactNow" xml:space="preserve">
+    <value>立即压缩</value>
+  </data>
+  <data name="Settings_Memory_ClearHistory" xml:space="preserve">
+    <value>清除所有历史</value>
+  </data>
+  <data name="Settings_Memory_ClearWarning" xml:space="preserve">
+    <value>警告：清除历史记录后无法恢复。</value>
+  </data>
+  <data name="Settings_Memory_FactsLayer" xml:space="preserve">
+    <value>事实层</value>
+  </data>
+  <data name="Settings_Memory_TotalFacts" xml:space="preserve">
+    <value>事实总数</value>
+  </data>
+  <data name="Settings_Memory_Topics" xml:space="preserve">
+    <value>主题</value>
+  </data>
+  <data name="Settings_Memory_ViewFacts" xml:space="preserve">
+    <value>查看事实浏览器</value>
+  </data>
+
+  <!-- Conversation Window -->
+  <data name="Conversation_Title" xml:space="preserve">
+    <value>Aether 对话</value>
+  </data>
+  <data name="Conversation_NewConversation" xml:space="preserve">
+    <value>新对话</value>
+  </data>
+  <data name="Conversation_Ready" xml:space="preserve">
+    <value>就绪</value>
+  </data>
+  <data name="Conversation_Thinking" xml:space="preserve">
+    <value>正在思考...</value>
+  </data>
+  <data name="Conversation_Streaming" xml:space="preserve">
+    <value>正在输出...</value>
+  </data>
+  <data name="Conversation_Typing" xml:space="preserve">
+    <value>Aether 正在输入...</value>
+  </data>
+  <data name="Conversation_Stop" xml:space="preserve">
+    <value>停止</value>
+  </data>
+  <data name="Conversation_Send" xml:space="preserve">
+    <value>发送</value>
+  </data>
+  <data name="Conversation_Placeholder" xml:space="preserve">
+    <value>输入消息...（按 Enter 发送）</value>
+  </data>
+  <data name="Conversation_Clear" xml:space="preserve">
+    <value>清除对话</value>
+  </data>
+  <data name="Conversation_ClearConfirm" xml:space="preserve">
+    <value>确定要清除对话历史吗？</value>
+  </data>
+  <data name="Conversation_Welcome" xml:space="preserve">
+    <value>欢迎使用 Aether。有什么可以帮您的吗？</value>
+  </data>
+  <data name="Conversation_Cleared" xml:space="preserve">
+    <value>对话已清除。有什么可以帮您的吗？</value>
+  </data>
+
+  <!-- Roles -->
+  <data name="Role_You" xml:space="preserve">
+    <value>你</value>
+  </data>
+  <data name="Role_Aether" xml:space="preserve">
+    <value>Aether</value>
+  </data>
+  <data name="Role_System" xml:space="preserve">
+    <value>系统</value>
+  </data>
+
+  <!-- Placeholder Pages -->
+  <data name="Placeholder_ComingSoon" xml:space="preserve">
+    <value>即将推出</value>
+  </data>
+  <data name="Placeholder_CheckUpdates" xml:space="preserve">
+    <value>请检查更新以获取最新功能。</value>
+  </data>
+</root>

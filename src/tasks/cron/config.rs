@@ -459,6 +459,7 @@ pub struct ExecutionResult {
     pub error_reason: Option<ErrorReason>,
     pub delivery_status: Option<DeliveryStatus>,
     pub agent_used_messaging_tool: bool,
+    pub trigger_source: TriggerSource,
 }
 
 // ── CronJobView ─────────────────────────────────────────────────────────

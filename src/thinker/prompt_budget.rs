@@ -97,7 +97,8 @@ pub fn truncate_with_head_tail(
     let tail_chars = usable.saturating_sub(head_chars);
 
     let truncated_count = content
-        .len()
+        .chars()
+        .count()
         .saturating_sub(head_chars)
         .saturating_sub(tail_chars);
     let marker = format!("\n\n[... {} chars truncated ...]\n\n", truncated_count);
