@@ -1,7 +1,6 @@
 //! ProtocolAdapter trait implementation for AnthropicProtocol.
 
 use std::collections::VecDeque;
-use axum::body::Bytes;
 
 use crate::config::types::provider::CacheRetention;
 use crate::config::ProviderConfig;
