@@ -6,6 +6,7 @@ pub mod anthropic;
 pub mod configurable;
 pub mod definition;
 pub mod gemini;
+mod http_client;
 mod jsonpath;
 pub mod loader;
 pub mod openai_chat;
