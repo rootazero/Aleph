@@ -62,10 +62,7 @@ impl ClawHubClient {
             .timeout(REQUEST_TIMEOUT)
             .user_agent(ua)
             .build()
-            .unwrap_or_else(|e| {
-                tracing::error!("Failed to build reqwest client with custom config: {}", e);
-                Client::new()
-            });
+            .expect("reqwest Client builder should not fail with standard config");
 
         Self {
             base_url: url.trim_end_matches('/').to_string(),
@@ -231,6 +228,11 @@ impl ClawHubClient {
 
         // Sanitize slug for filename: "owner/skill" → "owner-skill"
         let safe_slug = slug.replace('/', "-");
+        let safe_slug = if safe_slug.len() > 100 {
+            &safe_slug[..100]
+        } else {
+            &safe_slug
+        };
         let temp_path = std::env::temp_dir().join(format!(
             "clawhub-{}-{}.zip",
             safe_slug,
