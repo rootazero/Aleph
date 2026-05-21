@@ -1101,3 +1101,36 @@ fn responses_top_logprobs_stripped_for_deepseek() {
         "DeepSeek has supports_logprobs=false; field must be stripped"
     );
 }
+
+// ─── Task 4: per-chunk SSE idle timeout ──────────────────────────────────
+
+#[test]
+fn build_request_stores_configured_stream_idle_timeout() {
+    let proto = OpenAiResponsesProtocol::new(Client::new(), ResponsesVariant::default());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.stream_idle_timeout_secs = Some(23);
+    let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let _ = proto.build_request(&payload, &config);
+    assert_eq!(
+        proto
+            .stream_idle_timeout_secs
+            .load(std::sync::atomic::Ordering::Relaxed),
+        23,
+    );
+}
+
+#[test]
+fn build_request_defaults_stream_idle_timeout_to_60() {
+    let proto = OpenAiResponsesProtocol::new(Client::new(), ResponsesVariant::default());
+    let config = ProviderConfig::test_config("gpt-4o");
+    let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let _ = proto.build_request(&payload, &config);
+    assert_eq!(
+        proto
+            .stream_idle_timeout_secs
+            .load(std::sync::atomic::Ordering::Relaxed),
+        60,
+    );
+}

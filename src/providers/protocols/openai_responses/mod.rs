@@ -75,12 +75,23 @@ impl ResponsesVariant {
 pub struct OpenAiResponsesProtocol {
     client: Client,
     variant: ResponsesVariant,
+    /// Idle timeout (seconds) for the SSE byte stream, resolved from
+    /// `ProviderConfig.stream_idle_timeout_secs` in `build_request` and read
+    /// in `stream_deltas`. An `AtomicU64` because `&self` is shared (`Arc`)
+    /// and the value must cross into the `'static` stream closure.
+    stream_idle_timeout_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl OpenAiResponsesProtocol {
     /// Create a new adapter with the given HTTP client and variant config
     pub fn new(client: Client, variant: ResponsesVariant) -> Self {
-        Self { client, variant }
+        Self {
+            client,
+            variant,
+            stream_idle_timeout_secs: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+                crate::providers::protocols::stream_idle::DEFAULT_STREAM_IDLE_SECS,
+            )),
+        }
     }
 
     /// Build the endpoint URL from provider configuration and variant
@@ -220,6 +231,10 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
         payload: &RequestPayload,
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder> {
+        self.stream_idle_timeout_secs.store(
+            crate::providers::protocols::stream_idle::effective_idle_secs(config),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let endpoint = Self::build_endpoint(config, &self.variant);
         let actual_model = payload
             .model
@@ -311,6 +326,14 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
             .bytes_stream()
             .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
             .boxed();
+        let idle_secs = self
+            .stream_idle_timeout_secs
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let byte_stream = crate::providers::protocols::stream_idle::wrap_idle_timeout(
+            byte_stream,
+            idle_secs,
+            "OpenAI",
+        );
 
         /// Per-iteration mutable state carried through unfold
         struct State {
