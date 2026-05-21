@@ -3,7 +3,7 @@
 use super::error::InitError;
 use crate::config::Config;
 use crate::sync_primitives::Arc;
-use crate::utils::paths::get_config_dir;
+use crate::utils::paths::{get_config_dir, get_runtimes_dir};
 use std::path::PathBuf;
 use tracing::{info, warn};
 
@@ -169,7 +169,9 @@ impl InitializationCoordinator {
                     }
                 }
                 InitPhase::Runtimes => {
-                    let runtimes_dir = self.config_dir.join("runtimes");
+                    let runtimes_dir = get_runtimes_dir().map_err(|e| {
+                        InitError::new("rollback", format!("Failed to get runtimes dir: {}", e))
+                    })?;
                     if runtimes_dir.exists() {
                         if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
                             warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
@@ -178,29 +180,12 @@ impl InitializationCoordinator {
                     }
                 }
                 InitPhase::Database => {
-                    let db_base = self.config_dir.join("memory.db");
-                    let db_artifacts = [
-                        &db_base,
-                        &self.config_dir.join("memory.db-wal"),
-                        &self.config_dir.join("memory.db-shm"),
-                    ];
-                    for path in &db_artifacts {
-                        if path.exists() {
-                            if let Err(e) = tokio::fs::remove_file(path).await {
-                                warn!(error = %e, path = ?path, "Failed to remove database file during rollback");
-                                errors.push(format!("database file: {}", e));
-                            }
-                        }
-                    }
+                    // Skip: memory.db may pre-exist; deleting it could destroy user data.
+                    warn!("Skipping database rollback to avoid deleting pre-existing user data");
                 }
                 InitPhase::Config => {
-                    let config_path = self.config_dir.join("config.toml");
-                    if config_path.exists() {
-                        if let Err(e) = tokio::fs::remove_file(&config_path).await {
-                            warn!(error = %e, path = ?config_path, "Failed to remove config during rollback");
-                            errors.push(format!("config file: {}", e));
-                        }
-                    }
+                    // Skip: config.toml may pre-exist; deleting it could destroy user configuration.
+                    warn!("Skipping config rollback to avoid deleting pre-existing user configuration");
                 }
                 InitPhase::Directories => {
                     // Don't remove entire config_dir to preserve user data
@@ -212,7 +197,7 @@ impl InitializationCoordinator {
             info!("Rollback completed");
             Ok(())
         } else {
-            Err(InitError::new(
+            Err(InitError::non_retryable(
                 "rollback",
                 format!("Partial rollback failed: {}", errors.join("; ")),
             ))
