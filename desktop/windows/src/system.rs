@@ -70,80 +70,21 @@ impl SystemCapability for WindowsSystem {
     }
 
     async fn quit_app(&self, app_name: &str) -> Result<()> {
-        #[cfg(windows)]
-        {
-            let app_name = app_name.to_string();
-            tokio::task::spawn_blocking(move || {
-                use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-                use windows::Win32::UI::WindowsAndMessaging::{
-                    EnumWindows, GetWindowTextW, IsWindowVisible, PostMessageW, WM_CLOSE,
-                };
-
-                struct EnumState {
-                    target: String,
-                    found: bool,
-                }
-
-                // SAFETY: EnumWindows callback follows documented signature.
-                extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
-                    unsafe {
-                        if IsWindowVisible(hwnd).as_bool() {
-                            let mut buf = [0u16; 512];
-                            let len = GetWindowTextW(hwnd, &mut buf);
-                            if len > 0 {
-                                let title = String::from_utf16_lossy(&buf[..len as usize]);
-                                let state = &mut *(lparam.0 as *mut EnumState);
-                                if title.to_lowercase().contains(&state.target.to_lowercase()) {
-                                    let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
-                                    state.found = true;
-                                    // Close only the first match and stop. Previously this
-                                    // returned 1 (continue), so it WM_CLOSE'd *every* window
-                                    // whose title contained the substring — e.g.
-                                    // quit_app("Word") would also close "Password Manager".
-                                    // NOTE: still a title-substring match; a precise fix
-                                    // matches the process executable name (Win32 follow-up).
-                                    return 0;
-                                }
-                            }
-                        }
-                        1 // Continue enumeration
-                    }
-                }
-
-                let mut state = EnumState {
-                    target: app_name.clone(),
-                    found: false,
-                };
-
-                unsafe {
-                    let _ = EnumWindows(Some(enum_proc), LPARAM(&mut state as *mut _ as isize));
-                }
-
-                if state.found {
-                    Ok(())
-                } else {
-                    Err(DesktopError::PlatformError(format!(
-                        "no visible window matching '{app_name}' found"
-                    )))
-                }
-            })
+        // Delegate to the shared cross-platform implementation, which matches by
+        // process executable name. The previous local implementation matched by
+        // window-title substring, so `quit_app("Word")` could also close
+        // unrelated apps such as "Password Manager".
+        let app_name = app_name.to_string();
+        tokio::task::spawn_blocking(move || aleph_desktop::action::quit_app(&app_name))
             .await
             .map_err(|e| DesktopError::PlatformError(format!("task join error: {e}")))?
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = app_name;
-            Err(DesktopError::NotImplemented(
-                "quit_app requires Windows".into(),
-            ))
-        }
     }
 
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>> {
         #[cfg(windows)]
         {
             tokio::task::spawn_blocking(|| {
-                use windows::Win32::Foundation::HWND;
+                use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
                 use windows::Win32::UI::WindowsAndMessaging::{
                     EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
                 };
@@ -153,7 +94,7 @@ impl SystemCapability for WindowsSystem {
                 }
 
                 // SAFETY: EnumWindows callback follows documented signature.
-                extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
+                extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
                     unsafe {
                         if IsWindowVisible(hwnd).as_bool() {
                             let mut buf = [0u16; 512];
@@ -172,7 +113,7 @@ impl SystemCapability for WindowsSystem {
                                 });
                             }
                         }
-                        1
+                        BOOL(1)
                     }
                 }
 
@@ -246,7 +187,7 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
             tokio::task::spawn_blocking(|| {
                 use clipboard_win::{formats, get_clipboard};
 
-                match get_clipboard::<String>(formats::Unicode) {
+                match get_clipboard::<String, _>(formats::Unicode) {
                     Ok(text) => Ok(ClipboardContent {
                         text: Some(text),
                         has_image: false,
@@ -298,6 +239,7 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
         #[cfg(windows)]
         {
             tokio::task::spawn_blocking(|| {
+                use windows::core::PWSTR;
                 use windows::Win32::System::SystemInformation::{
                     ComputerNamePhysicalDnsHostname, GetComputerNameExW,
                 };
@@ -305,14 +247,15 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
                 let mut hostname_buf = [0u16; 256];
                 let mut size = hostname_buf.len() as u32;
 
-                // SAFETY: GetComputerNameExW writes into provided buffer up to size bytes.
+                // SAFETY: GetComputerNameExW writes up to `size` UTF-16 units
+                // into the buffer and updates `size` with the count written.
                 let hostname = unsafe {
                     if GetComputerNameExW(
                         ComputerNamePhysicalDnsHostname,
-                        Some(&mut hostname_buf),
+                        PWSTR(hostname_buf.as_mut_ptr()),
                         &mut size,
                     )
-                    .as_bool()
+                    .is_ok()
                     {
                         String::from_utf16_lossy(&hostname_buf[..size as usize])
                     } else {
@@ -345,7 +288,7 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
         #[cfg(windows)]
         {
             tokio::task::spawn_blocking(|| {
-                use windows::Win32::Foundation::GetTickCount;
+                use windows::Win32::System::SystemInformation::GetTickCount;
                 use windows::Win32::UI::Input::KeyboardAndMouse::GetLastInputInfo;
 
                 #[repr(C)]
