@@ -25,8 +25,10 @@
 //! }
 //! ```
 
+mod consent;
 mod executor;
 
+pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
 pub use executor::HookExecutor;
 
 use std::collections::HashMap;
@@ -805,5 +807,91 @@ mod tests {
         let mut result = HookResult::default();
         parse_command_output("deny: first\nallow", &mut result);
         assert_eq!(result.permission_decision, Some(PermissionDecision::Allow));
+    }
+
+    fn command_hook(command: &str) -> HookConfig {
+        HookConfig {
+            event: HookEvent::BeforeToolCall,
+            kind: HookKind::default(),
+            priority: HookPriority::default(),
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: command.to_string(),
+            }],
+            plugin_name: "consent-test".to_string(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn unapproved_shell_hook_is_skipped_and_recorded_pending() {
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let consent = Arc::new(ShellHookConsent::with_path(
+            dir.path().join("allowlist.json"),
+        ));
+        let executor = HookExecutor::new(vec![command_hook("echo SHOULD_NOT_RUN")])
+            .with_consent(consent.clone());
+
+        let result = executor
+            .execute(HookEvent::BeforeToolCall, &HookContext::new("s"))
+            .await
+            .unwrap();
+
+        // The hook matched but its command was gated off.
+        assert_eq!(result.hooks_executed, 1);
+        assert!(!result.action_results[0].success);
+        assert!(result.action_results[0].output.is_none());
+        // ...and it was surfaced for operator review.
+        let pending = consent.entries();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].status, ConsentStatus::Pending);
+        assert_eq!(pending[0].plugin_name, "consent-test");
+    }
+
+    #[tokio::test]
+    async fn approved_shell_hook_runs_normally() {
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let consent = Arc::new(ShellHookConsent::with_path(
+            dir.path().join("allowlist.json"),
+        ));
+        let cmd = "echo approved_output";
+        consent.record_pending("consent-test", cmd, "before_tool_call");
+        let fp = consent.entries()[0].fingerprint.clone();
+        consent.approve(&fp).expect("approve");
+
+        let executor =
+            HookExecutor::new(vec![command_hook(cmd)]).with_consent(consent.clone());
+        let result = executor
+            .execute(HookEvent::BeforeToolCall, &HookContext::new("s"))
+            .await
+            .unwrap();
+
+        assert_eq!(result.hooks_executed, 1);
+        assert!(result.action_results[0].success);
+        assert!(result.action_results[0]
+            .output
+            .as_deref()
+            .unwrap_or_default()
+            .contains("approved_output"));
+    }
+
+    #[tokio::test]
+    async fn shell_hook_runs_freely_when_no_consent_gate_attached() {
+        // Back-compat: a `HookExecutor` with no consent gate (the default)
+        // executes command hooks exactly as before.
+        let executor = HookExecutor::new(vec![command_hook("echo ungated")]);
+        let result = executor
+            .execute(HookEvent::BeforeToolCall, &HookContext::new("s"))
+            .await
+            .unwrap();
+        assert!(result.action_results[0].success);
+        assert!(result.action_results[0]
+            .output
+            .as_deref()
+            .unwrap_or_default()
+            .contains("ungated"));
     }
 }
