@@ -223,11 +223,6 @@ impl OpenAiTtsProvider {
         }
     }
 
-    /// Validate a voice name
-    fn validate_voice(voice: &str) -> bool {
-        AVAILABLE_VOICES.contains(&voice)
-    }
-
     /// Get the content type for a given format
     fn content_type_for_format(format: Option<&str>) -> &'static str {
         match format {
