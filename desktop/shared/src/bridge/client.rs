@@ -14,6 +14,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -47,6 +48,19 @@ fn map_bridge_error(e: RpcError) -> DesktopError {
     }
     DesktopError::BridgeFailed(format!("bridge error {}: {}", e.code, e.message))
 }
+
+/// Default per-call RPC deadline.
+///
+/// Generous enough for the slowest *interactive* helper operations — OCR,
+/// AX tree walks, PIM queries, a single camera snap — yet bounded so a helper
+/// that accepts a request and then hangs (without closing stdout, so crash
+/// recovery never fires) cannot wedge an agent turn forever.
+///
+/// Long-running capture operations (`camera.clip`, `audio.record`,
+/// `speech.transcribe_file`) outlast this default; they must use
+/// [`SwiftBridge::call_with_timeout`] with a deadline derived from the
+/// requested duration instead.
+pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Long-lived RPC client for the `aleph-bridge` Swift helper.
 ///
@@ -242,8 +256,56 @@ impl SwiftBridge {
         }
     }
 
-    /// Send a JSON-RPC request and await the typed response.
+    /// Send a JSON-RPC request and await the typed response, bounded by the
+    /// [`DEFAULT_RPC_TIMEOUT`].
+    ///
+    /// Most callers want this. Operations that can legitimately run longer
+    /// than the default (camera/audio capture) must use
+    /// [`SwiftBridge::call_with_timeout`] instead.
     pub async fn call<P, R>(&self, method: &str, params: P) -> Result<R>
+    where
+        P: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        self.call_with_timeout(method, params, DEFAULT_RPC_TIMEOUT)
+            .await
+    }
+
+    /// Await a reply on `rx`, bounded by `timeout`.
+    ///
+    /// On timeout the dangling inflight slot for `id` is cancelled so it does
+    /// not leak, and [`DesktopError::BridgeTimeout`] is returned. The helper
+    /// subprocess is left running — only this single call fails. A helper that
+    /// is merely slow (not wedged) will have its late response discarded by
+    /// the reader loop as an unknown id.
+    async fn await_reply(
+        &self,
+        id: u64,
+        rx: oneshot::Receiver<Result<serde_json::Value>>,
+        timeout: Duration,
+        method: &str,
+    ) -> Result<serde_json::Value> {
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_recv)) => Err(DesktopError::BridgeFailed("inflight dropped".into())),
+            Err(_elapsed) => {
+                self.inflight.cancel(id).await;
+                Err(DesktopError::BridgeTimeout(format!(
+                    "no reply for '{method}' within {}s",
+                    timeout.as_secs()
+                )))
+            }
+        }
+    }
+
+    /// Send a JSON-RPC request and await the typed response, bounded by an
+    /// explicit per-call `timeout`.
+    pub async fn call_with_timeout<P, R>(
+        &self,
+        method: &str,
+        params: P,
+        timeout: Duration,
+    ) -> Result<R>
     where
         P: serde::Serialize,
         R: serde::de::DeserializeOwned,
@@ -315,16 +377,12 @@ impl SwiftBridge {
                     .map_err(|e| DesktopError::BridgeFailed(format!("flush stdin retry: {e}")))?;
             }
 
-            let raw = rx2
-                .await
-                .map_err(|_| DesktopError::BridgeFailed("inflight dropped".into()))??;
+            let raw = self.await_reply(id, rx2, timeout, method).await?;
             return serde_json::from_value(raw)
                 .map_err(|e| DesktopError::BridgeFailed(format!("decode result: {e}")));
         }
 
-        let raw = rx
-            .await
-            .map_err(|_| DesktopError::BridgeFailed("inflight dropped".into()))??;
+        let raw = self.await_reply(id, rx, timeout, method).await?;
         serde_json::from_value(raw)
             .map_err(|e| DesktopError::BridgeFailed(format!("decode result: {e}")))
     }
@@ -370,6 +428,16 @@ done
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
   printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"bad params"}}\n' "$id"
+done
+"#
+    }
+
+    /// Fake helper that consumes every request but never replies, simulating
+    /// a wedged helper that keeps stdout open (so crash recovery never fires).
+    fn silent_helper_script() -> &'static str {
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  :
 done
 "#
     }
@@ -456,6 +524,46 @@ done
         // Give the reader task a moment to observe stdout EOF and reset state.
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
+        let v: serde_json::Value = bridge
+            .call("bridge.ping", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(v["pong"], true);
+    }
+
+    #[tokio::test]
+    async fn call_with_timeout_trips_when_helper_never_replies() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_fake(&dir, silent_helper_script());
+
+        let bridge = SwiftBridge::new(path);
+        bridge.ensure_running().await.unwrap();
+
+        let result: Result<serde_json::Value> = bridge
+            .call_with_timeout(
+                "bridge.ping",
+                serde_json::json!({}),
+                Duration::from_millis(200),
+            )
+            .await;
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, DesktopError::BridgeTimeout(_)),
+            "expected BridgeTimeout, got: {err:?}"
+        );
+        // The timed-out request must not leak in the inflight table.
+        assert_eq!(bridge.inflight.len().await, 0);
+    }
+
+    #[tokio::test]
+    async fn default_call_succeeds_against_fast_helper() {
+        // call() now delegates to call_with_timeout(DEFAULT_RPC_TIMEOUT);
+        // a fast helper must still resolve well within the default window.
+        let dir = tempfile::tempdir().unwrap();
+        let path = install_fake(&dir, fake_helper_script());
+
+        let bridge = SwiftBridge::new(path);
         let v: serde_json::Value = bridge
             .call("bridge.ping", serde_json::json!({}))
             .await

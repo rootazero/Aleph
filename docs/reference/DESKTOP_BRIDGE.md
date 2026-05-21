@@ -53,6 +53,26 @@ The Swift helper installs a parent-death watchdog: it polls `getppid()` and
 exits cleanly if the parent PID changes, preventing zombie helper processes
 when the server crashes.
 
+### Per-call RPC timeout
+
+Crash recovery only fires when the helper closes stdout (EOF). A helper that
+accepts a request and then *hangs* — stuck in a native API, deadlocked —
+keeps stdout open, so the reader loop never observes EOF. To stop such a
+helper from wedging an agent turn indefinitely, every RPC is bounded by a
+per-call deadline:
+
+- `SwiftBridge::call` uses `DEFAULT_RPC_TIMEOUT` (60 s) — ample for the
+  slowest interactive operations (OCR, AX tree walks, PIM queries, a single
+  camera snap).
+- `SwiftBridge::call_with_timeout` takes an explicit deadline. Long-running
+  capture operations use it: `camera.clip` and `audio.record` pass
+  `requested_duration + 30 s`; `speech.transcribe_file` passes a flat 300 s.
+
+On timeout the caller receives `DesktopError::BridgeTimeout`, the in-flight
+slot is dropped (no leak), and the helper is **left running** — only that one
+call fails. A late reply from a merely-slow helper is discarded by the reader
+loop as an unknown id. Timeouts do not count toward the restart window.
+
 ## 2. Protocol
 
 ### Transport

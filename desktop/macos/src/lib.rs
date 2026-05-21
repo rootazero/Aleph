@@ -14,6 +14,7 @@ pub use sleep_inhibitor::MacosPower;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use aleph_desktop::media_types::{
     AudioDeviceInfo, AudioRecordConfig, AudioRecordResult, CameraClipConfig, CameraClipResult,
@@ -188,6 +189,16 @@ fn bridge_err(msg: &str) -> aleph_desktop::DesktopError {
     aleph_desktop::DesktopError::BridgeFailed(msg.to_string())
 }
 
+/// Extra time beyond a capture's requested duration to allow for capture-
+/// session warm-up, encoding, and disk I/O before the RPC is treated as hung.
+/// Added on top of `duration_secs` for `camera.clip` / `audio.record`, whose
+/// recordings outlast [`SwiftBridge::call`]'s default deadline.
+const CAPTURE_TIMEOUT_MARGIN_SECS: f64 = 30.0;
+
+/// Deadline for on-device speech transcription. The source file length is not
+/// known to the Rust side, so this is bounded generously rather than derived.
+const SPEECH_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(300);
+
 // ---------------------------------------------------------------------------
 // MediaCapability: camera + audio + speech proxied via the Swift helper.
 // All method bodies are thin RPC forwarders — no native AVFoundation /
@@ -231,14 +242,18 @@ impl MediaCapability for MacOSPlatform {
             audio = config.with_audio,
             "Proxying camera clip to Swift helper"
         );
+        // The helper records for `duration_secs`, which outlasts the default
+        // RPC deadline; bound the call by the recording duration plus margin.
+        // `duration_secs` is pre-clamped by `.clamped()`, so the sum is finite.
         let rpc: ClipResult = self
             .bridge
-            .call(
+            .call_with_timeout(
                 METHOD_CAMERA_CLIP,
                 ClipParams {
                     duration_secs: config.duration_secs,
                     with_audio: config.with_audio,
                 },
+                Duration::from_secs_f64(config.duration_secs + CAPTURE_TIMEOUT_MARGIN_SECS),
             )
             .await
             .map_err(|e| bridge_err(&format!("media.camera.clip RPC: {e}")))?;
@@ -258,13 +273,16 @@ impl MediaCapability for MacOSPlatform {
             duration = config.duration_secs,
             "Proxying audio record to Swift helper"
         );
+        // Recording outlasts the default RPC deadline; bound the call by the
+        // requested duration plus margin. `duration_secs` is pre-clamped.
         let rpc: RecordAudioResult = self
             .bridge
-            .call(
+            .call_with_timeout(
                 METHOD_AUDIO_RECORD,
                 RecordAudioParams {
                     duration_secs: config.duration_secs,
                 },
+                Duration::from_secs_f64(config.duration_secs + CAPTURE_TIMEOUT_MARGIN_SECS),
             )
             .await
             .map_err(|e| bridge_err(&format!("media.audio.record RPC: {e}")))?;
@@ -310,14 +328,17 @@ impl MediaCapability for MacOSPlatform {
             lang = %config.language,
             "Proxying speech transcribe_file to Swift helper"
         );
+        // Transcription of a long file can outlast the default deadline;
+        // bound it generously since the file length is not known here.
         let rpc: TranscribeFileResult = self
             .bridge
-            .call(
+            .call_with_timeout(
                 METHOD_SPEECH_TRANSCRIBE_FILE,
                 TranscribeFileParams {
                     audio_path: audio_path.to_string(),
                     language: config.language.clone(),
                 },
+                SPEECH_TRANSCRIBE_TIMEOUT,
             )
             .await
             .map_err(|e| bridge_err(&format!("media.speech.transcribe_file RPC: {e}")))?;

@@ -49,6 +49,16 @@ impl InflightTable {
         }
     }
 
+    /// Drop a pending request without completing or failing it.
+    ///
+    /// Used by the bridge client when an RPC times out: the caller has
+    /// already given up, so the slot is removed to avoid leaking it. If the
+    /// helper later sends a response for this id, `complete` simply reports
+    /// "id not found" — which the reader loop already tolerates.
+    pub async fn cancel(&self, id: u64) {
+        self.inner.lock().await.remove(&id);
+    }
+
     pub async fn fail_all(&self, reason: impl Into<String>) {
         let reason: String = reason.into();
         let mut guard = self.inner.lock().await;
@@ -111,5 +121,19 @@ mod tests {
         let res = rx.await.unwrap();
         assert!(res.is_err());
         assert_eq!(table.len().await, 0);
+    }
+
+    #[tokio::test]
+    async fn cancel_removes_slot_without_leaking() {
+        let table = InflightTable::default();
+        let (tx, rx) = oneshot::channel();
+        table.register(7, tx).await;
+        assert_eq!(table.len().await, 1);
+        table.cancel(7).await;
+        assert_eq!(table.len().await, 0);
+        // The receiver observes the dropped sender as a recv error.
+        assert!(rx.await.is_err());
+        // A late `complete` for a cancelled id is a tolerated no-op error.
+        assert!(table.complete(7, serde_json::json!(null)).await.is_err());
     }
 }
