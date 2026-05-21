@@ -85,7 +85,7 @@ impl AlephToolServer {
     /// Create a new empty tool server.
     pub fn new() -> Self {
         Self {
-            tools: Arc::new(RwLock::new(HashMap::new())),
+            tools: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -293,7 +293,7 @@ impl AlephToolServer {
     /// Add a pre-boxed dynamic tool (internal helper).
     async fn add_tool_dyn(&self, tool: Box<dyn AlephToolDyn>) -> Result<()> {
         let name = tool.name().to_string();
-        self.tools.write().await.insert(name, Arc::from(tool));
+        self.tools.lock().unwrap().insert(name, Arc::from(tool));
         Ok(())
     }
 }

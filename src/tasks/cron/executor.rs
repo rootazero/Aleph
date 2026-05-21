@@ -18,6 +18,7 @@ use crate::gateway::router::SessionKey;
 use crate::sync_primitives::Arc;
 use crate::tasks::cron::config::{
     DeliveryStatus, ErrorReason, ExecutionResult, JobSnapshot, RunStatus, SessionTarget,
+    TriggerSource,
 };
 use crate::tasks::cron::service::timer::JobExecutorFn;
 
@@ -58,6 +59,7 @@ async fn execute_cron_job(
                 started_at,
                 format!("agent not found: {agent_id}"),
                 ErrorReason::Permanent(format!("agent '{agent_id}' is not registered")),
+                snapshot.trigger_source.clone(),
             );
         }
     };

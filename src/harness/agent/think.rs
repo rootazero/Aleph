@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 
 use tokio_util::sync::CancellationToken;
 
-use super::{AgentHarness, HarnessCallbackExt, InputGuardrailOutcome};
+use super::{AgentHarness, InputGuardrailOutcome};
 use crate::context::budget::LoopDirective;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState};

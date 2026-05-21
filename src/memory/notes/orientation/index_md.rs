@@ -91,7 +91,7 @@ impl IndexMdGenerator {
     }
 
     async fn summary_for(&self, entry: &NoteIndexEntry) -> Result<String, AlephError> {
-        let safe_cat = crate::memory::notes::note::helpers::sanitize_title(&entry.category)
+        let safe_cat = crate::memory::notes::sanitize_title(&entry.category)
             .unwrap_or_else(|_| "other".to_string());
         let note_path = self
             .agent_dir

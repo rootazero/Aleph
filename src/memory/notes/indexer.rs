@@ -437,7 +437,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         } else {
             "other".to_string()
         };
-        let category = crate::memory::notes::note::helpers::sanitize_title(&category)
+        let category = crate::memory::notes::sanitize_title(&category)
             .unwrap_or_else(|_| "other".to_string());
 
         let cat_dir = self.memory_dir.join(agent_id).join(&category);

@@ -130,7 +130,7 @@ pub(super) async fn call_with_repair_impl(
 
     // 4. Route to "invalid" tool if available
     let invalid = {
-        let tools = tools_map.read().await;
+        let tools = tools_map.lock().unwrap();
         tools.get("invalid").map(Arc::clone)
     };
     if let Some(invalid_tool) = invalid {
