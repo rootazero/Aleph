@@ -192,14 +192,25 @@ impl DesktopTool {
     /// Returns `None` if the action is allowed (or no policy is configured),
     /// or `Some(DesktopOutput)` if the action is denied or requires user
     /// confirmation.
-    async fn check_approval(&self, action_type: ActionType, target: &str) -> Option<DesktopOutput> {
+    ///
+    /// The [`ActionRequest`] is stamped with the issuing agent's id and a
+    /// human-readable audit context resolved from the agent-loop call context
+    /// (see [`audit_identity`]), so `ApprovalPolicy::record` produces an
+    /// accountable audit trail rather than blank entries.
+    async fn check_approval(
+        &self,
+        action_type: ActionType,
+        action: &str,
+        target: &str,
+    ) -> Option<DesktopOutput> {
         let policy = self.approval_policy.as_ref()?;
 
+        let (agent_id, context) = audit_identity(action, target);
         let request = ActionRequest {
             action_type,
             target: target.to_string(),
-            agent_id: String::new(), // TODO: plumb agent_id from agent loop call context
-            context: String::new(),  // TODO: populate with action description for audit
+            agent_id,
+            context,
             timestamp: chrono::Utc::now(),
         };
 
@@ -302,6 +313,37 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
     }
 }
 
+/// Resolve the audit identity of the current desktop tool call.
+///
+/// Reads `TURN_CONTEXT` — the per-tool-call task-local scoped by
+/// `ScopedToolService::execute`, the single production tool-dispatch
+/// chokepoint — so the approval audit trail records *which* agent issued the
+/// action and *where* the turn originated. `check_approval` runs before any
+/// `spawn_blocking`, so the task-local is still in scope at the read.
+///
+/// Returns `(agent_id, context)`:
+/// - `agent_id` — the issuing agent; falls back to `"main"` outside a scoped
+///   turn (direct calls, tests), consistent with `parse_caller_agent_id`.
+/// - `context` — a human-readable audit line naming the action and, for
+///   channel-originated turns, the channel + conversation it came from.
+fn audit_identity(action: &str, target: &str) -> (String, String) {
+    match crate::tools::turn_context::current_turn_context() {
+        Some(turn) => {
+            let agent_id = turn.session_key.agent_id().to_string();
+            let context = if turn.is_channel_routable() {
+                format!(
+                    "desktop.{action} ({target}) via {}/{}",
+                    turn.channel_id, turn.conversation_id
+                )
+            } else {
+                format!("desktop.{action} ({target})")
+            };
+            (agent_id, context)
+        }
+        None => ("main".to_string(), format!("desktop.{action} ({target})")),
+    }
+}
+
 /// Unconditional content-level safety hard-block.
 ///
 /// Runs *below* the approval policy: even an approval policy configured to
@@ -397,7 +439,10 @@ Examples:
 
         // 1. Approval check
         if let Some((action_type, target)) = classify_approval(&args) {
-            if let Some(out) = self.check_approval(action_type, &target).await {
+            if let Some(out) = self
+                .check_approval(action_type, &args.action, &target)
+                .await
+            {
                 return Ok(out);
             }
         }
