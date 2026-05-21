@@ -35,9 +35,16 @@ impl SecretVault {
         let data = match io.read()? {
             Some(bytes) => {
                 debug!(path = %path.display(), "Loading existing vault");
-                bincode::deserialize(&bytes).map_err(|e| {
+                let data: VaultData = bincode::deserialize(&bytes).map_err(|e| {
                     SecretError::Serialization(format!("Failed to deserialize vault: {}", e))
-                })?
+                })?;
+                if data.version > VAULT_VERSION {
+                    return Err(SecretError::Serialization(format!(
+                        "Vault version {} is newer than supported version {}. Please upgrade Aleph.",
+                        data.version, VAULT_VERSION
+                    )));
+                }
+                data
             }
             None => {
                 debug!(path = %path.display(), "Creating new vault");
@@ -51,10 +58,9 @@ impl SecretVault {
         Ok(Self { data, path })
     }
 
-    /// Build a `VaultIo` keyed on the parent directory of the configured vault path.
+    /// Build a `VaultIo` for the configured vault path.
     fn io_for(path: &Path) -> VaultIo {
-        let data_dir = path.parent().unwrap_or_else(|| Path::new("."));
-        VaultIo::new(data_dir)
+        VaultIo::new_with_path(path.to_path_buf())
     }
 
     /// Create an empty vault (for when open() fails).
@@ -85,17 +91,13 @@ impl SecretVault {
         io.write(&bytes)?;
 
         // Restrict vault file permissions on Unix (owner-only read/write).
-        // Use `io.path()` (the actual file VaultIo wrote to) rather than
-        // `self.path`, because VaultIo always writes `secrets.vault` in
-        // the parent directory even if `self.path` has a different filename.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            let actual_path = io.path();
-            if let Err(e) = std::fs::set_permissions(actual_path, perms) {
+            if let Err(e) = std::fs::set_permissions(&self.path, perms) {
                 tracing::error!(
-                    path = %actual_path.display(),
+                    path = %self.path.display(),
                     error = %e,
                     "Failed to set vault file permissions — vault may be readable by other users"
                 );
@@ -453,5 +455,22 @@ mod tests {
         assert!(!vault.exists("old_key"));
         assert!(vault.exists("new_key"));
         assert_eq!(vault.len(), 1);
+    }
+
+    #[test]
+    fn test_version_check_rejects_future_version() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("future.vault");
+
+        // Write a vault with a future version
+        let future_data = VaultData {
+            version: VAULT_VERSION + 1,
+            entries: HashMap::new(),
+        };
+        let bytes = bincode::serialize(&future_data).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+
+        let result = SecretVault::open(&path);
+        assert!(matches!(result, Err(SecretError::Serialization(_))));
     }
 }

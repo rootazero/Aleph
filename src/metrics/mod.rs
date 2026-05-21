@@ -43,6 +43,7 @@ const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
 ///     // ... do work
 /// } // timer logs automatically here
 /// ```
+#[must_use]
 pub struct StageTimer {
     name: String,
     start: Instant,
@@ -176,12 +177,7 @@ impl StageTimer {
 
 impl Drop for StageTimer {
     fn drop(&mut self) {
-        let elapsed_ms = self
-            .start
-            .elapsed()
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX);
+        let elapsed_ms = self.elapsed_ms();
 
         // Check if we exceeded the target (if set) and warnings are enabled
         if let Some(target_ms) = self.target_ms {

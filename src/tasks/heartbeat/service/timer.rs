@@ -375,8 +375,8 @@ async fn writeback_one(
             l1_status: tick_result.l1_status.clone(),
             l2_status: tick_result.l2_status.clone(),
             started_at: now_ms
-                - tick_result.l1_duration_ms
-                - tick_result.l2_duration_ms.unwrap_or(0),
+                .saturating_sub(tick_result.l1_duration_ms)
+                .saturating_sub(tick_result.l2_duration_ms.unwrap_or(0)),
             ended_at: Some(now_ms),
             l1_duration_ms: Some(tick_result.l1_duration_ms),
             l2_duration_ms: tick_result.l2_duration_ms,

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentDialog
+    x:Class="Aether.Windows.InitializationDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Initializing Aether"
+    PrimaryButtonText=""
+    SecondaryButtonText=""
+    CloseButtonText=""
+    IsPrimaryButtonEnabled="False"
+    IsSecondaryButtonEnabled="False"
+    Closing="OnClosing">
+
+    <StackPanel Width="400" Spacing="16" Padding="8">
+        <!-- Current phase -->
+        <TextBlock x:Name="PhaseText"
+                   Text="Preparing..."
+                   FontSize="16"
+                   FontWeight="SemiBold"/>
+
+        <!-- Overall progress -->
+        <ProgressBar x:Name="OverallProgress"
+                     Minimum="0"
+                     Maximum="100"
+                     Value="0"/>
+
+        <!-- Detail message -->
+        <TextBlock x:Name="DetailText"
+                   Text=""
+                   FontSize="12"
+                   Opacity="0.7"
+                   TextWrapping="Wrap"/>
+
+        <!-- Download progress panel (hidden by default) -->
+        <StackPanel x:Name="DownloadPanel" Visibility="Collapsed" Spacing="4">
+            <TextBlock x:Name="DownloadText" FontSize="12"/>
+            <ProgressBar x:Name="DownloadProgress" Minimum="0" Maximum="100"/>
+        </StackPanel>
+
+        <!-- Error panel (hidden by default) -->
+        <StackPanel x:Name="ErrorPanel" Visibility="Collapsed" Spacing="8">
+            <TextBlock x:Name="ErrorText"
+                       Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                       TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="RetryButton"
+                        Content="Retry"
+                        Click="OnRetryClick"/>
+                <Button x:Name="QuitButton"
+                        Content="Quit"
+                        Click="OnQuitClick"/>
+            </StackPanel>
+        </StackPanel>
+    </StackPanel>
+</ContentDialog>

@@ -139,6 +139,12 @@ impl ToolResultStore {
     }
 }
 
+impl Drop for ToolResultStore {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
 // =============================================================================
 // Standalone helpers
 // =============================================================================

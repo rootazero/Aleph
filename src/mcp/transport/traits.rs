@@ -101,7 +101,7 @@ pub trait McpTransport: Send + Sync + std::any::Any {
     /// need to implement this. The default returns an error.
     async fn send_sampling_response(
         &self,
-        _request_id: u64,
+        _request_id: serde_json::Value,
         _result: serde_json::Value,
     ) -> Result<()> {
         Err(crate::error::AlephError::IoError(

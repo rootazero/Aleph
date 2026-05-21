@@ -143,23 +143,23 @@ mod tests {
         assert_eq!(sessions.len(), 2);
     }
 
-    #[test]
-    fn test_expired_session_invalid() {
+    #[tokio::test]
+    async fn test_expired_session_invalid() {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
         // 0 hours = immediately expired
         let manager = HttpSessionManager::new(store, 0);
         let session_id = manager.create_session("test-hash").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         assert!(!manager.validate_session(&session_id).unwrap());
     }
 
-    #[test]
-    fn test_cleanup_expired() {
+    #[tokio::test]
+    async fn test_cleanup_expired() {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
         let manager = HttpSessionManager::new(store, 0);
         let _s1 = manager.create_session("hash1").unwrap();
         let _s2 = manager.create_session("hash2").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         let count = manager.cleanup_expired().unwrap();
         assert_eq!(count, 2);
     }

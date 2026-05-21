@@ -74,7 +74,7 @@ impl Config {
                     "anthropic" => (0.0, 1.0, "Claude"),
                     "openai" => (0.0, 2.0, "OpenAI"),
                     "gemini" => (0.0, 2.0, "Gemini"),
-                    "ollama" => (0.0, f32::MAX, "Ollama"),
+                    "ollama" => (0.0, 5.0, "Ollama"),
                     _ => (0.0, 2.0, "Custom"),
                 };
 

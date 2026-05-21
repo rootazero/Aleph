@@ -1,0 +1,353 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Aether.Views.Settings.CoworkSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Padding="24" Spacing="16">
+
+            <!-- Task Orchestration Overview -->
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8F1;" FontSize="16"/>
+                        <TextBlock Text="Task Orchestration" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    </StackPanel>
+
+                    <TextBlock Text="Cowork enables complex multi-step tasks to be broken down and executed in parallel using optimal models for each subtask."
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               FontSize="12"
+                               TextWrapping="Wrap"/>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Enable Cowork"/>
+                            <TextBlock Text="Allow automatic task decomposition and parallel execution"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <ToggleSwitch Grid.Column="1"
+                                      x:Name="CoworkEnabledToggle"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      IsOn="True"
+                                      Toggled="CoworkEnabledToggle_Toggled"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Parallelism Settings -->
+            <Border x:Name="ParallelismCard"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE9D5;" FontSize="16"/>
+                        <TextBlock Text="Parallelism" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    </StackPanel>
+
+                    <!-- Max Concurrent Tasks -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="120"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Max Concurrent Tasks"/>
+                            <TextBlock Text="Maximum number of subtasks running in parallel"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <NumberBox Grid.Column="1"
+                                   x:Name="MaxConcurrentBox"
+                                   Value="4"
+                                   Minimum="1"
+                                   Maximum="16"
+                                   SpinButtonPlacementMode="Inline"
+                                   ValueChanged="MaxConcurrentBox_ValueChanged"/>
+                    </Grid>
+
+                    <!-- Max Depth -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="120"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Max Task Depth"/>
+                            <TextBlock Text="Maximum depth of task decomposition tree"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <NumberBox Grid.Column="1"
+                                   x:Name="MaxDepthBox"
+                                   Value="3"
+                                   Minimum="1"
+                                   Maximum="10"
+                                   SpinButtonPlacementMode="Inline"
+                                   ValueChanged="MaxDepthBox_ValueChanged"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Model Routing -->
+            <Border x:Name="ModelRoutingCard"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8D1;" FontSize="16"/>
+                        <TextBlock Text="Model Routing" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    </StackPanel>
+
+                    <TextBlock Text="Configure which models handle different types of subtasks."
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               FontSize="12"
+                               TextWrapping="Wrap"/>
+
+                    <!-- Planning Model -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Planning"/>
+                            <TextBlock Text="Task decomposition"
+                                       FontSize="10"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <ComboBox Grid.Column="1"
+                                  x:Name="PlanningModelCombo"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="ModelCombo_SelectionChanged">
+                            <ComboBoxItem Content="Claude 3.5 Sonnet" Tag="claude-3-5-sonnet" IsSelected="True"/>
+                            <ComboBoxItem Content="Claude 3 Opus" Tag="claude-3-opus"/>
+                            <ComboBoxItem Content="GPT-4o" Tag="gpt-4o"/>
+                        </ComboBox>
+                    </Grid>
+
+                    <!-- Execution Model -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Execution"/>
+                            <TextBlock Text="Subtask processing"
+                                       FontSize="10"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <ComboBox Grid.Column="1"
+                                  x:Name="ExecutionModelCombo"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="ModelCombo_SelectionChanged">
+                            <ComboBoxItem Content="Auto (Based on task)" Tag="auto" IsSelected="True"/>
+                            <ComboBoxItem Content="Claude 3.5 Sonnet" Tag="claude-3-5-sonnet"/>
+                            <ComboBoxItem Content="Claude 3 Haiku" Tag="claude-3-haiku"/>
+                            <ComboBoxItem Content="GPT-4o Mini" Tag="gpt-4o-mini"/>
+                        </ComboBox>
+                    </Grid>
+
+                    <!-- Synthesis Model -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Synthesis"/>
+                            <TextBlock Text="Result aggregation"
+                                       FontSize="10"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <ComboBox Grid.Column="1"
+                                  x:Name="SynthesisModelCombo"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="ModelCombo_SelectionChanged">
+                            <ComboBoxItem Content="Claude 3.5 Sonnet" Tag="claude-3-5-sonnet" IsSelected="True"/>
+                            <ComboBoxItem Content="Claude 3 Opus" Tag="claude-3-opus"/>
+                            <ComboBoxItem Content="GPT-4o" Tag="gpt-4o"/>
+                        </ComboBox>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Timeout Settings -->
+            <Border x:Name="TimeoutCard"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE916;" FontSize="16"/>
+                        <TextBlock Text="Timeouts" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    </StackPanel>
+
+                    <!-- Task Timeout -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="120"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Task Timeout (seconds)"/>
+                            <TextBlock Text="Maximum time for a single subtask"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <NumberBox Grid.Column="1"
+                                   x:Name="TaskTimeoutBox"
+                                   Value="60"
+                                   Minimum="10"
+                                   Maximum="600"
+                                   SpinButtonPlacementMode="Inline"
+                                   ValueChanged="TaskTimeoutBox_ValueChanged"/>
+                    </Grid>
+
+                    <!-- Total Timeout -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="120"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Total Timeout (seconds)"/>
+                            <TextBlock Text="Maximum time for entire workflow"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <NumberBox Grid.Column="1"
+                                   x:Name="TotalTimeoutBox"
+                                   Value="300"
+                                   Minimum="30"
+                                   Maximum="3600"
+                                   SpinButtonPlacementMode="Inline"
+                                   ValueChanged="TotalTimeoutBox_ValueChanged"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Error Handling -->
+            <Border x:Name="ErrorHandlingCard"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE7BA;" FontSize="16"/>
+                        <TextBlock Text="Error Handling" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    </StackPanel>
+
+                    <!-- Retry Failed Tasks -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Retry Failed Tasks"/>
+                            <TextBlock Text="Automatically retry failed subtasks"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <ToggleSwitch Grid.Column="1"
+                                      x:Name="RetryToggle"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      IsOn="True"
+                                      Toggled="RetryToggle_Toggled"/>
+                    </Grid>
+
+                    <!-- Max Retries -->
+                    <Grid x:Name="MaxRetriesGrid">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="120"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Max Retries"/>
+                            <TextBlock Text="Number of retry attempts per task"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <NumberBox Grid.Column="1"
+                                   x:Name="MaxRetriesBox"
+                                   Value="3"
+                                   Minimum="1"
+                                   Maximum="10"
+                                   SpinButtonPlacementMode="Inline"
+                                   ValueChanged="MaxRetriesBox_ValueChanged"/>
+                    </Grid>
+
+                    <!-- Continue on Failure -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Continue on Failure"/>
+                            <TextBlock Text="Continue workflow even if some tasks fail"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <ToggleSwitch Grid.Column="1"
+                                      x:Name="ContinueOnFailureToggle"
+                                      OnContent="On"
+                                      OffContent="Off"
+                                      IsOn="False"
+                                      Toggled="ContinueOnFailureToggle_Toggled"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Save Button -->
+            <Button x:Name="SaveButton"
+                    Style="{StaticResource AccentButtonStyle}"
+                    HorizontalAlignment="Right"
+                    IsEnabled="False"
+                    Click="SaveButton_Click">
+                <TextBlock Text="Save Changes"/>
+            </Button>
+
+            <!-- Status InfoBar -->
+            <InfoBar x:Name="StatusInfoBar"
+                     IsOpen="False"
+                     IsClosable="True"
+                     Severity="Informational"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

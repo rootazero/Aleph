@@ -64,6 +64,15 @@ impl IdentityMap {
             if let Some(mut external_ids) = self.internal_to_external.get_mut(&user_id) {
                 external_ids.retain(|k| k != &key);
             }
+            // Clean up empty reverse mapping to prevent memory leak
+            if self
+                .internal_to_external
+                .get(&user_id)
+                .map(|v| v.is_empty())
+                .unwrap_or(false)
+            {
+                self.internal_to_external.remove(&user_id);
+            }
         }
     }
 

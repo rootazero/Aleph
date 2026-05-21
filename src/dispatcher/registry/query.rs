@@ -346,12 +346,14 @@ impl ToolQuery {
 
         // Sort by relevance: name matches first
         results.sort_by(|a, b| {
-            let a_name_match = a.name.to_lowercase().contains(&query_lower);
-            let b_name_match = b.name.to_lowercase().contains(&query_lower);
+            let a_lower = a.name.to_lowercase();
+            let b_lower = b.name.to_lowercase();
+            let a_name_match = a_lower.contains(&query_lower);
+            let b_name_match = b_lower.contains(&query_lower);
             match (a_name_match, b_name_match) {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
-                _ => a.name.cmp(&b.name),
+                _ => a_lower.cmp(&b_lower),
             }
         });
 

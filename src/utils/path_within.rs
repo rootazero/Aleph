@@ -4,6 +4,9 @@ use std::path::{Component, Path, PathBuf};
 
 /// Returns true iff `target`, lexically normalized, stays within `base`.
 pub fn is_path_within(base: &Path, target: &Path) -> bool {
+    if base.as_os_str().is_empty() {
+        return false;
+    }
     let mut normalized = PathBuf::new();
     for component in target.components() {
         match component {

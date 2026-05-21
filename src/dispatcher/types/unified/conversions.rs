@@ -116,12 +116,14 @@ impl UnifiedTool {
                 )
             }
             ToolCategory::Custom => {
-                let id = format!("custom:{}", def.name);
-                (ToolSource::Custom { rule_index: 0 }, id)
+                let source = ToolSource::Custom { rule_index: 0 };
+                let id = source.format_tool_id(&def.name);
+                (source, id)
             }
             ToolCategory::GeneratedSkill => {
-                let id = format!("generated:{}", def.name);
-                (ToolSource::Custom { rule_index: 0 }, id)
+                let source = ToolSource::Custom { rule_index: 0 };
+                let id = source.format_tool_id(&def.name);
+                (source, id)
             }
         };
 

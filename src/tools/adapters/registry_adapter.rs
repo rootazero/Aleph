@@ -98,9 +98,15 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
             Ok(output) => ToolResult::Success { output },
             Err(e) => {
                 tracing::warn!(tool = %self.name, error = %e, "Tool execution failed");
+                let retryable = matches!(
+                    e,
+                    crate::error::AlephError::NetworkError { .. }
+                        | crate::error::AlephError::IoError(..)
+                        | crate::error::AlephError::Timeout { .. }
+                );
                 ToolResult::Error {
                     error: e.to_string(),
-                    retryable: true,
+                    retryable,
                 }
             }
         }

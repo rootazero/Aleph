@@ -212,7 +212,6 @@ impl AgentHarness {
                 GraceReason::Budget,
             )
             .await;
-            callback.on_complete_via_harness();
             return Ok((TurnState::Done, 0, false));
         }
 

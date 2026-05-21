@@ -450,6 +450,15 @@ impl TeamEventLogger {
                 team_id.clone(),
                 serde_json::json!({"task_id": task_id, "result_summary": result_summary}),
             )),
+            AlephEvent::TeamTaskFailed {
+                team_id,
+                task_id,
+                error,
+            } => Some((
+                TeamEventType::TaskFailed,
+                team_id.clone(),
+                serde_json::json!({"task_id": task_id, "error": error}),
+            )),
             AlephEvent::TeamDisbanded { team_id } => Some((
                 TeamEventType::TeamDisbanded,
                 team_id.clone(),
@@ -483,6 +492,7 @@ impl EventHandler for TeamEventLogger {
             EventType::TeamTaskAssigned,
             EventType::TeamTaskUpdated,
             EventType::TeamTaskCompleted,
+            EventType::TeamTaskFailed,
             EventType::TeamDisbanded,
             EventType::TeamMessageSent,
         ]

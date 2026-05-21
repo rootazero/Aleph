@@ -70,7 +70,7 @@ impl TaskCategory {
             Self::SystemInfo => "system_info",
             Self::MediaDownload => "media_download",
             Self::TextProcessing => "text_processing",
-            Self::DataProcessing => "data_process",
+            Self::DataProcessing => "data_processing",
         }
     }
 
@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(TaskCategory::SystemInfo.as_str(), "system_info");
         assert_eq!(TaskCategory::MediaDownload.as_str(), "media_download");
         assert_eq!(TaskCategory::TextProcessing.as_str(), "text_processing");
-        assert_eq!(TaskCategory::DataProcessing.as_str(), "data_process");
+        assert_eq!(TaskCategory::DataProcessing.as_str(), "data_processing");
     }
 
     #[test]

@@ -248,6 +248,11 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
             result.deny_reason = Some(reason.clone());
             result.permission_decision = Some(PermissionDecision::Deny { reason });
         } else if trimmed == "allow" {
+            // Clear blocked/denied flags since the final decision is Allow
+            result.blocked = false;
+            result.block_reason = None;
+            result.denied = false;
+            result.deny_reason = None;
             result.permission_decision = Some(PermissionDecision::Allow);
         } else if let Some(reason) = trimmed.strip_prefix("ask:") {
             result.permission_decision = Some(PermissionDecision::Ask {

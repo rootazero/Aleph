@@ -38,6 +38,9 @@ impl GuardrailDecision {
     pub fn is_sanitize(&self) -> bool {
         matches!(self, GuardrailDecision::Sanitize(_))
     }
+    pub fn is_warn(&self) -> bool {
+        matches!(self, GuardrailDecision::Warn { .. })
+    }
 }
 
 #[cfg(test)]
@@ -70,5 +73,16 @@ mod tests {
         assert!(d.is_sanitize());
         assert!(!d.is_allow());
         assert!(!d.is_block());
+    }
+
+    #[test]
+    fn warn_classifies_correctly() {
+        let d = GuardrailDecision::Warn {
+            reason: "suspicious".into(),
+        };
+        assert!(d.is_warn());
+        assert!(!d.is_allow());
+        assert!(!d.is_block());
+        assert!(!d.is_sanitize());
     }
 }

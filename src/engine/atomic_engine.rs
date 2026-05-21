@@ -140,8 +140,8 @@ impl AtomicEngine {
             } else if stats_after.l2_hits > stats_before.l2_hits {
                 RoutingLayer::L2
             } else {
-                // Shouldn't happen, but default to L2
-                RoutingLayer::L2
+                // Neither L1 nor L2 hit - this should be L3 fallback
+                RoutingLayer::L3
             };
 
             return RoutingResult {

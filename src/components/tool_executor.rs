@@ -298,6 +298,7 @@ impl EventHandler for ToolExecutor {
                     started_at,
                     completed_at,
                     token_usage: TokenUsage::default(),
+                    plan_step_id: request.plan_step_id.clone(),
                     session_id: None,
                 })])
             }

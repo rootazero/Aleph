@@ -189,7 +189,6 @@ pub fn ensure_dir(path: &Path) -> DiscoveryResult<()> {
             tracing::info!("Created directory: {:?}", path);
             Ok(())
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e.into()),
     }
 }

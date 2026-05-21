@@ -122,7 +122,7 @@ pub async fn phase1_mark_manual<C: Clock>(
         agent_id: Some(job.agent_id.clone()),
         source_channel_id: job.source_channel_id.clone(),
         source_conversation_id: job.source_conversation_id.clone(),
-        prompt: job.prompt.clone(),
+        prompt: resolve_job_prompt(job, clock),
         model: None,
         timeout_ms: Some(default_timeout_ms),
         delivery: job.delivery_config.clone(),
@@ -239,7 +239,7 @@ pub async fn phase3_writeback<C: Clock>(
         let record = CronRunRecord {
             id: uuid::Uuid::new_v4().to_string(),
             job_id: job_id.clone(),
-            trigger_source: "schedule".to_string(),
+            trigger_source: result.trigger_source.as_str().to_string(),
             status: format!("{:?}", result.status).to_lowercase(),
             started_at: result.started_at,
             ended_at: Some(result.ended_at),
@@ -384,6 +384,7 @@ mod tests {
             error_reason: None,
             delivery_status: None,
             agent_used_messaging_tool: false,
+            trigger_source: TriggerSource::Schedule,
         }
     }
 

@@ -27,11 +27,13 @@ pub fn migrate_to_draft_2020_12(schema: &mut Value) {
         obj.insert("$defs".into(), defs);
     }
 
-    // Update $ref paths
-    if let Some(ref_val) = obj.get_mut("$ref") {
-        if let Some(s) = ref_val.as_str() {
-            if s.contains("#/definitions/") {
-                *ref_val = Value::String(s.replace("#/definitions/", "#/$defs/"));
+    // Update $ref and $dynamicRef paths
+    for key in &["$ref", "$dynamicRef"] {
+        if let Some(ref_val) = obj.get_mut(*key) {
+            if let Some(s) = ref_val.as_str() {
+                if s.contains("#/definitions/") {
+                    *ref_val = Value::String(s.replace("#/definitions/", "#/$defs/"));
+                }
             }
         }
     }
@@ -108,14 +110,16 @@ pub fn strictify_schema(schema: &mut Value) {
             strictify_nested(nested);
         }
     }
-    // "items" is a single schema, not a map — call strictify_schema directly.
-    if let Some(items) = obj.get_mut("items") {
-        if items.is_object() {
-            strictify_schema(items);
-        } else if items.is_array() {
-            if let Some(arr) = items.as_array_mut() {
-                for item in arr {
-                    strictify_schema(item);
+    // "items" and "prefixItems" are single schemas or arrays — handle both.
+    for key in &["items", "prefixItems"] {
+        if let Some(items) = obj.get_mut(*key) {
+            if items.is_object() {
+                strictify_schema(items);
+            } else if items.is_array() {
+                if let Some(arr) = items.as_array_mut() {
+                    for item in arr {
+                        strictify_schema(item);
+                    }
                 }
             }
         }

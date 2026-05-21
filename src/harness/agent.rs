@@ -633,7 +633,8 @@ pub(crate) fn canonical_json_string(value: &Value) -> String {
             other => other.clone(),
         }
     }
-    serde_json::to_string(&canon(value)).unwrap_or_default()
+    serde_json::to_string(&canon(value))
+        .expect("canonical JSON serialization should never fail")
 }
 
 /// Find the most recent `TurnStarted` id; generate a fresh one if none exists.
@@ -941,7 +942,6 @@ mod tests {
             turn_timeout: None,
             turn_budget: None,
             result_store: None,
-
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1004,7 +1004,6 @@ mod tests {
             turn_timeout: None,
             turn_budget: None,
             result_store: None,
-
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1064,7 +1063,6 @@ mod tests {
             turn_timeout: Some(std::time::Duration::from_millis(20)),
             turn_budget: None,
             result_store: None,
-
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;

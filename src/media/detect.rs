@@ -186,7 +186,7 @@ pub fn detect_by_magic(bytes: &[u8]) -> MediaType {
             duration_secs: None,
         };
     }
-    // ftyp-based containers (MP4/MOV/M4A)
+    // ftyp-based containers (MP4/MOV/M4A/HEIC)
     if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
         let brand = &bytes[8..12];
         if brand == b"M4A " || brand == b"M4B " {
@@ -199,6 +199,14 @@ pub fn detect_by_magic(bytes: &[u8]) -> MediaType {
             return MediaType::Video {
                 format: VideoFormat::Mov,
                 duration_secs: None,
+            };
+        }
+        // HEIC/HEIF image formats
+        if brand == b"heic" || brand == b"mif1" || brand == b"msf1" || brand == b"heix" {
+            return MediaType::Image {
+                format: MediaImageFormat::Heic,
+                width: None,
+                height: None,
             };
         }
         return MediaType::Video {

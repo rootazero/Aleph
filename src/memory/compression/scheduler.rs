@@ -61,7 +61,7 @@ impl SchedulerConfig {
 
 /// Scheduler for determining when to trigger compression
 pub struct CompressionScheduler {
-    config: SchedulerConfig,
+    config: Mutex<SchedulerConfig>,
     last_activity: Mutex<Instant>,
     pub(crate) pending_turns: AtomicU32,
 }
@@ -70,7 +70,7 @@ impl CompressionScheduler {
     /// Create a new compression scheduler
     pub fn new(config: SchedulerConfig) -> Self {
         Self {
-            config,
+            config: Mutex::new(config),
             last_activity: Mutex::new(Instant::now()),
             pending_turns: AtomicU32::new(0),
         }
@@ -85,16 +85,18 @@ impl CompressionScheduler {
     ///
     /// Priority: TurnThreshold > IdleTimeout
     pub fn should_trigger_compression(&self) -> CompressionTrigger {
-        let turns = self.pending_turns.load(Ordering::Relaxed);
+        let turns = self.pending_turns.load(Ordering::Acquire);
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
 
         // Check turn threshold first (higher priority)
-        if turns >= self.config.turn_threshold {
+        if turns >= config.turn_threshold {
             return CompressionTrigger::TurnThreshold(turns);
         }
 
         // Check idle timeout
         let idle_duration = self.get_idle_duration();
-        let idle_threshold = Duration::from_secs(self.config.idle_timeout_seconds as u64);
+        let idle_threshold = Duration::from_secs(config.idle_timeout_seconds as u64);
+        drop(config);
 
         if idle_duration >= idle_threshold && turns > 0 {
             return CompressionTrigger::IdleTimeout(idle_duration);
@@ -119,32 +121,33 @@ impl CompressionScheduler {
 
     /// Increment pending turns counter
     pub fn increment_turns(&self) {
-        self.pending_turns.fetch_add(1, Ordering::Relaxed);
+        self.pending_turns.fetch_add(1, Ordering::Release);
     }
 
     /// Increment turns by specified amount
     pub fn increment_turns_by(&self, count: u32) {
-        self.pending_turns.fetch_add(count, Ordering::Relaxed);
+        self.pending_turns.fetch_add(count, Ordering::Release);
     }
 
     /// Get current pending turns count
     pub fn get_pending_turns(&self) -> u32 {
-        self.pending_turns.load(Ordering::Relaxed)
+        self.pending_turns.load(Ordering::Acquire)
     }
 
     /// Reset turns counter (after compression completes)
     pub fn reset_turns(&self) {
-        self.pending_turns.store(0, Ordering::Relaxed);
+        self.pending_turns.store(0, Ordering::Release);
     }
 
     /// Update scheduler configuration
-    pub fn update_config(&mut self, config: SchedulerConfig) {
-        self.config = config;
+    pub fn update_config(&self, config: SchedulerConfig) {
+        let mut cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        *cfg = config;
     }
 
     /// Get current configuration
-    pub fn get_config(&self) -> &SchedulerConfig {
-        &self.config
+    pub fn get_config(&self) -> SchedulerConfig {
+        self.config.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 

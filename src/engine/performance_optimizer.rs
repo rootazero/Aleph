@@ -139,22 +139,30 @@ impl PerformanceOptimizer {
 
     /// Evict oldest cache entry
     fn evict_oldest(&self) {
-        // Find oldest entry
+        // Atomically find and remove oldest entry
         let mut oldest_key: Option<String> = None;
-        let mut oldest_time = Instant::now();
+        let mut oldest_time: Option<Instant> = None;
 
         for entry in self.cache.iter() {
             let cached = entry.value();
-            if cached.cached_at < oldest_time {
-                oldest_time = cached.cached_at;
-                oldest_key = Some(entry.key().clone());
+            match oldest_time {
+                None => {
+                    oldest_time = Some(cached.cached_at);
+                    oldest_key = Some(entry.key().clone());
+                }
+                Some(time) if cached.cached_at < time => {
+                    oldest_time = Some(cached.cached_at);
+                    oldest_key = Some(entry.key().clone());
+                }
+                _ => {}
             }
         }
 
-        // Remove oldest entry
+        // Remove oldest entry (if still present)
         if let Some(key) = oldest_key {
-            self.cache.remove(&key);
-            debug!(key = %key, "Evicted oldest cache entry");
+            if self.cache.remove(&key).is_some() {
+                debug!(key = %key, "Evicted oldest cache entry");
+            }
         }
     }
 

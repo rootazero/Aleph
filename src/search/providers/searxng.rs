@@ -38,7 +38,8 @@ impl SearxngProvider {
         }
 
         let trimmed = base_url.trim_end_matches('/').to_string();
-        if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        let scheme_lower = trimmed.to_lowercase();
+        if !scheme_lower.starts_with("http://") && !scheme_lower.starts_with("https://") {
             return Err(AlephError::invalid_config(
                 "SearXNG base URL must use http:// or https:// scheme",
             ));

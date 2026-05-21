@@ -92,12 +92,18 @@ pub(crate) fn resolve_linked_peer_id(
         Some(format!("{}:{}", channel_lower, peer_lower))
     };
 
+    // Sort entries for deterministic iteration. In the unlikely event of
+    // duplicate IDs (directly-constructed HashMap, not validated config),
+    // alphabetic canonical order provides a stable tie-break.
+    let mut entries: Vec<_> = identity_links.iter().collect();
+    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+
     // First pass: prefer scoped match (more specific) for deterministic behavior.
     // A scoped ID like "telegram:123" is more precise than a bare "123" and
     // prevents HashMap iteration order from affecting the result when both forms
     // appear under different canonicals.
     if let Some(ref scoped_id) = scoped {
-        for (canonical, ids) in identity_links {
+        for &(canonical, ids) in &entries {
             let canonical_name = canonical.trim();
             if canonical_name.is_empty() {
                 continue;
@@ -115,7 +121,7 @@ pub(crate) fn resolve_linked_peer_id(
     }
 
     // Second pass: bare peer ID match
-    for (canonical, ids) in identity_links {
+    for &(canonical, ids) in &entries {
         let canonical_name = canonical.trim();
         if canonical_name.is_empty() {
             continue;

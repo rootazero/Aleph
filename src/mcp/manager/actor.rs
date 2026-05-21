@@ -154,15 +154,10 @@ impl McpManagerActor {
         tracing::info!("MCP Manager starting...");
 
         // Auto-start servers from config
-        let auto_start_configs: Vec<_> = self
-            .config
-            .auto_start_servers()
-            .iter()
-            .map(|c| (*c).clone())
-            .collect();
+        let auto_start_configs = self.config.auto_start_servers();
 
-        for config in auto_start_configs {
-            if let Err(e) = self.start_server_internal(&config).await {
+        for config in &auto_start_configs {
+            if let Err(e) = self.start_server_internal(config).await {
                 tracing::error!(
                     server_id = %config.id,
                     error = %e,

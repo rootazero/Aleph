@@ -293,50 +293,59 @@ struct SchedulerEventListener {
 
 impl SchedulerEventListener {
     /// Called when a run completes or errors — drains expired tasks and starts
-    /// the next one if available.
+    /// the next one if available.  If the next task's agent is missing, the loop
+    /// continues until a runnable task is found or the queue is empty.
     async fn on_run_finished(&self) {
-        let next_task = {
-            let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(queue) = queues.get_mut(&self.session_key) {
-                queue.active_run_id = None;
+        loop {
+            let next_task = {
+                let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(queue) = queues.get_mut(&self.session_key) {
+                    queue.active_run_id = None;
 
-                // Drop expired tasks
-                let before = queue.pending.len();
-                queue
-                    .pending
-                    .retain(|t| t.enqueued_at.elapsed() < MAX_QUEUE_AGE);
-                let dropped = before - queue.pending.len();
-                if dropped > 0 {
-                    warn!(
-                        session = %self.session_key,
-                        dropped,
-                        "Dropped expired queued tasks"
-                    );
+                    // Drop expired tasks
+                    let before = queue.pending.len();
+                    queue
+                        .pending
+                        .retain(|t| t.enqueued_at.elapsed() < MAX_QUEUE_AGE);
+                    let dropped = before - queue.pending.len();
+                    if dropped > 0 {
+                        warn!(
+                            session = %self.session_key,
+                            dropped,
+                            "Dropped expired queued tasks"
+                        );
+                    }
+
+                    queue.pending.pop_front()
+                } else {
+                    None
                 }
+            };
 
-                queue.pending.pop_front()
-            } else {
-                None
+            if let Some(task) = next_task {
+                debug!(
+                    session = %self.session_key,
+                    "Dequeuing next task for session"
+                );
+                // We need to execute the next task. Build a temporary scheduler-like
+                // context inline to avoid circular references.
+                if execute_next(
+                    task.enriched,
+                    &self.session_key,
+                    Arc::clone(&self.queues),
+                    Arc::clone(&self.execution_adapter),
+                    Arc::clone(&self.agent_registry),
+                    Arc::clone(&self.channel_registry),
+                    self.app_config.clone(),
+                )
+                .await
+                {
+                    break; // task started successfully
+                }
+                // Agent missing — loop again to try the next queued task.
+                continue;
             }
-        };
-
-        if let Some(task) = next_task {
-            debug!(
-                session = %self.session_key,
-                "Dequeuing next task for session"
-            );
-            // We need to execute the next task. Build a temporary scheduler-like
-            // context inline to avoid circular references.
-            execute_next(
-                task.enriched,
-                &self.session_key,
-                Arc::clone(&self.queues),
-                Arc::clone(&self.execution_adapter),
-                Arc::clone(&self.agent_registry),
-                Arc::clone(&self.channel_registry),
-                self.app_config.clone(),
-            )
-            .await;
+            break;
         }
     }
 }
@@ -379,10 +388,10 @@ async fn execute_next(
     agent_registry: Arc<AgentRegistry>,
     channel_registry: Arc<ChannelRegistry>,
     app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
-) {
+) -> bool {
     let ctx = &enriched.merged.primary_context;
     let agent_id = ctx.session_key.agent_id().to_string();
-    let run_id = Uuid::new_v4().to_string();
+    let run_id = uuid::Uuid::new_v4().to_string();
 
     // Set active run id
     {
@@ -402,7 +411,7 @@ async fn execute_next(
             if let Some(queue) = qs.get_mut(session_key_str) {
                 queue.active_run_id = None;
             }
-            return;
+            return false;
         }
     };
 
@@ -464,6 +473,10 @@ async fn execute_next(
     );
     metadata.insert("is_group".to_string(), ctx.message.is_group.to_string());
     metadata.insert("is_mentioned".to_string(), ctx.is_mentioned.to_string());
+    if let Some(handle) = channel_registry.get(&ctx.message.channel_id).await {
+        let channel = handle.read().await;
+        metadata.insert("platform".to_string(), channel.channel_type().to_string());
+    }
 
     let request = RunRequest {
         run_id: run_id.clone(),
@@ -489,6 +502,7 @@ async fn execute_next(
             error!(run_id = %run_id, error = %e, "Queued execution failed");
         }
     });
+    true
 }
 
 // ---------------------------------------------------------------------------

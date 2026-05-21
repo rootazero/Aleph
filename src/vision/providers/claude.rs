@@ -88,7 +88,16 @@ impl ClaudeVisionProvider {
     }
 
     fn mime_from_url(url: &str) -> &'static str {
-        url.rsplit('.')
+        // Strip query string and fragment before extracting extension
+        let clean = url
+            .split('?')
+            .next()
+            .unwrap_or(url)
+            .split('#')
+            .next()
+            .unwrap_or(url);
+        clean
+            .rsplit('.')
             .next()
             .map(|ext| match ext.to_lowercase().as_str() {
                 "png" => "image/png",
@@ -144,14 +153,13 @@ impl ClaudeVisionProvider {
                 })
             }
             ImageInput::Url { url } => {
-                let mime = Self::mime_from_url(url);
-                Ok(ContentBlock::Image {
-                    source: ImageSource {
-                        source_type: "url".to_string(),
-                        media_type: mime.to_string(),
-                        data: url.clone(),
-                    },
-                })
+                // The Anthropic Messages API only supports base64 image sources
+                // via our ContentBlock::Image shape. URL images are not supported
+                // in this provider — use a different provider or download the image
+                // to a FilePath / Base64 input instead.
+                Err(VisionError::UnsupportedFormat(format!(
+                    "Claude vision provider does not support URL images: {url}"
+                )))
             }
         }
     }

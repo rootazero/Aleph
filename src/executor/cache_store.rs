@@ -71,21 +71,22 @@ impl ToolResultCache {
 
         let key = ToolCallCacheKey::new(tool_name.to_string(), arguments);
 
-        // Use peek with read lock for concurrent lookups (does not update LRU order).
-        // If hit and not expired, upgrade to write lock to update hit count and LRU order.
-        let maybe_hit = {
+        // Phase 1: Read-only probe — check existence and TTL without mutating LRU order.
+        let (maybe_hit, is_expired) = {
             let cache = self.cache.read().await;
-            cache.peek(&key).and_then(|cached| {
-                if cached.cached_at.elapsed() <= self.config.ttl() {
-                    Some(cached.result.clone())
-                } else {
-                    None
+            match cache.peek(&key) {
+                Some(cached) if cached.cached_at.elapsed() <= self.config.ttl() => {
+                    (Some(cached.result.clone()), false)
                 }
-            })
+                Some(_) => (None, true), // exists but expired
+                None => (None, false),   // does not exist
+            }
         };
 
         if let Some(result) = maybe_hit {
-            // Upgrade to write lock to update LRU order and hit count
+            // Phase 2: Best-effort LRU/hit_count update.
+            // The entry may have been evicted between releasing the read lock
+            // and acquiring the write lock — the cloned result is still valid.
             let mut cache = self.cache.write().await;
             if let Some(cached) = cache.get_mut(&key) {
                 cached.hit_count += 1;
@@ -99,11 +100,13 @@ impl ToolResultCache {
             return Some(result);
         }
 
-        // Not found or expired — evict if expired
-        let mut cache = self.cache.write().await;
-        if let Some(cached) = cache.peek(&key) {
-            if cached.cached_at.elapsed() > self.config.ttl() {
-                cache.pop(&key);
+        // Phase 3: Evict expired entry if still present.
+        if is_expired {
+            let mut cache = self.cache.write().await;
+            if let Some(cached) = cache.peek(&key) {
+                if cached.cached_at.elapsed() > self.config.ttl() {
+                    cache.pop(&key);
+                }
             }
         }
 

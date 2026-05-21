@@ -34,7 +34,12 @@ macro_rules! lock_conn {
 /// Build a `NoteIndexEntry` from a row that includes a `link_count` column.
 fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<NoteIndexEntry> {
     let tags_json: String = row.get("tags_json")?;
-    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+    let tags: Vec<String> = serde_json::from_str(&tags_json)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(e),
+        ))?;
     let link_count: i64 = row.get("link_count")?;
 
     Ok(NoteIndexEntry {
