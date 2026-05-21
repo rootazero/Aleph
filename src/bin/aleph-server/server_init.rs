@@ -31,8 +31,16 @@ pub async fn serve_webchat(
         .fallback(ServeFile::new(&index_path));
 
     let allowed_origins = tower_http::cors::AllowOrigin::predicate(|origin, _| {
-        let host = origin.host().unwrap_or("");
-        let scheme = origin.scheme_str().unwrap_or("");
+        // `origin` is the raw `Origin` header value, not a parsed URI — parse it
+        // before inspecting scheme/host.
+        let Ok(origin_str) = origin.to_str() else {
+            return false;
+        };
+        let Ok(uri) = origin_str.parse::<axum::http::Uri>() else {
+            return false;
+        };
+        let host = uri.host().unwrap_or("");
+        let scheme = uri.scheme_str().unwrap_or("");
         if scheme != "http" && scheme != "https" {
             return false;
         }
