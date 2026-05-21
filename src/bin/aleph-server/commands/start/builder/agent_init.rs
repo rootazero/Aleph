@@ -47,9 +47,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
         Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>,
     >,
     /// Deferred injection cell for ClarificationManager (enables the `ask_user` tool)
-    pub clarification_manager_cell: Option<
-        Arc<tokio::sync::OnceCell<Arc<alephcore::clarification::ClarificationManager>>>,
-    >,
+    pub clarification_manager_cell:
+        Option<Arc<tokio::sync::OnceCell<Arc<alephcore::clarification::ClarificationManager>>>>,
     /// Generation provider registry for TTS voice output
     pub generation_registry: Option<Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>>,
     /// Builtin tool registry (for heartbeat probe executor)
@@ -150,11 +149,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         let store = Arc::new(
                             SqliteCoordTaskStore::new(conn).with_event_bus(event_bus.clone()),
                         );
-                        // Run schema migration synchronously-ish via block_in_place
-                        let store_clone = store.clone();
-                        match tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(store_clone.migrate())
-                        }) {
+                        // Run schema migration inline (already inside async context)
+                        match store.migrate().await {
                             Ok(()) => {
                                 if !daemon {
                                     println!("  Coord task store initialized (SQLite)");
@@ -207,10 +203,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 match alephcore::utils::sqlite_open::open_sqlite_safe(&db_path) {
                     Ok(conn) => {
                         let store = Arc::new(SqliteTeamStore::new(conn));
-                        let store_clone = Arc::clone(&store);
-                        match tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(store_clone.migrate())
-                        }) {
+                        match store.migrate().await {
                             Ok(()) => {
                                 if !daemon {
                                     println!("  Team store initialized (SQLite)");
@@ -274,10 +267,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         match alephcore::utils::sqlite_open::open_sqlite_safe(&$db) {
                             Ok(conn) => {
                                 let store = Arc::new($store_ty::new(conn));
-                                let sc = Arc::clone(&store);
-                                match tokio::task::block_in_place(|| {
-                                    tokio::runtime::Handle::current().block_on(sc.migrate())
-                                }) {
+                                match store.migrate().await {
                                     Ok(()) => {
                                         if !daemon {
                                             println!("  {} initialized (SQLite)", $label);
@@ -312,10 +302,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     match alephcore::utils::sqlite_open::open_sqlite_safe(&db_path) {
                         Ok(conn) => {
                             let store = Arc::new(SqliteArtifactStore::new(conn));
-                            let store_concrete = store.clone();
-                            match tokio::task::block_in_place(|| {
-                                tokio::runtime::Handle::current().block_on(store_concrete.migrate())
-                            }) {
+                            match store.migrate().await {
                                 Ok(()) => {
                                     if !daemon {
                                         println!("  Artifact store initialized (SQLite)");
@@ -1467,10 +1454,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         );
                     }
                     if !orphans.is_empty() {
-                        tracing::info!(
-                            count = orphans.len(),
-                            "Reconciled orphaned agent tasks"
-                        );
+                        tracing::info!(count = orphans.len(), "Reconciled orphaned agent tasks");
                     }
                 }
                 Err(error) => {
@@ -1602,20 +1586,24 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 });
             }
             None => {
-                server.handlers_mut().register("trace.list", |req| async move {
-                    alephcore::gateway::protocol::JsonRpcResponse::error(
-                        req.id,
-                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
-                        "trace.list disabled: no state_database configured".to_string(),
-                    )
-                });
-                server.handlers_mut().register("trace.get", |req| async move {
-                    alephcore::gateway::protocol::JsonRpcResponse::error(
-                        req.id,
-                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
-                        "trace.get disabled: no state_database configured".to_string(),
-                    )
-                });
+                server
+                    .handlers_mut()
+                    .register("trace.list", |req| async move {
+                        alephcore::gateway::protocol::JsonRpcResponse::error(
+                            req.id,
+                            alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                            "trace.list disabled: no state_database configured".to_string(),
+                        )
+                    });
+                server
+                    .handlers_mut()
+                    .register("trace.get", |req| async move {
+                        alephcore::gateway::protocol::JsonRpcResponse::error(
+                            req.id,
+                            alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                            "trace.get disabled: no state_database configured".to_string(),
+                        )
+                    });
             }
         }
 
@@ -1968,10 +1956,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let registry = reg.clone();
                 let agents = Some(agents_for_invoke.clone());
                 async move {
-                    alephcore::gateway::handlers::tools_invoke::handle_invoke(
-                        req, registry, agents,
-                    )
-                    .await
+                    alephcore::gateway::handlers::tools_invoke::handle_invoke(req, registry, agents)
+                        .await
                 }
             });
             if !daemon {

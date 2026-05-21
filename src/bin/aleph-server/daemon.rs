@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 /// Expand ~ to home directory.
-/// Falls back to `/tmp` only when `dirs::home_dir()` returns `None`,
+/// Falls back to `/tmp/.aleph/...` when `dirs::home_dir()` returns `None`,
 /// after logging a warning so operators know the path is insecure.
 pub fn expand_path(path: &str) -> PathBuf {
     if let Some(stripped) = path.strip_prefix("~/") {
@@ -14,14 +14,25 @@ pub fn expand_path(path: &str) -> PathBuf {
             return home.join(stripped);
         }
         eprintln!("Warning: cannot determine home directory; using /tmp as fallback");
+        return PathBuf::from("/tmp").join(stripped);
     }
     PathBuf::from(path)
 }
 
-/// Check if a process with given PID is running
+/// Check if a process with given PID is running.
+///
+/// Uses `kill(pid, 0)` which performs error checking without sending a signal.
+/// Distinguishes between "process does not exist" (ESRCH) and "permission denied"
+/// (EPERM) — both mean the PID is not available to us, but for different reasons.
 #[cfg(unix)]
 pub fn is_process_running(pid: i32) -> bool {
-    unsafe { libc::kill(pid, 0) == 0 }
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    // ESRCH = process does not exist; EPERM = no permission to signal.
+    // In both cases the PID is effectively not available.
+    errno == libc::ESRCH || errno == libc::EPERM
 }
 
 #[cfg(not(unix))]
@@ -51,29 +62,6 @@ pub fn write_pid_file(pid_file: &str) -> std::io::Result<()> {
 pub fn remove_pid_file(pid_file: &str) {
     let path = expand_path(pid_file);
     let _ = std::fs::remove_file(&path);
-}
-
-/// **Deprecated** — moved to `alephcore::utils::instance_lock`.
-///
-/// This thin wrapper exists during the Spec C transition window so any
-/// internal call sites that still reference the daemon path keep
-/// compiling. Will be removed in a subsequent cleanup PR. The production
-/// start path no longer calls this — `main()` acquires via
-/// `alephcore::utils::instance_lock::try_acquire` directly.
-#[allow(dead_code)]
-pub fn acquire_instance_lock() -> Result<std::fs::File, Box<dyn std::error::Error>> {
-    let dir = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".aleph/data");
-    match alephcore::utils::instance_lock::try_acquire(&dir)? {
-        alephcore::utils::instance_lock::AcquireOutcome::Acquired(lock) => Ok(lock.into_file()),
-        alephcore::utils::instance_lock::AcquireOutcome::HeldByLive { pid, .. } => {
-            Err(format!("Another Aleph instance is running (PID {pid})").into())
-        }
-        alephcore::utils::instance_lock::AcquireOutcome::HeldByOrphaned { pid, .. } => {
-            Err(format!("Stale lock file (PID {pid} not running)").into())
-        }
-    }
 }
 
 /// Handle stop command

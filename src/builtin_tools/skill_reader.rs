@@ -271,7 +271,10 @@ impl ReadSkillTool {
                 notify_tool_result(Self::NAME, &error_msg, false);
                 return Err(ToolError::NotFound(error_msg));
             }
-            1 => candidates.into_iter().next().unwrap(),
+            1 => candidates
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| unreachable!("candidates.len() == 1")),
             _ => {
                 let paths: Vec<String> =
                     candidates.iter().map(|p| p.display().to_string()).collect();
