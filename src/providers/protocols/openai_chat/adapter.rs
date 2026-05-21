@@ -30,6 +30,10 @@ impl ProtocolAdapter for OpenAiProtocol {
         payload: &RequestPayload,
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder> {
+        self.stream_idle_timeout_secs.store(
+            crate::providers::protocols::stream_idle::effective_idle_secs(config),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let endpoint = Self::build_endpoint(config);
         let messages = Self::convert_messages(payload.messages, payload.system_prompt);
         let model_name = payload
@@ -229,6 +233,14 @@ impl ProtocolAdapter for OpenAiProtocol {
             .bytes_stream()
             .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
             .boxed();
+        let idle_secs = self
+            .stream_idle_timeout_secs
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let byte_stream = crate::providers::protocols::stream_idle::wrap_idle_timeout(
+            byte_stream,
+            idle_secs,
+            "OpenAI",
+        );
 
         /// Per-iteration mutable state carried through unfold
         struct State {

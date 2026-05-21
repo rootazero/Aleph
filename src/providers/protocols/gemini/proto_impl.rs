@@ -13,7 +13,12 @@ use super::GeminiProtocol;
 impl GeminiProtocol {
     /// Create a new Gemini protocol adapter
     pub fn new(client: reqwest::Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            stream_idle_timeout_secs: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+                crate::providers::protocols::stream_idle::DEFAULT_STREAM_IDLE_SECS,
+            )),
+        }
     }
 
     /// Build the endpoint URL — always uses the streaming endpoint (stream-first architecture)

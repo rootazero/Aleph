@@ -170,7 +170,7 @@ impl GenerationProviderRegistry {
     /// ```
     pub fn get_or_err(&self, name: &str) -> GenerationResult<Arc<dyn GenerationProvider>> {
         self.get(name)
-            .ok_or_else(|| GenerationError::model_not_found(name, "registry"))
+            .ok_or_else(|| GenerationError::internal(format!("Provider '{}' not found in registry", name)))
     }
 
     /// Get all registered provider names in sorted order

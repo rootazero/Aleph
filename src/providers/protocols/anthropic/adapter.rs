@@ -1,7 +1,6 @@
 //! ProtocolAdapter trait implementation for AnthropicProtocol.
 
 use std::collections::VecDeque;
-use axum::body::Bytes;
 
 use crate::config::types::provider::CacheRetention;
 use crate::config::ProviderConfig;
@@ -545,7 +544,11 @@ impl ProtocolAdapter for AnthropicProtocol {
         let idle_secs = self
             .stream_idle_timeout_secs
             .load(std::sync::atomic::Ordering::Relaxed);
-        let byte_stream = wrap_idle_timeout(byte_stream, idle_secs);
+        let byte_stream = crate::providers::protocols::stream_idle::wrap_idle_timeout(
+            byte_stream,
+            idle_secs,
+            "Anthropic",
+        );
 
         /// Per-iteration mutable state carried through unfold
         struct State {
@@ -667,36 +670,6 @@ impl ProtocolAdapter for AnthropicProtocol {
     }
 }
 
-/// Wrap a byte stream with a per-event idle watchdog.
-///
-/// If no event arrives within `idle_secs`, the stream emits an
-/// `AlephError::Timeout` and terminates. `idle_secs == 0` disables the
-/// watchdog (pass-through).
-///
-/// Maps `tokio_stream::Elapsed` to `AlephError::Timeout` so the error
-/// flows through the existing transient-error path; the caller's retry /
-/// surfacing logic is unchanged.
-fn wrap_idle_timeout(
-    stream: BoxStream<'static, Result<Bytes>>,
-    idle_secs: u64,
-) -> BoxStream<'static, Result<Bytes>> {
-    if idle_secs == 0 {
-        return stream;
-    }
-    use tokio_stream::StreamExt as _;
-    let timed = stream.timeout(std::time::Duration::from_secs(idle_secs));
-    let mapped = futures::StreamExt::map(timed, move |res| match res {
-        Ok(inner) => inner,
-        Err(_elapsed) => Err(AlephError::Timeout {
-            suggestion: Some(format!(
-                "Anthropic stream stalled: no SSE event received for {idle_secs}s. \
-                 The upstream may be unresponsive; retry or increase \
-                 ProviderConfig.stream_idle_timeout_secs."
-            )),
-        }),
-    });
-    Box::pin(mapped)
-}
 
 #[cfg(test)]
 mod tests {
@@ -983,69 +956,6 @@ mod tests {
         assert!(extended_cache_ttl, "Long retention must signal beta header");
     }
 
-    // ── wrap_idle_timeout ─────────────────────────────────────────────────────
-
-    #[tokio::test(start_paused = true)]
-    async fn wrap_idle_timeout_fires_after_threshold() {
-        use futures::StreamExt as _;
-        // Stream that never produces an item.
-        let pending: futures::stream::BoxStream<'static, Result<Bytes>> =
-            Box::pin(futures::stream::pending());
-        let mut wrapped = wrap_idle_timeout(pending, 1);
-        // Advance virtual clock past the 1s idle threshold.
-        tokio::time::advance(std::time::Duration::from_secs(2)).await;
-        let first = wrapped.next().await;
-        match first {
-            Some(Err(AlephError::Timeout { suggestion })) => {
-                assert!(
-                    suggestion
-                        .as_deref()
-                        .map(|s| s.contains("stalled"))
-                        .unwrap_or(false),
-                    "expected stall message, got {suggestion:?}",
-                );
-            }
-            other => panic!("expected Timeout, got {other:?}"),
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn wrap_idle_timeout_resets_on_event() {
-        use futures::StreamExt as _;
-        // Three chunks 50ms apart; idle threshold is 1s — none should trip.
-        let stream = async_stream::stream! {
-            for i in 0..3u8 {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                yield Ok::<Bytes, AlephError>(Bytes::from(vec![i]));
-            }
-        };
-        let boxed: futures::stream::BoxStream<'static, Result<Bytes>> = Box::pin(stream);
-        let mut wrapped = wrap_idle_timeout(boxed, 1);
-        let mut count = 0;
-        while let Some(item) = wrapped.next().await {
-            item.expect("no timeout expected");
-            count += 1;
-        }
-        assert_eq!(count, 3, "all three chunks should pass through");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn wrap_idle_timeout_zero_disables() {
-        use futures::StreamExt as _;
-        // idle=0 should be a pass-through — no timeout firing.
-        let stream = async_stream::stream! {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            yield Ok::<Bytes, AlephError>(Bytes::from_static(b"late"));
-        };
-        let boxed: futures::stream::BoxStream<'static, Result<Bytes>> = Box::pin(stream);
-        let mut wrapped = wrap_idle_timeout(boxed, 0);
-        tokio::time::advance(std::time::Duration::from_secs(120)).await;
-        let item = wrapped.next().await;
-        match item {
-            Some(Ok(b)) => assert_eq!(&b[..], b"late"),
-            other => panic!("expected late Ok event, got {other:?}"),
-        }
-    }
 }
 
 

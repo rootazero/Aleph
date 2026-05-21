@@ -215,6 +215,8 @@ use std::collections::HashMap;
 
 struct RegistryState {
     providers: HashMap<String, Arc<dyn AiProvider>>,
+    /// Insertion order of provider names, used for fallback when default is removed.
+    provider_order: Vec<String>,
     default_name: String,
     fallbacks: Vec<String>,
     health: HashMap<String, ProviderHealth>,
@@ -234,6 +236,7 @@ impl MultiProviderRegistry {
         Self {
             state: crate::sync_primitives::RwLock::new(RegistryState {
                 providers,
+                provider_order: vec![name.clone()],
                 default_name: name,
                 fallbacks: vec![],
                 health,
@@ -243,6 +246,9 @@ impl MultiProviderRegistry {
 
     pub fn register(&self, name: String, provider: Arc<dyn AiProvider>) {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        if !state.providers.contains_key(&name) {
+            state.provider_order.push(name.clone());
+        }
         state.providers.insert(name.clone(), provider);
         state.health.entry(name).or_default();
     }
@@ -255,8 +261,9 @@ impl MultiProviderRegistry {
             ));
         }
         let removed = state.providers.remove(name);
+        state.provider_order.retain(|n| n != name);
         if state.default_name == name {
-            if let Some(first) = state.providers.keys().min() {
+            if let Some(first) = state.provider_order.first() {
                 state.default_name = first.clone();
             }
         }

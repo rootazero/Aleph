@@ -419,7 +419,11 @@ fn split_path(note_path: &str) -> Result<(String, String), ApplyError> {
             "invalid note_path '{note_path}' — expected 'category/filename'"
         ))));
     };
-    Ok((cat.to_string(), name.to_string()))
+    let safe_cat = sanitize_title(cat)
+        .map_err(|e| ApplyError::Other(AlephError::other(format!(
+            "invalid category in note_path '{note_path}': {e}"
+        ))))?;
+    Ok((safe_cat, name.to_string()))
 }
 
 #[cfg(test)]

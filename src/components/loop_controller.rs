@@ -329,7 +329,7 @@ impl EventHandler for LoopController {
             // ================================================================
             AlephEvent::ToolCallCompleted(result) => {
                 // Update step status if this was a plan step
-                if let Some(step_id) = &result.input.get("plan_step_id").and_then(|v| v.as_str()) {
+                if let Some(step_id) = &result.plan_step_id {
                     self.update_step_status(step_id, StepStatus::Completed)
                         .await;
                 } else {

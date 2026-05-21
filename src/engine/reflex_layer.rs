@@ -36,12 +36,12 @@
 //! // L3: Falls through to LLM reasoning
 //! ```
 
-use crate::sync_primitives::{Arc, RwLock};
 use dashmap::DashMap;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info};
 
 use super::AtomicAction;
@@ -54,8 +54,10 @@ pub struct ReflexLayer {
     /// L2: Keyword routing rules
     keyword_rules: Vec<KeywordRule>,
 
-    /// Statistics
-    stats: Arc<RwLock<ReflexStats>>,
+    /// Statistics (atomic counters for thread safety)
+    l1_hits: AtomicU64,
+    l2_hits: AtomicU64,
+    l3_fallbacks: AtomicU64,
 }
 
 impl ReflexLayer {
@@ -64,7 +66,9 @@ impl ReflexLayer {
         Self {
             exact_cache: DashMap::new(),
             keyword_rules: Vec::new(),
-            stats: Arc::new(RwLock::new(ReflexStats::default())),
+            l1_hits: AtomicU64::new(0),
+            l2_hits: AtomicU64::new(0),
+            l3_fallbacks: AtomicU64::new(0),
         }
     }
 
@@ -79,29 +83,20 @@ impl ReflexLayer {
     pub fn try_reflex(&self, input: &str) -> Option<AtomicAction> {
         // L1: Exact match
         if let Some(action) = self.exact_cache.get(input) {
-            self.stats
-                .write()
-                .unwrap_or_else(|e| e.into_inner())
-                .l1_hits += 1;
+            self.l1_hits.fetch_add(1, Ordering::Relaxed);
             debug!(input = %input, "L1 cache hit");
             return Some(action.clone());
         }
 
         // L2: Keyword routing
         if let Some(action) = self.route_by_keywords(input) {
-            self.stats
-                .write()
-                .unwrap_or_else(|e| e.into_inner())
-                .l2_hits += 1;
+            self.l2_hits.fetch_add(1, Ordering::Relaxed);
             debug!(input = %input, action = ?action, "L2 keyword routing hit");
             return Some(action);
         }
 
         // Need L3 reasoning
-        self.stats
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .l3_fallbacks += 1;
+        self.l3_fallbacks.fetch_add(1, Ordering::Relaxed);
         debug!(input = %input, "Falling back to L3 reasoning");
         None
     }
@@ -309,7 +304,11 @@ impl ReflexLayer {
 
     /// Get statistics
     pub fn stats(&self) -> ReflexStats {
-        self.stats.read().unwrap_or_else(|e| e.into_inner()).clone()
+        ReflexStats {
+            l1_hits: self.l1_hits.load(Ordering::Relaxed),
+            l2_hits: self.l2_hits.load(Ordering::Relaxed),
+            l3_fallbacks: self.l3_fallbacks.load(Ordering::Relaxed),
+        }
     }
 
     /// Clear L1 cache
@@ -768,11 +767,14 @@ mod tests {
             extractor: Box::new(FilePathExtractor),
         });
 
-        // Higher priority rule should match first
-        // But FilePathExtractor will fail to extract, so it falls back to Bash
+        // Higher priority rule (Read/FilePathExtractor) should be tried first.
+        // Since "test" is not a valid file path, FilePathExtractor returns None,
+        // so the system falls through to the next matching rule (Bash/DirectCommandExtractor).
         let result = reflex.try_reflex("test");
-        // This test demonstrates priority ordering, actual result depends on extractor success
-        assert!(result.is_some() || result.is_none());
+        assert!(
+            result.is_some(),
+            "Expected some action to be produced by the fallback rule"
+        );
     }
 
     #[test]

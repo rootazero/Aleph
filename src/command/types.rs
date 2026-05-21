@@ -32,11 +32,12 @@ impl CommandType {
 
     /// Parse from string (for config files, case-insensitive)
     pub fn parse(s: &str) -> Option<Self> {
-        if s.eq_ignore_ascii_case("action") {
+        let trimmed = s.trim();
+        if trimmed.eq_ignore_ascii_case("action") {
             Some(CommandType::Action)
-        } else if s.eq_ignore_ascii_case("prompt") {
+        } else if trimmed.eq_ignore_ascii_case("prompt") {
             Some(CommandType::Prompt)
-        } else if s.eq_ignore_ascii_case("namespace") {
+        } else if trimmed.eq_ignore_ascii_case("namespace") {
             Some(CommandType::Namespace)
         } else {
             None

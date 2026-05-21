@@ -524,10 +524,12 @@ fn scan_directory(dir: &Path, source: SkillSource) -> Vec<SkillManifest> {
             }
         }
 
-        // Recurse into subdirectories
-        if path.is_dir() {
-            let sub = scan_directory(&path, source.clone());
-            manifests.extend(sub);
+        // Recurse into subdirectories (skip symlinks to avoid infinite loops)
+        if let Ok(file_type) = entry.file_type() {
+            if file_type.is_dir() && !file_type.is_symlink() {
+                let sub = scan_directory(&path, source.clone());
+                manifests.extend(sub);
+            }
         }
     }
 

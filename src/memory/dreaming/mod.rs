@@ -219,11 +219,11 @@ pub(crate) fn now_timestamp() -> i64 {
 
 /// Record user activity for DreamDaemon idle tracking.
 pub fn record_activity() {
-    LAST_ACTIVITY_TS.store(now_timestamp(), Ordering::Relaxed);
+    LAST_ACTIVITY_TS.store(now_timestamp(), Ordering::Release);
 }
 
 fn last_activity_timestamp() -> i64 {
-    LAST_ACTIVITY_TS.load(Ordering::Relaxed)
+    LAST_ACTIVITY_TS.load(Ordering::Acquire)
 }
 
 fn idle_seconds() -> i64 {

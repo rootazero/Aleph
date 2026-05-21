@@ -28,20 +28,20 @@ impl PhoneRule {
 
     /// Check if the match is adjacent to hex characters (likely UUID fragment)
     fn is_hex_bounded(text: &str, start: usize, end: usize) -> bool {
-        // Check character before match
+        // Check byte before match. Safe to use byte index because ASCII hex
+        // letters are single-byte, and a multi-byte continuation byte can never
+        // be an ASCII hex digit (all >= 0x80).
         if start > 0 {
-            if let Some(c) = text[..start].chars().last() {
-                if c.is_ascii_hexdigit() && !c.is_ascii_digit() {
-                    return true; // a-f before the number
-                }
+            let b = text.as_bytes()[start - 1];
+            if b.is_ascii_hexdigit() && !b.is_ascii_digit() {
+                return true; // a-f before the number
             }
         }
-        // Check character after match
+        // Check byte after match
         if end < text.len() {
-            if let Some(c) = text[end..].chars().next() {
-                if c.is_ascii_hexdigit() && !c.is_ascii_digit() {
-                    return true; // a-f after the number
-                }
+            let b = text.as_bytes()[end];
+            if b.is_ascii_hexdigit() && !b.is_ascii_digit() {
+                return true; // a-f after the number
             }
         }
         false

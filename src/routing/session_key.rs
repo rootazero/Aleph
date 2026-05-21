@@ -391,6 +391,21 @@ impl SessionKey {
             return None;
         }
 
+        // Handle Subagent keys: agent:{parent_key}:subagent:{subagent_id}
+        // Must check before parse_rest because subagent_id is not bounded.
+        if let Some(pos) = parts.iter().position(|&p| p == "subagent") {
+            if pos >= 2 && pos + 1 < parts.len() {
+                let parent_str = parts[..pos].join(":");
+                let subagent_id = parts[pos + 1].to_string();
+                if let Some(parent_key) = Self::parse(&parent_str) {
+                    return Some(Self::Subagent {
+                        parent_key: Box::new(parent_key),
+                        subagent_id,
+                    });
+                }
+            }
+        }
+
         let agent_id = normalize_agent_id(parts[1]);
         if agent_id.is_empty() {
             return None;
@@ -505,17 +520,19 @@ impl SessionKey {
                 thread_id: None,
             }),
 
-            // agent:id:cron|webhook|scheduled:task_id
-            [task_type @ ("cron" | "webhook" | "scheduled"), task_id] => Some(Self::Task {
-                agent_id: agent_id.to_string(),
-                task_type: task_type.to_string(),
-                task_id: task_id.to_string(),
-            }),
-
             // agent:id:ephemeral:uuid
             ["ephemeral", ephemeral_id] => Some(Self::Ephemeral {
                 agent_id: agent_id.to_string(),
                 ephemeral_id: ephemeral_id.to_string(),
+            }),
+
+            // agent:id:{task_type}:{task_id}
+            // Listed types are those used in the codebase; unknown types will
+            // not round-trip through parse (format ambiguity with Main epoch).
+            [task_type @ ("cron" | "webhook" | "scheduled" | "team" | "heartbeat" | "a2a"), task_id] => Some(Self::Task {
+                agent_id: agent_id.to_string(),
+                task_type: task_type.to_string(),
+                task_id: task_id.to_string(),
             }),
 
             // agent:id:main (or any single token as main_key)
@@ -792,6 +809,38 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_subagent() {
+        let key = SessionKey::parse("agent:main:main:subagent:coding").unwrap();
+        assert!(
+            matches!(key, SessionKey::Subagent { subagent_id, .. } if subagent_id == "coding")
+        );
+    }
+
+    #[test]
+    fn test_parse_task_team() {
+        let key = SessionKey::parse("agent:main:team:task-1").unwrap();
+        assert!(
+            matches!(key, SessionKey::Task { task_type, task_id, .. } if task_type == "team" && task_id == "task-1")
+        );
+    }
+
+    #[test]
+    fn test_parse_task_heartbeat() {
+        let key = SessionKey::parse("agent:main:heartbeat:check-1").unwrap();
+        assert!(
+            matches!(key, SessionKey::Task { task_type, task_id, .. } if task_type == "heartbeat" && task_id == "check-1")
+        );
+    }
+
+    #[test]
+    fn test_parse_task_a2a() {
+        let key = SessionKey::parse("agent:main:a2a:req-1").unwrap();
+        assert!(
+            matches!(key, SessionKey::Task { task_type, task_id, .. } if task_type == "a2a" && task_id == "req-1")
+        );
+    }
+
+    #[test]
     fn test_parse_invalid() {
         assert!(SessionKey::parse("invalid").is_none());
         assert!(SessionKey::parse("agent:").is_none());
@@ -806,6 +855,10 @@ mod tests {
             SessionKey::dm("main", "discord", "user2", DmScope::PerChannelPeer),
             SessionKey::group("main", "slack", PeerKind::Channel, "C123"),
             SessionKey::task("main", "webhook", "hook-1"),
+            SessionKey::Subagent {
+                parent_key: Box::new(SessionKey::main("main")),
+                subagent_id: "coding".to_string(),
+            },
         ];
         for key in keys {
             let s = key.to_key_string();

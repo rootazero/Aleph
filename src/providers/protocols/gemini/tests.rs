@@ -808,6 +808,35 @@ fn test_parse_sse_prompt_blocked() {
 }
 
 #[test]
+fn build_request_stores_configured_stream_idle_timeout() {
+    let proto = GeminiProtocol::new(reqwest::Client::new());
+    let mut config = crate::config::ProviderConfig::test_config("gemini-1.5-pro");
+    config.stream_idle_timeout_secs = Some(31);
+    let payload = crate::providers::adapter::RequestPayload::new(&[]);
+    let _ = proto.build_request(&payload, &config);
+    assert_eq!(
+        proto
+            .stream_idle_timeout_secs
+            .load(std::sync::atomic::Ordering::Relaxed),
+        31,
+    );
+}
+
+#[test]
+fn build_request_defaults_stream_idle_timeout_to_60() {
+    let proto = GeminiProtocol::new(reqwest::Client::new());
+    let config = crate::config::ProviderConfig::test_config("gemini-1.5-pro");
+    let payload = crate::providers::adapter::RequestPayload::new(&[]);
+    let _ = proto.build_request(&payload, &config);
+    assert_eq!(
+        proto
+            .stream_idle_timeout_secs
+            .load(std::sync::atomic::Ordering::Relaxed),
+        60,
+    );
+}
+
+#[test]
 fn test_parse_sse_prompt_feedback_without_block_is_ignored() {
     // promptFeedback with only safetyRatings (no blockReason) appears on
     // successful responses and must not be treated as an error.

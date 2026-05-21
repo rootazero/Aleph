@@ -54,10 +54,18 @@ impl LoopTool for BuiltinToolAdapter {
     async fn execute(&self, input: Value) -> ToolResult {
         match self.inner.call(input).await {
             Ok(output) => ToolResult::Success { output },
-            Err(e) => ToolResult::Error {
-                error: e.to_string(),
-                retryable: true,
-            },
+            Err(e) => {
+                let retryable = matches!(
+                    e,
+                    crate::error::AlephError::NetworkError { .. }
+                        | crate::error::AlephError::IoError(..)
+                        | crate::error::AlephError::Timeout { .. }
+                );
+                ToolResult::Error {
+                    error: e.to_string(),
+                    retryable,
+                }
+            }
         }
     }
 }
@@ -172,7 +180,8 @@ mod tests {
                 error, retryable, ..
             } => {
                 assert!(error.contains("fake tool error"));
-                assert!(retryable);
+                // Generic tool errors are not retryable; only network/IO/timeout are.
+                assert!(!retryable);
             }
             ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
                 panic!("expected error")

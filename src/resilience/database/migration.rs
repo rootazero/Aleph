@@ -234,15 +234,15 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
             })
             .map_err(|e| {
                 if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
+                    tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
+                }
                 AlephError::config(format!("Failed to load legacy traces: {}", e))
             })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| {
                 if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
+                    tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
+                }
                 AlephError::config(format!("Failed to collect legacy traces: {}", e))
             })?;
 
@@ -255,8 +255,8 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
             )
             .map_err(|e| {
                 if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
+                    tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
+                }
                 AlephError::config(format!("Failed to prepare migrated trace insert: {}", e))
             })?;
 
@@ -264,8 +264,8 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
             let event = legacy_trace_to_agent_trace(step_index, &role, &content_json);
             let event_json = serde_json::to_string(&event).map_err(|e| {
                 if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
+                    tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
+                }
                 AlephError::config(format!("Failed to serialize migrated trace: {}", e))
             })?;
 
@@ -280,8 +280,8 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
                 ])
                 .map_err(|e| {
                     if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
+                        tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
+                    }
                     AlephError::config(format!("Failed to insert migrated trace: {}", e))
                 })?;
         }
@@ -295,8 +295,8 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
     )
     .map_err(|e| {
         if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
+            tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
+        }
         AlephError::config(format!("Failed to finalize task_traces migration: {}", e))
     })?;
 

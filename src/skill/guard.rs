@@ -63,7 +63,7 @@ const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "destructive_rm_rf_root",
-        regex: r"rm\s+-rf?\s+(/|~|\$HOME)(\s|/|$)",
+        regex: r"rm\s+-[rf]*r[rf]*\s+(/|~|\$HOME)(\s|/|$)",
         level: ThreatLevel::Dangerous,
     },
     Pattern {
@@ -196,15 +196,17 @@ fn scan_skill_directory_inner(dir: &std::path::Path, verdicts: &mut Vec<ScanVerd
         {
             continue;
         }
-        if path.is_dir() {
-            scan_skill_directory_inner(&path, verdicts);
-        } else if path.is_file() {
-            let label = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if let Ok(content) = std::fs::read(&path) {
-                verdicts.push(scan_content(&label, &content));
+        if let Ok(file_type) = entry.file_type() {
+            if file_type.is_dir() && !file_type.is_symlink() {
+                scan_skill_directory_inner(&path, verdicts);
+            } else if file_type.is_file() {
+                let label = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if let Ok(content) = std::fs::read(&path) {
+                    verdicts.push(scan_content(&label, &content));
+                }
             }
         }
     }
@@ -237,6 +239,11 @@ mod tests {
         // `rm -rf ~/...` (slash after the home glyph) must be caught.
         assert_eq!(
             scan_content("b.sh", b"rm -rf ~/Documents").level,
+            ThreatLevel::Dangerous
+        );
+        // `rm -fr /` (reversed flags) must also be caught.
+        assert_eq!(
+            scan_content("c.sh", b"rm -fr /").level,
             ThreatLevel::Dangerous
         );
     }

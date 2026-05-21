@@ -459,7 +459,7 @@ impl McpTransport for SseTransport {
 
     async fn send_sampling_response(
         &self,
-        request_id: u64,
+        request_id: serde_json::Value,
         result: serde_json::Value,
     ) -> Result<()> {
         self.send_response(request_id, result).await
@@ -491,19 +491,32 @@ impl SseTransport {
     /// Send a response to a server-initiated request
     ///
     /// Used for responding to sampling/createMessage and other server-initiated RPCs.
-    pub async fn send_response(&self, request_id: u64, result: serde_json::Value) -> Result<()> {
-        let response = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: Some(request_id),
-            result: Some(result),
-            error: None,
-        };
+    pub async fn send_response(&self, request_id: serde_json::Value, result: serde_json::Value) -> Result<()> {
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": result,
+        });
 
-        self.send_json_rpc_response(&response).await?;
+        let response_json = serde_json::to_string(&response)
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize response: {}", e)))?;
+
+        let http_response = self
+            .build_request(response_json)
+            .send()
+            .await
+            .map_err(|e| AlephError::IoError(format!("Failed to send response: {}", e)))?;
+
+        if !http_response.status().is_success() {
+            return Err(AlephError::IoError(format!(
+                "Server returned error status: {}",
+                http_response.status()
+            )));
+        }
 
         tracing::debug!(
             server = %self.server_name,
-            request_id = request_id,
+            request_id = %request_id,
             "Sent response to server-initiated request"
         );
 
@@ -513,26 +526,38 @@ impl SseTransport {
     /// Send an error response to a server-initiated request
     pub async fn send_error_response(
         &self,
-        request_id: u64,
+        request_id: serde_json::Value,
         code: i32,
         message: &str,
     ) -> Result<()> {
-        let response = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: Some(request_id),
-            result: None,
-            error: Some(JsonRpcError {
-                code,
-                message: message.to_string(),
-                data: None,
-            }),
-        };
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": code,
+                "message": message,
+            },
+        });
 
-        self.send_json_rpc_response(&response).await?;
+        let response_json = serde_json::to_string(&response)
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize error response: {}", e)))?;
+
+        let http_response = self
+            .build_request(response_json)
+            .send()
+            .await
+            .map_err(|e| AlephError::IoError(format!("Failed to send error response: {}", e)))?;
+
+        if !http_response.status().is_success() {
+            return Err(AlephError::IoError(format!(
+                "Server returned error status: {}",
+                http_response.status()
+            )));
+        }
 
         tracing::debug!(
             server = %self.server_name,
-            request_id = request_id,
+            request_id = %request_id,
             code = code,
             "Sent error response to server-initiated request"
         );

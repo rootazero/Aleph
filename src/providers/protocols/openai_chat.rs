@@ -16,6 +16,11 @@ use super::openai_common::tools::sanitize_tool_name;
 /// OpenAI protocol adapter
 pub struct OpenAiProtocol {
     client: Client,
+    /// Idle timeout (seconds) for the SSE byte stream, resolved from
+    /// `ProviderConfig.stream_idle_timeout_secs` in `build_request` and read
+    /// in `stream_deltas`. An `AtomicU64` because `&self` is shared (`Arc`)
+    /// and the value must cross into the `'static` stream closure.
+    stream_idle_timeout_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 mod proto_impl;

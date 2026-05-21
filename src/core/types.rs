@@ -96,7 +96,11 @@ impl MediaAttachment {
         let data = data.into();
         let size_bytes = match encoding {
             // Base64 encoding inflates size by ~33%; store original decoded size
-            ContentEncoding::Base64 => (data.len().saturating_mul(3) / 4) as u64,
+            // Account for padding characters (=) at the end of base64 strings
+            ContentEncoding::Base64 => {
+                let padding = data.chars().rev().take(2).filter(|&c| c == '=').count();
+                ((data.len() - padding).saturating_mul(3) / 4) as u64
+            }
             ContentEncoding::Utf8 => data.len() as u64,
         };
         Self {

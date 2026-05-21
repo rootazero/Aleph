@@ -68,7 +68,7 @@ impl SemanticUnit {
             .filter_map(|&i| messages.get(i))
             .map(|msg| {
                 let text = msg.text_content();
-                (text.len() as f64 / ratio).ceil() as usize
+                (text.chars().count() as f64 / ratio).ceil() as usize
             })
             .sum()
     }

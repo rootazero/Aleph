@@ -6,12 +6,14 @@ pub mod anthropic;
 pub mod configurable;
 pub mod definition;
 pub mod gemini;
+mod http_client;
 mod jsonpath;
 pub mod loader;
 pub mod openai_chat;
 pub mod openai_common;
 pub mod openai_responses;
 pub mod registry;
+mod stream_idle;
 pub mod template;
 
 pub use anthropic::AnthropicProtocol;

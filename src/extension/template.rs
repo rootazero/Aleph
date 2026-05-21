@@ -99,9 +99,11 @@ impl SkillTemplate {
             ));
         }
 
-        // Apply replacements in reverse order to preserve positions
-        for (_, _, original, replacement) in replacements.into_iter().rev() {
-            result = result.replace(&original, &replacement);
+        // Apply replacements in reverse order to preserve positions.
+        // Use positional replacement (single occurrence) to avoid corrupting
+        // file contents that may contain the same reference pattern.
+        for (start, end, _, replacement) in replacements.into_iter().rev() {
+            result.replace_range(start..end, &replacement);
         }
 
         Ok(result)

@@ -16,7 +16,7 @@ static FENCE_REGEX: LazyLock<Regex> =
 pub struct FenceSpan {
     /// Byte offset of the opening fence line start.
     pub(crate) start: usize,
-    /// Byte offset after the closing fence line (or text end if unclosed).
+    /// Byte offset of the closing fence line start (or text end if unclosed).
     pub(crate) end: usize,
     /// Just the fence marker (e.g., "```" or "~~~~").
     pub(crate) marker: String,
@@ -360,7 +360,7 @@ mod tests {
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 1);
-        // Should extract just first word as language
+        // Info string without whitespace is stored as-is
         assert_eq!(spans[0].language, Some("rust,ignore".to_string()));
     }
 
