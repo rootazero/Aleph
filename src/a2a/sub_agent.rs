@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 
-use crate::a2a::adapter::client::A2AClientPool;
+use crate::a2a::adapter::client::{fold_stream, A2AClient, A2AClientPool};
 use crate::a2a::domain::{A2AMessage, A2ARole};
 use crate::a2a::port::RegisteredAgent;
 use crate::a2a::service::SmartRouter;
@@ -123,10 +123,10 @@ impl A2ASubAgent {
 
     /// Send a delegation request to an already-resolved remote agent.
     ///
-    /// Shared by [`Self::execute`] (router-picked agent) and
-    /// [`Self::execute_delegation`] (optionally pinned agent): obtains a pooled
-    /// client, sends the prompt as an A2A message, summarises the reply, and
-    /// fires the Spec 1 G2 raw-memory delegation hook.
+    /// Streaming-first: consumes the remote agent's SSE stream (idle-timeout
+    /// liveness + live progress). When the remote has no `/a2a/stream` route
+    /// (non-Aleph agents), transparently falls back to [`Self::dispatch_sync`].
+    /// Shared by [`Self::execute`] and [`Self::execute_delegation`].
     async fn dispatch(
         &self,
         agent: &RegisteredAgent,
@@ -139,7 +139,60 @@ impl A2ASubAgent {
         let message = A2AMessage::text(A2ARole::User, &request.prompt);
         let task_id = uuid::Uuid::new_v4().to_string();
 
-        match client.send_message(&task_id, &message, None).await {
+        match client.send_message_stream(&task_id, &message, None).await {
+            Ok(stream) => {
+                let outcome = fold_stream(stream, |chunk| {
+                    crate::builtin_tools::notify_tool_streaming_chunk("a2a_delegate", chunk);
+                })
+                .await;
+
+                let result = if outcome.success {
+                    SubAgentResult::success(request.id.clone(), outcome.summary)
+                } else {
+                    SubAgentResult::failure(
+                        request.id.clone(),
+                        outcome
+                            .error
+                            .unwrap_or_else(|| "A2A streaming delegation failed".to_string()),
+                    )
+                };
+
+                // Spec 1 G2: record a successful delegation for parent-agent memory.
+                if result.success {
+                    if let Some(w) = self.raw_memory_writer.clone() {
+                        emit_delegation_raw_with_registry(
+                            w,
+                            request,
+                            &result,
+                            &agent.card.id,
+                            self.capture_registry.clone(),
+                        );
+                    }
+                }
+                Ok(result)
+            }
+            Err(e) => {
+                tracing::info!(
+                    error = %e,
+                    "A2A streaming unavailable; falling back to sync send_message"
+                );
+                self.dispatch_sync(&client, agent, request, &task_id, &message)
+                    .await
+            }
+        }
+    }
+
+    /// Synchronous delegation — POSTs `message/send` and waits for the full
+    /// task. Fallback for remote agents without a streaming endpoint.
+    async fn dispatch_sync(
+        &self,
+        client: &A2AClient,
+        agent: &RegisteredAgent,
+        request: &SubAgentRequest,
+        task_id: &str,
+        message: &A2AMessage,
+    ) -> crate::error::Result<SubAgentResult> {
+        match client.send_message(task_id, message, None).await {
             Ok(task) => {
                 let summary = if !task.history.is_empty() {
                     task.history
@@ -680,6 +733,102 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("ghost-agent"));
+    }
+
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn streaming_registered(name: &str, url: &str) -> RegisteredAgent {
+        RegisteredAgent {
+            card: AgentCard {
+                id: "streamer".to_string(),
+                name: name.to_string(),
+                version: "1.0".to_string(),
+                description: None,
+                provider: None,
+                documentation_url: None,
+                interfaces: vec![],
+                skills: vec![],
+                security: vec![],
+                extensions: vec![],
+                default_input_modes: vec![],
+                default_output_modes: vec![],
+            },
+            trust_level: TrustLevel::Trusted,
+            base_url: url.to_string(),
+            last_seen: chrono::Utc::now(),
+            health: AgentHealth::Healthy,
+            auth_token: None,
+        }
+    }
+
+    fn sse_completed_body(answer: &str) -> String {
+        let completed = UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+            task_id: "t".to_string(),
+            context_id: "c".to_string(),
+            status: TaskStatus {
+                state: TaskState::Completed,
+                message: Some(A2AMessage::text(A2ARole::Agent, answer)),
+                timestamp: chrono::Utc::now(),
+            },
+            is_final: true,
+            metadata: None,
+        });
+        let env =
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": completed}).to_string();
+        format!("event: status-update\ndata: {}\n\n", env)
+    }
+
+    #[tokio::test]
+    async fn execute_delegation_streams_remote_result() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/stream"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(sse_completed_body("streamed answer 42"), "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let sub = build_sub_agent(vec![streaming_registered("Streamer", &server.uri())]);
+        let outcome = sub
+            .execute_delegation("do the thing", Some("Streamer"))
+            .await
+            .unwrap();
+        assert!(outcome.result.success, "got: {:?}", outcome.result);
+        assert_eq!(outcome.agent.as_deref(), Some("Streamer"));
+        assert!(outcome.result.summary.contains("streamed answer 42"));
+    }
+
+    #[tokio::test]
+    async fn execute_delegation_falls_back_to_sync_when_no_stream_route() {
+        let server = MockServer::start().await;
+        // No streaming endpoint.
+        Mock::given(method("POST"))
+            .and(path("/a2a/stream"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        // Synchronous JSON-RPC endpoint returns a completed task.
+        let mut task = A2ATask::new("t", "c");
+        task.status.state = TaskState::Completed;
+        task.history
+            .push(A2AMessage::text(A2ARole::Agent, "sync answer 99"));
+        let rpc = serde_json::json!({"jsonrpc": "2.0", "id": "x", "result": task});
+        Mock::given(method("POST"))
+            .and(path("/a2a"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(rpc))
+            .mount(&server)
+            .await;
+
+        let sub = build_sub_agent(vec![streaming_registered("Streamer", &server.uri())]);
+        let outcome = sub
+            .execute_delegation("do it", Some("Streamer"))
+            .await
+            .unwrap();
+        assert!(outcome.result.success, "got: {:?}", outcome.result);
+        assert!(outcome.result.summary.contains("sync answer 99"));
     }
 }
 
