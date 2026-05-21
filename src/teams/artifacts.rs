@@ -476,7 +476,19 @@ impl SqliteArtifactStore {
 
         let (started_at, completed_at) = match new_status {
             TaskStatus::InProgress => (Some(now.to_rfc3339()), None),
-            TaskStatus::Completed | TaskStatus::Failed => (None, Some(now.to_rfc3339())),
+            TaskStatus::Completed | TaskStatus::Failed => {
+                // Preserve existing started_at — do not overwrite it on completion/failure.
+                let existing: Option<String> = conn
+                    .query_row(
+                        "SELECT started_at FROM task_artifacts WHERE id = ?1",
+                        params![artifact_id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(db_err)?
+                    .flatten();
+                (existing, Some(now.to_rfc3339()))
+            }
             _ => (None, None),
         };
 

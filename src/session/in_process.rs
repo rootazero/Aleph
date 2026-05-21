@@ -143,17 +143,23 @@ impl SessionService for InProcessActorSessionService {
         &self,
         id: &SessionId,
     ) -> Result<broadcast::Receiver<SessionEventRecord>, SessionError> {
-        if self.sender_for(id).await.is_none() {
-            self.spawn_actor(id).await?;
+        // Fast path: broadcaster already alive.
+        {
+            let broadcasters = self.broadcasters.read().await;
+            if let Some(bcast) = broadcasters.get(id) {
+                return Ok(bcast.subscribe());
+            }
         }
-        let bcast = {
-            self.broadcasters
-                .read()
-                .await
-                .get(id)
-                .cloned()
-                .ok_or_else(|| SessionError::Other("broadcaster missing".into()))?
-        };
+
+        // Slow path: spawn (or re-spawn) the actor atomically.
+        self.spawn_actor(id).await?;
+        let bcast = self
+            .broadcasters
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or_else(|| SessionError::Other("broadcaster missing".into()))?;
         Ok(bcast.subscribe())
     }
 

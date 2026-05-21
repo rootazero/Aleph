@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 
 use tokio_util::sync::CancellationToken;
 
-use super::{AgentHarness, HarnessCallbackExt, InputGuardrailOutcome};
+use super::{AgentHarness, InputGuardrailOutcome};
 use crate::context::budget::LoopDirective;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState};
@@ -212,7 +212,6 @@ impl AgentHarness {
                 GraceReason::Budget,
             )
             .await;
-            callback.on_complete_via_harness();
             return Ok((TurnState::Done, 0, false));
         }
 
@@ -450,7 +449,6 @@ impl AgentHarness {
                     GraceReason::Diminishing,
                 )
                 .await;
-                callback.on_complete_via_harness();
                 self.emit(|| crate::harness::trace::LoopTraceEvent::TurnCompleted {
                     iteration: iterations,
                     outcome: crate::harness::trace::LoopTraceTurnOutcome::Stop,
@@ -506,8 +504,9 @@ impl AgentHarness {
     /// already produced displayable text. Fail-soft on any LLM error —
     /// logs at WARN and returns without persisting.
     ///
-    /// Caller is responsible for setting `hit_limit`, calling
-    /// `callback.on_complete_via_harness()`, and returning `TurnState::Done`.
+    /// Caller is responsible for setting `hit_limit` and returning
+    /// `TurnState::Done`; the loop fires `on_complete()` on `Done`, so the
+    /// grace paths must not call it themselves.
     async fn fire_grace_turn(
         &self,
         session_id: &SessionId,

@@ -378,6 +378,18 @@ impl SkillContent {
 
 impl ValueObject for SkillContent {}
 
+impl From<&str> for SkillContent {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for SkillContent {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SkillManifest (Aggregate Root)
 // ---------------------------------------------------------------------------
@@ -385,7 +397,7 @@ impl ValueObject for SkillContent {}
 /// The primary aggregate root for the skill system.
 ///
 /// A `SkillManifest` represents a fully resolved skill with its identity,
-/// content, eligibility rules, installation instructions, and invocation
+/// content, eligibility, installation instructions, and invocation
 /// policy. It implements `Entity<Id=SkillId>` and `AggregateRoot`.
 #[derive(Debug, Clone)]
 pub struct SkillManifest {
@@ -427,7 +439,7 @@ impl SkillManifest {
         id: impl Into<SkillId>,
         name: impl Into<String>,
         description: impl Into<String>,
-        content: SkillContent,
+        content: impl Into<SkillContent>,
         source: SkillSource,
     ) -> Self {
         Self {
@@ -435,7 +447,7 @@ impl SkillManifest {
             name: name.into(),
             plugin: None,
             description: description.into(),
-            content,
+            content: content.into(),
             scope: PromptScope::default(),
             bound_tool: None,
             eligibility: EligibilitySpec::default(),

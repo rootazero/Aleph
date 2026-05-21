@@ -16,7 +16,6 @@ pub use handle::AlephToolServerHandle;
 use std::collections::HashMap;
 
 use serde_json::Value;
-use tokio::sync::RwLock;
 
 use crate::dispatcher::ToolDefinition;
 use crate::error::Result;
@@ -32,7 +31,11 @@ use repair::{call_with_repair_impl, try_repair_tool_name_impl};
 // =============================================================================
 
 /// The shared, lock-protected tool registry used by both server and handle.
-type ToolMap = Arc<RwLock<HashMap<String, Arc<dyn AlephToolDyn>>>>;
+///
+/// Uses `std::sync::Mutex` so synchronous builder methods (`tool`, `tool_boxed`)
+/// can register tools without blocking the async runtime.  All async ops clone
+/// the `Arc` they need while holding the lock and drop the guard before awaiting.
+type ToolMap = Arc<std::sync::Mutex<HashMap<String, Arc<dyn AlephToolDyn>>>>;
 
 // =============================================================================
 // AlephToolServer
@@ -82,7 +85,7 @@ impl AlephToolServer {
     /// Create a new empty tool server.
     pub fn new() -> Self {
         Self {
-            tools: Arc::new(RwLock::new(HashMap::new())),
+            tools: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -97,11 +100,9 @@ impl AlephToolServer {
     pub fn tool(self, tool: impl AlephToolDyn + 'static) -> Self {
         let name = tool.name().to_string();
         let tool_arc = Arc::new(tool);
-        let tools = self.tools.clone();
-        futures::executor::block_on(async move {
-            let mut guard = tools.write().await;
-            guard.insert(name, tool_arc);
-        });
+        let mut guard = self.tools.lock().unwrap();
+        guard.insert(name, tool_arc);
+        drop(guard);
         self
     }
 
@@ -115,11 +116,9 @@ impl AlephToolServer {
     pub fn tool_boxed(self, tool: Box<dyn AlephToolDyn>) -> Self {
         let name = tool.name().to_string();
         let tool_arc = Arc::from(tool);
-        let tools = self.tools.clone();
-        futures::executor::block_on(async move {
-            let mut guard = tools.write().await;
-            guard.insert(name, tool_arc);
-        });
+        let mut guard = self.tools.lock().unwrap();
+        guard.insert(name, tool_arc);
+        drop(guard);
         self
     }
 
@@ -294,7 +293,7 @@ impl AlephToolServer {
     /// Add a pre-boxed dynamic tool (internal helper).
     async fn add_tool_dyn(&self, tool: Box<dyn AlephToolDyn>) -> Result<()> {
         let name = tool.name().to_string();
-        self.tools.write().await.insert(name, Arc::from(tool));
+        self.tools.lock().unwrap().insert(name, Arc::from(tool));
         Ok(())
     }
 }

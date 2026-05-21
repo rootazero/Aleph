@@ -190,8 +190,11 @@ impl UnifiedMessage {
         let mut parts = Vec::new();
         for msg in messages {
             for block in msg.content_blocks() {
-                if let ContentBlock::Text { text, .. } = block {
-                    parts.push(text.as_str());
+                match block {
+                    ContentBlock::Text { text, .. } => parts.push(text.clone()),
+                    ContentBlock::Json { value } => parts.push(value.to_string()),
+                    ContentBlock::Thinking { thinking, .. } => parts.push(thinking.clone()),
+                    _ => {}
                 }
             }
         }

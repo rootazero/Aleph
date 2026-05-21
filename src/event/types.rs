@@ -385,6 +385,9 @@ pub struct ToolCallResult {
     pub started_at: i64,
     pub completed_at: i64,
     pub token_usage: TokenUsage,
+    /// Plan step ID this tool call corresponds to (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_step_id: Option<String>,
     /// Session ID for sub-agent correlation (optional for backwards compatibility)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -628,6 +631,7 @@ mod tests {
             started_at: 1000,
             completed_at: 2000,
             token_usage: TokenUsage::default(),
+            plan_step_id: Some("step_1".to_string()),
             session_id: None,
         });
 

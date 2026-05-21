@@ -75,7 +75,7 @@ pub fn create_platform_driver_with_config(
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        let _ = (linux_config, _windows_config);
+        let _ = (linux_config, windows_config);
         Arc::new(UnsupportedDriver)
     }
 }

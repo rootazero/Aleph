@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Where a direct-tool invocation originated.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DirectToolSource {
     SlashCommand,
     Skill,
@@ -44,13 +44,20 @@ pub enum DetectionLayer {
     L4Default,
 }
 
+impl DetectionLayer {
+    /// Returns the string representation of the layer.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::L2 => "L2",
+            Self::L3 => "L3",
+            Self::L4Default => "L4Default",
+        }
+    }
+}
+
 impl std::fmt::Display for DetectionLayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::L2 => f.write_str("L2"),
-            Self::L3 => f.write_str("L3"),
-            Self::L4Default => f.write_str("L4Default"),
-        }
+        f.write_str(self.as_str())
     }
 }
 

@@ -6,15 +6,19 @@
 use std::path::PathBuf;
 
 /// Expand ~ to home directory.
-/// Falls back to `/tmp/.aleph/...` when `dirs::home_dir()` returns `None`,
-/// after logging a warning so operators know the path is insecure.
+/// Falls back to `/tmp/.aleph-$uid/...` when `dirs::home_dir()` returns `None`,
+/// to avoid collisions between different users on shared systems.
 pub fn expand_path(path: &str) -> PathBuf {
     if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
             return home.join(stripped);
         }
-        eprintln!("Warning: cannot determine home directory; using /tmp as fallback");
-        return PathBuf::from("/tmp").join(stripped);
+        let uid = unsafe { libc::getuid() };
+        eprintln!(
+            "Warning: cannot determine home directory; using /tmp/.aleph-{} as fallback",
+            uid
+        );
+        return PathBuf::from(format!("/tmp/.aleph-{}", uid)).join(stripped);
     }
     PathBuf::from(path)
 }
@@ -22,17 +26,18 @@ pub fn expand_path(path: &str) -> PathBuf {
 /// Check if a process with given PID is running.
 ///
 /// Uses `kill(pid, 0)` which performs error checking without sending a signal.
-/// Distinguishes between "process does not exist" (ESRCH) and "permission denied"
-/// (EPERM) — both mean the PID is not available to us, but for different reasons.
+/// Returns `true` if the process exists (kill succeeds or EPERM),
+/// `false` if the process does not exist (ESRCH).
 #[cfg(unix)]
 pub fn is_process_running(pid: i32) -> bool {
-    if unsafe { libc::kill(pid, 0) } == 0 {
-        return true;
+    match unsafe { libc::kill(pid, 0) } {
+        0 => true,
+        _ => {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            // EPERM means process exists but we lack permission; ESRCH means it does not exist.
+            errno == libc::EPERM
+        }
     }
-    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-    // ESRCH = process does not exist; EPERM = no permission to signal.
-    // In both cases the PID is effectively not available.
-    errno == libc::ESRCH || errno == libc::EPERM
 }
 
 #[cfg(not(unix))]
@@ -91,12 +96,29 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
 
                 println!("Gateway did not stop gracefully, sending SIGKILL");
                 if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
-                    eprintln!(
-                        "Warning: failed to send SIGKILL to PID {}: {}",
+                    return Err(format!(
+                        "Failed to send SIGKILL to PID {}: {}",
                         pid,
                         std::io::Error::last_os_error()
-                    );
+                    )
+                    .into());
                 }
+
+                // Wait for process to exit after SIGKILL (max 2 seconds)
+                for _ in 0..20 {
+                    if !is_process_running(pid) {
+                        println!("Gateway stopped successfully");
+                        remove_pid_file(pid_file);
+                        return Ok(());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+
+                return Err(format!(
+                    "Gateway process (PID {}) did not exit even after SIGKILL",
+                    pid
+                )
+                .into());
             }
 
             #[cfg(not(unix))]
@@ -178,6 +200,14 @@ pub fn daemonize(
         }
     }
 
+    // Set umask so file permissions are deterministic
+    unsafe { libc::umask(0o022) };
+
+    // Change to root directory to avoid holding references to mount points
+    if unsafe { libc::chdir(b"/\0".as_ptr() as *const libc::c_char) } == -1 {
+        return Err("chdir to / failed".into());
+    }
+
     // Redirect stdout/stderr to log file if specified
     if let Some(log_path) = log_file {
         let log_path = expand_path(&log_path.to_string_lossy());
@@ -194,8 +224,10 @@ pub fn daemonize(
         let fd = log_file.as_raw_fd();
 
         unsafe {
-            libc::dup2(fd, libc::STDOUT_FILENO);
-            libc::dup2(fd, libc::STDERR_FILENO);
+            if libc::dup2(fd, libc::STDOUT_FILENO) == -1 || libc::dup2(fd, libc::STDERR_FILENO) == -1
+            {
+                return Err("dup2 failed".into());
+            }
         }
     } else {
         // Redirect to /dev/null by default
@@ -204,8 +236,11 @@ pub fn daemonize(
         let fd = dev_null.as_raw_fd();
 
         unsafe {
-            libc::dup2(fd, libc::STDOUT_FILENO);
-            libc::dup2(fd, libc::STDERR_FILENO);
+            if libc::dup2(fd, libc::STDOUT_FILENO) == -1
+                || libc::dup2(fd, libc::STDERR_FILENO) == -1
+            {
+                return Err("dup2 failed".into());
+            }
         }
     }
 

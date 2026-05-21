@@ -171,7 +171,12 @@ impl AgentHarness {
             };
             let inner = match exec_result {
                 Ok(r) => r,
-                Err(stalled) => return Err(stalled),
+                Err(stalled) => {
+                    if let Some(budget) = self.deps.turn_budget.as_ref() {
+                        budget.end_turn(&budget_turn_id);
+                    }
+                    return Err(stalled);
+                }
             };
             match inner {
                 Ok(mut output) => {

@@ -120,7 +120,9 @@ fn compress_screenshot(output: &str) -> String {
     let kept = &lines[..total.min(5)];
     let mut result = kept.join("\n");
     if total > 5 {
-        result.push_str(&format!("\n[... {} more lines omitted]", total - 5));
+        let remaining = total - 5;
+        let suffix = if remaining == 1 { "line" } else { "lines" };
+        result.push_str(&format!("\n[... {} more {} omitted]", remaining, suffix));
     }
     result
 }
@@ -144,10 +146,11 @@ fn compress_snapshot(output: &str) -> String {
         let trimmed = line.trim_start().trim_start_matches('-').trim_start();
         let is_interactive = INTERACTIVE_ROLES.iter().any(|role| {
             trimmed.starts_with(role)
-                && trimmed
-                    .as_bytes()
-                    .get(role.len())
-                    .is_some_and(|&b| b == b' ' || b == b'"')
+                && (trimmed.len() == role.len()
+                    || trimmed
+                        .as_bytes()
+                        .get(role.len())
+                        .is_some_and(|&b| b == b' ' || b == b'"'))
         });
         if is_interactive {
             kept.push(line);
@@ -160,10 +163,12 @@ fn compress_snapshot(output: &str) -> String {
         let summary_lines = lines.len().min(20);
         let mut result = lines[..summary_lines].join("\n");
         if lines.len() > summary_lines {
+            let line_word = if lines.len() - summary_lines == 1 { "line" } else { "lines" };
             result.push_str(&format!(
-                "\n[Snapshot compressed: no interactive elements; kept first {} of {} lines]",
+                "\n[Snapshot compressed: no interactive elements; kept first {} of {} {}]",
                 summary_lines,
-                lines.len()
+                lines.len(),
+                line_word
             ));
         }
         return result;
@@ -504,7 +509,7 @@ mod tests {
             .collect();
         assert_eq!(input.len(), 11_002);
 
-        let result = compress_tool_output("some_unknown_tool", &input);
+        let result = compress_tool_output("click", &input);
 
         assert!(result.is_char_boundary(result.len()));
     }

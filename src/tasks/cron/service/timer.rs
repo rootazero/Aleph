@@ -20,6 +20,19 @@ use crate::tasks::shared::clock::Clock;
 pub type JobExecutorFn =
     Arc<dyn Fn(JobSnapshot) -> Pin<Box<dyn Future<Output = ExecutionResult> + Send>> + Send + Sync>;
 
+/// RAII guard that clears the `is_running` flag on drop.
+///
+/// Ensures the re-entrancy guard is released even if `on_timer_tick` panics.
+struct RunningGuard<'a, C: Clock> {
+    state: &'a Arc<ServiceState<C>>,
+}
+
+impl<'a, C: Clock> Drop for RunningGuard<'a, C> {
+    fn drop(&mut self) {
+        self.state.set_running(false);
+    }
+}
+
 /// Run the timer loop until shutdown is requested.
 ///
 /// Each iteration:
@@ -47,12 +60,13 @@ pub async fn run_timer_loop<C: Clock>(state: Arc<ServiceState<C>>, executor: Job
         }
 
         state.set_running(true);
+        let _guard = RunningGuard { state: &state };
 
         if let Err(e) = on_timer_tick(&state, &executor).await {
             error!(error = %e, "cron timer tick failed");
         }
 
-        state.set_running(false);
+        // _guard drops here, clearing is_running even if on_timer_tick panicked.
     }
 }
 
@@ -197,6 +211,7 @@ mod tests {
                     error_reason: None,
                     delivery_status: None,
                     agent_used_messaging_tool: false,
+                    trigger_source: snapshot.trigger_source.clone(),
                 }
             })
         })

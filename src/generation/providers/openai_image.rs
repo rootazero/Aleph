@@ -217,7 +217,7 @@ impl OpenAiImageProvider {
                 GenerationError::authentication("Invalid API key or unauthorized", "openai-image")
             }
             429 => {
-                // Try to extract retry-after from response
+                // Note: retry-after could be extracted from response headers if available
                 GenerationError::rate_limit("Rate limit exceeded", None)
             }
             400 => GenerationError::invalid_parameters(body.to_string(), None),

@@ -164,7 +164,7 @@ impl JsonRpcResponse {
 
     /// Check if this is a successful response
     pub fn is_success(&self) -> bool {
-        self.error.is_none() && self.result.is_some()
+        self.error.is_none()
     }
 
     /// Check if this is an error response

@@ -320,7 +320,7 @@ impl ServerHealth {
         self.maybe_reset_window(window_seconds);
 
         match self.status {
-            HealthStatus::Unhealthy => {
+            HealthStatus::Unhealthy | HealthStatus::Degraded { .. } => {
                 if self.restart_window_start.is_some() {
                     // Within window, check count
                     self.restart_count < max_restarts
@@ -330,7 +330,7 @@ impl ServerHealth {
                 }
             }
             HealthStatus::Dead | HealthStatus::Stopped | HealthStatus::Restarting { .. } => false,
-            _ => false,
+            HealthStatus::Healthy => false,
         }
     }
 

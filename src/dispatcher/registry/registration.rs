@@ -371,13 +371,18 @@ impl ToolRegistrar {
                 .map(|s| truncate_description(s, 100))
                 .unwrap_or_else(|| format!("Custom command /{}", command_name));
 
-            let tool = UnifiedTool::new(
+            let mut tool = UnifiedTool::new(
                 &id,
                 &command_name,
                 description,
                 ToolSource::Custom { rule_index: index },
             )
-            .with_display_name(format!("/{}", command_name));
+            .with_display_name(format!("/{}", command_name))
+            .with_routing_regex(rule.regex.clone());
+
+            if let Some(ref prompt) = rule.system_prompt {
+                tool = tool.with_routing_system_prompt(prompt.clone());
+            }
 
             tools.insert(id, tool);
             count += 1;

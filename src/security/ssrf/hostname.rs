@@ -60,7 +60,10 @@ pub(crate) fn is_legacy_ip_literal(hostname: &str) -> bool {
     let lower = hostname.to_lowercase();
 
     // Hex IP: starts with 0x and rest is hex digits
-    if lower.starts_with("0x") && lower[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+    if lower.starts_with("0x")
+        && lower.len() > 2
+        && lower[2..].chars().all(|c| c.is_ascii_hexdigit())
+    {
         return true;
     }
 
@@ -191,6 +194,12 @@ mod tests {
     fn detects_hex_ip() {
         assert!(is_legacy_ip_literal("0x7f000001"));
         assert!(is_legacy_ip_literal("0xC0A80101"));
+    }
+
+    #[test]
+    fn rejects_empty_hex_prefix() {
+        assert!(!is_legacy_ip_literal("0x"));
+        assert!(!is_legacy_ip_literal("0X"));
     }
 
     #[test]

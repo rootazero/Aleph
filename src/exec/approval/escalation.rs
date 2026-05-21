@@ -13,13 +13,18 @@ fn resolve_path_with_symlinks(path: &Path) -> PathBuf {
         return canonical;
     }
 
-    // Partial resolution: canonicalize parent directory + append filename
-    if let Some(parent) = path.parent() {
+    // Partial resolution: try to canonicalize the deepest existing ancestor
+    // and resolve any symlinks in the prefix, then append the remaining suffix.
+    // This prevents symlink bypasses like /tmp/safe_link -> /etc combined with
+    // non-existent subpaths.
+    let mut current = path.to_path_buf();
+    while let Some(parent) = current.parent() {
         if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
-            if let Some(filename) = path.file_name() {
-                return canonical_parent.join(filename);
+            if let Ok(suffix) = path.strip_prefix(parent) {
+                return canonical_parent.join(suffix);
             }
         }
+        current = parent.to_path_buf();
     }
 
     // Fallback: lexical normalization (handles ".." without filesystem access)

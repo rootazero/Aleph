@@ -63,7 +63,10 @@ impl ExtensionChangeType {
             Self::Command
         } else if path_str.contains("/agents/") {
             Self::Agent
-        } else if path_str.contains("plugin.json") {
+        } else if path_str.contains("plugin.json")
+            || path_str.contains("plugin.toml")
+            || path_str.contains("aleph.plugin.toml")
+        {
             Self::Plugin
         } else {
             Self::Unknown

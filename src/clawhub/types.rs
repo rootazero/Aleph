@@ -106,6 +106,8 @@ pub struct VersionInfo {
     pub number: String,
     #[serde(default)]
     pub changelog: String,
+    #[serde(default)]
+    pub license: String,
     /// Timestamp — may be RFC 3339 string or Unix ms number.
     /// Stored as string for display; converted from number if needed.
     #[serde(default)]
@@ -143,6 +145,7 @@ impl From<RawVersionItem> for VersionInfo {
         Self {
             number: item.version,
             changelog: item.changelog.unwrap_or_default(),
+            license: String::new(),
             published_at,
             files: Vec::new(),
         }
@@ -326,6 +329,7 @@ impl From<DetailApiResponse> for SkillDetail {
             VersionInfo {
                 number: v.version,
                 changelog: v.changelog.unwrap_or_default(),
+                license: v.license.unwrap_or_default(),
                 published_at,
                 files: Vec::new(),
             }

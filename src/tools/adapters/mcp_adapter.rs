@@ -95,10 +95,15 @@ impl<T: McpTransportTrait + 'static> LoopTool for McpToolAdapter<T> {
                     output: Value::String(wrapped),
                 }
             }
-            Err(e) => ToolResult::Error {
-                error: e.to_string(),
-                retryable: true,
-            },
+            Err(e) => {
+                let retryable = e
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<std::io::Error>().is_some());
+                ToolResult::Error {
+                    error: e.to_string(),
+                    retryable,
+                }
+            }
         }
     }
 }
@@ -131,7 +136,11 @@ mod tests {
     impl McpTransportTrait for FakeTransport {
         async fn call_tool(&self, server: &str, tool: &str, args: Value) -> anyhow::Result<Value> {
             if self.should_fail {
-                anyhow::bail!("transport error: server={server} tool={tool}");
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("transport error: server={server} tool={tool}"),
+                )
+                .into());
             }
             // Echo back with metadata so tests can verify routing.
             Ok(json!({

@@ -256,7 +256,7 @@ impl CompressionService {
             .store()
             .list_notes(workspace_id)
             .await
-            .unwrap_or_default();
+            .map_err(|e| AlephError::other(format!("Failed to list existing notes: {e}")))?;
         let mut existing_note_summaries: Vec<String> = Vec::new();
         for note_idx in &existing_notes {
             let note_file = indexer

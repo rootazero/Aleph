@@ -151,7 +151,7 @@ impl ExecApprovalsStorage {
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = fs::Permissions::from_mode(0o600);
-            let _ = fs::set_permissions(&self.path, perms);
+            fs::set_permissions(&self.path, perms)?;
         }
 
         Ok(compute_hash(&json))

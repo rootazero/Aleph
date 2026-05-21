@@ -223,11 +223,6 @@ impl OpenAiTtsProvider {
         }
     }
 
-    /// Validate a voice name
-    fn validate_voice(voice: &str) -> bool {
-        AVAILABLE_VOICES.contains(&voice)
-    }
-
     /// Get the content type for a given format
     fn content_type_for_format(format: Option<&str>) -> &'static str {
         match format {
@@ -299,7 +294,7 @@ impl GenerationProvider for OpenAiTtsProvider {
             // Warn (but allow) unknown voices — third-party proxies and newer
             // models may support different voice names
             if let Some(ref voice) = request.params.voice {
-                if !Self::validate_voice(voice) {
+                if !AVAILABLE_VOICES.contains(&voice.as_str()) {
                     warn!(
                         voice = %voice,
                         known = ?AVAILABLE_VOICES,

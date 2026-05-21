@@ -220,19 +220,19 @@ mod tests {
 
     #[test]
     fn test_validate_voice_valid() {
-        assert!(OpenAiTtsProvider::validate_voice("alloy"));
-        assert!(OpenAiTtsProvider::validate_voice("echo"));
-        assert!(OpenAiTtsProvider::validate_voice("fable"));
-        assert!(OpenAiTtsProvider::validate_voice("onyx"));
-        assert!(OpenAiTtsProvider::validate_voice("nova"));
-        assert!(OpenAiTtsProvider::validate_voice("shimmer"));
+        assert!(AVAILABLE_VOICES.contains(&"alloy"));
+        assert!(AVAILABLE_VOICES.contains(&"echo"));
+        assert!(AVAILABLE_VOICES.contains(&"fable"));
+        assert!(AVAILABLE_VOICES.contains(&"onyx"));
+        assert!(AVAILABLE_VOICES.contains(&"nova"));
+        assert!(AVAILABLE_VOICES.contains(&"shimmer"));
     }
 
     #[test]
     fn test_validate_voice_invalid() {
-        assert!(!OpenAiTtsProvider::validate_voice("invalid"));
-        assert!(!OpenAiTtsProvider::validate_voice(""));
-        assert!(!OpenAiTtsProvider::validate_voice("ALLOY")); // Case sensitive
+        assert!(!AVAILABLE_VOICES.contains(&"invalid"));
+        assert!(!AVAILABLE_VOICES.contains(&""));
+        assert!(!AVAILABLE_VOICES.contains(&"ALLOY")); // Case sensitive
     }
 
     // === Content type tests ===

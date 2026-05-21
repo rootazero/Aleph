@@ -60,9 +60,9 @@ pub(super) async fn call_with_repair_impl(
     let lower_name = name.to_lowercase();
     let snake_name = to_snake_case(name);
 
-    // Single read lock for all lookup attempts — consistent snapshot, no TOCTOU gap
+    // Single lock for all lookup attempts — consistent snapshot, no TOCTOU gap
     let (tool, repair_info) = {
-        let tools = tools_map.read().await;
+        let tools = tools_map.lock().unwrap();
 
         if let Some(t) = tools.get(name).map(Arc::clone) {
             // 1. Exact match
@@ -130,7 +130,7 @@ pub(super) async fn call_with_repair_impl(
 
     // 4. Route to "invalid" tool if available
     let invalid = {
-        let tools = tools_map.read().await;
+        let tools = tools_map.lock().unwrap();
         tools.get("invalid").map(Arc::clone)
     };
     if let Some(invalid_tool) = invalid {
@@ -165,7 +165,7 @@ pub(super) async fn call_with_repair_impl(
 ///
 /// Returns the repaired name if a match is found, None otherwise.
 pub(super) async fn try_repair_tool_name_impl(tools_map: &ToolMap, name: &str) -> Option<String> {
-    let tools = tools_map.read().await;
+    let tools = tools_map.lock().unwrap();
 
     // Exact match
     if tools.contains_key(name) {

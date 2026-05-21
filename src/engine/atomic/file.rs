@@ -181,16 +181,18 @@ impl FileOps for FileOpsHandler {
                 }
             }
             WriteMode::Append => {
-                if resolved_path.exists() {
-                    let existing = tokio::fs::read_to_string(&resolved_path).await?;
-                    let new_content = format!("{}{}", existing, content);
-                    tokio::fs::write(&resolved_path, new_content).await?;
-                    return Ok(AtomicResult {
-                        success: true,
-                        output: format!("Appended to {}", resolved_path.display()),
-                        error: None,
-                    });
-                }
+                use tokio::fs::OpenOptions;
+                let mut file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&resolved_path)
+                    .await?;
+                tokio::io::AsyncWriteExt::write_all(&mut file, content.as_bytes()).await?;
+                return Ok(AtomicResult {
+                    success: true,
+                    output: format!("Appended to {}", resolved_path.display()),
+                    error: None,
+                });
             }
             WriteMode::Overwrite => {
                 // Default behavior

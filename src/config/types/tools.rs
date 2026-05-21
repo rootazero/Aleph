@@ -185,7 +185,7 @@ pub struct McpExternalServerConfig {
 
     /// Environment variables
     #[serde(default)]
-    pub env: std::collections::HashMap<String, String>,
+    pub env: HashMap<String, String>,
 
     /// Working directory
     #[serde(default)]

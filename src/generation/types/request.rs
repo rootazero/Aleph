@@ -97,4 +97,9 @@ impl GenerationRequest {
     pub fn speech<S: Into<String>>(text: S) -> Self {
         Self::new(GenerationType::Speech, text)
     }
+
+    /// Create a transcription request
+    pub fn transcription<S: Into<String>>(audio_path: S) -> Self {
+        Self::new(GenerationType::Transcription, audio_path)
+    }
 }

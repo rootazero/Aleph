@@ -5,7 +5,7 @@
 //! 2. `attachment.path` (local path) → use directly (no copy)
 //! 3. `attachment.url` (remote) → HTTP GET download (30s timeout)
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -84,7 +84,9 @@ impl MediaCache {
                 return Err(CacheError::TooLarge { size });
             }
             let dir = ensure_session_dir(session_id)?;
-            let filename = attachment.filename.as_deref().unwrap_or(&attachment.id);
+            let filename = sanitize_filename(
+                attachment.filename.as_deref().unwrap_or(&attachment.id),
+            );
             let path = dir.join(filename);
             std::fs::write(&path, data)?;
             debug!(path = %path.display(), "cached inline attachment");
@@ -97,7 +99,7 @@ impl MediaCache {
 
         // Priority 2: local path — use directly
         if let Some(ref p) = attachment.path {
-            let path = PathBuf::from(p);
+            let path = expand_tilde(p);
             let meta = std::fs::metadata(&path)?;
             let size = meta.len();
             if size > MAX_FILE_SIZE {
@@ -135,7 +137,9 @@ impl MediaCache {
                 return Err(CacheError::TooLarge { size });
             }
 
-            let filename = attachment.filename.as_deref().unwrap_or(&attachment.id);
+            let filename = sanitize_filename(
+                attachment.filename.as_deref().unwrap_or(&attachment.id),
+            );
             let path = dir.join(filename);
             std::fs::write(&path, &bytes)?;
             debug!(path = %path.display(), size, "downloaded attachment from URL");
@@ -373,6 +377,27 @@ fn ensure_session_dir(session_id: &str) -> Result<PathBuf, std::io::Error> {
         let _ = std::fs::write(&marker, "");
     }
     Ok(dir)
+}
+
+/// Strip directory components from a filename to prevent path traversal.
+///
+/// `foo/bar.txt` → `bar.txt`; `../../../etc/passwd` → `passwd`; `..` → `unnamed`.
+fn sanitize_filename(name: &str) -> String {
+    Path::new(name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unnamed")
+        .to_string()
+}
+
+/// Expand a leading `~/` into the user's home directory.
+fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
 }
 
 // =============================================================================
