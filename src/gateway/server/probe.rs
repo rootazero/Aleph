@@ -55,16 +55,16 @@ pub async fn handle_ready(State(state): State<Arc<GatewaySharedState>>) -> impl 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::config::AuthMode;
     use crate::gateway::event_bus::GatewayEventBus;
     use crate::gateway::event_scope::EventScopeGuard;
+    use crate::gateway::handlers::events::SubscriptionManager;
     use crate::gateway::handlers::HandlerRegistry;
     use crate::gateway::idempotency::IdempotencyGuard;
     use crate::gateway::lane::{LaneConfig, LaneManager};
     use crate::gateway::presence::PresenceTracker;
     use crate::gateway::rate_limiter::{RateLimitConfig, RateLimiter};
     use crate::gateway::state_version::StateVersionTracker;
-    use crate::gateway::config::AuthMode;
-    use crate::gateway::handlers::events::SubscriptionManager;
     use std::collections::HashMap;
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
