@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Extension hooks — production wiring closure (hermes-inspired)**: the
+  `HookExecutor` snapshot that the gateway request loop already builds was
+  being dropped on the floor (`let _hook_executor = ext_manager.hook_executor_snapshot()…`
+  in `gateway::execution_engine::run_loop`). Combined with the fact that
+  `build_request_tool_service` never accepted a hook executor, this meant
+  `BeforeToolCall` / `AfterToolCall` / `AfterToolCallFailure` were registered
+  end-to-end but never fired for a single production tool call. The snapshot is
+  now plumbed through `build_request_tool_service` → `ScopedToolService::with_hook_executor`
+  for both the main agent dispatch and the subagent parent-view path, with the
+  current `SessionKey` flowing into `HookContext::session_id`. `BeforeToolCall`
+  fires as an interceptor (block / deny / ask / update_input); `AfterToolCall`
+  and `AfterToolCallFailure` fire as observers + interceptors with
+  `update_output:` honoured. The legacy in-process `ToolHookDecorator` seam is
+  preserved unchanged. 6 integration tests in `src/tools/scoped.rs` cover block,
+  deny, update_input rewrite, success-observer side-effect, failure-observer
+  side-effect, and the no-hooks regression guard.
+
 ### Added
 - **REPL agent control panel** — six new TUI slash commands, hermes-agent-inspired, wired by connecting existing backend RPCs (zero new harness logic, R10). `/usage` shows session token totals plus a per-provider USD cost estimate; `/compress` triggers `session.compact` and reports before/after counts; `/stop` aborts the active run via `chat.abort`; `/undo` drops the last user+assistant turn; `/retry` undoes then re-submits the previous user message; `/tools off|new|all|verbose` switches the client-side tool-progress display filter. Aliases `/compact`→`/compress` and `/abort`→`/stop`. The status bar gains a `T:` tool-progress glyph. Provider pricing is a hardcoded 8-entry table (`interfaces/tui/src/tui/cost.rs`); unknown providers render `n/a` rather than a fabricated cost. Spec: [`2026-05-21-repl-agent-control-panel-design.md`](docs/superpowers/specs/2026-05-21-repl-agent-control-panel-design.md).
 - **`SessionStore::truncate_messages` + `session.truncate` RPC** — new trait method that drops the tail of a session transcript, keeping only the first N messages (`keep_count=0` clears all, `keep_count>=total` is a no-op). SQLite (`SessionManager`) and file backends implement it; the default trait impl returns `Unsupported` so legacy/test stores need no change. The SQLite path deletes by `(timestamp, id)` threshold, syncs the FTS index, and keeps `sessions.message_count` consistent. RPC `session.truncate` sits in the Mutate gateway lane and powers the TUI `/undo` command. 6 boundary-case integration tests in `tests/session_truncate_messages.rs`.
@@ -20,11 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **aleph-server CORS origin parsing** — the WebChat static-file server's `tower-http` `AllowOrigin::predicate` callback receives the raw `Origin` header value (`&HeaderValue`), not a parsed URI; the existing `.host()` / `.scheme_str()` calls on it did not compile (`E0599`), breaking the `aleph-server` binary build. The header is now parsed into an `axum::http::Uri` before scheme/host inspection.
 - **Fail-closed on `RuntimeSecurityGuard` internal error** — `PiiSecretsGuardrail::map_outbound`'s catch-all `Err(_)` arm previously fell through to `GuardrailDecision::Allow` (fail-OPEN on a security guardrail). Now returns `GuardrailDecision::Block { class: ErrorClass::Unexpected }` with `tracing::error!`. Operational issues like PII engine unavailable or lock poison can no longer silently weaken security.
+- **TUI agent-trace events leaked debug decoration into chat content** — when a run streamed structured `AgentTrace` events, the TUI populated the user-facing assistant message via `present_agent_trace_event` (the protocol's *debug* presentation, `TuiDebug` preset). A `TextEmitted::Final` event therefore rendered in the chat body as `[Final text] iter 1: <model output>`, and `ToolSummary` rendered in the reasoning fold as `Tool summary: <summary>` — trace-panel labels, not primary-transcript text. `AppState::append_trace_debug_entry` now feeds the raw `text` / `summary` fields verbatim for `TextEmitted` and `ToolSummary`; turn/state/session lifecycle events still use the decorated presentation (they carry structured data, not authored prose). Regression introduced by the `cf2f8e236` trace-consumer rebuild.
 
 ### Removed
 - Dead `let _ = RuntimeSecurityGuard::default_guard();` boot no-op in `src/security/mod.rs`. The function is still used by `PiiSecretsGuardrail::with_resolver` and is unit-tested.
 - 4 vestigial "OpenClaw tool-policy" TODO markers in `src/executor/builtin_registry/{registry.rs, builder/constructor.rs}` (replaced with doc-comment pointers to SANDBOX.md and SECURITY.md describing the actual layered enforcement: `GuardrailRegistry` + `WorkspaceSandbox` + `ApprovalGate`).
 - Old `PiiSecretsGuardrail::from_globals()` constructor (replaced by `with_guard_and_resolver` at the single production call site).
+- 5 redundant `format_params_*` unit tests in `interfaces/tui` that re-tested the pure protocol function `aleph_protocol::summarize_tool_input` in isolation — fully covered by `shared/protocol`'s own `summarize_*` tests, and silently failing for ~6 weeks after the `cf2f8e236` protocol rebuild changed the function's output semantics without updating the cross-crate consumer tests. The TUI's actual use of the function stays covered by the `handle_agent_trace_*` / `handle_tool_lifecycle` integration tests.
 
 ### Added (continued)
 - **OpenAI protocol — response_format wiring**: `ProviderConfig` now exposes

@@ -32,18 +32,19 @@ pub async fn serve_webchat(
 
     let allowed_origins = tower_http::cors::AllowOrigin::predicate(|origin, _| {
         // `origin` is the raw `Origin` header value, not a parsed URI — parse it
-        // before inspecting scheme/host.
+        // before inspecting scheme/host. A bare prefix match would otherwise
+        // accept hostile origins like `http://127.evil.com`.
         let Ok(origin_str) = origin.to_str() else {
             return false;
         };
         let Ok(uri) = origin_str.parse::<axum::http::Uri>() else {
             return false;
         };
-        let host = uri.host().unwrap_or("");
         let scheme = uri.scheme_str().unwrap_or("");
         if scheme != "http" && scheme != "https" {
             return false;
         }
+        let host = uri.host().unwrap_or("");
         matches!(host, "127.0.0.1" | "localhost" | "[::1]")
             || host.starts_with("127.0.0.")
     });

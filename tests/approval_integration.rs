@@ -21,6 +21,8 @@ fn create_test_capabilities(path: &str) -> SandboxCapabilities {
         fs_write: vec![PathBuf::from(path)],
         network: NetworkPolicy::None,
         spawn_subprocess: false,
+        max_memory_mb: None,
+        timeout_secs: None,
     }
 }
 

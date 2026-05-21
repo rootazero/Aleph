@@ -161,6 +161,8 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
     })
 }
 
