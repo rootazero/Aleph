@@ -42,11 +42,15 @@ impl ProtocolAdapter for OpenAiProtocol {
             .unwrap_or_else(|| config.default_model())
             .to_string();
 
-        // Build request body — always streaming (stream-first architecture)
+        // Build request body — always streaming (stream-first architecture).
+        // `stream_options.include_usage` makes OpenAI emit a trailing chunk
+        // carrying token counts; without it the Chat Completions stream omits
+        // usage entirely, leaving cost metering and context budgeting blind.
         let mut body = json!({
             "model": model_name,
             "messages": messages,
             "stream": true,
+            "stream_options": { "include_usage": true },
         });
 
         // Add optional parameters (per-request overrides provider config)
@@ -252,6 +256,14 @@ impl ProtocolAdapter for OpenAiProtocol {
             index_tracker: crate::providers::delta::IndexIdTracker,
             /// Pending deltas queued from multi-delta events (e.g. finish_reason chunk)
             pending: VecDeque<Result<ProviderDelta>>,
+            /// A terminal `Done` delta held back until the trailing
+            /// `stream_options.include_usage` usage chunk arrives. OpenAI sends
+            /// `finish_reason` and the usage chunk as *separate* chunks in that
+            /// order; emitting `Done` immediately would end the stream before
+            /// the usage chunk is read. Released on the usage chunk, the
+            /// `[DONE]` sentinel, or HTTP stream end — always kept last so the
+            /// `Done`-is-final contract holds for every consumer.
+            deferred_done: Option<Result<ProviderDelta>>,
             /// Set to true after a terminal event to stop the stream
             done: bool,
         }
@@ -261,6 +273,7 @@ impl ProtocolAdapter for OpenAiProtocol {
             line_buf: Vec::new(),
             index_tracker: crate::providers::delta::IndexIdTracker::new(),
             pending: VecDeque::new(),
+            deferred_done: None,
             done: false,
         };
 
@@ -290,18 +303,25 @@ impl ProtocolAdapter for OpenAiProtocol {
                         .strip_prefix("data: ")
                         .or_else(|| line.strip_prefix("data:"))
                     {
-                        if data != "[DONE]" {
+                        if data == "[DONE]" {
+                            // Terminal sentinel — release any deferred Done and stop.
+                            if let Some(done) = state.deferred_done.take() {
+                                state.pending.push_back(done);
+                            }
+                            state.done = true;
+                        } else {
                             parse_chat_sse_event(
                                 data,
                                 &mut state.index_tracker,
                                 &mut state.pending,
                             );
-                            // If a Done was queued, stop after draining pending
-                            if state
-                                .pending
-                                .iter()
-                                .any(|d| matches!(d, Ok(ProviderDelta::Done(_))))
-                            {
+                            // Hold the terminal Done back until the trailing
+                            // include_usage chunk lands, so the token count is
+                            // not lost (see `defer_done_until_usage`).
+                            if super::sse::defer_done_until_usage(
+                                &mut state.pending,
+                                &mut state.deferred_done,
+                            ) {
                                 state.done = true;
                             }
                         }
@@ -330,6 +350,11 @@ impl ProtocolAdapter for OpenAiProtocol {
                                     );
                                 }
                             }
+                        }
+                        // Release a deferred Done that never received a
+                        // trailing usage chunk or `[DONE]` sentinel.
+                        if let Some(done) = state.deferred_done.take() {
+                            state.pending.push_back(done);
                         }
                         state.done = true;
                         if let Some(delta) = state.pending.pop_front() {

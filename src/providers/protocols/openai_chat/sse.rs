@@ -32,6 +32,44 @@ pub(crate) fn parse_chat_sse_event(
         }
     };
 
+    // ── Usage ───────────────────────────────────────────────────────────
+    // Parsed before the `choices` lookup. With `stream_options.include_usage`
+    // set, OpenAI delivers token counts in a dedicated trailing chunk whose
+    // `choices` array is empty (`{"choices":[],"usage":{...}}`); bailing on an
+    // empty `choices` would silently drop that count. Intermediate chunks
+    // carry `"usage": null` — `as_object()` filters those out so no spurious
+    // zero-token Usage delta is emitted.
+    if let Some(usage) = v.get("usage").and_then(|u| u.as_object()) {
+        let input = usage
+            .get("prompt_tokens")
+            .and_then(|t| t.as_u64())
+            .and_then(|t| t.try_into().ok())
+            .unwrap_or(0);
+        let output = usage
+            .get("completion_tokens")
+            .and_then(|t| t.as_u64())
+            .and_then(|t| t.try_into().ok())
+            .unwrap_or(0);
+        let cache_read_tokens = usage
+            .get("prompt_tokens_details")
+            .and_then(|d| d.get("cached_tokens"))
+            .and_then(|t| t.as_u64())
+            .and_then(|t| t.try_into().ok());
+        let thinking_tokens = usage
+            .get("completion_tokens_details")
+            .and_then(|d| d.get("reasoning_tokens"))
+            .and_then(|t| t.as_u64())
+            .and_then(|t| t.try_into().ok());
+        out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens,
+            cache_creation_tokens: None, // OpenAI Chat does not surface cache-write
+            thinking_tokens,
+            cost: None,
+        })));
+    }
+
     let choice = match v.get("choices").and_then(|c| c.get(0)) {
         Some(c) => c,
         None => return,
@@ -103,38 +141,6 @@ pub(crate) fn parse_chat_sse_event(
         }
     }
 
-    // ── Usage (usually in final chunk alongside finish_reason) ──────────
-    if let Some(usage) = v.get("usage") {
-        let input = usage
-            .get("prompt_tokens")
-            .and_then(|t| t.as_u64())
-            .and_then(|t| t.try_into().ok())
-            .unwrap_or(0);
-        let output = usage
-            .get("completion_tokens")
-            .and_then(|t| t.as_u64())
-            .and_then(|t| t.try_into().ok())
-            .unwrap_or(0);
-        let cache_read_tokens = usage
-            .get("prompt_tokens_details")
-            .and_then(|d| d.get("cached_tokens"))
-            .and_then(|t| t.as_u64())
-            .and_then(|t| t.try_into().ok());
-        let thinking_tokens = usage
-            .get("completion_tokens_details")
-            .and_then(|d| d.get("reasoning_tokens"))
-            .and_then(|t| t.as_u64())
-            .and_then(|t| t.try_into().ok());
-        out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
-            input_tokens: input,
-            output_tokens: output,
-            cache_read_tokens,
-            cache_creation_tokens: None, // OpenAI Chat does not surface cache-write
-            thinking_tokens,
-            cost: None,
-        })));
-    }
-
     // ── Finish reason — emit ToolCallEnd for all tracked tools, then Done ──
     let finish_reason = choice.get("finish_reason").and_then(|r| r.as_str());
 
@@ -168,4 +174,39 @@ pub(crate) fn parse_chat_sse_event(
             out.push_back(Ok(ProviderDelta::Done(stop)));
         }
     }
+}
+
+/// Hold the terminal `Done` delta back until the trailing usage chunk lands.
+///
+/// OpenAI emits `finish_reason` and the `stream_options.include_usage` usage
+/// payload as *separate* SSE chunks, in that order. Emitting `Done`
+/// immediately would terminate the stream before the usage chunk is read,
+/// permanently losing the token count.
+///
+/// `pending` is the freshly-parsed event queue (a parsed event pushes its
+/// terminal `Done` last, if any). This function moves that `Done` into
+/// `deferred_done`; once a `Usage` delta is also present it re-appends `Done`
+/// as the final element — preserving the "`Done` is the last event" contract
+/// for every consumer regardless of buffering behaviour.
+///
+/// Returns `true` when usage and the deferred `Done` are both in hand and the
+/// stream should terminate.
+pub(crate) fn defer_done_until_usage(
+    pending: &mut VecDeque<Result<ProviderDelta>>,
+    deferred_done: &mut Option<Result<ProviderDelta>>,
+) -> bool {
+    if matches!(pending.back(), Some(Ok(ProviderDelta::Done(_)))) {
+        *deferred_done = pending.pop_back();
+    }
+    if deferred_done.is_some()
+        && pending
+            .iter()
+            .any(|d| matches!(d, Ok(ProviderDelta::Usage(_))))
+    {
+        if let Some(done) = deferred_done.take() {
+            pending.push_back(done);
+        }
+        return true;
+    }
+    false
 }

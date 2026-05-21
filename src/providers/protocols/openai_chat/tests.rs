@@ -8,7 +8,7 @@ use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::openai::{ChatCompletionResponse, OpenAiFunctionCall, OpenAiTool, OpenAiFunction, OpenAiToolCall};
 
-use crate::providers::protocols::openai_chat::sse::parse_chat_sse_event;
+use crate::providers::protocols::openai_chat::sse::{defer_done_until_usage, parse_chat_sse_event};
 
 #[test]
 fn openai_chat_usage_deserializes_cache_and_reasoning_tokens() {
@@ -1271,4 +1271,134 @@ fn build_request_defaults_stream_idle_timeout_to_60() {
             .load(std::sync::atomic::Ordering::Relaxed),
         60,
     );
+}
+
+// ─── Streaming usage capture (stream_options.include_usage) ───────────────
+
+#[test]
+fn build_request_enables_stream_options_include_usage() {
+    // Without `stream_options.include_usage` OpenAI omits token counts from
+    // the stream entirely, blinding cost metering and context budgeting.
+    let protocol = OpenAiProtocol::new(Client::new());
+    let msgs = [UnifiedMessage::user("Hello")];
+    let payload = RequestPayload::new(&msgs);
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.api_key = Some("test-key".to_string());
+
+    let request = protocol.build_request(&payload, &config).unwrap();
+    let built = request.build().unwrap();
+    let body_bytes = built.body().unwrap().as_bytes().unwrap();
+    let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["stream_options"]["include_usage"], true);
+}
+
+#[test]
+fn parse_sse_usage_from_choices_empty_chunk() {
+    // OpenAI delivers token counts in a trailing chunk whose `choices` array
+    // is empty — the parser must still surface the Usage delta rather than
+    // bailing out on the empty `choices`.
+    let data = r#"{"id":"chatcmpl-x","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":34,"total_tokens":154}}"#;
+    let mut tracker = IndexIdTracker::new();
+    let mut out: VecDeque<crate::providers::Result<ProviderDelta>> = Default::default();
+    parse_chat_sse_event(data, &mut tracker, &mut out);
+
+    let usage = out
+        .iter()
+        .find_map(|r| match r {
+            Ok(ProviderDelta::Usage(u)) => Some(u),
+            _ => None,
+        })
+        .expect("usage must be parsed even when choices is empty");
+    assert_eq!(usage.input_tokens, 120);
+    assert_eq!(usage.output_tokens, 34);
+}
+
+#[test]
+fn parse_sse_null_usage_emits_no_delta() {
+    // Intermediate chunks carry `"usage": null` when include_usage is set;
+    // these must not produce a spurious zero-token Usage delta.
+    let data = r#"{"choices":[{"delta":{"content":"hi"},"index":0}],"usage":null}"#;
+    let mut tracker = IndexIdTracker::new();
+    let mut out: VecDeque<crate::providers::Result<ProviderDelta>> = Default::default();
+    parse_chat_sse_event(data, &mut tracker, &mut out);
+
+    assert!(
+        !out.iter().any(|r| matches!(r, Ok(ProviderDelta::Usage(_)))),
+        "null usage must not emit a Usage delta"
+    );
+    assert!(
+        out.iter()
+            .any(|r| matches!(r, Ok(ProviderDelta::TextDelta(_)))),
+        "the text delta is still emitted"
+    );
+}
+
+#[test]
+fn defer_done_releases_done_after_separate_usage_chunk() {
+    // OpenAI sends `finish_reason` and the include_usage chunk separately, in
+    // that order. The terminal Done must be held back until usage lands.
+    let mut pending: VecDeque<crate::providers::Result<ProviderDelta>> = Default::default();
+    pending.push_back(Ok(ProviderDelta::Done(StopReason::EndTurn)));
+    let mut deferred: Option<crate::providers::Result<ProviderDelta>> = None;
+
+    let terminate = defer_done_until_usage(&mut pending, &mut deferred);
+    assert!(!terminate, "keep reading — usage not seen yet");
+    assert!(deferred.is_some(), "Done held back");
+    assert!(pending.is_empty(), "Done removed from pending");
+
+    // The trailing usage chunk arrives.
+    pending.push_back(Ok(ProviderDelta::Usage(
+        crate::providers::adapter::TokenUsage {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        },
+    )));
+    let terminate = defer_done_until_usage(&mut pending, &mut deferred);
+    assert!(terminate, "usage in hand — stream should finish");
+    assert!(deferred.is_none(), "deferred Done released");
+    // Done must remain the LAST element so the Done-is-final contract holds.
+    assert!(matches!(pending.back(), Some(Ok(ProviderDelta::Done(_)))));
+    assert!(matches!(pending.front(), Some(Ok(ProviderDelta::Usage(_)))));
+}
+
+#[test]
+fn defer_done_releases_done_with_inline_usage() {
+    // Providers (DeepSeek, Groq, …) that put usage in the finish_reason chunk
+    // produce a single event carrying both Usage and Done.
+    let mut pending: VecDeque<crate::providers::Result<ProviderDelta>> = Default::default();
+    pending.push_back(Ok(ProviderDelta::Usage(
+        crate::providers::adapter::TokenUsage {
+            input_tokens: 7,
+            output_tokens: 3,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        },
+    )));
+    pending.push_back(Ok(ProviderDelta::Done(StopReason::EndTurn)));
+    let mut deferred = None;
+
+    let terminate = defer_done_until_usage(&mut pending, &mut deferred);
+    assert!(terminate, "usage already present — finish immediately");
+    assert!(matches!(pending.back(), Some(Ok(ProviderDelta::Done(_)))));
+}
+
+#[test]
+fn defer_done_keeps_reading_when_event_has_no_done() {
+    // A plain content chunk: no Done, nothing to defer, keep reading.
+    let mut pending: VecDeque<crate::providers::Result<ProviderDelta>> = Default::default();
+    pending.push_back(Ok(ProviderDelta::TextDelta("hi".into())));
+    let mut deferred = None;
+
+    let terminate = defer_done_until_usage(&mut pending, &mut deferred);
+    assert!(!terminate);
+    assert!(deferred.is_none());
+    assert_eq!(pending.len(), 1, "content delta untouched");
 }
