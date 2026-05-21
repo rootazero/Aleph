@@ -90,7 +90,7 @@ impl TopicEvent {
     pub fn to_notification(&self) -> Value {
         serde_json::json!({
             "jsonrpc": "2.0",
-            "method": null,
+            "method": "event",
             "params": {
                 "topic": self.topic,
                 "data": self.data,
