@@ -600,14 +600,20 @@ impl AppState {
         presentation: &AgentTracePresentation,
     ) {
         match event {
-            AgentTraceEvent::TextEmitted { stream, .. } => match stream {
-                AgentTraceTextKind::Intermediate => {
-                    self.append_reasoning_entry(presentation.content.clone())
-                }
-                AgentTraceTextKind::Final => self.append_assistant_content(&presentation.content),
+            // TextEmitted carries the model's verbatim output. Feed the raw
+            // text into the user-facing message — the debug presentation would
+            // prefix it with "[Final text] iter N:" decoration meant only for
+            // a trace/debug panel, not the primary chat content.
+            AgentTraceEvent::TextEmitted { stream, text, .. } => match stream {
+                AgentTraceTextKind::Intermediate => self.append_reasoning_entry(text.clone()),
+                AgentTraceTextKind::Final => self.append_assistant_content(text),
             },
-            AgentTraceEvent::ToolSummary { .. }
-            | AgentTraceEvent::TurnStarted { .. }
+            // ToolSummary carries an agent-authored summary sentence — use it
+            // verbatim instead of the "Tool summary: " decorated form.
+            AgentTraceEvent::ToolSummary { summary, .. } => {
+                self.append_reasoning_entry(summary.clone())
+            }
+            AgentTraceEvent::TurnStarted { .. }
             | AgentTraceEvent::TurnStateEntered { .. }
             | AgentTraceEvent::TurnCompleted { .. }
             | AgentTraceEvent::SessionCompleted { .. } => {
@@ -888,7 +894,6 @@ impl AppState {
 mod tests {
     use super::*;
     use aleph_protocol::{AgentTraceSessionOutcome, AgentTraceTextKind};
-    use serde_json::Value;
 
     #[test]
     fn new_state_has_welcome_message() {
@@ -954,68 +959,6 @@ mod tests {
 
         state.toggle_verbose();
         assert!(!state.verbose);
-    }
-
-    #[test]
-    fn format_params_string() {
-        let val = Value::String("hello world".into());
-        assert_eq!(
-            aleph_protocol::summarize_tool_input(
-                &val,
-                aleph_protocol::AgentTracePresentationPreset::TuiDebug.options()
-            ),
-            "hello world"
-        );
-    }
-
-    #[test]
-    fn format_params_string_truncation() {
-        let long = "a".repeat(100);
-        let result = aleph_protocol::summarize_tool_input(
-            &Value::String(long),
-            aleph_protocol::AgentTracePresentationPreset::TuiDebug.options(),
-        );
-        assert!(result.len() < 100);
-        assert!(result.ends_with("..."));
-    }
-
-    #[test]
-    fn format_params_object() {
-        let val = serde_json::json!({
-            "command": "ls -la",
-            "count": 42,
-        });
-        let result = aleph_protocol::summarize_tool_input(
-            &val,
-            aleph_protocol::AgentTracePresentationPreset::TuiDebug.options(),
-        );
-        assert!(result.contains("command="));
-        assert!(result.contains("ls -la"));
-        assert!(result.contains("count="));
-        assert!(result.contains("42"));
-    }
-
-    #[test]
-    fn format_params_null() {
-        assert_eq!(
-            aleph_protocol::summarize_tool_input(
-                &Value::Null,
-                aleph_protocol::AgentTracePresentationPreset::TuiDebug.options()
-            ),
-            ""
-        );
-    }
-
-    #[test]
-    fn format_params_array() {
-        let val = serde_json::json!([1, 2, 3]);
-        assert_eq!(
-            aleph_protocol::summarize_tool_input(
-                &val,
-                aleph_protocol::AgentTracePresentationPreset::TuiDebug.options()
-            ),
-            "[3 items]"
-        );
     }
 
     #[test]
@@ -1360,7 +1303,7 @@ mod tests {
                 assert_eq!(
                     reasoning.as_deref(),
                     Some(
-                        "Turn started #1\nState #1: think\nTurn completed #1 (continue, 1 requested, 1 executed, 64 tokens)"
+                        "Turn started (iteration 1)\nThinking (iteration 1)\nTurn completed (continue) — tools: 1/1, tokens: 64"
                     )
                 );
             }
@@ -1412,7 +1355,7 @@ mod tests {
                 assert_eq!(content, "done");
                 assert_eq!(
                     reasoning.as_deref(),
-                    Some("Turn started #1\nSession completed (completed, 1 iterations, 0 tool calls, 33 tokens)")
+                    Some("Turn started (iteration 1)\nSession completed (completed) — iterations: 1, tools: 0, tokens: 33 — done")
                 );
             }
             other => panic!("Expected Assistant message, got: {:?}", other),

@@ -147,6 +147,7 @@ pub async fn handle_create_invitation(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64,
+                state_version: None,
             };
             let _ = event_bus.publish_json(&event);
 
@@ -281,6 +282,7 @@ pub async fn handle_revoke_invitation(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64,
+                state_version: None,
             };
             let _ = event_bus.publish_json(&event);
 
@@ -476,6 +478,7 @@ pub async fn handle_terminate_session(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64,
+                state_version: None,
             };
             let _ = event_bus.publish_json(&event);
 
