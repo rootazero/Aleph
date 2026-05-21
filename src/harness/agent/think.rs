@@ -194,7 +194,7 @@ impl AgentHarness {
         // turn yet), issue exactly one tool-less LLM call so the user
         // gets a terminal text response instead of a mid-thought hang.
         // Tools are stripped both via `.with_tools(None)` (implicit by
-        // omitting the call) and via the GRACE_NUDGE message, so the LLM
+        // omitting the call) and via the grace nudge message, so the LLM
         // cannot recurse. Fail-soft: any error falls through silently.
         // R10-safe: one extra LLM call gated by an existing directive,
         // no new policy, no state machine.
