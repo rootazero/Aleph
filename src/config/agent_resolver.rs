@@ -259,6 +259,8 @@ impl AgentDefinitionResolver {
                 }
                 // Remove old sessions dir after successful migration
                 let _ = fs::remove_dir_all(&old_sessions);
+                // Mark migration as complete to prevent re-processing
+                let _ = fs::write(agent_dir.join("sessions").join(".migrated"), "");
             }
         }
 
