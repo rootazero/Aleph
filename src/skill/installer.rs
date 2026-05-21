@@ -30,10 +30,11 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
         InstallKind::Uv => Some(format!("uv pip install {}", spec.package)),
         InstallKind::Go => Some(format!("go install {}", spec.package)),
         InstallKind::Download => spec.url.as_ref().and_then(|url| {
-            if !is_safe_shell_arg(url) {
+            // Reject URLs containing single quotes to prevent breaking out of shell quotes.
+            if url.contains('\'') {
                 return None;
             }
-            Some(format!("curl -fsSL -o {} {}", spec.package, url))
+            Some(format!("curl -fsSL -o {} '{}'", spec.package, url))
         }),
     }
 }
@@ -221,7 +222,7 @@ mod tests {
         let cmd = build_install_command(&spec).unwrap();
         assert_eq!(
             cmd,
-            "curl -fsSL -o /usr/local/bin/tool https://example.com/tool"
+            "curl -fsSL -o /usr/local/bin/tool 'https://example.com/tool'"
         );
     }
 
