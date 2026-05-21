@@ -461,34 +461,6 @@ impl SkillManifest {
         }
     }
 
-impl SkillManifest {
-    /// Create a new `SkillManifest` with required fields and sensible defaults.
-    pub fn new(
-        id: impl Into<SkillId>,
-        name: impl Into<String>,
-        description: impl Into<String>,
-        content: SkillContent,
-        source: SkillSource,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            name: name.into(),
-            plugin: None,
-            description: description.into(),
-            content,
-            scope: PromptScope::default(),
-            bound_tool: None,
-            eligibility: EligibilitySpec::default(),
-            install_specs: Vec::new(),
-            invocation: InvocationPolicy::default(),
-            source,
-            primary_env: None,
-            homepage: None,
-            emoji: None,
-            when_to_use: None,
-        }
-    }
-
     // --- Accessors ---
 
     /// Human-readable name.
