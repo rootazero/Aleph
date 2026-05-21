@@ -287,3 +287,108 @@ async fn test_click_missing_coordinates_reports_validation_error() {
         "expected coordinate validation error, got: {msg}"
     );
 }
+
+// ── agent_id audit pipeline ──────────────────────────────────────────
+
+/// An approval policy that captures the most recent `ActionRequest` so tests
+/// can assert what reached the audit boundary.
+struct CapturingPolicy {
+    decision: ApprovalDecision,
+    last: std::sync::Mutex<Option<ActionRequest>>,
+}
+
+#[async_trait]
+impl ApprovalPolicy for CapturingPolicy {
+    async fn check(&self, request: &ActionRequest) -> ApprovalDecision {
+        *self.last.lock().unwrap() = Some(request.clone());
+        self.decision.clone()
+    }
+    async fn record(&self, _request: &ActionRequest, _decision: &ApprovalDecision) {}
+}
+
+#[test]
+fn audit_identity_falls_back_to_main_outside_turn() {
+    // Direct calls / tests run outside a scoped turn — the audit identity must
+    // still be well-formed, never an empty agent_id.
+    let (agent_id, context) = audit_identity("click", "click(1,2)");
+    assert_eq!(agent_id, "main");
+    assert_eq!(context, "desktop.click (click(1,2))");
+}
+
+#[test]
+fn audit_identity_reads_agent_and_channel_from_turn_context() {
+    use crate::routing::session_key::SessionKey;
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+    let turn = TurnContext {
+        session_key: SessionKey::task("research-agent", "cron", "daily"),
+        channel_id: "slack".to_string(),
+        conversation_id: "C123".to_string(),
+    };
+    let (agent_id, context) =
+        TURN_CONTEXT.sync_scope(turn, || audit_identity("type_text", "hello"));
+    assert_eq!(agent_id, "research-agent");
+    assert_eq!(context, "desktop.type_text (hello) via slack/C123");
+}
+
+#[test]
+fn audit_identity_omits_origin_for_non_channel_turn() {
+    use crate::routing::session_key::SessionKey;
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+    // A cron/internal turn has no originating channel — context names the
+    // action only, with no trailing `via .../...`.
+    let turn = TurnContext {
+        session_key: SessionKey::task("cron-agent", "cron", "daily"),
+        channel_id: String::new(),
+        conversation_id: String::new(),
+    };
+    let (agent_id, context) =
+        TURN_CONTEXT.sync_scope(turn, || audit_identity("click", "click(5,5)"));
+    assert_eq!(agent_id, "cron-agent");
+    assert_eq!(context, "desktop.click (click(5,5))");
+}
+
+#[tokio::test]
+async fn approval_request_carries_agent_id_from_turn_context() {
+    use crate::routing::session_key::SessionKey;
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+    // End-to-end: a desktop tool call inside a scoped turn must hand the
+    // approval policy a non-blank agent_id and audit context.
+    let policy = Arc::new(CapturingPolicy {
+        decision: ApprovalDecision::Allow,
+        last: std::sync::Mutex::new(None),
+    });
+    // `Arc<CapturingPolicy>` unsizes to `Arc<dyn ApprovalPolicy>` by coercion
+    // at the argument position; `policy` itself stays concrete for `last`.
+    let tool = DesktopTool::new().with_approval_policy(policy.clone());
+
+    let turn = TurnContext {
+        session_key: SessionKey::task("desktop-agent", "cron", "daily"),
+        channel_id: "telegram".to_string(),
+        conversation_id: "user-1".to_string(),
+    };
+
+    let mut args = make_args("click");
+    args.x = Some(10.0);
+    args.y = Some(20.0);
+
+    let _ = TURN_CONTEXT
+        .scope(turn, async { AlephTool::call(&tool, args).await })
+        .await
+        .unwrap();
+
+    let captured = policy
+        .last
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("approval policy.check should have run");
+    assert_eq!(captured.agent_id, "desktop-agent");
+    assert!(
+        captured.context.contains("desktop.click") && captured.context.contains("telegram"),
+        "audit context should name the action and origin channel, got: {}",
+        captured.context
+    );
+}
