@@ -14,7 +14,9 @@ impl LinuxPim {
     }
 
     fn thunderbird_dir() -> Option<PathBuf> {
-        std::env::var_os("HOME").map(PathBuf::from).map(|h| h.join(".thunderbird"))
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|h| h.join(".thunderbird"))
     }
 
     fn find_mbox_files(&self) -> Vec<(String, PathBuf)> {
@@ -34,7 +36,9 @@ impl LinuxPim {
     }
 
     fn walk_mail_dir(root: &Path, current: &Path, out: &mut Vec<(String, PathBuf)>) {
-        let Ok(entries) = std::fs::read_dir(current) else { return };
+        let Ok(entries) = std::fs::read_dir(current) else {
+            return;
+        };
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
             if path.is_dir() {
@@ -195,7 +199,11 @@ impl PimCapability for LinuxPim {
             };
             result.push(MailFolder {
                 id: folder_id.clone(),
-                name: folder_id.rsplit('/').next().unwrap_or(&folder_id).to_string(),
+                name: folder_id
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&folder_id)
+                    .to_string(),
                 count,
             });
         }
@@ -260,29 +268,25 @@ impl PimCapability for LinuxPim {
             )));
         }
         let folder_id = parts[0];
-        let offset: usize = parts[1]
-            .parse()
-            .map_err(|_| DesktopError::PlatformError(format!(
-                "Invalid offset in message_id: {message_id}"
-            )))?;
+        let offset: usize = parts[1].parse().map_err(|_| {
+            DesktopError::PlatformError(format!("Invalid offset in message_id: {message_id}"))
+        })?;
 
         let folders = self.find_mbox_files();
         let path = folders
             .into_iter()
             .find(|(id, _)| id == folder_id)
             .map(|(_, p)| p)
-            .ok_or_else(|| DesktopError::PlatformError(format!(
-                "Folder not found: {folder_id}"
-            )))?;
+            .ok_or_else(|| DesktopError::PlatformError(format!("Folder not found: {folder_id}")))?;
 
         let content = Self::read_mbox_file(&path).await?;
         let messages = Self::parse_mbox(&content);
         let msg = messages
             .into_iter()
             .find(|m| m.offset == offset)
-            .ok_or_else(|| DesktopError::PlatformError(format!(
-                "Message not found at offset {offset}"
-            )))?;
+            .ok_or_else(|| {
+                DesktopError::PlatformError(format!("Message not found at offset {offset}"))
+            })?;
 
         Ok(MailMessageDetail {
             id: message_id.to_string(),
@@ -299,13 +303,19 @@ impl PimCapability for LinuxPim {
     }
 
     async fn notes_list(&self, _folder: Option<&str>) -> Result<Vec<NoteInfo>> {
-        Err(DesktopError::NotImplemented("Notes not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Linux".into(),
+        ))
     }
     async fn notes_read(&self, _note_id: &str) -> Result<NoteContent> {
-        Err(DesktopError::NotImplemented("Notes not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Linux".into(),
+        ))
     }
     async fn notes_create(&self, _folder: &str, _title: &str, _body: &str) -> Result<String> {
-        Err(DesktopError::NotImplemented("Notes not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Linux".into(),
+        ))
     }
     async fn notes_update(
         &self,
@@ -313,13 +323,19 @@ impl PimCapability for LinuxPim {
         _title: Option<&str>,
         _body: Option<&str>,
     ) -> Result<()> {
-        Err(DesktopError::NotImplemented("Notes not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Linux".into(),
+        ))
     }
     async fn notes_delete(&self, _note_id: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented("Notes not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Linux".into(),
+        ))
     }
     async fn notes_folders(&self) -> Result<Vec<String>> {
-        Err(DesktopError::NotImplemented("Notes not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Notes not available on Linux".into(),
+        ))
     }
 
     async fn calendar_list_events(
@@ -328,26 +344,34 @@ impl PimCapability for LinuxPim {
         _to: DateTime<Utc>,
         _calendar_id: Option<&str>,
     ) -> Result<Vec<CalendarEvent>> {
-        Err(DesktopError::NotImplemented("Calendar not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Linux".into(),
+        ))
     }
     async fn calendar_get_event(&self, _event_id: &str) -> Result<CalendarEvent> {
-        Err(DesktopError::NotImplemented("Calendar not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Linux".into(),
+        ))
     }
     async fn calendar_create_event(&self, _event: NewCalendarEvent) -> Result<String> {
-        Err(DesktopError::NotImplemented("Calendar not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Linux".into(),
+        ))
     }
-    async fn calendar_update_event(
-        &self,
-        _event_id: &str,
-        _event: NewCalendarEvent,
-    ) -> Result<()> {
-        Err(DesktopError::NotImplemented("Calendar not available on Linux".into()))
+    async fn calendar_update_event(&self, _event_id: &str, _event: NewCalendarEvent) -> Result<()> {
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Linux".into(),
+        ))
     }
     async fn calendar_delete_event(&self, _event_id: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented("Calendar not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Linux".into(),
+        ))
     }
     async fn calendar_calendars(&self) -> Result<Vec<CalendarInfo>> {
-        Err(DesktopError::NotImplemented("Calendar not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Calendar not available on Linux".into(),
+        ))
     }
 
     async fn reminders_list(
@@ -355,32 +379,50 @@ impl PimCapability for LinuxPim {
         _list_id: Option<&str>,
         _include_completed: bool,
     ) -> Result<Vec<Reminder>> {
-        Err(DesktopError::NotImplemented("Reminders not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Linux".into(),
+        ))
     }
     async fn reminders_get(&self, _reminder_id: &str) -> Result<Reminder> {
-        Err(DesktopError::NotImplemented("Reminders not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Linux".into(),
+        ))
     }
     async fn reminders_create(&self, _reminder: NewReminder) -> Result<String> {
-        Err(DesktopError::NotImplemented("Reminders not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Linux".into(),
+        ))
     }
     async fn reminders_complete(&self, _reminder_id: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented("Reminders not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Linux".into(),
+        ))
     }
     async fn reminders_delete(&self, _reminder_id: &str) -> Result<()> {
-        Err(DesktopError::NotImplemented("Reminders not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Linux".into(),
+        ))
     }
     async fn reminders_lists(&self) -> Result<Vec<ReminderList>> {
-        Err(DesktopError::NotImplemented("Reminders not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Reminders not available on Linux".into(),
+        ))
     }
 
     async fn contacts_search(&self, _query: &str) -> Result<Vec<Contact>> {
-        Err(DesktopError::NotImplemented("Contacts not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Contacts not available on Linux".into(),
+        ))
     }
     async fn contacts_get(&self, _contact_id: &str) -> Result<ContactDetail> {
-        Err(DesktopError::NotImplemented("Contacts not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Contacts not available on Linux".into(),
+        ))
     }
     async fn contacts_groups(&self) -> Result<Vec<ContactGroup>> {
-        Err(DesktopError::NotImplemented("Contacts not available on Linux".into()))
+        Err(DesktopError::NotImplemented(
+            "Contacts not available on Linux".into(),
+        ))
     }
 }
 

@@ -40,4 +40,10 @@ pub trait A2AStreamingHandler: Send + Sync {
         task_id: &str,
         update: TaskArtifactUpdateEvent,
     ) -> A2AResult<()>;
+
+    /// Clean up resources for a completed task (e.g. remove broadcast channels).
+    /// Default implementation is a no-op.
+    async fn cleanup_task(&self, _task_id: &str) -> A2AResult<()> {
+        Ok(())
+    }
 }

@@ -56,6 +56,18 @@ impl Sandbox for NoopSandbox {
             "sandbox disabled: set [sandbox] enabled = true in config to execute commands".into(),
         ))
     }
+
+    fn summary(&self) -> Option<crate::sandbox::summary::SandboxSummary> {
+        // Explicit "off" signal so the LLM does not believe enforcement is
+        // active when it is not. Mirrors codex's `permission_profile_sandbox_tag = "none"`.
+        Some(crate::sandbox::summary::SandboxSummary {
+            backend: "none/disabled",
+            policy_tier: "danger-full-access",
+            writable_roots: Vec::new(),
+            network: crate::sandbox::summary::NetworkState::AllowAll,
+            max_memory_mb: None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -90,6 +102,9 @@ mod tests {
         ) -> Result<OsSandboxProfile, SandboxError> {
             Ok(OsSandboxProfile {
                 contents: String::new(),
+                max_memory_mb: None,
+                linux_init_policy: None,
+                windows_init_policy: None,
             })
         }
 
@@ -225,6 +240,9 @@ mod tests {
         ) -> Result<OsSandboxProfile, SandboxError> {
             Ok(OsSandboxProfile {
                 contents: String::new(),
+                max_memory_mb: None,
+                linux_init_policy: None,
+                windows_init_policy: None,
             })
         }
 

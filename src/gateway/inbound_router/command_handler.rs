@@ -5,7 +5,6 @@ use tracing::{error, info, warn};
 use crate::gateway::channel::{InboundMessage, OutboundMessage};
 use crate::gateway::inbound_context::InboundContext;
 use crate::gateway::router::SessionKey;
-use crate::intent::{DirectToolSource, IntentResult};
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 
@@ -42,24 +41,73 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
     }
 }
 
-/// Serialize an `IntentResult` to a JSON string for RunRequest metadata.
-pub(super) fn serialize_intent_result(result: &IntentResult) -> Option<String> {
-    match result {
-        IntentResult::DirectTool {
-            tool_id,
-            args,
-            source,
-        } => serde_json::to_string(&serde_json::json!({
-            "type": "direct_tool",
-            "tool_id": tool_id,
+/// Serialize a `ParsedCommand` directly into the slash-command mode JSON used
+/// by `ExecutionEngine` fast path. Preserves source-specific fields that the
+/// `IntentResult::DirectTool` round-trip drops:
+/// * `Skill` — `skill_id`, `instructions`, `allowed_tools`, `display_name`
+/// * `Custom` — `system_prompt`, `pattern`, `tool_id`
+/// * `Mcp`   — `server_name`, `tool_name`
+///
+/// Without this, the fast-path's `match mode_type { "skill" => ... }` branch
+/// was dead code: every slash command was misclassified as `direct_tool` and
+/// skill instructions were silently dropped.
+pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Option<String> {
+    use crate::command::CommandContext;
+    use crate::intent::DirectToolSource;
+
+    let args = parsed.arguments.as_deref().unwrap_or("");
+    let value = match &parsed.context {
+        CommandContext::Skill {
+            skill_id,
+            instructions,
+            display_name,
+            allowed_tools,
+        } => serde_json::json!({
+            "type": "skill",
+            "skill_id": skill_id,
+            "display_name": display_name,
+            "instructions": instructions,
+            "allowed_tools": allowed_tools,
             "args": args,
-            "source": source.as_str(),
-        }))
-        .ok(),
-        IntentResult::Execute { .. }
-        | IntentResult::Converse { .. }
-        | IntentResult::Abort { .. } => None,
-    }
+            "source": DirectToolSource::Skill.as_str(),
+        }),
+        CommandContext::Custom {
+            system_prompt,
+            provider,
+            pattern,
+        } => serde_json::json!({
+            "type": "custom",
+            "tool_id": parsed.command_name,
+            "system_prompt": system_prompt,
+            "provider": provider,
+            "pattern": pattern,
+            "args": args,
+            "source": DirectToolSource::Custom.as_str(),
+        }),
+        CommandContext::Mcp {
+            server_name,
+            tool_name,
+        } => serde_json::json!({
+            "type": "mcp",
+            "server_name": server_name,
+            "tool_name": tool_name,
+            "args": args,
+            "source": DirectToolSource::Mcp.as_str(),
+        }),
+        CommandContext::Builtin { tool_name } => serde_json::json!({
+            "type": "direct_tool",
+            "tool_id": tool_name,
+            "args": args,
+            "source": DirectToolSource::SlashCommand.as_str(),
+        }),
+        CommandContext::None => serde_json::json!({
+            "type": "direct_tool",
+            "tool_id": parsed.command_name,
+            "args": args,
+            "source": DirectToolSource::SlashCommand.as_str(),
+        }),
+    };
+    serde_json::to_string(&value).ok()
 }
 
 impl InboundMessageRouter {
@@ -71,6 +119,75 @@ impl InboundMessageRouter {
         } else {
             crate::gateway::i18n::Locale::Zh
         }
+    }
+
+    /// Send a "Unknown command — did you mean?" reply with up to 3 close
+    /// matches from the unified tool registry. Returns `true` when a reply
+    /// was sent (caller should NOT fall through to the agent), `false` when
+    /// no plausible candidates exist (caller may fall through normally).
+    pub(super) async fn try_send_unknown_command_help(
+        &self,
+        msg: &InboundMessage,
+        unknown_cmd: &str,
+    ) -> bool {
+        use crate::builtin_tools::meta_tools::levenshtein_distance;
+
+        let parser = match self.command_parser.as_ref() {
+            Some(p) => p,
+            None => return false,
+        };
+        let needle = unknown_cmd.to_lowercase();
+        if needle.is_empty() {
+            return false;
+        }
+
+        let all_tools = parser.tool_registry().list_all().await;
+        // Score every tool name + alias against the needle. Threshold tuned
+        // for short identifiers: at most 2 edits for ≤6-char names, 3 for
+        // longer ones, plus substring fast-path.
+        let mut scored: Vec<(usize, String)> = all_tools
+            .iter()
+            .filter_map(|t| {
+                let name = t.name.to_lowercase();
+                if name == needle {
+                    return None; // exact match — caller should have resolved
+                }
+                let dist = levenshtein_distance(&name, &needle);
+                let threshold = if name.len().max(needle.len()) <= 6 { 2 } else { 3 };
+                let substring_hit = name.contains(&needle) || needle.contains(&name);
+                if dist <= threshold || substring_hit {
+                    let effective = if substring_hit { dist.min(2) } else { dist };
+                    Some((effective, t.name.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if scored.is_empty() {
+            return false;
+        }
+
+        scored.sort_by_key(|(d, name)| (*d, name.clone()));
+        scored.truncate(3);
+        let suggestions: Vec<String> = scored.into_iter().map(|(_, n)| format!("/{}", n)).collect();
+
+        let text = format!(
+            "Unknown command `/{}`. Did you mean: {}?",
+            unknown_cmd,
+            suggestions.join(", ")
+        );
+        let reply = OutboundMessage::text(msg.conversation_id.as_str(), &text);
+        if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+            error!("[Router] Failed to send unknown-command help: {}", e);
+            return false;
+        }
+        info!(
+            unknown = %unknown_cmd,
+            suggestions = ?suggestions,
+            "[Router] Sent unknown-command suggestions"
+        );
+        true
     }
 
     /// Handle /btw command: ephemeral sidebar conversation that doesn't affect context.
@@ -205,34 +322,4 @@ impl InboundMessageRouter {
         }
     }
 
-    /// Convert a ParsedCommand to IntentResult
-    pub(super) fn parsed_command_to_intent_result(
-        &self,
-        cmd: crate::command::ParsedCommand,
-    ) -> IntentResult {
-        use crate::command::CommandContext;
-
-        let args = cmd.arguments.clone();
-
-        let (tool_id, source) = match cmd.context {
-            CommandContext::Builtin { tool_name } => (tool_name, DirectToolSource::SlashCommand),
-            CommandContext::Skill { skill_id, .. } => (skill_id, DirectToolSource::Skill),
-            CommandContext::Mcp {
-                server_name,
-                tool_name,
-                ..
-            } => {
-                let id = tool_name.unwrap_or(server_name);
-                (id, DirectToolSource::Mcp)
-            }
-            CommandContext::Custom { .. } => (cmd.command_name.clone(), DirectToolSource::Custom),
-            CommandContext::None => (cmd.command_name.clone(), DirectToolSource::SlashCommand),
-        };
-
-        IntentResult::DirectTool {
-            tool_id,
-            args,
-            source,
-        }
-    }
 }

@@ -77,11 +77,18 @@ impl BackgroundAgentTracker {
         }
     }
 
-    /// Cancel a running background agent.
-    pub fn cancel(&self, request_id: &str) {
+    /// Cancel a running background agent. Returns `true` if the request_id
+    /// was found in the running set and the `CancellationToken` was hit;
+    /// `false` if no such running agent exists (already completed / never
+    /// registered). The cooperative cancellation still relies on the
+    /// running task observing the token at the next await point.
+    pub fn cancel(&self, request_id: &str) -> bool {
         let running = self.running.read().unwrap_or_else(|e| e.into_inner());
         if let Some(agent) = running.get(request_id) {
             agent.cancel_token.cancel();
+            true
+        } else {
+            false
         }
     }
 

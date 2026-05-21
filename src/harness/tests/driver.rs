@@ -113,6 +113,7 @@ async fn session_driver_delegates_to_harness_run() {
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
+        preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -123,6 +124,9 @@ async fn session_driver_delegates_to_harness_run() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-delegation");
@@ -181,6 +185,7 @@ async fn session_driver_preserves_cancelled_semantics() {
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
+        preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -191,6 +196,9 @@ async fn session_driver_preserves_cancelled_semantics() {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-cancelled");

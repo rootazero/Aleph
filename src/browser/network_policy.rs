@@ -141,9 +141,9 @@ impl BrowserSsrfGuard {
             if let Some(host) = url.host_str() {
                 // The core engine's allowlist BYPASSES blocks, but browser needs allowlist-ONLY mode.
                 // Check if host matches any allowed domain pattern.
+                let host_lower = host.to_ascii_lowercase();
                 let matched = self.config.allowed_domains.iter().any(|pat| {
                     let pat_lower = pat.to_ascii_lowercase();
-                    let host_lower = host.to_ascii_lowercase();
                     if let Some(base) = pat_lower.strip_prefix("*.") {
                         host_lower == base || host_lower.ends_with(&format!(".{base}"))
                     } else {

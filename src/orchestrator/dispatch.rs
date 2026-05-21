@@ -114,6 +114,23 @@ pub struct FlowRequest {
     /// Gateway-side observability sink. `None` is a no-op.
     /// Not included in `Debug` output because `Arc<dyn TraceSink>` is not `Debug`.
     pub trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+    /// Phase 4 (F4): channel-aware interaction envelope. When `Some`, the
+    /// harness bridge threads this `InteractionManifest` into the
+    /// `ResolvedContext` used for prompt assembly, so per-channel
+    /// constraints (paradigm, capabilities, output limits) reach the
+    /// LLM. `None` keeps the legacy `Background` default — appropriate
+    /// for subagent dispatch and internal tooling that runs without a
+    /// channel.
+    pub interaction_manifest: Option<crate::thinker::interaction::InteractionManifest>,
+    /// G2 — per-request sandbox override. `None` falls back to
+    /// `Orchestrator::sandbox_factory(spec.sandbox_kind, &session_key)` — the
+    /// pre-G2 default. `Some(sandbox)` short-circuits the factory; used by the
+    /// team dispatcher to inject a `WorktreeSandbox` so concurrent team
+    /// members write to isolated git worktrees and cannot corrupt each
+    /// other's index.
+    ///
+    /// Not included in `Debug` output because `Arc<dyn Sandbox>` is not `Debug`.
+    pub sandbox_override: Option<std::sync::Arc<dyn crate::sandbox::Sandbox>>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -159,6 +176,11 @@ pub struct Orchestrator {
     /// chain + per-`provider_hint` overrides). `None` for test mocks and the
     /// simple engine; `Some` once `build_failover_chain` has run at boot.
     pub subagent_routing: Option<crate::orchestrator::deps_builder::ProviderChain>,
+    /// Shared `AgentRegistry`. Same `Arc` cloned into `AgentHarnessRunner` at
+    /// boot so all subagent dispatchers see user-defined agents. `None` only
+    /// in test fixtures and the simple engine — the gateway path falls back
+    /// to `AgentRegistry::with_builtins()` in that case.
+    pub agent_registry: Option<Arc<crate::agents::AgentRegistry>>,
     active_sessions: Arc<Mutex<HashSet<String>>>,
 }
 
@@ -189,6 +211,7 @@ pub trait HarnessRunner: Send + Sync {
         cancel: CancellationToken,
         tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
         trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+        interaction_manifest: Option<crate::thinker::interaction::InteractionManifest>,
     ) -> Result<FlowOutcome, FlowError>;
 }
 
@@ -209,6 +232,7 @@ impl Orchestrator {
             sandbox_factory,
             harness,
             subagent_routing: None,
+            agent_registry: None,
             active_sessions: Arc::new(Mutex::new(HashSet::new())),
         }
     }
@@ -222,6 +246,15 @@ impl Orchestrator {
         routing: crate::orchestrator::deps_builder::ProviderChain,
     ) -> Self {
         self.subagent_routing = Some(routing);
+        self
+    }
+
+    /// Attach the shared `AgentRegistry` so `SubagentTool` instances spawned
+    /// inside the gateway execution engine can resolve user-defined agents
+    /// (not just built-ins). Without this, `run_loop` falls back to a fresh
+    /// empty registry and subagents silently lose all custom-agent metadata.
+    pub fn with_agent_registry(mut self, registry: Arc<crate::agents::AgentRegistry>) -> Self {
+        self.agent_registry = Some(registry);
         self
     }
 
@@ -267,17 +300,22 @@ impl Orchestrator {
 
         // Step 5: brain pick deferred to HarnessRunner (ProviderRegistry lives there).
 
-        // Step 6: sandbox provision.
-        let sandbox = match (self.sandbox_factory)(spec.sandbox_kind, &session_res.session_key) {
-            Ok(sb) => sb,
-            Err(e) => {
-                let mut guard = self
-                    .active_sessions
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                guard.remove(&session_res.session_key);
-                return Err(e);
-            }
+        // Step 6: sandbox provision. Per-request `sandbox_override` short-circuits
+        // the factory — the team dispatcher uses it to inject a `WorktreeSandbox`
+        // for per-task git isolation. Falls back to the factory when None.
+        let sandbox = match req.sandbox_override.clone() {
+            Some(sb) => sb,
+            None => match (self.sandbox_factory)(spec.sandbox_kind, &session_res.session_key) {
+                Ok(sb) => sb,
+                Err(e) => {
+                    let mut guard = self
+                        .active_sessions
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    guard.remove(&session_res.session_key);
+                    return Err(e);
+                }
+            },
         };
 
         // Step 7: spawn harness, plumbing events + completion + cancel.
@@ -295,6 +333,7 @@ impl Orchestrator {
         let session_for_release = session_res.session_key.clone();
         let tool_service_override = req.tool_service.clone();
         let trace_sink = req.trace_sink.clone();
+        let interaction_manifest = req.interaction_manifest.clone();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -311,6 +350,7 @@ impl Orchestrator {
                     cancel_clone,
                     tool_service_override,
                     trace_sink,
+                    interaction_manifest,
                 )
                 .await;
             // `done_tx.send` returns Err only when `done_rx` was dropped by the

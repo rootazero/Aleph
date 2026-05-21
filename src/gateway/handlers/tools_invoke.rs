@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::parse_params;
+use crate::agents::AgentRegistry;
 use crate::executor::ToolRegistry;
 
 /// Parameters for `tools.invoke`.
@@ -43,7 +44,17 @@ pub struct InvokeParams {
 }
 
 /// Real handler — executes the tool directly via the registry trait.
-pub async fn handle_invoke<R>(request: JsonRpcRequest, registry: Arc<R>) -> JsonRpcResponse
+///
+/// `agents` is optional: when present, the request's `agent_id` (default
+/// `"main"`) must resolve to an `AgentDef` and the requested `tool_name`
+/// must pass `AgentDef::is_tool_allowed`. When `None` the allowlist gate
+/// is skipped (test mode / legacy callers). The production boot path
+/// always supplies the live registry — see `agent_init.rs`.
+pub async fn handle_invoke<R>(
+    request: JsonRpcRequest,
+    registry: Arc<R>,
+    agents: Option<Arc<AgentRegistry>>,
+) -> JsonRpcResponse
 where
     R: ToolRegistry + ?Sized,
 {
@@ -54,6 +65,34 @@ where
 
     if params.tool_name.trim().is_empty() {
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "tool_name must not be empty");
+    }
+
+    // Allowlist gate — applied only when caller supplied an agent registry.
+    if let Some(ref agents) = agents {
+        let resolved_id = params
+            .agent_id
+            .clone()
+            .unwrap_or_else(|| "main".to_string());
+        let agent_def = match agents.get(&resolved_id) {
+            Some(d) => d,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("unknown agent_id: {resolved_id}"),
+                );
+            }
+        };
+        if !agent_def.is_tool_allowed(&params.tool_name) {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!(
+                    "tool '{}' not allowed for agent '{}'",
+                    params.tool_name, resolved_id
+                ),
+            );
+        }
     }
 
     let arguments = merge_agent_id(params.arguments, params.agent_id.as_deref());
@@ -73,16 +112,6 @@ where
             format!("tool '{}' failed: {}", params.tool_name, err),
         ),
     }
-}
-
-/// Stub registered at startup; replaced with the real handler once the
-/// `BuiltinToolRegistry` Arc is available (see `agent_init.rs`).
-pub async fn handle_invoke_stub(request: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "tools.invoke requires ToolRegistry — wire in Gateway startup".to_string(),
-    )
 }
 
 /// If the caller supplied a top-level `agent_id`, fold it into the JSON
@@ -171,7 +200,7 @@ mod tests {
     async fn rejects_missing_params() {
         let reg = Arc::new(StubRegistry::new());
         let req = JsonRpcRequest::with_id("tools.invoke", None, json!(1));
-        let resp = handle_invoke(req, reg).await;
+        let resp = handle_invoke(req, reg, None).await;
         assert!(!resp.is_success(), "expected error response");
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
     }
@@ -181,7 +210,7 @@ mod tests {
         let reg = Arc::new(StubRegistry::new());
         let params = json!({"tool_name": "  ", "arguments": {}});
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg).await;
+        let resp = handle_invoke(req, reg, None).await;
         assert!(!resp.is_success());
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
     }
@@ -191,7 +220,7 @@ mod tests {
         let reg = Arc::new(StubRegistry::new());
         let params = json!({"tool_name": "missing_tool", "arguments": {}});
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg).await;
+        let resp = handle_invoke(req, reg, None).await;
         assert!(!resp.is_success());
         let err = resp.error.unwrap();
         assert_eq!(err.code, INTERNAL_ERROR);
@@ -213,7 +242,7 @@ mod tests {
             "arguments": {"query": "hello"},
         });
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg.clone()).await;
+        let resp = handle_invoke(req, reg.clone(), None).await;
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["ok"], true);
@@ -233,7 +262,7 @@ mod tests {
             "agent_id": "research",
         });
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg.clone()).await;
+        let resp = handle_invoke(req, reg.clone(), None).await;
         assert!(resp.is_success());
         let (_, called_args) = reg.last_call().unwrap();
         assert_eq!(called_args["agent_id"], "research");
@@ -256,5 +285,88 @@ mod tests {
     async fn passes_through_non_object_arguments() {
         let merged = merge_agent_id(json!("plain string"), Some("any"));
         assert_eq!(merged, json!("plain string"));
+    }
+
+    // ---------------------------------------------------------------------
+    // D2/P3 — allowlist-gate tests (Some(agents) path)
+    // ---------------------------------------------------------------------
+
+    use crate::agents::{AgentDef, AgentMode};
+
+    fn registry_with_restricted_agent() -> Arc<AgentRegistry> {
+        let r = AgentRegistry::new();
+        r.register(
+            AgentDef::new("restricted", AgentMode::SubAgent)
+                .with_allowed_tools(vec!["allowed_one".into()]),
+        );
+        Arc::new(r)
+    }
+
+    #[tokio::test]
+    async fn blocks_tool_outside_agent_allowlist() {
+        let tool_reg = Arc::new(StubRegistry::new().with_ok("blocked_one", json!({})));
+        let agents = registry_with_restricted_agent();
+
+        let params = json!({
+            "tool_name": "blocked_one",
+            "agent_id": "restricted",
+            "arguments": {}
+        });
+        let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+        let resp = handle_invoke(req, tool_reg.clone(), Some(agents)).await;
+
+        assert!(!resp.is_success(), "expected error for out-of-allowlist tool");
+        assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
+        assert!(
+            tool_reg.last_call().is_none(),
+            "registry must not be touched when allowlist denies"
+        );
+    }
+
+    #[tokio::test]
+    async fn permits_tool_inside_agent_allowlist() {
+        let tool_reg =
+            Arc::new(StubRegistry::new().with_ok("allowed_one", json!({"hits": 1})));
+        let agents = registry_with_restricted_agent();
+
+        let params = json!({
+            "tool_name": "allowed_one",
+            "agent_id": "restricted",
+            "arguments": {}
+        });
+        let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+        let resp = handle_invoke(req, tool_reg, Some(agents)).await;
+
+        assert!(resp.is_success(), "expected success: {:?}", resp.error);
+    }
+
+    #[tokio::test]
+    async fn skips_allowlist_when_agents_none() {
+        // Pre-gate behavior preserved when caller passes None — used by the
+        // existing tests above and by simulated-mode wiring.
+        let tool_reg = Arc::new(StubRegistry::new().with_ok("anything", json!({})));
+        let params = json!({
+            "tool_name": "anything",
+            "arguments": {}
+        });
+        let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+        let resp = handle_invoke(req, tool_reg, None).await;
+        assert!(resp.is_success());
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_agent_id() {
+        let tool_reg = Arc::new(StubRegistry::new());
+        let agents = registry_with_restricted_agent();
+
+        let params = json!({
+            "tool_name": "allowed_one",
+            "agent_id": "no_such_agent",
+            "arguments": {}
+        });
+        let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+        let resp = handle_invoke(req, tool_reg, Some(agents)).await;
+        assert!(!resp.is_success());
+        assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
     }
 }

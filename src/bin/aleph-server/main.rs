@@ -126,6 +126,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 DevicesAction::Revoke { device_id } => commands::handle_devices_revoke(&device_id),
             };
         }
+        // SP-2: never returns; applies landlock+seccomp then execvp's the
+        // target. Lives in the synchronous dispatcher because it has no
+        // need for tokio (and must not initialize one — we're about to
+        // exec a completely different process image).
+        Some(Command::SandboxInit { args: init_args }) => {
+            alephcore::sandbox::sandbox_init::run_init(init_args);
+        }
+        // SP-3a: never returns; applies restricted token + Low IL then
+        // CreateProcessAsUserW + WaitForSingleObject + ExitProcess.
+        Some(Command::SandboxInitWindows { args: init_args }) => {
+            alephcore::sandbox::windows_init::run_init(init_args);
+        }
         other => {
             args.command = other;
         }
@@ -199,6 +211,24 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             let code = commands::bootstrap_runtime::run(br_args).await;
             std::process::exit(code);
         }
+        Some(Command::SandboxDebug {
+            network,
+            fs_write,
+            fs_read,
+            show_summary,
+            log_denials,
+            command,
+        }) => {
+            return commands::handle_sandbox_debug(
+                network,
+                fs_write,
+                fs_read,
+                show_summary,
+                log_denials,
+                command,
+            )
+            .await;
+        }
         Some(Command::Start) | None => {
             // Continue with start logic
         }
@@ -206,7 +236,9 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Stop)
         | Some(Command::Secret { .. })
         | Some(Command::Status { .. })
-        | Some(Command::Devices { .. }) => unreachable!(),
+        | Some(Command::Devices { .. })
+        | Some(Command::SandboxInit { .. })
+        | Some(Command::SandboxInitWindows { .. }) => unreachable!(),
     }
 
     // Start the gateway server

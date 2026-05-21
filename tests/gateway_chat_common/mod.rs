@@ -135,6 +135,7 @@ impl HarnessRunner for StubHarnessRunner {
         cancel: CancellationToken,
         tool_service_override: Option<Arc<dyn ToolService>>,
         trace_sink: Option<Arc<dyn alephcore::harness::TraceSink>>,
+        _interaction_manifest: Option<alephcore::thinker::InteractionManifest>,
     ) -> Result<FlowOutcome, FlowError> {
         let ctx = StubContext {
             session_key,
@@ -198,6 +199,9 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         default_max_iterations: 200,
         power: None,
         memory_context_provider: None,
+        dispatch_registry: None,
+        turn_budget: None,
+        result_store: None,
     };
 
     Arc::new(Orchestrator::new(
@@ -223,5 +227,6 @@ pub fn basic_request() -> FlowRequest {
         depth: 0,
         tool_service: None,
         trace_sink: None,
+        interaction_manifest: None,
     }
 }

@@ -67,12 +67,7 @@ async fn subagent_mode_cannot_see_or_execute_subagent_tool() {
     let svc = AllowlistToolService::new(Arc::new(ParentToolsWithSubagent), Arc::new(def));
 
     // list() must filter `subagent` out.
-    let names: Vec<_> = svc
-        .list()
-        .await
-        .into_iter()
-        .map(|d| d.name)
-        .collect();
+    let names: Vec<_> = svc.list().await.into_iter().map(|d| d.name).collect();
     assert!(
         !names.iter().any(|n| n == "subagent"),
         "subagent must not appear in SubAgent's tool list, got {names:?}"

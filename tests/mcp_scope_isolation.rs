@@ -11,9 +11,11 @@ use std::sync::{Arc, Mutex};
 
 use alephcore::agents::{AgentDef, AgentMode, McpInlineConfig, McpServerSpec};
 use alephcore::extension::registrar::mcp_registrar::{McpScope, McpScopeError};
-use alephcore::extension::{PluginKind, PluginOrigin, PluginRecord, PluginRegistry, ToolRegistration};
-use alephcore::harness::TraceSink;
+use alephcore::extension::{
+    PluginKind, PluginOrigin, PluginRecord, PluginRegistry, ToolRegistration,
+};
 use alephcore::harness::trace::LoopTraceEvent;
+use alephcore::harness::TraceSink;
 
 #[derive(Default, Clone)]
 struct CapturingSink {
@@ -56,10 +58,11 @@ fn registry_with_global_tool(plugin_id: &str, tool_name: &str) -> PluginRegistry
 async fn i_t1_happy_reference_path() {
     let registry = registry_with_global_tool("github", "gh-search");
     let global = Arc::new(registry);
-    let agent = AgentDef::new("scoped", AgentMode::SubAgent)
-        .with_mcp_servers(vec![McpServerSpec::Reference {
+    let agent = AgentDef::new("scoped", AgentMode::SubAgent).with_mcp_servers(vec![
+        McpServerSpec::Reference {
             name: "github".into(),
-        }]);
+        },
+    ]);
     let sink = CapturingSink::default();
     let arc_sink: Arc<dyn TraceSink> = Arc::new(sink.clone());
 
@@ -72,14 +75,15 @@ async fn i_t1_happy_reference_path() {
 
     let events = sink.snapshot();
     assert!(
-        events.iter().any(|e| matches!(e, LoopTraceEvent::McpScopeAttached { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::McpScopeAttached { .. })),
         "expected McpScopeAttached"
     );
     assert!(
-        events.iter().any(|e| matches!(
-            e,
-            LoopTraceEvent::McpScopeCleaned { leaked: false, .. }
-        )),
+        events
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::McpScopeCleaned { leaked: false, .. })),
         "expected McpScopeCleaned(leaked=false)"
     );
 }
@@ -88,15 +92,16 @@ async fn i_t1_happy_reference_path() {
 async fn i_t2_happy_inline_path() {
     let registry = PluginRegistry::new();
     let global = Arc::new(registry);
-    let agent = AgentDef::new("scoped", AgentMode::SubAgent)
-        .with_mcp_servers(vec![McpServerSpec::Inline {
+    let agent = AgentDef::new("scoped", AgentMode::SubAgent).with_mcp_servers(vec![
+        McpServerSpec::Inline {
             name: "fresh".into(),
             config: McpInlineConfig {
                 command: "/bin/cat".into(),
                 args: vec![],
                 env: Default::default(),
             },
-        }]);
+        },
+    ]);
 
     let result = McpScope::provision(&agent, global, None).await;
     match result {
@@ -115,15 +120,16 @@ async fn i_t2_happy_inline_path() {
 async fn i_t3_name_conflict_at_spawn_time() {
     let registry = registry_with_global_tool("github", "gh-search");
     let global = Arc::new(registry);
-    let agent = AgentDef::new("scoped", AgentMode::SubAgent)
-        .with_mcp_servers(vec![McpServerSpec::Inline {
+    let agent = AgentDef::new("scoped", AgentMode::SubAgent).with_mcp_servers(vec![
+        McpServerSpec::Inline {
             name: "github".into(),
             config: McpInlineConfig {
                 command: "/bin/echo".into(),
                 args: vec!["hi".into()],
                 env: Default::default(),
             },
-        }]);
+        },
+    ]);
     let err = McpScope::provision(&agent, global, None)
         .await
         .expect_err("must fail at spawn time");
@@ -137,10 +143,11 @@ async fn i_t3_name_conflict_at_spawn_time() {
 async fn i_t4_provision_perf_budget_warn_only() {
     let registry = registry_with_global_tool("github", "gh-search");
     let global = Arc::new(registry);
-    let agent = AgentDef::new("scoped", AgentMode::SubAgent)
-        .with_mcp_servers(vec![McpServerSpec::Reference {
+    let agent = AgentDef::new("scoped", AgentMode::SubAgent).with_mcp_servers(vec![
+        McpServerSpec::Reference {
             name: "github".into(),
-        }]);
+        },
+    ]);
     let t0 = std::time::Instant::now();
     let scope = McpScope::provision(&agent, global, None)
         .await
@@ -167,15 +174,16 @@ async fn i_t5_drop_teardown_emits_leaked_event() {
     let sink = CapturingSink::default();
     let arc_sink: Arc<dyn TraceSink> = Arc::new(sink.clone());
 
-    let agent = AgentDef::new("scoped", AgentMode::SubAgent)
-        .with_mcp_servers(vec![McpServerSpec::Inline {
+    let agent = AgentDef::new("scoped", AgentMode::SubAgent).with_mcp_servers(vec![
+        McpServerSpec::Inline {
             name: "fresh".into(),
             config: McpInlineConfig {
                 command: "/bin/cat".into(),
                 args: vec![],
                 env: Default::default(),
             },
-        }]);
+        },
+    ]);
 
     {
         let result = McpScope::provision(&agent, global, Some(arc_sink.clone())).await;
@@ -194,10 +202,9 @@ async fn i_t5_drop_teardown_emits_leaked_event() {
 
     let events = sink.snapshot();
     assert!(
-        events.iter().any(|e| matches!(
-            e,
-            LoopTraceEvent::McpScopeCleaned { leaked: true, .. }
-        )),
+        events
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::McpScopeCleaned { leaked: true, .. })),
         "expected McpScopeCleaned(leaked=true) on Drop path; got: {events:?}"
     );
 }

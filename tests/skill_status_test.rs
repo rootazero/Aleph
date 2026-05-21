@@ -21,7 +21,9 @@ async fn skill_status_reports_skills_from_temp_dir() {
 
     let tool = SkillStatusTool::new(system);
     let out = tool
-        .call(SkillStatusArgs { filter: "all".to_string() })
+        .call(SkillStatusArgs {
+            filter: "all".to_string(),
+        })
         .await
         .unwrap();
     assert!(out.total >= 1, "expected >=1 skill, got {}", out.total);

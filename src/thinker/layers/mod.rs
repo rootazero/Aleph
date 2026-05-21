@@ -31,17 +31,22 @@ mod agent_role;
 pub mod profile;
 
 // --- Tool layers ---
+mod tool_runtime_state;
 mod tool_usage_grammar;
 mod tools;
+pub use tool_runtime_state::ToolRuntimeStateLayer;
 
 // --- Context layers ---
+mod chain_context;
 mod environment;
 mod heartbeat;
 mod inbound_context;
 mod operational_guidelines;
 mod protocol_tokens;
+mod provider_guidance;
 mod runtime_context;
 mod security;
+mod session_budget;
 mod voice_mode;
 
 // --- Identity files layer ---
@@ -89,6 +94,7 @@ pub use tool_usage_grammar::ToolUsageGrammarLayer;
 pub use tools::HydratedToolsLayer;
 pub use tools::ToolsLayer;
 
+pub use chain_context::ChainContextLayer;
 pub use curated_memory::CuratedMemoryLayer;
 pub use environment::EnvironmentLayer;
 pub use heartbeat::HeartbeatLayer;
@@ -98,8 +104,10 @@ pub use memory_augmentation::MemoryAugmentationLayer;
 pub use memory_protocol::MemoryProtocolLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;
 pub use protocol_tokens::ProtocolTokensLayer;
+pub use provider_guidance::ProviderGuidanceLayer;
 pub use runtime_context::RuntimeContextLayer;
 pub use security::SecurityLayer;
+pub use session_budget::SessionBudgetLayer;
 pub use session_context_guide::SessionContextGuideLayer;
 pub use session_resume::SessionResumeLayer;
 pub use voice_mode::VoiceModeLayer;
