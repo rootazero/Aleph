@@ -392,6 +392,20 @@ another host.
 **Config**: A2A is off by default. Set `[a2a] enabled = true`; the `a2a_*`
 tools register only when it is enabled.
 
+### Outbound transport
+
+Outbound delegation is streaming-first: `a2a_delegate` POSTs to the remote
+agent's `/a2a/stream` (SSE) endpoint, consuming `status-update` /
+`artifact-update` events with a 90s idle-timeout for liveness and live
+progress notifications. A remote agent without a streaming route (non-Aleph
+A2A agents) is handled by a transparent fallback to the synchronous
+`message/send` endpoint.
+
+Config-declared agents (`[[a2a.agents]]`) start with a placeholder Agent Card.
+A one-shot background task at server startup fetches each agent's real Agent
+Card (skills, description, version) and replaces the placeholder, so smart
+routing and `a2a_agents list` see real skill data.
+
 ## Infrastructure: Autonomous Dispatcher
 
 The **`TeamDispatcher`** (`src/teams/dispatcher/`) drives a team's
