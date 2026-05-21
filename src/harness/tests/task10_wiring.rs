@@ -10,7 +10,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -297,7 +297,7 @@ async fn budget_final_reply_skips_grace_turn_when_text_already_present() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -354,6 +354,7 @@ async fn budget_final_reply_fires_grace_turn_when_no_prior_text() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -422,6 +423,7 @@ async fn budget_final_reply_grace_turn_failsoft_on_llm_error() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -486,7 +488,7 @@ async fn budget_warning_invokes_compactor_before_llm() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -572,7 +574,7 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -642,6 +644,7 @@ async fn diminishing_returns_fires_grace_and_hits_limit() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -737,7 +740,7 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();
@@ -870,6 +873,7 @@ async fn per_tool_budget_fires_before_global_turn_timeout() {
         turn_timeout: Some(std::time::Duration::from_secs(60)),
         turn_budget: None,
         result_store: None,
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -892,5 +896,193 @@ async fn per_tool_budget_fires_before_global_turn_timeout() {
     assert!(
         elapsed < std::time::Duration::from_millis(500),
         "per-tool 50ms budget must fire well before the 60s global; saw {elapsed:?}",
+    );
+}
+
+// =============================================================================
+// Fake SessionEpochRegistrar helpers for split tests
+// =============================================================================
+
+/// Registrar that always succeeds, recording whether it was called.
+struct OkRegistrar {
+    called: Arc<AtomicBool>,
+}
+
+impl OkRegistrar {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            called: Arc::new(AtomicBool::new(false)),
+        })
+    }
+}
+
+#[async_trait]
+impl crate::session::epoch_registrar::SessionEpochRegistrar for OkRegistrar {
+    async fn register_epoch(
+        &self,
+        _key: &crate::session::service::SessionId,
+    ) -> anyhow::Result<()> {
+        self.called.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// Registrar that always fails.
+struct FailRegistrar;
+
+#[async_trait]
+impl crate::session::epoch_registrar::SessionEpochRegistrar for FailRegistrar {
+    async fn register_epoch(
+        &self,
+        _key: &crate::session::service::SessionId,
+    ) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("registrar deliberately fails"))
+    }
+}
+
+// =============================================================================
+// Test — SplitSession: circuit-breaker trip → split → run continues in child.
+// =============================================================================
+#[tokio::test]
+async fn split_session_directive_continues_run_in_child_session() {
+    // 80-char user message with budget=100 tokens → ratio=0.80, in warning zone
+    // (warn=0.50, critical=0.90). circuit_breaker_max=1 → first record_compaction
+    // trips it. max_splits=1 → SplitSession (not FinalReply).
+    let user_text = "y".repeat(80);
+    let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
+    // Provider returns a short text answer → loop ends cleanly after one turn in child.
+    let provider = CountingProvider::new("all done");
+
+    let mut cfg = tiny_budget_config(100, 0.50, 0.90);
+    cfg.circuit_breaker_max = 1;
+    cfg.max_splits = 1;
+    let budget = ContextBudget::new(&cfg);
+
+    // FailingProvider drives the compactor's deterministic-truncation fallback path.
+    let compactor = Arc::new(crate::context::compact::compactor::ContextCompactor::new(
+        Arc::new(FailingProvider) as Arc<dyn AiProvider>,
+        crate::context::compact::compactor::CompactorConfig {
+            fresh_tail: 1,
+            ..Default::default()
+        },
+    ));
+
+    let registrar = OkRegistrar::new();
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: None,
+        context_budget: Some(Arc::new(AsyncMutex::new(budget))),
+        context_compactor: Some(compactor),
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: Some(registrar.clone() as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>),
+    };
+    let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
+    let mut cb = NoopHarnessCallback;
+
+    harness
+        .run(&sample_session_id(), &mut cb, &cancel)
+        .await
+        .expect("run should complete Ok after split");
+
+    // The registrar was called, confirming the split path was taken.
+    assert!(
+        registrar.called.load(Ordering::SeqCst),
+        "epoch registrar must have been called during split",
+    );
+    // After the split, run() must record the child session as the final id.
+    let final_id = harness
+        .final_session_id()
+        .expect("final_session_id must be Some after a split");
+    let parent = sample_session_id();
+    let expected_child = parent.with_next_epoch();
+    assert_eq!(
+        final_id, expected_child,
+        "final session must be parent.epoch+1",
+    );
+}
+
+// =============================================================================
+// Test — SplitSession fail-soft: registrar error → fall back to FinalReply.
+// =============================================================================
+#[tokio::test]
+async fn split_session_failsoft_falls_back_to_final_reply() {
+    // Same budget config as above — trips SplitSession on first warning turn.
+    let user_text = "y".repeat(80);
+    let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
+    let provider = CountingProvider::new("grace summary");
+
+    let mut cfg = tiny_budget_config(100, 0.50, 0.90);
+    cfg.circuit_breaker_max = 1;
+    cfg.max_splits = 1;
+    let budget = ContextBudget::new(&cfg);
+
+    let compactor = Arc::new(crate::context::compact::compactor::ContextCompactor::new(
+        Arc::new(FailingProvider) as Arc<dyn AiProvider>,
+        crate::context::compact::compactor::CompactorConfig {
+            fresh_tail: 1,
+            ..Default::default()
+        },
+    ));
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: None,
+        context_budget: Some(Arc::new(AsyncMutex::new(budget))),
+        context_compactor: Some(compactor),
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        // FailRegistrar always returns Err → split fails → fall back to FinalReply.
+        session_epoch_registrar: Some(Arc::new(FailRegistrar) as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>),
+    };
+    let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
+    let mut cb = NoopHarnessCallback;
+
+    harness
+        .run(&sample_session_id(), &mut cb, &cancel)
+        .await
+        .expect("run must complete Ok even when split fails");
+
+    assert!(
+        harness.hit_limit(),
+        "FinalReply fallback path must set hit_limit",
+    );
+    // No split → final session is same as parent (epoch unchanged).
+    let final_id = harness.final_session_id();
+    let parent = sample_session_id();
+    assert!(
+        final_id.is_none() || final_id.as_ref() == Some(&parent),
+        "final session must equal parent when split fails; got {final_id:?}",
     );
 }

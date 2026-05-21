@@ -307,6 +307,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 .result_store
                 .clone()
                 .or_else(crate::tools::result_store::global_tool_result_store),
+            session_epoch_registrar: None,
         };
         // Stage 7 (#12): emit init-seam visibility before the harness
         // starts its Think→Act loop. Order mirrors HarnessDeps field

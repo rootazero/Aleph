@@ -126,7 +126,7 @@ async fn session_driver_delegates_to_harness_run() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-delegation");
@@ -198,7 +198,7 @@ async fn session_driver_preserves_cancelled_semantics() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-cancelled");

@@ -289,7 +289,7 @@ pub(super) fn minimal_deps(
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     }
 }
 

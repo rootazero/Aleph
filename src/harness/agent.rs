@@ -97,6 +97,10 @@ pub struct AgentHarness {
     /// Wall-clock start of `run()`. Read after the run via
     /// [`AgentHarness::duration_ms`] to derive elapsed milliseconds.
     started_at: OnceLock<Instant>,
+    /// The session id at the end of `run()`. Equals the parent id on a normal
+    /// run; equals the child id when a `SplitSession` directive caused the
+    /// loop to switch sessions mid-run. `None` until `run()` completes.
+    final_session_id: Mutex<Option<SessionId>>,
 }
 
 impl AgentHarness {
@@ -114,6 +118,7 @@ impl AgentHarness {
             tool_timeline: Mutex::new(Vec::new()),
             token_breakdown: Mutex::new(TokenBreakdown::default()),
             started_at: OnceLock::new(),
+            final_session_id: Mutex::new(None),
         }
     }
 
@@ -127,6 +132,17 @@ impl AgentHarness {
     /// previous run's budget trip does not leak into the next outcome.
     pub fn reset_hit_limit(&self) {
         self.hit_limit.store(false, Ordering::Relaxed);
+    }
+
+    /// The session id at the end of the most recent `run()`. `None` when
+    /// `run()` has not been called or the harness is still running.
+    /// Equals the parent id on a normal run; equals the child id when
+    /// a `SplitSession` directive switched the loop to a child session.
+    pub fn final_session_id(&self) -> Option<SessionId> {
+        self.final_session_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Cumulative provider-reported token usage observed across every LLM
@@ -308,6 +324,10 @@ impl Harness for AgentHarness {
         // when the same harness is reused — single-run instances see one
         // entry only.
         let _ = self.started_at.set(Instant::now());
+        // Track which session the loop is currently driving. Starts as the
+        // caller's session; rebinds to the child session when a SplitSession
+        // directive succeeds. Stored in `final_session_id` at loop exit.
+        let mut current_session: SessionId = session_id.clone();
         let cap = self.deps.max_iterations;
         let mut iterations: usize = 0;
         let mut tool_calls_made: usize = 0;
@@ -340,7 +360,7 @@ impl Harness for AgentHarness {
             }
             match self
                 .run_turn_internal(
-                    session_id,
+                    &current_session,
                     callback,
                     iterations,
                     tool_calls_made,
@@ -372,7 +392,10 @@ impl Harness for AgentHarness {
                     self.set_terminate_reason(TerminateReason::Cancelled);
                     break Err(e);
                 }
-                Ok((TurnState::Continue, executed, is_veto)) => {
+                Ok((TurnState::Continue, executed, is_veto, split_child)) => {
+                    if let Some(child) = split_child {
+                        current_session = child;
+                    }
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
                     }
@@ -448,12 +471,18 @@ impl Harness for AgentHarness {
                         }
                     }
                 }
-                Ok((TurnState::Done, _, _)) => {
+                Ok((TurnState::Done, _, _, _)) => {
                     callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::Completed);
                 }
             }
         };
+
+        // Store the final session id — either the original or a split child.
+        *self
+            .final_session_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(current_session);
 
         // P2: read the last AssistantMessage text once at exit so the
         // SessionCompleted trace event is self-sufficient. Trace consumers
@@ -559,7 +588,7 @@ impl Harness for AgentHarness {
             &cancel,
         )
         .await
-        .map(|(state, _, _)| state)
+        .map(|(state, _, _, _)| state)
     }
 }
 
@@ -929,6 +958,7 @@ mod tests {
             turn_timeout: None,
             turn_budget: None,
             result_store: None,
+            session_epoch_registrar: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -991,6 +1021,7 @@ mod tests {
             turn_timeout: None,
             turn_budget: None,
             result_store: None,
+            session_epoch_registrar: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1050,6 +1081,7 @@ mod tests {
             turn_timeout: Some(std::time::Duration::from_millis(20)),
             turn_budget: None,
             result_store: None,
+            session_epoch_registrar: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;

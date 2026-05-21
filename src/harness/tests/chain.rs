@@ -98,7 +98,7 @@ mod stubs {
             turn_timeout: None,
             turn_budget: None,
             result_store: None,
-
+            session_epoch_registrar: None,
         }
     }
 }
