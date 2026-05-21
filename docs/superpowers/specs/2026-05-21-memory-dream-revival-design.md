@@ -138,8 +138,9 @@ Net: +411 / −704 lines. Lib + bin compile; touched files are clippy-clean
 
 ## Continuation cycle — 2026-05-22
 
-Re-examined the four deferred items. Two were safe to ship; two were
-confirmed out of scope for a non-destructive cycle.
+All four deferred items were implemented. Two were straightforward
+dead-code / bug-fix work; two needed careful scoping to stay
+non-destructive.
 
 **Shipped:**
 
@@ -163,27 +164,37 @@ confirmed out of scope for a non-destructive cycle.
   `memory.appList` keeps its honest empty result with the boilerplate and
   stale TODO removed.
 
-**Confirmed out of scope (not shipped):**
+- **Phase 5 — register 7 memory tools in `BUILTIN_TOOL_DEFINITIONS`** ✅
+  `82dd31d57`. `memory_reflect`, `recall_context`, `note_orient`,
+  `note_schema`, `user_profile`, `session_complete`, and
+  `flag_user_correction` were registered only via the dynamic builder in
+  `constructor.rs`, so they were absent from the authoritative
+  `BUILTIN_TOOL_DEFINITIONS` table — making `is_builtin_tool()`,
+  `get_builtin_tool_names()`, and `agents.tools_schema` inconsistent with
+  the tools actually available to the LLM. Added the 7 definitions (all
+  `requires_config`, with matching `create_tool_boxed` `None` arms) and
+  assigned them to the `memory_knowledge` tool-category group — required by
+  `groups.rs::test_all_builtin_tools_have_a_group`, which also surfaces
+  them in the Panel tool-category catalog.
 
-- **7 memory tools in `BUILTIN_TOOL_DEFINITIONS`** — investigation showed
-  this is not a 7-line metadata fix: `groups.rs::test_all_builtin_tools_have_a_group`
-  requires every definition to also be assigned a `TOOL_CATEGORIES` group,
-  and `TOOL_CATEGORIES` feeds `agents.tools_schema` → the Panel per-agent
-  tool-config UI. The 7 tools are internal memory-lifecycle hooks
-  (`memory_reflect`, `session_complete`, `flag_user_correction`, …),
-  conditionally registered from `constructor.rs` and already callable by the
-  LLM. The only consistency consumer, `is_builtin_tool()`, is itself dead
-  code (`#[allow(dead_code)]`, zero callers). Net functional benefit ≈ 0;
-  the change carries a real UX side-effect (exposing lifecycle tools as
-  individually toggleable in the Panel). Left unchanged — needs a product
-  decision, not a wiring fix.
-- **Event-sourcing wiring** — confirmed a destructive write-path overhaul,
-  not a wiring gap. `MemoryCommandHandler` is constructed and threaded into
-  `CompressionService::with_command_handler` but its methods are never
-  called (a dead write-side); `EventProjector` / `MemoryTimeTraveler` are
-  live via the `memory_timeline` tool (read-side). Completing it requires
-  rerouting every `insert_fact` / `update_fact` / `invalidate_fact` write
-  through the handler; removing it requires deleting a live tool. Both are
-  major architectural decisions that violate the "no destructive
-  refactoring" constraint of this effort. Remains a separate scoped effort
+- **Phase 6 — record note_manage lifecycle events into the event log** ✅
+  `0d4de60f8`. The event-sourcing subsystem (`MemoryCommandHandler` /
+  `EventProjector` / `MemoryTimeTraveler`) was fully built but had no
+  producer — nothing ever wrote the event log, so the `memory_timeline`
+  tool always returned empty. Wired the cleanest producer: `note_manage`,
+  whose create/update/append/delete actions map 1:1 onto note-lifecycle
+  events. After each successful write it records an event via the handler,
+  keyed by the stable `category/filename` note path, so `memory_timeline`
+  now has real history to fold.
+
+  Scoping to stay non-destructive: the handler is built **without** a
+  `NoteIndexer`, so its projection step is a no-op — it is a pure
+  event-log writer here. `note_manage` keeps its own notes-filesystem
+  write path 100% unchanged (the handler's own `project_to_notes` writes
+  degenerate UUID-titled notes and must not touch real notes). Event
+  recording is best-effort (the note write already committed). Routing
+  `CompressionService` / dream-stage writes through the handler remains a
+  genuine write-path overhaul — those hold already-built `KnowledgeNote`s
+  while the handler builds notes from command fields (an architectural
+  inversion) — and stays a separate scoped effort
   (`project_event_sourcing_next`).
