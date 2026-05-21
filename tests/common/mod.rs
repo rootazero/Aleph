@@ -186,6 +186,7 @@ impl OrchestratorFixture {
             default_max_iterations: 200,
             power: None,
             memory_context_provider: None,
+            memory_backend: None,
             dispatch_registry: None,
             turn_budget: None,
             result_store: None,

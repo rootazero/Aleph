@@ -18,14 +18,24 @@ use crate::context::compact::compactor::{CompactResult, CompactStrategy};
 pub struct SessionSummarySource {
     database: MemoryBackend,
     session_id: String,
+    /// Agent that owns the session summaries. `get_raw_by_path_prefix` filters
+    /// `WHERE agent_id = ?`, so this must be the real owning agent id — the
+    /// same one `SessionCompactor::post_turn_compress` writes the d0/d1/d2
+    /// facts under. A wrong (or placeholder) value matches nothing.
+    agent_id: String,
 }
 
 impl SessionSummarySource {
-    /// Create a new source for the given session.
-    pub fn new(database: MemoryBackend, session_id: impl Into<String>) -> Self {
+    /// Create a new source for the given session and owning agent.
+    pub fn new(
+        database: MemoryBackend,
+        session_id: impl Into<String>,
+        agent_id: impl Into<String>,
+    ) -> Self {
         Self {
             database,
             session_id: session_id.into(),
+            agent_id: agent_id.into(),
         }
     }
 
@@ -45,7 +55,7 @@ impl SessionSummarySource {
 
         let mut raws = self
             .database
-            .get_raw_by_path_prefix(&path_prefix, "default", 50)
+            .get_raw_by_path_prefix(&path_prefix, &self.agent_id, 50)
             .await
             .ok()?;
 
@@ -158,5 +168,61 @@ mod tests {
     #[test]
     fn extract_depth_returns_0_for_invalid() {
         assert_eq!(extract_depth("invalid/path"), 0);
+    }
+
+    #[tokio::test]
+    async fn try_reuse_finds_summaries_for_the_owning_agent() {
+        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use std::sync::Arc;
+
+        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        // Seed a d0 session summary the way `post_turn_compress` writes it.
+        let raw = RawMemory::new(
+            "Earlier turns: set up the project and ran the tests.".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("agent-x")
+        .with_session("sess-1")
+        .with_path("aleph://session/sess-1/d0/0");
+        backend.insert_raw_memory(&raw).await.unwrap();
+
+        let source = SessionSummarySource::new(backend, "sess-1", "agent-x");
+        let mut messages = vec![
+            UnifiedMessage::user("old one"),
+            UnifiedMessage::assistant("old two"),
+            UnifiedMessage::user("fresh tail"),
+        ];
+        let result = source
+            .try_reuse(&mut messages, 0, 2)
+            .await
+            .expect("matching agent + session must reuse the stored summary");
+        assert_eq!(result.strategy_used, CompactStrategy::SessionMemoryReuse);
+        // window [0,2) collapses into one summary message; the fresh tail stays.
+        assert_eq!(messages.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn try_reuse_returns_none_for_a_different_agent() {
+        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use std::sync::Arc;
+
+        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let raw = RawMemory::new("summary".to_string(), RawMemorySource::SessionCompressed)
+            .with_agent("agent-x")
+            .with_session("sess-1")
+            .with_path("aleph://session/sess-1/d0/0");
+        backend.insert_raw_memory(&raw).await.unwrap();
+
+        // Same session id, wrong owning agent — the agent_id filter must
+        // exclude it. Regression guard for the old hardcoded "default".
+        let source = SessionSummarySource::new(backend, "sess-1", "other-agent");
+        let mut messages = vec![
+            UnifiedMessage::user("old one"),
+            UnifiedMessage::assistant("old two"),
+            UnifiedMessage::user("fresh tail"),
+        ];
+        assert!(source.try_reuse(&mut messages, 0, 2).await.is_none());
     }
 }

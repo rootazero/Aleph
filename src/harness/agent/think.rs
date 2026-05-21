@@ -234,8 +234,14 @@ impl AgentHarness {
         if matches!(budget_directive, Some(LoopDirective::CompactAndContinue)) {
             if let Some(compactor) = self.deps.context_compactor.as_ref() {
                 // `fresh_tail = 0` lets the compactor fall back to its own
-                // config default (matches Task 6 spec).
-                match compactor.compact(&mut messages, 0, None).await {
+                // config default (matches Task 6 spec). The session id enables
+                // the compactor's zero-API-cost reuse of hierarchical session
+                // summaries when a memory backend is wired.
+                let session_key_str = session_id.to_key_string();
+                match compactor
+                    .compact(&mut messages, 0, Some(session_key_str.as_str()))
+                    .await
+                {
                     Ok(_) => {
                         // Re-arm the circuit breaker only when this compaction
                         // actually reduced pressure. An ineffective compaction
