@@ -1199,6 +1199,18 @@ mod tests {
             .await
             .unwrap();
 
+        // `created_at` is second-granularity, so all five inserts land in the
+        // same second and the same-priority tiebreak would be undefined.
+        // Backdate normal_old so the `created_at ASC` tiebreak is deterministic.
+        {
+            let conn = store.conn.lock().await;
+            conn.execute(
+                "UPDATE coord_tasks SET created_at = created_at - 100 WHERE id = ?1",
+                params![normal_old.id],
+            )
+            .unwrap();
+        }
+
         let ordered = store
             .list_tasks(CoordTaskFilter {
                 team_id: Some("T".into()),
