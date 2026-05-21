@@ -62,7 +62,10 @@ impl ProtocolLoader {
         })?;
 
         // Create ConfigurableProtocol
-        let protocol = ConfigurableProtocol::new(def.clone(), reqwest::Client::new())?;
+        let protocol = ConfigurableProtocol::new(
+            def.clone(),
+            crate::providers::protocols::http_client::build_provider_http_client(),
+        )?;
 
         // Register in ProtocolRegistry
         ProtocolRegistry::global().register(def.name.clone(), Arc::new(protocol))?;

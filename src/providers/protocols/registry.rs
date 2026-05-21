@@ -123,7 +123,7 @@ impl ProtocolRegistry {
             .unwrap_or_else(|e| e.into_inner())
             .get(name)
             .map(|factory| {
-                let client = Client::new();
+                let client = crate::providers::protocols::http_client::build_provider_http_client();
                 factory(client)
             })
     }
