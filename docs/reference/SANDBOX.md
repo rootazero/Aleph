@@ -313,9 +313,271 @@ Hard rules that must not be violated by any bridge handler:
   justifying why it does not touch `~/.aleph/`. Bridge code review checks this
   invariant.
 
+## Cycle 1 hardening (2026-05-20)
+
+Comparison against codex's three-OS sandbox (`/Volumes/TBU4/Github/codex`)
+surfaced four classes of defect that Cycle 1 fixed end-to-end. See
+[`docs/superpowers/specs/2026-05-20-sandbox-hardening-cycle1-design.md`][cycle1]
+for the full design.
+
+[cycle1]: ../superpowers/specs/2026-05-20-sandbox-hardening-cycle1-design.md
+
+### Behavior changes (breaking)
+
+- **`NetworkPolicy::AllowHosts` and `NetworkPolicy::ProxyOnly` now hard-fail**
+  on Linux and Windows. Both used to silently degrade — Linux fell back to
+  `--unshare-net` (no network at all), Windows wrote a no-op profile line.
+  Callers that depended on the silent fallback get
+  `SandboxError::UnsupportedPolicy` instead; the error message points at the
+  follow-up spec that will implement the feature.
+- **macOS `AllowHosts` now validates each entry parses as an IP address**.
+  Seatbelt's `(remote ip ...)` matcher only accepts IP literals; hostnames
+  silently never matched (the rule was a no-op). The new validation rejects
+  hostnames with a remediation hint to pre-resolve to IPs.
+
+### New capabilities
+
+- **`SandboxCapabilities.max_memory_mb`** caps the sandboxed process's
+  virtual address space on all three OSes:
+  - **macOS / Linux**: `setrlimit(RLIMIT_AS)` applied via `pre_exec` on the
+    sandbox helper (`sandbox-exec` / `bwrap`). The limit is inherited by the
+    eventual target binary through exec.
+  - **Windows**: `JOBOBJECT_EXTENDED_LIMIT_INFORMATION.ProcessMemoryLimit` on
+    the Job Object that contains the sandboxed process.
+- **`SandboxCapabilities.timeout_secs`** is a per-call override of the
+  `SandboxConfig.default_timeout_seconds` ceiling.
+
+### Dissolution — 937 lines of dead Windows code removed
+
+The following modules contained stub façades pretending to implement Windows
+security primitives but were verifiably never called from production code:
+
+- `src/sandbox/platforms/windows/wfp.rs` — every method either returned a
+  hardcoded `Err` or a no-op `Ok(())`.
+- `src/sandbox/platforms/windows/appcontainer.rs` — every method returned
+  `Err("requires windows-sys 0.61+")`.
+- `src/sandbox/platforms/windows/acl.rs` — `dacl_allows_access` had zero
+  callers tree-wide.
+- `src/sandbox/platforms/windows/filter.rs` — `FilterSet` referenced only by
+  its own `#[cfg(test)]` module.
+- `src/sandbox/platforms/windows/token.rs` — `create_restricted_token` was
+  imported by `driver.rs` but never invoked; the spawn path used plain
+  `tokio::process::Command` with only a JobObject for protection.
+
+Removing them follows R10's "YAGNI 撤回模式" — zero current consumers means
+delete, not preserve for hypothetical future use. A future spec that
+implements RestrictedToken / WFP / AppContainer can re-introduce focused,
+working modules without inheriting the stub skeletons.
+
+### Current Windows defense surface (post-SP-6)
+
+The `sandbox-init-windows` subcommand walks a three-tier soft-degrade
+chain, picking the strongest containment available on the host:
+
+1. **AppContainer** (SP-6, shipped 2026-05-20): per-execution unique
+   profile via `CreateAppContainerProfile`; capability SIDs derived
+   from `SandboxCapabilities.network` (`internetClient`/
+   `privateNetworkClientServer` for `AllowAll`; nothing for `None`);
+   `CreateProcessW` with `EXTENDED_STARTUPINFO_PRESENT` +
+   `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`. The target runs at
+   a trust level below Low IL with capability-gated resource access.
+   Profile is `DeleteAppContainerProfile`-ed after `wait`. On any
+   AppContainer setup failure, soft-degrades to tier 2 (`require_app_container=true`
+   in `WindowsSandboxConfig` escalates to hard error).
+2. **Restricted token + Low IL** (SP-3a, shipped 2026-05-20):
+   `CreateRestrictedToken(self, DISABLE_MAX_PRIVILEGE)` →
+   `SetTokenInformation(TokenIntegrityLevel = S-1-16-4096)` →
+   `CreateProcessAsUserW(target)`. Target runs with no privileges at
+   Low IL. On `ERROR_PRIVILEGE_NOT_HELD` (host lacks
+   `SE_INCREASE_QUOTA`, common on locked-down server policies),
+   soft-degrades to tier 3.
+3. **`CreateProcessW` baseline** (cycle 1): host token, Medium IL,
+   inside JobObject only. Last-resort tier — JobObject containment
+   from cycle 1 always applies regardless of which tier launches the
+   target.
+
+JobObject (cycle 1): active-process limit (fork-bomb defense),
+kill-on-close, die-on-unhandled-exception, virtual-memory ceiling,
+UI restrictions. Wraps every spawned process group across all three
+tiers.
+
+`windows-sys` was upgraded `0.59 → 0.61` to access the
+`Win32_Security_Isolation` module which exposes the AppContainer API.
+
+Limitations (intentional, see SP-6 spec § 1 out-of-scope):
+- No WFP for per-host network filtering — `AllowHosts` returns
+  `UnsupportedPolicy` from `WindowsSandboxDriver::profile_for`. SP-3b
+  is deferred indefinitely (admin-only).
+- Targets requiring system paths outside their workspace (`~/.gitconfig`,
+  `%TEMP%`, `%APPDATA%`) remain blocked by the AppContainer SID —
+  accepted limitation; users can run outside AppContainer (sandbox
+  degrades to SP-3a tier).
+
+**SP-6 v2 (2026-05-20)**: the workspace DACL grant promised by SP-6 v1
+§ 2.4 is now wired. Before each AppContainer launch, the init process
+adds an inheritable `GENERIC_ALL` allow ACE for the per-execution
+AppContainer SID on the session workspace directory; after the target
+exits, the same helper revokes the ACE (best-effort). Failure at any
+step logs to stderr and continues — DACL is an enabler, not a sandbox
+enforcement primitive, so the sandbox itself never blocks on it.
+Targets that don't need workspace writes (computation-only) are
+unaffected. Targets requiring system paths (`~/.gitconfig`, `%TEMP%`)
+remain an accepted AppContainer limitation.
+
+### Linux resource limits (SP-5 — shipped 2026-05-20)
+
+On Linux with cgroup v2 delegated to the user, `BubblewrapDriver::run`
+creates a per-execution sub-cgroup under the aleph-server process's own
+cgroup and applies:
+
+- **`memory.max`** from `SandboxCapabilities.max_memory_mb`. RSS-based,
+  so `mmap(PROT_NONE)` tricks that bypass `RLIMIT_AS` are caught.
+  `memory.swap.max=0` always (no swap-pressure escape).
+- **`cpu.max`** from `LinuxSandboxConfig.cpu_quota_percent`. `None` →
+  unlimited; `Some(50)` → 50% of one core.
+- **`pids.max`** from `LinuxSandboxConfig.max_pids` (default `Some(200)`).
+  Hard cap on process count — defends against fork bombs beyond what
+  bwrap's active-process limit provides.
+
+The bwrap child PID is written to `cgroup.procs` via `pre_exec` so
+membership is inherited through the bwrap → sandbox-init → target exec
+chain. `Drop` on `CgroupV2Scope` runs after `wait_with_output()` and
+`rmdir`s the cgroup directory; no orphan accumulation.
+
+When cgroup v2 is unavailable (cgroup-v1-only systems, containers
+without delegation, non-systemd hosts), `try_create` returns `None` and
+the sandbox runs anyway — `RLIMIT_AS` continues to enforce a memory
+ceiling, with one `tracing::warn!` explaining the degradation. Flip
+`LinuxSandboxConfig.require_cgroups = true` to escalate to a hard
+spawn failure instead.
+
+### Linux defense-in-depth (SP-2 — shipped 2026-05-20)
+
+bwrap's namespace isolation now sits underneath two additional Linux LSM
+mechanisms, applied by a hidden `aleph-server sandbox-init` subcommand
+that bwrap launches inside its mount namespace:
+
+- **Landlock** (kernel ≥ 5.13): in-process FS ACL inside the mounts that
+  bwrap already gave the child. `READ_FILE | READ_DIR | EXECUTE` on
+  `SYSTEM_READ_PATHS` (`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`,
+  `/etc`) + `SandboxCapabilities.fs_read`; full RW + Exec on
+  `SandboxCapabilities.fs_write` + the session cwd. On kernels < 5.13
+  landlock is soft-skipped with a warning unless
+  `LinuxSandboxConfig.require_landlock = true`.
+- **seccomp-bpf** (kernel ≥ 3.5, universal in practice): syscall
+  denylist returning `EPERM` for ~28 entries covering filesystem
+  manipulation (`mount`/`umount`/`pivot_root`/`chroot`), kernel reload
+  (`kexec_*`), module loading (`*_module`), eBPF, perf, ptrace, kernel
+  keyring, `userfaultfd`, io_uring, `mknodat`, swap, `syslog`,
+  `reboot`, namespace switching, and `clone`/`unshare` with
+  `CLONE_NEWUSER` (nested user-ns escape). Snapshot-pinned by the
+  `seccomp_denylist_is_frozen` unit test.
+
+The init subcommand is wired into the existing `aleph-server` binary
+(no separate helper artifact — R3 core minimalism); bwrap bind-mounts
+the running aleph-server read-only at `/aleph-sandbox-init` inside the
+namespace, then exec's it. Two new crates pulled in Linux-only:
+`landlock 0.4` and `seccompiler 0.5`.
+
+### Hostname support (macOS, SP-4 — shipped 2026-05-20)
+
+`NetworkPolicy::AllowHosts { hosts: ["github.com", "1.2.3.4"] }` is now
+accepted on macOS. The pipeline gained one new step between approval (4)
+and `profile_for` (5):
+
+- `src/sandbox/dns.rs::resolve_hosts_in_capabilities` walks the hosts list,
+  leaves IP literals untouched (`1.2.3.4`, `[::1]`, `1.2.3.4:443`, bare
+  IPv6), and resolves hostnames via `tokio::net::lookup_host` with a 5 s
+  timeout per hostname.
+- On failure (NXDOMAIN, timeout, empty result), the command is rejected
+  with `SandboxError::DnsResolutionFailed { hostname, source }` — fail
+  closed, matching cycle 1's P7 posture.
+- The resolved IPs replace the hostnames in `cmd.capabilities.network`
+  before the driver sees them, so Seatbelt's `(remote ip ...)` matcher
+  sees IP-only input. Defense-in-depth: the seatbelt driver still rejects
+  non-IPs if called directly, so a future caller bypassing the workspace
+  pipeline can't generate malformed SBPL.
+- Linux (`bwrap`) and Windows (`JobObject`-only) continue to return
+  `SandboxError::UnsupportedPolicy` for any `AllowHosts` — they have no
+  IP-level matcher to feed. SP-2 / SP-3b / SP-6 will plug into the same
+  DNS layer when those mechanisms land.
+
+### Deferred follow-up specs
+
+| ID | Scope | Why deferred |
+|---|---|---|
+| ~~SP-2~~ | ~~Linux Landlock + seccomp-bpf~~ | **Shipped (2026-05-20)** as `aleph-server sandbox-init` subcommand invoked by bwrap. See "Linux defense-in-depth" below. |
+| ~~SP-3a~~ | ~~Windows RestrictedToken + Low IL~~ | **Shipped (2026-05-20)** via `sandbox-init-windows` subcommand using CreateRestrictedToken + SetTokenInformation. See "Current Windows defense surface" above. |
+| SP-3b | Windows WFP per-host network filtering | Requires admin for filter installation. Likely superseded by SP-6 (AppContainer's network capability model) for most use cases. See "Network Filtering" below. |
+| ~~SP-4~~ | ~~Hostname-based filtering~~ | **Shipped (2026-05-20)** as workspace-layer DNS pre-resolution; macOS-scoped. See "Hostname support" below. |
+| ~~SP-5~~ | ~~cgroups v2 Linux memory + CPU~~ | **Shipped (2026-05-20)** as host-side `CgroupV2Scope` in `BubblewrapDriver::run`. See "Linux resource limits" below. |
+| ~~SP-6~~ | ~~Windows AppContainer~~ | **Shipped (2026-05-20)** as top tier of soft-degrade chain in sandbox-init-windows. See "Current Windows defense surface" above. |
+
+## Cycle 3 hardening (2026-05-21)
+
+Closes three follow-ups deferred from Cycle 2:
+
+### Full macOS SBPL platform defaults
+
+`src/sandbox/platforms/macos/seatbelt.rs` now ships the complete codex
+`restricted_read_only_platform_defaults.sbpl` (mach-lookups to logd /
+trustd / runningboard / analyticsd, IOSurface, system-mac-syscall,
+firmlink ancestors, terminal/PTY/dev handles, `/tmp` scratch space,
+opt-homebrew lib). The pre-Cycle-3 minimum SBPL passed sandbox-exec's
+parser but caused `/bin/echo` to SIGABRT before producing output; the
+new smoke test `echo_runs_inside_workspace_sandbox` pins that
+regression.
+
+### Windows protected-metadata DACL deny
+
+`launch_with_app_container` in `src/sandbox/windows_init.rs` now stamps
+`DENY_ACCESS` ACEs on every existing `<workspace>/{.git,.aleph,.codex,.agents}`
+subdirectory for the per-execution AppContainer SID, in addition to
+the Cycle 2 workspace `GRANT_ACCESS`. Because `SetEntriesInAclW`
+canonicalises ACL ordering (deny ACEs before allow), the metadata
+deny pins reads-but-no-writes/delete for the AppContainer even though
+the workspace root grant inherits `GENERIC_ALL` down to children. Mask
+is `GENERIC_WRITE | DELETE` — read stays allowed so `git log` / `git
+status` continue to work.
+
+### Network Filtering
+
+| Mode | macOS (Seatbelt) | Linux (bwrap) | Windows (AppContainer / token) |
+|---|---|---|---|
+| `None` | `(deny network*)` | `--unshare-net` + Cycle 3 seccomp deny `socket(AF_INET/INET6/NETLINK)` + `connect` | Token restricts; no inbound caps granted |
+| `AllowAll` | `(allow network*)` | shared netns | network capability granted |
+| `AllowHosts(ips)` | `(allow network-outbound (remote ip ...))` per IP | **Rejected** — pre-resolved IPs surfaced in error | **Rejected** — pre-resolved IPs surfaced in error |
+| `ProxyOnly` | `(allow ...)` for `localhost:<port>` | Rejected | Rejected |
+
+Cycle 3 lifted Linux closer to codex parity by adding seccomp-level
+socket-family deny for `None` mode (defense in depth on top of
+`--unshare-net`). Per-host enforcement for Linux + Windows is still
+deferred: every plausible mechanism requires either elevated
+privileges we don't hold (CAP_NET_ADMIN on Linux, SeChangeNotify /
+LocalSystem on Windows) or a managed proxy intercepting client
+traffic. The next-cycle work for true per-host filtering is:
+
+1. **Managed proxy mode**: ship a small in-process SOCKS / HTTP CONNECT
+   proxy bound to `127.0.0.1:<random>`, expose host+port through
+   `HTTP_PROXY` / `HTTPS_PROXY` env vars to the sandboxed target.
+   Enforces allowlist at the application protocol layer; bypassable
+   only by clients that ignore proxy env vars (rare in practice).
+2. **Linux nftables-in-user-netns**: drop into a user namespace where
+   the host process holds `CAP_NET_ADMIN` over the new netns, install
+   nftables rules allowing only the resolved IPs, then enter the
+   sandbox. Real kernel-level enforcement but adds rootless-network
+   plumbing (slirp4netns / pasta).
+
+Neither has a spec yet; until one ships, `AllowHosts` on Linux/Windows
+hard-fails with a rejection message that includes the exact
+pre-resolved IPs that would be allowed — callers can use this to plan
+around the gap or fall back to `AllowAll` + application-level filtering
+inside the workload.
+
 ## References
 
 - **Spec:** `docs/superpowers/specs/2026-04-19-sandbox-workspace-design.md`
+- **Spec (Cycle 1):** `docs/superpowers/specs/2026-05-20-sandbox-hardening-cycle1-design.md`
 - **Plan:** `docs/superpowers/plans/2026-04-19-managed-agents-phase-3-sandbox.md`
 - **Glossary:** [GLOSSARY.md](./GLOSSARY.md) — `Sandbox`, `WorkspaceSandbox`,
   `OsSandboxDriver`, `SandboxCapabilities`

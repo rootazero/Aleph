@@ -37,7 +37,8 @@ impl BuiltinToolRegistry {
     /// # Safety Notes
     /// - Dangerous commands are still blocked by CommandChecker (rm -rf /, sudo, etc.)
     /// - File operations are sandboxed by PathPermissionChecker
-    /// - TODO: Tool policy will be reimplemented following OpenClaw's sandbox pattern
+    /// - Tool policy is enforced layered (Guardrails + Sandbox + ApprovalGate).
+    ///   See docs/reference/SANDBOX.md.
     pub async fn with_config(config: BuiltinToolConfig) -> Self {
         let search_tool = if let Some(ref registry) = config.search_registry {
             SearchTool::with_registry(Arc::clone(registry))
@@ -734,6 +735,69 @@ impl BuiltinToolRegistry {
             (submit, resolve)
         };
 
+        // Add worker-lifecycle tools (idle / request-shutdown / resolve-shutdown).
+        // Hermes/ClawTeam-inspired wiring: MessageType::Idle / ShutdownRequest /
+        // ShutdownApproved / ShutdownRejected were already in the schema but no
+        // tools exposed them — this completes the LLM-facing layer.
+        let (lifecycle_idle_tool, lifecycle_request_shutdown_tool, lifecycle_resolve_shutdown_tool) = {
+            let current = current_agent_id.clone();
+            let mk = |router: &Arc<crate::teams::messages::router::MessageRouter>,
+                      team_store: &Arc<dyn crate::teams::TeamStore>| {
+                use crate::builtin_tools::team::{
+                    LifecycleIdleTool, LifecycleRequestShutdownTool, LifecycleResolveShutdownTool,
+                };
+                let idle = LifecycleIdleTool::new(
+                    Arc::clone(router),
+                    Arc::clone(team_store),
+                    current.clone(),
+                );
+                let request = LifecycleRequestShutdownTool::new(
+                    Arc::clone(router),
+                    Arc::clone(team_store),
+                    current.clone(),
+                );
+                let resolve = LifecycleResolveShutdownTool::new(Arc::clone(router), current.clone());
+                (idle, request, resolve)
+            };
+
+            let triad = match (
+                config.message_router.as_ref(),
+                config.team_store.as_ref(),
+            ) {
+                (Some(router), Some(team_store)) => Some(mk(router, team_store)),
+                _ => None,
+            };
+
+            // Register parameter schemas (same pattern as plan_submit/resolve above).
+            if let Some((ref idle, ref request, ref resolve)) = triad {
+                use crate::tools::AlephTool;
+                let defs: [crate::dispatcher::ToolDefinition; 3] = [
+                    idle.definition(),
+                    request.definition(),
+                    resolve.definition(),
+                ];
+                for td in &defs {
+                    let mut ut = UnifiedTool::new(
+                        format!("builtin:{}", td.name),
+                        &td.name,
+                        &td.description,
+                        ToolSource::Builtin,
+                    );
+                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    tools.insert(td.name.clone(), ut);
+                }
+                info!(
+                    "Registered worker lifecycle tools (lifecycle_idle, \
+                     lifecycle_request_shutdown, lifecycle_resolve_shutdown)"
+                );
+            }
+
+            match triad {
+                Some((i, r, x)) => (Some(i), Some(r), Some(x)),
+                None => (None, None, None),
+            }
+        };
+
         // Add task artifact tools (if ArtifactStore is available)
         let (task_submit_tool, task_read_artifact_tool) =
             if let Some(ref artifact_store) = config.artifact_store {
@@ -1122,6 +1186,9 @@ impl BuiltinToolRegistry {
             inbox_read_tool,
             plan_submit_tool,
             plan_resolve_tool,
+            lifecycle_idle_tool,
+            lifecycle_request_shutdown_tool,
+            lifecycle_resolve_shutdown_tool,
             session_collaborate_tool,
             session_turn_tool,
             session_read_tool,

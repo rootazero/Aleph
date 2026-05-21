@@ -150,6 +150,7 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
+        preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(alephcore::harness::prompt::DefaultPromptBuilder),
@@ -160,6 +161,8 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
     })
 }
 

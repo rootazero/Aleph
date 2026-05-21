@@ -42,22 +42,17 @@ impl EscapeAbort for WindowsEscapeListener {
         {
             use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
             use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-            use windows::Win32::UI::Input::KeyboardAndMouse::{
-                SetWindowsHookExW, WH_KEYBOARD_LL,
-            };
+            use windows::Win32::UI::Input::KeyboardAndMouse::{SetWindowsHookExW, WH_KEYBOARD_LL};
 
             {
                 let mut guard = LISTENER_PTR.lock().unwrap();
                 *guard = Some(self as *const _);
             }
 
-            let hmod = unsafe {
-                GetModuleHandleW(None).unwrap_or(HINSTANCE(std::ptr::null_mut()))
-            };
+            let hmod = unsafe { GetModuleHandleW(None).unwrap_or(HINSTANCE(std::ptr::null_mut())) };
 
-            let hook = unsafe {
-                SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), hmod, 0)
-            };
+            let hook =
+                unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), hmod, 0) };
 
             let hook = hook.map_err(|e| {
                 aleph_desktop::DesktopError::PlatformError(format!(
@@ -105,11 +100,7 @@ impl EscapeAbort for WindowsEscapeListener {
 }
 
 #[cfg(windows)]
-extern "system" fn keyboard_hook_proc(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         CallNextHookEx, KBDLLHOOKSTRUCT, VK_ESCAPE, WM_KEYDOWN,

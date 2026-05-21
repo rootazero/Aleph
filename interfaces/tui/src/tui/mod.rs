@@ -7,6 +7,7 @@
 
 mod app;
 mod command_tree;
+mod cost;
 mod event;
 mod markdown;
 mod render;
@@ -32,7 +33,7 @@ use aleph_protocol::{AgentTraceReplay, AgentTraceTaskSummary, StreamEvent};
 use aleph_client::{AlephClient, CliConfig, CliResult};
 
 use app::{Action, AppState, Focus};
-use slash::{LocalCommand, ParsedInput};
+use slash::{LocalCommand, ParsedInput, ToolProgressMode};
 
 /// Entry point: run the TUI application.
 ///
@@ -772,10 +773,228 @@ async fn execute_local_command(
                 Err(e) => state.add_system_message(format!("Replay load error: {}", e)),
             }
         }
+        LocalCommand::Usage => execute_usage(state, client).await,
+        LocalCommand::Compress => execute_compress(state, client).await,
+        LocalCommand::Stop => execute_stop(state, client).await,
+        LocalCommand::Undo => execute_undo(state, client).await,
+        LocalCommand::Retry => execute_retry(state, client).await,
+        LocalCommand::Tools { mode } => execute_tools(state, mode),
     }
 
     // Ensure textarea still has focus hint after command execution
     let _ = textarea;
+}
+
+// ---------------------------------------------------------------------------
+// Control-panel command handlers
+// ---------------------------------------------------------------------------
+
+/// Response shape for `session.usage` RPC. Subset of the full reply.
+#[derive(Debug, serde::Deserialize)]
+struct UsageReply {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    tokens: u64,
+    #[serde(default)]
+    messages: u64,
+}
+
+async fn execute_usage(state: &mut AppState, client: &AlephClient) {
+    let params = json!({ "session_key": state.session_key });
+    match client
+        .call::<_, UsageReply>("session.usage", Some(params))
+        .await
+    {
+        Ok(usage) => state.add_system_message(format_usage(state, &usage)),
+        Err(e) => state.add_system_message(format!("Usage error: {}", e)),
+    }
+}
+
+fn format_usage(state: &AppState, u: &UsageReply) -> String {
+    let mut lines = vec![format!(
+        "Session usage — messages: {}  input: {}  output: {}  total: {}",
+        u.messages, u.input_tokens, u.output_tokens, u.tokens
+    )];
+    match cost::estimate_cost(&state.model_name, u.input_tokens, u.output_tokens) {
+        Some(c) => lines.push(format!(
+            "Cost estimate ({}): ${:.4} (in) + ${:.4} (out) = ${:.4}",
+            state.model_name, c.input_usd, c.output_usd, c.total_usd
+        )),
+        None => lines.push(format!(
+            "Cost: n/a (no pricing entry for {})",
+            state.model_name
+        )),
+    }
+    lines.join("\n")
+}
+
+/// Response shape for `session.compact` RPC.
+#[derive(Debug, serde::Deserialize)]
+struct CompactReply {
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    before_messages: u64,
+    #[serde(default)]
+    after_messages: u64,
+    #[serde(default)]
+    tokens_saved: u64,
+}
+
+async fn execute_compress(state: &mut AppState, client: &AlephClient) {
+    if state.current_run.is_some() {
+        state.add_system_message(
+            "Wait for the current run to finish before compacting (/stop to abort)".to_string(),
+        );
+        return;
+    }
+    let params = json!({ "session_key": state.session_key });
+    match client
+        .call::<_, CompactReply>("session.compact", Some(params))
+        .await
+    {
+        Ok(r) => {
+            let summary = if r.before_messages == r.after_messages {
+                format!("Compact: {}", r.message)
+            } else {
+                format!(
+                    "Compacted {} → {} messages (saved ~{} tokens)",
+                    r.before_messages, r.after_messages, r.tokens_saved
+                )
+            };
+            state.add_system_message(summary);
+        }
+        Err(e) => state.add_system_message(format!("Compact error: {}", e)),
+    }
+}
+
+async fn execute_stop(state: &mut AppState, client: &AlephClient) {
+    let Some(run_id) = state.current_run.clone() else {
+        state.add_system_message("No active run.".to_string());
+        return;
+    };
+    let params = json!({ "run_id": run_id });
+    match client.call::<_, Value>("chat.abort", Some(params)).await {
+        Ok(_) => {
+            state.current_run = None;
+            state.add_system_message(format!("Run aborted ({}).", run_id));
+        }
+        Err(e) => state.add_system_message(format!("Abort error: {}", e)),
+    }
+}
+
+/// Response shape for `session.truncate` RPC.
+#[derive(Debug, serde::Deserialize)]
+struct TruncateReply {
+    #[serde(default)]
+    messages_removed: u64,
+    #[serde(default)]
+    tokens_removed_estimate: u64,
+}
+
+async fn execute_undo(state: &mut AppState, client: &AlephClient) {
+    if state.current_run.is_some() {
+        state
+            .add_system_message("Stop the active run first (/stop), then /undo.".to_string());
+        return;
+    }
+    // Count non-system messages — we only undo the last user+assistant pair.
+    let conversational_count = state
+        .messages
+        .iter()
+        .filter(|m| !matches!(m, app::ChatMessage::System { .. }))
+        .count();
+    if conversational_count < 2 {
+        state.add_system_message("Nothing to undo.".to_string());
+        return;
+    }
+    let keep_count = conversational_count.saturating_sub(2);
+    let params = json!({
+        "session_key": state.session_key,
+        "keep_count": keep_count,
+    });
+    match client
+        .call::<_, TruncateReply>("session.truncate", Some(params))
+        .await
+    {
+        Ok(r) => {
+            pop_last_turn_locally(state);
+            state.add_system_message(format!(
+                "Reverted last turn (-{} messages, ~{} tokens).",
+                r.messages_removed, r.tokens_removed_estimate
+            ));
+        }
+        Err(e) => state.add_system_message(format!("Undo error: {}", e)),
+    }
+}
+
+async fn execute_retry(state: &mut AppState, client: &AlephClient) {
+    if state.current_run.is_some() {
+        state
+            .add_system_message("Stop the active run first (/stop), then /retry.".to_string());
+        return;
+    }
+    let Some(last_user) = last_user_message(state) else {
+        state.add_system_message("Nothing to retry.".to_string());
+        return;
+    };
+
+    // Phase 1: undo the last turn
+    execute_undo(state, client).await;
+
+    // Phase 2: re-submit the captured user message via the same path as Action::SendMessage
+    state.add_user_message(last_user.clone());
+    state.send_history.push(last_user.clone());
+    let params = json!({
+        "session_key": state.session_key,
+        "message": last_user,
+    });
+    if let Err(e) = client.call::<_, Value>("agent.run", Some(params)).await {
+        state.add_system_message(format!("Retry send error: {}", e));
+    }
+}
+
+fn execute_tools(state: &mut AppState, mode: Option<ToolProgressMode>) {
+    match mode {
+        Some(m) => {
+            state.tool_progress_mode = m;
+            state.add_system_message(format!("Tool progress: {}", m));
+        }
+        None => {
+            state.add_system_message(format!(
+                "Tool progress: {} (usage: /tools off|new|all|verbose)",
+                state.tool_progress_mode
+            ));
+        }
+    }
+}
+
+/// Return a clone of the last User message's content, if any.
+fn last_user_message(state: &AppState) -> Option<String> {
+    state.messages.iter().rev().find_map(|m| match m {
+        app::ChatMessage::User { content, .. } => Some(content.clone()),
+        _ => None,
+    })
+}
+
+/// Locally pop the last user+assistant pair from chat history, after a successful
+/// server-side truncate. Keeps the TUI in sync without a full reload round-trip.
+fn pop_last_turn_locally(state: &mut AppState) {
+    // Drop trailing system messages first (they may have been added after the turn).
+    while matches!(state.messages.last(), Some(app::ChatMessage::System { .. })) {
+        state.messages.pop();
+    }
+    // Drop the trailing assistant turn (if any)…
+    if matches!(state.messages.last(), Some(app::ChatMessage::Assistant { .. })) {
+        state.messages.pop();
+    }
+    // …and the preceding user message.
+    if matches!(state.messages.last(), Some(app::ChatMessage::User { .. })) {
+        state.messages.pop();
+    }
 }
 
 fn format_replay_list(tasks: &[AgentTraceTaskSummary]) -> String {

@@ -8,7 +8,9 @@
 use alephcore::agents::background_tracker::BackgroundAgentTracker;
 use alephcore::agents::forwarding_trace_sink::ForwardingTraceSink;
 use alephcore::agents::progress::ProgressKind;
-use alephcore::harness::trace::{LoopTraceEvent, LoopTraceState, ToolCallEndEvent, ToolCallStartEvent};
+use alephcore::harness::trace::{
+    LoopTraceEvent, LoopTraceState, ToolCallEndEvent, ToolCallStartEvent,
+};
 use alephcore::harness::TraceSink;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -94,7 +96,9 @@ fn sync_subagent_does_not_install_wrapper() {
     });
     // Tracker never received progress (because no wrapper exists for sync paths).
     assert!(
-        tracker.progress_snapshot("nonexistent-sync-rid", 10).is_empty(),
+        tracker
+            .progress_snapshot("nonexistent-sync-rid", 10)
+            .is_empty(),
         "sync path must not populate background tracker"
     );
     // And the plain sink correctly captured the event (proves the trace flowed).

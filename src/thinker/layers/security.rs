@@ -18,7 +18,18 @@ impl PromptLayer for SecurityLayer {
         !matches!(mode, PromptMode::Minimal)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Context]
+        // Phase 2 wiring: participate in every non-minimal path so the
+        // layer fires on the harness `Basic` path. The inject() guard
+        // keeps output empty until a `ResolvedContext` is threaded into
+        // `LayerInput::context` (Phase 3 work), so widening here is a
+        // pure no-op today and ready to emit when context arrives.
+        &[
+            AssemblyPath::Basic,
+            AssemblyPath::Hydration,
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+            AssemblyPath::Cached,
+        ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         let ctx = match input.context {
@@ -28,13 +39,25 @@ impl PromptLayer for SecurityLayer {
 
         let disabled_tools = &ctx.disabled_tools;
         let security_notes = &ctx.environment_contract.security_notes;
+        let sandbox_summary = ctx.sandbox_summary.as_ref();
 
         // Only add section if there's something to report
-        if security_notes.is_empty() && disabled_tools.is_empty() {
+        if security_notes.is_empty() && disabled_tools.is_empty() && sandbox_summary.is_none() {
             return;
         }
 
         output.push_str("## Security & Constraints\n\n");
+
+        // Sandbox posture (codex-inspired): tells the LLM which enforcer
+        // it is running under so it can plan accordingly instead of
+        // discovering limits through trial-and-error.
+        if let Some(summary) = sandbox_summary {
+            for line in summary.to_prompt_lines() {
+                let line = sanitize_for_prompt(&line, SanitizeLevel::Light);
+                output.push_str(&format!("- {}\n", line));
+            }
+            output.push('\n');
+        }
 
         // Security notes
         for note in security_notes {
@@ -105,7 +128,91 @@ mod tests {
     #[test]
     fn test_security_paths() {
         let paths = SecurityLayer.paths();
-        assert_eq!(paths.len(), 1);
+        // Phase 2: layer now participates in every non-minimal path so it
+        // fires on the harness `Basic` route — graceful no-op until a
+        // ResolvedContext is threaded in.
+        assert!(paths.contains(&AssemblyPath::Basic));
+        assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Context));
+        assert!(paths.contains(&AssemblyPath::Hydration));
+        assert!(paths.contains(&AssemblyPath::Cached));
+    }
+
+    #[test]
+    fn graceful_noop_on_basic_path_without_context() {
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        // Basic path doesn't carry a ResolvedContext; the layer must emit
+        // nothing instead of a half-rendered "## Security & Constraints"
+        // header.
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn renders_sandbox_summary_when_attached() {
+        use crate::sandbox::{NetworkState, SandboxSummary};
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::security_context::SecurityContext;
+        use crate::thinker::InteractionManifest;
+        use crate::thinker::InteractionParadigm;
+
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        ctx.sandbox_summary = Some(SandboxSummary {
+            backend: "macos/seatbelt",
+            policy_tier: "workspace-write",
+            writable_roots: vec![std::path::PathBuf::from("/ws/abc")],
+            network: NetworkState::AllowAll,
+            max_memory_mb: Some(512),
+        });
+
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let _tools: Vec<crate::tools::info::ToolInfo> = vec![];
+        let input = LayerInput::context(&config, &ctx);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.contains("## Security & Constraints"));
+        assert!(out.contains("macos/seatbelt"));
+        assert!(out.contains("workspace-write"));
+        assert!(out.contains("/ws/abc"));
+        assert!(out.contains("512 MiB"));
+    }
+
+    #[test]
+    fn omits_sandbox_section_when_summary_is_none() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::security_context::SecurityContext;
+        use crate::thinker::InteractionManifest;
+        use crate::thinker::InteractionParadigm;
+
+        let ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        // sandbox_summary defaults to None; security_notes is still
+        // populated by `permissive` (one note), so the section still emits.
+        assert!(ctx.sandbox_summary.is_none());
+
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let _tools: Vec<crate::tools::info::ToolInfo> = vec![];
+        let input = LayerInput::context(&config, &ctx);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        // Header present (other notes exist) but no sandbox backend tag.
+        assert!(!out.contains("macos/seatbelt"));
+        assert!(!out.contains("linux/bwrap"));
+        assert!(!out.contains("none/disabled"));
     }
 }

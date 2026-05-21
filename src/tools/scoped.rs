@@ -12,6 +12,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::agents::subagent_tool::SubagentTool;
+use crate::dispatcher::ToolHealthCache;
+use crate::extension::hooks::{HookContext, HookExecutor, PermissionDecision};
+use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
@@ -36,6 +39,18 @@ pub trait ToolHookDecorator: Send + Sync {
 
     /// Called after a tool invocation completes (success or error).
     fn after_execute(&self, name: &str, output: &Result<ToolOutput, ToolError>);
+
+    /// Called after [`after_execute`] with the wall-clock duration of the
+    /// dispatch (including retry). Default no-op so existing implementations
+    /// keep compiling. Implement to surface duration metrics without taking
+    /// on per-call latency tracking inside every adapter.
+    fn after_execute_with_duration(
+        &self,
+        _name: &str,
+        _output: &Result<ToolOutput, ToolError>,
+        _duration_ms: u64,
+    ) {
+    }
 }
 
 // =============================================================================
@@ -59,6 +74,13 @@ pub struct ScopedToolService {
     subagent_tool: Option<Arc<SubagentTool>>,
     refresh: Option<Arc<dyn ToolRefreshSource>>,
     hook_decorator: Option<Arc<dyn ToolHookDecorator>>,
+    /// Extension-shipped hook executor. Fires `BeforeToolCall` interceptors
+    /// (block/deny/ask/update_input) and `AfterToolCall`/`AfterToolCallFailure`
+    /// observers around every tool execution. `None` = no extension hooks.
+    hook_executor: Option<Arc<HookExecutor>>,
+    /// Session identifier surfaced into `HookContext` for extension hooks
+    /// (env var `SESSION_ID`, log correlation). Empty string when unset.
+    hook_session_id: String,
     /// Tool names that require user confirmation before they execute.
     confirm_tools: BTreeSet<String>,
     /// Transport used to obtain that confirmation. `None` = no approval
@@ -69,8 +91,21 @@ pub struct ScopedToolService {
     /// (sandbox escalation, `requires_confirmation`, `ask_user`) can route a
     /// prompt back to the originating channel.
     turn_context: Option<crate::tools::turn_context::TurnContext>,
+    /// Layer 2 of the tool-result budget: persists oversized outputs to
+    /// disk and replaces them with a compact marker before they enter
+    /// the conversation history.
+    result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
     schema_cache: ArcSwap<Option<(u64, Arc<[crate::dispatcher::ToolDefinition]>)>>,
     cache_generation: std::sync::atomic::AtomicU64,
+    /// Optional runtime health cache. When set, `list()` and
+    /// `dispatcher_schema()` strip tools whose probe reports Unhealthy
+    /// (and the entry hasn't expired) so the LLM never sees a tool whose
+    /// dependencies are dead.
+    health: Option<Arc<ToolHealthCache>>,
+    /// Last observed health-cache generation. Bumping this on a generation
+    /// drift invalidates the `schema_cache`, so a tool flipping
+    /// healthy↔unhealthy retransmits to the LLM on the next turn.
+    last_health_generation: std::sync::atomic::AtomicU64,
 }
 
 impl ScopedToolService {
@@ -84,12 +119,42 @@ impl ScopedToolService {
             subagent_tool: None,
             refresh: None,
             hook_decorator: None,
+            hook_executor: None,
+            hook_session_id: String::new(),
             confirm_tools: BTreeSet::new(),
             approval_requester: None,
             turn_context: None,
+            result_store: None,
             schema_cache: ArcSwap::from_pointee(None),
             cache_generation: std::sync::atomic::AtomicU64::new(0),
+            health: None,
+            last_health_generation: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Attach the dispatcher's runtime health cache.
+    ///
+    /// When set, `list()` and `dispatcher_schema()` consult the cache and
+    /// silently strip any tool whose registered probe reports a non-expired
+    /// `Unhealthy`. Cache-key drift on the underlying health generation is
+    /// detected on every read so a flip propagates within one turn.
+    pub fn with_health(mut self, health: Arc<ToolHealthCache>) -> Self {
+        self.health = Some(health);
+        self
+    }
+
+    /// Attach a Layer 2 result store. When the underlying tool returns a
+    /// result whose token estimate exceeds the tool's `max_result_tokens`,
+    /// the full text is written to `~/.aleph/data/tool_results/<sess>/...`
+    /// and the LLM sees `[Full output persisted: <path> (<n> tokens, <tool>)]`
+    /// instead. Without a store wired the service falls back to head+tail
+    /// truncation when the budget is exceeded.
+    pub fn with_result_store(
+        mut self,
+        store: Arc<crate::tools::result_store::ToolResultStore>,
+    ) -> Self {
+        self.result_store = Some(store);
+        self
     }
 
     /// Require user confirmation for the named tools before they execute.
@@ -137,6 +202,24 @@ impl ScopedToolService {
     /// Attach a hook decorator for observing tool execution.
     pub fn with_hook_decorator(mut self, hook: Arc<dyn ToolHookDecorator>) -> Self {
         self.hook_decorator = Some(hook);
+        self
+    }
+
+    /// Attach an extension-shipped `HookExecutor`. Wires `BeforeToolCall`
+    /// interceptors (block / deny / ask / update_input) and
+    /// `AfterToolCall` / `AfterToolCallFailure` observers around every tool
+    /// dispatch. `session_id` flows into `HookContext` so command hooks see
+    /// the `$SESSION_ID` variable.
+    ///
+    /// Inert when `executor.hook_count() == 0`; callers can pass a snapshot
+    /// without first counting.
+    pub fn with_hook_executor(
+        mut self,
+        executor: Arc<HookExecutor>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.hook_executor = Some(executor);
+        self.hook_session_id = session_id.into();
         self
     }
 
@@ -194,6 +277,20 @@ impl ScopedToolService {
                     metadata: ToolOutputMetadata::default(),
                 })
             }
+            // Map `retryable=true` to `ToolError::Transport` so the
+            // one-shot retry helper (which keys off `ToolError::is_retryable`,
+            // currently `true` for `Timeout` / `Transport` only) actually
+            // fires. Semantically the LoopTool layer reports "this is a
+            // transient failure that may succeed if tried again"; `Transport`
+            // is the best-fitting carrier in the public `ToolError` enum
+            // without expanding its variant set.
+            ToolResult::Error {
+                error,
+                retryable: true,
+            } => Err(ToolError::Transport {
+                name: name.to_string(),
+                cause: error,
+            }),
             ToolResult::Error { error, .. } => Err(ToolError::Execution {
                 name: name.to_string(),
                 cause: error,
@@ -214,6 +311,10 @@ impl ToolService for ScopedToolService {
                 let _ = refresh.fetch_tools();
             }
         }
+
+        // Take a single health snapshot so the filter is consistent across
+        // every tool in this list call.
+        let health_snap = self.health.as_ref().map(|h| h.snapshot());
 
         let mut defs: Vec<ToolDefinition> = self
             .inner
@@ -238,6 +339,13 @@ impl ToolService for ScopedToolService {
         // and doesn't list "subagent" (which it never does — see is_allowed).
         if !self.allowed.is_empty() {
             defs.retain(|d| self.is_allowed(&d.name));
+        }
+
+        // Health gate: strip any tool whose probe reports a non-expired
+        // Unhealthy. Tools without a registered probe pass through (the
+        // snapshot reports them healthy by default).
+        if let Some(snap) = &health_snap {
+            defs.retain(|d| snap.is_healthy(&d.name));
         }
 
         defs
@@ -285,6 +393,19 @@ impl ToolService for ScopedToolService {
                 self.cache_generation.fetch_add(1, Ordering::AcqRel);
             }
         }
+
+        // Bump generation if the health cache rotated (a probe flipped
+        // healthy↔unhealthy or `invalidate_all` fired). This keeps the
+        // dispatcher schema cache aligned with the same gating snapshot
+        // that `list()` sees.
+        if let Some(health) = &self.health {
+            let live_gen = health.generation();
+            let prev = self.last_health_generation.swap(live_gen, Ordering::AcqRel);
+            if prev != live_gen {
+                self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
         let gen_now = self.cache_generation.load(Ordering::Acquire);
 
         // Cache hit?
@@ -293,6 +414,9 @@ impl ToolService for ScopedToolService {
                 return Arc::clone(&cached.1);
             }
         }
+
+        // Take a snapshot for filter application — same as list().
+        let health_snap = self.health.as_ref().map(|h| h.snapshot());
 
         // Cache miss: rebuild loop-side defs (matching list() body), then convert.
         let mut defs: Vec<ToolDefinition> = self
@@ -313,6 +437,9 @@ impl ToolService for ScopedToolService {
         if !self.allowed.is_empty() {
             // Mirror list() — subagent is exempt from allow-filter via is_allowed.
             defs.retain(|d| self.is_allowed(&d.name));
+        }
+        if let Some(snap) = &health_snap {
+            defs.retain(|d| snap.is_healthy(&d.name));
         }
         let schema = to_dispatcher_form(&defs);
         self.schema_cache
@@ -367,36 +494,341 @@ impl ScopedToolService {
             }
         }
 
-        // Fire pre-hook.
+        // Fire pre-hook (legacy observational decorator).
         if let Some(ref hook) = self.hook_decorator {
             hook.before_execute(name, &input);
         }
 
-        // Route to subagent tool if name matches.
-        let result = if self
+        // Extension `BeforeToolCall` interceptors. May block / deny / ask, or
+        // rewrite the tool input via `update_input:`. Inert when no executor
+        // is wired or when no hooks match the event. Runs BEFORE routing so a
+        // blocked call never reaches the retry pipeline.
+        let started = std::time::Instant::now();
+        let effective_input = match self
+            .run_before_tool_hooks(name, input.clone())
+            .await
+        {
+            Ok(maybe_new_input) => maybe_new_input,
+            Err(err) => {
+                let duration_ms: u64 = started
+                    .elapsed()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX);
+                let rejection: Result<ToolOutput, ToolError> = Err(err);
+                if let Some(ref hook) = self.hook_decorator {
+                    hook.after_execute(name, &rejection);
+                    hook.after_execute_with_duration(name, &rejection, duration_ms);
+                }
+                return rejection;
+            }
+        };
+
+        // Route to subagent tool if name matches; otherwise route into the
+        // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize
+        // pipeline below.
+        let routing = if self
             .subagent_tool
             .as_ref()
             .is_some_and(|st| st.name() == name)
         {
-            let st = self.subagent_tool.as_ref().unwrap();
-            let raw = st.execute(input).await;
-            Self::tool_result_to_output(name, raw)
+            RoutingTarget::Subagent
         } else if self.inner.get(name).is_some() || self.inner.resolve(name).is_some() {
-            let raw = self.inner.execute(name, input).await;
-            Self::tool_result_to_output(name, raw)
+            RoutingTarget::Inner
         } else {
-            Err(ToolError::NotFound {
-                name: name.to_string(),
-            })
+            RoutingTarget::Missing
         };
 
-        // Fire post-hook.
+        let mut result = match routing {
+            RoutingTarget::Missing => Err(ToolError::NotFound {
+                name: name.to_string(),
+            }),
+            target => {
+                // One-shot retry: if the inner Loop tool returned
+                // `retryable: true` (mapped to `ToolError::Transport` in
+                // `tool_result_to_output`), the helper sleeps 100ms and
+                // retries exactly once — but ONLY for tools declared
+                // idempotent. Non-idempotent tools (default) skip the
+                // retry to avoid duplicate side effects on a timeout that
+                // may have already reached the server. R10-safe: no policy
+                // selection beyond the static idempotency classification.
+                let idempotent = crate::tools::retry::is_idempotent_builtin_name(name);
+                let raw_outcome = crate::tools::retry::execute_with_one_shot_backoff(idempotent, || {
+                    let input = effective_input.clone();
+                    let name_owned = name.to_string();
+                    async move {
+                        let raw = match target {
+                            RoutingTarget::Subagent => {
+                                let st = self.subagent_tool.as_ref().expect("checked above");
+                                st.execute(input).await
+                            }
+                            RoutingTarget::Inner => self.inner.execute(&name_owned, input).await,
+                            RoutingTarget::Missing => unreachable!(),
+                        };
+                        Self::tool_result_to_output(&name_owned, raw)
+                    }
+                })
+                .await;
+                match raw_outcome {
+                    Ok(output) => Ok(self.apply_layer_two(name, output)),
+                    Err(err) => Err(Self::sanitize_tool_error(name, err)),
+                }
+            }
+        };
+
+        // Extension `AfterToolCall` / `AfterToolCallFailure` hooks. Observers
+        // fire in parallel; Interceptors run sequentially and may rewrite the
+        // visible tool output via `update_output:` on the success path.
+        self.run_after_tool_hooks(name, &effective_input, &mut result)
+            .await;
+
+        let duration_ms: u64 = started
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+
+        // Fire post-hooks. Both for back-compat (v1) and with-duration (v2).
         if let Some(ref hook) = self.hook_decorator {
             hook.after_execute(name, &result);
+            hook.after_execute_with_duration(name, &result, duration_ms);
         }
 
         result
     }
+
+    /// Fire `BeforeToolCall` interceptors. Returns the (possibly rewritten)
+    /// input on allow, or a `ToolError` when a hook blocks / denies the call
+    /// or when an `Ask` decision is not approved by the user.
+    async fn run_before_tool_hooks(
+        &self,
+        name: &str,
+        input: Value,
+    ) -> Result<Value, ToolError> {
+        let executor = match self.hook_executor.as_ref() {
+            Some(e) if e.hook_count() > 0 => e.clone(),
+            _ => return Ok(input),
+        };
+
+        let ctx = self.build_hook_context(name, &input, None, None);
+        let (_ctx, hook_result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, ctx)
+            .await
+            .map_err(|e| ToolError::Execution {
+                name: name.to_string(),
+                cause: format!("BeforeToolCall hook executor failed: {e}"),
+            })?;
+
+        // Hard deny — not retryable.
+        if hook_result.denied {
+            return Err(ToolError::PermissionDenied {
+                name: name.to_string(),
+                reason: hook_result
+                    .deny_reason
+                    .unwrap_or_else(|| "denied by hook".to_string()),
+            });
+        }
+
+        // Soft block — surfaces as an execution error so the LLM can react.
+        if hook_result.blocked {
+            return Err(ToolError::Execution {
+                name: name.to_string(),
+                cause: hook_result
+                    .block_reason
+                    .unwrap_or_else(|| "blocked by hook".to_string()),
+            });
+        }
+
+        // Ask: route through the approval requester (same seam as
+        // `confirm_tools`). Fails closed when no transport is wired.
+        if let Some(PermissionDecision::Ask { reason }) = hook_result.permission_decision {
+            match &self.approval_requester {
+                Some(requester) => {
+                    let outcome = requester.request_approval(name, &reason).await;
+                    if outcome != ApprovalOutcome::Approved {
+                        return Err(ToolError::Execution {
+                            name: name.to_string(),
+                            cause: format!(
+                                "Hook requested user confirmation for `{name}` and the \
+                                 user did not approve ({outcome:?})."
+                            ),
+                        });
+                    }
+                }
+                None => {
+                    return Err(ToolError::Execution {
+                        name: name.to_string(),
+                        cause: format!(
+                            "Hook requested user confirmation for `{name}` but no \
+                             approval channel is available. Do not retry."
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Last-writer-wins rewrite of the tool input.
+        Ok(hook_result.updated_input.unwrap_or(input))
+    }
+
+    /// Fire `AfterToolCall` / `AfterToolCallFailure` hooks. Observers run in
+    /// parallel; Interceptors run sequentially and may override the visible
+    /// tool output via `update_output:` on the success path.
+    async fn run_after_tool_hooks(
+        &self,
+        name: &str,
+        input: &Value,
+        result: &mut Result<ToolOutput, ToolError>,
+    ) {
+        let executor = match self.hook_executor.as_ref() {
+            Some(e) if e.hook_count() > 0 => e.clone(),
+            _ => return,
+        };
+
+        match result {
+            Ok(output) => {
+                let output_str = output.value.to_string();
+                let ctx = self
+                    .build_hook_context(name, input, Some(&output_str), Some(false));
+                // Fire fire-and-forget Observer-kind hooks in parallel first.
+                executor
+                    .execute_observers(HookEvent::AfterToolCall, &ctx)
+                    .await;
+                // Then run Interceptor-kind hooks to harvest `update_output:`
+                // — the only post-execution mutation we honor. block / deny
+                // semantics make no sense post-hoc and are ignored.
+                if let Ok((_ctx, hr)) = executor
+                    .execute_interceptors(HookEvent::AfterToolCall, ctx)
+                    .await
+                {
+                    if let Some(text) = hr.updated_output {
+                        output.value = Value::String(text);
+                    }
+                }
+            }
+            Err(err) => {
+                let err_str = err.to_string();
+                let ctx = self
+                    .build_hook_context(name, input, Some(&err_str), Some(true));
+                executor
+                    .execute_observers(HookEvent::AfterToolCallFailure, &ctx)
+                    .await;
+                // Symmetry with the success path: let Interceptor-kind hooks
+                // fire too (e.g., for structured logging), but the failure
+                // path is read-only — `update_output:` is ignored because
+                // there is no `ToolOutput` to mutate.
+                let _ = executor
+                    .execute_interceptors(HookEvent::AfterToolCallFailure, ctx)
+                    .await;
+            }
+        }
+    }
+
+    fn build_hook_context(
+        &self,
+        name: &str,
+        input: &Value,
+        tool_output: Option<&str>,
+        tool_error: Option<bool>,
+    ) -> HookContext {
+        let mut ctx = HookContext::new(self.hook_session_id.clone())
+            .with_tool_name(name.to_string())
+            .with_arguments(input.to_string())
+            .with_tool_input(input.to_string());
+        if let Some(out) = tool_output {
+            ctx = ctx.with_tool_output(out.to_string());
+        }
+        if let Some(is_err) = tool_error {
+            ctx = ctx.with_tool_error(is_err);
+        }
+        ctx
+    }
+
+    /// Apply Layer 2 of the budget pipeline (`compress → persist-if-large
+    /// → truncate`) to a successful tool output. Reuses the existing
+    /// per-tool compression hook (`compress_tool_output`) and the shared
+    /// `result_store` if one is wired; falls back to head+tail truncation
+    /// otherwise.
+    fn apply_layer_two(&self, name: &str, mut out: ToolOutput) -> ToolOutput {
+        // Compress first: hands JSON to the per-tool summarizer that
+        // already exists in `tool_output::compressor`. The text we feed
+        // into Layer 2 reflects what the LLM will ultimately see.
+        let raw = match &out.value {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let compressed = crate::tool_output::compressor::compress_tool_output(name, &raw);
+
+        let explicit = self.inner.max_result_tokens_for(name);
+        let budget = crate::tools::result_processing::resolve_result_budget(name, explicit);
+
+        // Generate a per-call file name suffix so concurrent calls to the
+        // same tool do not collide on disk. The LLM correlates the result
+        // through the surrounding conversation history, not the path.
+        let call_id = uuid::Uuid::new_v4().simple().to_string();
+
+        let processed = crate::tools::result_processing::apply_result_budget(
+            &call_id,
+            name,
+            &compressed,
+            self.result_store.as_deref(),
+            budget,
+        );
+
+        // Mark `metadata.truncated` whenever Layer 2 shortened the text.
+        if processed.persisted_path.is_some() || processed.text.contains("[output truncated") {
+            out.metadata.truncated = true;
+        }
+        out.value = Value::String(processed.text);
+        out
+    }
+
+    /// Wrap a `ToolError` text payload with the standard external-content
+    /// fence so reflected user input / scraped remote data inside the
+    /// error message cannot smuggle prompt-injection patterns back into
+    /// the LLM. The fence labels the source as `tool_error:<tool>` so the
+    /// model can pattern-match consistently with `tool_error` outputs
+    /// from other channels.
+    fn sanitize_tool_error(name: &str, err: ToolError) -> ToolError {
+        use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
+        // Preserve the original variant so callers can keep matching on
+        // `Timeout` / `Transport` / `Execution`; only the `cause` /
+        // message string is sanitized.
+        match err {
+            ToolError::Execution { name: n, cause } => ToolError::Execution {
+                name: n,
+                cause: wrap_external_content(
+                    &cause,
+                    ContentSource::ToolError {
+                        tool: name.to_string(),
+                    },
+                ),
+            },
+            ToolError::Transport { name: n, cause } => ToolError::Transport {
+                name: n,
+                cause: wrap_external_content(
+                    &cause,
+                    ContentSource::ToolError {
+                        tool: name.to_string(),
+                    },
+                ),
+            },
+            // Other variants either have no untrusted payload (NotFound,
+            // PermissionDenied, Duplicate, ValidationFailed) or are
+            // structured enough not to need wrapping (Timeout). Pass
+            // through unchanged.
+            other => other,
+        }
+    }
+}
+
+/// Which dispatch branch `execute_inner` is routing into. Kept as a
+/// fieldless enum so the retry closure can capture it by value.
+#[derive(Copy, Clone)]
+enum RoutingTarget {
+    Subagent,
+    Inner,
+    Missing,
 }
 
 // =============================================================================
@@ -406,9 +838,12 @@ impl ScopedToolService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::hooks::HookExecutor;
+    use crate::extension::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
     use crate::tools::refresh::ToolRefreshSource;
     use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
     use serde_json::{json, Value};
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc as StdArc;
 
@@ -837,5 +1272,283 @@ mod tests {
         let s = svc.dispatcher_schema();
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].name, "a");
+    }
+
+    // Health gate tests
+    // -------------------------------------------------------------------------
+
+    use crate::dispatcher::{HealthReason, ProbeResult, ToolHealthCache, ToolHealthProbe};
+    use std::borrow::Cow;
+
+    struct AlwaysDead;
+
+    #[async_trait::async_trait]
+    impl ToolHealthProbe for AlwaysDead {
+        async fn probe(&self) -> ProbeResult {
+            ProbeResult::Unhealthy {
+                reason: HealthReason::DependencyDown(Cow::Borrowed("test fixture")),
+                retry_after: None,
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Extension HookExecutor wiring
+    // -------------------------------------------------------------------------
+
+    /// Capturing tool that echoes the input value it actually receives, so
+    /// tests can assert on hook-rewritten input flowing into the underlying
+    /// tool implementation.
+    struct EchoTool;
+
+    #[async_trait::async_trait]
+    impl LoopTool for EchoTool {
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "echoes input"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        async fn execute(&self, input: Value) -> LoopToolResult {
+            LoopToolResult::Success { output: input }
+        }
+    }
+
+    fn echo_registry() -> Arc<LoopToolRegistry> {
+        let mut r = LoopToolRegistry::new();
+        r.register(Box::new(EchoTool));
+        Arc::new(r)
+    }
+
+    fn make_command_hook(event: HookEvent, kind: HookKind, command: &str) -> HookConfig {
+        HookConfig {
+            event,
+            kind,
+            priority: HookPriority::Normal,
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: command.to_string(),
+            }],
+            plugin_name: "test".to_string(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+        }
+    }
+
+    /// `apply_layer_two` always stringifies tool output (`Value::String`).
+    /// Tests that care about the structured shape parse it back here.
+    fn parse_tool_output(value: &Value) -> Value {
+        match value {
+            Value::String(s) => serde_json::from_str(s).unwrap_or_else(|_| value.clone()),
+            other => other.clone(),
+        }
+    }
+
+    #[tokio::test]
+    async fn before_tool_hook_block_returns_execution_error() {
+        let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+            HookEvent::BeforeToolCall,
+            HookKind::Interceptor,
+            "echo 'block: blocked by policy'",
+        )]));
+        let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+            .with_hook_executor(executor, "test-session");
+
+        match svc.execute("echo", json!({})).await {
+            Err(ToolError::Execution { name, cause }) => {
+                assert_eq!(name, "echo");
+                assert!(
+                    cause.contains("blocked by policy"),
+                    "unexpected cause: {cause}"
+                );
+            }
+            other => panic!("expected Execution error from block hook, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn before_tool_hook_deny_returns_permission_denied() {
+        let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+            HookEvent::BeforeToolCall,
+            HookKind::Interceptor,
+            "echo 'deny: hard policy stop'",
+        )]));
+        let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+            .with_hook_executor(executor, "test-session");
+
+        match svc.execute("echo", json!({})).await {
+            Err(ToolError::PermissionDenied { name, reason }) => {
+                assert_eq!(name, "echo");
+                assert!(
+                    reason.contains("hard policy stop"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected PermissionDenied from deny hook, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn before_tool_hook_update_input_rewrites_args() {
+        // Hook rewrites the tool input to a fixed JSON value. The EchoTool
+        // returns whatever input it receives, so we can assert by reading the
+        // tool output.
+        let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+            HookEvent::BeforeToolCall,
+            HookKind::Interceptor,
+            r#"echo 'update_input: {"path":"/etc/hosts","force":true}'"#,
+        )]));
+        let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+            .with_hook_executor(executor, "test-session");
+
+        let output = svc
+            .execute("echo", json!({ "path": "/tmp/original" }))
+            .await
+            .expect("execute should succeed when hook only rewrites input");
+        // Layer 2 stringifies tool output; parse it back to inspect fields.
+        let parsed = parse_tool_output(&output.value);
+        assert_eq!(parsed["path"], json!("/etc/hosts"));
+        assert_eq!(parsed["force"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn after_tool_hook_observer_fires_on_success() {
+        // Observer writes the tool name to a tempfile so we can prove it
+        // fired with the right context. Run inside a per-test tempdir to
+        // avoid interference when tests run in parallel.
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let marker = dir.path().join("after.flag");
+        let marker_str = marker.to_string_lossy().to_string();
+        let cmd = format!(r#"printf '%s' "$TOOL_NAME" > '{marker_str}'"#);
+        let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+            HookEvent::AfterToolCall,
+            HookKind::Observer,
+            &cmd,
+        )]));
+        let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+            .with_hook_executor(executor, "test-session");
+
+        let _ = svc
+            .execute("echo", json!({}))
+            .await
+            .expect("execute should succeed");
+
+        let contents = std::fs::read_to_string(&marker).expect("observer must have written marker");
+        assert_eq!(contents.trim(), "echo");
+    }
+
+    #[tokio::test]
+    async fn after_tool_failure_hook_fires_when_tool_errors() {
+        // Construct a registry with a tool that always errors.
+        struct ErrTool;
+        #[async_trait::async_trait]
+        impl LoopTool for ErrTool {
+            fn name(&self) -> &str {
+                "boom"
+            }
+            fn description(&self) -> &str {
+                "always errors"
+            }
+            fn schema(&self) -> Value {
+                json!({ "type": "object" })
+            }
+            async fn execute(&self, _input: Value) -> LoopToolResult {
+                LoopToolResult::Error {
+                    error: "kaboom".to_string(),
+                    retryable: false,
+                }
+            }
+        }
+        let mut r = LoopToolRegistry::new();
+        r.register(Box::new(ErrTool));
+        let registry = Arc::new(r);
+
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let marker = dir.path().join("fail.flag");
+        let marker_str = marker.to_string_lossy().to_string();
+        let cmd = format!(r#"printf '%s' "$TOOL_NAME" > '{marker_str}'"#);
+        let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+            HookEvent::AfterToolCallFailure,
+            HookKind::Observer,
+            &cmd,
+        )]));
+        let svc = ScopedToolService::new(registry, BTreeSet::new())
+            .with_hook_executor(executor, "test-session");
+
+        let err = svc
+            .execute("boom", json!({}))
+            .await
+            .expect_err("tool returns error");
+        assert!(matches!(err, ToolError::Execution { .. }));
+
+        let contents =
+            std::fs::read_to_string(&marker).expect("failure observer must have written marker");
+        assert_eq!(contents.trim(), "boom");
+    }
+
+    #[tokio::test]
+    async fn no_hooks_means_no_change_in_behaviour() {
+        // Sanity: without `.with_hook_executor`, ScopedToolService behaves
+        // identically to before (regression guard).
+        let svc = ScopedToolService::new(echo_registry(), BTreeSet::new());
+        let out = svc
+            .execute("echo", json!({ "k": "v" }))
+            .await
+            .expect("execute succeeds");
+        // Layer 2 stringifies tool output; parse it back to compare structurally.
+        assert_eq!(parse_tool_output(&out.value), json!({ "k": "v" }));
+    }
+
+    #[tokio::test]
+    async fn list_strips_unhealthy_tools() {
+        let registry = make_registry(&["alive", "dead"]);
+        let health = Arc::new(ToolHealthCache::new());
+        health.register_probe("dead", Arc::new(AlwaysDead));
+        health.refresh("dead").await;
+        let svc = ScopedToolService::new(registry, BTreeSet::new()).with_health(health);
+        let defs = svc.list().await;
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"alive"));
+        assert!(!names.contains(&"dead"), "got: {names:?}");
+    }
+
+    #[test]
+    fn dispatcher_schema_strips_unhealthy_tools_and_invalidates_on_flip() {
+        // Driven sync from outside an async runtime — populate the cache via
+        // a small block_on island.
+        let registry = make_registry(&["alive", "dead"]);
+        let health = Arc::new(ToolHealthCache::new());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            health.register_probe("dead", Arc::new(AlwaysDead));
+            health.refresh("dead").await;
+        });
+        let svc =
+            ScopedToolService::new(registry, BTreeSet::new()).with_health(Arc::clone(&health));
+
+        let s1 = svc.dispatcher_schema();
+        let names: Vec<&str> = s1.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"alive"));
+        assert!(!names.contains(&"dead"), "first call should strip dead");
+
+        // Flip "dead" healthy via invalidation; the schema cache must
+        // invalidate so the next call surfaces "dead" again.
+        health.invalidate_all();
+        let s2 = svc.dispatcher_schema();
+        assert!(
+            !Arc::ptr_eq(&s1, &s2),
+            "cache must rotate when health generation flips"
+        );
+        let names2: Vec<&str> = s2.iter().map(|d| d.name.as_str()).collect();
+        assert!(
+            names2.contains(&"dead"),
+            "after invalidation, dead reappears; got: {names2:?}"
+        );
     }
 }

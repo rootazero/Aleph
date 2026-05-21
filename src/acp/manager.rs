@@ -520,11 +520,11 @@ impl AcpAdapterManager {
         {
             let mut sessions = self.sessions.write().await;
             if let Some(session) = sessions.get_mut(&key) {
-                if session.is_alive() {
+                if session.is_alive() && session.state() != crate::acp::protocol::AcpSessionState::Error {
                     return Ok(());
                 }
-                // Dead session — remove it
-                warn!(harness_id, "ACP session died, respawning");
+                // Dead or error session — remove it
+                warn!(harness_id, "ACP session died or entered error state, respawning");
                 self.emit_persistence_event(super::AcpSessionEvent::Removed {
                     harness_id: harness_id.to_string(),
                     cwd: cwd.to_string(),
@@ -640,33 +640,47 @@ impl AcpAdapterManager {
                     .prompt(prompt_text, cwd, timeout, on_chunk.as_ref())
                     .await;
 
-                // Re-insert session if still alive
-                if session.is_alive() {
-                    if let Some(sid) = session.acp_session_id() {
-                        // Use Created (idempotent: retain + push in hook) because
-                        // ensure_session cannot emit Created (session_id is None at spawn time).
-                        self.emit_persistence_event(super::AcpSessionEvent::Created {
+                match result {
+                    Ok((text, _notifications)) => {
+                        // Re-insert session if still alive
+                        if session.is_alive() {
+                            if let Some(sid) = session.acp_session_id() {
+                                // Use Created (idempotent: retain + push in hook) because
+                                // ensure_session cannot emit Created (session_id is None at spawn time).
+                                self.emit_persistence_event(super::AcpSessionEvent::Created {
+                                    harness_id: harness_id.to_string(),
+                                    acp_session_id: sid.to_string(),
+                                    cwd: cwd.to_string(),
+                                })
+                                .await;
+                            }
+                            self.sessions.write().await.insert(key, session);
+                        } else {
+                            self.emit_persistence_event(super::AcpSessionEvent::Removed {
+                                harness_id: harness_id.to_string(),
+                                cwd: cwd.to_string(),
+                            })
+                            .await;
+                            warn!(
+                                harness_id,
+                                "ACP session died after prompt, not re-inserting"
+                            );
+                        }
+                        Ok(text)
+                    }
+                    Err(e) => {
+                        // Session entered error state during prompt — kill it and do not re-insert
+                        if session.is_alive() {
+                            session.kill().await;
+                        }
+                        self.emit_persistence_event(super::AcpSessionEvent::Removed {
                             harness_id: harness_id.to_string(),
-                            acp_session_id: sid.to_string(),
                             cwd: cwd.to_string(),
                         })
                         .await;
+                        Err(e)
                     }
-                    self.sessions.write().await.insert(key, session);
-                } else {
-                    self.emit_persistence_event(super::AcpSessionEvent::Removed {
-                        harness_id: harness_id.to_string(),
-                        cwd: cwd.to_string(),
-                    })
-                    .await;
-                    warn!(
-                        harness_id,
-                        "ACP session died after prompt, not re-inserting"
-                    );
                 }
-
-                let (text, _notifications) = result?;
-                Ok(text)
             }
             AdapterMode::Oneshot => {
                 // Clone Arc ref under brief read lock; execute_oneshot may take minutes.

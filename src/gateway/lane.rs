@@ -41,7 +41,7 @@ impl Lane {
 
             // Mutate lane
             "config.patch" | "config.apply" | "config.set" | "memory.store" | "memory.delete"
-            | "session.compact" | "session.delete" => Lane::Mutate,
+            | "session.compact" | "session.truncate" | "session.delete" => Lane::Mutate,
 
             // System lane
             "plugins.install" | "plugins.uninstall" | "skills.install" | "skills.delete"
@@ -210,6 +210,7 @@ mod tests {
         assert_eq!(Lane::for_method("memory.store"), Lane::Mutate);
         assert_eq!(Lane::for_method("memory.delete"), Lane::Mutate);
         assert_eq!(Lane::for_method("session.compact"), Lane::Mutate);
+        assert_eq!(Lane::for_method("session.truncate"), Lane::Mutate);
         assert_eq!(Lane::for_method("session.delete"), Lane::Mutate);
 
         // System lane

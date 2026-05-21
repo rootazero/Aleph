@@ -2,8 +2,9 @@
 //! ToolCall (per dispatch).
 //!
 //! All three are `Send + Sync + 'static` and `async_trait` to permit IO-bound
-//! impls (e.g. external classifier service). Stage 5a ships the trait surface
-//! + Input/Output callsites; Stage 5b wires ToolCall into `agent.rs::act`.
+//! impls (e.g. external classifier service). All three callsites are live in
+//! `agent.rs::run_turn_internal` (input/output) and `agent/act.rs`
+//! (tool-call); see also `apply_tool_call_guardrail`.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -25,7 +26,8 @@ pub trait OutputGuardrail: Send + Sync + 'static {
 }
 
 /// Inspects each tool dispatch before `ToolService::execute(...)`.
-/// Stage 5a defines the trait; Stage 5b wires the callsite.
+/// Callsite lives at `harness/agent/act.rs` (Block skips the dispatch,
+/// Sanitize mutates the args, Allow proceeds).
 #[async_trait]
 pub trait ToolCallGuardrail: Send + Sync + 'static {
     fn name(&self) -> &str;

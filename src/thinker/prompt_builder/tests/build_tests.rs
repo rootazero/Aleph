@@ -89,6 +89,271 @@ fn test_thinking_guidance_with_soul() {
 }
 
 #[test]
+fn phase3_with_resolved_context_basic_path_emits_operational_guidelines() {
+    // Phase 3 wiring: `PromptBuilder::with_resolved_context(...)` must
+    // thread a `ResolvedContext` into the `Basic` assembly path so the
+    // Phase 2 widened layers fire on the harness route (which calls
+    // `build_system_prompt`, not `build_system_prompt_with_context`).
+    //
+    // The harness-bridge default is `Background` paradigm + permissive
+    // security — under those settings `OperationalGuidelinesLayer` must
+    // emit its `## System Operational Awareness` block.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::Background);
+    let security = SecurityContext::permissive();
+    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+    let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
+    let prompt = builder.build_system_prompt(&[]);
+
+    assert!(
+        prompt.contains("## System Operational Awareness"),
+        "OperationalGuidelinesLayer must emit on Basic path when resolved_context is attached"
+    );
+    assert!(
+        prompt.contains("Diagnostic Capabilities"),
+        "Diagnostic Capabilities sub-section missing from operational guidelines"
+    );
+    // SecurityLayer always renders a "Security Level: …" note (sandbox
+    // baseline) even under permissive — that's the documented envelope
+    // surface for the LLM. Verify the header + the permissive note both
+    // arrive on Basic.
+    assert!(
+        prompt.contains("## Security & Constraints"),
+        "SecurityLayer should emit the section header when context is attached"
+    );
+    assert!(
+        prompt.contains("Security Level: None"),
+        "SecurityLayer must surface the sandbox baseline note under permissive"
+    );
+    // ProtocolTokensLayer guards on the `SilentReply` capability —
+    // Background paradigm includes it by default, so the harness path
+    // gets the protocol token block automatically.
+    assert!(
+        prompt.contains("ALEPH_SILENT_COMPLETE"),
+        "ProtocolTokensLayer must emit when Background paradigm enables SilentReply"
+    );
+    // RuntimeContextLayer requires `runtime_context` to be populated on
+    // the ResolvedContext — left as None here, so layer is silent.
+    assert!(
+        !prompt.contains("## Runtime Environment"),
+        "RuntimeContextLayer should stay silent without runtime_context attached"
+    );
+}
+
+#[test]
+fn phase3_with_provider_protocol_openai_emits_guidance_on_basic_path() {
+    // `PromptBuilder::with_provider_protocol(...)` must thread the
+    // wire-protocol family into the `Basic` assembly path so
+    // `ProviderGuidanceLayer` selects the right per-family block. The
+    // harness bridge sources the protocol from
+    // `AiProvider::model_behavior_override()` falling back to
+    // `AiProvider::protocol()`.
+    let builder = PromptBuilder::new(PromptConfig::default()).with_provider_protocol("openai");
+    let prompt = builder.build_system_prompt(&[]);
+    assert!(
+        prompt.contains("## Tool-Use Enforcement"),
+        "OpenAI protocol must surface tool-use enforcement on Basic path"
+    );
+    assert!(
+        prompt.contains("## Execution Discipline"),
+        "OpenAI protocol must surface execution discipline on Basic path"
+    );
+}
+
+#[test]
+fn phase3_with_provider_protocol_anthropic_stays_silent_on_basic_path() {
+    let builder = PromptBuilder::new(PromptConfig::default()).with_provider_protocol("anthropic");
+    let prompt = builder.build_system_prompt(&[]);
+    assert!(
+        !prompt.contains("## Tool-Use Enforcement"),
+        "Anthropic protocol must not emit tool-use enforcement (Claude is well-behaved)"
+    );
+    assert!(
+        !prompt.contains("## Execution Discipline"),
+        "Anthropic protocol must not emit execution discipline"
+    );
+    assert!(
+        !prompt.contains("## Google Model Operational Directives"),
+        "Anthropic protocol must not emit Google directives"
+    );
+}
+
+#[test]
+fn phase4_with_runtime_context_populated_emits_runtime_environment_on_basic_path() {
+    // Phase 4 F1: when a `ResolvedContext` carries a populated
+    // `runtime_context`, `RuntimeContextLayer` (priority 1720, Dynamic)
+    // must emit its single-line `## Runtime Environment` summary even on
+    // the Basic path. Mirrors `harness_bridge::build_system_prompt`
+    // populating the field with `RuntimeContext::collect(...)`.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::runtime_context::RuntimeContext;
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::Background);
+    let security = SecurityContext::permissive();
+    let mut resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+    resolved.runtime_context = Some(RuntimeContext {
+        os: "linux".to_string(),
+        arch: "aarch64".to_string(),
+        shell: "fish".to_string(),
+        working_dir: std::path::PathBuf::from("/srv/aleph"),
+        repo_root: None,
+        current_model: "test-provider".to_string(),
+        hostname: "ci-runner".to_string(),
+        current_time: "2026-05-20 12:00:00".to_string(),
+        current_time_ms: 1779789600000,
+        timezone: "UTC".to_string(),
+    });
+
+    let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
+    let prompt = builder.build_system_prompt(&[]);
+
+    assert!(
+        prompt.contains("## Runtime Environment"),
+        "RuntimeContextLayer must emit on Basic path when runtime_context is populated"
+    );
+    assert!(prompt.contains("arch=aarch64"));
+    assert!(prompt.contains("shell=fish"));
+    assert!(prompt.contains("model=test-provider"));
+    assert!(prompt.contains("host=ci-runner"));
+    assert!(prompt.contains("(UTC)"));
+}
+
+#[test]
+fn phase4_with_iteration_cap_emits_session_budget_block() {
+    // Phase 4 F2: harness_bridge resolves the per-run iteration cap
+    // once via `resolve_max_iterations` and threads it into the prompt
+    // via `PromptBuilder::with_iteration_cap(...)`. `SessionBudgetLayer`
+    // must surface it as a `## Session Budget` block on the Basic path.
+    let builder = PromptBuilder::new(PromptConfig::default()).with_iteration_cap(64);
+    let prompt = builder.build_system_prompt(&[]);
+    assert!(prompt.contains("## Session Budget"));
+    assert!(prompt.contains("Iteration cap**: 64"));
+    assert!(prompt.contains("decisive action"));
+}
+
+#[test]
+fn phase4_channel_aware_resolved_context_messaging_paradigm() {
+    // Phase 4 F4: when the gateway threads a channel-specific
+    // InteractionManifest (e.g., Messaging paradigm for Telegram) into
+    // `FlowRequest.interaction_manifest`, the harness bridge constructs
+    // the `ResolvedContext` from that manifest instead of the
+    // `Background` default. Messaging paradigm doesn't include
+    // SilentReply (Background does), so the protocol tokens block must
+    // NOT emit — the test pins the contract by paradigm choice.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::Messaging);
+    let security = SecurityContext::permissive();
+    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+    let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
+    let prompt = builder.build_system_prompt(&[]);
+
+    // OperationalGuidelinesLayer gates on `Background | CLI` only — the
+    // Messaging paradigm must keep that section silent.
+    assert!(
+        !prompt.contains("## System Operational Awareness"),
+        "Messaging paradigm must not emit operational guidelines (gates on Background/CLI)"
+    );
+    // ProtocolTokensLayer gates on `SilentReply` — Messaging paradigm
+    // doesn't enable it by default.
+    assert!(
+        !prompt.contains("ALEPH_SILENT_COMPLETE"),
+        "Messaging paradigm must not emit silent-complete protocol tokens"
+    );
+    // SecurityLayer fires whenever any disabled_tools / security_notes
+    // arrive — the permissive sandbox baseline note still shows up.
+    assert!(prompt.contains("Security Level: None"));
+}
+
+#[test]
+fn phase5_messaging_paradigm_security_context_announces_approval_required() {
+    // Phase 5 F2: harness_bridge now derives SecurityContext from the
+    // InteractionManifest paradigm via `SecurityContext::for_paradigm`.
+    // Messaging paradigm must surface the Standard-sandbox + approval-
+    // required posture in the SecurityLayer output so the LLM is told
+    // to be cautious about elevated operations on public-channel bots.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::Messaging);
+    let security = SecurityContext::for_paradigm(InteractionParadigm::Messaging);
+    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+    let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
+    let prompt = builder.build_system_prompt(&[]);
+
+    assert!(
+        prompt.contains("Security Level: Standard"),
+        "Messaging paradigm must surface Standard sandbox baseline"
+    );
+    assert!(
+        prompt.contains("Elevated Operations: Require user approval"),
+        "Messaging paradigm must surface approval-required posture"
+    );
+}
+
+#[test]
+fn phase5_cli_paradigm_security_context_stays_permissive() {
+    // Phase 5 F2 negative test: CLI paradigm must preserve the existing
+    // permissive baseline — the LLM sees "Security Level: None" and is
+    // not told about elevated-operation restrictions.
+    use crate::thinker::context::ContextAggregator;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+
+    let interaction = InteractionManifest::new(InteractionParadigm::CLI);
+    let security = SecurityContext::for_paradigm(InteractionParadigm::CLI);
+    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+
+    let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
+    let prompt = builder.build_system_prompt(&[]);
+
+    assert!(prompt.contains("Security Level: None"));
+    assert!(
+        !prompt.contains("Elevated Operations: Require user approval"),
+        "CLI paradigm must not announce approval requirement (permissive posture)"
+    );
+}
+
+#[test]
+fn phase4_without_iteration_cap_session_budget_stays_silent() {
+    let builder = PromptBuilder::new(PromptConfig::default());
+    let prompt = builder.build_system_prompt(&[]);
+    assert!(
+        !prompt.contains("## Session Budget"),
+        "SessionBudgetLayer must not emit when no iteration cap was attached"
+    );
+}
+
+#[test]
+fn phase3_basic_path_without_resolved_context_stays_silent() {
+    // Symmetric to the above: without `with_resolved_context`, the
+    // widened layers must still graceful-noop on Basic so we don't
+    // accidentally render half-headers.
+    let builder = PromptBuilder::new(PromptConfig::default());
+    let prompt = builder.build_system_prompt(&[]);
+
+    assert!(
+        !prompt.contains("## System Operational Awareness"),
+        "OperationalGuidelinesLayer must not emit when no resolved_context attached"
+    );
+    assert!(
+        !prompt.contains("## Security & Constraints"),
+        "SecurityLayer must not emit when no resolved_context attached"
+    );
+}
+
+#[test]
 fn test_build_system_prompt_with_context_includes_runtime_context() {
     use crate::thinker::context::ContextAggregator;
     use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};

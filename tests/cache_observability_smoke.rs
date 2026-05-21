@@ -8,12 +8,12 @@
 //! This is the intentional cheap smoke — real-LLM cache_read/creation
 //! verification is in the manual checklist on the PR description.
 
-use alephcore::Result;
 use alephcore::harness::trace::LoopTraceEvent;
 use alephcore::harness::TraceSink;
 use alephcore::providers::adapter::{ProviderResponse, RequestPayload, TokenUsage};
 use alephcore::providers::message::UnifiedMessage;
 use alephcore::providers::{AiProvider, MeteringProvider};
+use alephcore::Result;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -35,8 +35,12 @@ impl AiProvider for CannedUsageProvider {
             })
         })
     }
-    fn name(&self) -> &str { "canned-usage" }
-    fn color(&self) -> &str { "#000" }
+    fn name(&self) -> &str {
+        "canned-usage"
+    }
+    fn color(&self) -> &str {
+        "#000"
+    }
 }
 
 struct CapturingSink(Mutex<Vec<LoopTraceEvent>>);
@@ -60,19 +64,23 @@ async fn root_label_emits_provider_usage_event() {
         },
     });
     let sink = Arc::new(CapturingSink(Mutex::new(Vec::new())));
-    let metering = MeteringProvider::new(
-        inner,
-        Some(sink.clone() as Arc<dyn TraceSink>),
-        "root",
-    );
+    let metering = MeteringProvider::new(inner, Some(sink.clone() as Arc<dyn TraceSink>), "root");
 
     let msgs = [UnifiedMessage::user("hi")];
-    let _ = metering.process(RequestPayload::new(&msgs)).await.expect("process");
+    let _ = metering
+        .process(RequestPayload::new(&msgs))
+        .await
+        .expect("process");
 
     let events = sink.0.lock().unwrap();
     assert_eq!(events.len(), 1);
     match &events[0] {
-        LoopTraceEvent::ProviderUsage { agent_id, cache_read_tokens, cache_creation_tokens, .. } => {
+        LoopTraceEvent::ProviderUsage {
+            agent_id,
+            cache_read_tokens,
+            cache_creation_tokens,
+            ..
+        } => {
             assert_eq!(agent_id, "root");
             assert_eq!(*cache_read_tokens, Some(800));
             assert_eq!(*cache_creation_tokens, Some(50));
@@ -103,10 +111,13 @@ async fn subagent_label_distinguishes_from_root() {
     let _ = metering.process(RequestPayload::new(&msgs)).await.unwrap();
 
     let events = sink.0.lock().unwrap();
-    let agent_ids: Vec<_> = events.iter().filter_map(|e| match e {
-        LoopTraceEvent::ProviderUsage { agent_id, .. } => Some(agent_id.clone()),
-        _ => None,
-    }).collect();
+    let agent_ids: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            LoopTraceEvent::ProviderUsage { agent_id, .. } => Some(agent_id.clone()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(agent_ids, vec!["subagent-research".to_string()]);
 }
 
@@ -124,6 +135,9 @@ async fn no_sink_means_no_panic_no_event() {
     });
     let metering = MeteringProvider::new(inner, None, "root");
     let msgs = [UnifiedMessage::user("hi")];
-    let resp = metering.process(RequestPayload::new(&msgs)).await.expect("process");
+    let resp = metering
+        .process(RequestPayload::new(&msgs))
+        .await
+        .expect("process");
     assert!(resp.usage.is_some());
 }

@@ -5,10 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use alephcore::gateway::handlers::HandlerRegistry;
 use alephcore::gateway::protocol::JsonRpcResponse;
-// TODO: removed — module deleted: use alephcore::skill_evolution::types::{SkillMetrics, SolidificationSuggestion};
-use alephcore::tools::markdown_skill::{
-    MarkdownCliTool, MarkdownSkillGenerator, ReloadCallback, SkillWatcherConfig,
-};
+use alephcore::tools::markdown_skill::{MarkdownCliTool, ReloadCallback, SkillWatcherConfig};
 use alephcore::tools::AlephToolServer;
 use tempfile::TempDir;
 
@@ -22,12 +19,6 @@ pub struct SkillsContext {
     pub loaded_tools: Vec<MarkdownCliTool>,
     pub load_errors: Vec<(PathBuf, anyhow::Error)>,
     pub tool_server: Option<AlephToolServer>,
-
-    // Skill generator
-    pub generator: Option<MarkdownSkillGenerator>,
-    pub generated_skill_path: Option<PathBuf>,
-    pub generated_content: Option<String>,
-    // TODO: removed — module deleted: pub suggestion: Option<SolidificationSuggestion>,
 
     // Hot reload
     pub watcher_config: Option<SkillWatcherConfig>,
@@ -48,10 +39,6 @@ impl Default for SkillsContext {
             loaded_tools: Vec::new(),
             load_errors: Vec::new(),
             tool_server: None,
-            generator: None,
-            generated_skill_path: None,
-            generated_content: None,
-            // suggestion: None, // removed — SolidificationSuggestion deleted
             watcher_config: None,
             reloaded_tools: Arc::new(Mutex::new(Vec::new())),
             reload_count: Arc::new(Mutex::new(0)),
@@ -79,12 +66,6 @@ impl std::fmt::Debug for SkillsContext {
                 "tool_server",
                 &self.tool_server.as_ref().map(|_| "AlephToolServer"),
             )
-            .field(
-                "generator",
-                &self.generator.as_ref().map(|_| "MarkdownSkillGenerator"),
-            )
-            .field("generated_skill_path", &self.generated_skill_path)
-            // .field("suggestion", ...) // removed — SolidificationSuggestion deleted
             .field("watcher_config", &self.watcher_config)
             .field("reload_count", &*self.reload_count.lock().unwrap())
             .field("temp_dir", &self.temp_dir.as_ref().map(|t| t.path()))
@@ -123,7 +104,4 @@ impl SkillsContext {
             Ok(())
         })
     }
-
-    // TODO: removed — skill_evolution module deleted:
-    // create_test_suggestion method removed
 }

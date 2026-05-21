@@ -24,6 +24,8 @@ struct ChromeMcpSession {
 pub struct ChromeMcpDriver {
     sessions: RwLock<HashMap<String, ChromeMcpSession>>,
     config: ChromeMcpConfig,
+    /// Prevents concurrent Chrome launches from racing.
+    chrome_launch_lock: tokio::sync::Mutex<()>,
 }
 
 impl ChromeMcpDriver {
@@ -31,6 +33,7 @@ impl ChromeMcpDriver {
         Self {
             sessions: RwLock::new(HashMap::new()),
             config,
+            chrome_launch_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -165,6 +168,8 @@ impl ChromeMcpDriver {
 
     /// Ensure Chrome is running with remote debugging enabled.
     async fn ensure_chrome_running(&self) -> Result<(), BrowserError> {
+        let _guard = self.chrome_launch_lock.lock().await;
+
         if Self::is_chrome_running() {
             return Err(BrowserError::AttachFailed(
                 "Chrome is running but remote debugging is not enabled. \

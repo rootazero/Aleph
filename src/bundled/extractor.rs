@@ -4,7 +4,7 @@
 //! - manifest.json doesn't exist (first install or upgrade from old version)
 //! - bundled_version differs from manifest's bundled_version
 
-use super::manifest::{SkillEntry, SkillManifest, SkillOrigin};
+use super::manifest::{SkillEntry, InstallRegistry, SkillOrigin};
 use super::{BUNDLED_PLUGINS, BUNDLED_SKILLS, BUNDLED_VERSION};
 use include_dir::Dir;
 use std::path::Path;
@@ -32,12 +32,12 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     }
 
     // Load or create manifest
-    let mut manifest = match SkillManifest::load(&skills_dir) {
+    let mut manifest = match InstallRegistry::load(&skills_dir) {
         Some(m) => m,
         None => {
             // First run or upgrade from old version — reconcile existing skills first
             info!("No skills manifest found, performing initial reconcile");
-            let mut m = SkillManifest::new("");
+            let mut m = InstallRegistry::new("");
             if let Err(e) = m.reconcile(&skills_dir) {
                 warn!(error = %e, "Failed to reconcile skills directory, will retry on next startup");
             }
@@ -95,7 +95,7 @@ pub fn extract_bundled_content(aleph_home: &Path) {
 
 /// Extract bundled skills to the skills directory.
 /// Returns true if all extractions succeeded.
-fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut SkillManifest) -> bool {
+fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegistry) -> bool {
     let mut all_ok = true;
 
     for dir in bundled.dirs() {
@@ -269,8 +269,7 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
             continue;
         };
         let subdir_target = target.join(name);
-        std::fs::create_dir_all(&subdir_target)?;
-        extract_dir_contents(subdir, &subdir_target)?;
+        extract_dir_recursive(subdir, &subdir_target)?;
     }
 
     Ok(())

@@ -233,8 +233,8 @@ fn base_with_hanging_tool(cancel: CancellationToken) -> SpawnerBase {
 
 async fn run_subagent_with_hanging_llm(cancel: CancellationToken) -> Result<LoopRunResult, String> {
     let base = base_with_hanging_llm(cancel.clone());
-    let agent_def =
-        AgentDef::new("hanging-llm-probe", AgentMode::SubAgent).with_allowed_tools(vec!["*".into()]);
+    let agent_def = AgentDef::new("hanging-llm-probe", AgentMode::SubAgent)
+        .with_allowed_tools(vec!["*".into()]);
     let req = SpawnRequest {
         agent_def: &agent_def,
         task: "hang on llm",
@@ -249,7 +249,9 @@ async fn run_subagent_with_hanging_llm(cancel: CancellationToken) -> Result<Loop
     spawn(&base, req).await
 }
 
-async fn run_subagent_with_hanging_tool(cancel: CancellationToken) -> Result<LoopRunResult, String> {
+async fn run_subagent_with_hanging_tool(
+    cancel: CancellationToken,
+) -> Result<LoopRunResult, String> {
     let base = base_with_hanging_tool(cancel.clone());
     let agent_def = AgentDef::new("hanging-tool-probe", AgentMode::SubAgent)
         .with_allowed_tools(vec!["*".into()]);

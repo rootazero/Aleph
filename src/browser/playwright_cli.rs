@@ -41,6 +41,7 @@ pub struct PlaywrightCliDriver {
     binary_path: RwLock<Option<PathBuf>>,
     config: PlaywrightCliConfig,
     per_session_locks: RwLock<HashMap<String, Arc<Mutex<()>>>>,
+    binary_resolve_lock: tokio::sync::Mutex<()>,
 }
 
 impl PlaywrightCliDriver {
@@ -49,6 +50,7 @@ impl PlaywrightCliDriver {
             binary_path: RwLock::new(None),
             config,
             per_session_locks: RwLock::new(HashMap::new()),
+            binary_resolve_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -62,6 +64,18 @@ impl PlaywrightCliDriver {
         {
             return Ok(p);
         }
+
+        let _guard = self.binary_resolve_lock.lock().await;
+
+        if let Some(p) = self
+            .binary_path
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            return Ok(p);
+        }
+
         if let Some(explicit) = self.config.binary_path.as_deref() {
             let p = PathBuf::from(explicit);
             if !p.exists() {

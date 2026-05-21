@@ -45,6 +45,11 @@ pub(super) enum SubagentAction {
     Run(RunArgs),
     /// Check status of a background sub-agent.
     CheckStatus(String),
+    /// Cancel a still-running background sub-agent by request_id. Hits the
+    /// shared `CancellationToken`; the running task observes it on its next
+    /// await point and unwinds cleanly. Idempotent — cancelling an unknown
+    /// or already-completed request returns an error rather than panicking.
+    Cancel(String),
     /// Send a message to a named teammate.
     SendMessage {
         to: String,
@@ -435,10 +440,17 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                 .ok_or_else(|| "check_status requires 'request_id' field".to_string())?;
             return Ok(SubagentAction::CheckStatus(rid.to_string()));
         }
+        "cancel" => {
+            let rid = input
+                .get("request_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "cancel requires 'request_id' field".to_string())?;
+            return Ok(SubagentAction::Cancel(rid.to_string()));
+        }
         // "run" or "" (default) — fall through to legacy run/check_status logic
         "run" | "" => {}
         other => {
-            return Err(format!("unknown action '{other}'. Expected one of: run, check_status, send_message, read_inbox"));
+            return Err(format!("unknown action '{other}'. Expected one of: run, check_status, cancel, send_message, read_inbox"));
         }
     }
 

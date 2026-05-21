@@ -165,8 +165,8 @@ async fn h_t1_worktree_isolation_happy_path() {
         subagent_semaphore: None,
     };
 
-    let agent_def = AgentDef::new("worktree-probe", AgentMode::SubAgent)
-        .with_allowed_tools(vec!["*".into()]);
+    let agent_def =
+        AgentDef::new("worktree-probe", AgentMode::SubAgent).with_allowed_tools(vec!["*".into()]);
 
     let req = SpawnRequest {
         agent_def: &agent_def,
@@ -273,7 +273,10 @@ async fn h_t2_cancel_path_still_cleans_up() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    assert!(!path.exists(), "Drop safety-net must clean up cancelled worktree");
+    assert!(
+        !path.exists(),
+        "Drop safety-net must clean up cancelled worktree"
+    );
 }
 
 #[tokio::test]
@@ -303,10 +306,9 @@ async fn h_t3_panic_path_emits_leaked_true_event() {
     }
     let events = sink.events.lock().unwrap().clone();
     assert!(
-        events.iter().any(|e| matches!(
-            e,
-            LoopTraceEvent::WorktreeCleanedUp { leaked: true, .. }
-        )),
+        events
+            .iter()
+            .any(|e| matches!(e, LoopTraceEvent::WorktreeCleanedUp { leaked: true, .. })),
         "expected WorktreeCleanedUp(leaked=true) on Drop path; got events: {events:?}"
     );
 }
@@ -361,6 +363,12 @@ async fn h_t5_create_and_cleanup_within_perf_budget() {
     let t1 = std::time::Instant::now();
     h.cleanup().await.expect("cleanup");
     let cleanup_ms = t1.elapsed().as_millis();
-    assert!(create_ms < 800, "create took {create_ms}ms, budget 200ms (4× CI headroom)");
-    assert!(cleanup_ms < 400, "cleanup took {cleanup_ms}ms, budget 100ms (4× CI headroom)");
+    assert!(
+        create_ms < 800,
+        "create took {create_ms}ms, budget 200ms (4× CI headroom)"
+    );
+    assert!(
+        cleanup_ms < 400,
+        "cleanup took {cleanup_ms}ms, budget 100ms (4× CI headroom)"
+    );
 }

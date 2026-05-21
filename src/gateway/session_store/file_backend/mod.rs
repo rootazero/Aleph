@@ -546,6 +546,47 @@ impl SessionStore for FileSessionStore {
         }
     }
 
+    async fn truncate_messages(
+        &self,
+        key: &SessionKey,
+        keep_count: usize,
+    ) -> Result<TruncateResult, SessionStoreError> {
+        let key_str = key.to_key_string();
+        let mut messages = self.read_transcript(&key_str, None).await?;
+        if keep_count >= messages.len() {
+            return Ok(TruncateResult::default());
+        }
+
+        let dropped: Vec<MessageRecord> = messages.drain(keep_count..).collect();
+        let tokens_removed: u64 = dropped
+            .iter()
+            .map(|m| (m.input_tokens.max(0) as u64).saturating_add(m.output_tokens.max(0) as u64))
+            .sum();
+
+        let path = self.transcript_path(&key_str);
+        let mut contents = String::new();
+        for msg in &messages {
+            let line = serde_json::to_string(msg).map_err(|e| {
+                SessionStoreError::DatabaseError(format!("Serialize failed: {}", e))
+            })?;
+            contents.push_str(&line);
+            contents.push('\n');
+        }
+        tokio::fs::write(&path, contents).await.map_err(|e| {
+            SessionStoreError::DatabaseError(format!("Write transcript failed: {}", e))
+        })?;
+
+        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+            meta.message_count = messages.len() as i64;
+            self.write_metadata(&key_str, &meta).await?;
+        }
+
+        Ok(TruncateResult {
+            messages_removed: dropped.len(),
+            tokens_removed_estimate: tokens_removed,
+        })
+    }
+
     async fn list_checkpoints(
         &self,
         key: &SessionKey,

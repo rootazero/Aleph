@@ -1,12 +1,13 @@
-//! Stage 5 — Guardrails Pipeline (#9).
+//! Guardrails Pipeline (#9).
 //!
 //! Three trait surfaces (`InputGuardrail`, `OutputGuardrail`,
 //! `ToolCallGuardrail`) consulted by `AgentHarness` at three callsites
 //! (turn entry, model output, tool dispatch). Decisions reuse Stage 1
 //! `ErrorClass` so block reasons share the harness-wide retry vocabulary.
 //!
-//! Stage 5a ships Input + Output + Registry + `PiiSecretsGuardrail`.
-//! Stage 5b wires ToolCall callsite + `on_model_fallback`.
+//! All three callsites are live. The `PiiSecretsGuardrail` impl is the
+//! reference implementation that covers all three trait surfaces with a
+//! single regex set.
 
 pub mod decision;
 pub mod pii_secrets;

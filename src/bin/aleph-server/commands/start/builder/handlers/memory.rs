@@ -1,6 +1,5 @@
 use super::*;
 
-
 pub(in crate::commands::start) fn register_memory_handlers(
     server: &mut GatewayServer,
     memory_db: &MemoryBackend,
@@ -264,4 +263,3 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
 }
 
 // ─── register_workspace_handlers ─────────────────────────────────────────────
-

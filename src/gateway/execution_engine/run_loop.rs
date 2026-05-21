@@ -81,12 +81,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        let _hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
+        // Snapshot the extension HookExecutor for this request — fires
+        // `BeforeToolCall` / `AfterToolCall` / `AfterToolCallFailure` hooks
+        // around every tool dispatch inside `ScopedToolService`. `None` when
+        // no extension manager is present or no hooks are registered, so the
+        // tool path skips the executor entirely.
+        let hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
             let snapshot = ext_manager.hook_executor_snapshot().await;
             (snapshot.hook_count() > 0).then(|| Arc::new(snapshot))
         } else {
             None
         };
+        let hook_session_id = request.session_key.to_key_string();
 
         // Build tool registry inputs (filtered by agent whitelist).
         let base_allowed_tools: Vec<crate::dispatcher::UnifiedTool> = self
@@ -107,6 +113,36 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .filter(|t| agent.is_tool_allowed(&t.name))
                     .cloned(),
             );
+        }
+
+        // When a Skill slash command kicks off this run, restrict the tool
+        // surface to the skill's declared `allowed_tools` (set by execute.rs
+        // from the parsed CommandContext::Skill). Without this the LLM sees
+        // the agent's full toolset and the skill's intent to scope tool use
+        // is silently ignored. Empty / missing key preserves legacy behavior.
+        //
+        // FOLLOW-UP: `slash_skill_instructions` is also written into
+        // request.metadata by execute.rs but only consumed via PromptBuilder
+        // when the orchestrator path is used (see harness_bridge.rs).
+        // The legacy gateway path here does not yet thread that string into
+        // the system prompt overlay — the skill's `<instructions>` are
+        // still relying on the `<available_skills>` block in the system
+        // prompt to nudge the LLM to follow the skill's spec. A dedicated
+        // overlay slot in PromptBuilder is the right place to plumb it.
+        if let Some(raw) = request.metadata.get("slash_skill_allowed_tools") {
+            let skill_whitelist: std::collections::HashSet<&str> =
+                raw.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+            if !skill_whitelist.is_empty() {
+                let before = allowed_tools.len();
+                allowed_tools.retain(|t| skill_whitelist.contains(t.name.as_str()));
+                info!(
+                    run_id = run_id,
+                    before,
+                    after = allowed_tools.len(),
+                    skill_whitelist = ?skill_whitelist,
+                    "Applied slash-skill allowed_tools restriction"
+                );
+            }
         }
 
         let _agent_perms = agent.config().tool_permissions();
@@ -311,6 +347,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     None,
                     tool_refresh.clone(),
                     Some(turn_context.clone()),
+                    hook_executor.clone(),
+                    hook_session_id.clone(),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -327,9 +365,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 use crate::agents::background_tracker::BackgroundAgentTracker;
                 use crate::agents::subagent_tool::SubagentTool;
                 use crate::agents::AgentRegistry;
-                let agent_registry = Arc::new(AgentRegistry::with_builtins());
-                let background_tracker = Arc::new(BackgroundAgentTracker::new());
-                let run_chain = crate::harness::chain_context::ChainContext::new();
 
                 let orchestrator = match self.orchestrator.get() {
                     Some(o) => o,
@@ -343,6 +378,25 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         ));
                     }
                 };
+
+                // Reuse the boot-time `AgentRegistry` (same Arc the harness
+                // received). Falling back to `with_builtins()` only protects
+                // test fixtures / the simple engine that skip
+                // `Orchestrator::with_agent_registry` — production must
+                // always have it set, otherwise subagents cannot resolve
+                // user-defined agents.
+                let agent_registry = orchestrator
+                    .agent_registry
+                    .clone()
+                    .unwrap_or_else(|| {
+                        warn!(
+                            run_id = run_id,
+                            "Orchestrator has no agent_registry; subagent will only see built-ins (boot wiring gap)"
+                        );
+                        Arc::new(AgentRegistry::with_builtins())
+                    });
+                let background_tracker = Arc::new(BackgroundAgentTracker::new());
+                let run_chain = crate::harness::chain_context::ChainContext::new();
                 let sub_session = orchestrator.session_service.clone();
                 // Phase 3 — route spawned subagents through the same
                 // FailoverProvider chain the main harness uses, and surface the
@@ -397,11 +451,26 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Some(subagent_tool),
                 tool_refresh,
                 Some(turn_context.clone()),
+                hook_executor.clone(),
+                hook_session_id.clone(),
             );
 
             // Build FlowRequest
             let flow_input =
                 super::helpers::history_to_flow_input(history.clone(), request.input.clone());
+
+            // Phase 4 (F4): derive the channel's InteractionManifest from
+            // the platform string already carried in request.metadata.
+            // `paradigm_for_channel_type` maps "cli" → CLI, the messaging
+            // channels (telegram/feishu/slack/whatsapp/etc.) → Messaging,
+            // web variants → WebRich, and anything unknown → Background.
+            // The harness bridge will adapt `OperationalGuidelinesLayer`,
+            // `ProtocolTokensLayer`, etc. accordingly.
+            let interaction_manifest = request.metadata.get("platform").map(|p| {
+                crate::thinker::interaction::InteractionManifest::new(
+                    crate::gateway::channel::paradigm_for_channel_type(p),
+                )
+            });
 
             let req = crate::orchestrator::FlowRequest {
                 flow_id: None,
@@ -413,6 +482,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 depth: 0,
                 tool_service: Some(tool_service),
                 trace_sink: Some(trace_sink),
+                interaction_manifest,
+                // G2 — forward the per-run sandbox override so the team
+                // dispatcher's WorktreeSandbox replaces the orchestrator's
+                // sandbox_factory output for this run.
+                sandbox_override: request.sandbox_override.clone(),
             };
 
             // Dispatch via the orchestrator

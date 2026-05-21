@@ -240,7 +240,10 @@ impl AlephTool for TeamDelegateTool {
         // Task lock — best effort (advisory; a single synchronous owner here).
         let _ = self.coord_store.acquire_lock(&task.id, &args.agent_id).await;
 
-        // 3. Run the member agent via the shared execution path.
+        // 3. Run the member agent via the shared execution path. G2 —
+        // `team_delegate` is the synchronous leader-driven path (one task
+        // at a time, leader awaits), so worktree isolation is unnecessary:
+        // pass `false` and keep behaviour identical to pre-G2.
         let outcome = execute_member_task(
             context,
             &args.agent_id,
@@ -248,6 +251,7 @@ impl AlephTool for TeamDelegateTool {
             &task.id,
             args.task.clone(),
             args.timeout_secs,
+            false,
         )
         .await;
         let _ = self.coord_store.release_lock(&task.id, &args.agent_id).await;

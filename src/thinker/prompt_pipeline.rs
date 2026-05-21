@@ -216,6 +216,8 @@ impl PromptPipeline {
     ///  700  ProtocolTokensLayer
     ///  710  HeartbeatLayer
     ///  800  OperationalGuidelinesLayer
+    ///  810  ProviderGuidanceLayer
+    ///  820  SessionBudgetLayer
     ///  900  CitationStandardsLayer
     /// 1000  GenerationModelsLayer
     /// 1050  SkillInstructionsLayer
@@ -228,6 +230,7 @@ impl PromptPipeline {
     ///
     /// **Dynamic zone** (per-request, not cacheable):
     /// 1700  InboundContextLayer
+    /// 1702  ChainContextLayer
     /// 1704  AgentCatalogLayer
     /// 1705  McpInstructionsLayer
     /// 1706  McpToolIndexLayer
@@ -244,6 +247,7 @@ impl PromptPipeline {
             Box::new(AgentRoleLayer),
             Box::new(CuratedMemoryLayer),
             Box::new(InboundContextLayer),
+            Box::new(ChainContextLayer),
             Box::new(McpInstructionsLayer),
             Box::new(McpToolIndexLayer),
             Box::new(VoiceModeLayer),
@@ -254,12 +258,15 @@ impl PromptPipeline {
             Box::new(RuntimeCapabilitiesLayer),
             Box::new(ToolsLayer),
             Box::new(HydratedToolsLayer),
+            Box::new(ToolRuntimeStateLayer),
             Box::new(AgentCatalogLayer),
             Box::new(ToolUsageGrammarLayer),
             Box::new(SecurityLayer),
             Box::new(ProtocolTokensLayer),
             Box::new(HeartbeatLayer),
             Box::new(OperationalGuidelinesLayer),
+            Box::new(ProviderGuidanceLayer),
+            Box::new(SessionBudgetLayer),
             Box::new(CitationStandardsLayer),
             Box::new(GenerationModelsLayer),
             Box::new(SkillInstructionsLayer),
@@ -472,9 +479,11 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        // 34 after ResponseFormatLayer was unregistered (2026-05-10) — see
-        // `default_layers` for rationale.
-        assert_eq!(pipeline.layer_count(), 34);
+        // 37 after SessionBudgetLayer was added (Phase 4, 2026-05-20)
+        // alongside ProviderGuidanceLayer (Phase 3) and ChainContextLayer
+        // (Phase 2). The previous count was 36 — see `default_layers`
+        // for the full layer table.
+        assert_eq!(pipeline.layer_count(), 37);
     }
 
     #[test]
@@ -526,12 +535,15 @@ mod mode_tests {
             "protocol_tokens",
             "heartbeat",
             "operational_guidelines",
+            "provider_guidance",
+            "session_budget",
             "citation_standards",
             "generation_models",
             "skill_instructions",
             "mcp_instructions",
             "mcp_tool_index",
             "agent_catalog",
+            "chain_context",
             "session_resume",
             "special_actions",
             "guidelines",
@@ -835,10 +847,13 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"mcp_instructions"));
         assert!(dynamic_names.contains(&"mcp_tool_index"));
         assert!(dynamic_names.contains(&"agent_catalog"));
+        // Phase 2 (2026-05-20): ChainContextLayer rendered subagent
+        // delegation depth per request — naturally dynamic.
+        assert!(dynamic_names.contains(&"chain_context"));
         assert_eq!(
             dynamic_names.len(),
-            11,
-            "Exactly 11 dynamic layers expected"
+            12,
+            "Exactly 12 dynamic layers expected"
         );
     }
 

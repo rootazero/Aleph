@@ -440,6 +440,22 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Read inbox messages or a full thread. Use mode='inbox' (default) to read your messages, mode='thread' with thread_id to read a conversation thread.",
         requires_config: true,
     },
+    // Worker lifecycle tools — require MessageRouter + TeamStore
+    BuiltinToolDefinition {
+        name: "lifecycle_idle",
+        description: "Report that this worker is idle and awaiting work. Sends an `idle` message to the team leader.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "lifecycle_request_shutdown",
+        description: "Request the team leader's permission to terminate this worker. Pair with lifecycle_resolve_shutdown.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "lifecycle_resolve_shutdown",
+        description: "Approve or reject a shutdown request from a worker. Sets decision to 'approve' or 'reject'.",
+        requires_config: true,
+    },
     // Task coordination tools — require CoordTaskStore
     BuiltinToolDefinition {
         name: "task_create",
@@ -655,7 +671,8 @@ pub fn create_tool_boxed(
         // Team management tools require TeamStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "team_create" | "team_delegate" | "team_status" | "team_disband" | "team_member_remove"
-        | "team_digest" | "message_send" | "inbox_read" | "plan_submit" | "plan_resolve" => None,
+        | "team_digest" | "message_send" | "inbox_read" | "plan_submit" | "plan_resolve"
+        | "lifecycle_idle" | "lifecycle_request_shutdown" | "lifecycle_resolve_shutdown" => None,
         // Task coordination tools require CoordTaskStore + AgentMessageBus at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_create" | "task_update" | "task_list" | "task_wait" => None,

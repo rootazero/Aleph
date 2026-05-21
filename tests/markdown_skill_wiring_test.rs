@@ -8,6 +8,12 @@
 //! bridges async→sync via `tokio::task::block_in_place`, which is only sound
 //! on a multi-threaded runtime (the same flavour the `aleph-server` binary
 //! uses).
+//!
+//! Phase 1 deprecation: this integration test still constructs and inspects
+//! `AlephSkillSpec` directly. It migrates to `SkillManifest` in Phase 2
+//! (≥2026-06-03) along with the other markdown_skill consumers. See
+//! docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md.
+#![allow(deprecated)]
 
 use alephcore::gateway::execution_engine::markdown_skill_refresh::MarkdownSkillRefreshSource;
 use alephcore::gateway::handlers::markdown_skills::{

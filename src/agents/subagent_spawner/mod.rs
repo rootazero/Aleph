@@ -244,12 +244,15 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         //    ResponseFormatLayer so the prompt does not (a) lie to the LLM
         //    that no tools exist, nor (b) mandate the legacy
         //    `{reasoning, action}` JSON envelope which contradicts native
-        //    tool_use.
+        //    tool_use. The descended `child_chain` is passed in so
+        //    `ChainContextLayer` can tell the spawned agent it is nested
+        //    and how much delegation budget remains.
         let system_prompt = PromptBuilder::new(PromptConfig {
             native_tools_enabled: true,
             ..PromptConfig::default()
         })
         .with_agent(req.agent_def.clone())
+        .with_chain_context(child_chain.clone())
         .build_system_prompt(&[]);
 
         // 5. Resolve the model override: explicit > model_hint > native.
@@ -314,6 +317,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             verifier_chain: None,
             context_budget: None,
             context_compactor: None,
+            preflight_pipeline: None,
             // Stage A (P1) — was None; now inherited from parent SpawnerBase.
             trace_sink: base.trace_sink.clone(),
             system_prompt: Some(system_prompt),
@@ -331,6 +335,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             stall_config: base.stall_config.clone(),
             consecutive_failure_cap: base.consecutive_failure_cap,
             turn_timeout: base.turn_timeout,
+            turn_budget: None,
+            result_store: None,
+
         };
         let harness = Arc::new(AgentHarness::new(deps));
 

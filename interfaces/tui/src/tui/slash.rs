@@ -4,6 +4,51 @@
 // that are handled entirely within the TUI (no Gateway RPC needed).
 // All other slash commands are sent to the Gateway as regular messages.
 
+use std::fmt;
+
+/// Tool execution progress display mode (client-side filter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolProgressMode {
+    /// Suppress all ToolStart/ToolUpdate/ToolEnd display.
+    Off,
+    /// Show ToolStart + ToolEnd only; drop mid-execution ToolUpdate noise.
+    New,
+    /// Show ToolStart + ToolEnd + ToolUpdate (default — preserves the
+    /// pre-`/tools` TUI behaviour and matches hermes-agent's default).
+    All,
+    /// Show everything plus raw tool params + result outputs.
+    Verbose,
+}
+
+impl Default for ToolProgressMode {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+impl fmt::Display for ToolProgressMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Off => "off",
+            Self::New => "new",
+            Self::All => "all",
+            Self::Verbose => "verbose",
+        })
+    }
+}
+
+impl ToolProgressMode {
+    /// Single-character glyph for the status bar.
+    pub fn glyph(&self) -> char {
+        match self {
+            Self::Off => '-',
+            Self::New => 'n',
+            Self::All => 'a',
+            Self::Verbose => 'v',
+        }
+    }
+}
+
 /// Local-only slash commands handled entirely within the TUI.
 /// All other slash commands are forwarded to Gateway as chat messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,12 +65,30 @@ pub enum LocalCommand {
     ReplayList,
     /// Load a persisted trace replay by task ID
     ReplayShow { task_id: String },
+    /// Show session token usage + cost estimate
+    Usage,
+    /// Trigger session compaction (KeepLastN strategy)
+    Compress,
+    /// Abort the currently active run, if any
+    Stop,
+    /// Truncate the last user+assistant turn from history
+    Undo,
+    /// Undo last turn and re-submit the previous user message
+    Retry,
+    /// Switch tool-progress display mode (None prints the current mode)
+    Tools { mode: Option<ToolProgressMode> },
 }
 
 /// Local command catalog: (name, description) pairs.
 const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/clear", "Clear the screen"),
     ("/verbose", "Toggle verbose/debug output"),
+    ("/usage", "Show token usage + cost estimate for this session"),
+    ("/compress", "Compact session history (server-side summarisation)"),
+    ("/stop", "Abort the currently active run"),
+    ("/undo", "Remove the last user+assistant turn from history"),
+    ("/retry", "Undo + re-send the previous user message"),
+    ("/tools", "Tool progress mode: off|new|all|verbose"),
     ("/replays", "List recent persisted trace replays"),
     ("/replay", "Load a persisted trace replay by task ID"),
     ("/help", "Show available commands"),
@@ -67,6 +130,23 @@ pub fn parse_input(input: &str) -> ParsedInput {
     match cmd_lower.as_str() {
         "/clear" => ParsedInput::Local(LocalCommand::Clear),
         "/verbose" => ParsedInput::Local(LocalCommand::Verbose),
+        "/usage" => ParsedInput::Local(LocalCommand::Usage),
+        "/compress" | "/compact" => ParsedInput::Local(LocalCommand::Compress),
+        "/stop" | "/abort" => ParsedInput::Local(LocalCommand::Stop),
+        "/undo" => ParsedInput::Local(LocalCommand::Undo),
+        "/retry" => ParsedInput::Local(LocalCommand::Retry),
+        "/tools" => {
+            // No arg or unrecognised arg → mode=None (handler prints current mode + hint).
+            // Recognised arg → mode=Some(...).
+            let mode = match args.to_lowercase().as_str() {
+                "off" => Some(ToolProgressMode::Off),
+                "new" => Some(ToolProgressMode::New),
+                "all" => Some(ToolProgressMode::All),
+                "verbose" => Some(ToolProgressMode::Verbose),
+                _ => None,
+            };
+            ParsedInput::Local(LocalCommand::Tools { mode })
+        }
         "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
         "/replay" => {
             if args.is_empty() {
@@ -115,6 +195,55 @@ mod tests {
         assert_eq!(
             parse_input("/Clear"),
             ParsedInput::Local(LocalCommand::Clear)
+        );
+    }
+
+    #[test]
+    fn parse_control_panel_commands() {
+        assert_eq!(parse_input("/usage"), ParsedInput::Local(LocalCommand::Usage));
+        assert_eq!(
+            parse_input("/compress"),
+            ParsedInput::Local(LocalCommand::Compress)
+        );
+        // /compact is an accepted alias for hermes parity
+        assert_eq!(
+            parse_input("/compact"),
+            ParsedInput::Local(LocalCommand::Compress)
+        );
+        assert_eq!(parse_input("/stop"), ParsedInput::Local(LocalCommand::Stop));
+        assert_eq!(parse_input("/abort"), ParsedInput::Local(LocalCommand::Stop));
+        assert_eq!(parse_input("/undo"), ParsedInput::Local(LocalCommand::Undo));
+        assert_eq!(parse_input("/retry"), ParsedInput::Local(LocalCommand::Retry));
+    }
+
+    #[test]
+    fn parse_tools_modes() {
+        assert_eq!(
+            parse_input("/tools"),
+            ParsedInput::Local(LocalCommand::Tools { mode: None })
+        );
+        assert_eq!(
+            parse_input("/tools off"),
+            ParsedInput::Local(LocalCommand::Tools {
+                mode: Some(ToolProgressMode::Off)
+            })
+        );
+        assert_eq!(
+            parse_input("/tools NEW"),
+            ParsedInput::Local(LocalCommand::Tools {
+                mode: Some(ToolProgressMode::New)
+            })
+        );
+        assert_eq!(
+            parse_input("/tools verbose"),
+            ParsedInput::Local(LocalCommand::Tools {
+                mode: Some(ToolProgressMode::Verbose)
+            })
+        );
+        // Invalid arg falls through to "print hint" — handler differentiates.
+        assert_eq!(
+            parse_input("/tools nonsense"),
+            ParsedInput::Local(LocalCommand::Tools { mode: None })
         );
     }
 
@@ -170,10 +299,25 @@ mod tests {
     #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
-        assert_eq!(cmds.len(), 6);
+        assert_eq!(cmds.len(), 12);
         assert!(cmds.iter().any(|(name, _)| *name == "/clear"));
         assert!(cmds.iter().any(|(name, _)| *name == "/quit"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/usage"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/compress"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/stop"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/undo"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/retry"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/tools"));
         assert!(cmds.iter().any(|(name, _)| *name == "/replays"));
         assert!(cmds.iter().any(|(name, _)| *name == "/replay"));
+    }
+
+    #[test]
+    fn tool_progress_mode_glyphs() {
+        assert_eq!(ToolProgressMode::Off.glyph(), '-');
+        assert_eq!(ToolProgressMode::New.glyph(), 'n');
+        assert_eq!(ToolProgressMode::All.glyph(), 'a');
+        assert_eq!(ToolProgressMode::Verbose.glyph(), 'v');
+        assert_eq!(ToolProgressMode::default(), ToolProgressMode::All);
     }
 }

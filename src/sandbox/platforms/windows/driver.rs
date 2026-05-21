@@ -16,13 +16,36 @@ use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
 use crate::sandbox::policy::{FsPolicy, NetworkPolicy, SandboxPolicy};
+use crate::sandbox::windows_init::WindowsInitPolicy;
+
+/// Driver-side knobs sourced from `WindowsSandboxConfig`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowsSandboxOptions {
+    pub use_restricted_token: bool,
+    pub require_restricted_token: bool,
+    pub use_app_container: bool,
+    pub require_app_container: bool,
+}
 
 #[derive(Debug, Clone)]
-pub struct WindowsSandboxDriver;
+pub struct WindowsSandboxDriver {
+    options: WindowsSandboxOptions,
+}
 
 impl WindowsSandboxDriver {
     pub fn new() -> Self {
-        Self
+        Self {
+            options: WindowsSandboxOptions {
+                use_restricted_token: true,
+                require_restricted_token: false,
+                use_app_container: true,
+                require_app_container: false,
+            },
+        }
+    }
+
+    pub fn with_options(options: WindowsSandboxOptions) -> Self {
+        Self { options }
     }
 
     /// Generate a profile description from the sandbox policy.
@@ -74,16 +97,40 @@ impl WindowsSandboxDriver {
                 lines.push("network=allow_all".to_string());
             }
             NetworkPolicy::AllowHosts(hosts) => {
-                lines.push("network=allow_hosts".to_string());
-                for host in hosts {
-                    lines.push(format!("host={}", host));
-                }
+                // Workspace pre-resolution has already turned hostnames
+                // into IP literals (see `src/sandbox/dns.rs`); we expose
+                // them in the rejection so callers know exactly which
+                // IPs would be allowed if WFP enforcement existed.
+                //
+                // Why not enforced: WFP filter installation requires
+                // SeChangeNotifyPrivilege + admin (or a service running
+                // as LocalSystem). Even the AppContainer path runs
+                // unprivileged in user-session and cannot add WFP
+                // filters. The single-cycle deliverable would be a
+                // managed proxy plus HTTP_PROXY env injection, matching
+                // the Linux path.
+                let allowlist = hosts.join(", ");
+                return Err(SandboxError::UnsupportedPolicy {
+                    platform: "windows/token",
+                    feature: "NetworkPolicy::AllowHosts".into(),
+                    reason: format!(
+                        "per-host egress filtering on Windows is not yet enforced. \
+                         Workspace pre-resolved the allowlist to [{allowlist}]; a future \
+                         cycle will land enforcement via a managed proxy or WFP filters \
+                         (the latter requires admin / LocalSystem). For now, use AllowAll \
+                         (unfiltered) or None (no network). Tracked in \
+                         docs/reference/SANDBOX.md § Network Filtering."
+                    ),
+                });
             }
-            NetworkPolicy::ProxyOnly { ports } => {
-                lines.push("network=proxy_only".to_string());
-                for port in ports {
-                    lines.push(format!("port={}", port));
-                }
+            NetworkPolicy::ProxyOnly { .. } => {
+                return Err(SandboxError::UnsupportedPolicy {
+                    platform: "windows/token",
+                    feature: "NetworkPolicy::ProxyOnly".into(),
+                    reason: "proxy-only routing requires WFP (spec SP-3). \
+                             Use AllowAll or None."
+                        .into(),
+                });
             }
         }
 
@@ -114,7 +161,34 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
     ) -> Result<OsSandboxProfile, SandboxError> {
         let policy = SandboxPolicy::from(capabilities);
         let contents = self.generate_profile(&policy, cwd)?;
-        Ok(OsSandboxProfile { contents })
+        // SP-3a/SP-6: serialize the WindowsInitPolicy so run() can wrap
+        // the target with `sandbox-init-windows`. Skipped only when
+        // BOTH restricted-token AND app-container are disabled — falls
+        // through to plain CreateProcessW (cycle 1 behavior).
+        let windows_init_policy =
+            if self.options.use_restricted_token || self.options.use_app_container {
+                let p = WindowsInitPolicy {
+                    require_restricted_token: self.options.require_restricted_token,
+                    use_app_container: self.options.use_app_container,
+                    require_app_container: self.options.require_app_container,
+                    app_container_capabilities:
+                        crate::sandbox::windows_init::capability_names_for_network(
+                            &capabilities.network,
+                        ),
+                    workspace_path: Some(cwd.to_string_lossy().into_owned()),
+                };
+                Some(serde_json::to_string(&p).map_err(|e| {
+                    SandboxError::ProfileGeneration(format!("WindowsInitPolicy serialize: {e}"))
+                })?)
+            } else {
+                None
+            };
+        Ok(OsSandboxProfile {
+            contents,
+            max_memory_mb: policy.process.max_memory_mb,
+            linux_init_policy: None,
+            windows_init_policy,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -136,12 +210,39 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
         #[cfg(target_os = "windows")]
         {
             use super::job::SandboxJob;
-            use super::token::create_restricted_token;
             use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
 
-            let mut cmd = tokio::process::Command::new(program);
-            cmd.args(args)
-                .current_dir(cwd)
+            // SP-3a: when the profile carries a windows_init_policy,
+            // wrap the target with `aleph-server sandbox-init-windows
+            // --policy <json> -- <program> <args>`. The init child
+            // applies the restricted token + Low IL before launching
+            // the target via CreateProcessAsUserW (which inherits the
+            // JobObject membership we're about to assign below). Skip
+            // when policy is absent (use_restricted_token=false) — the
+            // target runs directly under the host token.
+            let mut cmd = match &profile.windows_init_policy {
+                Some(policy_json) => {
+                    let aleph_exe = std::env::current_exe()
+                        .and_then(std::fs::canonicalize)
+                        .map_err(|e| SandboxError::ExecutionFailed(format!(
+                            "cannot determine aleph-server path: {e}"
+                        )))?;
+                    let mut c = tokio::process::Command::new(aleph_exe);
+                    c.arg("sandbox-init-windows")
+                        .arg("--policy")
+                        .arg(policy_json)
+                        .arg("--")
+                        .arg(program)
+                        .args(args);
+                    c
+                }
+                None => {
+                    let mut c = tokio::process::Command::new(program);
+                    c.args(args);
+                    c
+                }
+            };
+            cmd.current_dir(cwd)
                 .env_clear()
                 .envs(env)
                 .stdout(std::process::Stdio::piped())
@@ -150,9 +251,11 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 .creation_flags(CREATE_NEW_PROCESS_GROUP as u32);
 
             let job = unsafe {
-                SandboxJob::new(if parsed.allow_fork { 32 } else { 1 }).map_err(|e| {
-                    SandboxError::ExecutionFailed(format!("job creation failed: {e}"))
-                })?
+                SandboxJob::new(
+                    if parsed.allow_fork { 32 } else { 1 },
+                    profile.max_memory_mb,
+                )
+                .map_err(|e| SandboxError::ExecutionFailed(format!("job creation failed: {e}")))?
             };
 
             let mut child = cmd.spawn().map_err(|e| {
@@ -356,25 +459,65 @@ mod tests {
     }
 
     #[test]
-    fn generate_profile_allow_hosts() {
+    fn generate_profile_allow_hosts_returns_unsupported() {
         let driver = WindowsSandboxDriver::new();
+        // Workspace pre-resolution feeds an IP-only allowlist; mirror
+        // that here so the assertion catches IP-bearing rejections.
         let policy = SandboxPolicy {
-            network: NetworkPolicy::AllowHosts(vec!["example.com".into()]),
+            network: NetworkPolicy::AllowHosts(vec![
+                "203.0.113.7".into(),
+                "203.0.113.8".into(),
+            ]),
             ..Default::default()
         };
         let cwd = Path::new("C:\\workspace");
-        let profile = driver.generate_profile(&policy, cwd).unwrap();
+        let err = driver
+            .generate_profile(&policy, cwd)
+            .expect_err("AllowHosts must hard-fail on windows/token");
+        match err {
+            SandboxError::UnsupportedPolicy {
+                platform,
+                feature,
+                reason,
+            } => {
+                assert_eq!(platform, "windows/token");
+                assert!(feature.contains("AllowHosts"));
+                assert!(reason.contains("203.0.113.7"), "got: {reason}");
+                assert!(reason.contains("203.0.113.8"), "got: {reason}");
+                assert!(
+                    reason.contains("SANDBOX.md")
+                        || reason.contains("WFP")
+                        || reason.contains("managed proxy"),
+                    "rejection must point at the documented gap, got: {reason}"
+                );
+            }
+            other => panic!("expected UnsupportedPolicy, got {other:?}"),
+        }
+    }
 
-        assert!(profile.contains("network=allow_hosts"));
-        assert!(profile.contains("host=example.com"));
+    #[test]
+    fn generate_profile_proxy_only_returns_unsupported() {
+        let driver = WindowsSandboxDriver::new();
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::ProxyOnly { ports: vec![8080] },
+            ..Default::default()
+        };
+        let cwd = Path::new("C:\\workspace");
+        assert!(matches!(
+            driver.generate_profile(&policy, cwd),
+            Err(SandboxError::UnsupportedPolicy { .. })
+        ));
     }
 
     #[test]
     fn parse_profile_roundtrip() {
+        // Uses AllowAll (supported) so the roundtrip exercises memory limit
+        // and write-paths plumbing without tripping the unsupported network
+        // guard.
         let driver = WindowsSandboxDriver::new();
         let policy = SandboxPolicy {
             filesystem: FsPolicy::WritePaths(vec![PathBuf::from("C:\\temp")]),
-            network: NetworkPolicy::ProxyOnly { ports: vec![8080] },
+            network: NetworkPolicy::AllowAll,
             process: crate::sandbox::policy::ProcessPolicy {
                 allow_fork: true,
                 timeout_secs: 120,
@@ -390,8 +533,7 @@ mod tests {
         assert_eq!(parsed.fs_mode, "write_paths");
         assert_eq!(parsed.cwd, Some("C:\\workspace".to_string()));
         assert_eq!(parsed.write_paths, vec!["C:\\temp"]);
-        assert_eq!(parsed.network_mode, "proxy_only");
-        assert_eq!(parsed.proxy_ports, vec![8080]);
+        assert_eq!(parsed.network_mode, "allow_all");
         assert!(parsed.allow_fork);
         assert_eq!(parsed.timeout_secs, 120);
         assert_eq!(parsed.max_memory_mb, Some(512));
