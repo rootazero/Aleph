@@ -74,13 +74,13 @@ pub struct SessionResolveInput {
 pub fn resolve_session(input: SessionResolveInput) -> Result<SessionResolution, FlowError> {
     match input.strategy {
         SessionStrategy::Reuse => match input.session_hint {
-            Some(k) => Ok(SessionResolution {
+            Some(k) if !k.is_empty() => Ok(SessionResolution {
                 session_key: k,
                 parent_session_key: None,
                 is_new: false,
             }),
-            None => Err(FlowError::InvalidConfig(
-                "SessionStrategy::Reuse requires session_hint".into(),
+            _ => Err(FlowError::InvalidConfig(
+                "SessionStrategy::Reuse requires a non-empty session_hint".into(),
             )),
         },
         SessionStrategy::Fresh => Ok(SessionResolution {
@@ -92,10 +92,12 @@ pub fn resolve_session(input: SessionResolveInput) -> Result<SessionResolution, 
             let parent = input
                 .parent_session
                 .clone()
-                .or(parent_session_key)
+                .filter(|s| !s.is_empty())
+                .or(parent_session_key.filter(|s| !s.is_empty()))
                 .ok_or_else(|| {
                     FlowError::InvalidConfig(
-                        "SessionStrategy::Child requires parent_session at runtime".into(),
+                        "SessionStrategy::Child requires a non-empty parent_session at runtime"
+                            .into(),
                     )
                 })?;
             Ok(SessionResolution {
