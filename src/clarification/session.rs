@@ -163,25 +163,36 @@ impl ClarificationManager {
 /// Map a user's free-text reply onto a [`ClarificationResult`] for `request`.
 fn interpret_reply(request: &ClarificationRequest, reply: &str) -> ClarificationResult {
     let trimmed = reply.trim();
-    if request.clarification_type == ClarificationType::Select {
-        if let Some(options) = &request.options {
-            // 1-based numeric selection.
-            if let Ok(n) = trimmed.parse::<usize>() {
-                if n >= 1 && n <= options.len() {
-                    let opt = &options[n - 1];
-                    return ClarificationResult::selected((n - 1) as u32, opt.value.clone());
+
+    match request.clarification_type {
+        ClarificationType::Select => {
+            if let Some(options) = &request.options {
+                // 1-based numeric selection.
+                if let Ok(n) = trimmed.parse::<usize>() {
+                    if n >= 1 && n <= options.len() {
+                        let opt = &options[n - 1];
+                        return ClarificationResult::selected((n - 1) as u32, opt.value.clone());
+                    }
+                }
+                // Match against an option value or label (case-insensitive).
+                let lower = trimmed.to_lowercase();
+                for (i, opt) in options.iter().enumerate() {
+                    if opt.value.to_lowercase() == lower || opt.label.to_lowercase() == lower {
+                        return ClarificationResult::selected(i as u32, opt.value.clone());
+                    }
                 }
             }
-            // Match against an option value or label (case-insensitive).
-            let lower = trimmed.to_lowercase();
-            for (i, opt) in options.iter().enumerate() {
-                if opt.value.to_lowercase() == lower || opt.label.to_lowercase() == lower {
-                    return ClarificationResult::selected(i as u32, opt.value.clone());
-                }
-            }
+            ClarificationResult::text_input(trimmed.to_string())
+        }
+        ClarificationType::Text => ClarificationResult::text_input(trimmed.to_string()),
+        ClarificationType::MultiGroup => {
+            // TODO: MultiGroup replies should be parsed from a structured format
+            // (e.g., JSON with group_id -> selected_value mappings). For now,
+            // fall back to text input since MultiGroup is typically resolved
+            // through a structured UI rather than free-text replies.
+            ClarificationResult::text_input(trimmed.to_string())
         }
     }
-    ClarificationResult::text_input(trimmed.to_string())
 }
 
 // =============================================================================

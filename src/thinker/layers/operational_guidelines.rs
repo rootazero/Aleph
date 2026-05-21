@@ -17,7 +17,16 @@ impl PromptLayer for OperationalGuidelinesLayer {
         matches!(mode, PromptMode::Full)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Context]
+        // Phase 2 wiring: ride every non-minimal path. The inject() guard
+        // keeps output empty when no `ResolvedContext` is attached, so
+        // widening here is a no-op until Phase 3 threads the context in.
+        &[
+            AssemblyPath::Basic,
+            AssemblyPath::Hydration,
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+            AssemblyPath::Cached,
+        ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         let ctx = match input.context {
@@ -85,7 +94,21 @@ mod tests {
     #[test]
     fn test_operational_guidelines_paths() {
         let paths = OperationalGuidelinesLayer.paths();
-        assert_eq!(paths.len(), 1);
+        assert!(paths.contains(&AssemblyPath::Basic));
+        assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Context));
+        assert!(paths.contains(&AssemblyPath::Hydration));
+        assert!(paths.contains(&AssemblyPath::Cached));
+    }
+
+    #[test]
+    fn graceful_noop_on_basic_path_without_context() {
+        let layer = OperationalGuidelinesLayer;
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+        assert!(out.is_empty());
     }
 }

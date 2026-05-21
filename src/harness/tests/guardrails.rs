@@ -309,6 +309,7 @@ fn make_deps(
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
+        preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -319,6 +320,9 @@ fn make_deps(
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     }
 }
 
@@ -593,6 +597,7 @@ fn make_deps_with_tools(
         verifier_chain: None,
         context_budget: None,
         context_compactor: None,
+        preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
         prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
@@ -603,6 +608,9 @@ fn make_deps_with_tools(
         stall_config: None,
         consecutive_failure_cap: None,
         turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+
     }
 }
 

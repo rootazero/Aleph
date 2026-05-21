@@ -23,6 +23,7 @@ pub mod tool_index;
 // === Re-exports: Tool Management ===
 pub use registry::ResolvedCommand;
 pub use registry::ToolRegistry;
+pub use registry::{HealthReason, HealthSnapshot, ProbeResult, ToolHealthCache, ToolHealthProbe};
 pub use types::{
     ChannelType, ConflictInfo, ConflictResolution, DispatchMode, RoutingLayer, StructuredToolMeta,
     ToolCategory, ToolDefinition, ToolDiff, ToolIndex, ToolIndexCategory, ToolIndexEntry,

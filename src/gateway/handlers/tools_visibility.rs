@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::agents::AgentDef;
 use crate::dispatcher::{ToolRegistry, ToolSource, UnifiedTool};
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 // =============================================================================
 // Response Types
@@ -66,6 +66,28 @@ pub fn extract_source(source: &ToolSource) -> (String, String) {
     }
 }
 
+/// Filter tools by source descriptor. Exact match (e.g. `"native"`,
+/// `"mcp:github"`) or family-prefix wildcard (`"mcp:*"`). `None` passes
+/// through unchanged. Mirrors OpenClaw's tools.catalog source filter for
+/// Panel/Webchat consumers that render source-by-source tabs.
+pub fn filter_by_source(tools: Vec<UnifiedTool>, source: Option<&str>) -> Vec<UnifiedTool> {
+    let Some(src) = source else {
+        return tools;
+    };
+    if let Some(prefix) = src.strip_suffix(":*") {
+        let prefix_with_colon = format!("{prefix}:");
+        tools
+            .into_iter()
+            .filter(|t| extract_source(&t.source).0.starts_with(&prefix_with_colon))
+            .collect()
+    } else {
+        tools
+            .into_iter()
+            .filter(|t| extract_source(&t.source).0 == src)
+            .collect()
+    }
+}
+
 /// Group a flat list of tools into `ToolGroup`s by source.
 ///
 /// Groups are sorted by group ID (BTreeMap) for deterministic output.
@@ -94,14 +116,28 @@ pub fn group_tools(tools: Vec<UnifiedTool>) -> Vec<ToolGroup> {
 // Handlers
 // =============================================================================
 
+/// Extract optional `source` param (string) from the request. Returns
+/// `None` when absent or non-string.
+fn extract_source_filter(req: &JsonRpcRequest) -> Option<String> {
+    req.params
+        .as_ref()
+        .and_then(|p| p.get("source"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
 /// Handle `tools.catalog` — list all active tools grouped by source.
+/// Optional `source` filter accepts an exact id (e.g. `"mcp:github"`) or
+/// family-prefix wildcard (e.g. `"mcp:*"`).
 pub async fn handle_catalog(
     request: JsonRpcRequest,
     tool_registry: &ToolRegistry,
 ) -> JsonRpcResponse {
+    let source_filter = extract_source_filter(&request);
     let tools = tool_registry.list_all().await;
-    let total = tools.len();
-    let groups = group_tools(tools);
+    let filtered = filter_by_source(tools, source_filter.as_deref());
+    let total = filtered.len();
+    let groups = group_tools(filtered);
 
     let result = ToolsListResult {
         groups,
@@ -113,14 +149,17 @@ pub async fn handle_catalog(
 }
 
 /// Handle `tools.effective` — list tools available to a specific agent.
+/// Optional `source` filter applies AFTER the agent allowlist, so the
+/// result is "tools allowed for this agent that also match the source".
 pub async fn handle_effective(
     request: JsonRpcRequest,
     tool_registry: &ToolRegistry,
     agent: Option<&AgentDef>,
 ) -> JsonRpcResponse {
+    let source_filter = extract_source_filter(&request);
     let tools = tool_registry.list_all().await;
 
-    let (filtered, agent_id): (Vec<UnifiedTool>, Option<String>) = match agent {
+    let (filtered_by_agent, agent_id): (Vec<UnifiedTool>, Option<String>) = match agent {
         Some(agent_def) => {
             let kept: Vec<UnifiedTool> = tools
                 .into_iter()
@@ -131,6 +170,7 @@ pub async fn handle_effective(
         None => (tools, None),
     };
 
+    let filtered = filter_by_source(filtered_by_agent, source_filter.as_deref());
     let total = filtered.len();
     let groups = group_tools(filtered);
 
@@ -141,24 +181,6 @@ pub async fn handle_effective(
     };
 
     JsonRpcResponse::success(request.id, serde_json::to_value(result).unwrap_or_default())
-}
-
-/// Stub for `tools.catalog` — returns error until wired with ToolRegistry.
-pub async fn handle_catalog_stub(request: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "tools.catalog requires ToolRegistry — wire in Gateway startup".to_string(),
-    )
-}
-
-/// Stub for `tools.effective` — returns error until wired with ToolRegistry.
-pub async fn handle_effective_stub(request: JsonRpcRequest) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "tools.effective requires ToolRegistry — wire in Gateway startup".to_string(),
-    )
 }
 
 // =============================================================================
@@ -295,5 +317,68 @@ mod tests {
         let skill = groups.iter().find(|g| g.id == "skill:refine-text").unwrap();
         assert_eq!(skill.label, "refine-text");
         assert_eq!(skill.tools.len(), 1);
+    }
+
+    // ---------------------------------------------------------------------
+    // P2 — source filter
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn source_filter_exact_match_keeps_only_native() {
+        let tools = vec![
+            make_tool("search", "Native", ToolSource::Native),
+            make_tool("help", "Built-in", ToolSource::Builtin),
+            make_tool(
+                "git_status",
+                "MCP",
+                ToolSource::Mcp {
+                    server: "github".into(),
+                },
+            ),
+        ];
+        let filtered = filter_by_source(tools, Some("native"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "search");
+    }
+
+    #[test]
+    fn source_filter_prefix_wildcard_keeps_all_mcp() {
+        let tools = vec![
+            make_tool(
+                "github_status",
+                "GH",
+                ToolSource::Mcp {
+                    server: "github".into(),
+                },
+            ),
+            make_tool(
+                "fs_ls",
+                "FS",
+                ToolSource::Mcp {
+                    server: "filesystem".into(),
+                },
+            ),
+            make_tool("search", "Native", ToolSource::Native),
+        ];
+        let filtered = filter_by_source(tools, Some("mcp:*"));
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|t| matches!(t.source, ToolSource::Mcp { .. })));
+    }
+
+    #[test]
+    fn source_filter_none_returns_all_unchanged() {
+        let tools = vec![
+            make_tool("a", "x", ToolSource::Native),
+            make_tool("b", "y", ToolSource::Builtin),
+        ];
+        let filtered = filter_by_source(tools, None);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn source_filter_exact_match_no_results() {
+        let tools = vec![make_tool("a", "x", ToolSource::Native)];
+        let filtered = filter_by_source(tools, Some("mcp:nonexistent"));
+        assert!(filtered.is_empty());
     }
 }

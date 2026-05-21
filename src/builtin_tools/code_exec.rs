@@ -106,6 +106,8 @@ impl CodeExecArgs {
                 NetworkPolicy::None
             },
             spawn_subprocess: self.allow_subprocess,
+            max_memory_mb: None,
+            timeout_secs: None,
         }
     }
 }

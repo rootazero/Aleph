@@ -58,6 +58,7 @@ impl AgentLoopBridge {
             metadata: HashMap::new(),
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            sandbox_override: None,
         }
     }
 
@@ -76,7 +77,7 @@ impl A2AMessageHandler for AgentLoopBridge {
         session_id: Option<&str>,
     ) -> A2AResult<A2ATask> {
         let input = message.text_content();
-        if input.is_empty() {
+        if input.trim().is_empty() {
             return Err(A2AError::InvalidParams(
                 "Message contains no text content".to_string(),
             ));
@@ -146,7 +147,7 @@ impl A2AMessageHandler for AgentLoopBridge {
         session_id: Option<&str>,
     ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>> {
         let input = message.text_content();
-        if input.is_empty() {
+        if input.trim().is_empty() {
             return Err(A2AError::InvalidParams(
                 "Message contains no text content".to_string(),
             ));
@@ -268,6 +269,7 @@ impl A2AMessageHandler for AgentLoopBridge {
                     error!(task_id = %task_id_owned, error = %e, "A2A bridge: streaming task failed");
                 }
             }
+            let _ = streaming.cleanup_task(&task_id_owned).await;
         });
 
         Ok(stream)
@@ -434,6 +436,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_message_whitespace_only_returns_error() {
+        let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let msg = A2AMessage::text(A2ARole::User, "   \n\t  ");
+
+        let result = bridge.handle_message("task-ws", msg, None).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), A2AError::InvalidParams(_)));
+    }
+
+    #[tokio::test]
     async fn handle_message_uses_session_id_as_context() {
         let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
         let msg = A2AMessage::text(A2ARole::User, "With session");
@@ -580,6 +592,19 @@ mod tests {
         let result = bridge.handle_message_stream("task-empty", msg, None).await;
         match result {
             Err(A2AError::InvalidParams(_)) => {} // expected
+            Err(other) => panic!("Expected InvalidParams, got: {other}"),
+            Ok(_) => panic!("Expected error, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_message_stream_whitespace_only_returns_error() {
+        let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let msg = A2AMessage::text(A2ARole::User, "   \n\t  ");
+
+        let result = bridge.handle_message_stream("task-ws", msg, None).await;
+        match result {
+            Err(A2AError::InvalidParams(_)) => {}
             Err(other) => panic!("Expected InvalidParams, got: {other}"),
             Ok(_) => panic!("Expected error, got Ok"),
         }

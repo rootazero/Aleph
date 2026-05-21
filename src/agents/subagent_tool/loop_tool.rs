@@ -32,8 +32,8 @@ impl LoopTool for SubagentTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["run", "check_status", "send_message", "read_inbox"],
-                    "description": "The action to perform. Defaults to 'run' (or 'check_status' if only request_id is provided)."
+                    "enum": ["run", "check_status", "cancel", "send_message", "read_inbox"],
+                    "description": "The action to perform. Defaults to 'run' (or 'check_status' if only request_id is provided). 'cancel' interrupts a still-running background sub-agent identified by request_id."
                 },
                 "task": {
                     "type": "string",
@@ -283,6 +283,44 @@ impl LoopTool for SubagentTool {
                         };
                     }
                 }
+            }
+            SubagentAction::Cancel(request_id) => {
+                let hit = self.background_tracker.cancel(&request_id);
+                if hit {
+                    return ToolResult::Success {
+                        output: json!({
+                            "status": "cancelling",
+                            "request_id": request_id,
+                            "note": "CancellationToken fired; running task will exit at its next await point.",
+                        }),
+                    };
+                }
+                // No running entry — surface the completed result (if any)
+                // so the LLM gets a deterministic answer rather than a
+                // misleading "not found".
+                return match self.background_tracker.take_result(&request_id) {
+                    Some(Ok(result)) => ToolResult::Success {
+                        output: json!({
+                            "status": "already_completed",
+                            "request_id": request_id,
+                            "result": result,
+                        }),
+                    },
+                    Some(Err(err)) => ToolResult::Error {
+                        error: format!(
+                            "Sub-agent '{}' already failed before cancel: {}",
+                            request_id, err
+                        ),
+                        retryable: false,
+                    },
+                    None => ToolResult::Error {
+                        error: format!(
+                            "No running or completed sub-agent found with request_id '{}'",
+                            request_id
+                        ),
+                        retryable: false,
+                    },
+                };
             }
             SubagentAction::Run(run_args) => run_args,
         };

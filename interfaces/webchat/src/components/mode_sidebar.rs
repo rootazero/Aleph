@@ -29,6 +29,7 @@ pub fn ModeSidebar() -> impl IntoView {
                             PanelMode::Dashboard => view! { <DashboardSidebar /> }.into_any(),
                             PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
                             PanelMode::Memory => view! { <div /> }.into_any(),
+                            PanelMode::Teams => view! { <crate::views::teams::TeamsSidebar /> }.into_any(),
                             PanelMode::Settings => view! { <SettingsSidebar /> }.into_any(),
                         }}
                     </aside>

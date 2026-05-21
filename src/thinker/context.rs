@@ -100,6 +100,17 @@ pub enum DisableReason {
         /// Prompt to display for approval
         prompt: String,
     },
+
+    /// Tool's runtime health probe reports unhealthy (transparent to AI)
+    ///
+    /// The dispatcher's `ToolHealthCache` ran a probe (Docker daemon
+    /// liveness, auth token presence, depth budget, etc.) and recorded
+    /// an Unhealthy result. The AI is shown the short label so it can
+    /// explain to the user why the capability is dormant.
+    Unhealthy {
+        /// Short reason label from the health probe.
+        reason: String,
+    },
 }
 
 /// A tool that is disabled with a specific reason
@@ -194,6 +205,18 @@ pub struct ResolvedContext {
     /// Optional runtime context for micro-environmental awareness
     #[serde(skip)]
     pub runtime_context: Option<super::runtime_context::RuntimeContext>,
+    /// Aggregated per-tool runtime state fragments. Populated by the
+    /// orchestrator before prompt assembly; rendered by
+    /// `ToolRuntimeStateLayer` (priority 502) as `<tool_runtime_state>`
+    /// XML. Empty when no opt-in tools have anything to say.
+    #[serde(skip, default)]
+    pub runtime_state_blocks: Vec<crate::tools::runtime_state::RuntimeStateFragment>,
+    /// Active sandbox posture for system-prompt injection (codex-inspired).
+    /// Populated by the orchestrator from `Sandbox::summary()` before
+    /// prompt assembly; rendered by `SecurityLayer` (priority 600). `None`
+    /// keeps the sandbox section absent (e.g. mock sandboxes in tests).
+    #[serde(skip, default)]
+    pub sandbox_summary: Option<crate::sandbox::SandboxSummary>,
 }
 
 /// Context Aggregator for reconciling interaction and security layers
@@ -265,6 +288,8 @@ impl ContextAggregator {
             disabled_tools,
             environment_contract,
             runtime_context: None,
+            runtime_state_blocks: Vec::new(),
+            sandbox_summary: None,
         }
     }
 

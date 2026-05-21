@@ -61,7 +61,12 @@ pub(crate) fn resolve_plugin_handler_from_sources(
 ///
 /// Holds instances of builtin tools and provides direct invocation capabilities.
 ///
-/// TODO: Security enforcement will be reimplemented following OpenClaw's sandbox/tool-policy pattern.
+/// Security enforcement is layered, not centralised in this registry:
+/// - `GuardrailRegistry` (input / output / tool-call) covers content checks.
+/// - `WorkspaceSandbox` covers OS-level isolation.
+/// - `ApprovalGate` covers HITL escalation.
+///
+/// See docs/reference/SANDBOX.md and docs/reference/SECURITY.md.
 pub struct BuiltinToolRegistry {
     /// Search tool instance
     pub(crate) search_tool: crate::builtin_tools::SearchTool,
@@ -231,6 +236,17 @@ pub struct BuiltinToolRegistry {
     /// Plan approval tools (optional — require MessageRouter + ArtifactStore + EventLogStore)
     pub(crate) plan_submit_tool: Option<crate::builtin_tools::team::PlanSubmitTool>,
     pub(crate) plan_resolve_tool: Option<crate::builtin_tools::team::PlanResolveTool>,
+    /// Worker lifecycle tools (optional — require MessageRouter + TeamStore).
+    /// Three-tool triad: worker reports idle, worker requests shutdown,
+    /// leader resolves the request. Pairs `MessageType::Idle` /
+    /// `ShutdownRequest` / `ShutdownApproved` / `ShutdownRejected` with
+    /// auto-resolved leader recipient, mirroring ClawTeam's
+    /// `lifecycle idle / request-shutdown / approve-shutdown` commands.
+    pub(crate) lifecycle_idle_tool: Option<crate::builtin_tools::team::LifecycleIdleTool>,
+    pub(crate) lifecycle_request_shutdown_tool:
+        Option<crate::builtin_tools::team::LifecycleRequestShutdownTool>,
+    pub(crate) lifecycle_resolve_shutdown_tool:
+        Option<crate::builtin_tools::team::LifecycleResolveShutdownTool>,
     /// Collaborative session tools (optional — require SessionCoordinator / SessionStore)
     pub(crate) session_collaborate_tool: Option<crate::builtin_tools::team::SessionCollaborateTool>,
     pub(crate) session_turn_tool: Option<crate::builtin_tools::team::SessionTurnTool>,
@@ -416,14 +432,12 @@ impl BuiltinToolRegistry {
 
     /// Check if an operation is permitted
     ///
-    /// TODO: Implement tool policy following OpenClaw's sandbox/tool-policy pattern.
-    /// Currently all operations are permitted; safety is enforced by:
-    /// - CommandChecker (blocks dangerous shell commands)
-    /// - PathPermissionChecker (sandboxes file operations)
+    /// Currently a pass-through; safety is enforced layered:
+    /// - `CommandChecker` (blocks dangerous shell commands)
+    /// - `PathPermissionChecker` (sandboxes file operations)
+    /// - See docs/reference/SANDBOX.md and docs/reference/SECURITY.md.
     #[allow(unused_variables)]
     pub(crate) fn check_capability(&self, tool_name: &str, arguments: &Value) -> Result<()> {
-        // TODO: Implement OpenClaw-style tool policy
-        // See: /Volumes/TBU4/Workspace/openclaw/src/agents/pi-tools.policy.ts
         Ok(())
     }
 }
@@ -1025,6 +1039,38 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let tool = self.plan_resolve_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("plan_resolve not available: plan approval not configured")
                 })?;
+                tool.call_json(arguments).await
+            }),
+
+            // Worker lifecycle tools
+            "lifecycle_idle" => Box::pin(async move {
+                let tool = self.lifecycle_idle_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "lifecycle_idle not available: MessageRouter / TeamStore not configured",
+                    )
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "lifecycle_request_shutdown" => Box::pin(async move {
+                let tool = self
+                    .lifecycle_request_shutdown_tool
+                    .as_ref()
+                    .ok_or_else(|| {
+                        AlephError::tool(
+                            "lifecycle_request_shutdown not available: MessageRouter / TeamStore not configured",
+                        )
+                    })?;
+                tool.call_json(arguments).await
+            }),
+            "lifecycle_resolve_shutdown" => Box::pin(async move {
+                let tool = self
+                    .lifecycle_resolve_shutdown_tool
+                    .as_ref()
+                    .ok_or_else(|| {
+                        AlephError::tool(
+                            "lifecycle_resolve_shutdown not available: MessageRouter not configured",
+                        )
+                    })?;
                 tool.call_json(arguments).await
             }),
 

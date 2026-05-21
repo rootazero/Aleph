@@ -249,6 +249,11 @@ impl ArenaManifest {
             ));
         }
 
+        let unique_ids: std::collections::HashSet<_> = agent_ids.iter().collect();
+        if unique_ids.len() != agent_ids.len() {
+            return Err("Duplicate agent IDs are not allowed".to_string());
+        }
+
         for id in agent_ids {
             if id.trim().is_empty() {
                 return Err("Agent IDs cannot be empty".to_string());
@@ -288,6 +293,12 @@ impl ArenaManifest {
                 let participant_ids: std::collections::HashSet<_> =
                     agent_ids.iter().cloned().collect();
                 for stage in &stages {
+                    if !participant_ids.contains(&stage.agent_id) {
+                        return Err(format!(
+                            "Stage '{}' is assigned to '{}', but '{}' is not a participant",
+                            stage.agent_id, stage.agent_id, stage.agent_id
+                        ));
+                    }
                     for dep in &stage.depends_on {
                         if !participant_ids.contains(dep) {
                             return Err(format!(
@@ -624,6 +635,19 @@ mod tests {
     }
 
     #[test]
+    fn arena_manifest_build_rejects_duplicate_agent_ids() {
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "peer",
+            &["agent-a".to_string(), "agent-a".to_string()],
+            None,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Duplicate agent IDs"));
+    }
+
+    #[test]
     fn arena_manifest_build_rejects_empty_agent_ids() {
         let result = ArenaManifest::build(
             "test".to_string(),
@@ -642,6 +666,33 @@ mod tests {
         let result = ArenaManifest::build("test".to_string(), "peer", &many_agents, None, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Too many participants"));
+    }
+
+    #[test]
+    fn arena_manifest_build_validates_pipeline_stage_agent_id() {
+        let stages = vec![
+            StageSpec {
+                agent_id: "agent-a".to_string(),
+                description: "Stage 1".to_string(),
+                depends_on: vec![],
+            },
+            StageSpec {
+                agent_id: "nonexistent".to_string(),
+                description: "Stage 2".to_string(),
+                depends_on: vec![],
+            },
+        ];
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "pipeline",
+            &["agent-a".to_string(), "agent-b".to_string()],
+            None,
+            Some(stages),
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("is assigned to 'nonexistent', but 'nonexistent' is not a participant"));
     }
 
     #[test]

@@ -14,6 +14,11 @@ pub enum ContentSource {
     Email { from: String, subject: String },
     BrowserContent,
     UserUpload { filename: String },
+    /// A tool execution error replayed back into the conversation. The
+    /// error message is untrusted text by definition (it may contain
+    /// reflected user input or scraped remote data), so we fence it the
+    /// same way as the other external sources.
+    ToolError { tool: String },
 }
 
 impl ContentSource {
@@ -45,6 +50,9 @@ impl ContentSource {
                     "user_upload filename=\"{}\"",
                     filename.replace('\"', "&quot;")
                 )
+            }
+            ContentSource::ToolError { tool } => {
+                format!("tool_error tool=\"{}\"", tool.replace('\"', "&quot;"))
             }
         }
     }
@@ -390,5 +398,38 @@ mod tests {
             },
         );
         assert!(upload.contains("user_upload filename=\"doc.pdf\""));
+    }
+
+    #[test]
+    fn tool_error_variant_wraps_with_tool_label() {
+        let wrapped = wrap_external_content(
+            "permission denied: /etc/shadow",
+            ContentSource::ToolError {
+                tool: "bash".to_string(),
+            },
+        );
+        assert!(
+            wrapped.contains("tool_error tool=\"bash\""),
+            "expected tool_error label, got: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("permission denied"),
+            "expected payload preserved, got: {wrapped}"
+        );
+        assert!(
+            wrapped.starts_with("<<<EXTERNAL_UNTRUSTED_CONTENT"),
+            "must use the standard fence: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn tool_error_escapes_quotes_in_tool_name() {
+        let wrapped = wrap_external_content(
+            "boom",
+            ContentSource::ToolError {
+                tool: "weird\"name".to_string(),
+            },
+        );
+        assert!(wrapped.contains("tool_error tool=\"weird&quot;name\""));
     }
 }

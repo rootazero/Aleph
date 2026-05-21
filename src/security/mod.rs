@@ -7,12 +7,14 @@
 //! - Persistent audit logging
 
 pub mod audit;
+pub mod audit_drain;
 pub mod content_sanitizer;
 pub mod context_id_hasher;
 pub mod headers;
 pub mod runtime_guard;
 pub mod ssrf;
 
+pub use audit_drain::spawn_audit_drain;
 pub use context_id_hasher::ContextIdHasher;
 pub use runtime_guard::{
     GuardResult, RuntimeSecurityGuard, SecurityContext, SecurityGuardConfig, SecurityGuardError,
@@ -23,6 +25,5 @@ mod export_tests {
     #[test]
     fn test_runtime_guard_exports_compile() {
         let _ = crate::security::SecurityGuardConfig::default();
-        let _ = crate::security::RuntimeSecurityGuard::default_guard();
     }
 }

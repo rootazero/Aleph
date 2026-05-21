@@ -5,6 +5,12 @@
 //! - Reload specific skills
 //! - List loaded skills
 //! - Unload skills
+//!
+//! Phase 1 deprecation: this handler still reads `AlephSkillSpec` fields via
+//! `tool.spec.*`. The RPC payload shape that exposes those fields will
+//! migrate to the unified `domain::skill::SkillManifest` during Phase 2.
+//! See docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md.
+#![allow(deprecated)]
 
 use crate::sync_primitives::Arc;
 use once_cell::sync::Lazy;

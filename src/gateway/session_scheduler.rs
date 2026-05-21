@@ -239,6 +239,7 @@ impl SessionScheduler {
             metadata,
             attachments: ctx.message.attachments.clone(),
             pending_media: pending_media.clone(),
+            sandbox_override: None,
         };
 
         info!(
@@ -472,6 +473,7 @@ async fn execute_next(
         metadata,
         attachments: ctx.message.attachments.clone(),
         pending_media: pending_media.clone(),
+        sandbox_override: None,
     };
 
     info!(

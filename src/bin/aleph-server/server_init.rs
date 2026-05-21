@@ -31,12 +31,22 @@ pub async fn serve_webchat(
         .fallback(ServeFile::new(&index_path));
 
     let allowed_origins = tower_http::cors::AllowOrigin::predicate(|origin, _| {
-        origin.as_bytes().starts_with(b"http://127.")
-            || origin.as_bytes().starts_with(b"https://127.")
-            || origin.as_bytes().starts_with(b"http://localhost")
-            || origin.as_bytes().starts_with(b"https://localhost")
-            || origin.as_bytes().starts_with(b"http://[::1]")
-            || origin.as_bytes().starts_with(b"https://[::1]")
+        // `origin` is a raw `HeaderValue` — parse it into a URI so the scheme
+        // and host can be inspected structurally (a bare prefix match would
+        // accept `http://127.evil.com`).
+        let Ok(origin_str) = origin.to_str() else {
+            return false;
+        };
+        let Ok(uri) = origin_str.parse::<axum::http::Uri>() else {
+            return false;
+        };
+        let scheme = uri.scheme_str().unwrap_or("");
+        if scheme != "http" && scheme != "https" {
+            return false;
+        }
+        let host = uri.host().unwrap_or("");
+        matches!(host, "127.0.0.1" | "localhost" | "[::1]")
+            || host.starts_with("127.0.0.")
     });
     let app = Router::new().fallback_service(serve_dir).layer(
         tower_http::cors::CorsLayer::new()
@@ -201,6 +211,7 @@ where
         metadata,
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
     };
 
     // Spawn execution task
@@ -364,43 +375,19 @@ where
         metadata.insert("locale".to_string(), lang.to_string());
     }
 
-    // Slash command detection: if message starts with "/", try to resolve via CommandParser
-    // and inject SLASH_COMMAND_MODE_KEY for fast-path execution in ExecutionEngine.
+    // Slash command detection: resolve via CommandParser and emit the
+    // source-aware mode JSON (preserves Skill instructions / Custom system
+    // prompt / MCP server name so the fast path can act on them).
     if params.message.trim().starts_with('/') {
         if let Some(ref parser) = command_parser {
             let slash_text = params.message.trim();
             if let Some(parsed) = parser.parse_async(slash_text).await {
-                // Convert parsed command to IntentResult and serialize
-                use alephcore::intent::DirectToolSource;
-                let (tool_id, source) = match parsed.context {
-                    alephcore::command::CommandContext::Builtin { tool_name } => {
-                        (tool_name, DirectToolSource::SlashCommand)
-                    }
-                    alephcore::command::CommandContext::Skill { skill_id, .. } => {
-                        (skill_id, DirectToolSource::Skill)
-                    }
-                    alephcore::command::CommandContext::Mcp {
-                        server_name,
-                        tool_name,
-                        ..
-                    } => (tool_name.unwrap_or(server_name), DirectToolSource::Mcp),
-                    alephcore::command::CommandContext::Custom { .. } => {
-                        (parsed.command_name.clone(), DirectToolSource::Custom)
-                    }
-                    alephcore::command::CommandContext::None => {
-                        (parsed.command_name.clone(), DirectToolSource::SlashCommand)
-                    }
-                };
-
-                if let Ok(mode_json) = serde_json::to_string(&serde_json::json!({
-                    "type": "direct_tool",
-                    "tool_id": tool_id,
-                    "args": parsed.arguments.as_deref().unwrap_or(""),
-                    "source": source.as_str(),
-                })) {
+                if let Some(mode_json) =
+                    alephcore::gateway::inbound_router::serialize_parsed_command(&parsed)
+                {
                     tracing::info!(
-                        "[chat.send] Slash command resolved: tool_id={}, args={:?}",
-                        tool_id,
+                        "[chat.send] Slash command resolved: name={}, args={:?}",
+                        parsed.command_name,
                         parsed.arguments
                     );
                     metadata.insert(
@@ -420,6 +407,7 @@ where
         metadata,
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
     };
 
     // Spawn execution task

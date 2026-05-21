@@ -228,6 +228,10 @@ impl TeamDispatcher {
             .map(|p| p as &dyn InboxContextProvider);
         let input = build_handoff_context(&self.coord_store, &self.team_store, inbox, &task).await;
 
+        // G2 — autonomous dispatch runs members in parallel. Wrap each task
+        // in its own git worktree to keep their indices from colliding.
+        // Best-effort: non-git environments and any provision failure fall
+        // back to the pre-G2 shared-tree behaviour with a logged warning.
         let outcome = execute_member_task(
             &self.context,
             &owner,
@@ -235,6 +239,7 @@ impl TeamDispatcher {
             &task_id,
             input,
             self.config.task_timeout_secs,
+            true,
         )
         .await;
 

@@ -114,8 +114,22 @@ impl A2AClient {
 
         if let Some(error) = rpc_response.error {
             return Err(match error.code {
+                -32700 => A2AError::ParseError(error.message),
+                -32600 => A2AError::InvalidRequest(error.message),
                 -32601 => A2AError::MethodNotFound(error.message),
+                -32602 => A2AError::InvalidParams(error.message),
+                -32603 => A2AError::InternalError(error.message),
+                -32000 => A2AError::Unauthorized,
                 -32001 => A2AError::TaskNotFound(error.message),
+                -32002 => A2AError::TaskNotCancelable(
+                    crate::a2a::domain::TaskState::Failed, // best-effort fallback
+                ),
+                -32003 => A2AError::PushNotSupported,
+                -32004 => A2AError::UnsupportedContentType,
+                -32005 => A2AError::Forbidden,
+                -32010 => A2AError::AgentUnreachable(error.message),
+                -32011 => A2AError::NoMatchingAgent,
+                -32012 => A2AError::Timeout(std::time::Duration::from_secs(30)),
                 _ => A2AError::InternalError(error.message),
             });
         }
@@ -133,7 +147,7 @@ impl A2AClient {
         session_id: Option<&str>,
     ) -> A2AResult<A2ATask> {
         let mut params = json!({
-            "id": task_id,
+            "taskId": task_id,
             "message": message,
         });
         if let Some(sid) = session_id {

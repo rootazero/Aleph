@@ -8,6 +8,7 @@ pub mod devices;
 pub mod gateway;
 pub mod pairing;
 pub mod plugins;
+pub mod sandbox_debug;
 pub mod secret;
 pub mod start;
 
@@ -17,5 +18,6 @@ pub use devices::*;
 pub use gateway::*;
 pub use pairing::*;
 pub use plugins::*;
+pub use sandbox_debug::handle_sandbox_debug;
 pub use secret::*;
 pub use start::*;
