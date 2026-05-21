@@ -17,7 +17,7 @@ use crate::sync_primitives::Arc;
 use super::coordinator::{
     build_coordinator_prompt, build_fallback_plan, build_persona_prompt, parse_coordinator_plan,
 };
-use super::protocol::{GroupChatError, GroupChatMessage, Persona, Speaker};
+use super::protocol::{GroupChatError, GroupChatMessage, GroupChatStatus, Persona, Speaker};
 use super::session::GroupChatSession;
 
 /// Executor that drives the coordinator->persona LLM loop for a single round.
@@ -143,6 +143,9 @@ impl GroupChatExecutor {
         user_message: &str,
         targets: &[String],
     ) -> Result<Vec<GroupChatMessage>, GroupChatError> {
+        if session.status != GroupChatStatus::Active {
+            return Err(GroupChatError::SessionInactive(session.id.clone()));
+        }
         let round = session.current_round + 1;
 
         // Step 1: Record user message as a System turn
