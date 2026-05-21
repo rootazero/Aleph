@@ -9,6 +9,15 @@ use std::collections::HashMap;
 /// Anthropic API version header value
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
+/// User-Agent sent on OAuth requests.
+///
+/// Anthropic's OAuth infrastructure validates the user-agent and intermittently
+/// rejects requests whose spoofed Claude Code version is far behind the
+/// shipping CLI. Keep this string reasonably recent — bump alongside the
+/// `claude-cli` releases the OAuth flow is paired with. Matches the fallback
+/// hermes-agent uses when it can't detect a locally installed CLI version.
+const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.74";
+
 /// Sanitize a tool name to satisfy Anthropic's regex `^[a-zA-Z][a-zA-Z0-9_-]{0,127}$`.
 ///
 /// Replaces any disallowed character with `_`, prefixes a letter when the
@@ -897,10 +906,22 @@ mod stream_tests {
 
     // ── Test 4: Beta headers ────────────────────────────────────────────────
 
+    /// Default capabilities for Official-class endpoints (used in beta-header tests).
+    fn official_caps() -> crate::providers::protocols::anthropic::provider_policy::AnthropicCapabilities {
+        crate::providers::protocols::anthropic::provider_policy::resolve_anthropic_capabilities(
+            crate::providers::protocols::anthropic::provider_policy::AnthropicEndpointClass::Official,
+            None,
+        )
+    }
+
     #[test]
     fn test_beta_headers_standard_model() {
-        let headers =
-            AnthropicProtocol::build_beta_headers("claude-3-5-sonnet-20241022", None, false);
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-3-5-sonnet-20241022",
+            None,
+            false,
+            &official_caps(),
+        );
         // Should include the two always-on betas
         assert!(headers.contains("interleaved-thinking-2025-05-14"));
         assert!(headers.contains("fine-grained-tool-streaming-2025-05-14"));
@@ -910,16 +931,105 @@ mod stream_tests {
 
     #[test]
     fn test_beta_headers_opus4_model() {
-        let headers =
-            AnthropicProtocol::build_beta_headers("claude-opus-4-20250514", None, false);
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-opus-4-20250514",
+            None,
+            false,
+            &official_caps(),
+        );
         assert!(headers.contains("interleaved-thinking-2025-05-14"));
         assert!(headers.contains("output-128k-2025-02-19"));
     }
 
     #[test]
     fn test_beta_headers_sonnet4_model() {
-        let headers = AnthropicProtocol::build_beta_headers("claude-sonnet-4-5", None, false);
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-sonnet-4-5",
+            None,
+            false,
+            &official_caps(),
+        );
         assert!(headers.contains("output-128k-2025-02-19"));
+    }
+
+    #[test]
+    fn beta_headers_omits_fine_grained_when_capability_off() {
+        use crate::providers::protocols::anthropic::provider_policy::{
+            resolve_anthropic_capabilities, AnthropicEndpointClass,
+        };
+        let caps = resolve_anthropic_capabilities(
+            AnthropicEndpointClass::Custom,
+            Some("https://api.minimax.io/anthropic/v1/messages"),
+        );
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-3-5-sonnet",
+            None,
+            false,
+            &caps,
+        );
+        assert!(
+            !headers.contains("fine-grained-tool-streaming-2025-05-14"),
+            "MiniMax must not see fine-grained-tool-streaming, got {}",
+            headers,
+        );
+        // Interleaved-thinking is still allowed
+        assert!(headers.contains("interleaved-thinking-2025-05-14"));
+        // No context-1m on MiniMax
+        assert!(!headers.contains("context-1m-2025-08-07"));
+    }
+
+    #[test]
+    fn beta_headers_includes_context_1m_on_azure_for_claude_4() {
+        use crate::providers::protocols::anthropic::provider_policy::{
+            resolve_anthropic_capabilities, AnthropicEndpointClass,
+        };
+        let caps = resolve_anthropic_capabilities(
+            AnthropicEndpointClass::Custom,
+            Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
+        );
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-sonnet-4-6",
+            None,
+            false,
+            &caps,
+        );
+        assert!(
+            headers.contains("context-1m-2025-08-07"),
+            "Azure + claude-4 must enable context-1m, got {}",
+            headers,
+        );
+    }
+
+    #[test]
+    fn beta_headers_omits_context_1m_on_pre_claude_4_models_even_if_capability_on() {
+        use crate::providers::protocols::anthropic::provider_policy::{
+            resolve_anthropic_capabilities, AnthropicEndpointClass,
+        };
+        let caps = resolve_anthropic_capabilities(
+            AnthropicEndpointClass::Custom,
+            Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
+        );
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-3-5-sonnet-20241022",
+            None,
+            false,
+            &caps,
+        );
+        // 1M context is meaningless on pre-4 models — gate keeps headers clean
+        assert!(!headers.contains("context-1m-2025-08-07"));
+    }
+
+    #[test]
+    fn beta_headers_omits_context_1m_on_official_by_default() {
+        let caps = official_caps();
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-opus-4-7",
+            None,
+            false,
+            &caps,
+        );
+        // Native Anthropic 400s on subscriptions without long-context beta.
+        assert!(!headers.contains("context-1m-2025-08-07"));
     }
 
     #[test]
@@ -1157,5 +1267,396 @@ mod stream_tests {
             body.get("temperature").is_some(),
             "temperature preserved when thinking is off",
         );
+    }
+
+    // ── Test 14: OAuth token detection ──────────────────────────────────────
+
+    #[test]
+    fn is_oauth_token_recognises_anthropic_setup_tokens() {
+        assert!(AnthropicProtocol::is_oauth_token("sk-ant-oat01-abc"));
+        assert!(AnthropicProtocol::is_oauth_token("sk-ant-managed-XYZ"));
+    }
+
+    #[test]
+    fn is_oauth_token_recognises_jwt_and_claude_code_prefixes() {
+        assert!(AnthropicProtocol::is_oauth_token("eyJhbGciOiJIUzI1NiJ9.payload"));
+        assert!(AnthropicProtocol::is_oauth_token("cc-opaque-access-token"));
+    }
+
+    #[test]
+    fn is_oauth_token_rejects_console_api_keys_and_third_party_keys() {
+        // sk-ant-api* is the console API key prefix — NOT OAuth
+        assert!(!AnthropicProtocol::is_oauth_token("sk-ant-api03-xyz"));
+        // Third-party Anthropic-compatible keys never match OAuth heuristics
+        assert!(!AnthropicProtocol::is_oauth_token("minimax-sk-deadbeef"));
+        assert!(!AnthropicProtocol::is_oauth_token("ms-prod-azure-token"));
+        assert!(!AnthropicProtocol::is_oauth_token(""));
+    }
+
+    // ── Test 15: OAuth Bearer auth header swap in build_request ─────────────
+
+    /// Build a request and return its built HTTP form for header inspection.
+    fn build_http(payload: &RequestPayload, config: &ProviderConfig) -> reqwest::Request {
+        let protocol = AnthropicProtocol::new(reqwest::Client::new());
+        protocol
+            .build_request(payload, config)
+            .unwrap()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn build_request_uses_x_api_key_for_console_keys() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("sk-ant-api03-realkey".to_string());
+
+        let req = build_http(&payload, &config);
+        assert!(req.headers().get("x-api-key").is_some(), "x-api-key must be set for console API keys");
+        assert!(
+            req.headers().get("authorization").is_none(),
+            "console keys must NOT set Authorization (would 401)",
+        );
+        // Claude Code identity headers belong only to OAuth requests
+        assert!(req.headers().get("user-agent").map(|v| v.to_str().unwrap_or("").starts_with("claude-cli/")).unwrap_or(false) == false);
+        assert!(req.headers().get("x-app").is_none());
+    }
+
+    #[test]
+    fn build_request_uses_bearer_for_oauth_tokens() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("sk-ant-oat01-oauth-secret".to_string());
+
+        let req = build_http(&payload, &config);
+        // OAuth path drops x-api-key (sending both is rejected by Anthropic)
+        assert!(
+            req.headers().get("x-api-key").is_none(),
+            "OAuth path must drop x-api-key",
+        );
+        let auth = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            auth.starts_with("Bearer "),
+            "OAuth requests must send Authorization: Bearer, got {:?}",
+            auth,
+        );
+        assert!(
+            auth.ends_with("sk-ant-oat01-oauth-secret"),
+            "Bearer must carry the OAuth token verbatim",
+        );
+        // Claude Code identity headers required by Anthropic's OAuth infra
+        let ua = req
+            .headers()
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            ua.starts_with("claude-cli/"),
+            "OAuth requests must send claude-cli User-Agent, got {:?}",
+            ua,
+        );
+        assert_eq!(
+            req.headers().get("x-app").and_then(|v| v.to_str().ok()),
+            Some("cli"),
+            "OAuth requests must send x-app: cli",
+        );
+    }
+
+    #[test]
+    fn build_request_oauth_beta_header_includes_oauth_stack() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("sk-ant-oat01-token".to_string());
+
+        let req = build_http(&payload, &config);
+        let beta = req
+            .headers()
+            .get("anthropic-beta")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(beta.contains("claude-code-20250219"), "missing claude-code beta in {}", beta);
+        assert!(beta.contains("oauth-2025-04-20"), "missing oauth-2025-04-20 in {}", beta);
+        assert!(beta.contains("token-restricted"), "missing token-restricted in {}", beta);
+    }
+
+    // ── Test 16: adaptive thinking on Claude 4.6/4.7 ────────────────────────
+
+    #[test]
+    fn supports_adaptive_thinking_recognises_4_6_and_4_7_models() {
+        assert!(AnthropicProtocol::supports_adaptive_thinking("claude-opus-4-6"));
+        assert!(AnthropicProtocol::supports_adaptive_thinking("claude-opus-4-7"));
+        assert!(AnthropicProtocol::supports_adaptive_thinking("claude-sonnet-4-6-20251110"));
+        assert!(AnthropicProtocol::supports_adaptive_thinking("anthropic/claude-opus-4.6"));
+    }
+
+    #[test]
+    fn supports_adaptive_thinking_rejects_pre_4_6_models() {
+        assert!(!AnthropicProtocol::supports_adaptive_thinking("claude-3-5-sonnet"));
+        assert!(!AnthropicProtocol::supports_adaptive_thinking("claude-opus-4-5"));
+        assert!(!AnthropicProtocol::supports_adaptive_thinking("claude-haiku-4-5"));
+        assert!(!AnthropicProtocol::supports_adaptive_thinking("claude-3-opus"));
+    }
+
+    #[test]
+    fn map_think_level_to_adaptive_effort_downgrades_xhigh_on_4_6() {
+        use crate::agents::thinking::ThinkLevel;
+        assert_eq!(
+            AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::XHigh, "claude-opus-4-6"),
+            Some("max"),
+            "4.6 rejects xhigh — should downgrade to max",
+        );
+        assert_eq!(
+            AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::XHigh, "claude-opus-4-7"),
+            Some("xhigh"),
+            "4.7 supports xhigh natively",
+        );
+    }
+
+    #[test]
+    fn map_think_level_to_adaptive_effort_maps_other_levels() {
+        use crate::agents::thinking::ThinkLevel;
+        assert_eq!(AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::Off, "claude-opus-4-7"), None);
+        assert_eq!(AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::Minimal, "claude-opus-4-7"), Some("low"));
+        assert_eq!(AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::Low, "claude-opus-4-7"), Some("low"));
+        assert_eq!(AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::Medium, "claude-opus-4-7"), Some("medium"));
+        assert_eq!(AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::High, "claude-opus-4-7"), Some("high"));
+    }
+
+    #[test]
+    fn build_request_uses_adaptive_thinking_on_4_6_with_effort() {
+        use crate::agents::thinking::ThinkLevel;
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::High));
+        let mut config = ProviderConfig::test_config("claude-opus-4-7");
+        config.api_key = Some("sk-ant-api-test".to_string());
+
+        let body = build_body(&payload, &config);
+        // Thinking is adaptive on 4.7
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["thinking"]["display"], "summarized");
+        // budget_tokens must be omitted under adaptive (skip_serializing_if)
+        assert!(body["thinking"].get("budget_tokens").is_none(),
+            "adaptive thinking must NOT set budget_tokens, got {:?}", body["thinking"]);
+        // ThinkLevel-derived effort lands on output_config.effort
+        assert_eq!(body["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn build_request_keeps_legacy_thinking_on_pre_4_6_models() {
+        use crate::agents::thinking::ThinkLevel;
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Medium));
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("sk-ant-api-test".to_string());
+
+        let body = build_body(&payload, &config);
+        // Legacy `enabled` + `budget_tokens` on pre-4.6
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 10000);
+        // No output_config without config-level effort
+        assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn build_request_strips_sampling_params_on_4_7_even_without_thinking() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-opus-4-7");
+        config.api_key = Some("sk-ant-api-test".to_string());
+        config.temperature = Some(0.7);
+        config.top_p = Some(0.9);
+        config.top_k = Some(40);
+
+        let body = build_body(&payload, &config);
+        assert!(body.get("temperature").is_none(),
+            "4.7 forbids non-default temperature even without thinking");
+        assert!(body.get("top_p").is_none());
+        assert!(body.get("top_k").is_none());
+    }
+
+    // ── Test 17: tool schema sanitization (oneOf/allOf/anyOf + dedup) ───────
+
+    #[test]
+    fn build_request_strips_top_level_oneof_from_tool_schema() {
+        use crate::dispatcher::ToolDefinition;
+        use crate::providers::message::UnifiedMessage;
+        use crate::ToolCategory;
+
+        let tools = vec![ToolDefinition::new(
+            "polymorphic_tool",
+            "A schemars-generated enum tool",
+            serde_json::json!({
+                "oneOf": [
+                    {"type": "object", "properties": {"variant_a": {"type": "string"}}},
+                    {"type": "object", "properties": {"variant_b": {"type": "integer"}}}
+                ]
+            }),
+            ToolCategory::Builtin,
+        )];
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+
+        let body = build_body(&payload, &config);
+        let schema = &body["tools"][0]["input_schema"];
+        assert!(schema.get("oneOf").is_none(),
+            "oneOf must be stripped from tool input_schema, got {:?}", schema);
+        // Fallback type must be present
+        assert_eq!(schema["type"], "object");
+        // Properties fallback so validator has something to check
+        assert!(schema.get("properties").is_some());
+    }
+
+    #[test]
+    fn build_request_strips_top_level_anyof_and_allof_from_tool_schema() {
+        use crate::dispatcher::ToolDefinition;
+        use crate::providers::message::UnifiedMessage;
+        use crate::ToolCategory;
+
+        let tools = vec![ToolDefinition::new(
+            "union_tool",
+            "Tool with anyOf",
+            serde_json::json!({
+                "anyOf": [{"type": "string"}, {"type": "integer"}],
+                "allOf": [{"type": "object"}]
+            }),
+            ToolCategory::Builtin,
+        )];
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+
+        let body = build_body(&payload, &config);
+        let schema = &body["tools"][0]["input_schema"];
+        assert!(schema.get("anyOf").is_none());
+        assert!(schema.get("allOf").is_none());
+        assert_eq!(schema["type"], "object");
+    }
+
+    #[test]
+    fn build_request_keeps_clean_tool_schema_unchanged() {
+        use crate::dispatcher::ToolDefinition;
+        use crate::providers::message::UnifiedMessage;
+        use crate::ToolCategory;
+
+        let tools = vec![ToolDefinition::new(
+            "search",
+            "Search the web",
+            serde_json::json!({
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"]
+            }),
+            ToolCategory::Builtin,
+        )];
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+
+        let body = build_body(&payload, &config);
+        let schema = &body["tools"][0]["input_schema"];
+        // Unchanged structure
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["query"].is_object());
+        assert_eq!(schema["required"], serde_json::json!(["query"]));
+    }
+
+    #[test]
+    fn build_request_drops_duplicate_tool_names() {
+        use crate::dispatcher::ToolDefinition;
+        use crate::providers::message::UnifiedMessage;
+        use crate::ToolCategory;
+
+        let schema = serde_json::json!({"type": "object", "properties": {}});
+        let tools = vec![
+            ToolDefinition::new("search", "first", schema.clone(), ToolCategory::Builtin),
+            ToolDefinition::new("read_file", "fine", schema.clone(), ToolCategory::Builtin),
+            ToolDefinition::new("search", "DUPLICATE", schema.clone(), ToolCategory::Builtin),
+        ];
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+
+        let body = build_body(&payload, &config);
+        let tools_array = body["tools"].as_array().unwrap();
+        assert_eq!(tools_array.len(), 2, "duplicate tool name must be dropped, got {:?}", tools_array);
+        // First occurrence wins
+        assert_eq!(tools_array[0]["name"], "search");
+        assert_eq!(tools_array[0]["description"], "first");
+        assert_eq!(tools_array[1]["name"], "read_file");
+    }
+
+    #[test]
+    fn build_request_dedup_detects_post_sanitization_collisions() {
+        use crate::dispatcher::ToolDefinition;
+        use crate::providers::message::UnifiedMessage;
+        use crate::ToolCategory;
+
+        // Both sanitize to the same name `foo_bar`. The second must be dropped.
+        let schema = serde_json::json!({"type": "object", "properties": {}});
+        let tools = vec![
+            ToolDefinition::new("foo.bar", "first", schema.clone(), ToolCategory::Builtin),
+            ToolDefinition::new("foo/bar", "DUPLICATE", schema.clone(), ToolCategory::Builtin),
+        ];
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("test-key".to_string());
+
+        let body = build_body(&payload, &config);
+        let tools_array = body["tools"].as_array().unwrap();
+        assert_eq!(tools_array.len(), 1, "post-sanitization collision must dedup");
+        assert_eq!(tools_array[0]["name"], "foo_bar");
+        assert_eq!(tools_array[0]["description"], "first");
+    }
+
+    #[test]
+    fn build_request_xhigh_on_4_6_downgrades_to_max_in_effort() {
+        use crate::agents::thinking::ThinkLevel;
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::XHigh));
+        let mut config = ProviderConfig::test_config("claude-opus-4-6");
+        config.api_key = Some("sk-ant-api-test".to_string());
+
+        let body = build_body(&payload, &config);
+        assert_eq!(body["output_config"]["effort"], "max",
+            "4.6 rejects xhigh — effort must be downgraded to max");
+    }
+
+    #[test]
+    fn build_request_non_oauth_beta_header_omits_oauth_stack() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("Hi")];
+        let payload = RequestPayload::new(&msgs);
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.api_key = Some("sk-ant-api03-console".to_string());
+
+        let req = build_http(&payload, &config);
+        let beta = req
+            .headers()
+            .get("anthropic-beta")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(!beta.contains("claude-code-20250219"));
+        assert!(!beta.contains("oauth-2025-04-20"));
+        assert!(!beta.contains("token-restricted"));
     }
 }

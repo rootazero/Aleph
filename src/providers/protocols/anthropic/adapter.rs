@@ -16,7 +16,10 @@ use crate::providers::anthropic::types::{Metadata, OutputConfig};
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::{CacheControl, EphemeralTtl};
 use super::sse::parse_anthropic_sse_event;
-use super::{sanitize_anthropic_tool_name, AnthropicProtocol, ToolNameMap, ANTHROPIC_VERSION};
+use super::{
+    sanitize_anthropic_tool_name, AnthropicProtocol, ToolNameMap, ANTHROPIC_VERSION,
+    CLAUDE_CODE_USER_AGENT,
+};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -30,6 +33,46 @@ fn parse_stop_sequences(csv: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect()
+}
+
+/// Strip JSON Schema union keywords from a tool's `input_schema`.
+///
+/// Anthropic's tool validator rejects requests with `oneOf` / `allOf` /
+/// `anyOf` at the top level of `input_schema`, returning HTTP 400 with
+/// "items is not an object" / "array schema items is not an object".
+/// schemars-generated schemas commonly produce these for Rust enums and
+/// `Option<T>`-rich structs. Dropping the keywords lets the request
+/// validate against the fallback `type: object` schema rather than
+/// failing the whole turn.
+///
+/// Mirrors hermes-agent `_normalize_tool_input_schema` (lines 1411-1416).
+/// We do NOT recurse into nested properties — Anthropic only rejects the
+/// keywords at the top level; nested unions inside property schemas pass.
+fn strip_anthropic_tool_schema_unions(schema: &mut serde_json::Value) {
+    let Some(obj) = schema.as_object_mut() else { return };
+    // Important: use a loop, not `.any()` — `.any()` short-circuits on the
+    // first removal and skips the remaining keys, so a schema with both
+    // `allOf` and `anyOf` would only get one stripped.
+    let mut stripped = false;
+    for key in &["oneOf", "allOf", "anyOf"] {
+        if obj.remove(*key).is_some() {
+            stripped = true;
+        }
+    }
+    if stripped {
+        // Fallback: ensure the schema still validates as an object so
+        // the Anthropic validator has something to check against.
+        obj.entry("type")
+            .or_insert_with(|| serde_json::json!("object"));
+        if obj.get("type").and_then(|v| v.as_str()) == Some("object")
+            && !obj.contains_key("properties")
+        {
+            obj.insert(
+                "properties".to_string(),
+                serde_json::Value::Object(serde_json::Map::new()),
+            );
+        }
+    }
 }
 
 /// Resolve the effective prompt-cache retention for a request given the
@@ -203,54 +246,99 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         // Build thinking config if enabled.
         //
+        // Claude 4.6/4.7 use adaptive thinking — the model picks its own budget
+        // per turn, controlled by `output_config.effort` rather than a static
+        // `budget_tokens`. Manual budgets are deprecated on these models.
+        // Older models still take the legacy `{type: "enabled", budget_tokens}`.
+        //
         // Signed thinking blocks from prior assistant turns are replayed verbatim
         // by `convert_messages` (see ContentBlock::Thinking handling), so multi-turn
-        // tool_use conversations now keep thinking enabled across turns.
-        let thinking = payload
-            .think_level
-            .as_ref()
-            .and_then(Self::map_think_level)
-            .map(|budget| ThinkingBlock {
-                thinking_type: "enabled".to_string(),
-                budget_tokens: Some(budget),
-                display: None,
-            });
+        // tool_use conversations keep thinking enabled across turns.
+        let adaptive = Self::supports_adaptive_thinking(actual_model);
+        let (thinking, adaptive_effort): (Option<ThinkingBlock>, Option<&'static str>) =
+            match payload.think_level.as_ref() {
+                Some(level) if adaptive => {
+                    match Self::map_think_level_to_adaptive_effort(level, actual_model) {
+                        Some(eff) => (
+                            Some(ThinkingBlock {
+                                thinking_type: "adaptive".to_string(),
+                                budget_tokens: None,
+                                display: Some("summarized".to_string()),
+                            }),
+                            Some(eff),
+                        ),
+                        None => (None, None),
+                    }
+                }
+                Some(level) => (
+                    Self::map_think_level(level).map(|budget| ThinkingBlock {
+                        thinking_type: "enabled".to_string(),
+                        budget_tokens: Some(budget),
+                        display: None,
+                    }),
+                    None,
+                ),
+                None => (None, None),
+            };
 
         // Convert tool definitions to Anthropic format. Tool names must satisfy
         // Anthropic's regex `^[a-zA-Z][a-zA-Z0-9_-]{0,127}$`; we sanitize on
         // outbound and remember the mapping so the streamed response can be
         // mapped back to the dispatcher's original tool names.
+        //
+        // Two additional defenses convert hard 400s into warnings:
+        // 1. Strip top-level `oneOf` / `allOf` / `anyOf` from the schema —
+        //    Anthropic's validator rejects union keywords on tool input_schema.
+        //    Without this, schemars-generated tool schemas (common for Rust
+        //    enums) 400 with "items is not an object".
+        // 2. Dedup tool names — Anthropic rejects requests with duplicate
+        //    tool names. Upstream injection paths may slip a duplicate
+        //    through; drop the second occurrence with a warning so the
+        //    request still succeeds.
         let tools = payload.tools.map(|tool_defs| {
-            tool_defs
-                .iter()
-                .map(|td| {
-                    // Ensure input_schema has "type" field — required by strict
-                    // backends like AWS Bedrock, which rejects schemas without it.
-                    let mut schema = td.parameters.clone();
-                    if let Some(obj) = schema.as_object_mut() {
-                        obj.entry("type")
-                            .or_insert_with(|| serde_json::json!("object"));
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut out: Vec<AnthropicTool> = Vec::with_capacity(tool_defs.len());
+            for td in tool_defs.iter() {
+                // Ensure input_schema has "type" field — required by strict
+                // backends like AWS Bedrock, which rejects schemas without it.
+                let mut schema = td.parameters.clone();
+                if let Some(obj) = schema.as_object_mut() {
+                    obj.entry("type")
+                        .or_insert_with(|| serde_json::json!("object"));
+                }
+                // Migrate schemars draft-07 schemas to draft 2020-12
+                crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut schema);
+                // Defense (1): strip union keywords that Anthropic rejects.
+                strip_anthropic_tool_schema_unions(&mut schema);
+                let sanitized = sanitize_anthropic_tool_name(&td.name);
+                if sanitized != td.name {
+                    let mut map = self.name_map.write().unwrap_or_else(|e| e.into_inner());
+                    if map.insert(sanitized.clone(), td.name.clone()).is_none() {
+                        warn!(
+                            original = %td.name,
+                            sanitized = %sanitized,
+                            "Tool name sanitized for Anthropic compatibility"
+                        );
                     }
-                    // Migrate schemars draft-07 schemas to draft 2020-12
-                    crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut schema);
-                    let sanitized = sanitize_anthropic_tool_name(&td.name);
-                    if sanitized != td.name {
-                        let mut map = self.name_map.write().unwrap_or_else(|e| e.into_inner());
-                        if map.insert(sanitized.clone(), td.name.clone()).is_none() {
-                            warn!(
-                                original = %td.name,
-                                sanitized = %sanitized,
-                                "Tool name sanitized for Anthropic compatibility"
-                            );
-                        }
-                    }
-                    AnthropicTool {
-                        name: sanitized,
-                        description: td.description.clone(),
-                        input_schema: schema,
-                    }
-                })
-                .collect()
+                }
+                // Defense (2): dedup. Anthropic 400s on duplicate names; drop
+                // the second occurrence so the rest of the request still flies.
+                if !seen.insert(sanitized.clone()) {
+                    warn!(
+                        original = %td.name,
+                        sanitized = %sanitized,
+                        "Duplicate tool name dropped for Anthropic request \
+                         (Anthropic rejects duplicate names with HTTP 400)"
+                    );
+                    continue;
+                }
+                out.push(AnthropicTool {
+                    name: sanitized,
+                    description: td.description.clone(),
+                    input_schema: schema,
+                });
+            }
+            out
         });
 
         // Build system block without cache_control; injection is gated on
@@ -273,21 +361,31 @@ impl ProtocolAdapter for AnthropicProtocol {
         // `top_k` while `thinking` is enabled (HTTP 400). Strip them here so a
         // user who configures sampling AND uses a thinking model does not get
         // every request rejected — the model samples at its thinking default.
-        let (temperature, top_p, top_k) = if thinking.is_some() {
+        //
+        // Claude 4.7+ additionally 400s on sampling params even without thinking;
+        // gate them off whenever `forbids_sampling_params(model)` is true.
+        let strip_sampling = thinking.is_some() || Self::forbids_sampling_params(actual_model);
+        let (temperature, top_p, top_k) = if strip_sampling {
             (None, None, None)
         } else {
             (temperature, top_p, top_k)
         };
 
-        // Cycle 4: wire metadata + effort from config
+        // Cycle 4: wire metadata + effort from config. Adaptive thinking on
+        // 4.6/4.7 overrides any config-level effort — the model needs the
+        // ThinkLevel-derived effort to know how hard to think on this turn.
         let metadata = config
             .metadata_user_id
             .as_ref()
             .map(|uid| Metadata { user_id: Some(uid.clone()) });
-        let output_config = config
-            .effort
-            .as_ref()
-            .map(|e| OutputConfig { effort: Some(e.clone()) });
+        let output_config = adaptive_effort
+            .map(|e| OutputConfig { effort: Some(e.to_string()) })
+            .or_else(|| {
+                config
+                    .effort
+                    .as_ref()
+                    .map(|e| OutputConfig { effort: Some(e.clone()) })
+            });
 
         let request_body = MessagesRequest {
             model: actual_model.to_string(),
@@ -371,17 +469,34 @@ impl ProtocolAdapter for AnthropicProtocol {
         // Cycle 4: strip capability-gated fields one last time.
         policy.apply(&mut body);
 
-        Ok(self
+        let mut req = self
             .client
             .post(&endpoint)
-            .header("x-api-key", api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header(
                 "anthropic-beta",
-                Self::build_beta_headers(actual_model, Some(api_key), extended_cache_ttl),
+                Self::build_beta_headers(
+                    actual_model,
+                    Some(api_key),
+                    extended_cache_ttl,
+                    &policy.capabilities,
+                ),
             )
-            .header("Content-Type", "application/json")
-            .json(&body))
+            .header("Content-Type", "application/json");
+
+        // OAuth tokens authenticate via `Authorization: Bearer` and require
+        // Claude Code identity headers; regular console API keys use
+        // `x-api-key`. Mis-routing either way produces 401/403 from Anthropic.
+        if Self::is_oauth_token(api_key) {
+            req = req
+                .bearer_auth(api_key)
+                .header("User-Agent", CLAUDE_CODE_USER_AGENT)
+                .header("x-app", "cli");
+        } else {
+            req = req.header("x-api-key", api_key);
+        }
+
+        Ok(req.json(&body))
     }
 
     fn supports_native_tools(&self) -> bool {

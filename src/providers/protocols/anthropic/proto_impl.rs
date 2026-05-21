@@ -8,6 +8,7 @@ use crate::providers::anthropic::{
     ContentBlock, ImageSource, Message, MessageContent,
 };
 use crate::providers::message::UnifiedMessage;
+use crate::providers::protocols::anthropic::provider_policy::AnthropicCapabilities;
 use crate::sync_primitives::{Arc, RwLock};
 use reqwest::Client;
 
@@ -272,23 +273,43 @@ impl AnthropicProtocol {
 
     /// Build the comma-separated anthropic-beta header value for a given model.
     ///
-    /// Always includes interleaved-thinking and fine-grained-tool-streaming.
-    /// Adds the 128k output beta for large context models (opus-4, sonnet-4).
-    /// Adds token-restricted beta for OAuth tokens (sk-ant-oat).
-    /// Adds extended-cache-ttl-2025-04-11 when `extended_cache_ttl` is true (Long retention).
+    /// Each beta is gated on a capability bit so per-endpoint policy can opt
+    /// out (e.g. MiniMax drops `fine-grained-tool-streaming`; Azure/Bedrock
+    /// enable `context-1m`). Adds:
+    /// - `interleaved-thinking-2025-05-14` — `caps.supports_interleaved_thinking`
+    /// - `fine-grained-tool-streaming-2025-05-14` — `caps.supports_fine_grained_tool_streaming`
+    /// - `output-128k-2025-02-19` — Claude 4 family (opus-4, sonnet-4)
+    /// - `context-1m-2025-08-07` — `caps.supports_context_1m` AND Claude 4 family
+    /// - OAuth stack (`claude-code-20250219` + `oauth-2025-04-20` + `token-restricted`)
+    ///   when the API key is an Anthropic OAuth token — see `is_oauth_token`
+    /// - `extended-cache-ttl-2025-04-11` when `extended_cache_ttl` is true (Long retention)
     pub(super) fn build_beta_headers(
         model: &str,
         api_key: Option<&str>,
         extended_cache_ttl: bool,
+        caps: &AnthropicCapabilities,
     ) -> String {
-        let mut betas = vec![
-            "interleaved-thinking-2025-05-14",
-            "fine-grained-tool-streaming-2025-05-14",
-        ];
+        let mut betas: Vec<&'static str> = Vec::new();
+        if caps.supports_interleaved_thinking {
+            betas.push("interleaved-thinking-2025-05-14");
+        }
+        if caps.supports_fine_grained_tool_streaming {
+            betas.push("fine-grained-tool-streaming-2025-05-14");
+        }
         if Self::is_large_context_model(model) {
             betas.push("output-128k-2025-02-19");
         }
-        if api_key.map(|k| k.starts_with("sk-ant-oat")).unwrap_or(false) {
+        // 1M context beta is only meaningful on Claude 4.x models; sending it
+        // to older models is harmless but the gate keeps headers clean.
+        if caps.supports_context_1m && Self::is_claude_4_family(model) {
+            betas.push("context-1m-2025-08-07");
+        }
+        if api_key.map(Self::is_oauth_token).unwrap_or(false) {
+            // OAuth requests need the full Claude Code beta stack — without
+            // claude-code/oauth Anthropic's OAuth infrastructure intermittently
+            // 500s; without token-restricted the token's scope check fails.
+            betas.push("claude-code-20250219");
+            betas.push("oauth-2025-04-20");
             betas.push("token-restricted");
         }
         if extended_cache_ttl {
@@ -297,10 +318,40 @@ impl AnthropicProtocol {
         betas.join(",")
     }
 
+    /// True for Claude 4-family models (opus-4-*, sonnet-4-*, haiku-4-*).
+    /// Includes 4.5/4.6/4.7. Used to gate `context-1m-2025-08-07`.
+    pub(super) fn is_claude_4_family(model: &str) -> bool {
+        let m = model.to_lowercase();
+        m.contains("opus-4") || m.contains("sonnet-4") || m.contains("haiku-4")
+    }
+
     /// Returns true for large context models that support 128k output tokens.
     pub(super) fn is_large_context_model(model: &str) -> bool {
         let m = model.to_lowercase();
         m.contains("opus-4") || m.contains("sonnet-4")
+    }
+
+    /// Detect Anthropic-issued OAuth / setup tokens.
+    ///
+    /// Anthropic OAuth tokens authenticate via `Authorization: Bearer` and
+    /// require the Claude Code beta stack + user-agent, while regular console
+    /// API keys (`sk-ant-api*`) use `x-api-key`. Mis-routing either way produces
+    /// a 401 / 403 at the API.
+    ///
+    /// Positively identified prefixes (mirrors hermes-agent `_is_oauth_token`):
+    /// - `sk-ant-` but NOT `sk-ant-api` — Anthropic setup tokens / managed keys
+    /// - `eyJ` — JWTs from the OAuth flow
+    /// - `cc-` — Claude Code opaque OAuth access tokens
+    ///
+    /// Non-Anthropic keys (MiniMax, DashScope, Bedrock IAM, etc.) never match.
+    pub(super) fn is_oauth_token(key: &str) -> bool {
+        if key.is_empty() {
+            return false;
+        }
+        if key.starts_with("sk-ant-api") {
+            return false;
+        }
+        key.starts_with("sk-ant-") || key.starts_with("eyJ") || key.starts_with("cc-")
     }
 
     /// Map ThinkLevel to budget_tokens
@@ -312,6 +363,63 @@ impl AnthropicProtocol {
             ThinkLevel::Medium => Some(10000),
             ThinkLevel::High => Some(20000),
             ThinkLevel::XHigh => Some(50000),
+        }
+    }
+
+    /// True for Claude 4.6+ models that support adaptive thinking
+    /// (`thinking: { "type": "adaptive" }` + `output_config.effort`).
+    ///
+    /// Manual `budget_tokens` is deprecated on these models — Anthropic
+    /// recommends adaptive so the model picks its own budget per turn.
+    /// Substring match handles date-stamped variants like
+    /// `claude-opus-4-6-20251110` and dot/hyphen normalization.
+    pub(super) fn supports_adaptive_thinking(model: &str) -> bool {
+        let m = model.to_lowercase().replace('.', "-");
+        m.contains("-4-6") || m.contains("-4-7")
+    }
+
+    /// True for models that 400 on non-default temperature/top_p/top_k even
+    /// without `thinking` enabled. Claude 4.7 explicitly rejects sampling
+    /// parameters; later releases are expected to follow.
+    pub(super) fn forbids_sampling_params(model: &str) -> bool {
+        let m = model.to_lowercase().replace('.', "-");
+        m.contains("-4-7")
+    }
+
+    /// True for models that accept the `xhigh` adaptive effort level (Claude
+    /// 4.7+ only). 4.6 models reject `xhigh` with a 400 — callers must downgrade
+    /// to `max` when this returns false.
+    pub(super) fn supports_xhigh_effort(model: &str) -> bool {
+        let m = model.to_lowercase().replace('.', "-");
+        m.contains("-4-7")
+    }
+
+    /// Map [`ThinkLevel`] to an Anthropic adaptive-thinking `effort` string.
+    ///
+    /// Anthropic 4.7+ exposes five levels (`low`, `medium`, `high`, `xhigh`,
+    /// `max`); 4.6 only exposes four (`low`, `medium`, `high`, `max`). When
+    /// `xhigh` would be selected on a 4.6 model we downgrade to `max`
+    /// (the strongest level it accepts) per hermes-agent
+    /// `ADAPTIVE_EFFORT_MAP` + `_supports_xhigh_effort`.
+    ///
+    /// `ThinkLevel::Off` is rejected at the call site (adaptive thinking
+    /// requires *some* effort), so this returns `None` for `Off`.
+    pub(super) fn map_think_level_to_adaptive_effort(
+        level: &ThinkLevel,
+        model: &str,
+    ) -> Option<&'static str> {
+        match level {
+            ThinkLevel::Off => None,
+            ThinkLevel::Minimal | ThinkLevel::Low => Some("low"),
+            ThinkLevel::Medium => Some("medium"),
+            ThinkLevel::High => Some("high"),
+            ThinkLevel::XHigh => {
+                if Self::supports_xhigh_effort(model) {
+                    Some("xhigh")
+                } else {
+                    Some("max")
+                }
+            }
         }
     }
 
