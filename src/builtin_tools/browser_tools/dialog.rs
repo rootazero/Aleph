@@ -1,0 +1,112 @@
+// Browser dialog tool — responds to native JS dialogs (alert/confirm/prompt).
+
+use async_trait::async_trait;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::browser::manager::ProfileManager;
+use crate::error::Result;
+use crate::sync_primitives::Arc;
+use crate::tools::AlephTool;
+
+/// How to respond to a pending native dialog.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DialogAction {
+    /// Accept the dialog (OK on alert/confirm, submit on prompt).
+    Accept,
+    /// Dismiss the dialog (Cancel).
+    Dismiss,
+}
+
+/// Arguments for the browser_dialog tool.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct BrowserDialogArgs {
+    /// Browser profile name (default: "default").
+    #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
+    pub profile: String,
+    /// Whether to accept or dismiss the dialog.
+    pub action: DialogAction,
+    /// Text to fill into a prompt dialog before accepting (ignored otherwise).
+    #[serde(default)]
+    pub prompt_text: Option<String>,
+}
+
+/// Output from the browser_dialog tool.
+#[derive(Debug, Serialize)]
+pub struct BrowserDialogOutput {
+    pub success: bool,
+    pub message: Option<String>,
+}
+
+/// Responds to native browser dialogs (alert, confirm, prompt, beforeunload).
+#[derive(Clone)]
+pub struct BrowserDialogTool {
+    manager: Arc<ProfileManager>,
+}
+
+impl BrowserDialogTool {
+    pub fn new(manager: Arc<ProfileManager>) -> Self {
+        Self { manager }
+    }
+}
+
+#[async_trait]
+impl AlephTool for BrowserDialogTool {
+    const NAME: &'static str = "browser_dialog";
+    const DESCRIPTION: &'static str =
+        "Respond to a native browser dialog (alert/confirm/prompt) by accepting or dismissing it";
+    type Args = BrowserDialogArgs;
+    type Output = BrowserDialogOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        let action = match args.action {
+            DialogAction::Accept => "accept",
+            DialogAction::Dismiss => "dismiss",
+        };
+        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+            Ok((backend, tab_id)) => {
+                match backend
+                    .handle_dialog(&tab_id, action, args.prompt_text.as_deref())
+                    .await
+                {
+                    Ok(()) => Ok(BrowserDialogOutput {
+                        success: true,
+                        message: Some(format!("Dialog {action}ed in profile '{}'", args.profile)),
+                    }),
+                    Err(e) => Ok(BrowserDialogOutput {
+                        success: false,
+                        message: Some(format!("Dialog handling failed: {e}")),
+                    }),
+                }
+            }
+            Err(e) => Ok(BrowserDialogOutput {
+                success: false,
+                message: Some(format!("{e}")),
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::browser::profile::BrowserSystemConfig;
+
+    #[tokio::test]
+    async fn test_dialog_accept_degrades_without_browser() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserDialogTool::new(manager);
+        let result = tool
+            .call(BrowserDialogArgs {
+                profile: "default".into(),
+                action: DialogAction::Accept,
+                prompt_text: None,
+            })
+            .await
+            .unwrap();
+        // Without a running browser, tools degrade gracefully
+        assert!(!result.success);
+        assert!(result.message.is_some());
+    }
+}

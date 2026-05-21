@@ -19,10 +19,11 @@
 use crate::sync_primitives::Arc;
 
 use crate::builtin_tools::browser_tools::{
-    BrowserClickTool, BrowserConsoleTool, BrowserEvaluateTool, BrowserFillFormTool,
-    BrowserNavigateTool, BrowserOpenTool, BrowserPressKeyTool, BrowserProfileTool,
-    BrowserScreenshotTool, BrowserSelectTool, BrowserSnapshotTool, BrowserTabsTool,
-    BrowserTypeTool, BrowserWaitForTool,
+    BrowserClickTool, BrowserConsoleTool, BrowserDialogTool, BrowserEvaluateTool,
+    BrowserFillFormTool, BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool,
+    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool,
+    BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSnapshotTool,
+    BrowserTabsTool, BrowserTypeTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
@@ -55,8 +56,7 @@ pub struct BuiltinToolDefinition {
 /// build each request's `ScopedToolService` confirm-set, which routes a
 /// confirmation prompt to the user before the tool executes. Mirrors the
 /// `AlephTool::requires_confirmation()` overrides on these tools.
-pub const CONFIRMATION_REQUIRED_TOOLS: &[&str] =
-    &["vault_store", "agent_delete", "team_disband"];
+pub const CONFIRMATION_REQUIRED_TOOLS: &[&str] = &["vault_store", "agent_delete", "team_disband"];
 
 /// All builtin tools in the system - Single Source of Truth
 ///
@@ -335,6 +335,31 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "browser_console",
         description: "Read browser console messages for debugging",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_hover",
+        description: "Hover the pointer over an element in the browser",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_scroll",
+        description: "Scroll the browser viewport up/down/left/right",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_pdf",
+        description: "Print the current browser page to a PDF file",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_network",
+        description: "Read the browser network request log for debugging",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_dialog",
+        description: "Respond to a native browser dialog (alert/confirm/prompt)",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -644,7 +669,8 @@ pub fn create_tool_boxed(
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
-        | "browser_console" | "browser_profile" => {
+        | "browser_console" | "browser_hover" | "browser_scroll" | "browser_pdf"
+        | "browser_network" | "browser_dialog" | "browser_profile" => {
             let manager = config
                 .and_then(|cfg| cfg.browser_profile_manager.clone())
                 .unwrap_or_else(|| {
@@ -666,6 +692,11 @@ pub fn create_tool_boxed(
                 "browser_press_key" => Some(Box::new(BrowserPressKeyTool::new(manager))),
                 "browser_wait_for" => Some(Box::new(BrowserWaitForTool::new(manager))),
                 "browser_console" => Some(Box::new(BrowserConsoleTool::new(manager))),
+                "browser_hover" => Some(Box::new(BrowserHoverTool::new(manager))),
+                "browser_scroll" => Some(Box::new(BrowserScrollTool::new(manager))),
+                "browser_pdf" => Some(Box::new(BrowserPdfTool::new(manager))),
+                "browser_network" => Some(Box::new(BrowserNetworkTool::new(manager))),
+                "browser_dialog" => Some(Box::new(BrowserDialogTool::new(manager))),
                 "browser_profile" => Some(Box::new(BrowserProfileTool::new(manager))),
                 _ => None,
             }
@@ -744,6 +775,11 @@ mod tests {
         assert!(names.contains(&"browser_press_key".to_string()));
         assert!(names.contains(&"browser_wait_for".to_string()));
         assert!(names.contains(&"browser_console".to_string()));
+        assert!(names.contains(&"browser_hover".to_string()));
+        assert!(names.contains(&"browser_scroll".to_string()));
+        assert!(names.contains(&"browser_pdf".to_string()));
+        assert!(names.contains(&"browser_network".to_string()));
+        assert!(names.contains(&"browser_dialog".to_string()));
         assert!(names.contains(&"browser_profile".to_string()));
     }
 

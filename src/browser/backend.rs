@@ -81,6 +81,30 @@ pub trait BrowserBackend: Send + Sync {
         Err(BrowserError::ActionFailed("pdf not supported".into()))
     }
 
+    /// Bring the given tab to the foreground / make it the active page.
+    /// Default impl returns Unsupported — only backends with a real notion of
+    /// active page (e.g. Chrome DevTools MCP) override.
+    async fn switch_tab(&self, _tab_id: &str) -> Result<(), BrowserError> {
+        Err(BrowserError::ActionFailed(
+            "switch_tab not supported".into(),
+        ))
+    }
+
+    /// Respond to a pending native dialog (alert / confirm / prompt / beforeunload).
+    /// `action` is "accept" or "dismiss"; `prompt_text` is the text to fill into a
+    /// prompt before accepting (ignored for non-prompt dialogs).
+    /// Default impl returns Unsupported.
+    async fn handle_dialog(
+        &self,
+        _tab_id: &str,
+        _action: &str,
+        _prompt_text: Option<&str>,
+    ) -> Result<(), BrowserError> {
+        Err(BrowserError::ActionFailed(
+            "handle_dialog not supported".into(),
+        ))
+    }
+
     async fn fill_form(
         &self,
         tab_id: &str,

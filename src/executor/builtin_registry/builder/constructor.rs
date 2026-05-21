@@ -9,11 +9,13 @@ use std::collections::HashMap;
 
 use tracing::info;
 
+use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
-    BrowserClickTool, BrowserConsoleTool, BrowserEvaluateTool, BrowserFillFormTool,
-    BrowserNavigateTool, BrowserOpenTool, BrowserPressKeyTool, BrowserProfileTool,
-    BrowserScreenshotTool, BrowserSelectTool, BrowserSnapshotTool, BrowserTabsTool,
-    BrowserTypeTool, BrowserWaitForTool,
+    BrowserClickTool, BrowserConsoleTool, BrowserDialogTool, BrowserEvaluateTool,
+    BrowserFillFormTool, BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool,
+    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool,
+    BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSnapshotTool,
+    BrowserTabsTool, BrowserTypeTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::skill_reader::{
     ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
@@ -25,7 +27,6 @@ use crate::builtin_tools::{
     ScratchpadTool, SearchTool, SelfManageTool, SystemTool, VaultStoreTool, WebFetchTool,
 };
 use crate::dispatcher::{ToolSource, UnifiedTool};
-use super::{BuiltinToolConfig, BuiltinToolRegistry};
 
 impl BuiltinToolRegistry {
     /// Create a new registry with custom configuration
@@ -180,6 +181,13 @@ impl BuiltinToolRegistry {
         let browser_press_key_tool = BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager));
         let browser_wait_for_tool = BrowserWaitForTool::new(Arc::clone(&browser_profile_manager));
         let browser_console_tool = BrowserConsoleTool::new(Arc::clone(&browser_profile_manager));
+        let browser_hover_tool = BrowserHoverTool::new(Arc::clone(&browser_profile_manager));
+        let browser_scroll_tool = BrowserScrollTool::new(Arc::clone(&browser_profile_manager));
+        let browser_pdf_tool = BrowserPdfTool::new(Arc::clone(&browser_profile_manager));
+        let browser_network_tool = BrowserNetworkTool::new(Arc::clone(&browser_profile_manager));
+        let browser_dialog_tool = BrowserDialogTool::new(Arc::clone(&browser_profile_manager));
+        // Start the idle-profile reaper (sweeps stale browsers every 60s).
+        browser_profile_manager.spawn_idle_reaper(60);
         let browser_profile_tool = BrowserProfileTool::new(browser_profile_manager);
 
         // Create memory tools if backend and embedder are provided
@@ -300,6 +308,11 @@ impl BuiltinToolRegistry {
                 browser_press_key_tool.definition(),
                 browser_wait_for_tool.definition(),
                 browser_console_tool.definition(),
+                browser_hover_tool.definition(),
+                browser_scroll_tool.definition(),
+                browser_pdf_tool.definition(),
+                browser_network_tool.definition(),
+                browser_dialog_tool.definition(),
                 browser_profile_tool.definition(),
             ];
             for td in &browser_tool_defs {
@@ -445,8 +458,7 @@ impl BuiltinToolRegistry {
                     TaskCreateTool, TaskListTool, TaskUpdateTool, TaskWaitTool,
                 };
 
-                let create =
-                    TaskCreateTool::new(Arc::clone(store), config.dispatch_signal.clone());
+                let create = TaskCreateTool::new(Arc::clone(store), config.dispatch_signal.clone());
                 let list = TaskListTool::new(Arc::clone(store));
 
                 // TaskUpdateTool and TaskWaitTool need the event bus
@@ -669,13 +681,13 @@ impl BuiltinToolRegistry {
                 config.artifact_store.as_ref(),
                 config.event_store.as_ref(),
             ) {
-                (Some(mr), Some(a_s), Some(es)) => Some(Arc::new(
-                    crate::teams::plans::PlanManager::new(
+                (Some(mr), Some(a_s), Some(es)) => {
+                    Some(Arc::new(crate::teams::plans::PlanManager::new(
                         Arc::clone(mr),
                         Arc::clone(a_s),
                         Arc::clone(es),
-                    ),
-                )),
+                    )))
+                }
                 _ => None,
             };
             let submit = match (plan_manager.as_ref(), config.team_store.as_ref()) {
@@ -1066,6 +1078,11 @@ impl BuiltinToolRegistry {
             browser_press_key_tool,
             browser_wait_for_tool,
             browser_console_tool,
+            browser_hover_tool,
+            browser_scroll_tool,
+            browser_pdf_tool,
+            browser_network_tool,
+            browser_dialog_tool,
             browser_profile_tool,
             agent_create_tool,
             agent_list_tool,

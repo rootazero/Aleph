@@ -136,18 +136,21 @@ impl AlephTool for BrowserTabsTool {
                     message: Some(format!("List tabs failed: {e}")),
                 }),
             },
-            TabAction::Switch { tab_id } => {
-                // Neither Chrome DevTools MCP nor Playwright CLI has explicit tab switch.
-                // Return success as a no-op acknowledgement.
-                Ok(BrowserTabsOutput {
+            TabAction::Switch { tab_id } => match backend.switch_tab(&tab_id).await {
+                Ok(()) => Ok(BrowserTabsOutput {
                     success: true,
                     tabs: None,
                     message: Some(format!(
                         "Switched to tab '{}' in profile '{}'",
                         tab_id, args.profile
                     )),
-                })
-            }
+                }),
+                Err(e) => Ok(BrowserTabsOutput {
+                    success: false,
+                    tabs: None,
+                    message: Some(format!("Switch tab failed: {e}")),
+                }),
+            },
             TabAction::Close { tab_id } => match backend.close_tab(&tab_id).await {
                 Ok(()) => Ok(BrowserTabsOutput {
                     success: true,
@@ -207,8 +210,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(result.success);
-        assert!(result.message.unwrap().contains("tab-1"));
+        // Switch now routes to backend.switch_tab() — without a running browser
+        // (or on the Playwright CLI backend which has no active-page notion) the
+        // call fails gracefully rather than lying about success.
+        assert!(!result.success);
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]

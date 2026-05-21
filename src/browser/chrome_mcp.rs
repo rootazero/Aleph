@@ -264,6 +264,7 @@ mod integration_tests {
     use super::*;
     use crate::browser::backend::BrowserBackend;
     use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
+    use crate::browser::network_policy::BrowserSsrfGuard;
 
     #[tokio::test]
     #[ignore] // Requires Chrome + npx chrome-devtools-mcp installed
@@ -318,7 +319,11 @@ mod integration_tests {
     async fn test_chrome_mcp_list_tabs() {
         let config = ChromeMcpConfig::default();
         let driver = Arc::new(ChromeMcpDriver::new(config));
-        let backend = ChromeMcpBackend::new(driver, "user".to_string());
+        let backend = ChromeMcpBackend::new(
+            driver,
+            "user".to_string(),
+            Arc::new(BrowserSsrfGuard::default()),
+        );
 
         println!("Calling list_tabs...");
         match backend.list_tabs().await {
@@ -337,7 +342,11 @@ mod integration_tests {
     async fn test_chrome_mcp_snapshot() {
         let config = ChromeMcpConfig::default();
         let driver = Arc::new(ChromeMcpDriver::new(config));
-        let backend = ChromeMcpBackend::new(driver, "user".to_string());
+        let backend = ChromeMcpBackend::new(
+            driver,
+            "user".to_string(),
+            Arc::new(BrowserSsrfGuard::default()),
+        );
 
         let tabs_text = backend.list_tabs().await.expect("list_tabs");
         println!("Tabs for snapshot:\n{tabs_text}");

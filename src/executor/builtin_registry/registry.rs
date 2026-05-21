@@ -189,6 +189,11 @@ pub struct BuiltinToolRegistry {
     pub(crate) browser_press_key_tool: crate::builtin_tools::browser_tools::BrowserPressKeyTool,
     pub(crate) browser_wait_for_tool: crate::builtin_tools::browser_tools::BrowserWaitForTool,
     pub(crate) browser_console_tool: crate::builtin_tools::browser_tools::BrowserConsoleTool,
+    pub(crate) browser_hover_tool: crate::builtin_tools::browser_tools::BrowserHoverTool,
+    pub(crate) browser_scroll_tool: crate::builtin_tools::browser_tools::BrowserScrollTool,
+    pub(crate) browser_pdf_tool: crate::builtin_tools::browser_tools::BrowserPdfTool,
+    pub(crate) browser_network_tool: crate::builtin_tools::browser_tools::BrowserNetworkTool,
+    pub(crate) browser_dialog_tool: crate::builtin_tools::browser_tools::BrowserDialogTool,
     pub(crate) browser_profile_tool: crate::builtin_tools::browser_tools::BrowserProfileTool,
     /// Shared session key handle for memory_search scope=current_session
     pub(super) memory_session_key_handle: Option<Arc<RwLock<String>>>,
@@ -751,6 +756,21 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "browser_console" => {
                 Box::pin(async move { self.browser_console_tool.call_json(arguments).await })
+            }
+            "browser_hover" => {
+                Box::pin(async move { self.browser_hover_tool.call_json(arguments).await })
+            }
+            "browser_scroll" => {
+                Box::pin(async move { self.browser_scroll_tool.call_json(arguments).await })
+            }
+            "browser_pdf" => {
+                Box::pin(async move { self.browser_pdf_tool.call_json(arguments).await })
+            }
+            "browser_network" => {
+                Box::pin(async move { self.browser_network_tool.call_json(arguments).await })
+            }
+            "browser_dialog" => {
+                Box::pin(async move { self.browser_dialog_tool.call_json(arguments).await })
             }
             "browser_profile" => {
                 Box::pin(async move { self.browser_profile_tool.call_json(arguments).await })

@@ -10,6 +10,7 @@ use base64::Engine as _;
 use super::backend::BrowserBackend;
 use super::chrome_mcp::ChromeMcpDriver;
 use super::error::BrowserError;
+use super::network_policy::BrowserSsrfGuard;
 use super::types::{
     ActionTarget, ScreenshotOpts, ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId,
 };
@@ -17,13 +18,19 @@ use super::types::{
 pub struct ChromeMcpBackend {
     driver: Arc<ChromeMcpDriver>,
     profile_name: String,
+    ssrf_guard: Arc<BrowserSsrfGuard>,
 }
 
 impl ChromeMcpBackend {
-    pub fn new(driver: Arc<ChromeMcpDriver>, profile_name: String) -> Self {
+    pub fn new(
+        driver: Arc<ChromeMcpDriver>,
+        profile_name: String,
+        ssrf_guard: Arc<BrowserSsrfGuard>,
+    ) -> Self {
         Self {
             driver,
             profile_name,
+            ssrf_guard,
         }
     }
 
@@ -64,8 +71,9 @@ impl ChromeMcpBackend {
 
     /// Extract text content from Chrome DevTools MCP response.
     /// MCP responses have format: {"content": [{"text": "...", "type": "text"}]}
+    /// Returns empty string when no text content is present — callers must NOT
+    /// dump raw JSON (image / binary frames) into snapshot output downstream.
     fn extract_text(result: &serde_json::Value) -> String {
-        // Try content[0].text (standard MCP format)
         if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
             for item in content {
                 if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
@@ -73,18 +81,19 @@ impl ChromeMcpBackend {
                 }
             }
         }
-        // Try as plain string
         if let Some(s) = result.as_str() {
             return s.to_string();
         }
-        // Fallback to JSON serialization
-        result.to_string()
+        String::new()
     }
 }
 
 #[async_trait]
 impl BrowserBackend for ChromeMcpBackend {
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
+        self.ssrf_guard
+            .check_url(url)
+            .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
         let result = self.call("new_page", json!({ "url": url })).await?;
         let text = Self::extract_text(&result);
         // Re-list to find the new page's ID
@@ -132,6 +141,9 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
+        self.ssrf_guard
+            .check_url(url)
+            .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
         self.select_page(tab_id).await?;
         self.call("navigate_page", json!({ "url": url })).await?;
         Ok(())
@@ -183,14 +195,32 @@ impl BrowserBackend for ChromeMcpBackend {
         _target: ActionTarget,
         direction: ScrollDirection,
     ) -> Result<(), BrowserError> {
-        let key = match direction {
-            ScrollDirection::Up => "PageUp",
-            ScrollDirection::Down => "PageDown",
-            ScrollDirection::Left => "Home",
-            ScrollDirection::Right => "End",
-        };
         self.select_page(tab_id).await?;
-        self.call("press_key", json!({ "key": key })).await?;
+        // Vertical scrolling: PageUp/PageDown are reliable across pages.
+        // Horizontal scrolling: Home/End would jump to start/end-of-document, which
+        // is NOT lateral scroll — fall back to window.scrollBy(±400, 0) via JS.
+        match direction {
+            ScrollDirection::Up => {
+                self.call("press_key", json!({ "key": "PageUp" })).await?;
+            }
+            ScrollDirection::Down => {
+                self.call("press_key", json!({ "key": "PageDown" })).await?;
+            }
+            ScrollDirection::Left => {
+                self.call(
+                    "evaluate_script",
+                    json!({ "function": "() => window.scrollBy(-400, 0)" }),
+                )
+                .await?;
+            }
+            ScrollDirection::Right => {
+                self.call(
+                    "evaluate_script",
+                    json!({ "function": "() => window.scrollBy(400, 0)" }),
+                )
+                .await?;
+            }
+        }
         Ok(())
     }
 
@@ -216,8 +246,15 @@ impl BrowserBackend for ChromeMcpBackend {
                 }
             }
         }
-        // Fallback: treat text as base64
+        // Fallback: treat text as base64. An empty string means the MCP
+        // response carried neither image content nor text — treat as failure
+        // rather than silently returning a zero-byte screenshot.
         let text = Self::extract_text(&result);
+        if text.is_empty() {
+            return Err(BrowserError::ScreenshotFailed(
+                "Chrome MCP returned no image data".into(),
+            ));
+        }
         let png_bytes = base64::engine::general_purpose::STANDARD
             .decode(&text)
             .map_err(|e| BrowserError::ScreenshotFailed(format!("base64 decode: {e}")))?;
@@ -275,6 +312,40 @@ impl BrowserBackend for ChromeMcpBackend {
     async fn console_messages(&self, tab_id: &str) -> Result<String, BrowserError> {
         self.select_page(tab_id).await?;
         let result = self.call("list_console_messages", json!({})).await?;
+        Ok(Self::extract_text(&result))
+    }
+
+    async fn switch_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
+        self.select_page(tab_id).await
+    }
+
+    async fn handle_dialog(
+        &self,
+        tab_id: &str,
+        action: &str,
+        prompt_text: Option<&str>,
+    ) -> Result<(), BrowserError> {
+        let action_norm = match action.to_ascii_lowercase().as_str() {
+            "accept" | "ok" | "confirm" => "accept",
+            "dismiss" | "cancel" | "reject" => "dismiss",
+            other => {
+                return Err(BrowserError::ActionFailed(format!(
+                    "unknown dialog action '{other}' — expected 'accept' or 'dismiss'"
+                )));
+            }
+        };
+        self.select_page(tab_id).await?;
+        let mut args = json!({ "action": action_norm });
+        if let Some(text) = prompt_text {
+            args["promptText"] = json!(text);
+        }
+        self.call("handle_dialog", args).await?;
+        Ok(())
+    }
+
+    async fn network_log(&self, tab_id: &str) -> Result<String, BrowserError> {
+        self.select_page(tab_id).await?;
+        let result = self.call("list_network_requests", json!({})).await?;
         Ok(Self::extract_text(&result))
     }
 
@@ -345,5 +416,28 @@ mod tests {
         let (url, title) = parse_snapshot_header(text);
         assert_eq!(url, "");
         assert_eq!(title, "");
+    }
+
+    #[test]
+    fn test_extract_text_reads_content_text() {
+        let result = serde_json::json!({
+            "content": [{ "type": "text", "text": "hello world" }]
+        });
+        assert_eq!(ChromeMcpBackend::extract_text(&result), "hello world");
+    }
+
+    #[test]
+    fn test_extract_text_plain_string() {
+        let result = serde_json::json!("plain");
+        assert_eq!(ChromeMcpBackend::extract_text(&result), "plain");
+    }
+
+    #[test]
+    fn test_extract_text_no_text_returns_empty_not_json() {
+        // Image-only response — must NOT dump raw JSON into the result.
+        let result = serde_json::json!({
+            "content": [{ "type": "image", "data": "aGVsbG8=" }]
+        });
+        assert_eq!(ChromeMcpBackend::extract_text(&result), "");
     }
 }
