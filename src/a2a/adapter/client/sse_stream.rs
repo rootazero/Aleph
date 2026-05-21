@@ -172,6 +172,115 @@ fn parse_event(event_type: &str, data: &str) -> Option<UpdateEvent> {
     }
 }
 
+/// Result of folding an A2A `UpdateEvent` stream into a delegation outcome.
+#[derive(Debug, Clone)]
+pub struct FoldedOutcome {
+    /// The remote agent's response text (artifacts, else the last status message).
+    pub summary: String,
+    /// Whether the remote task completed successfully.
+    pub success: bool,
+    /// Failure reason when `success` is false.
+    pub error: Option<String>,
+}
+
+/// Concatenate the text parts of an artifact, newline-separated.
+fn artifact_text(artifact: &Artifact) -> String {
+    artifact
+        .parts
+        .iter()
+        .filter_map(|p| match p {
+            Part::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Consume an A2A `UpdateEvent` stream into a [`FoldedOutcome`].
+///
+/// Accumulates artifact text and the last status message; `on_chunk` is fired
+/// with each new text fragment so callers can surface live progress. A stream
+/// `Err` or a terminal `Failed`/`Rejected`/`Canceled` state yields
+/// `success = false`.
+pub async fn fold_stream<S, F>(stream: S, mut on_chunk: F) -> FoldedOutcome
+where
+    S: Stream<Item = A2AResult<UpdateEvent>> + Send,
+    F: FnMut(&str),
+{
+    use futures::StreamExt;
+
+    tokio::pin!(stream);
+    let mut artifacts: Vec<String> = Vec::new();
+    let mut last_status_text: Option<String> = None;
+    let mut final_state: Option<TaskState> = None;
+    let mut stream_error: Option<String> = None;
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(UpdateEvent::StatusUpdate(ev)) => {
+                if let Some(msg) = &ev.status.message {
+                    let text = msg.text_content();
+                    if !text.is_empty() {
+                        on_chunk(&text);
+                        last_status_text = Some(text);
+                    }
+                }
+                if ev.is_final || ev.status.state.is_terminal() {
+                    final_state = Some(ev.status.state);
+                }
+            }
+            Ok(UpdateEvent::ArtifactUpdate(ev)) => {
+                let text = artifact_text(&ev.artifact);
+                if !text.is_empty() {
+                    on_chunk(&text);
+                    artifacts.push(text);
+                }
+            }
+            Err(e) => {
+                stream_error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+
+    let failed = matches!(
+        final_state,
+        Some(TaskState::Failed | TaskState::Rejected | TaskState::Canceled)
+    );
+    let success = stream_error.is_none() && !failed;
+
+    let body = if !artifacts.is_empty() {
+        artifacts.join("\n")
+    } else {
+        last_status_text.unwrap_or_default()
+    };
+
+    let (summary, error) = if let Some(e) = stream_error {
+        let summary = if body.is_empty() { e.clone() } else { body };
+        (summary, Some(e))
+    } else if failed {
+        let msg = if body.is_empty() {
+            format!("Remote A2A task ended in state {:?}", final_state)
+        } else {
+            body
+        };
+        (msg.clone(), Some(msg))
+    } else {
+        let summary = if body.is_empty() {
+            "Remote A2A task completed with no textual output".to_string()
+        } else {
+            body
+        };
+        (summary, None)
+    };
+
+    FoldedOutcome {
+        summary,
+        success,
+        error,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,5 +448,81 @@ mod tests {
         assert!(matches!(second, Some(Err(A2AError::Timeout(_)))));
 
         assert!(parsed.next().await.is_none());
+    }
+
+    fn status_event(state: TaskState, msg: Option<&str>, is_final: bool) -> UpdateEvent {
+        UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+            task_id: "t".to_string(),
+            context_id: "c".to_string(),
+            status: TaskStatus {
+                state,
+                message: msg.map(|m| A2AMessage::text(A2ARole::Agent, m)),
+                timestamp: Utc::now(),
+            },
+            is_final,
+            metadata: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn fold_stream_success_uses_final_message() {
+        let events: Vec<A2AResult<UpdateEvent>> = vec![
+            Ok(status_event(TaskState::Working, None, false)),
+            Ok(status_event(TaskState::Completed, Some("final answer"), true)),
+        ];
+        let mut chunks: Vec<String> = Vec::new();
+        let outcome = fold_stream(futures::stream::iter(events), |c| {
+            chunks.push(c.to_string())
+        })
+        .await;
+        assert!(outcome.success);
+        assert_eq!(outcome.summary, "final answer");
+        assert!(outcome.error.is_none());
+        assert_eq!(chunks, vec!["final answer".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn fold_stream_failed_state_is_unsuccessful() {
+        let events: Vec<A2AResult<UpdateEvent>> =
+            vec![Ok(status_event(TaskState::Failed, Some("boom"), true))];
+        let outcome = fold_stream(futures::stream::iter(events), |_| {}).await;
+        assert!(!outcome.success);
+        assert_eq!(outcome.error.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn fold_stream_artifact_accumulates_text() {
+        let artifact_ev = UpdateEvent::ArtifactUpdate(TaskArtifactUpdateEvent {
+            task_id: "t".to_string(),
+            context_id: "c".to_string(),
+            artifact: Artifact {
+                artifact_id: "a".to_string(),
+                kind: "text".to_string(),
+                parts: vec![Part::Text {
+                    text: "part one".to_string(),
+                    metadata: None,
+                }],
+                metadata: None,
+            },
+            append: false,
+            last_chunk: true,
+            metadata: None,
+        });
+        let events: Vec<A2AResult<UpdateEvent>> = vec![
+            Ok(artifact_ev),
+            Ok(status_event(TaskState::Completed, None, true)),
+        ];
+        let outcome = fold_stream(futures::stream::iter(events), |_| {}).await;
+        assert!(outcome.success);
+        assert_eq!(outcome.summary, "part one");
+    }
+
+    #[tokio::test]
+    async fn fold_stream_error_item_fails() {
+        let events: Vec<A2AResult<UpdateEvent>> =
+            vec![Err(A2AError::Timeout(std::time::Duration::from_secs(1)))];
+        let outcome = fold_stream(futures::stream::iter(events), |_| {}).await;
+        assert!(!outcome.success);
+        assert!(outcome.error.is_some());
     }
 }
