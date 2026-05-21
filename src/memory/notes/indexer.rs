@@ -345,12 +345,14 @@ impl<S: NoteStore> NoteIndexer<S> {
                     ),
                     suggestion: None,
                 })?;
+        let safe_cat = sanitize_title(category)
+            .unwrap_or_else(|_| "other".to_string());
 
         let safe_title = sanitize_title(filename)?;
         let file_path = self
             .memory_dir
             .join(agent_id)
-            .join(category)
+            .join(&safe_cat)
             .join(format!("{safe_title}.md"));
 
         let mut note = if file_path.exists() {
@@ -369,7 +371,7 @@ impl<S: NoteStore> NoteIndexer<S> {
             }
             KnowledgeNote {
                 title: filename.to_string(),
-                category: category.to_string(),
+                category: safe_cat.clone(),
                 tags: vec![],
                 facts: vec![],
                 links: vec![],
@@ -407,9 +409,9 @@ impl<S: NoteStore> NoteIndexer<S> {
                 message: format!("Failed to write {:?}: {e}", file_path),
                 suggestion: None,
             })?;
-        self.store.index_note(&note, agent_id, category).await?;
+        self.store.index_note(&note, agent_id, &safe_cat).await?;
 
-        self.notify_orientation(agent_id, category, filename);
+        self.notify_orientation(agent_id, &safe_cat, filename);
         Ok(())
     }
 
@@ -435,6 +437,8 @@ impl<S: NoteStore> NoteIndexer<S> {
         } else {
             "other".to_string()
         };
+        let category = crate::memory::notes::note::helpers::sanitize_title(&category)
+            .unwrap_or_else(|_| "other".to_string());
 
         let cat_dir = self.memory_dir.join(agent_id).join(&category);
         let old_path = cat_dir.join(format!("{safe_old}.md"));
@@ -528,11 +532,13 @@ impl<S: NoteStore> NoteIndexer<S> {
                     ),
                     suggestion: None,
                 })?;
+        let safe_cat = sanitize_title(cat)
+            .unwrap_or_else(|_| "other".to_string());
         let safe_title = sanitize_title(filename)?;
         let file_path = self
             .memory_dir
             .join(agent_id)
-            .join(cat)
+            .join(&safe_cat)
             .join(format!("{safe_title}.md"));
         if !file_path.exists() {
             return Err(AlephError::other(format!(
@@ -566,8 +572,8 @@ impl<S: NoteStore> NoteIndexer<S> {
         let md = note.to_markdown();
         note.content_hash = sha2_hash(&md);
         atomic_write_file(&file_path, &md).await?;
-        self.store.index_note(&note, agent_id, cat).await?;
-        self.notify_orientation(agent_id, cat, &safe_title);
+        self.store.index_note(&note, agent_id, &safe_cat).await?;
+        self.notify_orientation(agent_id, &safe_cat, &safe_title);
         Ok(())
     }
 

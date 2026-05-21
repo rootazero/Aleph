@@ -85,7 +85,7 @@ impl CompressionScheduler {
     ///
     /// Priority: TurnThreshold > IdleTimeout
     pub fn should_trigger_compression(&self) -> CompressionTrigger {
-        let turns = self.pending_turns.load(Ordering::Relaxed);
+        let turns = self.pending_turns.load(Ordering::Acquire);
 
         // Check turn threshold first (higher priority)
         if turns >= self.config.turn_threshold {
@@ -119,22 +119,22 @@ impl CompressionScheduler {
 
     /// Increment pending turns counter
     pub fn increment_turns(&self) {
-        self.pending_turns.fetch_add(1, Ordering::Relaxed);
+        self.pending_turns.fetch_add(1, Ordering::Release);
     }
 
     /// Increment turns by specified amount
     pub fn increment_turns_by(&self, count: u32) {
-        self.pending_turns.fetch_add(count, Ordering::Relaxed);
+        self.pending_turns.fetch_add(count, Ordering::Release);
     }
 
     /// Get current pending turns count
     pub fn get_pending_turns(&self) -> u32 {
-        self.pending_turns.load(Ordering::Relaxed)
+        self.pending_turns.load(Ordering::Acquire)
     }
 
     /// Reset turns counter (after compression completes)
     pub fn reset_turns(&self) {
-        self.pending_turns.store(0, Ordering::Relaxed);
+        self.pending_turns.store(0, Ordering::Release);
     }
 
     /// Update scheduler configuration
