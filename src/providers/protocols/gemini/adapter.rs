@@ -25,6 +25,10 @@ impl ProtocolAdapter for GeminiProtocol {
         payload: &RequestPayload,
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder> {
+        self.stream_idle_timeout_secs.store(
+            crate::providers::protocols::stream_idle::effective_idle_secs(config),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let endpoint = Self::build_endpoint(config, payload.model.as_deref());
         let contents = Self::convert_messages(payload.messages);
         let system_instruction = Self::build_system_instruction(payload.system_prompt);
@@ -175,6 +179,14 @@ impl ProtocolAdapter for GeminiProtocol {
             .bytes_stream()
             .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
             .boxed();
+        let idle_secs = self
+            .stream_idle_timeout_secs
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let byte_stream = crate::providers::protocols::stream_idle::wrap_idle_timeout(
+            byte_stream,
+            idle_secs,
+            "Gemini",
+        );
 
         /// Per-iteration mutable state carried through unfold
         struct State {
