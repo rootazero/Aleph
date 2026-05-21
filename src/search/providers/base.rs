@@ -25,7 +25,7 @@ pub fn check_status(response: Response, provider_name: &str) -> Result<Response>
             format!("{} API error: {}", provider_name, status),
         ))
     } else if status == StatusCode::TOO_MANY_REQUESTS {
-        Err(AlephError::provider(format!(
+        Err(AlephError::rate_limit(format!(
             "{} API error: {} (rate limited)",
             provider_name, status
         )))
