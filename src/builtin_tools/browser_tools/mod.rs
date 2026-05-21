@@ -4,13 +4,18 @@
 
 pub mod click;
 pub mod console;
+pub mod dialog;
 pub mod evaluate;
 pub mod fill_form;
+pub mod hover;
 pub mod navigate;
+pub mod network;
 pub mod open;
+pub mod pdf;
 pub mod press_key;
 pub mod profile_tool;
 pub mod screenshot;
+pub mod scroll;
 pub mod select;
 pub mod snapshot;
 pub mod tabs;
@@ -55,18 +60,22 @@ async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<String, BrowserE
 }
 
 /// Create the appropriate backend for the given profile.
+///
+/// Headless mode follows the profile-level override, falling back to the global
+/// `playwright_cli.headless` default (resolved via `ProfileManager::resolve_headless`).
 pub(crate) fn make_backend(manager: &ProfileManager, profile: &str) -> Box<dyn BrowserBackend> {
     manager.record_activity(profile);
     match manager.get_driver(profile) {
         Some(BrowserDriver::ExistingSession) => Box::new(ChromeMcpBackend::new(
             manager.get_chrome_mcp_driver(),
             profile.to_string(),
+            manager.get_ssrf_guard(),
         )),
         Some(BrowserDriver::Managed) | None => Box::new(PlaywrightCliBackend::new(
             manager.get_playwright_cli_driver(),
             profile.to_string(),
             manager.get_ssrf_guard(),
-            true, // headless default; profile-level override applied via get_backend()
+            manager.resolve_headless(profile),
         )),
     }
 }
@@ -83,13 +92,18 @@ pub(crate) async fn make_backend_and_tab(
 
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
 pub use console::{BrowserConsoleArgs, BrowserConsoleOutput, BrowserConsoleTool};
+pub use dialog::{BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool};
 pub use evaluate::{BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool};
 pub use fill_form::{BrowserFillFormArgs, BrowserFillFormOutput, BrowserFillFormTool};
+pub use hover::{BrowserHoverArgs, BrowserHoverOutput, BrowserHoverTool};
 pub use navigate::{BrowserNavigateArgs, BrowserNavigateOutput, BrowserNavigateTool};
+pub use network::{BrowserNetworkArgs, BrowserNetworkOutput, BrowserNetworkTool};
 pub use open::{BrowserOpenArgs, BrowserOpenOutput, BrowserOpenTool};
+pub use pdf::{BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool};
 pub use press_key::{BrowserPressKeyArgs, BrowserPressKeyOutput, BrowserPressKeyTool};
 pub use profile_tool::{BrowserProfileArgs, BrowserProfileOutput, BrowserProfileTool};
 pub use screenshot::{BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool};
+pub use scroll::{BrowserScrollArgs, BrowserScrollOutput, BrowserScrollTool};
 pub use select::{BrowserSelectArgs, BrowserSelectOutput, BrowserSelectTool};
 pub use snapshot::{BrowserSnapshotArgs, BrowserSnapshotOutput, BrowserSnapshotTool};
 pub use tabs::{BrowserTabsArgs, BrowserTabsOutput, BrowserTabsTool};

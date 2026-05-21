@@ -2155,6 +2155,44 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         println!();
     }
 
+    // G4: register gateway.identity.get with a small captured snapshot.
+    // The snapshot deliberately omits Arc<GatewaySharedState> — capturing
+    // the handler-registry Arc here would make this very handlers_mut()
+    // call (which uses Arc::get_mut) panic.
+    {
+        use alephcore::gateway::handlers::gateway_identity::{
+            handle_gateway_identity_get, GatewayIdentitySnapshot,
+        };
+        // +1 accounts for the gateway.identity.get handler itself, which
+        // is registered immediately after this count is taken.
+        let method_count = server.handlers_mut().len() + 1;
+        let identity_snapshot = GatewayIdentitySnapshot {
+            instance_id: server.instance_id.clone(),
+            started_at_unix: server.started_at_unix,
+            state_versions: server.state_versions.clone(),
+            method_count,
+        };
+        server
+            .handlers_mut()
+            .register("gateway.identity.get", move |req| {
+                let snap = identity_snapshot.clone();
+                async move { handle_gateway_identity_get(req, snap).await }
+            });
+        if !daemon {
+            println!("  gateway.identity.get: wired");
+        }
+    }
+
+    // G2: signal readiness. /ready returns 200 from this point onward;
+    // before this, it returns 503 so proxies don't route to a gateway
+    // whose handler tree is still being wired.
+    server
+        .ready
+        .store(true, std::sync::atomic::Ordering::Release);
+    if !daemon {
+        println!("  Gateway readiness: signaled (ready=true)");
+    }
+
     AgentHandlersResult {
         _run_manager: run_manager
             .expect("run_manager must be set in both real and simulated modes"),

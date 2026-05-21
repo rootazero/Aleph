@@ -114,10 +114,21 @@ impl BrowserBackend for PlaywrightCliBackend {
     async fn type_text(
         &self,
         _tab_id: &str,
-        _target: ActionTarget,
+        target: ActionTarget,
         text: &str,
     ) -> Result<(), BrowserError> {
-        let _ = self.run(&["type", text], self.action_timeout()).await?;
+        match target {
+            // Ref target — type into the specific element (positional, mirrors `fill`).
+            ActionTarget::Ref { ref_id } => {
+                let _ = self
+                    .run(&["type", &ref_id, text], self.action_timeout())
+                    .await?;
+            }
+            // No element ref — type into whatever currently holds focus.
+            ActionTarget::Coordinates { .. } => {
+                let _ = self.run(&["type", text], self.action_timeout()).await?;
+            }
+        }
         Ok(())
     }
 
@@ -163,8 +174,14 @@ impl BrowserBackend for PlaywrightCliBackend {
         _tab_id: &str,
         opts: ScreenshotOpts,
     ) -> Result<ScreenshotOutput, BrowserError> {
+        // playwright-cli infers the image format from the file extension, so
+        // honor `opts.format` by choosing the matching extension.
+        let ext = match opts.format.to_ascii_lowercase().as_str() {
+            "jpeg" | "jpg" => "jpg",
+            _ => "png",
+        };
         let mut path = std::env::temp_dir();
-        let fname = format!("aleph-ss-{}.png", uuid::Uuid::new_v4());
+        let fname = format!("aleph-ss-{}.{ext}", uuid::Uuid::new_v4());
         path.push(fname);
         let path_str = path.to_string_lossy().to_string();
 

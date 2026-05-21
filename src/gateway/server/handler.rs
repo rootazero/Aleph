@@ -248,7 +248,7 @@ async fn handle_connection(
                                                     };
                                                     ctx.presence.upsert(conn_id.clone(), presence_entry);
                                                     ctx.state_versions.bump_presence();
-                                                    let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})));
+                                                    let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})).with_state_version(ctx.state_versions.snapshot()));
                                                 }
                                             }
                                         }
@@ -482,7 +482,7 @@ async fn handle_connection(
                                                         drop(conns);
                                                         ctx.presence.upsert(conn_id.clone(), presence_entry);
                                                         ctx.state_versions.bump_presence();
-                                                        let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})));
+                                                        let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})).with_state_version(ctx.state_versions.snapshot()));
                                                     }
                                                 }
                                             }
@@ -669,6 +669,7 @@ async fn handle_connection(
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_millis() as u64,
+                            state_version: None,
                         };
                         let _ = ctx.event_bus.publish_json(&event);
                     }
@@ -682,10 +683,10 @@ async fn handle_connection(
     // Remove presence and emit departure event
     if let Some(_entry) = ctx.presence.remove(&conn_id) {
         ctx.state_versions.bump_presence();
-        let _ = ctx.event_bus.publish_json(&TopicEvent::new(
-            "presence.left",
-            serde_json::json!({"conn_id": &conn_id}),
-        ));
+        let _ = ctx.event_bus.publish_json(
+            &TopicEvent::new("presence.left", serde_json::json!({"conn_id": &conn_id}))
+                .with_state_version(ctx.state_versions.snapshot()),
+        );
     }
 
     // Remove subscriptions for this connection
