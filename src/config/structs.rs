@@ -202,6 +202,9 @@ pub struct Config {
     /// hard-failing on a provider context-length error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_budget: Option<ContextBudgetToml>,
+    /// Mid-run trajectory resume — boot-scan auto-resume of interrupted runs.
+    #[serde(default)]
+    pub resume: crate::config::types::ResumeConfig,
     /// Presets override loaded from ~/.aleph/presets.toml
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
@@ -397,6 +400,7 @@ impl Default for Config {
             stability: None,
             fallback_provider: None,
             context_budget: None,
+            resume: crate::config::types::ResumeConfig::default(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
             prompts_override: crate::config::prompts_override::PromptsOverride::default(),
             defaults_override: crate::config::defaults_override::DefaultsOverride::default(),

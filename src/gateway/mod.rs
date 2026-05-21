@@ -90,6 +90,7 @@ pub mod lane;
 pub mod media;
 pub mod openai_api;
 pub mod rate_limiter;
+pub mod resume_coordinator;
 pub mod run_event_bus;
 pub mod session_scheduler;
 pub mod state_version;
@@ -164,6 +165,7 @@ pub use agent_env::{
 };
 pub use context::GatewayContext;
 pub use inter_agent_policy::AgentToAgentPolicy;
+pub use resume_coordinator::{ResumeCoordinator, ResumeReport};
 pub use run_event_bus::{
     wait_for_run_end, ActiveRunHandle, QueueError, RunEndResult, RunEvent,
     RunStatus as RunEventStatus, WaitError,
