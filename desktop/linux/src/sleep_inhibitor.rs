@@ -51,7 +51,13 @@ impl PowerCapability for LinuxPower {
             })?;
 
         Ok(InhibitorGuard::new(Box::new(move || {
-            let _ = child.wait_with_output();
+            // The inhibitor child runs `sleep infinity` — it never exits on
+            // its own. Kill it to release the inhibit lock (that is what the
+            // guard is *for*), then reap the zombie. `wait_with_output()`
+            // here would block this drop forever.
+            let mut child = child;
+            let _ = child.kill();
+            let _ = child.wait();
         })))
     }
 }

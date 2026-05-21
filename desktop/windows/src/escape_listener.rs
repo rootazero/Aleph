@@ -99,6 +99,17 @@ impl EscapeAbort for WindowsEscapeListener {
     }
 }
 
+impl Drop for WindowsEscapeListener {
+    /// Unhook the keyboard hook and clear `LISTENER_PTR`. Without this, a
+    /// listener dropped while still started leaves `LISTENER_PTR` dangling —
+    /// the next Escape keypress would dereference freed memory in
+    /// `keyboard_hook_proc` — and leaks the `HHOOK`. Mirrors the macOS
+    /// `EscapeListener` `Drop` impl.
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 #[cfg(windows)]
 extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};

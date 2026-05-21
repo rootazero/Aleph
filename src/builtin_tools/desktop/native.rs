@@ -582,8 +582,13 @@ impl super::DesktopTool {
                     }));
                 }
 
-                // Cmd+V to paste
-                if let Err(e) = screen.key_combo(&["meta".into()], "v").await {
+                // Paste shortcut: Cmd+V on macOS, Ctrl+V on Linux/Windows.
+                #[cfg(target_os = "macos")]
+                let paste_modifier = "meta";
+                #[cfg(not(target_os = "macos"))]
+                let paste_modifier = "ctrl";
+
+                if let Err(e) = screen.key_combo(&[paste_modifier.into()], "v").await {
                     if let Some(ref original) = saved {
                         let _ = screen.clipboard_write(original).await;
                     }
