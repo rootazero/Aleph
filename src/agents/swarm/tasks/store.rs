@@ -496,6 +496,10 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         // Single pass: tasks + unresolved-parent count + a CSV of dependency ids.
         // GROUP_CONCAT keeps the dependency list inline so we avoid the per-task
         // load_dependencies() round-trip used previously.
+        //
+        // Ordering: highest priority first so a kanban column surfaces the most
+        // urgent work at the top, then oldest-created first as a stable
+        // tiebreaker. Priority is stored as text, so a CASE maps it to a rank.
         let sql = format!(
             r#"
             SELECT
@@ -509,7 +513,15 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             LEFT JOIN coord_tasks dep ON dep.id = d.depends_on
             {where_sql}
             GROUP BY t.id
-            ORDER BY t.created_at ASC
+            ORDER BY
+                CASE t.priority
+                    WHEN 'critical' THEN 0
+                    WHEN 'high' THEN 1
+                    WHEN 'normal' THEN 2
+                    WHEN 'low' THEN 3
+                    ELSE 2
+                END ASC,
+                t.created_at ASC
             "#
         );
 
@@ -1155,5 +1167,57 @@ mod tests {
         assert_eq!(by_id[&a.id].status, CoordTaskStatus::Pending);
         assert_eq!(by_id[&b.id].status, CoordTaskStatus::Blocked);
         assert_eq!(by_id[&c.id].status, CoordTaskStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn list_tasks_orders_by_priority_then_created() {
+        let store = setup_store().await;
+
+        // Insert in a deliberately scrambled order so created_at cannot
+        // accidentally produce the expected sequence on its own.
+        let mk = |subject: &'static str, priority: Priority| NewCoordTask {
+            team_id: Some("T".into()),
+            subject: subject.into(),
+            description: "".into(),
+            owner: None,
+            priority,
+            blocked_by: vec![],
+            metadata: json!({}),
+        };
+        let low = store.create_task(mk("low", Priority::Low)).await.unwrap();
+        let critical = store
+            .create_task(mk("critical", Priority::Critical))
+            .await
+            .unwrap();
+        let normal_old = store
+            .create_task(mk("normal-old", Priority::Normal))
+            .await
+            .unwrap();
+        let high = store.create_task(mk("high", Priority::High)).await.unwrap();
+        let normal_new = store
+            .create_task(mk("normal-new", Priority::Normal))
+            .await
+            .unwrap();
+
+        let ordered = store
+            .list_tasks(CoordTaskFilter {
+                team_id: Some("T".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let ids: Vec<&str> = ordered.iter().map(|t| t.id.as_str()).collect();
+        // critical → high → normal (oldest-first within tie) → low
+        assert_eq!(
+            ids,
+            vec![
+                critical.id.as_str(),
+                high.id.as_str(),
+                normal_old.id.as_str(),
+                normal_new.id.as_str(),
+                low.id.as_str(),
+            ]
+        );
     }
 }
