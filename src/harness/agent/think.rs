@@ -98,6 +98,24 @@ fn last_assistant_has_text(events: &[SessionEventRecord]) -> bool {
         .unwrap_or(false)
 }
 
+/// Estimate the token cost of the tool schema sent to the provider.
+///
+/// Mirrors the wire shape — name + description + JSON-serialized parameters —
+/// so the context-budget sensor accounts for the per-request overhead the tool
+/// definitions add on top of the conversation messages. Pure arithmetic
+/// scaffolding (R10): no reasoning, no decision.
+fn estimate_tool_schema_tokens(tools: &[crate::dispatcher::ToolDefinition], ratio: f64) -> usize {
+    use crate::memory::session_compactor::context_window::estimate_tokens;
+    tools
+        .iter()
+        .map(|t| {
+            estimate_tokens(&t.name, ratio)
+                + estimate_tokens(&t.description, ratio)
+                + estimate_tokens(&t.parameters.to_string(), ratio)
+        })
+        .sum()
+}
+
 impl AgentHarness {
     /// Internal turn execution with pre-computed counters to avoid O(n²)
     /// event-log scans in the outer loop.
@@ -191,26 +209,54 @@ impl AgentHarness {
             }
         }
 
+        // Fetch the cached dispatcher-form tool schema once. O(1) `Arc::clone`
+        // on the steady-state path. Hoisted above the budget check so the
+        // pressure sensor accounts for the real tool-schema overhead.
+        let dispatcher_tools = self.deps.tools.dispatcher_schema();
+
         // 2b. Task-10 budget check: evaluate context pressure before issuing
-        // the LLM call. `FinalReply` forces a terminal turn with no tools.
-        let budget_directive = if let Some(budget) = self.deps.context_budget.as_ref() {
-            let mut guard = budget.lock().await;
-            Some(guard.before_turn(&messages, "", &[]))
-        } else {
-            None
-        };
+        // the LLM call. The sensor now sees the real system prompt and
+        // tool-schema overhead (previously passed empty), so compaction and
+        // `FinalReply` fire on the true context size, not just message tokens.
+        let (budget_directive, budget_tool_tokens) =
+            if let Some(budget) = self.deps.context_budget.as_ref() {
+                let mut guard = budget.lock().await;
+                let tool_tokens =
+                    estimate_tool_schema_tokens(&dispatcher_tools, guard.token_estimate_ratio());
+                let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
+                let directive = guard.before_turn(&messages, system_prompt, tool_tokens);
+                (Some(directive), tool_tokens)
+            } else {
+                (None, 0usize)
+            };
 
         // 2c. Compact when directive calls for it and a compactor is wired.
         if matches!(budget_directive, Some(LoopDirective::CompactAndContinue)) {
             if let Some(compactor) = self.deps.context_compactor.as_ref() {
                 // `fresh_tail = 0` lets the compactor fall back to its own
                 // config default (matches Task 6 spec).
-                if let Err(e) = compactor.compact(&mut messages, 0, None).await {
-                    tracing::warn!(
-                        ?session_id,
-                        ?e,
-                        "context compactor failed; continuing with uncompacted messages",
-                    );
+                match compactor.compact(&mut messages, 0, None).await {
+                    Ok(_) => {
+                        // Re-arm the circuit breaker only when this compaction
+                        // actually reduced pressure. An ineffective compaction
+                        // leaves the breaker counting, so a thrashing run still
+                        // escalates to `FinalReply` (hermes anti-thrash).
+                        if let Some(budget) = self.deps.context_budget.as_ref() {
+                            let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
+                            budget.lock().await.note_compaction_effect(
+                                &messages,
+                                system_prompt,
+                                budget_tool_tokens,
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            ?session_id,
+                            ?e,
+                            "context compactor failed; continuing with uncompacted messages",
+                        );
+                    }
                 }
             }
         }
@@ -243,10 +289,9 @@ impl AgentHarness {
             return Ok((TurnState::Done, 0, false));
         }
 
-        // 2d. Fetch the cached dispatcher-form tool schema. This is an O(1)
-        // `Arc::clone` on the steady-state path (Stage 2). Cache invalidation
+        // 2d. Derive the optional tool-schema reference for the request payload
+        // from the dispatcher tools fetched above (Stage 2). Cache invalidation
         // is owned by `ToolService` impls; see `to_dispatcher_form`.
-        let dispatcher_tools = self.deps.tools.dispatcher_schema();
         let tools_ref: Option<&[crate::dispatcher::ToolDefinition]> = if dispatcher_tools.is_empty()
         {
             None
