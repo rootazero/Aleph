@@ -9,6 +9,7 @@ debug_dir       := "target/debug"
 panel_dir       := "interfaces/webchat"
 panel_dist      := "interfaces/webchat/dist"
 server_bin      := "aleph-server"
+shell_dir       := "desktop/shell"
 
 # ─── Default ───
 
@@ -44,6 +45,17 @@ build: wasm swift-bridge
 build-debug: wasm
     cargo build -p alephcore --bin {{server_bin}}
     @echo "✓ Server (debug): {{debug_dir}}/{{server_bin}}"
+
+# ─── Desktop Shell (Tauri v2 native app) ───
+
+# Run the desktop shell in dev mode (rebuilds the daemon first)
+shell-dev: build-debug
+    cd {{shell_dir}} && cargo tauri dev
+
+# Build the desktop shell installers (.app/.dmg, .msi, .deb, …)
+shell-build: build
+    cd {{shell_dir}} && cargo tauri build
+    @echo "✓ Installers: {{release_dir}}/bundle/"
 
 # ─── Single Stage ───
 
@@ -90,6 +102,10 @@ check:
 # Quick check: desktop crate compiles
 check-desktop:
     cargo check -p aleph-desktop
+
+# Quick check: desktop shell compiles
+check-shell:
+    cargo check -p aleph-desktop-shell
 
 # Run core tests
 test:
@@ -142,8 +158,12 @@ clippy-desktop:
 clippy-desktop-macos:
     cargo clippy -p aleph-desktop-macos -- -D warnings
 
+# Clippy on the desktop shell
+clippy-shell:
+    cargo clippy -p aleph-desktop-shell -- -D warnings
+
 # Clippy everything
-clippy-all: clippy clippy-desktop clippy-desktop-macos
+clippy-all: clippy clippy-desktop clippy-desktop-macos clippy-shell
 
 # ─── Utilities ───
 
