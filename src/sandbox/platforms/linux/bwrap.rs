@@ -379,22 +379,51 @@ impl BubblewrapDriver {
 
 /// Append codex-inspired metadata-protection mounts to a bubblewrap
 /// argument vector. For every writable root, each protected subpath
-/// (e.g. `.git`, `.aleph`) is remounted read-only via `--ro-bind-try`,
-/// which silently no-ops when the source does not exist — safe for
-/// brand-new workspaces. Must be emitted *after* the writable `--bind`
-/// because bwrap mounts override in declaration order.
+/// (`.git`, `.aleph`, `.codex`, `.agents`) is shielded so the sandboxed
+/// process can neither write into an existing one nor create a missing
+/// one:
+///
+/// - **Existing** path → `--ro-bind-try` remounts it read-only, so tools
+///   that read metadata (`git log`, `git status`) keep working.
+/// - **Absent** path → a synthetic empty read-only `tmpfs` is mounted
+///   (`--perms 555 --tmpfs <p> --remount-ro <p>`). Without this,
+///   `--ro-bind-try` silently no-ops for a non-existent source and the
+///   sandboxed process can `mkdir .git` inside the writable workspace and
+///   write into it. The synthetic mount matches macOS Seatbelt, whose
+///   `(deny file-write* (subpath …))` rule applies whether or not the
+///   path exists. Mirrors codex's `append_empty_directory_args`.
+///
+/// Must be emitted *after* the writable `--bind` because bwrap mounts
+/// override in declaration order.
 fn push_metadata_protection_args<'a, I>(args: &mut Vec<String>, writable_roots: I)
 where
     I: IntoIterator<Item = &'a std::path::Path>,
 {
     let roots: Vec<&std::path::Path> = writable_roots.into_iter().collect();
-    let protected =
-        crate::sandbox::protected_paths::protected_paths_for(roots.iter().copied());
+    let protected = crate::sandbox::protected_paths::protected_paths_for(roots.iter().copied());
     for path in protected {
-        let Some(path_str) = path.to_str() else { continue };
-        args.push("--ro-bind-try".into());
-        args.push(path_str.into());
-        args.push(path_str.into());
+        let Some(path_str) = path.to_str() else {
+            continue;
+        };
+        if path.exists() {
+            // Existing metadata: keep it readable but read-only.
+            // `--ro-bind-try` (not `--ro-bind`) tolerates the tiny
+            // check→mount race where the dir is removed meanwhile.
+            args.push("--ro-bind-try".into());
+            args.push(path_str.into());
+            args.push(path_str.into());
+        } else {
+            // Absent metadata: synthesize an empty read-only directory so
+            // the process cannot create a real one and write inside it.
+            // `--perms 555` → r-x (traversable, not writable); `--tmpfs`
+            // then `--remount-ro` pins the whole mount read-only.
+            args.push("--perms".into());
+            args.push("555".into());
+            args.push("--tmpfs".into());
+            args.push(path_str.into());
+            args.push("--remount-ro".into());
+            args.push(path_str.into());
+        }
     }
 }
 
@@ -644,52 +673,98 @@ mod tests {
     }
 
     #[test]
-    fn workspace_only_adds_ro_bind_try_for_metadata_paths() {
+    fn workspace_only_synthesizes_tmpfs_for_absent_metadata() {
         let driver = BubblewrapDriver::new();
         let policy = SandboxPolicy::default();
-        let cwd = Path::new("/tmp/ws");
+        let ws = tempfile::tempdir().unwrap();
+        let cwd = ws.path();
+        // No .git/.aleph/… created → every protected subpath is absent.
         let args = driver.generate_args(&policy, cwd).unwrap();
 
-        // The writable --bind comes first, then --ro-bind-try for each
-        // protected subpath — bwrap mounts override in order, so the
-        // ro-bind must follow.
+        let cwd_str = cwd.to_str().unwrap();
+        let git = format!("{cwd_str}/.git");
+        // The writable --bind comes first; the synthetic tmpfs must
+        // follow so it overrides (shadows) the writable mount.
         let bind_idx = args
             .windows(3)
-            .position(|w| w == ["--bind", "/tmp/ws", "/tmp/ws"])
+            .position(|w| w == ["--bind", cwd_str, cwd_str])
             .expect("workspace --bind must be present");
-        let git_idx = args
+        let tmpfs_idx = args
+            .windows(2)
+            .position(|w| w == ["--tmpfs", git.as_str()])
+            .expect("absent .git must get a synthetic --tmpfs");
+        assert!(
+            bind_idx < tmpfs_idx,
+            "tmpfs must follow the writable --bind"
+        );
+        // The synthetic mount is mode 555 and remounted read-only.
+        assert!(args.windows(2).any(|w| w == ["--perms", "555"]));
+        assert!(args.windows(2).any(|w| w == ["--remount-ro", git.as_str()]));
+        // An absent path must NOT use --ro-bind-try (it would no-op).
+        assert!(!args
             .windows(3)
-            .position(|w| w == ["--ro-bind-try", "/tmp/ws/.git", "/tmp/ws/.git"])
-            .expect(".git --ro-bind-try must be present");
-        let aleph_idx = args
-            .windows(3)
-            .position(|w| w == ["--ro-bind-try", "/tmp/ws/.aleph", "/tmp/ws/.aleph"])
-            .expect(".aleph --ro-bind-try must be present");
-        assert!(bind_idx < git_idx);
-        assert!(bind_idx < aleph_idx);
+            .any(|w| w == ["--ro-bind-try", git.as_str(), git.as_str()]));
+    }
+
+    #[test]
+    fn workspace_only_ro_binds_existing_metadata() {
+        let driver = BubblewrapDriver::new();
+        let policy = SandboxPolicy::default();
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir(ws.path().join(".git")).unwrap();
+        let cwd = ws.path();
+        let args = driver.generate_args(&policy, cwd).unwrap();
+
+        let git = format!("{}/.git", cwd.to_str().unwrap());
+        // An existing .git is bound read-only so `git log` still works —
+        // not shadowed by a synthetic tmpfs.
+        assert!(
+            args.windows(3)
+                .any(|w| w == ["--ro-bind-try", git.as_str(), git.as_str()]),
+            "existing .git must get --ro-bind-try"
+        );
+        assert!(
+            !args.windows(2).any(|w| w == ["--tmpfs", git.as_str()]),
+            "existing .git must not be shadowed by a synthetic tmpfs"
+        );
     }
 
     #[test]
     fn write_paths_protects_metadata_in_each_writable_root() {
         let driver = BubblewrapDriver::new();
+        let ws = tempfile::tempdir().unwrap();
+        let extra = tempfile::tempdir().unwrap();
+        // .git exists in the workspace, absent in the extra root — this
+        // exercises both protection branches across both writable roots.
+        std::fs::create_dir(ws.path().join(".git")).unwrap();
         let policy = SandboxPolicy {
-            filesystem: FsPolicy::WritePaths(vec![PathBuf::from("/tmp/extra")]),
+            filesystem: FsPolicy::WritePaths(vec![extra.path().to_path_buf()]),
             ..Default::default()
         };
-        let cwd = Path::new("/tmp/ws");
-        let args = driver.generate_args(&policy, cwd).unwrap();
+        let args = driver.generate_args(&policy, ws.path()).unwrap();
 
-        // Both cwd and the additional writable path get metadata protection.
-        for root in ["/tmp/ws", "/tmp/extra"] {
+        // Every protected subpath under every writable root is shielded
+        // by one branch or the other.
+        for root in [ws.path(), extra.path()] {
             for sub in [".git", ".aleph", ".codex", ".agents"] {
-                let p = format!("{root}/{sub}");
+                let p = format!("{}/{}", root.to_str().unwrap(), sub);
+                let ro_bound = args
+                    .windows(3)
+                    .any(|w| w == ["--ro-bind-try", p.as_str(), p.as_str()]);
+                let tmpfs_shadowed = args.windows(2).any(|w| w == ["--tmpfs", p.as_str()]);
                 assert!(
-                    args.windows(3)
-                        .any(|w| w == ["--ro-bind-try", p.as_str(), p.as_str()]),
-                    "missing --ro-bind-try for {p}"
+                    ro_bound || tmpfs_shadowed,
+                    "missing metadata protection for {p}"
                 );
             }
         }
+        // The one pre-existing dir specifically uses the ro-bind branch.
+        let ws_git = format!("{}/.git", ws.path().to_str().unwrap());
+        assert!(
+            args.windows(3)
+                .any(|w| w == ["--ro-bind-try", ws_git.as_str(), ws_git.as_str()]),
+            "existing workspace .git must use --ro-bind-try"
+        );
     }
 
     #[test]

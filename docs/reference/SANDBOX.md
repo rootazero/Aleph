@@ -623,17 +623,73 @@ is what let either effort verify the Windows build.
 
 ### Deferred — Linux protected-path creation gap
 
-`push_metadata_protection_args` in `bwrap.rs` uses `--ro-bind-try`,
-which silently no-ops for a protected metadata path
-(`.git`/`.aleph`/`.codex`/`.agents`) that does not yet exist on disk.
-A sandboxed process can therefore `mkdir .git` inside the writable
-workspace and write into it. macOS denies this — its
-`(deny file-write* (subpath ...))` rule applies whether or not the
-path exists — so the two platforms are **inconsistent**. The fix
-(codex-style synthetic empty read-only bind mount for the absent
-paths) is new Linux-only logic that cannot be compile-verified on a
-macOS dev box (`x86_64-unknown-linux-gnu` is not an installed Rust
-target); it is deferred to a Linux-capable session.
+Closed in Cycle 5 (below).
+
+## Cycle 5 hardening (2026-05-22)
+
+Plans the two items deferred by Cycle 4. Item 1 is fixed in this cycle;
+Item 2 is decomposed into a phased plan. Full design:
+`docs/superpowers/specs/2026-05-22-sandbox-cycle5-deferred-items-design.md`.
+
+### Linux protected-path creation gap — fixed
+
+`push_metadata_protection_args` in `bwrap.rs` previously emitted only
+`--ro-bind-try` for `.git` / `.aleph` / `.codex` / `.agents`. bubblewrap's
+`--ro-bind-try` silently no-ops when the source does not exist, so for a
+brand-new workspace the protection arguments did nothing and a sandboxed
+process could `mkdir .git` inside the writable workspace and write into
+it. macOS Seatbelt denied this regardless of existence — the platforms
+were inconsistent.
+
+The function now branches on `Path::exists()`:
+
+- **Existing** protected path → `--ro-bind-try` remounts it read-only, as
+  before, so `git log` / `git status` keep working.
+- **Absent** protected path → a synthetic empty read-only directory is
+  mounted (`--perms 555 --tmpfs <p> --remount-ro <p>`), mirroring codex's
+  `append_empty_directory_args`. The sandboxed process sees a traversable
+  but unwritable directory and cannot replace it with a real one.
+
+The residual gap is a tiny check→mount TOCTOU window during argument
+generation (before the sandboxed process runs); either outcome still
+yields a protected mount on the next run. Windows has a parallel gap — its
+Cycle 3 DACL deny only covers *existing* metadata dirs — recorded in the
+Cycle 5 spec as a follow-up (it needs a different mechanism: deny-ACL'd
+stub directories pre-created at workspace provisioning).
+
+### Per-host network filtering — phased plan
+
+`AllowHosts` / `ProxyOnly` still hard-fail on Linux and Windows. The
+Cycle 5 spec decomposes enforcement into four phases:
+
+- **Phase A** — a shared in-process HTTP-CONNECT / SOCKS5 allowlist proxy
+  (`src/sandbox/proxy/`), no privilege, usable on all three OSes; also
+  gives macOS an app-layer hostname allowlist.
+- **Phase B** — a Linux netns TCP→UDS→TCP bridge (port of codex
+  `proxy_routing.rs`) + seccomp ProxyRouted mode, so a `--unshare-net`
+  sandbox can reach the host proxy. No extra privilege.
+- **Phase C** — Linux nftables in a `CAP_NET_ADMIN` user namespace (true
+  kernel-level per-IP egress).
+- **Phase D** — Windows WFP filters (admin-only).
+
+Recommended sequencing is `A → B`, then reassess; C and D stay deferred
+until a concrete need. Each phase is its own future cycle.
+
+### Verification
+
+`bwrap.rs` is `#[cfg(target_os = "linux")]`-gated and does not compile in
+a plain macOS `cargo check`. Cycle 5 added the `cargo-zigbuild` toolchain
+(`zig cc` cross-toolchain) — the Linux counterpart to Cycle 4's
+`mingw-w64` — but a full in-tree `cargo-zigbuild check` of `alephcore` is
+blocked by `wayland-sys`, a transitive GUI dependency that needs a Linux
+sysroot for `pkg-config` (a sysroot problem, not a toolchain one).
+
+Because the change is pure `std` (FFI-free, no `#[cfg]`), it was verified
+with an isolated scratch crate holding a verbatim copy of the function:
+native `cargo test` (3/3 green — branch logic) plus `cargo-zigbuild check
+--target x86_64-unknown-linux-gnu` (clean Linux compile of the function
+and its `tempfile`/`Vec::windows`/`format!` test patterns). The in-tree
+Linux-gated unit tests still require a Linux host to run.
 
 ## References
 
