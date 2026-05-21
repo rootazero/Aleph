@@ -332,7 +332,7 @@ impl BubblewrapDriver {
         // driver uses, so unit tests can assert on the generated
         // argument vector without depending on a real bubblewrap.
         let mut args = Vec::new();
-        self.add_fs_policy(&mut args, &policy.filesystem, cwd)?;
+        self.add_fs_args(&mut args, &policy.filesystem, cwd)?;
         Ok(args)
     }
 
