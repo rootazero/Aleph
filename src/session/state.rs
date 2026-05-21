@@ -43,6 +43,9 @@ impl SessionState {
             SessionEvent::SessionDetached { .. } => {
                 // Detach is observational; no state mutation.
             }
+            SessionEvent::SessionForked { .. } => {
+                // Lineage metadata; no state mutation in parent.
+            }
 
             SessionEvent::TurnStarted { turn_id, .. } => {
                 self.current_turn = Some(TurnState {

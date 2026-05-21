@@ -196,6 +196,14 @@ pub enum SessionEvent {
         at: Timestamp,
     },
 
+    /// Recorded as the first event of a child session created by
+    /// compaction-driven session-split. `parent_session_id` is the parent
+    /// session key string (`SessionKey::to_key_string()`).
+    SessionForked {
+        parent_session_id: String,
+        at: Timestamp,
+    },
+
     Error {
         turn_id: Option<TurnId>,
         kind: ErrorKind,
@@ -222,4 +230,25 @@ pub fn now_ms() -> Timestamp {
             tracing::warn!(error = %e, "System clock went backwards — returning 0");
             0
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_forked_event_round_trips_through_json() {
+        let event = SessionEvent::SessionForked {
+            parent_session_id: "agent:a/main:k:s2".to_string(),
+            at: 1_700_000_000_000,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: SessionEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            SessionEvent::SessionForked { parent_session_id, .. } => {
+                assert_eq!(parent_session_id, "agent:a/main:k:s2");
+            }
+            other => panic!("expected SessionForked, got {other:?}"),
+        }
+    }
 }
