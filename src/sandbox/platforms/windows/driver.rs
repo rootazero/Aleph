@@ -15,16 +15,38 @@ use tracing::{debug, warn};
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
+use crate::sandbox::platforms::common::truncate_output;
 use crate::sandbox::policy::{FsPolicy, NetworkPolicy, SandboxPolicy};
 use crate::sandbox::windows_init::WindowsInitPolicy;
 
 /// Driver-side knobs sourced from `WindowsSandboxConfig`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct WindowsSandboxOptions {
     pub use_restricted_token: bool,
     pub require_restricted_token: bool,
     pub use_app_container: bool,
     pub require_app_container: bool,
+    /// When `false`, the target runs without a Job Object — no
+    /// kill-on-close, no UI restrictions, no active-process cap. Honors
+    /// `WindowsSandboxConfig.use_job_object`.
+    pub use_job_object: bool,
+    /// Active-process ceiling for the Job Object when forking is allowed
+    /// (`WindowsSandboxConfig.max_active_processes`). A non-forking
+    /// command is always pinned to 1 regardless of this value.
+    pub max_active_processes: u32,
+}
+
+impl Default for WindowsSandboxOptions {
+    fn default() -> Self {
+        Self {
+            use_restricted_token: true,
+            require_restricted_token: false,
+            use_app_container: true,
+            require_app_container: false,
+            use_job_object: true,
+            max_active_processes: 8,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -35,12 +57,7 @@ pub struct WindowsSandboxDriver {
 impl WindowsSandboxDriver {
     pub fn new() -> Self {
         Self {
-            options: WindowsSandboxOptions {
-                use_restricted_token: true,
-                require_restricted_token: false,
-                use_app_container: true,
-                require_app_container: false,
-            },
+            options: WindowsSandboxOptions::default(),
         }
     }
 
@@ -250,23 +267,38 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 .stdin(std::process::Stdio::piped())
                 .creation_flags(CREATE_NEW_PROCESS_GROUP as u32);
 
-            let job = unsafe {
-                SandboxJob::new(
-                    if parsed.allow_fork { 32 } else { 1 },
-                    profile.max_memory_mb,
+            // Job Object is optional — honors
+            // WindowsSandboxConfig.use_job_object. When enabled, the
+            // active-process ceiling is the configured maximum for a
+            // forking command and a hard 1 for a non-forking one.
+            // `.max(1)` guards against a `0` misconfiguration that would
+            // otherwise make the job kill every process immediately.
+            let job: Option<SandboxJob> = if self.options.use_job_object {
+                let active_limit = if parsed.allow_fork {
+                    self.options.max_active_processes.max(1)
+                } else {
+                    1
+                };
+                Some(
+                    unsafe { SandboxJob::new(active_limit, profile.max_memory_mb) }.map_err(
+                        |e| SandboxError::ExecutionFailed(format!("job creation failed: {e}")),
+                    )?,
                 )
-                .map_err(|e| SandboxError::ExecutionFailed(format!("job creation failed: {e}")))?
+            } else {
+                None
             };
 
             let mut child = cmd.spawn().map_err(|e| {
                 SandboxError::ExecutionFailed(format!("failed to spawn process: {e}"))
             })?;
 
-            let pid = child.id().unwrap_or(0);
-            if pid != 0 {
-                let handle = child.raw_handle().unwrap_or(std::ptr::null_mut());
-                if !handle.is_null() {
-                    let _ = unsafe { job.assign_process(handle as _) };
+            if let Some(ref job) = job {
+                let pid = child.id().unwrap_or(0);
+                if pid != 0 {
+                    let handle = child.raw_handle().unwrap_or(std::ptr::null_mut());
+                    if !handle.is_null() {
+                        let _ = unsafe { job.assign_process(handle as _) };
+                    }
                 }
             }
 
@@ -286,23 +318,18 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
 
             match result {
                 Ok(Ok(output)) => {
-                    let stdout_truncated = output.stdout.len() > max_output_bytes;
-                    let stderr_truncated = output.stderr.len() > max_output_bytes;
-                    let stdout = if stdout_truncated {
-                        output.stdout[..max_output_bytes].to_vec()
-                    } else {
-                        output.stdout
-                    };
-                    let stderr = if stderr_truncated {
-                        output.stderr[..max_output_bytes].to_vec()
-                    } else {
-                        output.stderr
-                    };
+                    let status = output.status;
+                    let (stdout, stdout_truncated) =
+                        truncate_output(output.stdout, max_output_bytes);
+                    let (stderr, stderr_truncated) =
+                        truncate_output(output.stderr, max_output_bytes);
 
                     Ok(SandboxOutput {
                         stdout,
                         stderr,
-                        exit_code: output.status.code(),
+                        exit_code: status.code(),
+                        // Windows processes are not terminated by Unix
+                        // signals; `signal` is always `None` here.
                         signal: None,
                         truncated: stdout_truncated || stderr_truncated,
                         duration_ms: elapsed_ms,
@@ -409,6 +436,29 @@ mod tests {
     fn windows_driver_platform() {
         let driver = WindowsSandboxDriver::new();
         assert_eq!(driver.platform(), "windows/token");
+    }
+
+    #[test]
+    fn options_default_enables_job_object_with_sane_limit() {
+        // BUG-2 regression: the two job-object knobs must default to the
+        // production values and `new()` must adopt them.
+        let opts = WindowsSandboxOptions::default();
+        assert!(opts.use_job_object);
+        assert_eq!(opts.max_active_processes, 8);
+        let driver = WindowsSandboxDriver::new();
+        assert!(driver.options.use_job_object);
+        assert_eq!(driver.options.max_active_processes, 8);
+    }
+
+    #[test]
+    fn with_options_threads_job_object_knobs() {
+        let driver = WindowsSandboxDriver::with_options(WindowsSandboxOptions {
+            use_job_object: false,
+            max_active_processes: 3,
+            ..WindowsSandboxOptions::default()
+        });
+        assert!(!driver.options.use_job_object);
+        assert_eq!(driver.options.max_active_processes, 3);
     }
 
     #[test]

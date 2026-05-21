@@ -13,12 +13,24 @@ pub fn expand_path(path: &str) -> PathBuf {
         if let Some(home) = dirs::home_dir() {
             return home.join(stripped);
         }
-        let uid = unsafe { libc::getuid() };
-        eprintln!(
-            "Warning: cannot determine home directory; using /tmp/.aleph-{} as fallback",
-            uid
-        );
-        return PathBuf::from(format!("/tmp/.aleph-{}", uid)).join(stripped);
+        // `getuid` is Unix-only; on Windows fall back to the system temp
+        // dir (matching the cfg split already used by `is_process_running`).
+        #[cfg(unix)]
+        {
+            let uid = unsafe { libc::getuid() };
+            eprintln!(
+                "Warning: cannot determine home directory; using /tmp/.aleph-{} as fallback",
+                uid
+            );
+            return PathBuf::from(format!("/tmp/.aleph-{}", uid)).join(stripped);
+        }
+        #[cfg(not(unix))]
+        {
+            eprintln!(
+                "Warning: cannot determine home directory; using the system temp dir as fallback"
+            );
+            return std::env::temp_dir().join(".aleph").join(stripped);
+        }
     }
     PathBuf::from(path)
 }
