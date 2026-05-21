@@ -93,6 +93,37 @@ pub async fn perform_session_split(
             .map_err(|e| SplitError::Failed(anyhow::anyhow!("copy fresh-tail event: {e}")))?;
     }
 
+    // 5. Balance the run markers across the split (Cycle 5 × Cycle 6
+    //    integration). The harness bridge emitted `RunStarted` on the parent
+    //    at run start; without this the parent's log would end on a dangling
+    //    `RunStarted` and `ResumeCoordinator` would mis-detect the frozen
+    //    parent as an interrupted run. Close the parent's run, and open one on
+    //    the child so a crash *after* the split is detected against the child
+    //    (the live epoch the run actually continues on). The run_id need only
+    //    correlate within each session's log — the resume scan is positional.
+    let split_run_id = uuid::Uuid::new_v4().to_string();
+    session
+        .emit_event(
+            parent_session_id,
+            SessionEvent::RunFinished {
+                run_id: split_run_id.clone(),
+                outcome: crate::session::events::RunOutcome::Completed,
+                at: crate::session::events::now_ms(),
+            },
+        )
+        .await
+        .map_err(|e| SplitError::Failed(anyhow::anyhow!("emit parent RunFinished: {e}")))?;
+    session
+        .emit_event(
+            &child,
+            SessionEvent::RunStarted {
+                run_id: split_run_id,
+                at: crate::session::events::now_ms(),
+            },
+        )
+        .await
+        .map_err(|e| SplitError::Failed(anyhow::anyhow!("emit child RunStarted: {e}")))?;
+
     Ok(SplitOutcome { child_session_id: child })
 }
 
@@ -361,21 +392,25 @@ mod tests {
         let reg_keys = registrar.keys().await;
         assert_eq!(reg_keys, vec![expected_child.clone()]);
 
-        // 3. Events emitted to the child, in order:
-        //    [0] SessionForked
-        //    [1] SystemMessage (summary)
-        //    [2] verbatim fresh-tail event (the single record at tail_start)
+        // 3. Events emitted, in order:
+        //    [0] SessionForked        -> child
+        //    [1] SystemMessage        -> child
+        //    [2] verbatim fresh tail  -> child
+        //    [3] RunFinished{Completed} -> parent (run-marker balancing)
+        //    [4] RunStarted           -> child  (run-marker balancing)
         let emitted = session.emitted().await;
         assert_eq!(
             emitted.len(),
-            3,
-            "expected 3 emitted events (forked + summary + 1 tail), got {}",
+            5,
+            "expected 5 emitted events (forked + summary + 1 tail + 2 run markers), got {}",
             emitted.len()
         );
 
-        // All emitted to the child session.
-        for (id, _) in &emitted {
-            assert_eq!(id, &expected_child, "event was emitted to wrong session");
+        // Seeding + the child RunStarted go to the child; only the parent
+        // RunFinished targets the parent.
+        for (i, (id, _)) in emitted.iter().enumerate() {
+            let expected = if i == 3 { &parent } else { &expected_child };
+            assert_eq!(id, expected, "event {i} emitted to wrong session");
         }
 
         // [0] SessionForked with the parent's key string.
@@ -407,6 +442,22 @@ mod tests {
                 assert_eq!(content.text, "fresh tail message");
             }
             other => panic!("expected UserMessage (fresh tail), got {other:?}"),
+        }
+
+        // [3] RunFinished{Completed} closes the parent's run so the frozen
+        //     parent is not later mis-detected as an interrupted run.
+        match &emitted[3].1 {
+            SessionEvent::RunFinished { outcome, .. } => {
+                assert_eq!(*outcome, crate::session::events::RunOutcome::Completed);
+            }
+            other => panic!("expected RunFinished on parent, got {other:?}"),
+        }
+
+        // [4] RunStarted opens a run on the child so a crash after the split
+        //     is detected against the live (child) epoch.
+        match &emitted[4].1 {
+            SessionEvent::RunStarted { .. } => {}
+            other => panic!("expected RunStarted on child, got {other:?}"),
         }
     }
 }
