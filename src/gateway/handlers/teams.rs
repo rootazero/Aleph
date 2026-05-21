@@ -6,6 +6,8 @@
 //! - teams.disband: Mark a team as disbanded
 //! - teams.delete: Permanently delete a disbanded team
 //! - agents.teams: List all teams an agent belongs to
+//! - teams.list_tasks / teams.create_task / teams.update_task: kanban-facing
+//!   CoordTask operations
 
 use serde::Deserialize;
 use serde_json::json;
@@ -15,7 +17,9 @@ use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStore};
 use crate::sync_primitives::Arc;
 use crate::teams::TeamStore;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, RESOURCE_NOT_FOUND};
+use super::super::protocol::{
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
+};
 use super::parse_params;
 
 // =============================================================================
@@ -290,5 +294,150 @@ pub async fn handle_update_task(
             INTERNAL_ERROR,
             format!("Failed to update task '{}': {}", params.task_id, e),
         ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTaskParams {
+    pub team_id: String,
+    pub subject: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub blocked_by: Option<Vec<String>>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Handle teams.create_task — create a CoordTask on a team's board. Topic
+/// emission happens inside the store, so the kanban panel refreshes itself.
+pub async fn handle_create_task(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.create_task request");
+
+    let params: CreateTaskParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    let subject = params.subject.trim();
+    if subject.is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "subject must not be empty".to_string(),
+        );
+    }
+
+    use crate::agents::swarm::tasks::{NewCoordTask, Priority};
+
+    // An unknown priority string is a client error rather than a silent
+    // default — surface it so the UI can correct the request.
+    let priority = match params.priority.as_deref() {
+        None => Priority::default(),
+        Some(p) => match Priority::from_stored(p) {
+            Some(parsed) => parsed,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("unknown priority '{p}' (expected low|normal|high|critical)"),
+                )
+            }
+        },
+    };
+
+    let new_task = NewCoordTask {
+        team_id: Some(params.team_id.clone()),
+        subject: subject.to_string(),
+        description: params.description.unwrap_or_default(),
+        owner: params.owner.filter(|s| !s.trim().is_empty()),
+        priority,
+        blocked_by: params.blocked_by.unwrap_or_default(),
+        metadata: params
+            .metadata
+            .unwrap_or_else(|| serde_json::Value::Object(Default::default())),
+    };
+
+    match coord_store.create_task(new_task).await {
+        Ok(task) => JsonRpcResponse::success(request.id, json!({ "task": task })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to create task for team '{}': {}", params.team_id, e),
+        ),
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::swarm::tasks::store::SqliteCoordTaskStore;
+
+    async fn coord_store() -> Arc<dyn CoordTaskStore> {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        let store = SqliteCoordTaskStore::new(conn);
+        store.migrate().await.expect("migrate");
+        Arc::new(store)
+    }
+
+    fn create_req(params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "teams.create_task".to_string(),
+            params: Some(params),
+            id: Some(json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_task_trims_subject_and_returns_task() {
+        let store = coord_store().await;
+        let resp = handle_create_task(
+            create_req(json!({"team_id": "T", "subject": "  Ship it  ", "priority": "high"})),
+            store,
+        )
+        .await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.expect("result present");
+        let task = &result["task"];
+        assert_eq!(task["subject"], "Ship it");
+        assert_eq!(task["team_id"], "T");
+        assert_eq!(task["priority"], "high");
+        assert_eq!(task["status"], "pending");
+    }
+
+    #[tokio::test]
+    async fn create_task_rejects_blank_subject() {
+        let store = coord_store().await;
+        let resp =
+            handle_create_task(create_req(json!({"team_id": "T", "subject": "   "})), store).await;
+
+        let err = resp.error.expect("expected an error");
+        assert_eq!(err.code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn create_task_rejects_unknown_priority() {
+        let store = coord_store().await;
+        let resp = handle_create_task(
+            create_req(json!({"team_id": "T", "subject": "x", "priority": "urgent"})),
+            store,
+        )
+        .await;
+
+        let err = resp.error.expect("expected an error");
+        assert_eq!(err.code, INVALID_PARAMS);
     }
 }
