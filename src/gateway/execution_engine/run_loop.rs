@@ -81,12 +81,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        let _hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
+        // Snapshot the extension HookExecutor for this request — fires
+        // `BeforeToolCall` / `AfterToolCall` / `AfterToolCallFailure` hooks
+        // around every tool dispatch inside `ScopedToolService`. `None` when
+        // no extension manager is present or no hooks are registered, so the
+        // tool path skips the executor entirely.
+        let hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
             let snapshot = ext_manager.hook_executor_snapshot().await;
             (snapshot.hook_count() > 0).then(|| Arc::new(snapshot))
         } else {
             None
         };
+        let hook_session_id = request.session_key.to_key_string();
 
         // Build tool registry inputs (filtered by agent whitelist).
         let base_allowed_tools: Vec<crate::dispatcher::UnifiedTool> = self
@@ -311,6 +317,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     None,
                     tool_refresh.clone(),
                     Some(turn_context.clone()),
+                    hook_executor.clone(),
+                    hook_session_id.clone(),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -397,6 +405,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Some(subagent_tool),
                 tool_refresh,
                 Some(turn_context.clone()),
+                hook_executor.clone(),
+                hook_session_id.clone(),
             );
 
             // Build FlowRequest

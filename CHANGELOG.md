@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Extension hooks — production wiring closure (hermes-inspired)**: the
+  `HookExecutor` snapshot that the gateway request loop already builds was
+  being dropped on the floor (`let _hook_executor = ext_manager.hook_executor_snapshot()…`
+  in `gateway::execution_engine::run_loop`). Combined with the fact that
+  `build_request_tool_service` never accepted a hook executor, this meant
+  `BeforeToolCall` / `AfterToolCall` / `AfterToolCallFailure` were registered
+  end-to-end but never fired for a single production tool call. The snapshot is
+  now plumbed through `build_request_tool_service` → `ScopedToolService::with_hook_executor`
+  for both the main agent dispatch and the subagent parent-view path, with the
+  current `SessionKey` flowing into `HookContext::session_id`. `BeforeToolCall`
+  fires as an interceptor (block / deny / ask / update_input); `AfterToolCall`
+  and `AfterToolCallFailure` fire as observers + interceptors with
+  `update_output:` honoured. The legacy in-process `ToolHookDecorator` seam is
+  preserved unchanged. 6 integration tests in `src/tools/scoped.rs` cover block,
+  deny, update_input rewrite, success-observer side-effect, failure-observer
+  side-effect, and the no-hooks regression guard.
+
 ### Added
 - **OpenAI protocol — response_format wiring**: `ProviderConfig` now exposes
   `response_format: Option<ResponseFormat>` (variants `Text` / `JsonObject` /
