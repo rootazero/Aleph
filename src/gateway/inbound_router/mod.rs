@@ -480,6 +480,24 @@ impl InboundMessageRouter {
             }
         };
 
+        // Extension hooks observe inbound channel traffic (post-permission).
+        // MESSAGE_PREVIEW is capped at 256 chars to keep message content out of
+        // an unbounded env var.
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::MessageReceived,
+            &ctx.session_key.to_key_string(),
+            vec![
+                ("CHANNEL_ID", channel_id.to_string()),
+                ("SENDER_ID", msg.sender_id.as_str().to_string()),
+                ("MESSAGE_CHARS", msg.text.chars().count().to_string()),
+                (
+                    "MESSAGE_PREVIEW",
+                    msg.text.chars().take(256).collect::<String>(),
+                ),
+            ],
+        )
+        .await;
+
         // Voice STT: transcribe audio attachments before further processing
         let has_stt = self.stt_config.is_some();
         let has_audio = super::voice::inbound::has_audio_attachment(&ctx.message);
@@ -947,5 +965,42 @@ mod tests {
         .with_approval_callback_sink(Arc::new(AlwaysIntercept));
 
         assert!(router.handle_message(cb_message()).await.is_ok());
+    }
+
+    /// H1 — a zero-config (no route bindings) group message must resolve to a
+    /// `Group` session key, not a `DirectMessage`. Before the fix the fallback
+    /// built `SessionKey::peer(...)` → a DM variant with an empty channel,
+    /// mistyping the group chat and splitting its history from the
+    /// configured-binding path's `SessionKey::group(...)`.
+    #[test]
+    fn group_message_resolves_to_group_session_key() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        );
+        let msg = InboundMessage {
+            id: MessageId::new("m1"),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("group-123"),
+            sender_id: UserId::new("u1"),
+            sender_name: None,
+            text: "hello group".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: true,
+            raw: None,
+            metadata: vec![],
+        };
+        let key = router.resolve_session_key_with_agent(&msg, "main");
+        assert!(
+            matches!(
+                &key,
+                crate::routing::session_key::SessionKey::Group { channel, peer_id, .. }
+                    if channel == "telegram" && peer_id == "group-123"
+            ),
+            "zero-config group message must resolve to a Group key; got: {key:?}",
+        );
     }
 }

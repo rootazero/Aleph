@@ -76,6 +76,12 @@ pub enum HookEvent {
     /// After session compaction
     #[serde(alias = "AfterCompaction")]
     AfterCompaction,
+    /// Before an LLM provider API request is issued
+    #[serde(alias = "PreApiRequest")]
+    PreApiRequest,
+    /// After an LLM provider API response is received
+    #[serde(alias = "PostApiRequest")]
+    PostApiRequest,
     /// When gateway starts
     #[serde(alias = "GatewayStart")]
     GatewayStart,

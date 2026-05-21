@@ -61,7 +61,6 @@ pub mod extension;
 pub mod generation;
 pub mod guardrails;
 mod init_unified;
-pub mod intent;
 pub mod logging;
 pub mod markdown;
 pub mod mcp;

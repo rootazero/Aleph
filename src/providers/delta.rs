@@ -88,7 +88,7 @@ pub struct DeltaCollector {
 /// counts first, `output_tokens` last). A plain overwrite would drop the
 /// earlier figures, so each field keeps the incoming value when it is
 /// non-zero / `Some` and otherwise retains the accumulated one.
-fn merge_usage(prev: TokenUsage, next: TokenUsage) -> TokenUsage {
+pub(crate) fn merge_usage(prev: TokenUsage, next: TokenUsage) -> TokenUsage {
     TokenUsage {
         input_tokens: if next.input_tokens != 0 {
             next.input_tokens

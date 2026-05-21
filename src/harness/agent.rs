@@ -35,7 +35,7 @@ use crate::harness::trait_def::{Harness, HarnessError, TurnState};
 use crate::orchestrator::dispatch::{TerminateReason, TokenBreakdown, ToolInvocation};
 use crate::providers::adapter::NativeToolCall;
 
-use crate::session::events::{SessionEvent, SessionEventRecord, ToolOutput, TurnId};
+use crate::session::events::{SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
 use crate::verification::ToolCallSummary;
 
@@ -315,8 +315,6 @@ impl Harness for AgentHarness {
         let mut consecutive_failure_turns: usize = 0;
         let mut tool_history: std::collections::VecDeque<ToolCallSummary> =
             std::collections::VecDeque::with_capacity(8);
-        let mut tool_call_cache: std::collections::HashMap<(String, String), ToolOutput> =
-            std::collections::HashMap::new();
         let result: Result<crate::harness::trace::LoopTraceSessionOutcome, HarnessError> = loop {
             if cancel.is_cancelled() {
                 self.set_terminate_reason(TerminateReason::Cancelled);
@@ -345,7 +343,6 @@ impl Harness for AgentHarness {
                     iterations,
                     tool_calls_made,
                     &mut tool_history,
-                    &mut tool_call_cache,
                     cancel,
                 )
                 .await
@@ -443,6 +440,15 @@ impl Harness for AgentHarness {
                             self.set_terminate_reason(TerminateReason::HitMaxIterations {
                                 used: iterations as u32,
                             });
+                            // C1: rescue a runaway that ended on an unresolved
+                            // tool_use so the user gets a terminal summary
+                            // instead of an empty / mid-thought response.
+                            // No-op when the last assistant turn already has
+                            // text — well-behaved capped runs pay nothing.
+                            self.fire_max_iterations_grace_turn(
+                                session_id, callback, iterations, cancel,
+                            )
+                            .await;
                             callback.on_complete();
                             break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
                         }
@@ -547,15 +553,12 @@ impl Harness for AgentHarness {
         let tool_calls_made = count_tool_calls(&events);
         let cancel = tokio_util::sync::CancellationToken::new();
         let mut history = std::collections::VecDeque::new();
-        let mut cache: std::collections::HashMap<(String, String), ToolOutput> =
-            std::collections::HashMap::new();
         self.run_turn_internal(
             session_id,
             callback,
             iterations,
             tool_calls_made,
             &mut history,
-            &mut cache,
             &cancel,
         )
         .await
@@ -998,8 +1001,10 @@ mod tests {
         let result = harness.run(&sid, &mut cb, &cancel).await;
         assert!(result.is_ok(), "run should succeed even when capped");
         assert!(harness.hit_limit(), "hit_limit should be true after cap");
-        // 3 iterations = 3 calls to provider (0, 1, 2)
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+        // 3 capped iterations = 3 provider calls, plus 1 grace turn fired by
+        // the max_iterations cap (C1) — LoopingProvider never produces
+        // terminal text, so the grace turn fires once more.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
 
         // P2: terminate_reason precisely identifies the max-iter cap (the
         // legacy hit_limit:bool could not distinguish this from stall /
@@ -1009,10 +1014,9 @@ mod tests {
             crate::orchestrator::dispatch::TerminateReason::HitMaxIterations { used: 3 },
         );
 
-        // P2: tool_timeline captured one entry per executed tool call.
-        // LoopingProvider returns a `echo(text:"loop")` tool_call each turn,
-        // executed by AlwaysOkTools — 3 iterations → 1 unique call deduped
-        // by the same-run memo (entries 2 and 3 hit cache, duration_ms = 0).
+        // P2: tool_timeline captures one entry per Act-phase tool call. The
+        // dedup memo (H4) is per-batch, so each of the 3 single-call turns
+        // executes its own `echo` invocation.
         let timeline = harness.tool_timeline();
         assert_eq!(timeline.len(), 3, "one timeline entry per Act-phase call");
         assert!(timeline.iter().all(|i| i.success));

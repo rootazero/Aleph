@@ -4,9 +4,11 @@
 
 use crate::config::ProviderConfig;
 use crate::error::Result;
-use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
+use crate::providers::adapter::{
+    ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
+};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
-use crate::providers::AiProvider;
+use crate::providers::{AiProvider, ProviderDelta};
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
 use crate::sync_primitives::Arc;
 use futures::StreamExt;
@@ -119,6 +121,16 @@ impl HttpProvider {
             metadata: payload.metadata.clone(),
         };
 
+        // Extension hooks observe LLM provider traffic for cost metering.
+        let session_id = hook_session_id(&payload);
+        let base_env = self.base_request_env(&payload, false);
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::PreApiRequest,
+            &session_id,
+            base_env.clone(),
+        )
+        .await;
+
         let request = self.adapter.build_request(&final_payload, &self.config)?;
         let response = request.send().await.map_err(|e| {
             if e.is_timeout() {
@@ -141,6 +153,24 @@ impl HttpProvider {
 
         // Validate response
         provider_response.validate(self.adapter.name());
+
+        // PostApiRequest fires once the response (and its token usage) is in
+        // hand — before the inbound leak check, so the cost meter records the
+        // request even when the response is later blocked.
+        let mut post_env = base_env;
+        if let Some(ref usage) = provider_response.usage {
+            append_usage_env(&mut post_env, usage);
+        }
+        post_env.push((
+            "STOP_REASON",
+            format!("{:?}", provider_response.stop_reason),
+        ));
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::PostApiRequest,
+            &session_id,
+            post_env,
+        )
+        .await;
 
         // Secret leak detection: scan inbound response TEXT only
         let detector = LeakDetector::new();
@@ -187,6 +217,16 @@ impl HttpProvider {
             metadata: payload.metadata.clone(),
         };
 
+        // Extension hooks observe LLM provider traffic for cost metering.
+        let session_id = hook_session_id(&payload);
+        let base_env = self.base_request_env(&payload, true);
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::PreApiRequest,
+            &session_id,
+            base_env.clone(),
+        )
+        .await;
+
         let request = self
             .adapter
             .build_request(&final_payload, &self.config)
@@ -200,10 +240,99 @@ impl HttpProvider {
             .stream_deltas(response)
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-        Ok(stream
+        let inner = stream
             .map(|r| r.map_err(|e| anyhow::anyhow!("{}", e)))
-            .boxed())
+            .boxed();
+
+        // Wrap the delta stream so `PostApiRequest` fires once — with the
+        // accumulated token usage — when the stream completes naturally. An
+        // aborted stream (client disconnect) skips the post hook.
+        let wrapped = async_stream::stream! {
+            let mut inner = inner;
+            let mut usage: Option<TokenUsage> = None;
+            let mut stop_reason: Option<StopReason> = None;
+            while let Some(item) = inner.next().await {
+                if let Ok(delta) = &item {
+                    match delta {
+                        ProviderDelta::Usage(u) => {
+                            usage = Some(match usage.take() {
+                                Some(prev) => {
+                                    crate::providers::delta::merge_usage(prev, u.clone())
+                                }
+                                None => u.clone(),
+                            });
+                        }
+                        ProviderDelta::Done(sr) => stop_reason = Some(sr.clone()),
+                        _ => {}
+                    }
+                }
+                yield item;
+            }
+            let mut env = base_env;
+            if let Some(ref u) = usage {
+                append_usage_env(&mut env, u);
+            }
+            if let Some(ref sr) = stop_reason {
+                env.push(("STOP_REASON", format!("{:?}", sr)));
+            }
+            crate::extension::hooks::fire_global_observer(
+                crate::extension::HookEvent::PostApiRequest,
+                &session_id,
+                env,
+            )
+            .await;
+        };
+
+        Ok(wrapped.boxed())
+    }
+
+    /// Build the env shared by `PreApiRequest` / `PostApiRequest` hooks.
+    fn base_request_env(
+        &self,
+        payload: &RequestPayload<'_>,
+        streaming: bool,
+    ) -> Vec<(&'static str, String)> {
+        let model = payload
+            .model
+            .clone()
+            .unwrap_or_else(|| self.config.default_model().to_string());
+        vec![
+            ("PROVIDER_NAME", self.name.clone()),
+            ("MODEL", model),
+            ("PROTOCOL", self.adapter.name().to_string()),
+            ("STREAMING", streaming.to_string()),
+            ("MESSAGE_COUNT", payload.messages.len().to_string()),
+        ]
+    }
+}
+
+/// Resolve a session id for API-request hooks. Uses the `session_id` metadata
+/// key when a caller threaded it through; otherwise a synthetic id so the cost
+/// meter still aggregates by provider/model.
+fn hook_session_id(payload: &RequestPayload<'_>) -> String {
+    payload
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("session_id"))
+        .cloned()
+        .unwrap_or_else(|| "provider".to_string())
+}
+
+/// Append `TokenUsage` figures to a `PostApiRequest` hook env.
+fn append_usage_env(env: &mut Vec<(&'static str, String)>, usage: &TokenUsage) {
+    env.push(("INPUT_TOKENS", usage.input_tokens.to_string()));
+    env.push(("OUTPUT_TOKENS", usage.output_tokens.to_string()));
+    if let Some(v) = usage.cache_read_tokens {
+        env.push(("CACHE_READ_TOKENS", v.to_string()));
+    }
+    if let Some(v) = usage.cache_creation_tokens {
+        env.push(("CACHE_CREATION_TOKENS", v.to_string()));
+    }
+    if let Some(v) = usage.thinking_tokens {
+        env.push(("THINKING_TOKENS", v.to_string()));
+    }
+    if let Some(ref cost) = usage.cost {
+        env.push(("COST_USD", format!("{:.6}", cost.calculate(usage))));
     }
 }
 
@@ -257,5 +386,49 @@ mod tests {
         let result = engine.filter("User: Call 13812345678 for info");
         assert!(result.text.contains("[PHONE]"));
         assert!(!result.text.contains("13812345678"));
+    }
+
+    #[test]
+    fn hook_session_id_prefers_metadata_then_falls_back() {
+        use crate::providers::adapter::RequestPayload;
+
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("session_id".to_string(), "sess-42".to_string());
+        let payload = RequestPayload {
+            metadata: Some(meta),
+            ..Default::default()
+        };
+        assert_eq!(super::hook_session_id(&payload), "sess-42");
+
+        // No metadata → synthetic id so the cost meter still aggregates.
+        assert_eq!(
+            super::hook_session_id(&RequestPayload::default()),
+            "provider"
+        );
+    }
+
+    #[test]
+    fn append_usage_env_emits_present_fields_only() {
+        use crate::providers::adapter::TokenUsage;
+
+        let usage = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_tokens: Some(10),
+            cache_creation_tokens: None,
+            thinking_tokens: None,
+            cost: None,
+        };
+        let mut env: Vec<(&'static str, String)> = Vec::new();
+        super::append_usage_env(&mut env, &usage);
+        let map: std::collections::HashMap<_, _> = env.into_iter().collect();
+
+        assert_eq!(map.get("INPUT_TOKENS"), Some(&"100".to_string()));
+        assert_eq!(map.get("OUTPUT_TOKENS"), Some(&"50".to_string()));
+        assert_eq!(map.get("CACHE_READ_TOKENS"), Some(&"10".to_string()));
+        // Absent Option fields must not emit env keys.
+        assert!(!map.contains_key("CACHE_CREATION_TOKENS"));
+        assert!(!map.contains_key("THINKING_TOKENS"));
+        assert!(!map.contains_key("COST_USD"));
     }
 }

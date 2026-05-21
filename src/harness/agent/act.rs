@@ -38,9 +38,15 @@ impl AgentHarness {
         tool_calls: Vec<NativeToolCall>,
         callback: &mut dyn HarnessCallback,
         iteration: usize,
-        tool_call_cache: &mut HashMap<(String, String), ToolOutput>,
     ) -> Result<usize, HarnessError> {
         let mut executed_count: usize = 0;
+
+        // Within-batch idempotency memo. Scoped to this single `act()` call:
+        // duplicate calls inside one tool batch are deduplicated, but a
+        // legitimate cross-turn repeat (e.g. `read_file` after `write_file`,
+        // or any time-varying tool such as `get_current_time`) always
+        // re-executes against fresh state instead of replaying a stale result.
+        let mut tool_call_cache: HashMap<(String, String), ToolOutput> = HashMap::new();
 
         // Layer 3 turn-budget boundary. `begin_turn` is idempotent — re-entering
         // the same `TurnId` is a no-op, so this is safe even if the caller
@@ -90,17 +96,16 @@ impl AgentHarness {
                 }
             }
 
-            // Idempotent same-run memo: identical (tool_name, canonical_args)
-            // pairs return the previous result without re-executing the tool.
-            // Scope is per-`run` (one user request) so cross-request retries
-            // are unaffected. Skips the per-call provider round-trip when the
-            // model loops on the same call.
+            // Within-batch dedup: identical (tool_name, canonical_args) pairs
+            // inside this single tool batch return the first result without
+            // re-executing. The memo is per-`act()` call, so a cross-turn
+            // repeat always re-runs against fresh state.
             let cache_key = (call.name.clone(), super::canonical_json_string(&call.arguments));
             if let Some(cached) = tool_call_cache.get(&cache_key) {
                 tracing::warn!(
                     tool = %call.name,
                     call_id = %call.id,
-                    "tool call deduplicated from same-run memo (no re-execution)",
+                    "duplicate tool call deduplicated within batch (no re-execution)",
                 );
                 executed_count = executed_count.saturating_add(1);
                 let output = cached.clone();
@@ -283,6 +288,9 @@ impl AgentHarness {
                     );
                 }
                 Err(e) => {
+                    // Preserve the error's retryability for the trace before
+                    // the variant is collapsed into a flat string.
+                    let retryable = e.is_retryable();
                     let error_msg = e.to_string();
                     let error_event = SessionEvent::ToolError {
                         turn_id,
@@ -317,7 +325,7 @@ impl AgentHarness {
                             },
                             result: crate::tools::runtime::ToolResult::Error {
                                 error: error_msg,
-                                retryable: false,
+                                retryable,
                             },
                         },
                     );
