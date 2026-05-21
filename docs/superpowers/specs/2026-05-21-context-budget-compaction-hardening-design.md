@@ -30,11 +30,34 @@ deliberately keeps.
 
 - **D3 — per-turn O(n) compaction recompute.** The harness rebuilds + recompacts
   the full event log every turn; the compacted form is never persisted.
-  Already covered by the existing **Cycle 5 `session-split-compaction`** plan
-  (`docs/superpowers/plans/2026-05-21-session-split-compaction.md`) — not
-  duplicated here.
-- **D7 — per-turn memory-retrieval refresh.** The system prompt's memory block
-  is assembled once from the first user query. A separate concern.
+  Covered by the **Cycle 5 `session-split-compaction`** plan
+  (`docs/superpowers/plans/2026-05-21-session-split-compaction.md`), merged to
+  main as `89ad74842`. **Closed** — no separate work; this branch's merge of
+  main pulls Cycle 5 in.
+
+- **D7 — per-turn memory-retrieval refresh. CLOSED (won't-do).** Initially
+  flagged because the system prompt's hybrid-retrieval memory block is
+  assembled once per run from that run's user query. Investigation
+  (`MemoryContextProvider` → `build_memory_user_message` → `WorkingMemoryAssembler`,
+  and the `src/harness/` Think→Act loop) concluded that *automatic per-turn
+  refresh is contraindicated by Aleph's architecture*, not a missing feature:
+  - **R8 already covers it.** `memory_search`, `recall_context`, `memory_browse`,
+    `memory_explore`, `memory_timeline`, `session_search` (the `memory_knowledge`
+    tool group) let the LLM re-retrieve memory *on demand* the moment it judges
+    its context has drifted — fresh hybrid retrieval, LLM-decided.
+  - **Auto-refresh violates R7.** A loop that re-retrieves every turn is the
+    harness deciding *for* the LLM when memory is needed — the "越俎代庖" R7 forbids.
+  - **Auto-refresh violates R10.** Retrieval + relevance recompute inside the
+    per-turn cycle is business logic in the dumb loop.
+  - **Cost.** Hybrid retrieval is ~100–3500 ms/turn (embedding + SQLite +
+    optional LLM rerank). Within a single run there is only one user query, so
+    per-turn re-retrieval buys nothing while spending heavily — the opposite of
+    "effective token control."
+  - Per-*message* refresh already happens: each new user message is a fresh
+    `run()` → fresh `build_system_prompt` → fresh retrieval on that message.
+
+  Conclusion: the correct Aleph design is on-demand recall via tools (R8) plus
+  the existing per-message re-retrieval. No code change.
 
 ## Design
 
