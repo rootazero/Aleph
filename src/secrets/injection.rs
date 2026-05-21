@@ -56,16 +56,20 @@ pub async fn render_with_secrets(
         return Ok((input.to_string(), vec![]));
     }
 
-    let mut result = input.to_string();
+    let mut result = String::with_capacity(input.len());
     let mut injected = Vec::with_capacity(refs.len());
+    let mut last_end = 0usize;
 
     for secret_ref in &refs {
+        result.push_str(&input[last_end..secret_ref.start]);
         let decrypted = resolver.resolve(&secret_ref.name).await?;
         let value = decrypted.expose();
 
         injected.push(InjectedSecret::from_value(&secret_ref.name, value));
-        result = result.replace(&secret_ref.raw, value);
+        result.push_str(value);
+        last_end = secret_ref.end;
     }
+    result.push_str(&input[last_end..]);
 
     Ok((result, injected))
 }
@@ -159,5 +163,19 @@ mod tests {
         let input = "before {{secret:token}} after";
         let (rendered, _) = render_with_secrets(input, &resolver).await.unwrap();
         assert_eq!(rendered, "before abc123 after");
+    }
+
+    #[tokio::test]
+    async fn test_render_value_contains_placeholder_not_replaced() {
+        // If a secret value happens to contain a placeholder literal,
+        // it must NOT be treated as a new placeholder to resolve.
+        let resolver = MockResolver::new()
+            .with("a", "{{secret:b}}")
+            .with("b", "REAL_B");
+        let input = "A={{secret:a}} B={{secret:b}}";
+        let (rendered, injected) = render_with_secrets(input, &resolver).await.unwrap();
+        // secret:a resolves to literal "{{secret:b}}", which stays as-is.
+        assert_eq!(rendered, "A={{secret:b}} B=REAL_B");
+        assert_eq!(injected.len(), 2);
     }
 }

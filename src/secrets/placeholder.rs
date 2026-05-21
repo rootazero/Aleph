@@ -7,6 +7,10 @@ use super::SecretError;
 pub struct SecretRef {
     pub name: String,
     pub raw: String,
+    /// Start index of the placeholder in the original input.
+    pub start: usize,
+    /// End index (exclusive) of the placeholder in the original input.
+    pub end: usize,
 }
 
 /// Extract secret references from a text input.
@@ -45,12 +49,15 @@ pub fn extract_secret_refs(input: &str) -> Result<Vec<SecretRef>, SecretError> {
             )));
         }
 
+        let placeholder_end = end + SUFFIX.len();
         refs.push(SecretRef {
             name: name.to_string(),
-            raw: input[start..end + SUFFIX.len()].to_string(),
+            raw: input[start..placeholder_end].to_string(),
+            start,
+            end: placeholder_end,
         });
 
-        cursor = end + SUFFIX.len();
+        cursor = placeholder_end;
     }
 
     Ok(refs)
