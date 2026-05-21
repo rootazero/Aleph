@@ -82,7 +82,29 @@ system_prompt_mode = "prepend"          # "prepend" (default) | "standard"
 
 # Model behavior override (optional)
 model_behavior = "anthropic"            # Use a specific behavior file in ~/.aleph/model_behaviors/{name}.md
+
+# Reliability & caching (all optional)
+stream_idle_timeout_secs = 60           # Anthropic only: per-SSE-event idle watchdog, secs (0 = disabled, default 60)
+cache_retention = "short"               # Anthropic only: "off" | "short" (default) | "long"
+service_tier = "auto"                   # Anthropic only: "auto" | "default"
+metadata_user_id = "user-123"           # Anthropic only: end-user id sent in metadata.user_id
+effort = "medium"                       # Anthropic only: thinking budget — "low" | "medium" | "high" | numeric string
+
+# OpenAI Chat/Responses extras (all optional, capability-gated — silently dropped if unsupported)
+parallel_tool_calls = true              # Allow parallel tool calls (omit = server default)
+seed = 42                               # Deterministic sampling seed
+logprobs = true                         # Return per-token logprobs
+top_logprobs = 5                        # Top alternative tokens per position, 0-20 (requires logprobs = true)
 ```
+
+> **Structured output** — `response_format` forces JSON output. It is a nested
+> table, not a scalar:
+> ```toml
+> [providers.MyProvider.response_format]
+> type = "json_object"                  # "text" | "json_object" | "json_schema"
+> ```
+> For `json_schema`, also set `name` and `schema` (a JSON Schema object).
+> Capability-gated: silently dropped when the endpoint doesn't support it.
 
 ## Field Pitfalls
 

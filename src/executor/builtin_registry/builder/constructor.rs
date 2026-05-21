@@ -7,7 +7,7 @@
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
@@ -350,6 +350,34 @@ impl BuiltinToolRegistry {
             &note_schema_tool,
             &user_profile_tool,
         );
+
+        // agent_info is read-only and depends only on the agent *definition*
+        // catalog (builtin sub-agents + user/project AgentDefs) — not on the
+        // runtime instance registry. The agent_catalog prompt layer always tells
+        // the model to call `agent_info(agent_id)`, so this tool must always be
+        // available. Build the same catalog the orchestrator uses: builtins plus
+        // filesystem-loaded definitions (degrades to builtins-only on I/O error).
+        let agent_info_tool = {
+            use crate::tools::AlephTool;
+            let def_registry = Arc::new(crate::agents::AgentRegistry::with_builtins());
+            if let Ok(home) = crate::discovery::aleph_home_dir() {
+                let project_dir = std::env::current_dir().ok();
+                if let Err(e) = def_registry.register_from_dirs(&home, project_dir.as_deref()) {
+                    warn!(error = %e, "agent_info: failed to load user agent defs; degrades to builtins-only");
+                }
+            }
+            let tool = crate::builtin_tools::agent_manage::AgentInfoTool::new(def_registry);
+            let td = tool.definition();
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                ToolSource::Builtin,
+            );
+            ut = ut.with_parameters_schema(td.parameters.clone());
+            tools.insert(td.name.clone(), ut);
+            tool
+        };
 
         // Add agent management tools (if AgentRegistry + AgentEnvStore are available)
         let (agent_create_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
@@ -1181,6 +1209,7 @@ impl BuiltinToolRegistry {
             agent_create_tool,
             agent_list_tool,
             agent_delete_tool,
+            agent_info_tool,
             session_context_handle,
             tool_policy_handle,
             tool_context_handle: config.tool_context.clone(),

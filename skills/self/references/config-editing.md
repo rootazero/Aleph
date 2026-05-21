@@ -63,6 +63,11 @@ default_hotkey
 [bindings]
 [plugin_marketplaces.*]
 [stop_hooks]
+[guardrails]
+[stability]
+[fallback_provider]
+[context_budget]
+[resume]
 ```
 
 ## Process Management (CRITICAL)

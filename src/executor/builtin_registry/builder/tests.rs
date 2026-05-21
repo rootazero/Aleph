@@ -113,3 +113,46 @@ mod spec3_tool_gating_tests {
         }
     }
 }
+
+/// Wiring tests for `agent_info` — the tool was fully implemented but never
+/// registered into the executor registry, so the model (which the agent_catalog
+/// prompt layer instructs to call `agent_info`) hit "tool not found".
+#[cfg(test)]
+mod agent_info_wiring_tests {
+    use crate::config::types::memory::MemoryInjectionMode;
+    use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
+    use crate::executor::ToolRegistry;
+
+    async fn minimal_registry() -> BuiltinToolRegistry {
+        // No agent_registry / workspace_manager — agent_info must still register
+        // because it builds its own agent-definition catalog.
+        BuiltinToolRegistry::with_config(BuiltinToolConfig {
+            injection_mode: MemoryInjectionMode::Hybrid,
+            ..Default::default()
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn agent_info_is_always_registered() {
+        let registry = minimal_registry().await;
+        assert!(
+            registry.has_tool("agent_info"),
+            "agent_info must always be registered — the agent_catalog prompt references it"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_info_dispatches_for_builtin_agent() {
+        let registry = minimal_registry().await;
+        let result = registry
+            .execute_tool("agent_info", serde_json::json!({"agent_id": "explore"}))
+            .await;
+        let value =
+            result.expect("agent_info should dispatch and succeed for the builtin 'explore' agent");
+        assert!(
+            value.to_string().contains("explore"),
+            "agent_info output should describe the 'explore' agent: {value}"
+        );
+    }
+}

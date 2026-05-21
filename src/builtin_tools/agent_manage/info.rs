@@ -102,12 +102,27 @@ impl AlephTool for AgentInfoTool {
             ))
         })?;
 
+        // Report the *effective* allowlist: expand named tool sets (e.g.
+        // "INVESTIGATION") into concrete tools and union with the flat
+        // `allowed_tools`. Set-based agents keep `allowed_tools` empty, so
+        // without this the reported capabilities would be misleadingly blank.
+        let mut allowed_tools = agent_def.allowed_tools;
+        for set_name in &agent_def.allowed_tool_sets {
+            if let Some(tools) = crate::agents::tool_sets::resolve(set_name) {
+                for &tool in tools {
+                    if !allowed_tools.iter().any(|t| t == tool) {
+                        allowed_tools.push(tool.to_string());
+                    }
+                }
+            }
+        }
+
         Ok(AgentInfoOutput {
             id: agent_def.id,
             description: agent_def.description,
             when_to_use: agent_def.when_to_use,
             mode: agent_def.mode.to_string(),
-            allowed_tools: agent_def.allowed_tools,
+            allowed_tools,
             denied_tools: agent_def.denied_tools,
             max_iterations: agent_def.max_iterations,
             context_mode: agent_def.context_mode.to_string(),
@@ -144,7 +159,13 @@ mod tests {
         assert!(!info.description.is_empty());
         assert!(info.when_to_use.is_some());
         assert_eq!(info.mode, "SubAgent");
-        assert!(info.allowed_tools.contains(&"glob".to_string()));
+        // `explore` declares its allowlist via the "INVESTIGATION" tool set;
+        // agent_info must resolve named sets into concrete tools.
+        assert!(
+            info.allowed_tools.contains(&"file_read".to_string()),
+            "INVESTIGATION tool set should resolve to include file_read: {:?}",
+            info.allowed_tools
+        );
         assert!(info.denied_tools.contains(&"bash".to_string()));
     }
 

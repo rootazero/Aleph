@@ -169,6 +169,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "self_config",
+        description: "Read/write Aleph identity files and config.toml with validation and natural-language preview",
+        requires_config: true, // Requires per-agent agent_id (injected at construction)
+    },
+    BuiltinToolDefinition {
         name: "vault_store",
         description: "Manage encrypted secret vault (store/delete/list API keys)",
         requires_config: true, // Requires SharedTokenManager
@@ -275,6 +280,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         name: "agent_delete",
         description: "Delete an agent and archive its workspace (cannot delete 'main')",
         requires_config: true, // Requires agent_registry + workspace_manager
+    },
+    BuiltinToolDefinition {
+        name: "agent_info",
+        description: "Get detailed capabilities and configuration of a registered agent (allowed/denied tools, iteration limits, context mode, usage hints)",
+        requires_config: false, // Always available — builds its own agent-definition catalog
     },
     // Browser tools — always available, share a ProfileManager
     BuiltinToolDefinition {
@@ -657,9 +667,13 @@ pub fn create_tool_boxed(
         "heartbeat_report" => Some(Box::new(
             crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
         )),
-        // Agent management tools require agent_registry + workspace_manager + session_context,
-        // created dynamically in BuiltinToolRegistry::with_config().
-        "agent_create" | "agent_list" | "agent_delete" => None,
+        // Agent management tools are created dynamically in
+        // BuiltinToolRegistry::with_config() — agent_create/list/delete need
+        // agent_registry + workspace_manager; agent_info builds its own catalog.
+        "agent_create" | "agent_list" | "agent_delete" | "agent_info" => None,
+        // self_config requires the per-agent agent_id, injected at construction time
+        // in BuiltinToolRegistry — cannot be created standalone here.
+        "self_config" => None,
         // Media tools — require MediaPipeline
         "media_understand" => config
             .and_then(|c| c.media_pipeline.as_ref())

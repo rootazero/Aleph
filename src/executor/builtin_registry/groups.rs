@@ -73,6 +73,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "desktop_ax_snapshot",
             "desktop_check_permissions",
             "self_manage",
+            "self_config",
             "read_config_guide",
             "vault_store",
             "channel_pairing",
@@ -156,7 +157,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "agent_mgmt",
         name: "Agent 管理",
-        tools: &["agent_create", "agent_list", "agent_delete"],
+        tools: &["agent_create", "agent_list", "agent_delete", "agent_info"],
     },
     ToolCategory {
         id: "session_mgmt",

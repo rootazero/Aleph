@@ -11,6 +11,8 @@ allowed_users = []                    # Empty = allow all, or [user_id1, user_id
 allowed_groups = []                   # Empty = allow all
 dm_allowed = true                     # Default true
 groups_allowed = true                 # Default true
+dm_policy = "pairing"                 # Optional: disabled | pairing (default) | allowlist | open
+group_policy = "allowlist"            # Optional: disabled | allowlist (default) | open
 polling_interval_secs = 1             # Default 1
 send_typing = true                    # Default true
 max_retries = 3                       # Default 3
@@ -44,7 +46,19 @@ guild_messages = true                 # Default true
 direct_messages = true                # Default true
 message_content = true                # Default true (privileged intent)
 guild_members = false                 # Default false
+
+# Optional: bind conversations to Discord threads
+[channels.MyDiscordBot.threads]
+enabled = true                        # Default true
+auto_create = false                   # Auto-create a thread per conversation
+auto_create_channels = []             # Channel IDs to auto-thread (empty = all)
 ```
+
+> The flat form above is the **legacy single-account** config and is fully
+> supported. Discord also has a richer multi-account form (`[channels.X.accounts.*]`
+> with per-guild and per-channel overrides) for running several bots or
+> fine-grained server settings — use the legacy form unless multi-account is
+> explicitly needed.
 
 ## Webhook (Generic)
 
