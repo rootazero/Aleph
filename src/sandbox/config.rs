@@ -379,6 +379,28 @@ mod tests {
     }
 
     #[test]
+    fn windows_config_default_has_job_object_settings() {
+        // BUG-2 regression: these two fields must exist with sane
+        // defaults and be threaded into the driver (see
+        // platforms::mod::create_platform_driver_with_config).
+        let cfg = WindowsSandboxConfig::default();
+        assert!(cfg.use_job_object);
+        assert_eq!(cfg.max_active_processes, 8);
+    }
+
+    #[test]
+    fn windows_config_job_object_fields_deserialize_from_toml() {
+        let toml = r#"
+            [windows]
+            use_job_object = false
+            max_active_processes = 4
+        "#;
+        let cfg: SandboxConfig = toml::from_str(toml).expect("parses");
+        assert!(!cfg.windows.use_job_object);
+        assert_eq!(cfg.windows.max_active_processes, 4);
+    }
+
+    #[test]
     fn rate_limit_config_deserializes_from_toml() {
         let toml = r#"
             [rate_limit]

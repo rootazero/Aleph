@@ -78,6 +78,10 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     /// `with_memory_context_provider`; the orchestrator path needs its own
     /// reference because it does not hold an `ExecutionEngine`.
     pub memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
+    /// SQLite memory backend exposed for the orchestrator path so the per-run
+    /// `ContextCompactor` can reuse hierarchical session summaries for
+    /// zero-API-cost compaction.
+    pub memory_backend: Option<alephcore::memory::store::MemoryBackend>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -2222,5 +2226,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         message_router: message_router.clone(),
         orchestrator_cell: orch_cell_out,
         memory_context_provider: mcp_for_orchestrator,
+        memory_backend: Some(memory_db.clone()),
     }
 }

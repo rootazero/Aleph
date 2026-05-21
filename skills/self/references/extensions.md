@@ -4,6 +4,9 @@
 
 ### CLI Commands
 
+> All plugin subcommands are under `aleph plugin` (singular). There is no
+> `aleph plugins` (plural) command.
+
 ```bash
 # Marketplace
 aleph plugin marketplace add <source>    # GitHub owner/repo or local path
@@ -13,14 +16,11 @@ aleph plugin marketplace remove <name>
 
 # Management
 aleph plugin list
-aleph plugin install <source>            # From marketplace or URL
+aleph plugin install <source>            # From marketplace, URL, or .zip
 aleph plugin install <name> --scope user # Scope: user|project|local
-
-# Legacy
-aleph plugins install <url>              # Git URL
-aleph plugins uninstall <name>
-aleph plugins enable <name>              # Remove .disabled marker
-aleph plugins disable <name>             # Create .disabled marker
+aleph plugin uninstall <name>
+aleph plugin enable <name>               # Remove .disabled marker
+aleph plugin disable <name>              # Create .disabled marker
 ```
 
 ### Source Detection
@@ -69,14 +69,27 @@ Example: "My Plugin 123" → "my-plugin-123"
 
 ## Skills
 
-### CLI Commands
+### Management Tools
 
-```bash
-aleph skill list
-aleph skill install <source>
-aleph skill reload <name>
-aleph skill delete <name>
-```
+Skills are managed through builtin **tools**, not a CLI subcommand (there is no
+`aleph skill` command):
+
+| Tool | Use for |
+|------|---------|
+| `skill_status` | Query skill readiness — `all` / `ready` / `needs_setup` / `disabled` |
+| `skill_manage` | Toggle a skill enabled/disabled, or change its scope (`system`/`tool`/`standalone`/`disabled`) |
+| `skill_install` | Install a skill's missing dependencies (auto-selects installer, e.g. brew vs npm) |
+
+### Installing New Skills
+
+New skills are not installed from a CLI. Add one by either:
+
+1. **As part of a plugin** — `aleph plugin install <source>`; the plugin's
+   `skills/` directory is auto-discovered.
+2. **Directly on disk** — drop a skill into the skills directory:
+   `~/.aleph/skills/my-skill/SKILL.md` (or `~/.aleph/skills/my-skill.md`).
+
+The skill system hot-reloads the skills directory.
 
 ### SKILL.md Format
 

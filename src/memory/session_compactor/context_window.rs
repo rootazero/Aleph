@@ -8,11 +8,16 @@ use crate::providers::message::UnifiedMessage;
 /// Estimate token count for a string using a char-length heuristic.
 ///
 /// `ratio` is the average number of characters per token (e.g. 3.5 for English).
+///
+/// Counts Unicode scalar values, not UTF-8 bytes: a CJK character is one
+/// character but three bytes, so byte-length over-counts CJK text ~3×. The
+/// sibling estimators (`summary_source`, `pressure::estimate_tokens_smart`)
+/// already count characters; this keeps the budget sensor consistent.
 pub fn estimate_tokens(content: &str, ratio: f64) -> usize {
     if ratio <= 0.0 {
         return 0;
     }
-    (content.len() as f64 / ratio) as usize
+    (content.chars().count() as f64 / ratio) as usize
 }
 
 /// Estimate total tokens across all messages.
@@ -83,6 +88,17 @@ mod tests {
         // ratio=1.0 => tokens == char count
         let s = "abcde";
         assert_eq!(estimate_tokens(s, 1.0), 5);
+    }
+
+    #[test]
+    fn test_estimate_tokens_counts_chars_not_bytes() {
+        // 5 CJK characters = 15 UTF-8 bytes. The estimate must be driven by
+        // the 5 characters, not the 15 bytes — otherwise CJK sessions trip
+        // compaction ~3× too early.
+        let cjk = "你好世界呀";
+        assert_eq!(cjk.chars().count(), 5);
+        assert_eq!(cjk.len(), 15);
+        assert_eq!(estimate_tokens(cjk, 1.0), 5);
     }
 
     // --- estimate_total_tokens ---

@@ -309,7 +309,10 @@ impl AlephTool for AgentCreateTool {
                     soul_name, specialized
                 )
             };
-            let _ = std::fs::write(&soul_path, soul_content);
+            if let Err(e) = std::fs::write(&soul_path, soul_content) {
+                warn!(agent_id = %args.id, path = %soul_path.display(), error = %e,
+                    "Failed to write SOUL.md template (non-fatal)");
+            }
         }
 
         let identity_path = agent_state_dir.join("IDENTITY.md");
@@ -319,14 +322,20 @@ impl AlephTool for AgentCreateTool {
                 "- Name: {}\n- Emoji: \u{1f916}\n- Theme: professional\n",
                 identity_name
             );
-            let _ = std::fs::write(&identity_path, identity_content);
+            if let Err(e) = std::fs::write(&identity_path, identity_content) {
+                warn!(agent_id = %args.id, path = %identity_path.display(), error = %e,
+                    "Failed to write IDENTITY.md template (non-fatal)");
+            }
         }
 
         let tools_path = agent_state_dir.join("TOOLS.md");
         if !tools_path.exists() {
             let tools_content =
                 "# Tool Notes\n\nRecord your tool usage preferences and notes here.\n";
-            let _ = std::fs::write(&tools_path, tools_content);
+            if let Err(e) = std::fs::write(&tools_path, tools_content) {
+                warn!(agent_id = %args.id, path = %tools_path.display(), error = %e,
+                    "Failed to write TOOLS.md template (non-fatal)");
+            }
         }
 
         // 7. Create AgentInstance

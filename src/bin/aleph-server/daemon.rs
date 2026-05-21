@@ -6,19 +6,33 @@
 use std::path::PathBuf;
 
 /// Expand ~ to home directory.
-/// Falls back to `/tmp/.aleph-$uid/...` when `dirs::home_dir()` returns `None`,
-/// to avoid collisions between different users on shared systems.
+/// When `dirs::home_dir()` returns `None`, falls back to a per-user scratch
+/// dir (`/tmp/.aleph-$uid` on Unix, `%TEMP%\.aleph` on Windows) to avoid
+/// collisions between different users on shared systems.
 pub fn expand_path(path: &str) -> PathBuf {
     if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
             return home.join(stripped);
         }
-        let uid = unsafe { libc::getuid() };
-        eprintln!(
-            "Warning: cannot determine home directory; using /tmp/.aleph-{} as fallback",
-            uid
-        );
-        return PathBuf::from(format!("/tmp/.aleph-{}", uid)).join(stripped);
+        // `/tmp` is shared on Unix, so the uid disambiguates users;
+        // Windows has no `/tmp` and `temp_dir()` is already per-user.
+        #[cfg(unix)]
+        {
+            let uid = unsafe { libc::getuid() };
+            eprintln!(
+                "Warning: cannot determine home directory; using /tmp/.aleph-{uid} as fallback"
+            );
+            return PathBuf::from(format!("/tmp/.aleph-{uid}")).join(stripped);
+        }
+        #[cfg(not(unix))]
+        {
+            let fallback = std::env::temp_dir().join(".aleph");
+            eprintln!(
+                "Warning: cannot determine home directory; using {} as fallback",
+                fallback.display()
+            );
+            return fallback.join(stripped);
+        }
     }
     PathBuf::from(path)
 }

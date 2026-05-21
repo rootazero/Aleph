@@ -16,7 +16,8 @@ mod screen_record;
 mod screenshot;
 
 pub use screenshot::{
-    capture_screen_png, list_displays, process_screenshot, take_screenshot, take_screenshot_display,
+    capture_screen_png, list_displays, process_screenshot, take_screenshot,
+    take_screenshot_display, DEFAULT_SCREENSHOT_MAX_BYTES,
 };
 
 #[cfg(target_os = "macos")]

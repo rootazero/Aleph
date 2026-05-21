@@ -56,4 +56,15 @@ fn init_theme() {
             // Follow system preference (CSS @media handles this)
         }
     }
+
+    // Apply the saved accent palette (data-accent attribute drives CSS).
+    let saved_accent: Option<String> = storage
+        .as_ref()
+        .and_then(|s: &web_sys::Storage| s.get_item("aleph-accent").ok())
+        .flatten();
+    if let Some(accent) = saved_accent.as_deref() {
+        if matches!(accent, "ocean" | "forest" | "sunset" | "rose") {
+            let _ = html.set_attribute("data-accent", accent);
+        }
+    }
 }

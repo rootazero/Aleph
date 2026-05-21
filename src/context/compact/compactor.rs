@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use super::summary_utils::{strip_analysis_block, IDENTIFIER_PRESERVATION};
 use crate::memory::session_compactor::summary_source::SessionSummarySource;
+use crate::memory::store::MemoryBackend;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
@@ -60,6 +61,14 @@ impl Default for CompactorConfig {
     }
 }
 
+/// Wiring for the zero-API-cost session-summary reuse path: the memory backend
+/// holding the d0/d1/d2 summaries plus the agent id they were written under.
+/// Both are required together — `get_raw_by_path_prefix` filters by agent id.
+struct SummaryReuse {
+    backend: MemoryBackend,
+    agent_id: String,
+}
+
 /// LLM-based context compactor.
 ///
 /// Compresses older conversation history into a concise summary, keeping
@@ -68,12 +77,34 @@ impl Default for CompactorConfig {
 pub struct ContextCompactor {
     provider: Arc<dyn AiProvider>,
     config: CompactorConfig,
+    /// When set, `compact()` first tries to reuse the hierarchical session
+    /// summaries written by `SessionCompactor` (zero API cost) before falling
+    /// back to a side-channel LLM call.
+    summary_reuse: Option<SummaryReuse>,
 }
 
 impl ContextCompactor {
     /// Create a new compactor with the given provider and configuration.
     pub fn new(provider: Arc<dyn AiProvider>, config: CompactorConfig) -> Self {
-        Self { provider, config }
+        Self {
+            provider,
+            config,
+            summary_reuse: None,
+        }
+    }
+
+    /// Enable the zero-API-cost session-summary reuse path. `backend` holds the
+    /// d0/d1/d2 facts; `agent_id` is the owning agent they were written under.
+    pub fn with_summary_reuse(
+        mut self,
+        backend: MemoryBackend,
+        agent_id: impl Into<String>,
+    ) -> Self {
+        self.summary_reuse = Some(SummaryReuse {
+            backend,
+            agent_id: agent_id.into(),
+        });
+        self
     }
 
     /// Compact older messages in the conversation history.
@@ -89,11 +120,13 @@ impl ContextCompactor {
     /// 5. On success: replace the window with a single summary message.
     /// 6. On failure + fallback enabled: deterministic truncation.
     /// 7. On failure + fallback disabled: skip.
+    /// `session_id` enables the zero-API-cost session-summary reuse path when a
+    /// memory backend is also wired (see [`ContextCompactor::with_summary_reuse`]).
     pub async fn compact(
         &self,
         messages: &mut Vec<UnifiedMessage>,
         fresh_tail: usize,
-        summary_source: Option<&SessionSummarySource>,
+        session_id: Option<&str>,
     ) -> anyhow::Result<CompactResult> {
         let effective_tail = fresh_tail.max(self.config.fresh_tail);
 
@@ -135,8 +168,12 @@ impl ContextCompactor {
         // Step 3: limit window and serialize
         let window_start = cut_end.saturating_sub(self.config.max_window);
 
-        // Fast path: try to reuse existing session summaries (zero API cost)
-        if let Some(source) = summary_source {
+        // Fast path: reuse pre-existing hierarchical session summaries (zero
+        // API cost). Active only when summary reuse is wired and the caller
+        // supplied a session id; otherwise fall through to the LLM path.
+        if let (Some(reuse), Some(sid)) = (self.summary_reuse.as_ref(), session_id) {
+            let source =
+                SessionSummarySource::new(reuse.backend.clone(), sid, reuse.agent_id.clone());
             if let Some(reuse_result) = source.try_reuse(messages, window_start, cut_end).await {
                 tracing::info!(
                     tokens_before = reuse_result.tokens_before,

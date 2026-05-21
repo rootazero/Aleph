@@ -182,6 +182,9 @@ pub struct BuiltinToolRegistry {
 
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
     pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
+    /// agent_info — always available (read-only, depends only on the agent
+    /// definition catalog, which is built unconditionally).
+    pub(crate) agent_info_tool: crate::builtin_tools::agent_manage::AgentInfoTool,
     /// Browser tools (always available, share a single ProfileManager)
     pub(crate) browser_open_tool: crate::builtin_tools::browser_tools::BrowserOpenTool,
     pub(crate) browser_click_tool: crate::builtin_tools::browser_tools::BrowserClickTool,
@@ -972,6 +975,11 @@ impl ToolRegistry for BuiltinToolRegistry {
                     // so this arm is unreachable by construction. The never type (!) coerces to the return type.
                     _ => unreachable!(),
                 }
+            }
+            // agent_info is read-only and always available — no session-context
+            // snapshot, no optional-dependency gate.
+            "agent_info" => {
+                Box::pin(async move { self.agent_info_tool.call_json(arguments).await })
             }
 
             // Task coordination tools

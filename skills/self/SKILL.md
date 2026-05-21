@@ -250,6 +250,11 @@ All top-level sections available in `config.toml`:
 | `bindings` | Route bindings | `channel`, `pattern`, `agent_id` |
 | `plugin_marketplaces.*` | Plugin sources | `source`, `type` (`github` or `local`) |
 | `stop_hooks` | Stop hooks | `name`, `command`, `timeout_secs` |
+| `guardrails` | PII/secret hard-filter switch | `enabled` |
+| `stability` | P0 rescue knobs (stall watchdog, failure cap, per-turn timeout) | `stall_timeout_secs`, `consecutive_failure_cap`, `turn_timeout_secs` |
+| `fallback_provider` | Provider failover chain | `chain`, `provider` |
+| `context_budget` | Mid-run context-window compaction | `enabled`, `token_budget`, `warning_threshold`, `critical_threshold` |
+| `resume` | Boot-scan auto-resume of interrupted runs | `enabled`, `max_age_secs`, `max_attempts`, `max_concurrent` |
 
 > **Important**: `[agent]` (task orchestration) and `[agents]` (agent definitions) are **different sections**. Do not confuse them.
 
@@ -446,6 +451,46 @@ temperature = 0.9
 | `temperature` | Generation temperature (0.0–2.0) |
 | `max_tokens` | Max response tokens |
 | `history_limit` | Max messages to retain in context |
+
+---
+
+## Advanced: Reliability & Rescue Sections
+
+Opt-in sections that harden long-running Think→Act loops. Each is **absent by
+default** — omitting the section keeps the feature off. These wire into the
+harness at startup, so tell the user to restart Aleph after changing them.
+
+```toml
+# PII / secret hard-filter on input + output + tool calls
+[guardrails]
+enabled = true
+
+# P0 rescue knobs — every field is independently optional
+[stability]
+stall_timeout_secs = 300           # abort a run with no progress for this long
+stall_check_interval_secs = 30     # watchdog poll interval (default 30)
+consecutive_failure_cap = 8        # abort after N back-to-back tool failures
+turn_timeout_secs = 300            # per-turn wall-clock cap
+
+# Provider failover — references existing [providers.*] keys by name
+[fallback_provider]
+chain = ["openai", "gemini"]       # tried in order after the primary
+# provider = "openai"              # back-compat single-provider form
+
+# Mid-run context-window compaction (prevents context-length hard-fail)
+[context_budget]
+enabled = true
+token_budget = 200000              # your model's real context window
+warning_threshold = 0.70           # fraction at which compaction begins
+critical_threshold = 0.85          # fraction forcing a final reply
+
+# Boot-scan auto-resume of runs interrupted by a crash/restart
+[resume]
+enabled = true                     # default true
+max_age_secs = 86400               # skip runs older than this (default 24h)
+max_attempts = 3                   # abandon after N crash-loops
+max_concurrent = 4                 # cap simultaneous resumes at boot
+```
 
 ---
 

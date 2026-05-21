@@ -9,7 +9,9 @@ use tracing::{debug, warn};
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
-use crate::sandbox::platforms::common::{is_wsl, wsl_version, LINUX_PLATFORM_DEFAULT_READ_ROOTS};
+use crate::sandbox::platforms::common::{
+    is_wsl, termination_signal, truncate_output, wsl_version, LINUX_PLATFORM_DEFAULT_READ_ROOTS,
+};
 use crate::sandbox::policy::{FsPolicy, NetworkPolicy, ProcessPolicy, SandboxPolicy};
 
 const BWRAP_CANDIDATES: [&str; 2] = ["/usr/bin/bwrap", "/usr/local/bin/bwrap"];
@@ -232,7 +234,7 @@ impl BubblewrapDriver {
                 args.push("--bind".into());
                 args.push(cwd_str.into());
                 args.push(cwd_str.into());
-                push_metadata_protection_args(&mut args, std::iter::once(cwd));
+                push_metadata_protection_args(args, std::iter::once(cwd));
             }
             FsPolicy::ReadPaths(paths) => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
@@ -253,7 +255,7 @@ impl BubblewrapDriver {
                     args.push(path_str.into());
                     args.push(path_str.into());
                 }
-                push_metadata_protection_args(&mut args, std::iter::once(cwd));
+                push_metadata_protection_args(args, std::iter::once(cwd));
             }
             FsPolicy::WritePaths(paths) => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
@@ -280,7 +282,7 @@ impl BubblewrapDriver {
                 // the writable `--bind` is what makes these read-only.
                 let mut all = vec![cwd];
                 all.extend(paths.iter().map(|p| p.as_path()));
-                push_metadata_protection_args(&mut args, all.into_iter());
+                push_metadata_protection_args(args, all.into_iter());
             }
             FsPolicy::FullRead { exclude } => {
                 args.push("--ro-bind".into());
@@ -563,24 +565,15 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
 
         match result {
             Ok(Ok(output)) => {
-                let stdout_truncated = output.stdout.len() > max_output_bytes;
-                let stderr_truncated = output.stderr.len() > max_output_bytes;
-                let stdout = if stdout_truncated {
-                    output.stdout[..max_output_bytes].to_vec()
-                } else {
-                    output.stdout
-                };
-                let stderr = if stderr_truncated {
-                    output.stderr[..max_output_bytes].to_vec()
-                } else {
-                    output.stderr
-                };
+                let status = output.status;
+                let (stdout, stdout_truncated) = truncate_output(output.stdout, max_output_bytes);
+                let (stderr, stderr_truncated) = truncate_output(output.stderr, max_output_bytes);
 
                 Ok(SandboxOutput {
                     stdout,
                     stderr,
-                    exit_code: output.status.code(),
-                    signal: None,
+                    exit_code: status.code(),
+                    signal: termination_signal(&status),
                     truncated: stdout_truncated || stderr_truncated,
                     duration_ms: elapsed_ms,
                 })
@@ -639,9 +632,8 @@ mod tests {
     #[test]
     fn generate_args_workspace_only_without_platform_defaults() {
         let driver = BubblewrapDriver::with_options(LinuxSandboxOptions {
-            mount_proc: true,
-            no_new_privs: true,
             include_platform_defaults: false,
+            ..LinuxSandboxOptions::default()
         });
         let policy = SandboxPolicy::default();
         let cwd = Path::new("/tmp/test-workspace");

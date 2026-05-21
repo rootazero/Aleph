@@ -188,6 +188,12 @@ impl Drop for ComputerUseLock {
 /// Check whether a process with the given PID is alive.
 #[cfg(unix)]
 fn is_pid_alive(pid: u32) -> bool {
+    // A zero or out-of-range PID is never a real process. `kill(0, 0)` would
+    // otherwise target the *caller's* process group and report "alive", and a
+    // PID above `i32::MAX` would wrap to a negative `pid_t` (also a group).
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
     // SAFETY: kill(pid, 0) sends no signal; it only checks process existence.
     let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
     if ret == 0 {
@@ -201,10 +207,45 @@ fn is_pid_alive(pid: u32) -> bool {
     errno != libc::ESRCH && errno != libc::EINVAL
 }
 
+/// Check whether a process with the given PID is alive.
+///
+/// Opens the process with a query-only access right and reads its exit code:
+/// a still-running process reports `STATUS_PENDING` (259). The previous
+/// implementation unconditionally returned `false`, which made the desktop
+/// session lock a no-op on Windows — a live session's lock could always be
+/// stolen by a concurrent one.
 #[cfg(windows)]
-fn is_pid_alive(_pid: u32) -> bool {
-    // On Windows, assume stale lock — always allow acquisition.
-    false
+fn is_pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    if pid == 0 {
+        return false;
+    }
+
+    // STATUS_PENDING — GetExitCodeProcess reports this while a process runs.
+    const STILL_RUNNING: u32 = 259;
+
+    // SAFETY: `OpenProcess` is called with a query-only access right; the
+    // returned handle, when non-null, is closed before this function returns.
+    // `GetExitCodeProcess` only writes into a stack local. No handle escapes.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            // The process cannot be opened — almost always because it has
+            // exited. (A live process owned by a different user could fail
+            // with ERROR_ACCESS_DENIED; treating that as dead is acceptable:
+            // a wrongly-reclaimed lock self-heals on the next acquire, a
+            // permanently-wedged one would not.)
+            return false;
+        }
+        let mut exit_code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        ok != 0 && exit_code == STILL_RUNNING
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +332,20 @@ mod tests {
         let result = lock.acquire();
         assert!(result.is_err(), "should be blocked by live lock");
         assert!(!lock.is_held());
+    }
+
+    #[test]
+    fn test_is_pid_alive_current_process() {
+        // The test process itself is, definitionally, alive. Exercises the
+        // real liveness check on whichever platform the suite runs on.
+        assert!(is_pid_alive(std::process::id()));
+    }
+
+    #[test]
+    fn test_is_pid_alive_rejects_zero() {
+        // PID 0 is never a real process and must never be reported alive —
+        // on Unix `kill(0, 0)` would otherwise hit the caller's process group.
+        assert!(!is_pid_alive(0));
     }
 
     #[test]

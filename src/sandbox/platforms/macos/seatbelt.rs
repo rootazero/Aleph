@@ -15,6 +15,7 @@ use tracing::debug;
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
+use crate::sandbox::platforms::common::{termination_signal, truncate_output};
 use crate::sandbox::policy::{EnvPolicy, FsPolicy, NetworkPolicy, ProcessPolicy, SandboxPolicy};
 
 /// Path to the trusted `sandbox-exec` binary.
@@ -797,24 +798,15 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
 
         match result {
             Ok(Ok(output)) => {
-                let stdout_truncated = output.stdout.len() > max_output_bytes;
-                let stderr_truncated = output.stderr.len() > max_output_bytes;
-                let stdout = if stdout_truncated {
-                    output.stdout[..max_output_bytes].to_vec()
-                } else {
-                    output.stdout
-                };
-                let stderr = if stderr_truncated {
-                    output.stderr[..max_output_bytes].to_vec()
-                } else {
-                    output.stderr
-                };
+                let status = output.status;
+                let (stdout, stdout_truncated) = truncate_output(output.stdout, max_output_bytes);
+                let (stderr, stderr_truncated) = truncate_output(output.stderr, max_output_bytes);
 
                 Ok(SandboxOutput {
                     stdout,
                     stderr,
-                    exit_code: output.status.code(),
-                    signal: None,
+                    exit_code: status.code(),
+                    signal: termination_signal(&status),
                     truncated: stdout_truncated || stderr_truncated,
                     duration_ms: elapsed_ms,
                 })

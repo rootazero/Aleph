@@ -11,7 +11,6 @@ pub mod pressure;
 use crate::context::compact::PressureLevel;
 use crate::memory::session_compactor::context_window::{estimate_tokens, estimate_total_tokens};
 use crate::providers::message::UnifiedMessage;
-use crate::tools::runtime::ToolDefinition;
 
 // =============================================================================
 // ContextPressure
@@ -36,25 +35,28 @@ pub struct ContextPressure {
 const OVERHEAD_WARNING_RATIO: f64 = 0.30;
 /// Threshold at which bootstrap overhead triggers a critical warning.
 const OVERHEAD_CRITICAL_RATIO: f64 = 0.50;
+/// Minimum pressure drop (fraction of budget) for a compaction to count as
+/// "effective" and re-arm the circuit breaker. Below this the breaker keeps
+/// its count, so a run of ineffective compactions still escalates to
+/// `FinalReply` — the anti-thrash safety stop borrowed from hermes.
+const COMPACTION_EFFECTIVE_DROP: f64 = 0.05;
 
 impl ContextPressure {
+    /// Compute a pressure snapshot.
+    ///
+    /// `tool_schema_tokens` is the caller-precomputed token cost of the tool
+    /// schema actually sent to the provider. Keeping it a plain `usize` (rather
+    /// than a `&[ToolDefinition]`) decouples this module from any tool-def type
+    /// and lets the harness count the exact wire schema (`dispatcher::ToolDefinition`).
     pub(crate) fn compute(
         messages: &[UnifiedMessage],
         system_prompt: &str,
-        tool_defs: &[ToolDefinition],
+        tool_schema_tokens: usize,
         token_budget: u64,
         ratio: f64,
     ) -> Self {
         let prompt_tokens = estimate_tokens(system_prompt, ratio);
-        let tool_tokens: usize = tool_defs
-            .iter()
-            .map(|td| {
-                estimate_tokens(&td.name, ratio)
-                    + estimate_tokens(&td.description, ratio)
-                    + estimate_tokens(&td.parameters.to_string(), ratio)
-            })
-            .sum();
-        let overhead = prompt_tokens + tool_tokens;
+        let overhead = prompt_tokens + tool_schema_tokens;
         let msg_tokens = estimate_total_tokens(messages, ratio);
         let used = overhead + msg_tokens;
         let budget: usize = token_budget.try_into().unwrap_or(usize::MAX);
@@ -283,16 +285,19 @@ impl ContextBudget {
     }
 
     /// Evaluate context pressure before a turn and return a directive.
+    ///
+    /// `tool_schema_tokens` is the token cost of the tool schema sent to the
+    /// provider — see [`ContextPressure::compute`].
     pub fn before_turn(
         &mut self,
         messages: &[UnifiedMessage],
         system_prompt: &str,
-        tool_defs: &[ToolDefinition],
+        tool_schema_tokens: usize,
     ) -> LoopDirective {
         let pressure = ContextPressure::compute(
             messages,
             system_prompt,
-            tool_defs,
+            tool_schema_tokens,
             self.token_budget,
             self.token_estimate_ratio,
         );
@@ -365,10 +370,38 @@ impl ContextBudget {
         LoopDirective::Continue
     }
 
-    /// Notify that a compaction succeeded in reducing pressure.
-    /// Resets the circuit breaker so it re-arms for future compaction attempts.
-    pub fn notify_compaction_success(&mut self) {
-        self.circuit_breaker.record_success();
+    /// Record the effect of a just-completed compaction on context pressure.
+    ///
+    /// Re-computes pressure on the post-compaction message list and compares it
+    /// to the snapshot saved by [`ContextBudget::before_turn`]. If pressure
+    /// dropped by at least [`COMPACTION_EFFECTIVE_DROP`] of the budget the
+    /// compaction worked — reset the circuit breaker so it re-arms. Otherwise
+    /// the breaker keeps its count, so three consecutive ineffective
+    /// compactions still escalate to `FinalReply`.
+    ///
+    /// Without this call the breaker only ever increments: it would trip after
+    /// `circuit_breaker_max` compaction turns even when compaction is healthy,
+    /// terminating long tasks prematurely.
+    pub fn note_compaction_effect(
+        &mut self,
+        messages: &[UnifiedMessage],
+        system_prompt: &str,
+        tool_schema_tokens: usize,
+    ) {
+        let Some(before) = self.last_pressure else {
+            return;
+        };
+        let after = ContextPressure::compute(
+            messages,
+            system_prompt,
+            tool_schema_tokens,
+            self.token_budget,
+            self.token_estimate_ratio,
+        );
+        if before.ratio - after.ratio >= COMPACTION_EFFECTIVE_DROP {
+            self.circuit_breaker.record_success();
+        }
+        self.last_pressure = Some(after);
     }
 
     /// Record that a session-split completed. Increments the per-run split
@@ -425,7 +458,7 @@ mod tests {
     #[test]
     fn test_context_pressure_compute() {
         let msgs = vec![UnifiedMessage::user("Hello world")];
-        let pressure = ContextPressure::compute(&msgs, "system", &[], 1000, 3.5);
+        let pressure = ContextPressure::compute(&msgs, "system", 0, 1000, 3.5);
         assert!(pressure.ratio < 1.0);
         assert!(pressure.used_tokens > 0);
         assert_eq!(pressure.budget_tokens, 1000);
@@ -441,18 +474,21 @@ mod tests {
     #[test]
     fn test_context_pressure_overhead_with_tools() {
         let msgs = vec![UnifiedMessage::user("hi")];
-        let tools = vec![ToolDefinition {
-            name: "bash_exec".to_string(),
-            description: "Execute a shell command and return output".to_string(),
-            parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
-            max_result_tokens: None,
-        }];
-        let pressure = ContextPressure::compute(&msgs, "system", &tools, 10_000, 3.5);
-        // Overhead should include system prompt + tool definitions
-        let pressure_no_tools = ContextPressure::compute(&msgs, "system", &[], 10_000, 3.5);
+        // Non-zero tool-schema overhead must raise the overhead and the used total.
+        let pressure = ContextPressure::compute(&msgs, "system", 400, 10_000, 3.5);
+        let pressure_no_tools = ContextPressure::compute(&msgs, "system", 0, 10_000, 3.5);
+        assert_eq!(
+            pressure.overhead_tokens,
+            pressure_no_tools.overhead_tokens + 400,
+            "tool schema tokens must be added to overhead"
+        );
         assert!(
-            pressure.overhead_tokens > pressure_no_tools.overhead_tokens,
-            "tools should increase overhead"
+            pressure.used_tokens > pressure_no_tools.used_tokens,
+            "tools should increase used tokens"
+        );
+        assert!(
+            pressure.available_for_messages < pressure_no_tools.available_for_messages,
+            "tools should shrink the room left for messages"
         );
     }
 
@@ -461,7 +497,7 @@ mod tests {
         let config = default_config();
         let mut budget = ContextBudget::new(&config);
         let msgs = vec![UnifiedMessage::user("short")];
-        let directive = budget.before_turn(&msgs, "sys", &[]);
+        let directive = budget.before_turn(&msgs, "sys", 0);
         assert_eq!(directive, LoopDirective::Continue);
     }
 
@@ -573,7 +609,7 @@ mod tests {
         let mut budget = ContextBudget::new(&config);
         // 750 chars = 75% usage → Warning zone
         let msgs = vec![UnifiedMessage::user("x".repeat(750))];
-        let directive = budget.before_turn(&msgs, "", &[]);
+        let directive = budget.before_turn(&msgs, "", 0);
         assert_eq!(directive, LoopDirective::CompactAndContinue);
     }
 
@@ -589,7 +625,7 @@ mod tests {
         let mut budget = ContextBudget::new(&config);
         // 900 chars = 90% usage → Critical zone
         let msgs = vec![UnifiedMessage::user("x".repeat(900))];
-        let directive = budget.before_turn(&msgs, "", &[]);
+        let directive = budget.before_turn(&msgs, "", 0);
         assert_eq!(directive, LoopDirective::FinalReply);
     }
 
@@ -607,10 +643,62 @@ mod tests {
         let mut budget = ContextBudget::new(&config);
         // 750 chars = Warning zone, stays in warning for 2+ turns → breaker trips
         let msgs = vec![UnifiedMessage::user("x".repeat(750))];
-        let d1 = budget.before_turn(&msgs, "", &[]);
+        let d1 = budget.before_turn(&msgs, "", 0);
         assert_eq!(d1, LoopDirective::CompactAndContinue);
-        let d2 = budget.before_turn(&msgs, "", &[]);
+        let d2 = budget.before_turn(&msgs, "", 0);
         assert_eq!(d2, LoopDirective::SplitSession); // breaker tripped on 2nd attempt
+    }
+
+    #[test]
+    fn note_compaction_effect_resets_breaker_when_effective() {
+        let config = ContextBudgetConfig {
+            token_budget: 1000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 1.0,
+            circuit_breaker_max: 2,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        let big = vec![UnifiedMessage::user("x".repeat(750))];
+        // Turn 1: warning → compact (breaker count = 1).
+        assert_eq!(
+            budget.before_turn(&big, "", 0),
+            LoopDirective::CompactAndContinue
+        );
+        // Effective compaction: pressure drops far below the warning line.
+        let small = vec![UnifiedMessage::user("x".repeat(100))];
+        budget.note_compaction_effect(&small, "", 0);
+        // Turn 2: still big → warning. The breaker was reset, so even with
+        // max=2 it does NOT escalate to FinalReply — long tasks survive.
+        assert_eq!(
+            budget.before_turn(&big, "", 0),
+            LoopDirective::CompactAndContinue
+        );
+    }
+
+    #[test]
+    fn note_compaction_effect_keeps_counting_when_ineffective() {
+        let config = ContextBudgetConfig {
+            token_budget: 1000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 1.0,
+            circuit_breaker_max: 2,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        let big = vec![UnifiedMessage::user("x".repeat(750))];
+        // Turn 1: warning → compact (breaker count = 1).
+        assert_eq!(
+            budget.before_turn(&big, "", 0),
+            LoopDirective::CompactAndContinue
+        );
+        // Ineffective compaction: pressure barely moves → breaker not reset.
+        budget.note_compaction_effect(&big, "", 0);
+        // Turn 2: warning again → breaker count = 2 → trips. Under the split cap
+        // the trip escalates to SplitSession (vs CompactAndContinue when reset).
+        assert_eq!(budget.before_turn(&big, "", 0), LoopDirective::SplitSession);
     }
 
     #[test]
@@ -621,7 +709,7 @@ mod tests {
         };
         let mut budget = ContextBudget::new(&config);
         let msgs = vec![UnifiedMessage::user("hello")];
-        let directive = budget.before_turn(&msgs, "", &[]);
+        let directive = budget.before_turn(&msgs, "", 0);
         assert_eq!(directive, LoopDirective::FinalReply);
     }
 
@@ -637,10 +725,10 @@ mod tests {
         let mut budget = ContextBudget::new(&cfg);
         // 750 chars = 75% usage → Warning zone (token_estimate_ratio=1.0)
         let msgs = vec![UnifiedMessage::user("x".repeat(750))];
-        let d1 = budget.before_turn(&msgs, "", &[]);
+        let d1 = budget.before_turn(&msgs, "", 0);
         assert_eq!(d1, LoopDirective::CompactAndContinue);
         // 2nd call trips the breaker (circuit_breaker_max=2); split_count=0 < max_splits=3
-        let directive = budget.before_turn(&msgs, "", &[]);
+        let directive = budget.before_turn(&msgs, "", 0);
         assert_eq!(
             directive,
             LoopDirective::SplitSession,
@@ -660,17 +748,17 @@ mod tests {
         let mut budget = ContextBudget::new(&cfg);
         let msgs = vec![UnifiedMessage::user("x".repeat(750))];
         // Prime the breaker: first call → CompactAndContinue
-        budget.before_turn(&msgs, "", &[]);
+        budget.before_turn(&msgs, "", 0);
         // Trip the breaker: split_count=0 < max_splits=1 → SplitSession
-        let first = budget.before_turn(&msgs, "", &[]);
+        let first = budget.before_turn(&msgs, "", 0);
         assert_eq!(first, LoopDirective::SplitSession);
         budget.record_split(); // split_count → 1 == max_splits
         // Re-prime: reset the consecutive counter so we can trip again cleanly
         // (pressure is still in warning band; breaker consecutive_count is >= max after the trip)
         // We need circuit_breaker_max more warning-band calls to trip again.
-        budget.before_turn(&msgs, "", &[]); // consecutive_count = 1 (CompactAndContinue)
+        budget.before_turn(&msgs, "", 0); // consecutive_count = 1 (CompactAndContinue)
         // Trip the breaker again: split_count=1 == max_splits=1 → FinalReply
-        let second = budget.before_turn(&msgs, "", &[]);
+        let second = budget.before_turn(&msgs, "", 0);
         assert_eq!(
             second,
             LoopDirective::FinalReply,

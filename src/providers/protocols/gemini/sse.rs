@@ -85,11 +85,17 @@ pub(crate) fn parse_gemini_sse_chunk(
 
                 // Function call — complete in one chunk, emit Start+ArgDelta+End
                 if let Some(fc) = part.get("functionCall") {
-                    let name = fc
-                        .get("name")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
+                    let name = match fc.get("name").and_then(|n| n.as_str()) {
+                        Some(n) if !n.is_empty() => n.to_string(),
+                        _ => {
+                            // A functionCall with no name is unusable — skip it
+                            // instead of emitting a phantom "unknown" tool call
+                            // that would fail tool dispatch with a confusing
+                            // error downstream.
+                            tracing::warn!("Gemini functionCall part missing a name; skipping");
+                            continue;
+                        }
+                    };
                     let args = fc.get("args").cloned().unwrap_or(serde_json::Value::Null);
                     let args_str = args.to_string();
 
@@ -126,27 +132,35 @@ pub(crate) fn parse_gemini_sse_chunk(
             .iter()
             .any(|d| matches!(d, Ok(ProviderDelta::ToolCallStart { .. })));
 
-        let stop_reason = match finish_reason {
+        // Map Gemini's finishReason. The real Gemini API reports `STOP` even
+        // when the candidate carried functionCall parts — there is no
+        // `FUNCTION_CALL` reason on the wire (kept below only as a defensive
+        // alias). The has_tool_calls override therefore upgrades `STOP` and
+        // unrecognized reasons to ToolUse so trace + gateway `finish_reason`
+        // reflect reality.
+        let mapped = match finish_reason {
             Some("STOP") => Some(StopReason::EndTurn),
             Some("MAX_TOKENS") => Some(StopReason::MaxTokens),
             Some("FUNCTION_CALL") => Some(StopReason::ToolUse),
-            Some("SAFETY") | Some("BLOCKLIST") | Some("PROHIBITED_CONTENT") | Some("SPII") => {
-                Some(StopReason::Refusal)
-            }
+            Some("SAFETY")
+            | Some("BLOCKLIST")
+            | Some("PROHIBITED_CONTENT")
+            | Some("SPII")
+            | Some("IMAGE_SAFETY") => Some(StopReason::Refusal),
             Some("RECITATION") => Some(StopReason::Sensitive),
-            Some(other) if !other.is_empty() => {
-                // If we emitted tool calls in this same chunk, treat as ToolUse
-                if has_tool_calls {
-                    Some(StopReason::ToolUse)
-                } else {
-                    Some(StopReason::Unknown)
-                }
+            // An unspecified / absent reason must not force-terminate the turn.
+            Some("FINISH_REASON_UNSPECIFIED") | Some("") | None => None,
+            // MALFORMED_FUNCTION_CALL, UNEXPECTED_TOOL_CALL, TOO_MANY_TOOL_CALLS,
+            // LANGUAGE, OTHER, ... — abnormal stops with no dedicated variant.
+            Some(_) => Some(StopReason::Unknown),
+        };
+        let stop_reason = match mapped {
+            // A candidate carrying tool-call parts is a tool-use turn
+            // regardless of the literal finishReason.
+            Some(StopReason::EndTurn) | Some(StopReason::Unknown) if has_tool_calls => {
+                Some(StopReason::ToolUse)
             }
-            _ => {
-                // No finish reason in this chunk — check if we saw tool calls
-                // without an explicit reason (some Gemini variants omit the field)
-                None
-            }
+            other => other,
         };
 
         if let Some(reason) = stop_reason {

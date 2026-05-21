@@ -6,9 +6,7 @@ use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::delta::ProviderDelta;
 use crate::providers::gemini::schema::clean_schema_for_gemini;
-use crate::providers::gemini::{
-    GeminiFunctionDeclaration, GeminiToolConfig,
-};
+use crate::providers::gemini::{GeminiFunctionDeclaration, GeminiToolConfig};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -44,6 +42,28 @@ impl ProtocolAdapter for GeminiProtocol {
             )
         });
 
+        // Stop sequences: parse the comma-separated provider-config value
+        // (same convention as the OpenAI-chat adapter).
+        let stop_sequences = config.stop_sequences.as_ref().and_then(|raw| {
+            let seqs: Vec<String> = raw
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            (!seqs.is_empty()).then_some(seqs)
+        });
+
+        // Media resolution: map the validated LOW/MEDIUM/HIGH config value to
+        // Gemini's `MEDIA_RESOLUTION_*` enum. Unknown values are dropped.
+        let media_resolution = config.media_resolution.as_ref().and_then(|raw| {
+            match raw.trim().to_uppercase().as_str() {
+                "LOW" => Some("MEDIA_RESOLUTION_LOW".to_string()),
+                "MEDIUM" => Some("MEDIA_RESOLUTION_MEDIUM".to_string()),
+                "HIGH" => Some("MEDIA_RESOLUTION_HIGH".to_string()),
+                _ => None,
+            }
+        });
+
         // Per-request overrides provider config
         let generation_config = crate::providers::gemini::GenerationConfig {
             max_output_tokens: payload
@@ -54,6 +74,8 @@ impl ProtocolAdapter for GeminiProtocol {
             top_p: config.top_p,
             top_k: config.top_k,
             thinking_config,
+            stop_sequences,
+            media_resolution,
         };
 
         // Build tool declarations if provided
@@ -94,12 +116,11 @@ impl ProtocolAdapter for GeminiProtocol {
             "Building Gemini request"
         );
 
-        // Build URL with query parameters
+        // Always request the SSE stream (stream-first architecture). The API
+        // key travels in the `x-goog-api-key` header (added below), not the
+        // URL, so it never leaks into logs, proxies, or tracing spans.
         let mut url = endpoint;
-        url.push_str("?key=");
-        url.push_str(api_key);
-        // Always add alt=sse for streaming (stream-first architecture)
-        url.push_str("&alt=sse");
+        url.push_str("?alt=sse");
 
         // Serialize to JSON value so we can add tool_config if needed
         let mut body = serde_json::to_value(&request_body)
@@ -128,6 +149,7 @@ impl ProtocolAdapter for GeminiProtocol {
             .client
             .post(&url)
             .header("Content-Type", "application/json")
+            .header("x-goog-api-key", api_key)
             .json(&body))
     }
 
@@ -147,16 +169,24 @@ impl ProtocolAdapter for GeminiProtocol {
     ) -> Result<BoxStream<'static, Result<ProviderDelta>>> {
         let status = response.status();
         if !status.is_success() {
-            let retry_after = response
+            let header_retry_after = response
                 .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
             let error_text = response.text().await.unwrap_or_default();
             // Parse Gemini's error envelope for a clean message; fall back to raw text.
-            let detail = parse_gemini_error_body(&error_text)
+            let parsed = parse_gemini_error_body(&error_text);
+            let detail = parsed
+                .as_ref()
                 .map(|e| format!("{} ({})", e.message, e.status))
                 .unwrap_or_else(|| error_text.clone());
+            // Prefer the `Retry-After` header; otherwise fall back to the
+            // `google.rpc.RetryInfo` carried in the error details — Gemini
+            // commonly returns the authoritative backoff there and omits the
+            // header entirely.
+            let retry_after =
+                header_retry_after.or_else(|| parsed.as_ref().and_then(|e| e.retry_delay_secs()));
             if status.as_u16() == 429 {
                 let suggestion = retry_after
                     .as_ref()

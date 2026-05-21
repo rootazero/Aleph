@@ -45,7 +45,13 @@ impl AgentManager {
                     if let Some(agents) = doc.get_mut("agents").and_then(|v| v.as_table_mut()) {
                         if agents.get("list").and_then(|v| v.as_array()).is_some() {
                             agents.remove("list");
-                            let _ = mgr.save_document(&doc);
+                            if let Err(e) = mgr.save_document(&doc) {
+                                warn!(
+                                    "Failed to strip legacy `agents.list = []` from config: {}. \
+                                     The default agent append below may fail to parse.",
+                                    e
+                                );
+                            }
                         }
                     }
                 }
