@@ -1239,3 +1239,36 @@ fn chat_logprobs_true_without_top_logprobs_emits_only_logprobs() {
         "top_logprobs must not appear when config.top_logprobs is None"
     );
 }
+
+// ─── Task 3: per-chunk SSE idle timeout ──────────────────────────────────
+
+#[test]
+fn build_request_stores_configured_stream_idle_timeout() {
+    let proto = OpenAiProtocol::new(reqwest::Client::new());
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.stream_idle_timeout_secs = Some(17);
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let _ = proto.build_request(&payload, &config);
+    assert_eq!(
+        proto
+            .stream_idle_timeout_secs
+            .load(std::sync::atomic::Ordering::Relaxed),
+        17,
+    );
+}
+
+#[test]
+fn build_request_defaults_stream_idle_timeout_to_60() {
+    let proto = OpenAiProtocol::new(reqwest::Client::new());
+    let config = ProviderConfig::test_config("gpt-4o");
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+    let _ = proto.build_request(&payload, &config);
+    assert_eq!(
+        proto
+            .stream_idle_timeout_secs
+            .load(std::sync::atomic::Ordering::Relaxed),
+        60,
+    );
+}
