@@ -91,7 +91,7 @@ jobs:
                "desktop/shell/binaries/AlephBridge-$triple"
           fi
           version="$(tr -d '[:space:]' < VERSION)"
-          cd desktop/shell && cargo tauri build --config "{\"version\":\"$version\"}"
+          cd desktop/shell && cargo tauri build --verbose --config "{\"version\":\"$version\"}"
 
       - uses: actions/upload-artifact@v7
         with:
