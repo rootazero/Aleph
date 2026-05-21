@@ -214,6 +214,7 @@ mod tests {
             started_at: 1000,
             completed_at: 2000,
             token_usage: TokenUsage::default(),
+            plan_step_id: None,
             session_id: None,
         }))
         .await;

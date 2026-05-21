@@ -4,7 +4,8 @@
 /// These types are kept only for AI provider image encoding/decoding.
 ///
 /// See: refactor-native-api-separation proposal
-use crate::error::Result;
+use base64::{engine::general_purpose, Engine as _};
+use crate::error::{AlephError, Result};
 
 /// Image format enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,8 +47,6 @@ impl ImageData {
     ///
     /// Returns a string in the format: "data:image/<format>;base64,<encoded_data>"
     pub fn to_base64(&self) -> String {
-        use base64::{engine::general_purpose, Engine as _};
-
         let mime_type = match self.format {
             ImageFormat::Png => "image/png",
             ImageFormat::Jpeg => "image/jpeg",
@@ -62,17 +61,22 @@ impl ImageData {
     ///
     /// Accepts strings in the format: "data:image/<format>;base64,<encoded_data>"
     pub fn from_base64(data_uri: &str) -> Result<Self> {
-        use base64::{engine::general_purpose, Engine as _};
-
         let (header, base64_data) = data_uri.split_once(',').ok_or_else(|| {
-            crate::error::AlephError::other(
+            AlephError::other(
                 "Invalid Base64 data URI format: missing comma separator".to_string(),
             )
         })?;
 
         if !header.starts_with("data:") {
-            return Err(crate::error::AlephError::other(format!(
+            return Err(AlephError::other(format!(
                 "Invalid Base64 data URI format: expected 'data:' prefix, got: {}",
+                header
+            )));
+        }
+
+        if !header.contains("base64") {
+            return Err(AlephError::other(format!(
+                "Invalid Base64 data URI format: expected 'base64' encoding in header: {}",
                 header
             )));
         }
@@ -81,7 +85,7 @@ impl ImageData {
             .strip_prefix("data:")
             .and_then(|h| h.split(';').next())
             .ok_or_else(|| {
-                crate::error::AlephError::other(format!(
+                AlephError::other(format!(
                     "Invalid Base64 data URI format: cannot extract MIME type from: {}",
                     header
                 ))
@@ -92,7 +96,7 @@ impl ImageData {
             "image/jpeg" => ImageFormat::Jpeg,
             "image/gif" => ImageFormat::Gif,
             _ => {
-                return Err(crate::error::AlephError::other(format!(
+                return Err(AlephError::other(format!(
                     "Unsupported image MIME type: {}",
                     mime_type
                 )));
@@ -100,7 +104,7 @@ impl ImageData {
         };
 
         let decoded = general_purpose::STANDARD.decode(base64_data).map_err(|e| {
-            crate::error::AlephError::other(format!("Base64 decoding failed: {}", e))
+            AlephError::other(format!("Base64 decoding failed: {}", e))
         })?;
 
         Ok(Self::new(decoded, format))
@@ -157,6 +161,18 @@ mod tests {
         assert!(
             err.contains("missing comma separator"),
             "Error should mention missing comma: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn from_base64_missing_base64_encoding() {
+        let result = ImageData::from_base64("data:image/png,SGVsbG8=");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("base64"),
+            "Error should mention missing base64 encoding: {}",
             err
         );
     }

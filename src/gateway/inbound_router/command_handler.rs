@@ -42,8 +42,8 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 }
 
 /// Serialize a `ParsedCommand` directly into the slash-command mode JSON used
-/// by `ExecutionEngine` fast path. Preserves source-specific fields that the
-/// `IntentResult::DirectTool` round-trip drops:
+/// by `ExecutionEngine` fast path. Preserves source-specific fields per
+/// command kind:
 /// * `Skill` — `skill_id`, `instructions`, `allowed_tools`, `display_name`
 /// * `Custom` — `system_prompt`, `pattern`, `tool_id`
 /// * `Mcp`   — `server_name`, `tool_name`
@@ -53,7 +53,6 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// skill instructions were silently dropped.
 pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Option<String> {
     use crate::command::CommandContext;
-    use crate::intent::DirectToolSource;
 
     let args = parsed.arguments.as_deref().unwrap_or("");
     let value = match &parsed.context {
@@ -69,7 +68,7 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
             "instructions": instructions,
             "allowed_tools": allowed_tools,
             "args": args,
-            "source": DirectToolSource::Skill.as_str(),
+            "source": "skill",
         }),
         CommandContext::Custom {
             system_prompt,
@@ -82,7 +81,7 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
             "provider": provider,
             "pattern": pattern,
             "args": args,
-            "source": DirectToolSource::Custom.as_str(),
+            "source": "custom",
         }),
         CommandContext::Mcp {
             server_name,
@@ -92,19 +91,19 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
             "server_name": server_name,
             "tool_name": tool_name,
             "args": args,
-            "source": DirectToolSource::Mcp.as_str(),
+            "source": "mcp",
         }),
         CommandContext::Builtin { tool_name } => serde_json::json!({
             "type": "direct_tool",
             "tool_id": tool_name,
             "args": args,
-            "source": DirectToolSource::SlashCommand.as_str(),
+            "source": "slash_command",
         }),
         CommandContext::None => serde_json::json!({
             "type": "direct_tool",
             "tool_id": parsed.command_name,
             "args": args,
-            "source": DirectToolSource::SlashCommand.as_str(),
+            "source": "slash_command",
         }),
     };
     serde_json::to_string(&value).ok()

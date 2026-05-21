@@ -83,7 +83,9 @@ fn validate_scheme(url: &Url) -> Result<(), SsrfError> {
 
 /// Returns true if two URLs have different origins (scheme + host + port).
 fn is_cross_origin(a: &Url, b: &Url) -> bool {
-    a.scheme() != b.scheme() || a.host_str() != b.host_str() || a.port() != b.port()
+    a.scheme() != b.scheme()
+        || a.host_str() != b.host_str()
+        || a.port_or_known_default() != b.port_or_known_default()
 }
 
 /// Performs all pre-flight SSRF validation on a URL: scheme, legacy IP, credentials,
@@ -390,6 +392,17 @@ mod tests {
         let a = Url::parse("https://example.com/a").unwrap();
         let b = Url::parse("https://example.com/b").unwrap();
         assert!(!is_cross_origin(&a, &b));
+    }
+
+    #[test]
+    fn same_origin_with_explicit_default_port() {
+        let a = Url::parse("https://example.com").unwrap();
+        let b = Url::parse("https://example.com:443").unwrap();
+        assert!(!is_cross_origin(&a, &b), "explicit default port should be same origin");
+
+        let c = Url::parse("http://example.com").unwrap();
+        let d = Url::parse("http://example.com:80").unwrap();
+        assert!(!is_cross_origin(&c, &d), "explicit default port should be same origin");
     }
 
     #[test]

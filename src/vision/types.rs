@@ -73,8 +73,15 @@ pub struct Rect {
 }
 
 impl Rect {
-    /// Create a new Rect, validating that width and height are non-negative and finite.
+    /// Create a new Rect, validating that all coordinates are finite and
+    /// width/height are non-negative.
     pub fn new(x: f64, y: f64, width: f64, height: f64) -> Result<Self, &'static str> {
+        if !x.is_finite() {
+            return Err("x must be finite");
+        }
+        if !y.is_finite() {
+            return Err("y must be finite");
+        }
         if !width.is_finite() {
             return Err("width must be finite");
         }

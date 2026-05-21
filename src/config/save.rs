@@ -37,8 +37,7 @@ impl Config {
         // If the file already exists with providers but we're about to write empty,
         // refuse the save and log a backtrace to catch the culprit.
         if path.exists() {
-            let embed_count = self.memory.embedding.providers.len();
-            if embed_count == 0 {
+            if self.memory.embedding.providers.is_empty() {
                 // Check if the on-disk version has providers
                 if let Ok(existing) = fs::read_to_string(path) {
                     if existing.contains("[[memory.embedding.providers]]") {

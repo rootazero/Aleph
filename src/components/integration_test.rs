@@ -90,6 +90,7 @@ mod tests {
             started_at: chrono::Utc::now().timestamp_millis() - 100,
             completed_at: chrono::Utc::now().timestamp_millis(),
             token_usage: TokenUsage::default(),
+            plan_step_id: None,
             session_id: None,
         }
     }
@@ -714,11 +715,12 @@ mod tests {
         let completion1 = AlephEvent::ToolCallCompleted(ToolCallResult {
             call_id: "call-1".to_string(),
             tool: "search".to_string(),
-            input: serde_json::json!({}),
-            output: "Found files".to_string(),
+            input: serde_json::json!({"query": "test"}),
+            output: "results".to_string(),
             started_at: 1000,
             completed_at: 2000,
             token_usage: TokenUsage::default(),
+            plan_step_id: None,
             session_id: None,
         });
 

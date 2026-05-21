@@ -244,13 +244,28 @@ impl ScopedToolService {
         self.allowed.is_empty() || self.allowed.contains(name)
     }
 
+    /// Build `ToolDefinitionMetadata` for a built-in loop tool from the
+    /// static budget + idempotency tables — the same data
+    /// `BuiltinHandler::definition()` surfaces through the handler path.
+    /// `ScopedToolService` is the harness's production `ToolService`, so
+    /// without this the per-tool wall-clock budget consulted by `act.rs`
+    /// via `describe()` would always be `None` and never fire.
+    fn builtin_metadata(name: &str) -> ToolDefinitionMetadata {
+        ToolDefinitionMetadata {
+            idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
+            max_duration_ms: crate::tools::budget::builtin_tool_budget_ms(name),
+            ..ToolDefinitionMetadata::default()
+        }
+    }
+
     fn loop_tool_to_definition(tool: &dyn LoopTool) -> ToolDefinition {
+        let name = tool.name();
         ToolDefinition {
-            name: tool.name().to_string(),
+            name: name.to_string(),
             description: tool.description().to_string(),
             input_schema: tool.schema(),
             source: ToolSource::Builtin,
-            metadata: ToolDefinitionMetadata::default(),
+            metadata: Self::builtin_metadata(name),
         }
     }
 
@@ -320,12 +335,15 @@ impl ToolService for ScopedToolService {
             .inner
             .tool_definitions()
             .into_iter()
-            .map(|d| ToolDefinition {
-                name: d.name,
-                description: d.description,
-                input_schema: d.parameters,
-                source: ToolSource::Builtin,
-                metadata: ToolDefinitionMetadata::default(),
+            .map(|d| {
+                let metadata = Self::builtin_metadata(&d.name);
+                ToolDefinition {
+                    name: d.name,
+                    description: d.description,
+                    input_schema: d.parameters,
+                    source: ToolSource::Builtin,
+                    metadata,
+                }
             })
             .collect();
 
@@ -423,12 +441,15 @@ impl ToolService for ScopedToolService {
             .inner
             .tool_definitions()
             .into_iter()
-            .map(|d| ToolDefinition {
-                name: d.name,
-                description: d.description,
-                input_schema: d.parameters,
-                source: ToolSource::Builtin,
-                metadata: ToolDefinitionMetadata::default(),
+            .map(|d| {
+                let metadata = Self::builtin_metadata(&d.name);
+                ToolDefinition {
+                    name: d.name,
+                    description: d.description,
+                    input_schema: d.parameters,
+                    source: ToolSource::Builtin,
+                    metadata,
+                }
             })
             .collect();
         if let Some(ref st) = self.subagent_tool {
@@ -1565,5 +1586,35 @@ mod tests {
             names2.contains(&"dead"),
             "after invalidation, dead reappears; got: {names2:?}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // CRITICAL-1 — describe() populates per-tool budget + idempotency metadata
+    // from the static tables, so the harness's per-tool wall-clock budget can
+    // actually fire (it was always `None` while metadata was hardcoded default).
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn describe_populates_builtin_budget_metadata() {
+        // `memory_search` is in both BUILTIN_TOOL_BUDGETS_MS (5_000ms) and
+        // IDEMPOTENT_BUILTIN_TOOLS.
+        let registry = make_registry(&["memory_search"]);
+        let svc = ScopedToolService::new(registry, BTreeSet::new());
+        let def = svc.describe("memory_search").await.expect("tool present");
+        assert_eq!(def.metadata.max_duration_ms, Some(5_000));
+        assert!(def.metadata.idempotent);
+    }
+
+    #[tokio::test]
+    async fn describe_leaves_metadata_default_for_unbudgeted_tool() {
+        // A tool absent from both tables keeps the legacy `None` budget so it
+        // inherits the harness-wide turn_timeout fallback.
+        let registry = make_registry(&["some_custom_tool"]);
+        let svc = ScopedToolService::new(registry, BTreeSet::new());
+        let def = svc
+            .describe("some_custom_tool")
+            .await
+            .expect("tool present");
+        assert_eq!(def.metadata.max_duration_ms, None);
+        assert!(!def.metadata.idempotent);
     }
 }

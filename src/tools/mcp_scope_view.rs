@@ -73,10 +73,14 @@ impl ToolService for McpScopedToolService {
         if self.extras.is_empty() {
             return parent_schema;
         }
+        // Collect parent names so extras don't shadow existing tools.
+        let parent_names: std::collections::HashSet<String> =
+            parent_schema.iter().map(|t| t.name.clone()).collect();
         // Build extras defs and convert to dispatcher form, then merge.
         let extra_defs: Vec<ToolDefinition> = self
             .extras
             .iter()
+            .filter(|t| !parent_names.contains(&t.name))
             .map(|t| ToolDefinition {
                 name: t.name.clone(),
                 description: t.description.clone(),
@@ -87,6 +91,9 @@ impl ToolService for McpScopedToolService {
                 metadata: ToolDefinitionMetadata::default(),
             })
             .collect();
+        if extra_defs.is_empty() {
+            return parent_schema;
+        }
         let extra_schema = to_dispatcher_form(&extra_defs);
         let mut merged: Vec<crate::dispatcher::ToolDefinition> =
             parent_schema.iter().cloned().collect();

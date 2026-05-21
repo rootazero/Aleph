@@ -9,6 +9,7 @@ use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer}
 use super::prompt_mode::PromptMode;
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Cache hit/miss statistics for [`PromptPipeline::execute_cached`].
 #[derive(Debug, Clone, Default)]
@@ -27,7 +28,8 @@ pub struct CacheStats {
 pub struct PromptPipeline {
     layers: Vec<Box<dyn PromptLayer>>,
     cache: RwLock<HashMap<&'static str, String>>,
-    stats: RwLock<(u64, u64)>, // (hits, misses)
+    cache_hits: AtomicU64,
+    cache_misses: AtomicU64,
 }
 
 impl PromptPipeline {
@@ -37,7 +39,8 @@ impl PromptPipeline {
         Self {
             layers,
             cache: RwLock::new(HashMap::new()),
-            stats: RwLock::new((0, 0)),
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
         }
     }
 
@@ -304,18 +307,14 @@ impl PromptPipeline {
             if layer.stability() == LayerStability::Stable {
                 if let Some(cached) = cache.get(layer.name()) {
                     output.push_str(cached);
-                    if let Ok(mut s) = self.stats.write() {
-                        s.0 += 1;
-                    }
+                    self.cache_hits.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
             }
 
             let mut section = String::new();
             layer.inject(&mut section, input);
-            if let Ok(mut s) = self.stats.write() {
-                s.1 += 1;
-            }
+            self.cache_misses.fetch_add(1, Ordering::Relaxed);
 
             if layer.stability() == LayerStability::Stable && !section.is_empty() {
                 to_cache.push((layer.name(), section.clone()));
@@ -348,18 +347,16 @@ impl PromptPipeline {
         if let Ok(mut w) = self.cache.write() {
             w.clear();
         }
-        if let Ok(mut s) = self.stats.write() {
-            *s = (0, 0);
-        }
+        self.cache_hits.store(0, Ordering::Relaxed);
+        self.cache_misses.store(0, Ordering::Relaxed);
     }
 
     /// Cache hit/miss statistics.
     pub fn cache_stats(&self) -> CacheStats {
         let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
-        let stats = self.stats.read().unwrap_or_else(|e| e.into_inner());
         CacheStats {
-            hits: stats.0,
-            misses: stats.1,
+            hits: self.cache_hits.load(Ordering::Relaxed),
+            misses: self.cache_misses.load(Ordering::Relaxed),
             entries: cache.len(),
         }
     }

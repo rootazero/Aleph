@@ -242,6 +242,14 @@ impl PiiEngine {
                         result
                             .replace_range(detection.start..detection.end, &detection.placeholder);
                         blocked_count += 1;
+                    } else {
+                        warn!(
+                            rule = %detection.rule_name,
+                            start = detection.start,
+                            end = detection.end,
+                            text_len = result.len(),
+                            "PII match has invalid offsets, skipping replacement"
+                        );
                     }
                     warn!(
                         rule = %detection.rule_name,

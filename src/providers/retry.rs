@@ -169,7 +169,6 @@ where
 {
     let max_retries = max_retries.unwrap_or(DEFAULT_MAX_RETRIES);
     let mut attempt = 0;
-    let mut last_error = None;
 
     loop {
         attempt += 1;
@@ -199,7 +198,7 @@ where
                         error = ?error,
                         "Max retries exceeded, giving up"
                     );
-                    return Err(last_error.unwrap_or(error));
+                    return Err(error);
                 }
 
                 // Calculate backoff duration (exponential: 1s, 2s, 4s) with overflow protection
@@ -215,8 +214,6 @@ where
 
                 // Wait before retrying
                 tokio::time::sleep(backoff).await;
-
-                last_error = Some(error);
             }
         }
     }
@@ -244,7 +241,6 @@ where
     let multiplier = policy.backoff_multiplier;
 
     let mut attempt = 0;
-    let mut last_error = None;
 
     loop {
         attempt += 1;
@@ -274,7 +270,7 @@ where
                         error = ?error,
                         "Max retries exceeded per policy, giving up"
                     );
-                    return Err(last_error.unwrap_or(error));
+                    return Err(error);
                 }
 
                 // Calculate backoff duration using policy multiplier (with overflow protection)
@@ -291,8 +287,6 @@ where
 
                 // Wait before retrying
                 tokio::time::sleep(backoff).await;
-
-                last_error = Some(error);
             }
         }
     }

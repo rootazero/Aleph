@@ -358,6 +358,10 @@ pub enum GroupChatError {
     /// A persona definition is invalid.
     #[error("invalid persona: {0}")]
     InvalidPersona(String),
+
+    /// The session is not active (e.g., ended or paused).
+    #[error("session is not active: {0}")]
+    SessionInactive(String),
 }
 
 // =============================================================================

@@ -254,7 +254,6 @@ impl ExtensionManager {
         let plugin_dirs = self.collect_plugin_dirs()?;
 
         // Clear and rebuild registry
-        let mut mcp_configs: Vec<(String, McpServerConfig)> = Vec::new();
         {
             let mut registry = self.plugin_registry.write().await;
             registry.clear();
@@ -262,17 +261,6 @@ impl ExtensionManager {
             for dir_path in &plugin_dirs {
                 match self.adapter_registry.parse_dir(dir_path) {
                     Ok(output) => {
-                        // Collect MCP configs (no-op in CapabilityApi dispatch)
-                        for cap in &output.capabilities {
-                            if let crate::extension::capability::CapabilityDeclaration::McpServer(
-                                mcp,
-                            ) = cap
-                            {
-                                let server_name = output.plugin_id.clone();
-                                mcp_configs.push((server_name, mcp.clone()));
-                            }
-                        }
-
                         // Build plugin record from adapter output
                         let record = PluginRecord::from_adapter_output(&output, dir_path.clone());
                         let plugin_id = output.plugin_id.clone();
@@ -579,7 +567,11 @@ impl ExtensionManager {
 pub fn default_plugins_dir() -> std::path::PathBuf {
     crate::discovery::aleph_plugins_dir()
         .map(|p| p.join("installed"))
-        .unwrap_or_else(|_| std::path::PathBuf::from("~/.aleph/plugins/installed"))
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .map(|h| h.join(".aleph/plugins/installed"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".aleph/plugins/installed"))
+        })
 }
 
 // =============================================================================

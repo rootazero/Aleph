@@ -238,6 +238,7 @@ fn humanize_terminate(r: &TerminateReason) -> String {
         TerminateReason::VerifierVeto { vetos } => {
             format!("Verifier veto cap ({vetos})")
         }
+        TerminateReason::EmptyResponseExhausted => "Empty response from provider".into(),
         TerminateReason::Cancelled => "Cancelled".into(),
     }
 }

@@ -389,8 +389,8 @@ impl ChannelRegistry {
                     message.text.get(..50).unwrap_or(&message.text)
                 );
                 if let Err(e) = inbound_tx.send(message) {
-                    error!(error = ?e, "Failed to forward message");
-                    break;
+                    error!(error = ?e, "Failed to forward message — no subscribers, continuing");
+                    // Don't break: subscribers may join later
                 }
             }
 

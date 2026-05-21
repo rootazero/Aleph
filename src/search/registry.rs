@@ -112,11 +112,7 @@ impl SearchRegistry {
             }
         }
 
-        let summary = if errors.is_empty() {
-            "All search providers failed".to_string()
-        } else {
-            format!("All search providers failed: {}", errors.join("; "))
-        };
+        let summary = format!("All search providers failed: {}", errors.join("; "));
         Err(AlephError::provider(summary))
     }
 

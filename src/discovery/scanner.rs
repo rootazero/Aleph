@@ -160,6 +160,12 @@ impl DirectoryScanner {
                 component_name
             )));
         }
+        if component_name.contains("..") {
+            return Err(DiscoveryError::InvalidPath(format!(
+                "component name cannot contain parent directory references: {}",
+                component_name
+            )));
+        }
 
         let mut discovered = Vec::new();
         let scan_dirs = self.get_all_directories()?;

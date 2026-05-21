@@ -149,9 +149,16 @@ impl CacheContext {
         self.cache_expires_at = expires_at;
 
         // Check if content hash matches (cache still valid)
-        if let Some(existing_hash) = content_hash {
-            if existing_hash != self.content_hash {
-                // Content changed, invalidate cache
+        match content_hash {
+            Some(existing_hash) => {
+                if existing_hash != self.content_hash {
+                    // Content changed, invalidate cache
+                    self.existing_cache_name = None;
+                    self.cache_expires_at = None;
+                }
+            }
+            None => {
+                // No hash provided — cannot verify cache validity, invalidate
                 self.existing_cache_name = None;
                 self.cache_expires_at = None;
             }

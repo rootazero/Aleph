@@ -92,7 +92,8 @@ impl<S: NoteStore> NoteRetrieval<S> {
         // 3. Read markdown, parse frontmatter, compute final re-rank score
         let mut scored: Vec<NoteContent> = Vec::new();
         for (path, cosine) in results {
-            let file_path = self.memory_dir.join(agent_id).join(format!("{path}.md"));
+            let safe_path = path.replace("..", "").replace('\\', "/");
+            let file_path = self.memory_dir.join(agent_id).join(format!("{safe_path}.md"));
             let content = match tokio::fs::read_to_string(&file_path).await {
                 Ok(c) => c,
                 Err(_) => continue, // file missing on disk — skip gracefully

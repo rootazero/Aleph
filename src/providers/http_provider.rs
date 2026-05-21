@@ -118,7 +118,7 @@ impl HttpProvider {
             max_tokens: payload.max_tokens,
             tool_choice: payload.tool_choice.clone(),
             model: payload.model.clone(),
-            metadata: None,
+            metadata: payload.metadata.clone(),
         };
 
         // Extension hooks observe LLM provider traffic for cost metering.
@@ -214,7 +214,7 @@ impl HttpProvider {
             max_tokens: payload.max_tokens,
             tool_choice: payload.tool_choice.clone(),
             model: payload.model.clone(),
-            metadata: None,
+            metadata: payload.metadata.clone(),
         };
 
         // Extension hooks observe LLM provider traffic for cost metering.

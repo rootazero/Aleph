@@ -357,7 +357,7 @@ where
             Ok(val) => return Ok(val),
             Err(err) => {
                 let verdict = classify_error(&err);
-                let retries_left = max_retries as u32 - attempt;
+                let retries_left = max_retries.saturating_sub(attempt as usize);
 
                 match verdict {
                     RetryVerdict::Fatal

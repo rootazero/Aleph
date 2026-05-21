@@ -152,10 +152,16 @@ impl InboundMessageRouter {
         let channel = msg.channel_id.as_str();
 
         if msg.is_group {
-            // Group message -> isolate by conversation_id
-            SessionKey::peer(
+            // Group message -> isolate by conversation_id. Use the proper
+            // `Group` variant (matching `resolve_route`'s bound-route path)
+            // so a group chat is not mistyped as a DM and the zero-config
+            // fallback key agrees with the configured-binding key for the
+            // same conversation.
+            SessionKey::group(
                 agent_id,
-                format!("{}:group:{}", channel, msg.conversation_id.as_str()),
+                channel,
+                crate::routing::session_key::PeerKind::Group,
+                msg.conversation_id.as_str(),
             )
         } else {
             // DM -> based on dm_scope

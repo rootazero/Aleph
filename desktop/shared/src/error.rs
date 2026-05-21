@@ -33,6 +33,13 @@ pub enum DesktopError {
     #[error("bridge failed: {0}")]
     BridgeFailed(String),
 
+    /// The bridge accepted the request but did not reply within the
+    /// per-call deadline. The helper is left running; only this call fails.
+    /// Distinct from `BridgeFailed` so callers can surface "the desktop
+    /// helper is unresponsive" rather than a generic failure.
+    #[error("bridge timed out: {0}")]
+    BridgeTimeout(String),
+
     /// The bridge has been disabled after too many crashes inside the
     /// restart window. Callers should surface this explicitly rather than
     /// retrying.

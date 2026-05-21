@@ -32,8 +32,10 @@ pub struct SentRecord {
     pub sent_at: Instant,
 }
 
+const DEFAULT_MAX_TRACKED: usize = 10_000;
+
 /// Tracks sent messages for deduplication
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SentMessageTracker {
     /// Original sent texts
     sent_texts: Vec<String>,
@@ -41,12 +43,35 @@ pub struct SentMessageTracker {
     sent_normalized: HashSet<String>,
     /// Full records with metadata
     records: Vec<SentRecord>,
+    /// Maximum number of messages to track (oldest are evicted)
+    max_tracked: usize,
+}
+
+impl Default for SentMessageTracker {
+    fn default() -> Self {
+        Self {
+            sent_texts: Vec::new(),
+            sent_normalized: HashSet::new(),
+            records: Vec::new(),
+            max_tracked: DEFAULT_MAX_TRACKED,
+        }
+    }
 }
 
 impl SentMessageTracker {
     /// Create a new tracker
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a new tracker with a custom capacity limit
+    pub fn with_capacity(max_tracked: usize) -> Self {
+        Self {
+            sent_texts: Vec::new(),
+            sent_normalized: HashSet::new(),
+            records: Vec::new(),
+            max_tracked,
+        }
     }
 
     /// Check if text would be a duplicate
@@ -58,6 +83,14 @@ impl SentMessageTracker {
     /// Record a sent message
     pub fn record(&mut self, text: &str, channel: &str, user_id: Option<&str>) {
         let normalized = normalize_text(text);
+
+        // Evict oldest if at capacity
+        if self.sent_texts.len() >= self.max_tracked {
+            let evicted = self.sent_texts.remove(0);
+            let evicted_norm = normalize_text(&evicted);
+            self.sent_normalized.remove(&evicted_norm);
+            self.records.remove(0);
+        }
 
         self.sent_texts.push(text.to_string());
         self.sent_normalized.insert(normalized);

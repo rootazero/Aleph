@@ -96,6 +96,13 @@ impl SystemCapability for WindowsSystem {
                                 if title.to_lowercase().contains(&state.target.to_lowercase()) {
                                     let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
                                     state.found = true;
+                                    // Close only the first match and stop. Previously this
+                                    // returned 1 (continue), so it WM_CLOSE'd *every* window
+                                    // whose title contained the substring — e.g.
+                                    // quit_app("Word") would also close "Password Manager".
+                                    // NOTE: still a title-substring match; a precise fix
+                                    // matches the process executable name (Win32 follow-up).
+                                    return 0;
                                 }
                             }
                         }

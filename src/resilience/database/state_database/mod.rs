@@ -74,6 +74,8 @@ impl StateDatabase {
         .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
 
         // Run migrations (same as new()) so in-memory DBs have full schema
+        migration::migrate_add_experience_replays(&conn)?;
+        migration::migrate_task_traces_to_agent_trace(&conn)?;
         migration::migrate_add_channel_offsets(&conn)?;
         migration::migrate_add_paired_users(&conn)?;
         migration::migrate_add_sticker_descriptions(&conn)?;
@@ -359,10 +361,7 @@ impl StateDatabase {
         file_unique_id: &str,
         description: &str,
     ) -> Result<(), AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Database lock poisoned: {}", e)))?;
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO sticker_descriptions (file_unique_id, description, cached_at) VALUES (?1, ?2, datetime('now'))",
             [file_unique_id, description],
@@ -376,10 +375,7 @@ impl StateDatabase {
         &self,
         file_unique_id: &str,
     ) -> Result<Option<String>, AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Database lock poisoned: {}", e)))?;
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
                 "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",

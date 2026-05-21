@@ -285,7 +285,8 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
         // and pass its full content (frontmatter + body) to the embedder.
         if let Some(em) = &self.embedding_manager {
             for path in &report.touched_paths {
-                let file = self.memory_dir.join(agent_id).join(format!("{path}.md"));
+                let safe_path = path.replace("..", "").replace('\\', "/");
+                let file = self.memory_dir.join(agent_id).join(format!("{safe_path}.md"));
                 match tokio::fs::read_to_string(&file).await {
                     Ok(content) => {
                         em.push_pending(agent_id, path, &content).await;

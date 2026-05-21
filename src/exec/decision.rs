@@ -5,13 +5,13 @@ use super::analysis::{CommandAnalysis, CommandSegment};
 use super::config::{ExecAsk, ExecSecurity, ResolvedExecConfig};
 
 /// Default safe binaries (read-only operations)
-/// Default safe binaries (read-only operations)
-/// Note: xargs and tee are excluded because their behavior is entirely argument-dependent:
+/// Note: xargs, tee, and env are excluded because their behavior is entirely argument-dependent:
 /// - xargs can invoke any command (e.g., `xargs rm`)
 /// - tee can write to arbitrary files
+/// - env can execute arbitrary commands (e.g., `env rm -rf /`)
 pub const DEFAULT_SAFE_BINS: &[&str] = &[
     "jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc", "cat", "echo", "pwd", "ls",
-    "which", "env", "date", "true", "false", "test", "basename", "dirname", "realpath", "stat",
+    "which", "date", "true", "false", "test", "basename", "dirname", "realpath", "stat",
     "file", "diff", "comm", "seq", "printf",
 ];
 

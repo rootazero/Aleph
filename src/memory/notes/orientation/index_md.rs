@@ -91,9 +91,11 @@ impl IndexMdGenerator {
     }
 
     async fn summary_for(&self, entry: &NoteIndexEntry) -> Result<String, AlephError> {
+        let safe_cat = crate::memory::notes::sanitize_title(&entry.category)
+            .unwrap_or_else(|_| "other".to_string());
         let note_path = self
             .agent_dir
-            .join(&entry.category)
+            .join(&safe_cat)
             .join(format!("{}.md", entry.filename));
         if let Ok(raw) = tokio::fs::read_to_string(&note_path).await {
             if let Some(first_bullet) = first_body_bullet(&raw) {
