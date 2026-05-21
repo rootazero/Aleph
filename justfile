@@ -260,9 +260,11 @@ deps:
 
 # ─── Release ───
 
-# Release a new version: bump VERSION, commit, push, trigger workflow
-# CHANGELOG.md should be written by AI (Claude) BEFORE running this command.
-# Usage: just release 2026.03.29
+# Release a new version: bump VERSION, commit, push, trigger the app workflow.
+# Runs the workflow in publish mode — builds the three-platform desktop apps
+# and publishes a GitHub Release. CHANGELOG.md must be written by AI (Claude)
+# BEFORE running this command.
+# Usage: just release 26.5.21
 release version:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -287,8 +289,8 @@ release version:
     gh release delete "v${VERSION}" --yes 2>/dev/null || true
     git push origin ":refs/tags/v${VERSION}" 2>/dev/null || true
 
-    # Trigger workflow
-    gh workflow run aleph-server-release.yml
+    # Trigger the app build + publish workflow
+    gh workflow run aleph-app-release.yml --field publish=true
 
     echo ""
     echo "✓ Release v${VERSION} triggered!"

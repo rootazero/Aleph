@@ -3,11 +3,21 @@ name: Aleph Release
 # Manual trigger only — build from a tested, stable commit.
 # Version is read from the VERSION file in the repo root.
 #
+# The `publish` input selects the run mode:
+#   off (default) — build the three desktop apps and upload artifacts only
+#                   (CI verification: no tag, no GitHub Release).
+#   on            — also tag the commit and publish a GitHub Release.
+#
 # Aleph ships as a native desktop app per platform: the Tauri shell bundles
 # the `aleph-server` daemon (and, on macOS, the Swift bridge) inside the app.
 # There is no separate bash-script install path.
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Tag and publish a GitHub Release (off = build-only)"
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -98,9 +108,9 @@ jobs:
   release:
     name: Create Release
     needs: [desktop-app]
-    # Release whatever platforms succeeded — one platform's build failure
-    # must not block the others' installers from shipping.
-    if: ${{ !cancelled() }}
+    # Runs only when `publish` is on. `!cancelled()` (not `success()`) so one
+    # platform's build failure still ships the installers that did build.
+    if: ${{ !cancelled() && inputs.publish }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
