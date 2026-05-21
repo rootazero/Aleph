@@ -99,8 +99,11 @@ pub enum RunOutcome {
 A run is **interrupted** iff the session's event log ends with one or more
 `RunStarted` events and no `RunFinished` after the last one.
 
-`Timestamp` is the existing alias used by sibling variants (`now_ms()` /
-`u64` ms-since-epoch — match whatever `SessionForked`/`SessionWoken` use).
+`Timestamp` is the existing alias in `src/session/events.rs` (`type Timestamp =
+i64`, unix ms); `now_ms()` produces it. `RunOutcome` is `snake_case`-renamed
+to match the file's `#[serde(rename_all = "snake_case")]` enums. Note
+`SessionEvent` deliberately does **not** derive `PartialEq` — variant tests
+compare on the serialized JSON form.
 
 Both variants also need: a `state.rs` projection arm (no state mutation — they
 are pure markers, like `SessionWoken`), and a `store.rs` `event_type` string
@@ -123,10 +126,10 @@ holds the session service handle (it seeds the session). It emits:
 | `Err(Cancelled)`       | `Cancelled`          | `Cancelled`  |
 | `Err(_)` other         | (any)                | `Errored`    |
 
-The `run_id`: `RunRequest` already carries a `run_id` (minted by
-`SessionScheduler`). The orchestrator uses that value. If a code path reaches
-the orchestrator without a `run_id`, it generates a UUID — the marker pair only
-needs to be internally consistent, not globally unique forever.
+The `run_id` for the marker pair is generated locally in
+`AgentHarnessRunner::run` (a fresh `uuid::Uuid`). The orchestrator does not
+receive the gateway scheduler's `run_id`; the marker pair only needs to
+correlate within one session log, so a locally-minted UUID suffices.
 
 Because the orchestrator *always* emits `RunStarted` (including on each resume
 attempt), repeated crashes leave **N consecutive `RunStarted` events** — this
@@ -149,11 +152,14 @@ impl ResumeCoordinator {
 
 `resume_interrupted_runs` performs:
 
-1. **Scan.** Query the event store for sessions whose latest run marker is a
-   `RunStarted` with no following `RunFinished`. The existing
-   `(session_id, event_type)` index on `session_events` makes this an indexed
-   query over `event_type IN ('run_started','run_finished')`, grouped per
-   session. Sessions whose newest such event is `run_started` are candidates.
+1. **Scan.** The `SessionEventStore` trait is per-session only, so a new
+   cross-session method is added: `load_run_markers()` returns, per session,
+   that session's `RunStarted`/`RunFinished` events in seq order. Its SQL —
+   `SELECT session_id, seq, payload_json, created_at FROM session_events WHERE
+   event_type IN ('run_started','run_finished') ORDER BY session_id, seq` — is
+   served by the existing `(session_id, event_type)` index. The coordinator
+   groups by session; a session whose newest marker is `RunStarted` is an
+   interrupted-run candidate.
 
 2. **Recency filter.** A candidate whose dangling `RunStarted.at` is older than
    `resume.max_age_secs` is *not* resumed — emit `RunFinished{Abandoned}` for it
@@ -172,30 +178,39 @@ impl ResumeCoordinator {
    `tool_result`) and lets the LLM decide whether to retry. Repair is a pure
    event-log append — the harness is never touched.
 
-5. **Re-trigger.** Reconstruct the reply route from the `SessionKey` (it carries
-   `agent_id`, channel, peer) and hand the run to `SessionScheduler` through a
-   new `enqueue_resume(session_key, reply_route)` entry point. Routing resume
-   *through the scheduler* (rather than calling `ExecutionAdapter::execute`
-   directly) is deliberate: the scheduler is the per-session serialization
-   point — it sets `active_run_id`, so a message that arrives for the same
-   session during boot queues behind the resume instead of starting a second
-   parallel harness loop on one session. `enqueue_resume` reuses the scheduler's
-   existing run-spawn path (agent resolution, reply-emitter construction,
-   `SchedulerEventListener`); it differs from `enqueue` only in that it builds a
-   `RunRequest { resume: true, .. }` from the session key instead of from an
-   `EnrichedMessage`. A semaphore of `resume.max_concurrent` permits in the
-   `ResumeCoordinator` bounds the boot burst.
+5. **Re-trigger.** Mirror the existing system-initiated-run precedent —
+   `src/tasks/cron/executor.rs` and `src/tasks/heartbeat/executor.rs` both
+   start agent runs with no inbound chat message. Resolve the agent from
+   `AgentRegistry`, build a `RunRequest` with `metadata["resume"] = "true"`,
+   build an `EventEmitter` (a collecting emitter is sufficient — a resumed run's
+   terminal reply is delivered through the channel registry, reconstructed from
+   the `SessionKey`), and call `ExecutionAdapter::execute` directly. Cron and
+   heartbeat already bypass `SessionScheduler`, so a system-initiated run racing
+   an inbound message on the same session is a *pre-existing, accepted*
+   condition — resume needs no bespoke scheduler integration. A semaphore of
+   `resume.max_concurrent` permits in the `ResumeCoordinator` bounds the boot
+   burst.
 
 `ResumeReport` is a small struct (`scanned`, `resumed`, `abandoned`, `skipped`)
 for the boot log line and for tests.
 
-### 3.4 Orchestrator resume mode
+### 3.4 Resume mode — skip the seed
 
-`RunRequest` gains `resume: bool` (default `false`). In
-`AgentHarnessRunner::run()`, when `resume == true`:
+The resume signal rides `RunRequest.metadata["resume"] = "true"` — a new map
+entry, **not** a new struct field, so the ~18 existing `RunRequest`
+construction sites are untouched. At the execution-engine → orchestrator
+boundary (where a `RunRequest` becomes a `FlowInput`), when `metadata["resume"]`
+is set the engine produces a new `FlowInput::Resume` variant instead of
+`FlowInput::Prompt`.
 
-- **Skip the user-message seed.** The input is already a `UserMessage` event in
-  the log being replayed; re-seeding would duplicate it.
+`AgentHarnessRunner::run` then receives `FlowInput::Resume`:
+
+- `session_seed::seed_session` treats `Resume` as a **no-op** — the input is
+  already a `UserMessage` event in the log being replayed; re-seeding would
+  duplicate it.
+- `last_user_query` returns `""` for `Resume` (no retrieval query).
+- Every other exhaustive `match` on `FlowInput` (`flow_run_tool.rs`, the
+  `orchestrator/tests/dispatch.rs` fixtures) gets a `Resume` arm.
 - Everything else is identical — emit `RunStarted`, call `harness.run()` (which
   replays the repaired log and continues), emit `RunFinished`.
 
@@ -234,9 +249,10 @@ possibly a dangling `ToolCallRequested`.
 2. Recency + cap checks pass.
 3. Crash boundary repaired — synthetic `ToolError` appended for each dangling
    tool call.
-4. Reply route reconstructed from `SessionKey`; `RunRequest{resume:true}` built;
-   `ExecutionAdapter::execute` invoked.
-5. `AgentHarnessRunner::run()` (resume mode) skips seeding, emits a fresh
+4. `RunRequest` built with `metadata["resume"]="true"`; `ExecutionAdapter::execute`
+   invoked (cron-executor precedent).
+5. At the engine→orchestrator boundary `metadata["resume"]` becomes
+   `FlowInput::Resume`. `AgentHarnessRunner::run()` skips seeding, emits a fresh
    `RunStarted`, calls `harness.run()` — which replays the repaired log and
    continues the task.
 6. Run ends → `RunFinished`.
@@ -261,7 +277,8 @@ possibly a dangling `ToolCallRequested`.
 ## 6. Redline Compliance
 
 - **R3 (Core Minimalism):** no parallel persistence — two event variants on the
-  existing log, one new gateway module. No new table, no new store trait.
+  existing log, one new gateway module. No new table; one query method added to
+  the existing `SessionEventStore` trait (no new trait).
 - **R10 (Thin Harness):** `src/harness/` is not modified. The harness already
   replays; resume detection, boundary repair, and re-trigger all live in
   gateway/orchestrator code.
@@ -293,7 +310,7 @@ possibly a dangling `ToolCallRequested`.
 - Seed an event store with a complete interrupted run (user message, a turn, a
   dangling tool call, trailing `RunStarted`). Run `resume_interrupted_runs`
   against a mock `ExecutionAdapter`. Assert: the synthetic `ToolError` was
-  appended, and `execute` was called once with `RunRequest.resume == true`.
+  appended, and `execute` was called once with `metadata["resume"] == "true"`.
 - `resume.enabled = false` → coordinator never calls `execute`.
 
 ---
@@ -302,12 +319,15 @@ possibly a dangling `ToolCallRequested`.
 
 Approximately 7 implementation tasks:
 
-1. `RunStarted` / `RunFinished` / `RunOutcome` event variants + projection + store.
-2. `RunRequest.resume` field + orchestrator resume mode (skip seed).
+1. `RunStarted` / `RunFinished` / `RunOutcome` event variants + `state.rs`
+   projection + `store.rs` `event_type` strings.
+2. `FlowInput::Resume` variant + `seed_session` / `last_user_query` / other
+   exhaustive-match arms + engine→orchestrator `metadata["resume"]` conversion.
 3. Orchestrator emits `RunStarted` / `RunFinished` around `harness.run()`.
-4. `SessionScheduler::enqueue_resume` entry point (re-trigger through the scheduler).
-5. `ResumeCoordinator` — scan + recency + cap.
-6. `ResumeCoordinator` — crash-boundary repair + re-trigger + boot wiring + config.
+4. `SessionEventStore::load_run_markers()` cross-session query.
+5. `ResumeCoordinator` — scan + recency + cap + crash-boundary repair.
+6. `ResumeCoordinator` — re-trigger (cron-executor precedent) + boot wiring +
+   `[resume]` config section.
 7. Integration tests + audit.
 
 ---
