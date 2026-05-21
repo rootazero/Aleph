@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 
-use crate::agents::background_tracker::BackgroundAgentTracker;
+use crate::agents::background_tracker::{BackgroundAgentTracker, CompletedOutcome};
 use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
 use crate::agents::teammates::TeammateManager;
 use crate::agents::AgentDef;
@@ -58,6 +58,9 @@ pub(super) enum SubagentAction {
     },
     /// Read inbox messages.
     ReadInbox { team_name: String },
+    /// Enumerate every background sub-agent (running + recently-completed)
+    /// so the parent can recover request_ids it no longer holds.
+    List,
 }
 
 /// A single task within a batch execution.
@@ -334,9 +337,14 @@ impl SubagentTool {
                 .catch_unwind()
                 .await;
             let outcome = match result {
-                Ok(Ok(r)) => Ok(r.final_text.unwrap_or_else(|| "(no output)".to_string())),
-                Ok(Err(e)) => Err(e),
-                Err(_panic) => Err("Sub-agent panicked".to_string()),
+                Ok(Ok(r)) => CompletedOutcome::Ok {
+                    final_text: r.final_text.unwrap_or_else(|| "(no output)".to_string()),
+                    iterations: r.iterations,
+                    tool_calls_made: r.tool_calls_made,
+                    total_tokens: r.total_tokens,
+                },
+                Ok(Err(e)) => CompletedOutcome::Err(e),
+                Err(_panic) => CompletedOutcome::Err("Sub-agent panicked".to_string()),
             };
             tracker.mark_completed(&rid, outcome);
         });
@@ -447,10 +455,13 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                 .ok_or_else(|| "cancel requires 'request_id' field".to_string())?;
             return Ok(SubagentAction::Cancel(rid.to_string()));
         }
+        "list" => {
+            return Ok(SubagentAction::List);
+        }
         // "run" or "" (default) — fall through to legacy run/check_status logic
         "run" | "" => {}
         other => {
-            return Err(format!("unknown action '{other}'. Expected one of: run, check_status, cancel, send_message, read_inbox"));
+            return Err(format!("unknown action '{other}'. Expected one of: run, check_status, cancel, list, send_message, read_inbox"));
         }
     }
 
@@ -868,7 +879,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_status_completed() {
         let tracker = Arc::new(BackgroundAgentTracker::new());
-        tracker.mark_completed("test-id", Ok("the result".to_string()));
+        tracker.mark_completed("test-id", CompletedOutcome::ok_text("the result"));
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
         let chain = crate::harness::chain_context::ChainContext::new();
@@ -1343,6 +1354,128 @@ mod tests {
             }
             ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
             _ => panic!("expected ToolResult::Success"),
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // list action + non-destructive completed reads
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_args_list_action() {
+        let action = parse_args(&json!({ "action": "list" })).unwrap();
+        assert!(
+            matches!(action, SubagentAction::List),
+            "action=list must parse to SubagentAction::List"
+        );
+    }
+
+    /// `list` enumerates running and completed background sub-agents so the
+    /// parent can recover request_ids it no longer holds.
+    #[tokio::test]
+    async fn execute_list_enumerates_background_agents() {
+        let tracker = make_tracker();
+        let token = CancellationToken::new();
+        tracker.register("run-1".into(), token, "still going".into());
+        tracker.mark_completed("done-1", CompletedOutcome::ok_text("finished"));
+
+        let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tool = SubagentTool::new(
+            provider,
+            chain,
+            make_registry(),
+            tracker,
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        );
+
+        let result = tool.execute(json!({ "action": "list" })).await;
+        match result {
+            ToolResult::Success { output } => {
+                assert_eq!(output["running_count"], 1);
+                assert_eq!(output["completed_count"], 1);
+                assert_eq!(output["running"][0]["request_id"], "run-1");
+                assert_eq!(output["completed"][0]["request_id"], "done-1");
+                assert_eq!(output["completed"][0]["status"], "completed");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    /// Re-checking a completed background sub-agent must keep returning the
+    /// result — the read is non-destructive (regression: `take_result` used
+    /// to consume the entry, so the second poll said "not found").
+    #[tokio::test]
+    async fn check_status_completed_is_repeatable() {
+        let tracker = make_tracker();
+        tracker.mark_completed("rid", CompletedOutcome::ok_text("the answer"));
+
+        let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tool = SubagentTool::new(
+            provider,
+            chain,
+            make_registry(),
+            tracker,
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        );
+
+        for poll in 1..=2 {
+            let result = tool
+                .execute(json!({ "action": "check_status", "request_id": "rid" }))
+                .await;
+            match result {
+                ToolResult::Success { output } => {
+                    assert_eq!(output["status"], "completed", "poll {poll}");
+                    assert_eq!(output["result"], "the answer", "poll {poll}");
+                }
+                other => panic!("poll {poll}: expected Success, got {other:?}"),
+            }
+        }
+    }
+
+    /// Completed-agent `check_status` reports the same run metrics the
+    /// foreground spawn path returns (parity — background no longer drops
+    /// `iterations` / `tool_calls_made` / `total_tokens`).
+    #[tokio::test]
+    async fn check_status_completed_reports_run_metrics() {
+        let tracker = make_tracker();
+        tracker.mark_completed(
+            "rid",
+            CompletedOutcome::Ok {
+                final_text: "done".into(),
+                iterations: 4,
+                tool_calls_made: 9,
+                total_tokens: 555,
+            },
+        );
+
+        let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tool = SubagentTool::new(
+            provider,
+            chain,
+            make_registry(),
+            tracker,
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        );
+
+        let result = tool
+            .execute(json!({ "action": "check_status", "request_id": "rid" }))
+            .await;
+        match result {
+            ToolResult::Success { output } => {
+                assert_eq!(output["iterations"], 4);
+                assert_eq!(output["tool_calls_made"], 9);
+                assert_eq!(output["total_tokens"], 555);
+            }
+            other => panic!("expected Success, got {other:?}"),
         }
     }
 }
