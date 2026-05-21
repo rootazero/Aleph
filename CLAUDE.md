@@ -157,6 +157,7 @@
 | `just shell-build` | Build desktop App installers (.dmg/.msi/.deb，内置 aleph-server) |
 | `just test-all` | All tests (core + desktop + proptest) |
 | `just clippy` | Lint |
+| `just verify-build` | CI 验证三平台 App 能否正常构建（build-only，不打 tag、不发布） |
 | `just release YY.M.D` | **发版**: 更新 VERSION + 提交推送 + 触发 GitHub workflow（需先写 changelog） |
 
 > **分发形态**: Aleph 以三平台原生桌面 App 发布（macOS `.dmg` / Windows `.msi` / Linux `.deb`）。App 通过 Tauri `externalBin` 内置 `aleph-server` 守护进程，首次启动自动拉起并接管旧 daemon；不再提供 bash / PowerShell 脚本安装。
@@ -177,6 +178,8 @@
 2. **运行 `just release YY.M.D`** — 自动完成：版本号更新 + 提交推送 + 触发三平台桌面 App 构建（App 内置 `aleph-server`）
 
 `just release` 会校验 CHANGELOG.md 中是否有对应版本的条目，没有则拒绝发布。GitHub Release 页面自动从 CHANGELOG.md 提取版本日志。
+
+> **可选预检**：发布前可先跑 `just verify-build`，以 build-only 模式在 CI 上构建三平台 App（只构建 + 传 artifacts，不打 tag、不发布），确认三平台都能正常构建后再 `just release`。同一 workflow（`aleph-app-release.yml`）的 `publish` 输入：`off`=纯验证，`on`=`just release` 走的发布模式。
 
 ### Feature Flags
 
