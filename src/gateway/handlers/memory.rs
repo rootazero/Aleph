@@ -90,21 +90,60 @@ impl Default for SearchParams {
     }
 }
 
-/// Search raw memories (session summaries / conversation records).
+/// Search memory.
 ///
-/// Returns facts with `fact_source IN ('session_compressed', 'summary')`.
+/// With a non-empty `query`, runs a full-text (FTS5) search over the compiled
+/// knowledge notes and returns the matches. With an empty query, returns the
+/// most recent raw memories (dashboard view).
 ///
 /// # Example Request
 ///
 /// ```json
-/// {"jsonrpc":"2.0","method":"memory.search","params":{"limit":10},"id":1}
+/// {"jsonrpc":"2.0","method":"memory.search","params":{"query":"rust","limit":10},"id":1}
 /// ```
 pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+    use crate::memory::notes::store::NoteStore;
+
     let params: SearchParams = request
         .params
         .as_ref()
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
+
+    // A non-empty query runs a real full-text search over knowledge notes.
+    // Previously the `query` parameter was silently ignored.
+    let query = params.query.as_deref().map(str::trim).unwrap_or("");
+    if !query.is_empty() {
+        let agent_id = params
+            .agent_id
+            .as_deref()
+            .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+        return match db
+            .search_notes_fts(query, agent_id, params.limit as usize)
+            .await
+        {
+            Ok(notes) => {
+                let entries: Vec<MemoryEntry> = notes
+                    .into_iter()
+                    .map(|n| MemoryEntry {
+                        id: n.path.clone(),
+                        agent_id: n.agent_id,
+                        window_title: n.category,
+                        user_input: n.filename,
+                        ai_output: String::new(),
+                        timestamp: n.updated_at,
+                        similarity_score: None,
+                    })
+                    .collect();
+                JsonRpcResponse::success(request.id, json!({ "memories": entries }))
+            }
+            Err(e) => JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Note search failed: {}", e),
+            ),
+        };
+    }
 
     match db.get_raw_memories_dashboard(params.agent_id.as_deref(), params.limit as usize) {
         Ok(memories) => {
