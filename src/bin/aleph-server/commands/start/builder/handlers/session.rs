@@ -1,6 +1,5 @@
 use super::*;
 
-
 // ─── register_session_handlers ───────────────────────────────────────────────
 
 pub(in crate::commands::start) fn register_session_handlers(
@@ -230,4 +229,3 @@ pub(in crate::commands::start) fn register_channel_handlers(
 }
 
 // ─── setup_config_watcher ────────────────────────────────────────────────────
-

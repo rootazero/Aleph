@@ -58,5 +58,9 @@ pub fn KanbanBoard(
 }
 
 fn tasks_with_status(tasks: &[CoordTaskDto], status: &str) -> Vec<CoordTaskDto> {
-    tasks.iter().filter(|t| t.status == status).cloned().collect()
+    tasks
+        .iter()
+        .filter(|t| t.status == status)
+        .cloned()
+        .collect()
 }

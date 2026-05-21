@@ -163,4 +163,3 @@ pub(in crate::commands::start) fn register_group_chat_handlers(
 }
 
 // ─── register_agents_handlers ───────────────────────────────────────────────
-

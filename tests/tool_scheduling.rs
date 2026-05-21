@@ -8,9 +8,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alephcore::dispatcher::{
-    HealthReason, ProbeResult, ToolHealthCache, ToolHealthProbe,
-};
+use alephcore::dispatcher::{HealthReason, ProbeResult, ToolHealthCache, ToolHealthProbe};
 
 /// A probe that always reports the same canned result.
 struct CannedProbe(ProbeResult);

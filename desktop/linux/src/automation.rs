@@ -19,11 +19,7 @@ impl Default for LinuxAutomation {
 
 #[async_trait]
 impl AutomationCapability for LinuxAutomation {
-    async fn run_script(
-        &self,
-        language: ScriptLanguage,
-        source: &str,
-    ) -> Result<String> {
+    async fn run_script(&self, language: ScriptLanguage, source: &str) -> Result<String> {
         let source = source.to_string();
         match language {
             ScriptLanguage::Shell => {
@@ -115,7 +111,10 @@ mod tests {
     async fn test_applescript_not_implemented() {
         let auto = LinuxAutomation::new();
         let result = auto
-            .run_script(ScriptLanguage::AppleScript, "tell app \"Finder\" to activate")
+            .run_script(
+                ScriptLanguage::AppleScript,
+                "tell app \"Finder\" to activate",
+            )
             .await;
         assert!(matches!(result, Err(DesktopError::NotImplemented(_))));
     }

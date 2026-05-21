@@ -33,8 +33,7 @@ impl SystemCapability for WindowsSystem {
                 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
                 let operation: Vec<u16> = "open\0".encode_utf16().collect();
-                let file: Vec<u16> =
-                    app_name.encode_utf16().chain(std::iter::once(0)).collect();
+                let file: Vec<u16> = app_name.encode_utf16().chain(std::iter::once(0)).collect();
 
                 // SAFETY: ShellExecuteW is a well-documented Win32 API. PCWSTR points to valid null-terminated UTF-16.
                 let result = unsafe {
@@ -314,13 +313,11 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
                     }
                 };
 
-                let username =
-                    std::env::var("USERNAME").unwrap_or_else(|_| "unknown".to_string());
+                let username = std::env::var("USERNAME").unwrap_or_else(|_| "unknown".to_string());
 
                 Ok(SystemInfo {
                     os_name: "Windows".to_string(),
-                    os_version: std::env::var("OS")
-                        .unwrap_or_else(|_| "Windows NT".to_string()),
+                    os_version: std::env::var("OS").unwrap_or_else(|_| "Windows NT".to_string()),
                     hostname,
                     arch: std::env::consts::ARCH.to_string(),
                     username,

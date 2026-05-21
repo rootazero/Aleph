@@ -181,8 +181,8 @@ async fn subagent_base_carries_4_p1_fields() {
     // surfaces as a build error or a runtime panic on the inherited values
     // (e.g., a turn_timeout of 456s wraps every LLM call but the call
     // returns immediately, so the timeout never fires).
-    let agent_def = AgentDef::new("inherit-probe", AgentMode::SubAgent)
-        .with_allowed_tools(vec!["*".into()]);
+    let agent_def =
+        AgentDef::new("inherit-probe", AgentMode::SubAgent).with_allowed_tools(vec!["*".into()]);
     let req = SpawnRequest {
         agent_def: &agent_def,
         task: "noop",

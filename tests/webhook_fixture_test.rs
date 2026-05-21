@@ -1,4 +1,3 @@
-
 #[test]
 fn test_webhook_inbound_message_parsing() {
     let json_str = include_str!("fixtures/webhook/inbound_message.json");

@@ -508,10 +508,71 @@ and `profile_for` (5):
 |---|---|---|
 | ~~SP-2~~ | ~~Linux Landlock + seccomp-bpf~~ | **Shipped (2026-05-20)** as `aleph-server sandbox-init` subcommand invoked by bwrap. See "Linux defense-in-depth" below. |
 | ~~SP-3a~~ | ~~Windows RestrictedToken + Low IL~~ | **Shipped (2026-05-20)** via `sandbox-init-windows` subcommand using CreateRestrictedToken + SetTokenInformation. See "Current Windows defense surface" above. |
-| SP-3b | Windows WFP per-host network filtering | Requires admin for filter installation. Likely superseded by SP-6 (AppContainer's network capability model) for most use cases. |
+| SP-3b | Windows WFP per-host network filtering | Requires admin for filter installation. Likely superseded by SP-6 (AppContainer's network capability model) for most use cases. See "Network Filtering" below. |
 | ~~SP-4~~ | ~~Hostname-based filtering~~ | **Shipped (2026-05-20)** as workspace-layer DNS pre-resolution; macOS-scoped. See "Hostname support" below. |
 | ~~SP-5~~ | ~~cgroups v2 Linux memory + CPU~~ | **Shipped (2026-05-20)** as host-side `CgroupV2Scope` in `BubblewrapDriver::run`. See "Linux resource limits" below. |
 | ~~SP-6~~ | ~~Windows AppContainer~~ | **Shipped (2026-05-20)** as top tier of soft-degrade chain in sandbox-init-windows. See "Current Windows defense surface" above. |
+
+## Cycle 3 hardening (2026-05-21)
+
+Closes three follow-ups deferred from Cycle 2:
+
+### Full macOS SBPL platform defaults
+
+`src/sandbox/platforms/macos/seatbelt.rs` now ships the complete codex
+`restricted_read_only_platform_defaults.sbpl` (mach-lookups to logd /
+trustd / runningboard / analyticsd, IOSurface, system-mac-syscall,
+firmlink ancestors, terminal/PTY/dev handles, `/tmp` scratch space,
+opt-homebrew lib). The pre-Cycle-3 minimum SBPL passed sandbox-exec's
+parser but caused `/bin/echo` to SIGABRT before producing output; the
+new smoke test `echo_runs_inside_workspace_sandbox` pins that
+regression.
+
+### Windows protected-metadata DACL deny
+
+`launch_with_app_container` in `src/sandbox/windows_init.rs` now stamps
+`DENY_ACCESS` ACEs on every existing `<workspace>/{.git,.aleph,.codex,.agents}`
+subdirectory for the per-execution AppContainer SID, in addition to
+the Cycle 2 workspace `GRANT_ACCESS`. Because `SetEntriesInAclW`
+canonicalises ACL ordering (deny ACEs before allow), the metadata
+deny pins reads-but-no-writes/delete for the AppContainer even though
+the workspace root grant inherits `GENERIC_ALL` down to children. Mask
+is `GENERIC_WRITE | DELETE` — read stays allowed so `git log` / `git
+status` continue to work.
+
+### Network Filtering
+
+| Mode | macOS (Seatbelt) | Linux (bwrap) | Windows (AppContainer / token) |
+|---|---|---|---|
+| `None` | `(deny network*)` | `--unshare-net` + Cycle 3 seccomp deny `socket(AF_INET/INET6/NETLINK)` + `connect` | Token restricts; no inbound caps granted |
+| `AllowAll` | `(allow network*)` | shared netns | network capability granted |
+| `AllowHosts(ips)` | `(allow network-outbound (remote ip ...))` per IP | **Rejected** — pre-resolved IPs surfaced in error | **Rejected** — pre-resolved IPs surfaced in error |
+| `ProxyOnly` | `(allow ...)` for `localhost:<port>` | Rejected | Rejected |
+
+Cycle 3 lifted Linux closer to codex parity by adding seccomp-level
+socket-family deny for `None` mode (defense in depth on top of
+`--unshare-net`). Per-host enforcement for Linux + Windows is still
+deferred: every plausible mechanism requires either elevated
+privileges we don't hold (CAP_NET_ADMIN on Linux, SeChangeNotify /
+LocalSystem on Windows) or a managed proxy intercepting client
+traffic. The next-cycle work for true per-host filtering is:
+
+1. **Managed proxy mode**: ship a small in-process SOCKS / HTTP CONNECT
+   proxy bound to `127.0.0.1:<random>`, expose host+port through
+   `HTTP_PROXY` / `HTTPS_PROXY` env vars to the sandboxed target.
+   Enforces allowlist at the application protocol layer; bypassable
+   only by clients that ignore proxy env vars (rare in practice).
+2. **Linux nftables-in-user-netns**: drop into a user namespace where
+   the host process holds `CAP_NET_ADMIN` over the new netns, install
+   nftables rules allowing only the resolved IPs, then enter the
+   sandbox. Real kernel-level enforcement but adds rootless-network
+   plumbing (slirp4netns / pasta).
+
+Neither has a spec yet; until one ships, `AllowHosts` on Linux/Windows
+hard-fails with a rejection message that includes the exact
+pre-resolved IPs that would be allowed — callers can use this to plan
+around the gap or fall back to `AllowAll` + application-level filtering
+inside the workload.
 
 ## References
 

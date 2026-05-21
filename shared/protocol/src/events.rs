@@ -269,9 +269,14 @@ pub enum AgentTraceEvent {
         final_text: Option<String>,
     },
     /// Subagent worktree isolation primitive created (P3 Stage H).
-    WorktreeCreated { path: std::path::PathBuf },
+    WorktreeCreated {
+        path: std::path::PathBuf,
+    },
     /// Subagent worktree cleaned up (P3 Stage H).
-    WorktreeCleanedUp { path: std::path::PathBuf, leaked: bool },
+    WorktreeCleanedUp {
+        path: std::path::PathBuf,
+        leaked: bool,
+    },
     /// Per-agent MCP scope attached (P3 Stage I).
     McpScopeAttached {
         agent_id: String,
