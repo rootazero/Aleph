@@ -129,7 +129,7 @@ pub const SPECS: &[RuntimeSpec] = &[
             os: TargetOs::AnyOs,
             strategy: InstallStrategy::Via {
                 parent: "node",
-                subcommand: &["--", "npm", "install", "-g", "@playwright/cli@latest"],
+                subcommand: &["npm", "install", "-g", "@playwright/cli@latest"],
             },
         }],
         post_install: &[

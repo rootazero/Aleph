@@ -86,11 +86,16 @@ async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
     let version = text
         .lines()
         .filter_map(|l| {
-            l.split_whitespace()
-                .find(|t| t.starts_with('v'))
-                .map(String::from)
+            // Look for the default version marked with '*'
+            if l.trim().starts_with('*') {
+                l.split_whitespace()
+                    .find(|t| t.starts_with('v'))
+                    .map(String::from)
+            } else {
+                None
+            }
         })
-        .next_back()
+        .next()
         .ok_or(PostInstallError::NoNodeVersion)?;
     let output = Command::new("fnm")
         .args(["alias", &version, alias_name])
