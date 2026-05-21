@@ -139,14 +139,33 @@ impl BubblewrapDriver {
                 args.push("--unshare-net".into());
             }
             NetworkPolicy::AllowAll => {}
-            NetworkPolicy::AllowHosts(_) => {
+            NetworkPolicy::AllowHosts(hosts) => {
+                // Workspace pre-resolution (see `src/sandbox/dns.rs`) has
+                // already turned every hostname into an IP literal by the
+                // time we get here, so the rejection message can be
+                // precise about which IPs *would* be allowed if a
+                // future cycle wires per-host enforcement.
+                //
+                // Why not enforced yet: kernel-level per-IP egress
+                // filtering on Linux requires CAP_NET_ADMIN to install
+                // nftables rules inside the bwrap netns, which we don't
+                // hold in the host process. Landlock-net (kernel 6.7+)
+                // only filters by TCP port, not by IP, so it can't
+                // express this policy. A managed-proxy mode (with
+                // HTTP_PROXY env injection) is the most plausible
+                // single-cycle deliverable; tracked as deferred work.
+                let allowlist = hosts.join(", ");
                 return Err(SandboxError::UnsupportedPolicy {
                     platform: "linux/bwrap",
                     feature: "NetworkPolicy::AllowHosts".into(),
-                    reason: "bubblewrap offers only all-or-nothing network isolation; \
-                             per-host filtering requires Landlock+seccomp or iptables \
-                             (deferred to spec SP-2). Use AllowAll or None."
-                        .into(),
+                    reason: format!(
+                        "per-host egress filtering on Linux is not yet enforced. \
+                         Workspace pre-resolved the allowlist to [{allowlist}]; a future \
+                         cycle will land enforcement via a managed proxy or nftables \
+                         in a CAP_NET_ADMIN-capable user namespace. For now, use \
+                         AllowAll (unfiltered) or None (no network). Tracked in \
+                         docs/reference/SANDBOX.md § Network Filtering."
+                    ),
                 });
             }
             NetworkPolicy::ProxyOnly { .. } => {
@@ -729,8 +748,12 @@ mod tests {
     #[test]
     fn generate_args_allow_hosts_returns_unsupported() {
         let driver = BubblewrapDriver::new();
+        // By the time `generate_args` runs, workspace pre-resolution
+        // (`src/sandbox/dns.rs`) has already turned every hostname into
+        // an IP literal — we stuff an IP in here directly to match what
+        // the production pipeline would produce.
         let policy = SandboxPolicy {
-            network: NetworkPolicy::AllowHosts(vec!["example.com".into()]),
+            network: NetworkPolicy::AllowHosts(vec!["10.0.0.1".into(), "10.0.0.2".into()]),
             ..Default::default()
         };
         let cwd = Path::new("/tmp/ws");
@@ -745,7 +768,17 @@ mod tests {
             } => {
                 assert_eq!(platform, "linux/bwrap");
                 assert!(feature.contains("AllowHosts"));
-                assert!(reason.contains("Landlock") || reason.contains("iptables"));
+                // The rejection message must include each pre-resolved
+                // IP so callers can see exactly what would be enforced
+                // once the deferred work lands.
+                assert!(reason.contains("10.0.0.1"), "got: {reason}");
+                assert!(reason.contains("10.0.0.2"), "got: {reason}");
+                assert!(
+                    reason.contains("SANDBOX.md")
+                        || reason.contains("managed proxy")
+                        || reason.contains("nftables"),
+                    "rejection must point at the documented gap, got: {reason}"
+                );
             }
             other => panic!("expected UnsupportedPolicy, got {other:?}"),
         }
