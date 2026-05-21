@@ -1236,12 +1236,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // Start DreamDaemon with command handler so decay mutations are event-sourced.
         // Spec 5 Task 12: thread wiki handle into DreamDaemon for IndexRefresherStage.
+        // The embedder is required to build a DreamContext (SkillDistill stage).
         alephcore::memory::ensure_dream_daemon_with_orientation(
             memory_db.clone(),
             std::sync::Arc::new(app_config.memory.clone()),
             default_prov.clone(),
             command_handler,
             orientation.clone(),
+            embedder_out.clone(),
+            note_memory_dir.clone(),
         );
 
         // Create session compactor for intra-session context compression
