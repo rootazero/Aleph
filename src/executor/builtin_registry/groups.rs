@@ -70,6 +70,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "desktop_ax_query_focused",
             "desktop_ax_query_tree",
             "desktop_ax_query_by_role",
+            "desktop_ax_snapshot",
             "desktop_check_permissions",
             "self_manage",
             "read_config_guide",
@@ -171,6 +172,11 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         id: "acp",
         name: "外部代码 Agent",
         tools: &["acp_delegate", "acp_switch"],
+    },
+    ToolCategory {
+        id: "a2a",
+        name: "远程 A2A Agent",
+        tools: &["a2a_delegate", "a2a_agents"],
     },
     ToolCategory {
         id: "heartbeat",

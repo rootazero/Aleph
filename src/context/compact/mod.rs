@@ -8,6 +8,7 @@
 //! live-compaction framework.
 
 pub mod compactor;
+pub mod session_split;
 pub mod summary_utils;
 pub mod tool_aware_chunker;
 pub mod types;

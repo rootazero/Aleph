@@ -62,6 +62,13 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     security_store: Arc<alephcore::gateway::security::SecurityStore>,
+    // Gateway session-epoch registrar for compaction-driven session-split.
+    // `Some(gateway SessionManager)` in the SQLite boot path; `None` in
+    // tests or deployments without a gateway session store (split degrades
+    // to FinalReply in that case).
+    session_epoch_registrar: Option<
+        Arc<dyn alephcore::session::epoch_registrar::SessionEpochRegistrar>,
+    >,
 ) -> anyhow::Result<Arc<Orchestrator>> {
     // P2 Stage E: load user/project agent definitions from filesystem.
     // Shadow events (higher-tier overrides) are logged at info level; the
@@ -206,6 +213,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         memory_context_provider,
         memory_backend,
         dispatch_registry,
+        session_epoch_registrar,
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.

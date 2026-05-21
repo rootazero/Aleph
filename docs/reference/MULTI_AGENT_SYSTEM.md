@@ -29,13 +29,13 @@ through Orchestrator → AgentHarness.
 
 ## Mode Comparison
 
-| | Spawn | Delegate | Team |
-|---|---|---|---|
-| **Trigger** | LLM automatic | LLM automatic | User `/team` command |
-| **Tools** | `subagent_spawn/steer/kill` | `session_send` | 9 team tools (see below) |
-| **Lifecycle** | Ephemeral (destroyed on completion) | Persistent (agents exist independently) | Persistent (disband to end) |
-| **Relationship** | Vertical (parent → child) | Horizontal (peer ↔ peer) | Hierarchical (Leader → Members) |
-| **Communication** | Return value | Messages (fire-and-forget or wait) | Three-layer: Tasks + Messages + Sessions |
+| | Spawn | Delegate | Team | A2A |
+|---|---|---|---|---|
+| **Trigger** | LLM automatic | LLM automatic | User `/team` command | LLM automatic |
+| **Tools** | `subagent_spawn/steer/kill` | `session_send` | 9 team tools (see below) | `a2a_delegate`, `a2a_agents` |
+| **Lifecycle** | Ephemeral (destroyed on completion) | Persistent (agents exist independently) | Persistent (disband to end) | Per-call (one remote task) |
+| **Relationship** | Vertical (parent → child) | Horizontal (peer ↔ peer) | Hierarchical (Leader → Members) | Cross-process (Aleph → remote agent) |
+| **Communication** | Return value | Messages (fire-and-forget or wait) | Three-layer: Tasks + Messages + Sessions | A2A protocol over HTTP (JSON-RPC 2.0) |
 
 ## Mode 1: Spawn (Sub-Agent Dispatch)
 
@@ -357,6 +357,55 @@ pub enum TeamEventType {
 
 **Retention**: Active teams — events older than 72h pruned lazily (during `team_digest` generation or periodic cleanup). Disbanded teams — events older than 24h pruned. Used for `team_digest` generation.
 
+## Mode 4: A2A (Remote Agent Delegation)
+
+**Tools**: `a2a_delegate`, `a2a_agents`
+
+Modes 1–3 are all **in-process** — every agent runs inside the same
+`aleph-server`. Mode 4 reaches *outside* the process: it delegates a task to a
+**remote agent** that speaks the A2A protocol (Agent-to-Agent — JSON-RPC 2.0
+over HTTP, with Agent Card discovery).
+
+Aleph has always *served* A2A — it exposes its own Agent Card at
+`/.well-known/agent-card.json` and answers `message/send` / `tasks/*` on `/a2a`.
+Mode 4 wires the **outbound** half: Aleph as an A2A *client*. (Previously the
+outbound stack — `A2AClient`, `SmartRouter`, `A2ASubAgent` — was constructed at
+startup and immediately dropped; it was unreachable until these tools.)
+
+- **`a2a_agents`** — manage the set of known remote agents: `list` them,
+  `add` one by URL (its Agent Card is fetched so smart routing learns its
+  skills), or `remove` one. Remotes can also be pre-declared in the `[a2a]`
+  config section.
+- **`a2a_delegate`** — hand a self-contained task to a remote agent. The
+  `SmartRouter` (exact name → exact skill → LLM-semantic) picks the best
+  agent, or the caller pins one explicitly via the `agent` argument.
+
+**Runtime**: `a2a_delegate` → `A2ASubAgent::execute_delegation` → `SmartRouter`
+routing → `A2AClientPool` (pooled per-agent HTTP clients) → remote `/a2a`
+JSON-RPC. The outcome is also recorded as a `RawMemory(Delegation)` row so the
+parent agent's long-term memory can distil lessons from it.
+
+**When LLM uses it**: tasks better handled by a specialised external agent —
+another Aleph instance, a colleague's agent, or any A2A-compliant agent on
+another host.
+
+**Config**: A2A is off by default. Set `[a2a] enabled = true`; the `a2a_*`
+tools register only when it is enabled.
+
+### Outbound transport
+
+Outbound delegation is streaming-first: `a2a_delegate` POSTs to the remote
+agent's `/a2a/stream` (SSE) endpoint, consuming `status-update` /
+`artifact-update` events with a 90s idle-timeout for liveness and live
+progress notifications. A remote agent without a streaming route (non-Aleph
+A2A agents) is handled by a transparent fallback to the synchronous
+`message/send` endpoint.
+
+Config-declared agents (`[[a2a.agents]]`) start with a placeholder Agent Card.
+A one-shot background task at server startup fetches each agent's real Agent
+Card (skills, description, version) and replaces the placeholder, so smart
+routing and `a2a_agents list` see real skill data.
+
 ## Infrastructure: Autonomous Dispatcher
 
 The **`TeamDispatcher`** (`src/teams/dispatcher/`) drives a team's
@@ -412,6 +461,12 @@ the **`TeamNotifier`** routes them to the team leader's inbox (R5).
 | Tool | Description |
 |------|-------------|
 | `session_send` | Send message to another agent's session (fire-and-forget or wait) |
+
+### A2A (Remote Agents)
+| Tool | Description |
+|------|-------------|
+| `a2a_delegate` | Delegate a task to a remote agent over the A2A protocol (auto-routed, or pinned via `agent`) |
+| `a2a_agents` | List / add / remove the remote A2A agents Aleph can delegate to |
 
 ### Team — Layer 1 (Tasks & Coordination)
 | Tool | Description |

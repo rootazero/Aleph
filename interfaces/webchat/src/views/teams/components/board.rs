@@ -17,6 +17,7 @@ pub fn KanbanBoard(
     let in_progress = Signal::derive(move || tasks_with_status(&tasks.get(), "in_progress"));
     let completed = Signal::derive(move || tasks_with_status(&tasks.get(), "completed"));
     let failed = Signal::derive(move || tasks_with_status(&tasks.get(), "failed"));
+    let cancelled = Signal::derive(move || tasks_with_status(&tasks.get(), "cancelled"));
 
     let empty_label = move || t_string!(i18n, teams.kanban.empty_state.no_tasks).to_string();
 
@@ -50,6 +51,12 @@ pub fn KanbanBoard(
             <KanbanColumn
                 title=t_string!(i18n, teams.kanban.columns.failed).to_string()
                 tasks=failed
+                on_card_click=on_card_click
+                empty_label=empty_label()
+            />
+            <KanbanColumn
+                title=t_string!(i18n, teams.kanban.columns.cancelled).to_string()
+                tasks=cancelled
                 on_card_click=on_card_click
                 empty_label=empty_label()
             />

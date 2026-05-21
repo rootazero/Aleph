@@ -299,7 +299,7 @@ async fn act_executes_tools_sequentially() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -372,7 +372,7 @@ async fn act_tool_failure_returns_harness_tool_error() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -475,7 +475,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -647,7 +647,7 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -746,6 +746,7 @@ async fn tool_error_trace_carries_retryable_flag() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
     harness

@@ -78,6 +78,21 @@ pub struct ToolOutputMetadata {
     pub cost_cents: Option<u64>,
 }
 
+/// Terminal disposition of a harness run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunOutcome {
+    /// Run reached its natural end (model stop / final reply).
+    Completed,
+    /// Run was deliberately cancelled (user `/stop`). NOT resumed.
+    Cancelled,
+    /// Run ended with an error. NOT resumed (the error is in the log;
+    /// re-running would likely hit the same error).
+    Errored,
+    /// Resume gave up on this run — cap reached or too old. Terminal.
+    Abandoned,
+}
+
 // NOTE: `PartialEq` is intentionally omitted from `SessionEvent` because
 // `SessionIdentityMeta` (used by `SessionCreated`) does not implement it.
 // Tests that need comparison should compare on the serialized JSON form.
@@ -94,6 +109,18 @@ pub enum SessionEvent {
         prior_head: EventSeq,
     },
     SessionDetached {
+        at: Timestamp,
+    },
+
+    /// A harness run began on this session.
+    RunStarted {
+        run_id: String,
+        at: Timestamp,
+    },
+    /// A harness run reached a terminal state on this session.
+    RunFinished {
+        run_id: String,
+        outcome: RunOutcome,
         at: Timestamp,
     },
 
@@ -196,6 +223,14 @@ pub enum SessionEvent {
         at: Timestamp,
     },
 
+    /// Recorded as the first event of a child session created by
+    /// compaction-driven session-split. `parent_session_id` is the parent
+    /// session key string (`SessionKey::to_key_string()`).
+    SessionForked {
+        parent_session_id: String,
+        at: Timestamp,
+    },
+
     Error {
         turn_id: Option<TurnId>,
         kind: ErrorKind,
@@ -222,4 +257,69 @@ pub fn now_ms() -> Timestamp {
             tracing::warn!(error = %e, "System clock went backwards — returning 0");
             0
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_forked_event_round_trips_through_json() {
+        let event = SessionEvent::SessionForked {
+            parent_session_id: "agent:a/main:k:s2".to_string(),
+            at: 1_700_000_000_000,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: SessionEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            SessionEvent::SessionForked { parent_session_id, .. } => {
+                assert_eq!(parent_session_id, "agent:a/main:k:s2");
+            }
+            other => panic!("expected SessionForked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_started_serde_round_trips() {
+        let ev = SessionEvent::RunStarted {
+            run_id: "run-abc".into(),
+            at: 1_700_000_000_000,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: SessionEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        assert!(json.contains("\"type\":\"run_started\""));
+    }
+
+    #[test]
+    fn run_finished_serde_round_trips_each_outcome() {
+        for outcome in [
+            RunOutcome::Completed,
+            RunOutcome::Cancelled,
+            RunOutcome::Errored,
+            RunOutcome::Abandoned,
+        ] {
+            let ev = SessionEvent::RunFinished {
+                run_id: "run-xyz".into(),
+                outcome,
+                at: 1_700_000_000_000,
+            };
+            let json = serde_json::to_string(&ev).unwrap();
+            let back: SessionEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(serde_json::to_string(&back).unwrap(), json);
+            assert!(json.contains("\"type\":\"run_finished\""));
+        }
+    }
+
+    #[test]
+    fn run_outcome_renames_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&RunOutcome::Completed).unwrap(),
+            "\"completed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RunOutcome::Abandoned).unwrap(),
+            "\"abandoned\""
+        );
+    }
 }

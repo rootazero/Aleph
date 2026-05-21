@@ -89,6 +89,10 @@ pub enum LoopDirective {
     FinalReply,
     /// Diminishing returns detected — inject a notice and stop tool execution.
     StopDiminishing,
+    /// In-place compaction is not keeping pressure down — split the session:
+    /// continue the run in a fresh child session (epoch + 1) seeded with a
+    /// summary + fresh tail. See `context::compact::session_split`.
+    SplitSession,
 }
 
 // =============================================================================
@@ -129,6 +133,9 @@ pub struct ContextBudgetConfig {
     pub diminishing_window: usize,
     /// Minimum total output tokens in the window to be considered productive.
     pub diminishing_threshold: usize,
+    /// Max session-splits allowed in one run before a circuit-breaker trip
+    /// falls back to `FinalReply`. Default 3.
+    pub max_splits: usize,
 }
 
 // =============================================================================
@@ -226,6 +233,10 @@ pub struct ContextBudget {
     diminishing: DiminishingReturnsDetector,
     /// Last computed pressure snapshot, saved by `before_turn()`.
     last_pressure: Option<ContextPressure>,
+    /// Number of session splits that have already occurred in this run.
+    split_count: usize,
+    /// Maximum session splits allowed before the circuit-breaker trip falls back to FinalReply.
+    max_splits: usize,
 }
 
 impl ContextBudget {
@@ -243,6 +254,8 @@ impl ContextBudget {
                 config.diminishing_threshold,
             ),
             last_pressure: None,
+            split_count: 0,
+            max_splits: config.max_splits,
         }
     }
 
@@ -327,9 +340,18 @@ impl ContextBudget {
         if pressure.ratio >= self.warning_threshold {
             // Warning — compact, but check circuit breaker
             if self.circuit_breaker.record_compaction() {
+                if self.split_count < self.max_splits {
+                    tracing::warn!(
+                        target: "context_budget",
+                        split_count = self.split_count,
+                        "Compaction circuit breaker tripped — requesting session split"
+                    );
+                    return LoopDirective::SplitSession;
+                }
                 tracing::warn!(
                     target: "context_budget",
-                    "Compaction circuit breaker tripped — escalating to FinalReply"
+                    split_count = self.split_count,
+                    "Compaction circuit breaker tripped and split cap reached — escalating to FinalReply"
                 );
                 return LoopDirective::FinalReply;
             }
@@ -382,6 +404,13 @@ impl ContextBudget {
         self.last_pressure = Some(after);
     }
 
+    /// Record that a session-split completed. Increments the per-run split
+    /// counter; once it reaches `max_splits`, further breaker trips fall back
+    /// to `FinalReply`.
+    pub fn record_split(&mut self) {
+        self.split_count = self.split_count.saturating_add(1);
+    }
+
     /// Returns current pressure level based on last computed pressure.
     /// Call after before_turn() to get meaningful result.
     pub fn sense_pressure_level(&self) -> PressureLevel {
@@ -422,6 +451,7 @@ mod tests {
             circuit_breaker_max: 3,
             diminishing_window: 4,
             diminishing_threshold: 500,
+            max_splits: 3,
         }
     }
 
@@ -600,13 +630,14 @@ mod tests {
     }
 
     #[test]
-    fn test_before_turn_circuit_breaker_escalates_to_final_reply() {
+    fn test_before_turn_circuit_breaker_escalates_to_split_session() {
         let config = ContextBudgetConfig {
             token_budget: 1000,
             warning_threshold: 0.70,
             critical_threshold: 0.85,
             token_estimate_ratio: 1.0,
             circuit_breaker_max: 2,
+            max_splits: 3,
             ..default_config()
         };
         let mut budget = ContextBudget::new(&config);
@@ -615,7 +646,7 @@ mod tests {
         let d1 = budget.before_turn(&msgs, "", 0);
         assert_eq!(d1, LoopDirective::CompactAndContinue);
         let d2 = budget.before_turn(&msgs, "", 0);
-        assert_eq!(d2, LoopDirective::FinalReply); // breaker tripped on 2nd attempt
+        assert_eq!(d2, LoopDirective::SplitSession); // breaker tripped on 2nd attempt
     }
 
     #[test]
@@ -665,8 +696,9 @@ mod tests {
         );
         // Ineffective compaction: pressure barely moves → breaker not reset.
         budget.note_compaction_effect(&big, "", 0);
-        // Turn 2: warning again → breaker count = 2 → trips → FinalReply.
-        assert_eq!(budget.before_turn(&big, "", 0), LoopDirective::FinalReply);
+        // Turn 2: warning again → breaker count = 2 → trips. Under the split cap
+        // the trip escalates to SplitSession (vs CompactAndContinue when reset).
+        assert_eq!(budget.before_turn(&big, "", 0), LoopDirective::SplitSession);
     }
 
     #[test]
@@ -679,6 +711,59 @@ mod tests {
         let msgs = vec![UnifiedMessage::user("hello")];
         let directive = budget.before_turn(&msgs, "", 0);
         assert_eq!(directive, LoopDirective::FinalReply);
+    }
+
+    #[test]
+    fn circuit_breaker_trip_emits_split_session_when_under_cap() {
+        let mut cfg = default_config();
+        cfg.token_budget = 1000;
+        cfg.warning_threshold = 0.70;
+        cfg.critical_threshold = 0.85;
+        cfg.token_estimate_ratio = 1.0;
+        cfg.circuit_breaker_max = 2;
+        cfg.max_splits = 3;
+        let mut budget = ContextBudget::new(&cfg);
+        // 750 chars = 75% usage → Warning zone (token_estimate_ratio=1.0)
+        let msgs = vec![UnifiedMessage::user("x".repeat(750))];
+        let d1 = budget.before_turn(&msgs, "", 0);
+        assert_eq!(d1, LoopDirective::CompactAndContinue);
+        // 2nd call trips the breaker (circuit_breaker_max=2); split_count=0 < max_splits=3
+        let directive = budget.before_turn(&msgs, "", 0);
+        assert_eq!(
+            directive,
+            LoopDirective::SplitSession,
+            "first breaker trip under the split cap must request a session split",
+        );
+    }
+
+    #[test]
+    fn split_session_falls_back_to_final_reply_at_cap() {
+        let mut cfg = default_config();
+        cfg.token_budget = 1000;
+        cfg.warning_threshold = 0.70;
+        cfg.critical_threshold = 0.85;
+        cfg.token_estimate_ratio = 1.0;
+        cfg.circuit_breaker_max = 2;
+        cfg.max_splits = 1;
+        let mut budget = ContextBudget::new(&cfg);
+        let msgs = vec![UnifiedMessage::user("x".repeat(750))];
+        // Prime the breaker: first call → CompactAndContinue
+        budget.before_turn(&msgs, "", 0);
+        // Trip the breaker: split_count=0 < max_splits=1 → SplitSession
+        let first = budget.before_turn(&msgs, "", 0);
+        assert_eq!(first, LoopDirective::SplitSession);
+        budget.record_split(); // split_count → 1 == max_splits
+        // Re-prime: reset the consecutive counter so we can trip again cleanly
+        // (pressure is still in warning band; breaker consecutive_count is >= max after the trip)
+        // We need circuit_breaker_max more warning-band calls to trip again.
+        budget.before_turn(&msgs, "", 0); // consecutive_count = 1 (CompactAndContinue)
+        // Trip the breaker again: split_count=1 == max_splits=1 → FinalReply
+        let second = budget.before_turn(&msgs, "", 0);
+        assert_eq!(
+            second,
+            LoopDirective::FinalReply,
+            "once max_splits is reached, the breaker trip falls back to FinalReply",
+        );
     }
 
     #[test]

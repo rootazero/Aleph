@@ -60,6 +60,14 @@ pub trait SessionEventStore: Send + Sync + 'static {
 
     /// Return the highest seq stored for this session, or 0 if none.
     async fn load_head_seq(&self, session_id: &SessionId) -> Result<EventSeq, SessionError>;
+
+    /// Cross-session scan for resume detection. Returns, per session, that
+    /// session's `RunStarted` / `RunFinished` events in `seq` order.
+    /// Sessions with no run markers are omitted. Served by the existing
+    /// `(session_id, event_type)` index.
+    async fn load_run_markers(
+        &self,
+    ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError>;
 }
 
 /// Create the `session_events` table and its indexes if missing.
@@ -238,6 +246,53 @@ impl SessionEventStore for SqliteEventStore {
 
         Ok(max_seq.map(|v| v as EventSeq).unwrap_or(0))
     }
+
+    async fn load_run_markers(
+        &self,
+    ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id, seq, payload_json, created_at
+                 FROM session_events
+                 WHERE event_type IN ('run_started', 'run_finished')
+                 ORDER BY session_id, seq ASC",
+            )
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let session_id: String = row.get(0)?;
+                let seq: i64 = row.get(1)?;
+                let payload: String = row.get(2)?;
+                let created_at: i64 = row.get(3)?;
+                Ok((session_id, seq, payload, created_at))
+            })
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+        // Group consecutive rows by session_id. The SQL `ORDER BY
+        // session_id, seq` guarantees all of one session's markers are
+        // contiguous, so a running group key is enough — no HashMap.
+        let mut grouped: Vec<(SessionId, Vec<SessionEventRecord>)> = Vec::new();
+        for row in rows {
+            let (session_id_str, seq, payload, created_at) =
+                row.map_err(|e| SessionError::Storage(e.to_string()))?;
+            let session_id: SessionId = serde_json::from_str(&session_id_str)?;
+            let event: SessionEvent = serde_json::from_str(&payload)?;
+            let record = SessionEventRecord {
+                seq: seq as EventSeq,
+                event,
+                created_at_ms: created_at,
+            };
+            match grouped.last_mut() {
+                Some((sid, records)) if *sid == session_id => {
+                    records.push(record);
+                }
+                _ => grouped.push((session_id, vec![record])),
+            }
+        }
+        Ok(grouped)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +332,9 @@ fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         SessionEvent::SessionCreated { .. }
         | SessionEvent::SessionWoken { .. }
         | SessionEvent::SessionDetached { .. }
+        | SessionEvent::SessionForked { .. }
+        | SessionEvent::RunStarted { .. }
+        | SessionEvent::RunFinished { .. }
         | SessionEvent::CompactionPerformed { .. } => None,
     }
 }
@@ -290,6 +348,8 @@ fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::SessionCreated { .. } => "session_created",
         SessionEvent::SessionWoken { .. } => "session_woken",
         SessionEvent::SessionDetached { .. } => "session_detached",
+        SessionEvent::RunStarted { .. } => "run_started",
+        SessionEvent::RunFinished { .. } => "run_finished",
         SessionEvent::TurnStarted { .. } => "turn_started",
         SessionEvent::TurnEnded { .. } => "turn_ended",
         SessionEvent::UserMessage { .. } => "user_message",
@@ -306,6 +366,7 @@ fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::SubagentReturned { .. } => "subagent_returned",
         SessionEvent::BudgetUpdated { .. } => "budget_updated",
         SessionEvent::CompactionPerformed { .. } => "compaction_performed",
+        SessionEvent::SessionForked { .. } => "session_forked",
         SessionEvent::Error { .. } => "error",
     }
 }
@@ -415,6 +476,21 @@ mod tests {
         }
     }
 
+    fn run_started(run_id: &str, at: i64) -> SessionEvent {
+        SessionEvent::RunStarted {
+            run_id: run_id.to_string(),
+            at,
+        }
+    }
+
+    fn run_finished(run_id: &str, at: i64) -> SessionEvent {
+        SessionEvent::RunFinished {
+            run_id: run_id.to_string(),
+            outcome: crate::session::events::RunOutcome::Completed,
+            at,
+        }
+    }
+
     #[tokio::test]
     async fn append_and_load_preserves_order() {
         let store = make_store();
@@ -483,5 +559,59 @@ mod tests {
         store.append(&sid, 5, &e, at).await.unwrap();
 
         assert_eq!(store.load_head_seq(&sid).await.unwrap(), 5);
+    }
+
+    #[tokio::test]
+    async fn load_run_markers_empty_when_no_markers() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store.append(&sid, 1, &turn_started(tid, at), at).await.unwrap();
+        let markers = store.load_run_markers().await.unwrap();
+        assert!(markers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_run_markers_groups_by_session_in_seq_order() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        // Interleave a non-marker event between two markers.
+        store.append(&sid, 1, &run_started("r1", at), at).await.unwrap();
+        store.append(&sid, 2, &turn_started(tid, at), at).await.unwrap();
+        store
+            .append(&sid, 3, &run_finished("r1", at + 5), at + 5)
+            .await
+            .unwrap();
+        store
+            .append(&sid, 4, &run_started("r2", at + 10), at + 10)
+            .await
+            .unwrap();
+
+        let markers = store.load_run_markers().await.unwrap();
+        assert_eq!(markers.len(), 1, "exactly one session has markers");
+        let (got_sid, records) = &markers[0];
+        assert_eq!(*got_sid, sid);
+        assert_eq!(records.len(), 3, "3 markers, non-marker excluded");
+        assert_eq!(records[0].seq, 1);
+        assert_eq!(records[1].seq, 3);
+        assert_eq!(records[2].seq, 4);
+        assert!(matches!(records[0].event, SessionEvent::RunStarted { .. }));
+        assert!(matches!(records[1].event, SessionEvent::RunFinished { .. }));
+        assert!(matches!(records[2].event, SessionEvent::RunStarted { .. }));
+    }
+
+    #[tokio::test]
+    async fn load_run_markers_separates_distinct_sessions() {
+        let store = make_store();
+        let sid_a = SessionKey::ephemeral("sess-a");
+        let sid_b = SessionKey::ephemeral("sess-b");
+        let at = now_ms();
+        store.append(&sid_a, 1, &run_started("ra", at), at).await.unwrap();
+        store.append(&sid_b, 1, &run_started("rb", at), at).await.unwrap();
+        let markers = store.load_run_markers().await.unwrap();
+        assert_eq!(markers.len(), 2);
     }
 }

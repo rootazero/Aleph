@@ -93,25 +93,21 @@ See [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) for the ful
 
 ## Installation
 
-### macOS / Linux
+Aleph ships as a native desktop app. Download the installer for your platform
+from the [latest release](https://github.com/rootazero/Aleph/releases/latest):
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash
-```
+| Platform | Installer |
+|----------|-----------|
+| macOS    | `.dmg` |
+| Windows  | `.msi` |
+| Linux    | `.deb` / `.AppImage` |
 
-### Windows (PowerShell)
+The app bundles the `aleph-server` daemon — there is no separate install
+step. On first launch it starts the daemon, registers launch-at-login, and
+lives in the system tray so the assistant stays resident.
 
-```powershell
-irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex
-```
-
-The installer automatically detects your platform and architecture (x86_64 / ARM64), downloads the latest release binary, installs it to your PATH, and optionally sets up auto-start as a system service.
-
-After installation, run:
-
-```bash
-aleph
-```
+> Skills that need a Node.js / Python runtime: open
+> **Panel → Settings → Runtime** once to bootstrap them.
 
 ### Build from Source
 

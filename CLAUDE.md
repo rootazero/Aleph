@@ -153,13 +153,17 @@
 | `cargo test -p alephcore --lib` | Run core tests |
 | `just dev` | Dev server (rebuilds WASM first) |
 | `just build` | Release build (WASM + server) |
+| `just shell-dev` | Run the desktop App in dev mode |
+| `just shell-build` | Build desktop App installers (.dmg/.msi/.deb，内置 aleph-server) |
 | `just test-all` | All tests (core + desktop + proptest) |
 | `just clippy` | Lint |
-| `just release YYYY.MM.DD` | **发版**: 更新 VERSION + 提交推送 + 触发 GitHub workflow（需先写 changelog） |
+| `just release YY.M.D` | **发版**: 更新 VERSION + 提交推送 + 触发 GitHub workflow（需先写 changelog） |
+
+> **分发形态**: Aleph 以三平台原生桌面 App 发布（macOS `.dmg` / Windows `.msi` / Linux `.deb`）。App 通过 Tauri `externalBin` 内置 `aleph-server` 守护进程，首次启动自动拉起并接管旧 daemon；不再提供 bash / PowerShell 脚本安装。
 
 ### 版本管理
 
-- **CalVer (日历版本)** — 格式 `YYYY.MM.DD`（如 `2026.03.29`），每天最多发布一个版本
+- **CalVer (日历版本)** — 格式 `YY.M.D`（两位年，月/日不补零，如 `26.5.21`），每天最多发布一个版本。该格式同时是合法 semver 并满足 Windows MSI 版本约束，可直接作为桌面 App 的 bundle 版本
 - **VERSION 文件是唯一版本源** — `build.rs` 读取 VERSION → 注入 `ALEPH_VERSION` 环境变量 → 所有代码通过 `env!("ALEPH_VERSION")` 使用
 - **禁止** 在代码中硬编码版本号，使用 `env!("ALEPH_VERSION")` 代替 `env!("CARGO_PKG_VERSION")`
 - Panel System Info、Gateway 版本、MCP/ACP 协议版本、CLI --version 全部从 VERSION 文件读取
@@ -170,7 +174,7 @@
 **由 AI (Claude) 驱动的两步流程：**
 
 1. **AI 写版本日志** — 读取**上一个 release 版本到 HEAD 之间**的 git log（通过 `git log <上次release commit>..HEAD`），总结 10-20 条有价值的内容，分为 Added（新增功能）和 Fixed（修复）两个分类，写入 CHANGELOG.md
-2. **运行 `just release YYYY.MM.DD`** — 自动完成：版本号更新 + 提交推送 + 触发四平台构建
+2. **运行 `just release YY.M.D`** — 自动完成：版本号更新 + 提交推送 + 触发三平台桌面 App 构建（App 内置 `aleph-server`）
 
 `just release` 会校验 CHANGELOG.md 中是否有对应版本的条目，没有则拒绝发布。GitHub Release 页面自动从 CHANGELOG.md 提取版本日志。
 
@@ -250,6 +254,7 @@ Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构�
 | SKILL_TRIGGER_ENHANCEMENT.md | [docs/reference/SKILL_TRIGGER_ENHANCEMENT.md](docs/reference/SKILL_TRIGGER_ENHANCEMENT.md) |
 | WHATSAPP_ARCHITECTURE_DESIGN.md | [docs/reference/WHATSAPP_ARCHITECTURE_DESIGN.md](docs/reference/WHATSAPP_ARCHITECTURE_DESIGN.md) |
 | DESKTOP_BRIDGE.md | [docs/reference/DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) |
+| DESKTOP_SHELL.md | [docs/reference/DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) |
 
 ---
 

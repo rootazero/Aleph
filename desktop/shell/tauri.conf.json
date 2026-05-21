@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aleph",
+  "identifier": "ai.aleph.desktop",
+  "build": {
+    "frontendDist": "./splash"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [],
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/aleph-server"],
+    "category": "Productivity",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "Your resident AI assistant",
+    "longDescription": "Aleph desktop shell — a native window, system tray, and lifecycle host for the Aleph Panel, backed by the local aleph-server daemon."
+  },
+  "plugins": {}
+}

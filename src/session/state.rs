@@ -43,6 +43,16 @@ impl SessionState {
             SessionEvent::SessionDetached { .. } => {
                 // Detach is observational; no state mutation.
             }
+            SessionEvent::SessionForked { .. } => {
+                // Lineage metadata; no state mutation in parent.
+            }
+            SessionEvent::RunStarted { .. } => {
+                // Run markers are observational; resume detection scans the
+                // event log directly. No state mutation.
+            }
+            SessionEvent::RunFinished { .. } => {
+                // See RunStarted.
+            }
 
             SessionEvent::TurnStarted { turn_id, .. } => {
                 self.current_turn = Some(TurnState {
@@ -299,5 +309,24 @@ mod tests {
             at: now_ms(),
         });
         assert_eq!(s.tokens_used, 250);
+    }
+
+    #[test]
+    fn run_markers_are_no_op_projections() {
+        use crate::session::events::RunOutcome;
+        let mut s = SessionState::default();
+        let before_turns = s.completed_turns;
+        s.apply(&SessionEvent::RunStarted {
+            run_id: "run-1".into(),
+            at: now_ms(),
+        });
+        s.apply(&SessionEvent::RunFinished {
+            run_id: "run-1".into(),
+            outcome: RunOutcome::Completed,
+            at: now_ms(),
+        });
+        assert!(s.current_turn.is_none());
+        assert_eq!(s.completed_turns, before_turns);
+        assert_eq!(s.wake_count, 0);
     }
 }

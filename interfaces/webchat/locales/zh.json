@@ -1280,7 +1280,8 @@
         "blocked": "阻塞",
         "in_progress": "进行中",
         "completed": "已完成",
-        "failed": "失败"
+        "failed": "失败",
+        "cancelled": "已取消"
       },
       "empty_state": {
         "no_teams": "暂无团队。在对话中让助手创建一个。",
@@ -1292,13 +1293,42 @@
         "owner": "负责人",
         "priority": "优先级",
         "description": "描述",
-        "result": "结果"
+        "result": "结果",
+        "created": "创建于",
+        "started": "开始于",
+        "completed": "完成于",
+        "dependencies": "依赖"
       },
       "actions": {
         "start": "开始",
         "complete": "完成",
         "fail": "失败",
-        "cancel": "取消"
+        "cancel": "取消",
+        "new_task": "新建任务"
+      },
+      "search_placeholder": "按主题或负责人搜索…",
+      "form": {
+        "title": "新建任务",
+        "subject": "主题",
+        "subject_placeholder": "需要完成什么？",
+        "description": "描述",
+        "description_placeholder": "细节、验收标准…",
+        "owner": "负责人（agent id）",
+        "owner_placeholder": "可选",
+        "priority": "优先级",
+        "create": "创建",
+        "cancel": "取消",
+        "subject_required": "主题不能为空"
+      },
+      "error": {
+        "update_failed": "更新失败",
+        "create_failed": "创建失败"
+      },
+      "priority": {
+        "low": "低",
+        "normal": "普通",
+        "high": "高",
+        "critical": "紧急"
       }
     }
   }

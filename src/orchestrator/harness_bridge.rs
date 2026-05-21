@@ -150,6 +150,13 @@ pub struct AgentHarnessRunner {
     /// `ToolRuntimeStateLayer` @502. `None` in test/early-boot paths keeps
     /// `runtime_state_blocks` empty (the layer then renders nothing).
     pub dispatch_registry: Option<Arc<crate::dispatcher::ToolRegistry>>,
+
+    /// Gateway session-epoch registrar for compaction-driven session-split.
+    /// When `Some`, the harness can mint child sessions at the next epoch and
+    /// make them visible to epoch resolution. `None` degrades gracefully —
+    /// the split budget directive falls back to `FinalReply` (see `HarnessDeps`).
+    pub session_epoch_registrar:
+        Option<Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>>,
 }
 
 #[async_trait]
@@ -322,6 +329,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 .result_store
                 .clone()
                 .or_else(crate::tools::result_store::global_tool_result_store),
+            session_epoch_registrar: self.session_epoch_registrar.clone(),
         };
         // Stage 7 (#12): emit init-seam visibility before the harness
         // starts its Think→Act loop. Order mirrors HarnessDeps field
@@ -354,11 +362,75 @@ impl HarnessRunner for AgentHarnessRunner {
         // channel so downstream Gateway sinks see delta / tool_call cadence
         // equivalent to the retiring AgentLoop StreamingSink.
         let mut cb = callback::BroadcastCallback::new(events.clone());
+        // Resume run markers. `run_id` is a locally-minted UUID — the marker
+        // pair only needs to correlate within one session log, so the
+        // gateway scheduler's run id is not required here. A crash between
+        // these two emits leaves a trailing `RunStarted` with no
+        // `RunFinished`, which is exactly what `ResumeCoordinator` detects.
+        let run_marker_id = uuid::Uuid::new_v4().to_string();
+        if let Err(e) = self
+            .session_service
+            .emit_event(
+                &session_id,
+                SessionEvent::RunStarted {
+                    run_id: run_marker_id.clone(),
+                    at: crate::session::events::now_ms(),
+                },
+            )
+            .await
+        {
+            tracing::warn!(error = %e, "failed to emit RunStarted marker");
+        }
+
         let run_result = harness.run(&session_id, &mut cb, &cancel).await;
         // Flush the trace sink regardless of success or error (no-op when None).
         if let Some(sink) = trace_sink.as_ref() {
             sink.flush();
         }
+
+        // Session-split adoption: if the harness performed a compaction-driven
+        // split, `final_session_id()` returns the child session id. Adopt it
+        // BEFORE emitting `RunFinished` (and before all post-run reads) so the
+        // terminal run marker lands on the session the run actually finished
+        // on. `perform_session_split` already balanced the parent's markers
+        // (parent `RunFinished` + child `RunStarted`); this closes the child.
+        let session_id = match harness.final_session_id() {
+            Some(child) if child != session_id => {
+                tracing::info!(
+                    parent = ?session_id,
+                    child = ?child,
+                    "session-split: orchestrator adopting child session id"
+                );
+                child
+            }
+            _ => session_id,
+        };
+
+        // Classify the outcome BEFORE the `?` so `RunFinished` is emitted
+        // on the error path too. Ok → Completed; Cancelled → Cancelled;
+        // any other error → Errored.
+        let run_outcome = match &run_result {
+            Ok(()) => crate::session::events::RunOutcome::Completed,
+            Err(crate::harness::trait_def::HarnessError::Cancelled) => {
+                crate::session::events::RunOutcome::Cancelled
+            }
+            Err(_) => crate::session::events::RunOutcome::Errored,
+        };
+        if let Err(e) = self
+            .session_service
+            .emit_event(
+                &session_id,
+                SessionEvent::RunFinished {
+                    run_id: run_marker_id.clone(),
+                    outcome: run_outcome,
+                    at: crate::session::events::now_ms(),
+                },
+            )
+            .await
+        {
+            tracing::warn!(error = %e, "failed to emit RunFinished marker");
+        }
+
         run_result.map_err(|e| match e {
             crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
             other => error::classify_harness_error(other, &provider_name),
@@ -770,6 +842,7 @@ fn last_user_query(input: &FlowInput) -> String {
             .map(str::to_string)
             .unwrap_or_default(),
         FlowInput::History { prompt, .. } => prompt.clone(),
+        FlowInput::Resume => String::new(),
     }
 }
 

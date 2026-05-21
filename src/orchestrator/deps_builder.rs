@@ -247,6 +247,7 @@ pub fn build_context_budget_config(config: &Config) -> Option<ContextBudgetConfi
         circuit_breaker_max: 3,
         diminishing_window: 4,
         diminishing_threshold: 500,
+        max_splits: 3,
     })
 }
 

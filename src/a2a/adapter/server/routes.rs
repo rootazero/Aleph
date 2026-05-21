@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::sse::{Event, Sse};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use axum::Router;
@@ -198,7 +198,9 @@ async fn a2a_stream_handler(
         }
     });
 
-    Sse::new(sse_stream).into_response()
+    Sse::new(sse_stream)
+        .keep_alive(KeepAlive::new())
+        .into_response()
 }
 
 /// Build an SSE error response from a JsonRpcResponse
@@ -207,7 +209,9 @@ fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
     let stream = futures::stream::once(async move {
         Ok::<_, Infallible>(Event::default().event("error").data(json))
     });
-    Sse::new(stream).into_response()
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new())
+        .into_response()
 }
 
 // --- Helpers ---

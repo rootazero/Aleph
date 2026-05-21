@@ -61,6 +61,26 @@
   --color-chart-2:          oklch(0.58 0.120 130);
   --color-chart-3:          oklch(0.60 0.080 70);
   --color-chart-4:          oklch(0.50 0.030 220);
+
+  /* === Typography — deliberate SF / system stack === */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    system-ui, "Helvetica Neue", Arial, sans-serif;
+
+  /* === Motion — one converged ease-out curve, calm by default === */
+  --default-transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  --default-transition-duration:         180ms;
+  --ease-spring:                         cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* === Depth — soft, layered shadows in place of heavy borders === */
+  --shadow-xs: 0 1px 2px oklch(0.20 0.02 310 / 0.05);
+  --shadow-sm: 0 1px 2px oklch(0.20 0.02 310 / 0.05),
+               0 1px 3px oklch(0.20 0.02 310 / 0.06);
+  --shadow-md: 0 2px 4px oklch(0.20 0.02 310 / 0.05),
+               0 6px 16px oklch(0.20 0.02 310 / 0.09);
+  --shadow-lg: 0 4px 8px oklch(0.20 0.02 310 / 0.06),
+               0 16px 36px oklch(0.20 0.02 310 / 0.13);
+  --shadow-xl: 0 8px 16px oklch(0.20 0.02 310 / 0.08),
+               0 28px 60px oklch(0.20 0.02 310 / 0.18);
 }
 
 /* ============================================================
@@ -145,11 +165,57 @@
 }
 
 /* ============================================================
-   Global Transitions (smooth theme switching)
+   Translucent Theme — surfaces float on the OS vibrancy material.
+   Engages only inside the macOS shell, where a real material sits
+   behind the webview; elsewhere `.translucent` degrades silently to
+   the solid dark theme (no matching rules → no visual change).
+   ============================================================ */
+
+html.translucent[data-platform="macos"],
+html.translucent[data-platform="macos"] body {
+  background-color: transparent;
+}
+
+html.translucent[data-platform="macos"] {
+  --color-surface:          oklch(0.16 0.020 310 / 0);
+  --color-surface-raised:   oklch(0.22 0.018 310 / 0.55);
+  --color-surface-sunken:   oklch(0.13 0.015 310 / 0.40);
+  --color-surface-overlay:  oklch(0.20 0.020 310 / 0.80);
+  --color-sidebar:          oklch(0.14 0.025 310 / 0.34);
+  --color-sidebar-active:   oklch(0.30 0.035 310 / 0.60);
+  --color-border:           oklch(0.62 0.020 310 / 0.16);
+  --color-border-subtle:    oklch(0.62 0.018 310 / 0.10);
+  --color-border-strong:    oklch(0.66 0.022 310 / 0.30);
+}
+
+/* ============================================================
+   Shell Adaptation — leave room for the macOS overlay traffic
+   lights when the Panel is hosted inside the desktop shell.
+   ============================================================ */
+
+html[data-platform="macos"] .app-titlebar {
+  padding-left: 5.25rem;
+}
+
+/* ============================================================
+   Global Transitions & Motion
    ============================================================ */
 
 :root {
-  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  transition: background-color 0.22s var(--ease-spring),
+    color 0.22s var(--ease-spring), border-color 0.22s var(--ease-spring);
+}
+
+/* Respect the user's reduced-motion preference everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ── Markdown prose ────────────────────────────────────── */

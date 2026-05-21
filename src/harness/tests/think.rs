@@ -261,7 +261,7 @@ async fn think_with_no_tool_use_returns_done() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -317,7 +317,7 @@ async fn think_llm_error_maps_to_harness_llm() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -357,7 +357,7 @@ async fn primary_transient_error_without_fallback_still_propagates() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
     let err = harness
@@ -442,7 +442,7 @@ async fn callback_fires_on_delta_and_tool_call() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
     let mut cb = CapturingCallback::default();
@@ -508,7 +508,7 @@ async fn run_returns_cancelled_when_token_is_pre_cancelled() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -577,7 +577,7 @@ async fn think_tool_use_after_act_returns_continue() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-
+        session_epoch_registrar: None,
     };
     let harness = AgentHarness::new(deps);
 

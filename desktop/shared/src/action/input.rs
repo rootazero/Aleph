@@ -298,9 +298,10 @@ pub fn clipboard_read() -> Result<String> {
 
     #[cfg(target_os = "windows")]
     {
-        Err(DesktopError::NotImplemented(
-            "clipboard_read not yet implemented for Windows".into(),
-        ))
+        use clipboard_win::{formats, get_clipboard};
+
+        get_clipboard::<String, _>(formats::Unicode)
+            .map_err(|e| DesktopError::InputFailed(format!("Failed to read clipboard: {e}")))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -361,10 +362,12 @@ pub fn clipboard_write(text: &str) -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        let _ = text;
-        Err(DesktopError::NotImplemented(
-            "clipboard_write not yet implemented for Windows".into(),
-        ))
+        use clipboard_win::{formats, set_clipboard};
+
+        set_clipboard(formats::Unicode, text)
+            .map_err(|e| DesktopError::InputFailed(format!("Failed to write clipboard: {e}")))?;
+        info!("Clipboard write performed");
+        Ok(())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

@@ -181,6 +181,12 @@ pub(in crate::commands::start) fn register_teams_handlers(
     );
     register_handler!(
         server,
+        "teams.create_task",
+        teams::handle_create_task,
+        coord_store
+    );
+    register_handler!(
+        server,
         "teams.update_task",
         teams::handle_update_task,
         coord_store

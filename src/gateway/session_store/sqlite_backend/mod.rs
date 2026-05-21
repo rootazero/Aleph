@@ -498,3 +498,67 @@ impl SessionStore for SessionManager {
         self.set_running(key).await.map_err(map_err)
     }
 }
+
+#[async_trait]
+impl crate::session::epoch_registrar::SessionEpochRegistrar for SessionManager {
+    async fn register_epoch(
+        &self,
+        key: &crate::session::service::SessionId,
+    ) -> anyhow::Result<()> {
+        self.get_or_create(key)
+            .await
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("register_epoch: get_or_create failed: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn test_store(temp: &tempfile::TempDir) -> SessionManager {
+        let config = SqliteSessionStoreConfig {
+            db_path: temp.path().join("test_sessions.db"),
+            ..Default::default()
+        };
+        SessionManager::new(config).expect("test session store")
+    }
+
+    #[tokio::test]
+    async fn register_epoch_registers_child_session_row() {
+        use crate::routing::session_key::SessionKey;
+        use crate::session::epoch_registrar::SessionEpochRegistrar;
+
+        let temp = tempdir().unwrap();
+        let store = test_store(&temp);
+
+        let base = SessionKey::Main {
+            agent_id: "a".into(),
+            main_key: "k".into(),
+            epoch: 0,
+        };
+        store.get_or_create(&base).await.unwrap();
+
+        let child = base.with_next_epoch(); // epoch 1
+        assert_eq!(child.epoch(), 1);
+
+        // Before registration the child generation does not exist.
+        assert!(
+            store.get_metadata(&child).await.unwrap().is_none(),
+            "child session must not exist before register_epoch"
+        );
+
+        store.register_epoch(&child).await.unwrap();
+
+        // register_epoch must have created the child row (it delegates to
+        // get_or_create). Assert directly via a metadata lookup — no reliance
+        // on get_current_epoch ordering.
+        let meta = store
+            .get_metadata(&child)
+            .await
+            .unwrap()
+            .expect("register_epoch must create the child session row");
+        assert_eq!(meta.key, child.to_key_string());
+    }
+}

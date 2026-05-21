@@ -4,6 +4,7 @@
 mod ax;
 mod native;
 mod perm;
+mod safety;
 pub mod session_lock;
 mod types;
 
@@ -12,7 +13,8 @@ mod tests;
 
 pub use ax::{
     DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
-    DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs,
+    DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopAxSnapshot,
+    DesktopAxSnapshotArgs,
 };
 pub use perm::{DesktopCheckPermissions, DesktopCheckPermissionsArgs};
 pub use types::{DesktopArgs, DesktopOutput};
@@ -97,7 +99,15 @@ impl DesktopTool {
                     .escape_started
                     .load(crate::sync_primitives::Ordering::Acquire)
                 {
-                    let _ = listener.start();
+                    // A failed start means the Escape abort hotkey is
+                    // unavailable — log it once (the flag is still set below so
+                    // we do not retry on every action).
+                    if let Err(e) = listener.start() {
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to start desktop escape listener; abort hotkey unavailable"
+                        );
+                    }
                     self.escape_started
                         .store(true, crate::sync_primitives::Ordering::Release);
                 }
@@ -182,14 +192,25 @@ impl DesktopTool {
     /// Returns `None` if the action is allowed (or no policy is configured),
     /// or `Some(DesktopOutput)` if the action is denied or requires user
     /// confirmation.
-    async fn check_approval(&self, action_type: ActionType, target: &str) -> Option<DesktopOutput> {
+    ///
+    /// The [`ActionRequest`] is stamped with the issuing agent's id and a
+    /// human-readable audit context resolved from the agent-loop call context
+    /// (see [`audit_identity`]), so `ApprovalPolicy::record` produces an
+    /// accountable audit trail rather than blank entries.
+    async fn check_approval(
+        &self,
+        action_type: ActionType,
+        action: &str,
+        target: &str,
+    ) -> Option<DesktopOutput> {
         let policy = self.approval_policy.as_ref()?;
 
+        let (agent_id, context) = audit_identity(action, target);
         let request = ActionRequest {
             action_type,
             target: target.to_string(),
-            agent_id: String::new(), // TODO: plumb agent_id from agent loop call context
-            context: String::new(),  // TODO: populate with action description for audit
+            agent_id,
+            context,
             timestamp: chrono::Utc::now(),
         };
 
@@ -292,6 +313,65 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
     }
 }
 
+/// Resolve the audit identity of the current desktop tool call.
+///
+/// Reads `TURN_CONTEXT` — the per-tool-call task-local scoped by
+/// `ScopedToolService::execute`, the single production tool-dispatch
+/// chokepoint — so the approval audit trail records *which* agent issued the
+/// action and *where* the turn originated. `check_approval` runs before any
+/// `spawn_blocking`, so the task-local is still in scope at the read.
+///
+/// Returns `(agent_id, context)`:
+/// - `agent_id` — the issuing agent; falls back to `"main"` outside a scoped
+///   turn (direct calls, tests), consistent with `parse_caller_agent_id`.
+/// - `context` — a human-readable audit line naming the action and, for
+///   channel-originated turns, the channel + conversation it came from.
+fn audit_identity(action: &str, target: &str) -> (String, String) {
+    match crate::tools::turn_context::current_turn_context() {
+        Some(turn) => {
+            let agent_id = turn.session_key.agent_id().to_string();
+            let context = if turn.is_channel_routable() {
+                format!(
+                    "desktop.{action} ({target}) via {}/{}",
+                    turn.channel_id, turn.conversation_id
+                )
+            } else {
+                format!("desktop.{action} ({target})")
+            };
+            (agent_id, context)
+        }
+        None => ("main".to_string(), format!("desktop.{action} ({target})")),
+    }
+}
+
+/// Unconditional content-level safety hard-block.
+///
+/// Runs *below* the approval policy: even an approval policy configured to
+/// auto-allow must not let a handful of catastrophic input payloads (remote
+/// code execution, root deletion, session log-out) reach a live desktop.
+/// Returns `Some(output)` when the action must be refused outright.
+///
+/// `batch` is intentionally not inspected here — each sub-action is
+/// dispatched through `AlephTool::call`, which re-runs this check.
+fn check_hard_block(args: &DesktopArgs) -> Option<DesktopOutput> {
+    let reason: Option<String> = match args.action.as_str() {
+        "type_text" | "paste" => args
+            .text
+            .as_deref()
+            .and_then(|t| safety::check_typed_text(t).err()),
+        "key_combo" => args
+            .keys
+            .as_deref()
+            .and_then(|k| safety::check_key_combo(k).err()),
+        _ => None,
+    };
+    reason.map(|message| DesktopOutput {
+        success: false,
+        data: None,
+        message: Some(message),
+    })
+}
+
 impl Default for DesktopTool {
     fn default() -> Self {
         Self::new()
@@ -302,6 +382,11 @@ impl Default for DesktopTool {
 impl AlephTool for DesktopTool {
     const NAME: &'static str = "desktop";
     const DESCRIPTION: &'static str = r#"Control the desktop — see the screen and interact with it.
+
+For reliable clicking, call `desktop_ax_snapshot` first: it returns the app's
+interactable elements with ready-to-use `center` [x, y] coordinates — far more
+accurate than estimating pixels from a screenshot. Use a screenshot only when
+you need to *see* visual state the accessibility tree cannot describe.
 
 Actions:
 - screenshot: Capture screen as base64. Optional region: {x,y,width,height}. Defaults to PNG; pass format/quality/max_width to re-encode (downscaling above 1920 hurts text legibility — keep max_width at 1920+ when you need to read text on screen).
@@ -345,11 +430,19 @@ Examples:
     type Output = DesktopOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // 0. Unconditional safety hard-block (sits below the approval policy).
+        if let Some(out) = check_hard_block(&args) {
+            return Ok(out);
+        }
+
         let is_mutating = classify_approval(&args).is_some();
 
         // 1. Approval check
         if let Some((action_type, target)) = classify_approval(&args) {
-            if let Some(out) = self.check_approval(action_type, &target).await {
+            if let Some(out) = self
+                .check_approval(action_type, &args.action, &target)
+                .await
+            {
                 return Ok(out);
             }
         }

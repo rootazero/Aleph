@@ -337,7 +337,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             turn_timeout: base.turn_timeout,
             turn_budget: None,
             result_store: None,
-
+            session_epoch_registrar: None,
         };
         let harness = Arc::new(AgentHarness::new(deps));
 

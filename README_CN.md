@@ -93,25 +93,17 @@ Aleph 的记忆系统超越了简单的 RAG：
 
 ## 安装
 
-### macOS / Linux
+Aleph 以原生桌面 App 形式发布。从 [最新 release](https://github.com/rootazero/Aleph/releases/latest) 下载对应平台的安装包：
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash
-```
+| 平台 | 安装包 |
+|------|--------|
+| macOS | `.dmg` |
+| Windows | `.msi` |
+| Linux | `.deb` / `.AppImage` |
 
-### Windows (PowerShell)
+App 已内置 `aleph-server` 守护进程 —— 无需单独安装。首次启动时它会拉起守护进程、注册开机自启，并常驻系统托盘，让助手保持在线。
 
-```powershell
-irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex
-```
-
-安装器自动检测平台和架构（x86_64 / ARM64），下载最新 release 二进制文件，安装到 PATH，并可选设置为系统服务自动启动。
-
-安装完成后运行：
-
-```bash
-aleph
-```
+> 需要 Node.js / Python 运行时的技能：打开 **Panel → 设置 → Runtime** 一次性引导安装。
 
 ### 从源码构建
 

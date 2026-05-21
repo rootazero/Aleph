@@ -1,7 +1,9 @@
-//! KanbanView — sub-view that mounts a board for the currently selected team
-//! and subscribes to `team.*.task.*` topic events for live refresh.
+//! KanbanView — sub-view that mounts a board for the currently selected team,
+//! a toolbar (search + create), and subscribes to `team.*.task.*` topic events
+//! for live refresh.
 
 use super::components::board::KanbanBoard;
+use super::components::create_form::KanbanCreateForm;
 use super::components::task_drawer::TaskDetailDrawer;
 use super::TeamsTabState;
 use crate::api::teams::{CoordTaskDto, TaskFilter, TeamsApi};
@@ -18,6 +20,8 @@ pub fn KanbanView() -> impl IntoView {
 
     let tasks: RwSignal<Vec<CoordTaskDto>> = RwSignal::new(Vec::new());
     let drawer: RwSignal<Option<CoordTaskDto>> = RwSignal::new(None);
+    let search = RwSignal::new(String::new());
+    let show_create = RwSignal::new(false);
 
     // Fetch tasks for the currently-selected team.
     let refresh = move || {
@@ -64,13 +68,31 @@ pub fn KanbanView() -> impl IntoView {
     });
     on_cleanup(move || dash.unsubscribe_events(sub_id));
 
+    // Client-side filter: case-insensitive substring match on subject or owner.
+    let filtered = Signal::derive(move || {
+        let query = search.get().trim().to_lowercase();
+        let all = tasks.get();
+        if query.is_empty() {
+            return all;
+        }
+        all.into_iter()
+            .filter(|t| {
+                t.subject.to_lowercase().contains(&query)
+                    || t
+                        .owner
+                        .as_deref()
+                        .is_some_and(|o| o.to_lowercase().contains(&query))
+            })
+            .collect()
+    });
+
     let card_click = Callback::new(move |task_id: String| {
         if let Some(task) = tasks.get_untracked().into_iter().find(|t| t.id == task_id) {
             drawer.set(Some(task));
         }
     });
 
-    let drawer_changed = Callback::new(move |()| refresh());
+    let on_changed = Callback::new(move |()| refresh());
 
     view! {
         <div class="flex flex-col h-full">
@@ -88,10 +110,30 @@ pub fn KanbanView() -> impl IntoView {
                         </div>
                     }.into_any()
                 } else {
-                    view! { <KanbanBoard tasks=tasks.into() on_card_click=card_click /> }.into_any()
+                    view! {
+                        <div class="flex flex-col flex-1 min-h-0">
+                            <div class="flex items-center gap-2 px-3 pt-3">
+                                <input
+                                    class="flex-1 px-2 py-1.5 rounded bg-surface-sunken border border-border text-sm text-text-primary focus:outline-none focus:border-border-strong"
+                                    type="text"
+                                    placeholder=move || t_string!(i18n, teams.kanban.search_placeholder).to_string()
+                                    prop:value=move || search.get()
+                                    on:input=move |ev| search.set(event_target_value(&ev))
+                                />
+                                <button
+                                    class="px-3 py-1.5 rounded text-xs font-medium bg-primary text-white hover:bg-primary/90 cursor-pointer flex-shrink-0"
+                                    on:click=move |_| show_create.set(true)
+                                >
+                                    {move || t_string!(i18n, teams.kanban.actions.new_task).to_string()}
+                                </button>
+                            </div>
+                            <KanbanBoard tasks=filtered on_card_click=card_click />
+                        </div>
+                    }.into_any()
                 }
             }}
-            <TaskDetailDrawer open_for=drawer on_changed=drawer_changed />
+            <TaskDetailDrawer open_for=drawer on_changed=on_changed />
+            <KanbanCreateForm open=show_create on_created=on_changed />
         </div>
     }
 }
