@@ -93,13 +93,30 @@ pub fn parse_sse_response(
     Box::pin(stream)
 }
 
+/// Parse one SSE `data` payload into an `UpdateEvent`.
+///
+/// A2A SSE streams carry a JSON-RPC Response envelope per event
+/// (`{"jsonrpc","id","result":<event>}`). The `result` is unwrapped first; a
+/// bare event (no envelope) is tolerated for interop with non-Aleph agents.
+/// Aleph's server sends a `kind`-tagged `UpdateEvent`, so that is tried
+/// directly; spec agents send a bare event, disambiguated via the SSE
+/// `event:` line.
 fn parse_event(event_type: &str, data: &str) -> Option<UpdateEvent> {
+    let value: serde_json::Value = serde_json::from_str(data).ok()?;
+    let payload = value.get("result").cloned().unwrap_or(value);
+
+    if let Ok(event) = serde_json::from_value::<UpdateEvent>(payload.clone()) {
+        return Some(event);
+    }
+
     match event_type {
-        "status-update" | "status_update" => serde_json::from_str::<TaskStatusUpdateEvent>(data)
-            .ok()
-            .map(UpdateEvent::StatusUpdate),
+        "status-update" | "status_update" => {
+            serde_json::from_value::<TaskStatusUpdateEvent>(payload)
+                .ok()
+                .map(UpdateEvent::StatusUpdate)
+        }
         "artifact-update" | "artifact_update" => {
-            serde_json::from_str::<TaskArtifactUpdateEvent>(data)
+            serde_json::from_value::<TaskArtifactUpdateEvent>(payload)
                 .ok()
                 .map(UpdateEvent::ArtifactUpdate)
         }
@@ -189,6 +206,32 @@ mod tests {
     fn parse_event_invalid_json_returns_none() {
         assert!(parse_event("status-update", "not json").is_none());
         assert!(parse_event("artifact-update", "{broken").is_none());
+    }
+
+    #[test]
+    fn parse_event_unwraps_jsonrpc_envelope_status() {
+        let ev: TaskStatusUpdateEvent = serde_json::from_str(&make_status_json()).unwrap();
+        let envelope = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": UpdateEvent::StatusUpdate(ev),
+        })
+        .to_string();
+        let result = parse_event("status-update", &envelope);
+        assert!(matches!(result, Some(UpdateEvent::StatusUpdate(_))));
+    }
+
+    #[test]
+    fn parse_event_unwraps_jsonrpc_envelope_artifact() {
+        let ev: TaskArtifactUpdateEvent = serde_json::from_str(&make_artifact_json()).unwrap();
+        let envelope = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": UpdateEvent::ArtifactUpdate(ev),
+        })
+        .to_string();
+        let result = parse_event("artifact-update", &envelope);
+        assert!(matches!(result, Some(UpdateEvent::ArtifactUpdate(_))));
     }
 
     #[test]
