@@ -86,7 +86,7 @@ impl StdioTransport {
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::null())
             .kill_on_drop(true);
 
         for (key, value) in env {

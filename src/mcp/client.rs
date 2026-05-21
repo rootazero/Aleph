@@ -530,29 +530,27 @@ impl McpClient {
                                         request_id = %rid,
                                         "Sampling request completed successfully"
                                     );
-                                    if let Some(id) = rid.as_u64() {
-                                        match serde_json::to_value(&response) {
-                                            Ok(result) => {
-                                                if let Err(e) = transport
-                                                    .send_sampling_response(id, result)
-                                                    .await
-                                                {
-                                                    tracing::error!(
-                                                        server = %server,
-                                                        request_id = %id,
-                                                        error = %e,
-                                                        "Failed to send sampling response"
-                                                    );
-                                                }
-                                            }
-                                            Err(e) => {
+                                    match serde_json::to_value(&response) {
+                                        Ok(result) => {
+                                            if let Err(e) = transport
+                                                .send_sampling_response(rid.clone(), result)
+                                                .await
+                                            {
                                                 tracing::error!(
                                                     server = %server,
-                                                    request_id = %id,
+                                                    request_id = %rid,
                                                     error = %e,
-                                                    "Failed to serialize sampling response"
+                                                    "Failed to send sampling response"
                                                 );
                                             }
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                server = %server,
+                                                request_id = %rid,
+                                                error = %e,
+                                                "Failed to serialize sampling response"
+                                            );
                                         }
                                     }
                                 }
