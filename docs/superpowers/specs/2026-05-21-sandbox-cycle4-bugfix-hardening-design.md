@@ -16,7 +16,12 @@ managed proxy — is genuinely multi-cycle (needs CAP_NET_ADMIN / admin or a
 proxy backend) and stays deferred, consistent with Cycle 3's honest-deferral
 precedent.
 
-## Bugs fixed
+## Bugs found
+
+Rows 1–3, 9, 10 are fixed by this cycle. Rows 11–12 were surfaced by the
+same deep-dive but were fixed **independently on `main`** (`c5f5e384b`,
+`c0b808ed9`) while this branch was in flight — the merge takes `main`'s
+version, so this cycle does not re-fix them.
 
 | # | Severity | File | Defect |
 |---|----------|------|--------|
@@ -25,8 +30,8 @@ precedent.
 | 3 | MEDIUM (security) | `workspace.rs` | `normalize_path` collapses `.`/`..` **lexically** only. A symlink inside the workspace whose name passes the lexical `starts_with(ws.cwd)` prefix check but whose target is outside the workspace escapes the cwd jail. codex canonicalizes. |
 | 9 | MEDIUM | `platforms/{macos/seatbelt,linux/bwrap}.rs` | `SandboxOutput.signal` is hard-coded `None`. A child killed by a signal (SIGSEGV, SIGKILL from an rlimit/cgroup breach) reports `exit_code: None, signal: None` — the caller cannot tell it was signalled. Windows has no Unix signals, so its `None` is correct and unchanged. |
 | 10 | LOW | all three drivers | Output truncation slices the raw `Vec<u8>` at `[..max_output_bytes]`, which can cut a UTF-8 codepoint in half (one `U+FFFD` downstream). Violates project rule P7 (UTF-8 safety). The truncation block is **triplicated** verbatim across the three drivers (rule-of-three violation). |
-| 11 | **CRITICAL** | `windows_init.rs` | `alephcore` did **not compile for Windows at all** — 6 `windows-sys` 0.61 API-drift errors: `GENERIC_ALL`/`GENERIC_WRITE` moved `System::SystemServices` → `Foundation`; `SE_GROUP_INTEGRITY` moved `Security` → `System::SystemServices`; `DeriveCapabilitySidsFromName` moved `Security::Isolation` → `Security`; `SE_GROUP_*` are now `i32` constants assigned to `u32` fields. Surfaced only because Cycle 4 installed `mingw-w64` and could finally cross-compile (Cycles 2–3 could not). Aleph ships a Windows `.msi`, so this is severe. |
-| 12 | HIGH | `bin/aleph-server/daemon.rs` | Incidental, found while restoring the Windows build: `expand_path` called `libc::getuid()` unconditionally, so the `aleph-server` binary did not compile for Windows. Outside the sandbox subsystem but the last error blocking a clean Windows build; `daemon.rs` already `#[cfg(unix)]`-splits `is_process_running`, so this just follows the file's own convention. |
+| 11 | **CRITICAL** (fixed on `main`) | `windows_init.rs` | `alephcore` did **not compile for Windows at all** — 6 `windows-sys` 0.61 API-drift errors: `GENERIC_ALL`/`GENERIC_WRITE` moved `System::SystemServices` → `Foundation`; `SE_GROUP_INTEGRITY` moved `Security` → `System::SystemServices`; `DeriveCapabilitySidsFromName` moved `Security::Isolation` → `Security`; `SE_GROUP_*` are now `i32` constants assigned to `u32` fields. Aleph ships a Windows `.msi`, so this is severe. Fixed on `main` by `c5f5e384b`. |
+| 12 | HIGH (fixed on `main`) | `bin/aleph-server/daemon.rs` | `expand_path` called `libc::getuid()` unconditionally, so the `aleph-server` binary did not compile for Windows. Fixed on `main` by `c0b808ed9`. |
 
 ## Approach
 
@@ -98,16 +103,17 @@ All three drivers call `truncate_output`; the two Unix drivers also call
   `EnvPolicy`** — design-level concerns, not surgical fixes; a refactor
   cycle, not this one.
 
-### BUG-11 + BUG-12 — restore the Windows build
+### BUG-11 + BUG-12 — the Windows build (fixed on `main`)
 
-`windows_init.rs`: five `use` paths repointed at the modules
-`windows-sys` 0.61 actually exports the symbols from, and two
-`SID_AND_ATTRIBUTES.Attributes` assignments get an `as u32` cast (the
-`SE_GROUP_*` constants are `i32`). `daemon.rs::expand_path`: the
-`getuid` fallback branch is `#[cfg(unix)]`-gated with a temp-dir
-fallback for `#[cfg(not(unix))]`, matching the cfg split already used
-by `is_process_running` in the same file. No behavioural change on any
-platform that already compiled.
+This deep-dive independently re-discovered the broken Windows build
+and had a fix staged, but `main` shipped equivalent fixes
+(`c5f5e384b`, `c0b808ed9`) first. The Cycle 4 merge therefore takes
+`main`'s `windows_init.rs` and `daemon.rs` verbatim. Cycle 4's lasting
+contribution to the Windows story is operational: it installed
+`mingw-w64` so `cargo check --target x86_64-pc-windows-gnu` can
+cross-compile (the `ring` build script needs a Windows C toolchain) —
+which is what lets the Windows build be verified at all on a macOS
+dev box.
 
 ## Verification
 
@@ -115,8 +121,8 @@ platform that already compiled.
   `cargo test -p alephcore --lib sandbox::` → 199/199 pass (188
   baseline + 11 new).
 - Windows: `cargo check -p alephcore --target x86_64-pc-windows-gnu`
-  → exit 0 (was 7 errors before BUG-11/12). `mingw-w64` installed via
-  Homebrew so `ring`'s build script can cross-compile.
+  → exit 0. `mingw-w64` installed via Homebrew so `ring`'s build
+  script can cross-compile.
 - Linux: BUG-1 verified by inspection (`Default` exists, unambiguous);
   BUG-9/10 in `bwrap.rs` are mechanical helper-call swaps against
   helpers already compiled on macOS. No `x86_64-unknown-linux-gnu`

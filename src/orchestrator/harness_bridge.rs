@@ -27,6 +27,7 @@ use crate::harness::agent::AgentHarness;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::Harness;
+use crate::memory::store::MemoryBackend;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
 use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::{FlowInput, FlowSpec};
@@ -137,6 +138,12 @@ pub struct AgentHarnessRunner {
     /// behaviour (boot path for tests / env without a memory backend).
     pub memory_context_provider:
         Option<Arc<crate::thinker::memory_context_provider::MemoryContextProvider>>,
+
+    /// SQLite memory backend, threaded into the per-run `ContextCompactor` so
+    /// it can reuse the hierarchical session summaries written by
+    /// `SessionCompactor` for zero-API-cost compaction. `None` (tests / boot
+    /// without a memory backend) keeps the LLM summarization path.
+    pub memory_backend: Option<MemoryBackend>,
 
     /// Dispatcher-side `ToolRegistry` — owns the `ToolHealthCache` whose
     /// snapshots drive the `<tool_runtime_state>` block emitted by
@@ -253,13 +260,21 @@ impl HarnessRunner for AgentHarnessRunner {
             match self.context_budget_config.as_ref() {
                 Some(cfg) => {
                     let budget = Arc::new(Mutex::new(ContextBudget::new(cfg)));
-                    let compactor = Arc::new(ContextCompactor::new(
+                    let mut compactor_inner = ContextCompactor::new(
                         llm.clone(),
                         CompactorConfig {
                             fresh_tail: cfg.fresh_tail_count,
                             ..CompactorConfig::default()
                         },
-                    ));
+                    );
+                    // Wire the zero-API-cost session-summary reuse path: the
+                    // memory backend holding the d0/d1/d2 facts plus the owning
+                    // agent id they were written under.
+                    if let Some(backend) = self.memory_backend.clone() {
+                        compactor_inner =
+                            compactor_inner.with_summary_reuse(backend, spec.agent.to_string());
+                    }
+                    let compactor = Arc::new(compactor_inner);
                     // Cheap-pass preflight: runs unconditionally before the budget
                     // check so token savings happen even when the compactor's LLM
                     // call fails. Same gating as the compactor (config-presence).

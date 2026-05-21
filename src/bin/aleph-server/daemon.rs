@@ -6,30 +6,32 @@
 use std::path::PathBuf;
 
 /// Expand ~ to home directory.
-/// Falls back to `/tmp/.aleph-$uid/...` when `dirs::home_dir()` returns `None`,
-/// to avoid collisions between different users on shared systems.
+/// When `dirs::home_dir()` returns `None`, falls back to a per-user scratch
+/// dir (`/tmp/.aleph-$uid` on Unix, `%TEMP%\.aleph` on Windows) to avoid
+/// collisions between different users on shared systems.
 pub fn expand_path(path: &str) -> PathBuf {
     if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
             return home.join(stripped);
         }
-        // `getuid` is Unix-only; on Windows fall back to the system temp
-        // dir (matching the cfg split already used by `is_process_running`).
+        // `/tmp` is shared on Unix, so the uid disambiguates users;
+        // Windows has no `/tmp` and `temp_dir()` is already per-user.
         #[cfg(unix)]
         {
             let uid = unsafe { libc::getuid() };
             eprintln!(
-                "Warning: cannot determine home directory; using /tmp/.aleph-{} as fallback",
-                uid
+                "Warning: cannot determine home directory; using /tmp/.aleph-{uid} as fallback"
             );
-            return PathBuf::from(format!("/tmp/.aleph-{}", uid)).join(stripped);
+            return PathBuf::from(format!("/tmp/.aleph-{uid}")).join(stripped);
         }
         #[cfg(not(unix))]
         {
+            let fallback = std::env::temp_dir().join(".aleph");
             eprintln!(
-                "Warning: cannot determine home directory; using the system temp dir as fallback"
+                "Warning: cannot determine home directory; using {} as fallback",
+                fallback.display()
             );
-            return std::env::temp_dir().join(".aleph").join(stripped);
+            return fallback.join(stripped);
         }
     }
     PathBuf::from(path)

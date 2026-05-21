@@ -5,6 +5,8 @@ use futures::FutureExt;
 use serde_json::{json, Value};
 use std::panic::AssertUnwindSafe;
 
+use crate::agents::background_tracker::{CompletedOutcome, CompletedSnapshot};
+use crate::agents::progress::SubagentProgress;
 use crate::agents::runtime::AgentRuntimeConfig;
 use crate::agents::AgentDef;
 use crate::teams::messages::router::SendRequest;
@@ -32,8 +34,8 @@ impl LoopTool for SubagentTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["run", "check_status", "cancel", "send_message", "read_inbox"],
-                    "description": "The action to perform. Defaults to 'run' (or 'check_status' if only request_id is provided). 'cancel' interrupts a still-running background sub-agent identified by request_id."
+                    "enum": ["run", "check_status", "cancel", "list", "send_message", "read_inbox"],
+                    "description": "The action to perform. Defaults to 'run' (or 'check_status' if only request_id is provided). 'cancel' interrupts a still-running background sub-agent identified by request_id. 'list' enumerates every background sub-agent (running and recently-completed) with their request_ids — use it to recover a request_id you no longer hold."
                 },
                 "task": {
                     "type": "string",
@@ -244,40 +246,39 @@ impl LoopTool for SubagentTool {
                 }
             }
             SubagentAction::CheckStatus(request_id) => {
-                // Check running first
-                let running = self.background_tracker.list_running();
-                if running.iter().any(|(id, _, _)| id == &request_id) {
+                // Running? — surface elapsed time + a derived activity
+                // summary alongside the recent progress events.
+                if let Some(meta) = self.background_tracker.running_meta(&request_id) {
                     let progress = self.background_tracker.progress_snapshot(&request_id, 10);
                     return ToolResult::Success {
                         output: json!({
                             "status": "running",
                             "request_id": request_id,
+                            "task": meta.task,
+                            "elapsed_secs": meta.elapsed_secs,
+                            "summary": summarize_progress(&progress),
                             "progress": progress,
                         }),
                     };
                 }
-                // Check completed
-                match self.background_tracker.take_result(&request_id) {
-                    Some(Ok(result)) => {
+                // Completed? — non-destructive read, so the parent may poll
+                // the same request_id again later without it vanishing.
+                match self.background_tracker.result_snapshot(&request_id) {
+                    Some(snap) => {
+                        if let CompletedOutcome::Err(err) = &snap.outcome {
+                            return ToolResult::Error {
+                                error: format!("Background sub-agent failed: {err}"),
+                                retryable: false,
+                            };
+                        }
                         return ToolResult::Success {
-                            output: json!({
-                                "status": "completed",
-                                "request_id": request_id,
-                                "result": result,
-                            }),
-                        };
-                    }
-                    Some(Err(err)) => {
-                        return ToolResult::Error {
-                            error: format!("Background sub-agent failed: {}", err),
-                            retryable: false,
+                            output: completed_to_json(&request_id, "completed", &snap),
                         };
                     }
                     None => {
                         return ToolResult::Error {
                             error: format!(
-                                "No background sub-agent found with request_id '{}'",
-                                request_id
+                                "No background sub-agent found with request_id '{request_id}'"
                             ),
                             retryable: false,
                         };
@@ -295,31 +296,58 @@ impl LoopTool for SubagentTool {
                         }),
                     };
                 }
-                // No running entry — surface the completed result (if any)
+                // No running entry — surface the completed outcome (if any)
                 // so the LLM gets a deterministic answer rather than a
-                // misleading "not found".
-                return match self.background_tracker.take_result(&request_id) {
-                    Some(Ok(result)) => ToolResult::Success {
-                        output: json!({
-                            "status": "already_completed",
-                            "request_id": request_id,
-                            "result": result,
-                        }),
-                    },
-                    Some(Err(err)) => ToolResult::Error {
-                        error: format!(
-                            "Sub-agent '{}' already failed before cancel: {}",
-                            request_id, err
-                        ),
-                        retryable: false,
-                    },
+                // misleading "not found". Non-destructive: a later
+                // check_status still sees the same result.
+                return match self.background_tracker.result_snapshot(&request_id) {
+                    Some(snap) => {
+                        if let CompletedOutcome::Err(err) = &snap.outcome {
+                            return ToolResult::Error {
+                                error: format!(
+                                    "Sub-agent '{request_id}' already failed before cancel: {err}"
+                                ),
+                                retryable: false,
+                            };
+                        }
+                        ToolResult::Success {
+                            output: completed_to_json(&request_id, "already_completed", &snap),
+                        }
+                    }
                     None => ToolResult::Error {
                         error: format!(
-                            "No running or completed sub-agent found with request_id '{}'",
-                            request_id
+                            "No running or completed sub-agent found with request_id '{request_id}'"
                         ),
                         retryable: false,
                     },
+                };
+            }
+            SubagentAction::List => {
+                let running: Vec<Value> = self
+                    .background_tracker
+                    .list_running()
+                    .into_iter()
+                    .map(|(id, task, elapsed_secs)| {
+                        json!({
+                            "request_id": id,
+                            "task": task,
+                            "elapsed_secs": elapsed_secs,
+                        })
+                    })
+                    .collect();
+                let completed: Vec<Value> = self
+                    .background_tracker
+                    .all_completed()
+                    .iter()
+                    .map(|(id, snap)| completed_to_json(id, "completed", snap))
+                    .collect();
+                return ToolResult::Success {
+                    output: json!({
+                        "running": running,
+                        "running_count": running.len(),
+                        "completed": completed,
+                        "completed_count": completed.len(),
+                    }),
                 };
             }
             SubagentAction::Run(run_args) => run_args,
@@ -451,6 +479,7 @@ impl LoopTool for SubagentTool {
                             "result": r.final_text.unwrap_or_else(|| "(no output)".to_string()),
                             "iterations": r.iterations,
                             "tool_calls_made": r.tool_calls_made,
+                            "total_tokens": r.total_tokens,
                         }),
                         Ok((idx, Ok(Err(e)))) => json!({
                             "index": idx,
@@ -600,7 +629,8 @@ impl LoopTool for SubagentTool {
                         output: json!({
                             "result": result.final_text.unwrap_or_else(|| "(no output)".to_string()),
                             "iterations": result.iterations,
-                            "tool_calls_made": result.tool_calls_made
+                            "tool_calls_made": result.tool_calls_made,
+                            "total_tokens": result.total_tokens
                         }),
                     }
                 }
@@ -616,3 +646,49 @@ impl LoopTool for SubagentTool {
     }
 }
 
+/// Derive a compact activity summary from a running sub-agent's progress
+/// window. `steps` is the highest iteration index observed (monotonic, so
+/// it stays accurate even though the window is FIFO-capped at 50); the
+/// `last_*` fields reflect the most recent event.
+fn summarize_progress(progress: &[SubagentProgress]) -> Value {
+    let steps = progress.iter().map(|p| p.step).max().unwrap_or(0);
+    let last = progress.last();
+    json!({
+        "steps": steps,
+        "last_activity": last.map(|p| p.kind),
+        "last_tool": last.and_then(|p| p.tool_name.clone()),
+    })
+}
+
+/// Render a finished background sub-agent as a JSON object. `ok_status` is
+/// the `status` string for a success (`completed` / `already_completed`);
+/// a failure always reports `failed`. Shared by the `check_status`,
+/// `cancel`, and `list` actions so a finished agent reports identically
+/// everywhere — at parity with the foreground spawn path's
+/// `{result, iterations, tool_calls_made}` response shape.
+fn completed_to_json(request_id: &str, ok_status: &str, snap: &CompletedSnapshot) -> Value {
+    match &snap.outcome {
+        CompletedOutcome::Ok {
+            final_text,
+            iterations,
+            tool_calls_made,
+            total_tokens,
+        } => json!({
+            "status": ok_status,
+            "request_id": request_id,
+            "task": snap.task,
+            "result": final_text,
+            "iterations": iterations,
+            "tool_calls_made": tool_calls_made,
+            "total_tokens": total_tokens,
+            "duration_secs": snap.duration_secs,
+        }),
+        CompletedOutcome::Err(err) => json!({
+            "status": "failed",
+            "request_id": request_id,
+            "task": snap.task,
+            "error": err,
+            "duration_secs": snap.duration_secs,
+        }),
+    }
+}

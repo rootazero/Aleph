@@ -291,9 +291,6 @@ mod imp {
         DISABLE_MAX_PRIVILEGE, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY,
         TOKEN_DUPLICATE, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
     };
-    // windows-sys 0.61: SE_GROUP_* token-group attributes live in
-    // System::SystemServices, not Security.
-    use windows_sys::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
     use windows_sys::Win32::Security::Authorization::{ACCESS_MODE, ConvertStringSidToSidW};
     use windows_sys::Win32::System::Console::{
         GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
@@ -387,13 +384,12 @@ mod imp {
         use std::iter::once;
 
         use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::DeriveCapabilitySidsFromName;
         use windows_sys::Win32::Security::Isolation::{
             CreateAppContainerProfile, DeleteAppContainerProfile,
         };
-        // windows-sys 0.61: DeriveCapabilitySidsFromName moved from
-        // Security::Isolation up to Security.
         use windows_sys::Win32::Security::{
-            DeriveCapabilitySidsFromName, FreeSid, SID_AND_ATTRIBUTES, SECURITY_CAPABILITIES,
+            FreeSid, SID_AND_ATTRIBUTES, SECURITY_CAPABILITIES,
         };
         use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapAlloc, HeapFree};
         use windows_sys::Win32::System::SystemServices::SE_GROUP_ENABLED;
@@ -455,8 +451,6 @@ mod imp {
             .iter()
             .map(|s| SID_AND_ATTRIBUTES {
                 Sid: *s,
-                // SE_GROUP_* are i32 constants in windows-sys 0.61; the
-                // SID_AND_ATTRIBUTES.Attributes field is u32.
                 Attributes: SE_GROUP_ENABLED as u32,
             })
             .collect();
@@ -508,7 +502,6 @@ mod imp {
         // so the post-wait cleanup revokes the exact same set.
         let mut denied_paths: Vec<String> = Vec::new();
         if let Some(ref ws) = parsed.policy.workspace_path {
-            // windows-sys 0.61: generic access rights live in Foundation.
             use windows_sys::Win32::Foundation::GENERIC_ALL;
             if let Err(e) = unsafe {
                 set_workspace_dacl_entry(
@@ -655,7 +648,6 @@ mod imp {
         // regardless of mask, so a single call per path covers both the
         // workspace grant and the metadata deny ACE.
         if let Some(ref ws) = parsed.policy.workspace_path {
-            // windows-sys 0.61: generic access rights live in Foundation.
             use windows_sys::Win32::Foundation::GENERIC_ALL;
             if let Err(e) = unsafe {
                 set_workspace_dacl_entry(
@@ -748,9 +740,9 @@ mod imp {
         workspace_path_str: &str,
         ac_sid: *mut core::ffi::c_void,
     ) -> Vec<String> {
-        // GENERIC_WRITE is in Foundation (windows-sys 0.61); DELETE is a
-        // standard right (0x0001_0000) — hard-coding it avoids reaching
-        // for the `windows_sys::Win32::Storage::FileSystem` re-export.
+        // GENERIC_WRITE is in Foundation; DELETE is a standard right
+        // (0x0001_0000) — hard-coding it avoids reaching for the
+        // `windows_sys::Win32::Storage::FileSystem` re-export.
         const DELETE_RIGHT: u32 = 0x0001_0000;
         use windows_sys::Win32::Security::Authorization::DENY_ACCESS;
         use windows_sys::Win32::Foundation::GENERIC_WRITE;
@@ -932,11 +924,10 @@ mod imp {
             )));
         }
 
+        use windows_sys::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
         let label = TOKEN_MANDATORY_LABEL {
             Label: windows_sys::Win32::Security::SID_AND_ATTRIBUTES {
                 Sid: sid as *mut _,
-                // SE_GROUP_INTEGRITY is an i32 constant in windows-sys
-                // 0.61; the Attributes field is u32.
                 Attributes: SE_GROUP_INTEGRITY as u32,
             },
         };

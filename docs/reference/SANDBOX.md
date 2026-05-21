@@ -610,24 +610,16 @@ parity). All are fixed in this cycle:
   The truncation logic — triplicated verbatim — is now a single
   `platforms::common::truncate_output` helper that backs the cut off
   any UTF-8 continuation byte (project rule P7).
-- **BUG-11 (critical) — `alephcore` did not compile for Windows.**
-  Six `windows-sys` 0.61 API-drift errors in `windows_init.rs`:
-  `GENERIC_ALL` / `GENERIC_WRITE` moved from `System::SystemServices`
-  to `Foundation`; `SE_GROUP_INTEGRITY` moved from `Security` to
-  `System::SystemServices`; `DeriveCapabilitySidsFromName` moved from
-  `Security::Isolation` to `Security`; and the `SE_GROUP_*` constants
-  are now `i32`, assigned to `u32` `SID_AND_ATTRIBUTES.Attributes`
-  fields. Fixed by repointing the `use` paths and adding `as u32`
-  casts. This had gone undetected because Cycles 2–3 could not
-  cross-compile to Windows (the `ring` build script needs a Windows C
-  toolchain); Cycle 4 installs `mingw-w64` so
-  `cargo check --target x86_64-pc-windows-gnu` works.
-- **BUG-12 (high) — `aleph-server` binary did not compile for Windows.**
-  Incidental, found while restoring the Windows build:
-  `daemon.rs::expand_path` called `libc::getuid()` unconditionally.
-  The `getuid` fallback branch is now `#[cfg(unix)]`-gated with a
-  temp-dir fallback for non-Unix, matching the cfg split already used
-  by `is_process_running` in the same file.
+
+The same deep-dive independently surfaced that `alephcore` did **not
+compile for Windows at all** — `windows-sys` 0.61 API drift in
+`windows_init.rs`, plus an unconditional `libc::getuid()` in
+`daemon.rs`. Those two fixes landed on `main` in parallel
+(`c5f5e384b`, `c0b808ed9`) while this cycle was in flight, so Cycle 4
+does not re-fix them — the merge takes `main`'s version. Installing
+`mingw-w64` so `cargo check --target x86_64-pc-windows-gnu` can
+cross-compile (the `ring` build script needs a Windows C toolchain)
+is what let either effort verify the Windows build.
 
 ### Deferred — Linux protected-path creation gap
 
