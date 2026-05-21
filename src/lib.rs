@@ -124,6 +124,7 @@ pub use crate::config::{
     types::generation::GenerationConfig,
     types::memory::DreamingConfig,
     types::phase6_wiring::{ContextBudgetToml, FallbackProviderToml, GuardrailsToml, StabilityToml},
+    types::resume::ResumeConfig,
     types::stop_hooks::StopHookConfig,
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
     FullConfig, GeneralConfig, GenerationProviderConfig, MemoryConfig, MemoryInjectionMode,
