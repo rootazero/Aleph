@@ -452,6 +452,35 @@ impl BuiltinToolRegistry {
             (None, None)
         };
 
+        // Add A2A outbound delegation tools (if the A2A subsystem is enabled).
+        // The handle is filled by A2A subsystem init *after* this registry is
+        // built — see commands/start/mod.rs. Tools register now; calls before
+        // the handle is populated return a clear "not available" error.
+        let (a2a_delegate_tool, a2a_agents_tool) = if let Some(ref handle) =
+            config.a2a_tool_handle
+        {
+            use crate::builtin_tools::a2a_tools::{A2AAgentsTool, A2ADelegateTool};
+            use crate::tools::AlephTool;
+
+            let delegate = A2ADelegateTool::new(handle.clone());
+            let agents = A2AAgentsTool::new(handle.clone());
+            let defs = [delegate.definition(), agents.definition()];
+            for td in &defs {
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered A2A outbound tools (a2a_delegate, a2a_agents)");
+            (Some(delegate), Some(agents))
+        } else {
+            (None, None)
+        };
+
         // Add task coordination tools (if CoordTaskStore is available)
         let (task_create_tool, task_update_tool, task_list_tool, task_wait_tool) =
             if let Some(ref store) = config.coord_task_store {
@@ -1158,6 +1187,8 @@ impl BuiltinToolRegistry {
             extension_manager: config.extension_manager.clone(),
             acp_delegate_tool,
             acp_switch_tool,
+            a2a_delegate_tool,
+            a2a_agents_tool,
             channel_registry_cell: {
                 let cell = Arc::new(tokio::sync::OnceCell::new());
                 if let Some(ref cr) = config.channel_registry {

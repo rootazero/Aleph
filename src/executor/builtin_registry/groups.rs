@@ -173,6 +173,11 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         tools: &["acp_delegate", "acp_switch"],
     },
     ToolCategory {
+        id: "a2a",
+        name: "远程 A2A Agent",
+        tools: &["a2a_delegate", "a2a_agents"],
+    },
+    ToolCategory {
         id: "heartbeat",
         name: "心跳监控",
         tools: &[

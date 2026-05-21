@@ -76,6 +76,18 @@ impl CardRegistry {
             agents.push(agent);
         }
     }
+
+    /// Insert or replace a fully-formed remote agent entry.
+    ///
+    /// Unlike [`AgentResolver::register`], this preserves the agent's
+    /// `auth_token` (the trait method cannot carry one). Existing entries with
+    /// the same card id *or* base URL are removed first, so re-adding a
+    /// config-declared agent by URL cleanly replaces its placeholder card.
+    pub async fn upsert(&self, agent: RegisteredAgent) {
+        let mut agents = self.agents.write().await;
+        agents.retain(|a| a.card.id != agent.card.id && a.base_url != agent.base_url);
+        agents.push(agent);
+    }
 }
 
 /// Convert a human-readable name to a URL-safe slug.
@@ -312,5 +324,41 @@ mod tests {
         assert_eq!(slug_from_name("Hello World!"), "hello-world");
         assert_eq!(slug_from_name("  Hello  World  "), "hello-world");
         assert_eq!(slug_from_name("!!!test!!!"), "test");
+    }
+
+    #[tokio::test]
+    async fn upsert_preserves_auth_token_and_replaces_by_url() {
+        let registry = CardRegistry::new();
+        registry
+            .upsert(RegisteredAgent {
+                card: sample_card("real-id", "Helper"),
+                trust_level: TrustLevel::Trusted,
+                base_url: "https://h.example.com".to_string(),
+                last_seen: Utc::now(),
+                health: AgentHealth::Healthy,
+                auth_token: Some("tok-abc".to_string()),
+            })
+            .await;
+
+        let agents = registry.list_agents().await.unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].auth_token.as_deref(), Some("tok-abc"));
+
+        // Re-upsert at the same base URL with a different card id replaces in
+        // place (no duplicate) — the placeholder-vs-real-id case.
+        registry
+            .upsert(RegisteredAgent {
+                card: sample_card("new-id", "Helper v2"),
+                trust_level: TrustLevel::Trusted,
+                base_url: "https://h.example.com".to_string(),
+                last_seen: Utc::now(),
+                health: AgentHealth::Healthy,
+                auth_token: Some("tok-xyz".to_string()),
+            })
+            .await;
+        let agents = registry.list_agents().await.unwrap();
+        assert_eq!(agents.len(), 1, "same base_url must replace, not duplicate");
+        assert_eq!(agents[0].card.id, "new-id");
+        assert_eq!(agents[0].auth_token.as_deref(), Some("tok-xyz"));
     }
 }

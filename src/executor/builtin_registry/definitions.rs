@@ -560,6 +560,18 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Switch to direct conversation with an external CLI agent (Claude Code, Codex, or Gemini), or switch back to Aleph.",
         requires_config: true,
     },
+    // A2A outbound tools — delegate to / manage remote Agent-to-Agent agents.
+    // Require the A2A subsystem ([a2a] enabled); execution returns a clear error otherwise.
+    BuiltinToolDefinition {
+        name: "a2a_delegate",
+        description: "Delegate a task to a remote agent over the A2A (Agent-to-Agent) protocol.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "a2a_agents",
+        description: "List, add, or remove the remote A2A agents Aleph can delegate to.",
+        requires_config: true,
+    },
 ];
 
 /// Create a boxed tool instance by name
