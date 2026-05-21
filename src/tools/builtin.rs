@@ -169,13 +169,14 @@ impl AlephToolServer {
         };
 
         use crate::builtin_tools::{
-            DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree,
+            DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree, DesktopAxSnapshot,
             DesktopCheckPermissions,
         };
         self.tool(DesktopTool::new().with_platform(Arc::clone(&desktop_platform)))
             .tool(DesktopAxQueryFocused::new().with_platform(Arc::clone(&desktop_platform)))
             .tool(DesktopAxQueryTree::new().with_platform(Arc::clone(&desktop_platform)))
             .tool(DesktopAxQueryByRole::new().with_platform(Arc::clone(&desktop_platform)))
+            .tool(DesktopAxSnapshot::new().with_platform(Arc::clone(&desktop_platform)))
             .tool(DesktopCheckPermissions::new().with_platform(desktop_platform))
     }
 

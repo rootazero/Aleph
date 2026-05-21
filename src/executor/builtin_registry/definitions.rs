@@ -28,9 +28,9 @@ use crate::builtin_tools::browser_tools::{
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
     BashExecTool, CodeExecTool, DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree,
-    DesktopCheckPermissions, DesktopTool, FileEditTool, FileOpsTool, FileReadTool, FileWriteTool,
-    ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool, SearchTool, SelfManageTool,
-    VaultStoreTool, WebFetchTool,
+    DesktopAxSnapshot, DesktopCheckPermissions, DesktopTool, FileEditTool, FileOpsTool,
+    FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool,
+    SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -146,6 +146,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "desktop_ax_query_by_role",
         description: "Collect all AX elements whose role matches `role` (e.g. \"AXButton\") in a process",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "desktop_ax_snapshot",
+        description: "Snapshot an app's interactable UI as a flat indexed element list with pre-computed click centers (set-of-marks GUI targeting)",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -610,6 +615,7 @@ pub fn create_tool_boxed(
         "desktop_ax_query_focused" => Some(Box::new(DesktopAxQueryFocused::new())),
         "desktop_ax_query_tree" => Some(Box::new(DesktopAxQueryTree::new())),
         "desktop_ax_query_by_role" => Some(Box::new(DesktopAxQueryByRole::new())),
+        "desktop_ax_snapshot" => Some(Box::new(DesktopAxSnapshot::new())),
         "desktop_check_permissions" => Some(Box::new(DesktopCheckPermissions::new())),
         "vault_store" => config
             .and_then(|c| c.shared_token_manager.as_ref())
@@ -670,9 +676,19 @@ pub fn create_tool_boxed(
         )),
         // Team management tools require TeamStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
-        "team_create" | "team_delegate" | "team_status" | "team_disband" | "team_member_remove"
-        | "team_digest" | "message_send" | "inbox_read" | "plan_submit" | "plan_resolve"
-        | "lifecycle_idle" | "lifecycle_request_shutdown" | "lifecycle_resolve_shutdown" => None,
+        "team_create"
+        | "team_delegate"
+        | "team_status"
+        | "team_disband"
+        | "team_member_remove"
+        | "team_digest"
+        | "message_send"
+        | "inbox_read"
+        | "plan_submit"
+        | "plan_resolve"
+        | "lifecycle_idle"
+        | "lifecycle_request_shutdown"
+        | "lifecycle_resolve_shutdown" => None,
         // Task coordination tools require CoordTaskStore + AgentMessageBus at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_create" | "task_update" | "task_list" | "task_wait" => None,

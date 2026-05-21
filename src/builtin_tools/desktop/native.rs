@@ -14,13 +14,38 @@ fn to_desktop_button(button: Option<&MouseButton>) -> aleph_desktop::MouseButton
     }
 }
 
+/// Build a structured validation-failure output for a known action whose
+/// required arguments are missing or malformed.
+fn invalid_args(message: impl Into<String>) -> DesktopOutput {
+    DesktopOutput {
+        success: false,
+        data: None,
+        message: Some(message.into()),
+    }
+}
+
+/// Extract the `x`/`y` pair required by point actions (click, hover, …).
+///
+/// Returns a clear validation error rather than silently defaulting to
+/// `(0.0, 0.0)` — a click at the screen's top-left corner can hit the
+/// system menu or a window's close button.
+fn require_xy(args: &DesktopArgs, action: &str) -> std::result::Result<(f64, f64), DesktopOutput> {
+    match (args.x, args.y) {
+        (Some(x), Some(y)) => Ok((x, y)),
+        _ => Err(invalid_args(format!(
+            "{action} requires numeric 'x' and 'y' coordinates"
+        ))),
+    }
+}
+
 /// Platform execution methods for [`super::DesktopTool`].
 impl super::DesktopTool {
     /// Execute a desktop action via `DesktopPlatform.screen()`.
     ///
-    /// Returns `Ok(Some(output))` if the action was handled,
-    /// or `Ok(None)` to signal that the caller should fall through to the
-    /// legacy `call_native` path or report the action as unsupported.
+    /// Returns `Ok(Some(output))` when the action was recognized and handled
+    /// (the output itself may report success or a structured failure), or
+    /// `Ok(None)` when the action name is not handled here, so the caller
+    /// reports it as unsupported on this platform.
     pub(super) async fn call_via_platform(
         &self,
         platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
@@ -106,8 +131,7 @@ impl super::DesktopTool {
                             // routinely contain small UI text and 0.75 caused
                             // legibility complaints from the LLM consumer. PNG
                             // is unaffected (lossless regardless of quality).
-                            let quality_u8 =
-                                (quality.unwrap_or(0.9).clamp(0.0, 1.0) * 100.0) as u8;
+                            let quality_u8 = (quality.unwrap_or(0.9).clamp(0.0, 1.0) * 100.0) as u8;
                             match tokio::task::spawn_blocking(move || {
                                 aleph_desktop::perception::process_screenshot(
                                     &raw_bytes, max_w, max_h, &out_fmt, quality_u8,
@@ -195,13 +219,9 @@ impl super::DesktopTool {
                 }
             }
             "click" => {
-                let x = match args.x {
-                    Some(v) => v,
-                    None => return Ok(None),
-                };
-                let y = match args.y {
-                    Some(v) => v,
-                    None => return Ok(None),
+                let (x, y) = match require_xy(args, "click") {
+                    Ok(xy) => xy,
+                    Err(out) => return Ok(Some(out)),
                 };
                 let button = to_desktop_button(args.button.as_ref());
                 match screen.click(x, y, button).await {
@@ -394,8 +414,10 @@ impl super::DesktopTool {
                 }
             }
             "double_click" => {
-                let x = args.x.unwrap_or(0.0);
-                let y = args.y.unwrap_or(0.0);
+                let (x, y) = match require_xy(args, "double_click") {
+                    Ok(xy) => xy,
+                    Err(out) => return Ok(Some(out)),
+                };
                 let button = to_desktop_button(args.button.as_ref());
                 match screen.double_click(x, y, button).await {
                     Ok(()) => Ok(Some(DesktopOutput {
@@ -411,10 +433,14 @@ impl super::DesktopTool {
                 }
             }
             "drag" => {
-                let sx = args.start_x.unwrap_or(0.0);
-                let sy = args.start_y.unwrap_or(0.0);
-                let ex = args.end_x.unwrap_or(0.0);
-                let ey = args.end_y.unwrap_or(0.0);
+                let (sx, sy, ex, ey) = match (args.start_x, args.start_y, args.end_x, args.end_y) {
+                    (Some(sx), Some(sy), Some(ex), Some(ey)) => (sx, sy, ex, ey),
+                    _ => {
+                        return Ok(Some(invalid_args(
+                            "drag requires numeric 'start_x', 'start_y', 'end_x' and 'end_y'",
+                        )));
+                    }
+                };
                 match screen.drag(sx, sy, ex, ey, args.duration_ms).await {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
@@ -429,8 +455,10 @@ impl super::DesktopTool {
                 }
             }
             "hover" => {
-                let x = args.x.unwrap_or(0.0);
-                let y = args.y.unwrap_or(0.0);
+                let (x, y) = match require_xy(args, "hover") {
+                    Ok(xy) => xy,
+                    Err(out) => return Ok(Some(out)),
+                };
                 match screen.hover(x, y).await {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
@@ -457,8 +485,10 @@ impl super::DesktopTool {
                 })),
             },
             "mouse_button" => {
-                let x = args.x.unwrap_or(0.0);
-                let y = args.y.unwrap_or(0.0);
+                let (x, y) = match require_xy(args, "mouse_button") {
+                    Ok(xy) => xy,
+                    Err(out) => return Ok(Some(out)),
+                };
                 let button = to_desktop_button(args.button.as_ref());
                 let press_action = match args.press_action.as_deref() {
                     Some("press") => aleph_desktop::PressAction::Press,
@@ -615,5 +645,34 @@ impl super::DesktopTool {
             }
             _ => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(value: serde_json::Value) -> DesktopArgs {
+        serde_json::from_value(value).expect("valid DesktopArgs")
+    }
+
+    #[test]
+    fn require_xy_rejects_missing_coordinates() {
+        let err = require_xy(&args(serde_json::json!({"action": "click"})), "click")
+            .expect_err("missing x/y must be rejected");
+        assert!(!err.success);
+        assert!(err.message.unwrap().contains("'x' and 'y'"));
+    }
+
+    #[test]
+    fn require_xy_rejects_partial_coordinates() {
+        let partial = args(serde_json::json!({"action": "click", "x": 10.0}));
+        assert!(require_xy(&partial, "click").is_err());
+    }
+
+    #[test]
+    fn require_xy_accepts_full_coordinates() {
+        let full = args(serde_json::json!({"action": "click", "x": 12.0, "y": 34.0}));
+        assert_eq!(require_xy(&full, "click").unwrap(), (12.0, 34.0));
     }
 }

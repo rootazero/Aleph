@@ -149,6 +149,8 @@ impl BuiltinToolRegistry {
             .with_platform(Arc::clone(&desktop_platform));
         let desktop_ax_query_by_role_tool = crate::builtin_tools::DesktopAxQueryByRole::new()
             .with_platform(Arc::clone(&desktop_platform));
+        let desktop_ax_snapshot_tool = crate::builtin_tools::DesktopAxSnapshot::new()
+            .with_platform(Arc::clone(&desktop_platform));
         let desktop_check_permissions_tool = crate::builtin_tools::DesktopCheckPermissions::new()
             .with_platform(Arc::clone(&desktop_platform));
 
@@ -756,14 +758,12 @@ impl BuiltinToolRegistry {
                     Arc::clone(team_store),
                     current.clone(),
                 );
-                let resolve = LifecycleResolveShutdownTool::new(Arc::clone(router), current.clone());
+                let resolve =
+                    LifecycleResolveShutdownTool::new(Arc::clone(router), current.clone());
                 (idle, request, resolve)
             };
 
-            let triad = match (
-                config.message_router.as_ref(),
-                config.team_store.as_ref(),
-            ) {
+            let triad = match (config.message_router.as_ref(), config.team_store.as_ref()) {
                 (Some(router), Some(team_store)) => Some(mk(router, team_store)),
                 _ => None,
             };
@@ -1060,6 +1060,7 @@ impl BuiltinToolRegistry {
             desktop_ax_query_focused_tool,
             desktop_ax_query_tree_tool,
             desktop_ax_query_by_role_tool,
+            desktop_ax_snapshot_tool,
             desktop_check_permissions_tool,
             pim_tool,
             system_tool,
