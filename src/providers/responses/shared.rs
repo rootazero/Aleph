@@ -218,13 +218,22 @@ pub(crate) fn build_tools(
     })
 }
 
-/// Map ToolChoice to Responses API tool_choice string
-pub(crate) fn map_tool_choice(choice: Option<&ToolChoice>) -> Option<String> {
+/// Map [`ToolChoice`] to the Responses API `tool_choice` field.
+///
+/// `Auto` / `Required` / `None` map to their string forms. `Specific(name)`
+/// maps to the forced-function object `{"type":"function","name":name}` — the
+/// Responses API shape for pinning a single tool. Previously `Specific` was
+/// silently downgraded to `"auto"`, so a caller forcing one tool got free
+/// choice instead.
+pub(crate) fn map_tool_choice(choice: Option<&ToolChoice>) -> Option<serde_json::Value> {
     choice.map(|c| match c {
-        ToolChoice::Auto => "auto".to_string(),
-        ToolChoice::Required => "required".to_string(),
-        ToolChoice::None => "none".to_string(),
-        ToolChoice::Specific(_) => "auto".to_string(),
+        ToolChoice::Auto => serde_json::Value::from("auto"),
+        ToolChoice::Required => serde_json::Value::from("required"),
+        ToolChoice::None => serde_json::Value::from("none"),
+        ToolChoice::Specific(name) => serde_json::json!({
+            "type": "function",
+            "name": name,
+        }),
     })
 }
 
@@ -561,19 +570,21 @@ mod tests {
     fn test_map_tool_choice() {
         assert_eq!(
             map_tool_choice(Some(&ToolChoice::Auto)),
-            Some("auto".to_string())
+            Some(serde_json::json!("auto"))
         );
         assert_eq!(
             map_tool_choice(Some(&ToolChoice::Required)),
-            Some("required".to_string())
+            Some(serde_json::json!("required"))
         );
         assert_eq!(
             map_tool_choice(Some(&ToolChoice::None)),
-            Some("none".to_string())
+            Some(serde_json::json!("none"))
         );
+        // Specific now produces a forced-function object rather than silently
+        // collapsing to "auto".
         assert_eq!(
             map_tool_choice(Some(&ToolChoice::Specific("foo".into()))),
-            Some("auto".to_string())
+            Some(serde_json::json!({"type": "function", "name": "foo"}))
         );
         assert_eq!(map_tool_choice(None), None);
     }

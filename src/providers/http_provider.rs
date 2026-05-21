@@ -145,11 +145,31 @@ impl HttpProvider {
         // Collect streaming deltas into a ProviderResponse
         let stream = self.adapter.stream_deltas(response).await?;
         let mut collector = crate::providers::DeltaCollector::new();
+        // A provider-level semantic error (OpenAI Responses `response.failed`
+        // or a top-level `error` frame, Anthropic error SSE) arrives as a
+        // `ProviderDelta::Error`, which `DeltaCollector` intentionally drops.
+        // Capture the first one so an errored, content-less response surfaces
+        // as a real error instead of a silent empty turn that triggers a
+        // wasteful empty-response retry loop.
+        let mut provider_error: Option<String> = None;
         futures::pin_mut!(stream);
         while let Some(delta) = stream.next().await {
-            collector.push(delta?);
+            let delta = delta?;
+            if let crate::providers::ProviderDelta::Error(msg) = &delta {
+                provider_error.get_or_insert_with(|| msg.clone());
+            }
+            collector.push(delta);
         }
         let provider_response = collector.finish();
+
+        // Promote a reported error to a hard failure only when nothing usable
+        // came through; a partial response (text/tool calls + a late error) is
+        // still returned so the model can react on the next turn.
+        if let Some(msg) = provider_error {
+            if provider_response.text.is_none() && provider_response.tool_calls.is_empty() {
+                return Err(crate::error::AlephError::provider(msg));
+            }
+        }
 
         // Validate response
         provider_response.validate(self.adapter.name());

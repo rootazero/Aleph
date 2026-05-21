@@ -146,8 +146,8 @@ impl OpenAiResponsesProtocol {
             payload.tools,
             policy.capabilities.supports_strict_schema,
         );
-        let tool_choice =
-            shared::map_tool_choice(payload.tool_choice.as_ref()).or(Some("auto".to_string()));
+        let tool_choice = shared::map_tool_choice(payload.tool_choice.as_ref())
+            .or_else(|| Some(serde_json::Value::from("auto")));
 
         let store = policy.explicit_store;
 
@@ -503,10 +503,18 @@ fn parse_sse_event_multi(
             let stop_reason = if is_incomplete {
                 StopReason::MaxTokens
             } else {
-                let has_tool_calls = response
-                    .output
-                    .iter()
-                    .any(|item| matches!(item, OutputItem::FunctionCall { .. }));
+                // A tool call counts whether it appears in the final `output`
+                // array OR was streamed during the run. The Codex
+                // (chatgpt.com) backend can return an empty `output` on
+                // `response.completed` even after emitting function-call
+                // events; `item_to_call` is the authoritative streamed record,
+                // so without this check the turn is mis-classified EndTurn and
+                // the streamed tool calls are never executed.
+                let has_tool_calls = !item_to_call.is_empty()
+                    || response
+                        .output
+                        .iter()
+                        .any(|item| matches!(item, OutputItem::FunctionCall { .. }));
                 if has_tool_calls {
                     StopReason::ToolUse
                 } else {

@@ -22,9 +22,10 @@ pub struct ResponsesRequest {
     pub reasoning: Option<ReasoningConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<FunctionToolDef>>,
-    /// Tool selection strategy ("auto", "required", "none")
+    /// Tool selection strategy: the string `"auto"` / `"required"` / `"none"`,
+    /// or a forced-function object `{"type":"function","name":"<tool>"}`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<String>,
+    pub tool_choice: Option<serde_json::Value>,
     /// Enable parallel tool calls
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,

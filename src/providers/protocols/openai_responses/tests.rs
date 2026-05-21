@@ -1134,3 +1134,99 @@ fn build_request_defaults_stream_idle_timeout_to_60() {
         60,
     );
 }
+
+// ─── Completed stop-reason robustness ─────────────────────────────────────
+
+#[test]
+fn completed_with_empty_output_but_streamed_tool_call_is_tooluse() {
+    // The Codex (chatgpt.com) backend can return an empty `output` array on
+    // `response.completed` even after streaming function-call events. The
+    // streamed call (recorded in `item_to_call`) must still classify the turn
+    // as ToolUse, otherwise the tool is never executed.
+    let mut item_to_call: HashMap<String, String> = Default::default();
+    let mut out: std::collections::VecDeque<crate::providers::Result<ProviderDelta>> =
+        Default::default();
+
+    let added = r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"search","arguments":""}}"#;
+    super::parse_sse_event_multi(added, &mut item_to_call, &mut out);
+
+    // `response.completed` arrives with an empty output array.
+    let completed = r#"{"type":"response.completed","response":{"id":"r1","status":"completed","model":"gpt-5","output":[]}}"#;
+    super::parse_sse_event_multi(completed, &mut item_to_call, &mut out);
+
+    let done = out
+        .iter()
+        .find_map(|r| match r {
+            Ok(ProviderDelta::Done(reason)) => Some(reason.clone()),
+            _ => None,
+        })
+        .expect("a Done delta must be emitted");
+    assert_eq!(
+        done,
+        StopReason::ToolUse,
+        "a streamed tool call must classify the turn as ToolUse even with empty output"
+    );
+}
+
+#[test]
+fn completed_with_no_output_and_no_tool_calls_is_endturn() {
+    // The plain text-completion case is unaffected by the streamed-tool fix.
+    let mut item_to_call: HashMap<String, String> = Default::default();
+    let mut out: std::collections::VecDeque<crate::providers::Result<ProviderDelta>> =
+        Default::default();
+
+    let completed = r#"{"type":"response.completed","response":{"id":"r1","status":"completed","model":"gpt-5","output":[{"type":"message","id":"m1","role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}}"#;
+    super::parse_sse_event_multi(completed, &mut item_to_call, &mut out);
+
+    let done = out
+        .iter()
+        .find_map(|r| match r {
+            Ok(ProviderDelta::Done(reason)) => Some(reason.clone()),
+            _ => None,
+        })
+        .expect("a Done delta must be emitted");
+    assert_eq!(done, StopReason::EndTurn);
+}
+
+// ─── tool_choice: forced-function support ─────────────────────────────────
+
+#[test]
+fn build_request_maps_specific_tool_choice_to_forced_function() {
+    use crate::providers::adapter::ToolChoice;
+    use crate::providers::message::UnifiedMessage;
+
+    let msgs = [UnifiedMessage::user("Hello")];
+    let payload = RequestPayload::new(&msgs)
+        .with_tool_choice(Some(ToolChoice::Specific("web_search".to_string())));
+    let config = ProviderConfig::test_config("gpt-4o");
+    let request = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &ResponsesVariant::default(),
+        &config,
+    );
+
+    // Specific must serialize as a forced-function object, not the silent
+    // "auto" downgrade that used to drop the constraint.
+    assert_eq!(
+        request.tool_choice,
+        Some(serde_json::json!({"type": "function", "name": "web_search"})),
+    );
+}
+
+#[test]
+fn build_request_defaults_tool_choice_to_auto() {
+    use crate::providers::message::UnifiedMessage;
+
+    let msgs = [UnifiedMessage::user("Hello")];
+    let payload = RequestPayload::new(&msgs);
+    let config = ProviderConfig::test_config("gpt-4o");
+    let request = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &ResponsesVariant::default(),
+        &config,
+    );
+
+    assert_eq!(request.tool_choice, Some(serde_json::json!("auto")));
+}
