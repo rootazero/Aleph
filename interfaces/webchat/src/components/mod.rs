@@ -2,7 +2,6 @@
 
 pub mod agents_sidebar;
 pub mod api_key_input;
-pub mod bottom_bar;
 pub mod chat_sidebar;
 pub mod connection_status;
 pub mod dashboard_sidebar;
@@ -10,6 +9,7 @@ pub mod forms;
 pub mod layouts;
 pub mod markdown;
 pub mod mode_sidebar;
+pub mod nav_menu;
 pub mod settings_sidebar;
 pub mod sidebar;
 pub mod theme_toggle;
@@ -17,8 +17,7 @@ pub mod top_bar;
 pub mod ui;
 
 // Re-export layout components
-pub use bottom_bar::{BottomBar, PanelMode};
-pub use mode_sidebar::ModeSidebar;
+pub use mode_sidebar::{ModeSidebar, PanelMode};
 pub use top_bar::TopBar;
 
 // Re-export commonly used form components

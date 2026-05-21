@@ -165,10 +165,134 @@
 }
 
 /* ============================================================
+   Accent Palettes — orthogonal to light/dark/vibrant.
+   Selected via the `data-accent` attribute on <html>. Each palette
+   only re-tints the primary / focus / sidebar-accent tokens; the
+   neutral surface hierarchy is left untouched. Default (absent or
+   "mauve") keeps the base @theme hue 310.
+   ============================================================ */
+
+/* --- Light values --- */
+html[data-accent="ocean"] {
+  --color-primary:          oklch(0.55 0.130 250);
+  --color-primary-hover:    oklch(0.50 0.120 250);
+  --color-primary-subtle:   oklch(0.95 0.030 250);
+  --color-sidebar-active:   oklch(0.95 0.022 250);
+  --color-sidebar-accent:   oklch(0.55 0.130 250);
+  --color-ring:             oklch(0.55 0.130 250 / 0.35);
+  --color-chart-1:          oklch(0.55 0.130 250);
+}
+html[data-accent="forest"] {
+  --color-primary:          oklch(0.53 0.115 150);
+  --color-primary-hover:    oklch(0.48 0.105 150);
+  --color-primary-subtle:   oklch(0.95 0.030 150);
+  --color-sidebar-active:   oklch(0.95 0.022 150);
+  --color-sidebar-accent:   oklch(0.53 0.115 150);
+  --color-ring:             oklch(0.53 0.115 150 / 0.35);
+  --color-chart-1:          oklch(0.53 0.115 150);
+}
+html[data-accent="sunset"] {
+  --color-primary:          oklch(0.62 0.135 60);
+  --color-primary-hover:    oklch(0.57 0.125 60);
+  --color-primary-subtle:   oklch(0.95 0.035 60);
+  --color-sidebar-active:   oklch(0.95 0.025 60);
+  --color-sidebar-accent:   oklch(0.58 0.130 60);
+  --color-ring:             oklch(0.62 0.135 60 / 0.35);
+  --color-chart-1:          oklch(0.62 0.135 60);
+}
+html[data-accent="rose"] {
+  --color-primary:          oklch(0.57 0.150 15);
+  --color-primary-hover:    oklch(0.52 0.140 15);
+  --color-primary-subtle:   oklch(0.95 0.035 15);
+  --color-sidebar-active:   oklch(0.95 0.025 15);
+  --color-sidebar-accent:   oklch(0.57 0.150 15);
+  --color-ring:             oklch(0.57 0.150 15 / 0.35);
+  --color-chart-1:          oklch(0.57 0.150 15);
+}
+
+/* --- Dark values (explicit `.dark` class) --- */
+html.dark[data-accent="ocean"] {
+  --color-primary:          oklch(0.68 0.130 250);
+  --color-primary-hover:    oklch(0.73 0.120 250);
+  --color-primary-subtle:   oklch(0.22 0.050 250);
+  --color-sidebar-active:   oklch(0.24 0.040 250);
+  --color-sidebar-accent:   oklch(0.70 0.130 250);
+  --color-ring:             oklch(0.68 0.130 250 / 0.35);
+  --color-chart-1:          oklch(0.68 0.130 250);
+}
+html.dark[data-accent="forest"] {
+  --color-primary:          oklch(0.66 0.120 150);
+  --color-primary-hover:    oklch(0.71 0.110 150);
+  --color-primary-subtle:   oklch(0.22 0.045 150);
+  --color-sidebar-active:   oklch(0.24 0.038 150);
+  --color-sidebar-accent:   oklch(0.68 0.120 150);
+  --color-ring:             oklch(0.66 0.120 150 / 0.35);
+  --color-chart-1:          oklch(0.66 0.120 150);
+}
+html.dark[data-accent="sunset"] {
+  --color-primary:          oklch(0.74 0.135 65);
+  --color-primary-hover:    oklch(0.79 0.125 65);
+  --color-primary-subtle:   oklch(0.24 0.050 65);
+  --color-sidebar-active:   oklch(0.26 0.040 65);
+  --color-sidebar-accent:   oklch(0.76 0.135 65);
+  --color-ring:             oklch(0.74 0.135 65 / 0.35);
+  --color-chart-1:          oklch(0.74 0.135 65);
+}
+html.dark[data-accent="rose"] {
+  --color-primary:          oklch(0.70 0.150 15);
+  --color-primary-hover:    oklch(0.75 0.140 15);
+  --color-primary-subtle:   oklch(0.23 0.055 15);
+  --color-sidebar-active:   oklch(0.25 0.045 15);
+  --color-sidebar-accent:   oklch(0.72 0.150 15);
+  --color-ring:             oklch(0.70 0.150 15 / 0.35);
+  --color-chart-1:          oklch(0.70 0.150 15);
+}
+
+/* --- System dark (no class, OS preference) --- */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light)[data-accent="ocean"] {
+    --color-primary:        oklch(0.68 0.130 250);
+    --color-primary-hover:  oklch(0.73 0.120 250);
+    --color-primary-subtle: oklch(0.22 0.050 250);
+    --color-sidebar-active: oklch(0.24 0.040 250);
+    --color-sidebar-accent: oklch(0.70 0.130 250);
+    --color-ring:           oklch(0.68 0.130 250 / 0.35);
+    --color-chart-1:        oklch(0.68 0.130 250);
+  }
+  :root:not(.light)[data-accent="forest"] {
+    --color-primary:        oklch(0.66 0.120 150);
+    --color-primary-hover:  oklch(0.71 0.110 150);
+    --color-primary-subtle: oklch(0.22 0.045 150);
+    --color-sidebar-active: oklch(0.24 0.038 150);
+    --color-sidebar-accent: oklch(0.68 0.120 150);
+    --color-ring:           oklch(0.66 0.120 150 / 0.35);
+    --color-chart-1:        oklch(0.66 0.120 150);
+  }
+  :root:not(.light)[data-accent="sunset"] {
+    --color-primary:        oklch(0.74 0.135 65);
+    --color-primary-hover:  oklch(0.79 0.125 65);
+    --color-primary-subtle: oklch(0.24 0.050 65);
+    --color-sidebar-active: oklch(0.26 0.040 65);
+    --color-sidebar-accent: oklch(0.76 0.135 65);
+    --color-ring:           oklch(0.74 0.135 65 / 0.35);
+    --color-chart-1:        oklch(0.74 0.135 65);
+  }
+  :root:not(.light)[data-accent="rose"] {
+    --color-primary:        oklch(0.70 0.150 15);
+    --color-primary-hover:  oklch(0.75 0.140 15);
+    --color-primary-subtle: oklch(0.23 0.055 15);
+    --color-sidebar-active: oklch(0.25 0.045 15);
+    --color-sidebar-accent: oklch(0.72 0.150 15);
+    --color-ring:           oklch(0.70 0.150 15 / 0.35);
+    --color-chart-1:        oklch(0.70 0.150 15);
+  }
+}
+
+/* ============================================================
    Translucent Theme — surfaces float on the OS vibrancy material.
-   Engages only inside the macOS shell, where a real material sits
-   behind the webview; elsewhere `.translucent` degrades silently to
-   the solid dark theme (no matching rules → no visual change).
+   Inside the macOS shell a real material sits behind the webview;
+   in a plain browser the `.translucent` theme paints its own aurora
+   backdrop so the glass surfaces still read.
    ============================================================ */
 
 html.translucent[data-platform="macos"],
@@ -176,7 +300,8 @@ html.translucent[data-platform="macos"] body {
   background-color: transparent;
 }
 
-html.translucent[data-platform="macos"] {
+/* Shared translucent surface tokens (macOS shell + browser fallback) */
+html.translucent {
   --color-surface:          oklch(0.16 0.020 310 / 0);
   --color-surface-raised:   oklch(0.22 0.018 310 / 0.55);
   --color-surface-sunken:   oklch(0.13 0.015 310 / 0.40);
@@ -186,6 +311,43 @@ html.translucent[data-platform="macos"] {
   --color-border:           oklch(0.62 0.020 310 / 0.16);
   --color-border-subtle:    oklch(0.62 0.018 310 / 0.10);
   --color-border-strong:    oklch(0.66 0.022 310 / 0.30);
+}
+
+/* Browser fallback — paint an aurora backdrop behind the glass. */
+html.translucent:not([data-platform="macos"]) body {
+  background-color: oklch(0.13 0.020 310);
+  background-image:
+    radial-gradient(ellipse 80% 60% at 12% -5%,  oklch(0.62 0.190 310 / 0.40), transparent 62%),
+    radial-gradient(ellipse 75% 55% at 105% 110%, oklch(0.60 0.170 235 / 0.38), transparent 60%),
+    radial-gradient(ellipse 65% 50% at 50% 115%, oklch(0.64 0.150 160 / 0.26), transparent 58%);
+  background-attachment: fixed;
+}
+
+/* Frosted-glass blur for the chrome surfaces under the translucent theme. */
+html.translucent .app-titlebar,
+html.translucent aside,
+html.translucent .glass-surface {
+  backdrop-filter: blur(24px) saturate(1.7);
+  -webkit-backdrop-filter: blur(24px) saturate(1.7);
+}
+
+/* ============================================================
+   Glass utility — frosted popovers / menus on any theme.
+   ============================================================ */
+
+.glass {
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+}
+
+/* Soft entrance for popovers / menus. */
+@keyframes aleph-pop-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+.animate-pop-in {
+  animation: aleph-pop-in 0.16s var(--ease-spring);
+  transform-origin: bottom left;
 }
 
 /* ============================================================
