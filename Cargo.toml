@@ -8,6 +8,7 @@ members = [
     "desktop/macos",
     "desktop/linux",
     "desktop/windows",
+    "desktop/shell",
     "shared/logging",
     "shared/protocol",
     "shared/ui_logic",

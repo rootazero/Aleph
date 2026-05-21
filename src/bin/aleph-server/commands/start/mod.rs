@@ -1408,6 +1408,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     );
                 }
 
+                // 11. One-shot startup card refresh: upgrade config agents'
+                // placeholder cards to their real Agent Cards in the
+                // background. Non-blocking — never delays startup.
+                alephcore::a2a::service::spawn_card_refresh(
+                    card_registry.clone(),
+                    a2a_sub_agent.clone(),
+                );
+
                 if !args.daemon {
                     println!("A2A protocol: enabled");
                     println!("  - Agent Card: /.well-known/agent-card.json");

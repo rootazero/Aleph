@@ -1,5 +1,7 @@
+use std::pin::Pin;
 use std::time::Duration;
 
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -7,6 +9,13 @@ use crate::a2a::domain::*;
 use crate::a2a::port::A2AResult;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
+
+/// Idle-timeout for the streaming delegation path — silence longer than this
+/// (no bytes, no SSE keep-alive) ends the stream.
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Bound on opening the streaming connection (TCP connect + response headers).
+const STREAM_OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// HTTP client for calling remote A2A agents via JSON-RPC 2.0.
 ///
@@ -157,6 +166,68 @@ impl A2AClient {
         serde_json::from_value(result).map_err(|e| A2AError::ParseError(e.to_string()))
     }
 
+    /// Send a message to a remote agent over the streaming endpoint.
+    ///
+    /// POSTs `message/send` to `{base_url}/a2a/stream` and returns the parsed
+    /// SSE stream of `UpdateEvent`s. A non-2xx status (e.g. an agent with no
+    /// streaming route) is returned as `Err` so the caller can fall back to
+    /// the synchronous `send_message`.
+    pub async fn send_message_stream(
+        &self,
+        task_id: &str,
+        message: &A2AMessage,
+        session_id: Option<&str>,
+    ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>> {
+        let mut params = json!({
+            "taskId": task_id,
+            "message": message,
+        });
+        if let Some(sid) = session_id {
+            params["sessionId"] = json!(sid);
+        }
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: uuid::Uuid::new_v4().to_string(),
+            method: "message/send".to_string(),
+            params,
+        };
+
+        let url = format!("{}/a2a/stream", self.base_url);
+        let mut builder = self
+            .http
+            .post(&url)
+            .json(&request)
+            .header(reqwest::header::ACCEPT, "text/event-stream");
+        if let Some(ref token) = self.auth_token {
+            builder = builder.bearer_auth(token);
+        }
+
+        // Bound connection establishment only — the stream body itself is
+        // governed by the per-chunk idle-timeout, not a total timeout.
+        let response = tokio::time::timeout(STREAM_OPEN_TIMEOUT, builder.send())
+            .await
+            .map_err(|_| A2AError::Timeout(STREAM_OPEN_TIMEOUT))?
+            .map_err(|e| {
+                if e.is_timeout() {
+                    A2AError::Timeout(STREAM_OPEN_TIMEOUT)
+                } else {
+                    A2AError::AgentUnreachable(e.to_string())
+                }
+            })?;
+
+        if !response.status().is_success() {
+            return Err(A2AError::AgentUnreachable(format!(
+                "A2A stream endpoint returned HTTP {}",
+                response.status()
+            )));
+        }
+
+        Ok(crate::a2a::adapter::client::parse_sse_response(
+            response,
+            STREAM_IDLE_TIMEOUT,
+        ))
+    }
+
     /// Get task status
     pub async fn get_task(
         &self,
@@ -218,6 +289,13 @@ impl A2AClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::a2a::domain::{
+        A2AMessage, A2ARole, TaskState, TaskStatus, TaskStatusUpdateEvent, UpdateEvent,
+    };
+    use chrono::Utc;
+    use futures::StreamExt;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn new_trims_trailing_slashes() {
@@ -289,5 +367,79 @@ mod tests {
             "http://localhost:8080/api/v1/.well-known/agent-card.json"
         );
         assert_eq!(client.rpc_url(), "http://localhost:8080/api/v1/a2a");
+    }
+
+    /// Build an SSE body of two enveloped status-update events.
+    fn two_event_sse_body() -> String {
+        let working = UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+            task_id: "t".to_string(),
+            context_id: "c".to_string(),
+            status: TaskStatus {
+                state: TaskState::Working,
+                message: None,
+                timestamp: Utc::now(),
+            },
+            is_final: false,
+            metadata: None,
+        });
+        let completed = UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+            task_id: "t".to_string(),
+            context_id: "c".to_string(),
+            status: TaskStatus {
+                state: TaskState::Completed,
+                message: Some(A2AMessage::text(A2ARole::Agent, "done")),
+                timestamp: Utc::now(),
+            },
+            is_final: true,
+            metadata: None,
+        });
+        let env = |ev: &UpdateEvent| {
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": ev}).to_string()
+        };
+        format!(
+            "event: status-update\ndata: {}\n\nevent: status-update\ndata: {}\n\n",
+            env(&working),
+            env(&completed)
+        )
+    }
+
+    #[tokio::test]
+    async fn send_message_stream_parses_two_events() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/stream"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(two_event_sse_body(), "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = A2AClient::new(server.uri());
+        let msg = A2AMessage::text(A2ARole::User, "hi");
+        let stream = client
+            .send_message_stream("task-1", &msg, None)
+            .await
+            .expect("stream should open");
+        let events: Vec<_> = stream.collect().await;
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.is_ok()));
+    }
+
+    #[tokio::test]
+    async fn send_message_stream_non_2xx_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/stream"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let client = A2AClient::new(server.uri());
+        let msg = A2AMessage::text(A2ARole::User, "hi");
+        match client.send_message_stream("task-1", &msg, None).await {
+            Ok(_) => panic!("expected non-2xx status to error"),
+            Err(e) => assert!(matches!(e, A2AError::AgentUnreachable(_))),
+        }
     }
 }
