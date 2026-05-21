@@ -38,6 +38,7 @@ pub mod capability;
 pub mod registrar;
 
 mod error;
+mod manager_global;
 pub mod manifest;
 pub mod mcp_config;
 mod plugin_ops;
@@ -53,6 +54,9 @@ pub mod watcher;
 pub use component_id::ComponentId;
 pub use error::*;
 pub use loader::PluginLoader;
+pub use manager_global::{
+    init_extension_manager, is_extension_manager_initialized, try_extension_manager,
+};
 pub use manifest::*;
 pub use registry::*;
 pub use service_manager::ServiceManager;

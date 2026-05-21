@@ -570,7 +570,7 @@ impl ScopedToolService {
                 })
                 .await;
                 match raw_outcome {
-                    Ok(output) => Ok(self.apply_layer_two(name, output)),
+                    Ok(output) => Ok(self.apply_layer_two(name, output).await),
                     Err(err) => Err(Self::sanitize_tool_error(name, err)),
                 }
             }
@@ -749,7 +749,7 @@ impl ScopedToolService {
     /// per-tool compression hook (`compress_tool_output`) and the shared
     /// `result_store` if one is wired; falls back to head+tail truncation
     /// otherwise.
-    fn apply_layer_two(&self, name: &str, mut out: ToolOutput) -> ToolOutput {
+    async fn apply_layer_two(&self, name: &str, mut out: ToolOutput) -> ToolOutput {
         // Compress first: hands JSON to the per-tool summarizer that
         // already exists in `tool_output::compressor`. The text we feed
         // into Layer 2 reflects what the LLM will ultimately see.
@@ -779,6 +779,21 @@ impl ScopedToolService {
         if processed.persisted_path.is_some() || processed.text.contains("[output truncated") {
             out.metadata.truncated = true;
         }
+
+        // Extension hooks observe large tool results offloaded to disk.
+        if let Some(ref path) = processed.persisted_path {
+            if let Some(executor) = self.hook_executor.as_ref() {
+                let ctx = HookContext::new(self.hook_session_id.clone())
+                    .with_tool_name(name)
+                    .with_env("TOOL_CALL_ID", call_id.clone())
+                    .with_env("PERSIST_PATH", path.display().to_string())
+                    .with_env("PERSIST_REF", processed.text.clone());
+                executor
+                    .execute_observers(HookEvent::ToolResultPersist, &ctx)
+                    .await;
+            }
+        }
+
         out.value = Value::String(processed.text);
         out
     }

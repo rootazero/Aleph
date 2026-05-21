@@ -480,6 +480,24 @@ impl InboundMessageRouter {
             }
         };
 
+        // Extension hooks observe inbound channel traffic (post-permission).
+        // MESSAGE_PREVIEW is capped at 256 chars to keep message content out of
+        // an unbounded env var.
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::MessageReceived,
+            &ctx.session_key.to_key_string(),
+            vec![
+                ("CHANNEL_ID", channel_id.to_string()),
+                ("SENDER_ID", msg.sender_id.as_str().to_string()),
+                ("MESSAGE_CHARS", msg.text.chars().count().to_string()),
+                (
+                    "MESSAGE_PREVIEW",
+                    msg.text.chars().take(256).collect::<String>(),
+                ),
+            ],
+        )
+        .await;
+
         // Voice STT: transcribe audio attachments before further processing
         let has_stt = self.stt_config.is_some();
         let has_audio = super::voice::inbound::has_audio_attachment(&ctx.message);

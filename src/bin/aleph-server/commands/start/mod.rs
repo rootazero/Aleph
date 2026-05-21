@@ -1877,6 +1877,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         println!();
     }
 
+    // Notify extension hooks that the gateway is up and fully configured.
+    alephcore::extension::hooks::fire_global_observer(
+        alephcore::extension::HookEvent::GatewayStart,
+        "gateway",
+        vec![
+            ("GATEWAY_VERSION", env!("ALEPH_VERSION").to_string()),
+            ("GATEWAY_BIND", final_bind.to_string()),
+            ("GATEWAY_PORT", final_port.to_string()),
+            ("GATEWAY_PID", std::process::id().to_string()),
+        ],
+    )
+    .await;
+
     // Spec C: write IPC endpoint discovery file. Best-effort — failure does
     // not block startup. Removed after run_until_shutdown returns (success
     // or error) below.
@@ -1902,6 +1915,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if let Some(dir) = ipc_data_dir.as_deref() {
         alephcore::cli::endpoint::remove_endpoint(dir);
     }
+
+    // Notify extension hooks of shutdown (best-effort; the SIGTERM path in
+    // setup_graceful_shutdown calls process::exit and bypasses this).
+    alephcore::extension::hooks::fire_global_observer(
+        alephcore::extension::HookEvent::GatewayStop,
+        "gateway",
+        vec![
+            ("GATEWAY_VERSION", env!("ALEPH_VERSION").to_string()),
+            ("GATEWAY_PID", std::process::id().to_string()),
+        ],
+    )
+    .await;
+
     run_result?;
 
     // Graceful shutdown: stop heartbeat, ACP harnesses, and mDNS

@@ -255,7 +255,39 @@ impl ChannelRegistry {
             )));
         }
 
-        channel.send(message).await
+        // Extension hooks observe outbound channel traffic. Capture the message
+        // facts before `channel.send` consumes the OutboundMessage.
+        let hook_channel = channel_id.as_str().to_string();
+        let hook_conversation = message.conversation_id.as_str().to_string();
+        let hook_chars = message.text.chars().count();
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::MessageSending,
+            &hook_conversation,
+            vec![
+                ("CHANNEL_ID", hook_channel.clone()),
+                ("CONVERSATION_ID", hook_conversation.clone()),
+                ("MESSAGE_CHARS", hook_chars.to_string()),
+            ],
+        )
+        .await;
+
+        let result = channel.send(message).await;
+
+        if let Ok(ref sent) = result {
+            crate::extension::hooks::fire_global_observer(
+                crate::extension::HookEvent::MessageSent,
+                &hook_conversation,
+                vec![
+                    ("CHANNEL_ID", hook_channel),
+                    ("CONVERSATION_ID", hook_conversation.clone()),
+                    ("MESSAGE_CHARS", hook_chars.to_string()),
+                    ("MESSAGE_ID", sent.message_id.as_str().to_string()),
+                ],
+            )
+            .await;
+        }
+
+        result
     }
 
     /// Edit a previously sent message through a specific channel
