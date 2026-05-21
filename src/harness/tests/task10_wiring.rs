@@ -602,6 +602,63 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
 }
 
 // =============================================================================
+// Test 6 — StopDiminishing fires grace turn + hit_limit when
+// DiminishingReturnsDetector trips on an unproductive turn.
+// Cycle 3 — after_turn was dead-wired before this commit.
+// =============================================================================
+#[tokio::test]
+async fn diminishing_returns_fires_grace_and_hits_limit() {
+    let user_text = "ping".to_string();
+    let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
+    let provider = CountingProvider::new("grace summary text");
+
+    // budget pressure never trips (large budget, high thresholds)
+    let mut cfg = tiny_budget_config(10_000, 0.99, 0.99);
+    // window=1: one unproductive turn is enough to trip the detector.
+    // threshold=10_000: any output below 10_000 tokens counts as diminishing.
+    // CountingProvider returns no usage, so output_tokens=0 → trips.
+    cfg.diminishing_window = 1;
+    cfg.diminishing_threshold = 10_000;
+    let budget = ContextBudget::new(&cfg);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: None,
+        context_budget: Some(Arc::new(AsyncMutex::new(budget))),
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+    };
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed on StopDiminishing");
+
+    assert_eq!(state, TurnState::Done, "StopDiminishing must produce TurnState::Done");
+    assert!(harness.hit_limit(), "hit_limit must be set when DiminishingReturnsDetector trips");
+    assert_eq!(
+        provider.call_count(),
+        2,
+        "1 primary call + 1 grace turn = 2 LLM calls expected",
+    );
+}
+
+// =============================================================================
 // Test 4 — Stage 6a (#10) ToolLoopVerifier vetoes repeated tool_call end-to-end
 // =============================================================================
 

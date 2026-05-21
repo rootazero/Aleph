@@ -255,6 +255,13 @@ impl AgentHarness {
         // billed. Excludes `thinking_tokens`; see `turn_token_total`.
         let turn_tokens = super::turn_token_total(&response.usage);
         self.total_tokens.fetch_add(turn_tokens, Ordering::Relaxed);
+        // Cycle 3 — OUTPUT tokens only (not total), required by
+        // DiminishingReturnsDetector's window threshold semantics.
+        let output_tokens = response
+            .usage
+            .as_ref()
+            .map(|u| u.output_tokens as usize)
+            .unwrap_or(0);
 
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = super::current_turn_id(&events);
@@ -399,6 +406,49 @@ impl AgentHarness {
                 total_tokens: turn_tokens as usize,
             };
             result = Ok((TurnState::Continue, executed, false));
+        }
+
+        // Cycle 3 — wire DiminishingReturnsDetector. `after_turn` had zero
+        // production callsites before this commit. Skipped on a verifier veto:
+        // a veto is already a guardrail intervention and must not also feed the
+        // diminishing-returns window. StopDiminishing reuses the Task-5
+        // grace-turn helper to give the user a terminal summary, mirroring
+        // the FinalReply path. R10-safe: no new directive variant, no new
+        // decision category — `StopDiminishing` already existed.
+        //
+        // The veto flag is the 3rd element of `result`; `verdict` was moved
+        // into the if-let binding above and is no longer in scope.
+        let is_verifier_veto = matches!(result, Ok((_, _, true)));
+        if !is_verifier_veto {
+            let after_directive = if let Some(budget) = self.deps.context_budget.as_ref() {
+                let mut guard = budget.lock().await;
+                Some(guard.after_turn(crate::context::budget::TurnMetrics {
+                    output_tokens,
+                    tool_calls: metrics_for_trace.requested_tool_calls,
+                    productive: metrics_for_trace.productive,
+                }))
+            } else {
+                None
+            };
+            if matches!(after_directive, Some(LoopDirective::StopDiminishing)) {
+                self.hit_limit.store(true, Ordering::Relaxed);
+                self.fire_grace_turn(
+                    session_id,
+                    &events,
+                    &messages,
+                    callback,
+                    iterations,
+                    GraceReason::Diminishing,
+                )
+                .await;
+                callback.on_complete_via_harness();
+                self.emit(|| crate::harness::trace::LoopTraceEvent::TurnCompleted {
+                    iteration: iterations,
+                    outcome: crate::harness::trace::LoopTraceTurnOutcome::Stop,
+                    metrics: metrics_for_trace.clone(),
+                });
+                return Ok((TurnState::Done, metrics_for_trace.executed_tool_calls, false));
+            }
         }
 
         self.emit(|| crate::harness::trace::LoopTraceEvent::TurnCompleted {
