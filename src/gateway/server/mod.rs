@@ -396,6 +396,8 @@ impl GatewayServer {
 
         let mut router = Router::new()
             .route("/ws", get(handler::ws_upgrade_handler))
+            .route("/health", get(probe::handle_health))
+            .route("/ready", get(probe::handle_ready))
             .fallback_service(control_plane)
             .with_state(shared)
             .merge(openai);
