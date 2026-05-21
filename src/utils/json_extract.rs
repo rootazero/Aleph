@@ -106,12 +106,21 @@ fn extract_from_json_code_block(response: &str) -> Option<String> {
         let content = &response[json_start..];
         let content_start = content.find(|c: char| !c.is_whitespace()).unwrap_or(0);
 
-        if let Some(end) = content[content_start..].find(end_marker) {
-            return Some(
-                content[content_start..content_start + end]
-                    .trim()
-                    .to_string(),
-            );
+        // Find closing ``` that stands on its own line (preceded only by whitespace)
+        let mut search_pos = content_start;
+        while let Some(pos) = content[search_pos..].find(end_marker) {
+            let abs_pos = search_pos + pos;
+            let before = &content[..abs_pos];
+            let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_prefix = &before[line_start..];
+            if line_prefix.trim().is_empty() {
+                return Some(
+                    content[content_start..abs_pos]
+                        .trim()
+                        .to_string(),
+                );
+            }
+            search_pos = abs_pos + end_marker.len();
         }
     }
     None
@@ -129,12 +138,22 @@ fn extract_from_generic_code_block(response: &str) -> Option<String> {
             .map(|i| block_start + i + 1)
             .unwrap_or(block_start);
 
-        if let Some(end) = response[content_start..].find(marker) {
-            let content = &response[content_start..content_start + end];
-            let trimmed = content.trim();
-            if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                return Some(trimmed.to_string());
+        // Find closing ``` that stands on its own line (preceded only by whitespace)
+        let mut search_pos = content_start;
+        while let Some(pos) = response[search_pos..].find(marker) {
+            let abs_pos = search_pos + pos;
+            let before = &response[..abs_pos];
+            let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_prefix = &before[line_start..];
+            if line_prefix.trim().is_empty() {
+                let content = &response[content_start..abs_pos];
+                let trimmed = content.trim();
+                if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                    return Some(trimmed.to_string());
+                }
+                return None;
             }
+            search_pos = abs_pos + marker.len();
         }
     }
     None
