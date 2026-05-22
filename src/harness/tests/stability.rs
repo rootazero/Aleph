@@ -109,6 +109,7 @@ impl AiProvider for OneShotToolProvider {
                 Ok(ProviderResponse {
                     text: None,
                     tool_calls: vec![NativeToolCall {
+                        thought_signature: None,
                         id: format!("c-{n}"),
                         name: tool,
                         arguments: serde_json::json!({}),
@@ -405,6 +406,7 @@ async fn tool_failure_recovers_in_next_think() {
                     Ok(ProviderResponse {
                         text: None,
                         tool_calls: vec![NativeToolCall {
+                            thought_signature: None,
                             id: "c-0".into(),
                             name: "fail_one".into(),
                             arguments: serde_json::json!({}),
@@ -475,16 +477,19 @@ async fn partial_batch_failure_continues() {
                         text: None,
                         tool_calls: vec![
                             NativeToolCall {
+                                thought_signature: None,
                                 id: "a".into(),
                                 name: "ok_a".into(),
                                 arguments: serde_json::json!({}),
                             },
                             NativeToolCall {
+                                thought_signature: None,
                                 id: "b".into(),
                                 name: "fail_b".into(),
                                 arguments: serde_json::json!({}),
                             },
                             NativeToolCall {
+                                thought_signature: None,
                                 id: "c".into(),
                                 name: "ok_c".into(),
                                 arguments: serde_json::json!({}),
@@ -551,6 +556,7 @@ async fn consecutive_total_failure_caps_loop() {
                 Ok(ProviderResponse {
                     text: None,
                     tool_calls: vec![NativeToolCall {
+                        thought_signature: None,
                         id: format!("c-{}", uuid::Uuid::new_v4()),
                         name: "fail_x".into(),
                         arguments: serde_json::json!({}),
@@ -812,6 +818,7 @@ async fn long_think_does_not_falsely_trip_stall() {
                     Ok(ProviderResponse {
                         text: None,
                         tool_calls: vec![NativeToolCall {
+                            thought_signature: None,
                             id: "c".into(),
                             name: "ok_x".into(),
                             arguments: serde_json::json!({}),

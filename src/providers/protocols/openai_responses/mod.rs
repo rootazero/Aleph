@@ -465,6 +465,7 @@ fn parse_sse_event_multi(
             // Register item_id → call_id for subsequent arg delta correlation
             item_to_call.insert(id, call_id.clone());
             out.push_back(Ok(ProviderDelta::ToolCallStart {
+                signature: None,
                 id: call_id,
                 name: desanitize_tool_name(&name),
             }));

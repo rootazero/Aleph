@@ -44,8 +44,19 @@ pub enum ProviderDelta {
     /// concatenates the signature fragments and stores the result on
     /// [`ProviderResponse::thinking_signature`].
     ThinkingSignatureDelta(String),
-    /// A tool call began — provides the id and name
-    ToolCallStart { id: String, name: String },
+    /// A tool call began — provides the id and name.
+    ///
+    /// `signature` carries Gemini 3's `thoughtSignature`: an opaque token the
+    /// model attaches to a `functionCall` part that must be replayed verbatim
+    /// on later turns to keep the model's reasoning chain intact. It is `None`
+    /// for providers that do not sign tool calls (Anthropic, OpenAI, older
+    /// Gemini). Gemini delivers a whole `functionCall` in one SSE chunk, so the
+    /// signature is always known at start.
+    ToolCallStart {
+        id: String,
+        name: String,
+        signature: Option<String>,
+    },
     /// Additional argument JSON fragment for a tool call
     ToolCallArgDelta { id: String, delta: String },
     /// A tool call's argument stream is complete
@@ -66,17 +77,30 @@ pub enum ProviderDelta {
 // DeltaCollector
 // =============================================================================
 
+/// A tool call accumulating across delta events inside [`DeltaCollector`].
+///
+/// `args` grows as `ToolCallArgDelta` fragments arrive; `signature` is set once
+/// at `ToolCallStart` (Gemini 3 `thoughtSignature`, `None` for other providers).
+#[derive(Debug, Default)]
+struct PendingToolCall {
+    id: String,
+    name: String,
+    /// Accumulated argument JSON fragments.
+    args: String,
+    /// Gemini 3 `thoughtSignature`, when the provider supplied one.
+    signature: Option<String>,
+}
+
 /// Accumulates [`ProviderDelta`] events into a [`ProviderResponse`].
 ///
-/// Tool calls are stored as `Vec<(id, name, accumulated_args)>` to preserve
+/// Tool calls are stored as an ordered `Vec<PendingToolCall>` to preserve
 /// insertion order, which matches the order the model declared them.
 #[derive(Debug, Default)]
 pub struct DeltaCollector {
     text: String,
     thinking: String,
     thinking_signature: String,
-    /// (id, name, accumulated_arg_json)
-    tool_calls: Vec<(String, String, String)>,
+    tool_calls: Vec<PendingToolCall>,
     usage: Option<TokenUsage>,
     stop_reason: StopReason,
 }
@@ -119,15 +143,24 @@ impl DeltaCollector {
             ProviderDelta::TextDelta(s) => self.text.push_str(&s),
             ProviderDelta::ThinkingDelta(s) => self.thinking.push_str(&s),
             ProviderDelta::ThinkingSignatureDelta(s) => self.thinking_signature.push_str(&s),
-            ProviderDelta::ToolCallStart { id, name } => {
+            ProviderDelta::ToolCallStart {
+                id,
+                name,
+                signature,
+            } => {
                 // Only add if not already tracked (idempotent start)
-                if !self.tool_calls.iter().any(|(tid, _, _)| tid == &id) {
-                    self.tool_calls.push((id, name, String::new()));
+                if !self.tool_calls.iter().any(|tc| tc.id == id) {
+                    self.tool_calls.push(PendingToolCall {
+                        id,
+                        name,
+                        args: String::new(),
+                        signature,
+                    });
                 }
             }
             ProviderDelta::ToolCallArgDelta { id, delta } => {
-                if let Some(entry) = self.tool_calls.iter_mut().find(|(tid, _, _)| tid == &id) {
-                    entry.2.push_str(&delta);
+                if let Some(entry) = self.tool_calls.iter_mut().find(|tc| tc.id == id) {
+                    entry.args.push_str(&delta);
                 }
             }
             ProviderDelta::ToolCallEnd { .. } => {
@@ -161,7 +194,13 @@ impl DeltaCollector {
         let mut tool_calls: Vec<NativeToolCall> = self
             .tool_calls
             .into_iter()
-            .map(|(id, name, raw_args)| {
+            .map(|tc| {
+                let PendingToolCall {
+                    id,
+                    name,
+                    args: raw_args,
+                    signature,
+                } = tc;
                 // Empty input must be an empty object {}, not an empty string ""
                 // Anthropic API requires tool_use.input to be a valid dictionary
                 let arguments = if raw_args.is_empty() {
@@ -185,6 +224,7 @@ impl DeltaCollector {
                     id,
                     name,
                     arguments,
+                    thought_signature: signature,
                 }
             })
             .collect();
@@ -250,7 +290,12 @@ impl DeltaCollector {
         // Generate a deterministic synthetic id from the tool name so the
         // harness can correlate tool results on subsequent turns.
         let id = format!("json_{}", name);
-        Some(NativeToolCall { id, name, arguments })
+        Some(NativeToolCall {
+            id,
+            name,
+            arguments,
+            thought_signature: None,
+        })
     }
 }
 
@@ -339,6 +384,7 @@ fn collect_response_deltas(response: ProviderResponse) -> Vec<ProviderDelta> {
         events.push(ProviderDelta::ToolCallStart {
             id: tc.id.clone(),
             name: tc.name,
+            signature: tc.thought_signature,
         });
         if !args_str.is_empty() && args_str != "null" {
             events.push(ProviderDelta::ToolCallArgDelta {
@@ -441,6 +487,7 @@ mod tests {
     fn test_collector_tool_calls() {
         let mut c = DeltaCollector::new();
         c.push(ProviderDelta::ToolCallStart {
+            signature: None,
             id: "tc1".to_string(),
             name: "search".to_string(),
         });
@@ -471,6 +518,7 @@ mod tests {
     fn test_collector_malformed_tool_args_returns_empty_object() {
         let mut c = DeltaCollector::new();
         c.push(ProviderDelta::ToolCallStart {
+            signature: None,
             id: "tc1".to_string(),
             name: "bad_tool".to_string(),
         });
@@ -501,6 +549,7 @@ mod tests {
         // normally and emits a structured "missing field X" ToolError.
         let mut collector = DeltaCollector::new();
         collector.push(ProviderDelta::ToolCallStart {
+            signature: None,
             id: "call_truncated".to_string(),
             name: "Read".to_string(),
         });
@@ -603,10 +652,12 @@ mod tests {
         let mut c = DeltaCollector::new();
         // Start both tool calls
         c.push(ProviderDelta::ToolCallStart {
+            signature: None,
             id: "tc1".to_string(),
             name: "search".to_string(),
         });
         c.push(ProviderDelta::ToolCallStart {
+            signature: None,
             id: "tc2".to_string(),
             name: "fetch".to_string(),
         });
@@ -658,6 +709,7 @@ mod tests {
         let resp = ProviderResponse {
             text: Some("Hello!".to_string()),
             tool_calls: vec![NativeToolCall {
+                thought_signature: None,
                 id: "tc1".to_string(),
                 name: "search".to_string(),
                 arguments: serde_json::json!({"q": "rust"}),
@@ -689,5 +741,42 @@ mod tests {
         // Verify Done at end
         let last = unwrapped.last().unwrap();
         assert!(matches!(last, ProviderDelta::Done(StopReason::ToolUse)));
+    }
+
+    #[test]
+    fn test_delta_collector_carries_thought_signature() {
+        // A Gemini 3 `thoughtSignature` arriving on ToolCallStart must land on
+        // the finished NativeToolCall.
+        let mut c = DeltaCollector::new();
+        c.push(ProviderDelta::ToolCallStart {
+            id: "tc1".into(),
+            name: "search".into(),
+            signature: Some("gemini_sig".into()),
+        });
+        c.push(ProviderDelta::ToolCallArgDelta {
+            id: "tc1".into(),
+            delta: r#"{"q":"x"}"#.into(),
+        });
+        c.push(ProviderDelta::ToolCallEnd { id: "tc1".into() });
+        let resp = c.finish();
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(
+            resp.tool_calls[0].thought_signature.as_deref(),
+            Some("gemini_sig"),
+        );
+    }
+
+    #[test]
+    fn test_delta_collector_no_signature_is_none() {
+        // Unsigned providers (Anthropic, OpenAI) leave thought_signature None.
+        let mut c = DeltaCollector::new();
+        c.push(ProviderDelta::ToolCallStart {
+            id: "tc1".into(),
+            name: "search".into(),
+            signature: None,
+        });
+        c.push(ProviderDelta::ToolCallEnd { id: "tc1".into() });
+        let resp = c.finish();
+        assert!(resp.tool_calls[0].thought_signature.is_none());
     }
 }

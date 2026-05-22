@@ -80,7 +80,7 @@ fn test_parse_sse_native_tool_id() {
     parse_gemini_sse_chunk(data, &mut fc, &mut out);
 
     match out.pop_front().unwrap() {
-        Ok(ProviderDelta::ToolCallStart { id, name }) => {
+        Ok(ProviderDelta::ToolCallStart { id, name, .. }) => {
             assert_eq!(id, "native_123");
             assert_eq!(name, "search");
         }
@@ -285,6 +285,7 @@ fn test_convert_s3_assistant_with_tool_call() {
     use crate::providers::message::ContentBlock as CB;
     let msgs = [UnifiedMessage::Assistant {
         content: vec![CB::ToolCall {
+            thought_signature: None,
             id: "call_1".to_string(),
             name: "search".to_string(),
             arguments: serde_json::json!({"query": "rust"}),
@@ -333,6 +334,7 @@ fn test_convert_s5_full_cycle() {
         UnifiedMessage::user("Search for Rust"),
         UnifiedMessage::Assistant {
             content: vec![CB::ToolCall {
+                thought_signature: None,
                 id: "call_1".to_string(),
                 name: "search".to_string(),
                 arguments: serde_json::json!({"q": "Rust"}),
@@ -396,6 +398,7 @@ fn test_convert_s8_assistant_text_and_tool_call_same_turn() {
                 cache_control: None,
             },
             CB::ToolCall {
+                thought_signature: None,
                 id: "call_1".to_string(),
                 name: "web_search".to_string(),
                 arguments: serde_json::json!({"q": "test"}),
@@ -522,6 +525,7 @@ fn test_convert_assistant_tool_call_preserves_id() {
     use crate::providers::message::ContentBlock as CB;
     let msgs = [UnifiedMessage::Assistant {
         content: vec![CB::ToolCall {
+            thought_signature: None,
             id: "call_xyz".to_string(),
             name: "search".to_string(),
             arguments: serde_json::json!({"q": "rust"}),
@@ -759,5 +763,142 @@ fn test_build_request_includes_media_resolution() {
     assert_eq!(
         body["generationConfig"]["mediaResolution"],
         "MEDIA_RESOLUTION_LOW",
+    );
+}
+
+// =========================================================================
+// thoughtSignature (Gemini 3) — round-trip
+// =========================================================================
+
+#[test]
+fn test_parse_sse_function_call_with_thought_signature() {
+    // Gemini 3 attaches `thoughtSignature` as a Part-level sibling of
+    // `functionCall`; it must surface on the ToolCallStart delta.
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","args":{"q":"rust"}},"thoughtSignature":"sig_abc_123"}]},"finishReason":"STOP"}]}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+
+    let signature = out.iter().find_map(|d| match d {
+        Ok(ProviderDelta::ToolCallStart { signature, .. }) => Some(signature.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        signature,
+        Some(Some("sig_abc_123".to_string())),
+        "Part-level thoughtSignature must surface on ToolCallStart, got {out:?}"
+    );
+}
+
+#[test]
+fn test_parse_sse_function_call_without_thought_signature() {
+    // Older Gemini models omit thoughtSignature — the delta must carry None.
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","args":{"q":"rust"}}}]},"finishReason":"STOP"}]}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+
+    let start = out.iter().find_map(|d| match d {
+        Ok(ProviderDelta::ToolCallStart { signature, .. }) => Some(signature.clone()),
+        _ => None,
+    });
+    assert_eq!(start, Some(None), "absent thoughtSignature must yield None");
+}
+
+#[test]
+fn test_convert_tool_call_emits_thought_signature() {
+    use crate::providers::message::ContentBlock as CB;
+    let msgs = [UnifiedMessage::Assistant {
+        content: vec![CB::ToolCall {
+            id: "call_1".to_string(),
+            name: "search".to_string(),
+            arguments: serde_json::json!({"q": "rust"}),
+            thought_signature: Some("sig_replay_xyz".to_string()),
+        }],
+    }];
+    let result = GeminiProtocol::convert_messages(&msgs);
+    let json = serde_json::to_value(&result[0]).unwrap();
+    let part = &json["parts"][0];
+    // thoughtSignature is a Part-level sibling of functionCall, NOT nested.
+    assert_eq!(part["thoughtSignature"], "sig_replay_xyz");
+    assert!(
+        part["functionCall"].get("thoughtSignature").is_none(),
+        "thoughtSignature must NOT be nested inside functionCall"
+    );
+    assert_eq!(part["functionCall"]["name"], "search");
+}
+
+#[test]
+fn test_convert_tool_call_without_signature_omits_key() {
+    use crate::providers::message::ContentBlock as CB;
+    let msgs = [UnifiedMessage::Assistant {
+        content: vec![CB::ToolCall {
+            id: "call_1".to_string(),
+            name: "search".to_string(),
+            arguments: serde_json::json!({"q": "rust"}),
+            thought_signature: None,
+        }],
+    }];
+    let result = GeminiProtocol::convert_messages(&msgs);
+    let json = serde_json::to_value(&result[0]).unwrap();
+    assert!(
+        json["parts"][0].get("thoughtSignature").is_none(),
+        "absent signature must be omitted from the wire"
+    );
+}
+
+/// The full 7-hop round-trip: Gemini SSE → DeltaCollector → ProviderResponse
+/// → harness `tool_use_blocks` → `parse_tool_use_block` → ContentBlock →
+/// `convert_messages` → request Part. Guards every hop of B6 at once.
+#[test]
+fn test_gemini_thought_signature_full_round_trip() {
+    use crate::harness::agent::tool_use_blocks;
+    use crate::harness::prompt::parse_tool_use_block;
+    use crate::providers::delta::DeltaCollector;
+    use crate::providers::message::{ContentBlock, UnifiedMessage};
+
+    // 1. A Gemini 3 SSE response: functionCall + Part-level thoughtSignature.
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","id":"native_1","args":{"q":"rust"}},"thoughtSignature":"e2e_sig_value"}]},"finishReason":"STOP"}]}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+
+    // 2. Collect deltas into a ProviderResponse.
+    let mut collector = DeltaCollector::new();
+    for delta in out {
+        collector.push(delta.expect("delta ok"));
+    }
+    let resp = collector.finish();
+    assert_eq!(resp.tool_calls.len(), 1);
+    assert_eq!(
+        resp.tool_calls[0].thought_signature.as_deref(),
+        Some("e2e_sig_value"),
+        "signature must reach NativeToolCall"
+    );
+
+    // 3. Persist via the harness writer, then read back.
+    let blocks = tool_use_blocks(&resp.tool_calls);
+    let parsed = parse_tool_use_block(&blocks[0]).expect("block parses");
+    let thought_signature = match &parsed {
+        ContentBlock::ToolCall {
+            thought_signature, ..
+        } => thought_signature.clone(),
+        other => panic!("expected ToolCall, got {other:?}"),
+    };
+    assert_eq!(
+        thought_signature.as_deref(),
+        Some("e2e_sig_value"),
+        "signature must survive the session-event JSON round-trip"
+    );
+
+    // 4. Replay into a Gemini request — the signature lands Part-level.
+    let msg = UnifiedMessage::Assistant {
+        content: vec![parsed],
+    };
+    let contents = GeminiProtocol::convert_messages(&[msg]);
+    let json = serde_json::to_value(&contents[0]).unwrap();
+    assert_eq!(
+        json["parts"][0]["thoughtSignature"], "e2e_sig_value",
+        "round-tripped signature must be replayed to Gemini"
     );
 }

@@ -691,6 +691,7 @@ impl AiProvider for RepeatingToolCallProvider {
             Ok(ProviderResponse {
                 text: None,
                 tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                    thought_signature: None,
                     id: "loop-id".to_string(),
                     name: "loop_tool".to_string(),
                     arguments: serde_json::json!({"x": 1}),
@@ -829,6 +830,7 @@ impl AiProvider for OneShotSleepyCallProvider {
             Ok(ProviderResponse {
                 text: None,
                 tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                    thought_signature: None,
                     id: "sleepy-id".to_string(),
                     name: "sleepy_tool".to_string(),
                     arguments: serde_json::json!({}),
@@ -1119,6 +1121,7 @@ impl AiProvider for CapGraceProvider {
             if n < self.tool_call_turns {
                 Ok(ProviderResponse {
                     tool_calls: vec![NativeToolCall {
+                        thought_signature: None,
                         id: format!("call-{n}"),
                         name: "noop_tool".to_string(),
                         arguments: serde_json::json!({}),

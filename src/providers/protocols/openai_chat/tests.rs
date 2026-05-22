@@ -424,6 +424,7 @@ fn test_convert_s3_assistant_text_and_tool_call() {
                 cache_control: None,
             },
             CB::ToolCall {
+                thought_signature: None,
                 id: "call_abc".to_string(),
                 name: "search".to_string(),
                 arguments: serde_json::json!({"query": "rust"}),
@@ -463,6 +464,7 @@ fn test_convert_s5_full_cycle() {
         UnifiedMessage::user("Search for Rust"),
         UnifiedMessage::Assistant {
             content: vec![CB::ToolCall {
+                thought_signature: None,
                 id: "call_1".to_string(),
                 name: "search".to_string(),
                 arguments: serde_json::json!({"q": "Rust"}),
@@ -487,6 +489,7 @@ fn test_convert_s6_arguments_json_stringify() {
     let args = serde_json::json!({"query": "test"});
     let msgs = [UnifiedMessage::Assistant {
         content: vec![CB::ToolCall {
+            thought_signature: None,
             id: "call_1".to_string(),
             name: "search".to_string(),
             arguments: args.clone(),
@@ -510,11 +513,13 @@ fn test_convert_s7_multiple_tool_calls() {
     let msgs = [UnifiedMessage::Assistant {
         content: vec![
             CB::ToolCall {
+                thought_signature: None,
                 id: "call_1".to_string(),
                 name: "search".to_string(),
                 arguments: serde_json::json!({"q": "a"}),
             },
             CB::ToolCall {
+                thought_signature: None,
                 id: "call_2".to_string(),
                 name: "read_file".to_string(),
                 arguments: serde_json::json!({"path": "/tmp/x"}),
@@ -629,7 +634,7 @@ fn test_parse_sse_tool_call_start() {
     assert_eq!(pending.len(), 1);
     let delta = pending.pop_front().unwrap().unwrap();
     assert!(
-        matches!(delta, ProviderDelta::ToolCallStart { id, name } if id == "call_abc" && name == "search")
+        matches!(delta, ProviderDelta::ToolCallStart { id, name, .. } if id == "call_abc" && name == "search")
     );
 
     // Tracker should have the index mapped

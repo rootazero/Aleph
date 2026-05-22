@@ -119,6 +119,7 @@ impl AiProvider for Scripted {
                 Ok(ProviderResponse {
                     text: Some("first turn".to_string()),
                     tool_calls: vec![NativeToolCall {
+                        thought_signature: None,
                         id: "c".to_string(),
                         name: "noop".to_string(),
                         arguments: serde_json::json!({}),

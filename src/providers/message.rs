@@ -76,6 +76,13 @@ pub enum ContentBlock {
         id: String,
         name: String,
         arguments: Value,
+        /// Gemini 3 `thoughtSignature` for this call — an opaque token replayed
+        /// verbatim to Gemini on later turns so the model's reasoning chain
+        /// stays intact. `None` for unsigned providers (Anthropic, OpenAI,
+        /// older Gemini). Mirrors the `signature` field on the `Thinking`
+        /// variant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
     /// Image (base64-encoded)
     Image { data: String, mime_type: String },
@@ -162,6 +169,7 @@ impl UnifiedMessage {
                 id: tc.id.clone(),
                 name: tc.name.clone(),
                 arguments: tc.arguments.clone(),
+                thought_signature: tc.thought_signature.clone(),
             });
         }
         UnifiedMessage::Assistant { content }
@@ -292,6 +300,7 @@ impl UnifiedMessage {
                         id,
                         name,
                         arguments,
+                        ..
                     } => Some((id.as_str(), name.as_str(), arguments)),
                     _ => None,
                 })
@@ -435,6 +444,7 @@ mod tests {
         let resp = ProviderResponse {
             text: Some("I'll search for that.".into()),
             tool_calls: vec![NativeToolCall {
+                thought_signature: None,
                 id: "call_1".into(),
                 name: "search".into(),
                 arguments: json!({"query": "rust"}),
@@ -483,6 +493,7 @@ mod tests {
                     cache_control: None,
                 },
                 ContentBlock::ToolCall {
+                    thought_signature: None,
                     id: "c1".into(),
                     name: "search".into(),
                     arguments: json!({}),
@@ -499,6 +510,7 @@ mod tests {
             UnifiedMessage::user("search for rust"),
             UnifiedMessage::Assistant {
                 content: vec![ContentBlock::ToolCall {
+                    thought_signature: None,
                     id: "c1".into(),
                     name: "search".into(),
                     arguments: json!({"q": "rust"}),
@@ -516,6 +528,7 @@ mod tests {
             UnifiedMessage::user("search for rust"),
             UnifiedMessage::Assistant {
                 content: vec![ContentBlock::ToolCall {
+                    thought_signature: None,
                     id: "c1".into(),
                     name: "search".into(),
                     arguments: json!({"q": "rust"}),
@@ -602,5 +615,31 @@ mod tests {
                 ttl: Some(EphemeralTtl::OneHour),
             },
         );
+    }
+
+    #[test]
+    fn test_from_provider_response_copies_thought_signature() {
+        use super::super::adapter::{NativeToolCall, ProviderResponse};
+        let resp = ProviderResponse {
+            tool_calls: vec![NativeToolCall {
+                id: "c1".into(),
+                name: "search".into(),
+                arguments: json!({}),
+                thought_signature: Some("sig_fpr".into()),
+            }],
+            ..Default::default()
+        };
+        let msg = UnifiedMessage::from_provider_response(&resp);
+        match &msg {
+            UnifiedMessage::Assistant { content } => match &content[0] {
+                ContentBlock::ToolCall {
+                    thought_signature, ..
+                } => {
+                    assert_eq!(thought_signature.as_deref(), Some("sig_fpr"));
+                }
+                other => panic!("expected ToolCall, got {other:?}"),
+            },
+            _ => panic!("expected Assistant"),
+        }
     }
 }

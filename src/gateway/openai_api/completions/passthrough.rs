@@ -94,6 +94,7 @@ fn convert_messages(messages: &[ChatMessage]) -> Vec<UnifiedMessage> {
                                 (tc.get("id").and_then(|v| v.as_str()), tc.get("function"))
                             {
                                 content.push(ContentBlock::ToolCall {
+                                    thought_signature: None,
                                     id: id.to_string(),
                                     name: func
                                         .get("name")

@@ -261,11 +261,13 @@ fn turn_started_event() -> SessionEvent {
 async fn act_executes_tools_sequentially() {
     let tool_calls = vec![
         NativeToolCall {
+            thought_signature: None,
             id: "c1".into(),
             name: "read_file".into(),
             arguments: serde_json::json!({"path": "a.txt"}),
         },
         NativeToolCall {
+            thought_signature: None,
             id: "c2".into(),
             name: "read_file".into(),
             arguments: serde_json::json!({"path": "b.txt"}),
@@ -340,6 +342,7 @@ async fn act_executes_tools_sequentially() {
 #[tokio::test]
 async fn act_tool_failure_returns_harness_tool_error() {
     let tool_calls = vec![NativeToolCall {
+        thought_signature: None,
         id: "c1".into(),
         name: "read_file".into(),
         arguments: serde_json::json!({"path": "missing.txt"}),
@@ -612,6 +615,7 @@ impl SessionService for ToolErrorFailingSession {
 #[tokio::test]
 async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
     let tool_calls = vec![NativeToolCall {
+        thought_signature: None,
         id: "c1".into(),
         name: "read_file".into(),
         arguments: serde_json::json!({"path": "boom.txt"}),
@@ -675,11 +679,21 @@ fn tool_use_blocks_round_trip_through_parse_tool_use_block() {
             id: "c1".into(),
             name: "read_file".into(),
             arguments: serde_json::json!({"path": "/a"}),
+            thought_signature: None,
         },
         NativeToolCall {
             id: "c2".into(),
             name: "bash".into(),
             arguments: serde_json::json!({"cmd": "ls"}),
+            thought_signature: None,
+        },
+        // A Gemini 3 call carrying a thoughtSignature — it must survive the
+        // writer/reader round-trip so it can be replayed on later turns.
+        NativeToolCall {
+            id: "c3".into(),
+            name: "search".into(),
+            arguments: serde_json::json!({"q": "rust"}),
+            thought_signature: Some("sig_xyz_base64".into()),
         },
     ];
 
@@ -694,12 +708,17 @@ fn tool_use_blocks_round_trip_through_parse_tool_use_block() {
                 id,
                 name,
                 arguments,
+                thought_signature,
             } => {
                 assert_eq!(id, calls[i].id, "id must round-trip for block {i}");
                 assert_eq!(name, calls[i].name, "name must round-trip for block {i}");
                 assert_eq!(
                     arguments, calls[i].arguments,
                     "arguments must round-trip for block {i}"
+                );
+                assert_eq!(
+                    thought_signature, calls[i].thought_signature,
+                    "thought_signature must round-trip for block {i}"
                 );
             }
             other => panic!("expected ContentBlock::ToolCall, got {other:?}"),
@@ -714,6 +733,7 @@ fn tool_use_blocks_round_trip_through_parse_tool_use_block() {
 #[tokio::test]
 async fn tool_error_trace_carries_retryable_flag() {
     let tool_calls = vec![NativeToolCall {
+        thought_signature: None,
         id: "c1".into(),
         name: "search".into(),
         arguments: serde_json::json!({}),

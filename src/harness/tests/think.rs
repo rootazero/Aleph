@@ -150,6 +150,7 @@ impl FixedProvider {
         let response = ProviderResponse {
             text: Some(text.to_string()),
             tool_calls: vec![NativeToolCall {
+                thought_signature: None,
                 id: "call-1".to_string(),
                 name: tool_name.to_string(),
                 arguments: serde_json::json!({}),

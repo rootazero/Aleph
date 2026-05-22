@@ -51,6 +51,7 @@ pub(crate) fn parse_anthropic_sse_event(
                 // Track index → id for subsequent input_json_delta events
                 block_ids.track(index, id.to_string());
                 out.push_back(Ok(ProviderDelta::ToolCallStart {
+                    signature: None,
                     id: id.to_string(),
                     name,
                 }));

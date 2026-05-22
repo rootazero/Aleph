@@ -358,6 +358,7 @@ fn test_convert_s3_assistant_text_and_tool_call() {
                 cache_control: None,
             },
             ContentBlock::ToolCall {
+                thought_signature: None,
                 id: "call_abc".to_string(),
                 name: "web_search".to_string(),
                 arguments: serde_json::json!({"query": "rust lang"}),
@@ -502,6 +503,7 @@ fn test_convert_s5_full_tool_use_cycle() {
         UnifiedMessage::user("Search for Rust tutorials"),
         UnifiedMessage::Assistant {
             content: vec![ContentBlock::ToolCall {
+                thought_signature: None,
                 id: "call_1".to_string(),
                 name: "search".to_string(),
                 arguments: serde_json::json!({"q": "rust tutorials"}),
@@ -535,16 +537,19 @@ fn test_convert_s6_multiple_tool_calls_one_turn() {
                 cache_control: None,
             },
             ContentBlock::ToolCall {
+                thought_signature: None,
                 id: "c1".to_string(),
                 name: "search".to_string(),
                 arguments: serde_json::json!({"q": "a"}),
             },
             ContentBlock::ToolCall {
+                thought_signature: None,
                 id: "c2".to_string(),
                 name: "fetch".to_string(),
                 arguments: serde_json::json!({"url": "http://example.com"}),
             },
             ContentBlock::ToolCall {
+                thought_signature: None,
                 id: "c3".to_string(),
                 name: "calc".to_string(),
                 arguments: serde_json::json!({"expr": "1+1"}),
@@ -734,7 +739,7 @@ fn test_parse_sse_event_tool_call_start() {
     let data = r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"search","arguments":""}}"#;
     let delta = drain_one(data, &mut map);
     assert!(
-        matches!(delta, Some(ProviderDelta::ToolCallStart { ref id, ref name }) if id == "call_abc" && name == "search")
+        matches!(delta, Some(ProviderDelta::ToolCallStart { ref id, ref name, .. }) if id == "call_abc" && name == "search")
     );
     // item_id → call_id mapping populated
     assert_eq!(map.get("fc_1").map(|s| s.as_str()), Some("call_abc"));

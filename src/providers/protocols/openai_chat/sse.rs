@@ -118,6 +118,7 @@ pub(crate) fn parse_chat_sse_event(
                     .unwrap_or("");
                 tracker.track(index, id.to_string());
                 out.push_back(Ok(ProviderDelta::ToolCallStart {
+                    signature: None,
                     id: id.to_string(),
                     name: desanitize_tool_name(name),
                 }));

@@ -131,6 +131,7 @@ impl OpenAiProtocol {
                                 id,
                                 name,
                                 arguments,
+                                ..
                             } => {
                                 Some(OpenAiToolCall {
                                     id: id.clone(),

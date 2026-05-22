@@ -90,6 +90,7 @@ impl GeminiProtocol {
                                 id,
                                 name,
                                 arguments,
+                                thought_signature,
                             } => {
                                 parts.push(Part::FunctionCall {
                                     function_call: crate::providers::gemini::GeminiFunctionCall {
@@ -100,6 +101,11 @@ impl GeminiProtocol {
                                         // (required for Gemini 3 native tool-call ids).
                                         id: Some(id.clone()),
                                     },
+                                    // Replay Gemini 3's thoughtSignature verbatim so
+                                    // the model's reasoning chain stays intact across
+                                    // turns. `None` (other providers / older Gemini)
+                                    // is omitted from the wire.
+                                    thought_signature: thought_signature.clone(),
                                 });
                             }
                             _ => {}

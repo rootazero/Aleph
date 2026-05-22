@@ -148,7 +148,7 @@ pub fn provider_deltas_to_responses_sse(
                             // in the OpenAI Responses wire format.
                             continue;
                         }
-                        ProviderDelta::ToolCallStart { id, name } => {
+                        ProviderDelta::ToolCallStart { id, name, .. } => {
                             state
                                 .tool_calls
                                 .push((id.clone(), name.clone(), String::new()));
@@ -369,6 +369,7 @@ mod tests {
     async fn test_tool_calls() {
         let deltas: Vec<anyhow::Result<ProviderDelta>> = vec![
             Ok(ProviderDelta::ToolCallStart {
+                signature: None,
                 id: "call_1".to_string(),
                 name: "get_weather".to_string(),
             }),

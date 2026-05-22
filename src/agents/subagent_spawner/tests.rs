@@ -86,6 +86,7 @@ mod tests {
                 Ok(ProviderResponse {
                     text: None,
                     tool_calls: vec![NativeToolCall {
+                        thought_signature: None,
                         id: format!("call-{n}"),
                         name: "noop".into(),
                         arguments: json!({}),
@@ -153,6 +154,7 @@ mod tests {
                 Ok(ProviderResponse {
                     text: None,
                     tool_calls: vec![NativeToolCall {
+                        thought_signature: None,
                         id: format!("call-{n}"),
                         name: tool_name,
                         arguments: json!({}),
@@ -428,6 +430,7 @@ mod tests {
             ProviderResponse {
                 text: None,
                 tool_calls: vec![NativeToolCall {
+                    thought_signature: None,
                     id: "call-1".into(),
                     name: "noop".into(),
                     arguments: json!({}),

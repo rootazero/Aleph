@@ -15,6 +15,7 @@ fn assistant_msg(text: &str) -> UnifiedMessage {
 fn tool_use_msg(call_id: &str, tool_name: &str) -> UnifiedMessage {
     UnifiedMessage::Assistant {
         content: vec![ContentBlock::ToolCall {
+            thought_signature: None,
             id: call_id.to_owned(),
             name: tool_name.to_owned(),
             arguments: json!({}),

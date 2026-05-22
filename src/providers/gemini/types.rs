@@ -78,6 +78,16 @@ pub enum Part {
     FunctionCall {
         #[serde(rename = "functionCall")]
         function_call: GeminiFunctionCall,
+        /// Gemini 3 `thoughtSignature` — a Part-level sibling of `functionCall`
+        /// (NOT a member of the `functionCall` object). It is an opaque token
+        /// the model requires replayed verbatim on later turns. Omitted from
+        /// the wire when absent (older models, non-Gemini origin).
+        #[serde(
+            rename = "thoughtSignature",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        thought_signature: Option<String>,
     },
     /// Function response from user
     FunctionResponse {

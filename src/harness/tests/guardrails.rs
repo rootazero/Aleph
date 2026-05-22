@@ -635,11 +635,13 @@ async fn tool_call_block_skips_only_blocked_call_in_batch() {
     // The second ("safe_tool") must still execute — Stage 5b spec says Block
     // skips ONE call, batch continues.
     let blocked = NativeToolCall {
+        thought_signature: None,
         id: "c1".into(),
         name: "forbidden_tool".into(),
         arguments: serde_json::json!({"x": 1}),
     };
     let allowed = NativeToolCall {
+        thought_signature: None,
         id: "c2".into(),
         name: "safe_tool".into(),
         arguments: serde_json::json!({"y": 2}),
@@ -702,6 +704,7 @@ async fn tool_call_block_skips_only_blocked_call_in_batch() {
 #[tokio::test]
 async fn tool_call_sanitize_rewrites_args_seen_by_tool() {
     let dirty = NativeToolCall {
+        thought_signature: None,
         id: "c1".into(),
         name: "send_message".into(),
         arguments: serde_json::json!({"body": "the password is SECRET"}),
@@ -755,6 +758,7 @@ async fn tool_call_sanitize_rewrites_args_seen_by_tool() {
 #[tokio::test]
 async fn tool_call_allow_passes_through_unchanged() {
     let call = NativeToolCall {
+        thought_signature: None,
         id: "c1".into(),
         name: "noop".into(),
         arguments: serde_json::json!({"k": "v"}),

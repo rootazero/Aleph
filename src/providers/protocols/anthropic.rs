@@ -270,6 +270,7 @@ mod tests {
                     cache_control: None,
                 },
                 CB::ToolCall {
+                    thought_signature: None,
                     id: "toolu_123".to_string(),
                     name: "search".to_string(),
                     arguments: serde_json::json!({"query": "rust"}),
@@ -320,6 +321,7 @@ mod tests {
             UnifiedMessage::user("Search for Rust"),
             UnifiedMessage::Assistant {
                 content: vec![CB::ToolCall {
+                    thought_signature: None,
                     id: "call_1".to_string(),
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "Rust"}),
@@ -343,11 +345,13 @@ mod tests {
         let msgs = [UnifiedMessage::Assistant {
             content: vec![
                 CB::ToolCall {
+                    thought_signature: None,
                     id: "call_1".to_string(),
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "rust"}),
                 },
                 CB::ToolCall {
+                    thought_signature: None,
                     id: "call_2".to_string(),
                     name: "read_file".to_string(),
                     arguments: serde_json::json!({"path": "/tmp/a.rs"}),
@@ -410,6 +414,7 @@ mod tests {
         let long_special_id = "call/foo@bar#1!!!!".to_string();
         let msgs = [UnifiedMessage::Assistant {
             content: vec![CB::ToolCall {
+                thought_signature: None,
                 id: long_special_id,
                 name: "test".to_string(),
                 arguments: serde_json::json!({}),
@@ -431,6 +436,7 @@ mod tests {
         let long_id = "a".repeat(100);
         let msgs2 = [UnifiedMessage::Assistant {
             content: vec![CB::ToolCall {
+                thought_signature: None,
                 id: long_id,
                 name: "test".to_string(),
                 arguments: serde_json::json!({}),
@@ -759,7 +765,7 @@ mod stream_tests {
             .find(|d| matches!(d, ProviderDelta::ToolCallStart { .. }));
         assert!(matches!(
             start,
-            Some(ProviderDelta::ToolCallStart { id, name }) if id == "toolu_1" && name == "search"
+            Some(ProviderDelta::ToolCallStart { id, name, .. }) if id == "toolu_1" && name == "search"
         ));
 
         // ToolCallArgDelta
@@ -851,6 +857,7 @@ mod stream_tests {
                     signature: Some("sig_abc123".to_string()),
                 },
                 UContentBlock::ToolCall {
+                    thought_signature: None,
                     id: "toolu_1".to_string(),
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "rust"}),

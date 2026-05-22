@@ -152,6 +152,7 @@ impl AnthropicProtocol {
                                 id,
                                 name,
                                 arguments,
+                                ..
                             } => {
                                 // Sanitize tool_use_id for Anthropic
                                 let sanitized_id: String = id

@@ -139,7 +139,7 @@ pub fn provider_deltas_to_sse(
                                         (deltas, tracker, usage_acc, false),
                                     ));
                                 }
-                                ProviderDelta::ToolCallStart { id: tc_id, name } => {
+                                ProviderDelta::ToolCallStart { id: tc_id, name, .. } => {
                                     let index = tracker.index_for(&tc_id);
                                     let chunk = make_chunk(
                                         &id,
@@ -409,6 +409,7 @@ mod tests {
     async fn test_provider_deltas_to_sse_tool_calls() {
         let deltas: Vec<anyhow::Result<ProviderDelta>> = vec![
             Ok(ProviderDelta::ToolCallStart {
+                signature: None,
                 id: "call_1".to_string(),
                 name: "get_weather".to_string(),
             }),

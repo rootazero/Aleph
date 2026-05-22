@@ -309,6 +309,7 @@ mod tests {
         sink.on_delta(&ProviderDelta::ThinkingDelta("hmm".to_string()))
             .await;
         sink.on_delta(&ProviderDelta::ToolCallStart {
+            signature: None,
             id: "tc1".to_string(),
             name: "search".to_string(),
         })

@@ -105,6 +105,7 @@ impl AiProvider for FastToolCallProvider {
             Ok(ProviderResponse {
                 text: None,
                 tool_calls: vec![NativeToolCall {
+                    thought_signature: None,
                     id: "call_hang_1".into(),
                     name: "hanging_tool".into(),
                     arguments: serde_json::json!({}),

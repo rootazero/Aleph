@@ -110,9 +110,19 @@ pub(crate) fn parse_gemini_sse_chunk(
                             synthetic
                         });
 
+                    // Gemini 3 attaches `thoughtSignature` as a Part-level
+                    // sibling of `functionCall` (read off `part`, not `fc`).
+                    // It must be replayed verbatim on later turns.
+                    let signature = part
+                        .get("thoughtSignature")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
+
                     out.push_back(Ok(ProviderDelta::ToolCallStart {
                         id: id.clone(),
                         name,
+                        signature,
                     }));
                     if !args_str.is_empty() && args_str != "null" {
                         out.push_back(Ok(ProviderDelta::ToolCallArgDelta {

@@ -199,10 +199,17 @@ pub(crate) fn parse_tool_use_block(
         .and_then(serde_json::Value::as_str)?
         .to_string();
     let arguments = obj.get("input").cloned().unwrap_or(serde_json::Value::Null);
+    // Gemini 3 `thoughtSignature`, persisted by `tool_use_blocks`. Absent for
+    // other providers and for sessions logged before this field existed.
+    let thought_signature = obj
+        .get("thought_signature")
+        .and_then(serde_json::Value::as_str)
+        .map(|s| s.to_string());
     Some(ContentBlock::ToolCall {
         id,
         name,
         arguments,
+        thought_signature,
     })
 }
 

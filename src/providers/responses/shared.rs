@@ -92,6 +92,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                         id,
                         name,
                         arguments,
+                        ..
                     } = block
                     {
                         items.push(InputItem::FunctionCall {
@@ -274,6 +275,7 @@ pub fn extract_tool_calls(response: &ResponseResource) -> Vec<NativeToolCall> {
             let args = serde_json::from_str(arguments)
                 .unwrap_or_else(|_| serde_json::Value::String(arguments.clone()));
             calls.push(NativeToolCall {
+                thought_signature: None,
                 id: call_id.clone(),
                 name: desanitize_tool_name_pub(name),
                 arguments: args,
@@ -363,6 +365,7 @@ mod tests {
                     cache_control: None,
                 },
                 ContentBlock::ToolCall {
+                    thought_signature: None,
                     id: "call_abc".to_string(),
                     name: "web_search".to_string(),
                     arguments: serde_json::json!({"query": "rust"}),
@@ -422,6 +425,7 @@ mod tests {
             UnifiedMessage::user("Search for Rust"),
             UnifiedMessage::Assistant {
                 content: vec![ContentBlock::ToolCall {
+                    thought_signature: None,
                     id: "c1".to_string(),
                     name: "search".to_string(),
                     arguments: serde_json::json!({"q": "rust"}),

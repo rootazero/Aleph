@@ -256,6 +256,13 @@ pub struct NativeToolCall {
     pub name: String,
     /// Tool arguments as JSON
     pub arguments: Value,
+    /// Gemini 3 `thoughtSignature` — an opaque token the model attaches to a
+    /// `functionCall` and requires replayed verbatim on later turns to keep its
+    /// reasoning chain intact. `None` for providers that do not sign tool calls
+    /// (Anthropic, OpenAI, older Gemini). `#[serde(default)]` keeps sessions
+    /// persisted before this field deserializable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 /// Why the LLM stopped generating
@@ -364,6 +371,7 @@ mod tests {
     fn test_provider_response_with_tool_calls() {
         let resp = ProviderResponse {
             tool_calls: vec![NativeToolCall {
+                thought_signature: None,
                 id: "call_123".into(),
                 name: "search".into(),
                 arguments: serde_json::json!({"query": "test"}),

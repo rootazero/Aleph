@@ -624,16 +624,25 @@ pub(crate) fn count_tool_calls(events: &[SessionEventRecord]) -> usize {
 }
 
 /// Serialize each `NativeToolCall` as a JSON `tool_use` block.
+///
+/// Gemini 3's `thought_signature` is persisted alongside the call so it
+/// survives the session-event round-trip and is replayed on later turns. The
+/// key is omitted entirely when absent (other providers / older Gemini), so
+/// pre-existing session logs are unaffected. Reader: `parse_tool_use_block`.
 pub(crate) fn tool_use_blocks(tool_calls: &[NativeToolCall]) -> Vec<Value> {
     tool_calls
         .iter()
         .map(|c| {
-            json!({
+            let mut block = json!({
                 "type": "tool_use",
                 "id": c.id,
                 "name": c.name,
                 "input": c.arguments,
-            })
+            });
+            if let Some(sig) = &c.thought_signature {
+                block["thought_signature"] = Value::String(sig.clone());
+            }
+            block
         })
         .collect()
 }
@@ -778,6 +787,7 @@ mod tests {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(ProviderResponse {
                     tool_calls: vec![NativeToolCall {
+                        thought_signature: None,
                         id: "loop".to_string(),
                         name: "echo".to_string(),
                         arguments: json!({"text": "loop"}),
