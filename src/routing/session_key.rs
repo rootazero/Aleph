@@ -125,8 +125,8 @@ impl SessionKey {
             },
             _ => Self::DirectMessage {
                 agent_id,
-                channel: channel.into().trim().to_lowercase(),
-                peer_id: peer_id.into().trim().to_lowercase(),
+                channel: sanitize_component(&channel.into()),
+                peer_id: sanitize_component(&peer_id.into()),
                 dm_scope,
                 epoch: 0,
             },
@@ -142,14 +142,13 @@ impl SessionKey {
     ) -> Self {
         Self::Group {
             agent_id: normalize_agent_id(&agent_id.into()),
-            channel: channel.into().trim().to_lowercase(),
+            channel: sanitize_component(&channel.into()),
             peer_kind,
-            peer_id: peer_id.into().trim().to_lowercase(),
+            peer_id: sanitize_component(&peer_id.into()),
             thread_id: None,
         }
     }
 
-    /// Create a group session key with thread
     pub fn group_thread(
         agent_id: impl Into<String>,
         channel: impl Into<String>,
@@ -159,10 +158,10 @@ impl SessionKey {
     ) -> Self {
         Self::Group {
             agent_id: normalize_agent_id(&agent_id.into()),
-            channel: channel.into().trim().to_lowercase(),
+            channel: sanitize_component(&channel.into()),
             peer_kind,
-            peer_id: peer_id.into().trim().to_lowercase(),
-            thread_id: Some(thread_id.into().trim().to_lowercase()),
+            peer_id: sanitize_component(&peer_id.into()),
+            thread_id: Some(sanitize_component(&thread_id.into())),
         }
     }
 
@@ -184,6 +183,13 @@ impl SessionKey {
         Self::Ephemeral {
             agent_id: normalize_agent_id(&agent_id.into()),
             ephemeral_id: uuid::Uuid::new_v4().to_string(),
+        }
+    }
+
+    pub fn subagent(parent_key: Self, subagent_id: impl Into<String>) -> Self {
+        Self::Subagent {
+            parent_key: Box::new(parent_key),
+            subagent_id: sanitize_component(&subagent_id.into()),
         }
     }
 
@@ -413,17 +419,13 @@ impl SessionKey {
 
         let rest = &parts[2..];
 
-        // Try parsing as-is first — an ID or thread ID may legitimately be "sN".
-        if let Some(key) = Self::parse_rest(&agent_id, rest, 0) {
-            return Some(key);
+        if let Some((rest_no_epoch, epoch)) = Self::strip_epoch(rest) {
+            if let Some(key) = Self::parse_rest(&agent_id, rest_no_epoch, epoch) {
+                return Some(key);
+            }
         }
 
-        // Then try stripping a trailing epoch suffix.
-        if let Some((rest_no_epoch, epoch)) = Self::strip_epoch(rest) {
-            Self::parse_rest(&agent_id, rest_no_epoch, epoch)
-        } else {
-            None
-        }
+        Self::parse_rest(&agent_id, rest, 0)
     }
 
     fn strip_epoch<'a>(rest: &'a [&'a str]) -> Option<(&'a [&'a str], u32)> {
@@ -526,22 +528,19 @@ impl SessionKey {
                 ephemeral_id: ephemeral_id.to_string(),
             }),
 
-            // agent:id:{task_type}:{task_id}
-            // Listed types are those used in the codebase; unknown types will
-            // not round-trip through parse (format ambiguity with Main epoch).
-            [task_type @ ("cron" | "webhook" | "scheduled" | "team" | "heartbeat" | "a2a"), task_id] => {
-                Some(Self::Task {
-                    agent_id: agent_id.to_string(),
-                    task_type: task_type.to_string(),
-                    task_id: task_id.to_string(),
-                })
-            }
-
             // agent:id:main (or any single token as main_key)
+            // Must come before the catch-all task pattern so that "main" is
+            // not misinterpreted as a task_type.
             [main_key] => Some(Self::Main {
                 agent_id: agent_id.to_string(),
                 main_key: main_key.to_string(),
                 epoch,
+            }),
+
+            [task_type, task_id] => Some(Self::Task {
+                agent_id: agent_id.to_string(),
+                task_type: task_type.to_string(),
+                task_id: task_id.to_string(),
             }),
 
             _ => None,
@@ -613,6 +612,24 @@ pub fn normalize_agent_id(id: &str) -> String {
     } else {
         result
     }
+}
+
+fn sanitize_component(s: &str) -> String {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 impl fmt::Display for SessionKey {
@@ -959,5 +976,35 @@ mod tests {
                 s
             );
         }
+    }
+
+    #[test]
+    fn test_roundtrip_with_special_chars() {
+        let key = SessionKey::dm("main", "ch:annel", "us:er", DmScope::PerChannelPeer);
+        let s = key.to_key_string();
+        let parsed = SessionKey::parse(&s).expect("must parse sanitized key");
+        assert_eq!(parsed.to_key_string(), s);
+        assert_eq!(
+            parsed,
+            SessionKey::dm("main", "ch-annel", "us-er", DmScope::PerChannelPeer)
+        );
+    }
+
+    #[test]
+    fn test_task_roundtrip_arbitrary_type() {
+        let key = SessionKey::task("main", "custom_type", "id-1");
+        let s = key.to_key_string();
+        let parsed = SessionKey::parse(&s).expect("must parse arbitrary task type");
+        assert_eq!(parsed.to_key_string(), s);
+    }
+
+    #[test]
+    fn test_subagent_constructor() {
+        let parent = SessionKey::main("main");
+        let key = SessionKey::subagent(parent, "coding:agent");
+        assert_eq!(key.agent_id(), "main");
+        let s = key.to_key_string();
+        let parsed = SessionKey::parse(&s).expect("must parse subagent");
+        assert_eq!(parsed.to_key_string(), s);
     }
 }

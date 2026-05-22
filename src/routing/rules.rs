@@ -1,6 +1,6 @@
 //! Rule-based task classifier with configurable regex patterns.
 
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -114,10 +114,10 @@ impl RoutingRules {
 }
 
 /// Compile a list of pattern strings, skipping invalid ones.
-fn compile_patterns(patterns: &[String]) -> Vec<Regex> {
+fn compile_patterns(patterns: &[String]) -> Vec<regex::Regex> {
     patterns
         .iter()
-        .filter_map(|p| match Regex::new(p) {
+        .filter_map(|p| match RegexBuilder::new(p).size_limit(1 << 20).build() {
             Ok(r) => Some(r),
             Err(e) => {
                 warn!(pattern = %p, error = %e, "skipping invalid routing pattern");
