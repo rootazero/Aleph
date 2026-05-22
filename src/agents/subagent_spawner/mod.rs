@@ -13,7 +13,8 @@
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::Arc;
+
+use crate::sync_primitives::Arc;
 
 use futures::FutureExt;
 use tokio_util::sync::CancellationToken;

@@ -471,7 +471,7 @@ impl LoopTool for SubagentTool {
                 }
 
                 let mut results: Vec<Value> = Vec::with_capacity(handles.len());
-                for h in handles {
+                for (batch_idx, h) in handles.into_iter().enumerate() {
                     let item = match h.await {
                         Ok((idx, Ok(Ok(r)))) => json!({
                             "index": idx,
@@ -492,6 +492,7 @@ impl LoopTool for SubagentTool {
                             "error": "sub-agent panicked",
                         }),
                         Err(join_err) => json!({
+                            "index": batch_idx,
                             "status": "join_error",
                             "error": join_err.to_string(),
                         }),

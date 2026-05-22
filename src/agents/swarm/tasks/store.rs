@@ -41,18 +41,46 @@ fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CoordTask> {
     let result_val: Option<String> = row.get(7)?;
     let metadata_str: String = row.get(8)?;
 
+    let status = CoordTaskStatus::from_stored(&status_str).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown task status: {}", status_str),
+            )),
+        )
+    })?;
+    let priority = Priority::from_stored(&priority_str).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            6,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown task priority: {}", priority_str),
+            )),
+        )
+    })?;
+
     Ok(CoordTask {
         id: row.get(0)?,
         team_id: row.get(1)?,
         subject: row.get(2)?,
         description: row.get(3)?,
-        status: CoordTaskStatus::from_stored(&status_str).unwrap_or_default(),
+        status,
         owner: row.get(5)?,
-        priority: Priority::from_stored(&priority_str).unwrap_or_default(),
+        priority,
         result: result_val,
         metadata: serde_json::from_str(&metadata_str)
-            .unwrap_or(serde_json::Value::Object(Default::default())),
-        dependencies: Vec::new(), // filled separately
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                8,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid metadata JSON: {}", e),
+                )),
+            ))?,
+        dependencies: Vec::new(),
         created_at: row.get(9)?,
         started_at: row.get(10)?,
         completed_at: row.get(11)?,

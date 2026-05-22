@@ -7,7 +7,7 @@
 //! spawn path. Sync subagents share the parent's trace_sink directly (Stage A
 //! inheritance); no wrapper is needed or installed there.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::agents::background_tracker::BackgroundAgentTracker;
 use crate::agents::progress::{ProgressKind, SubagentProgress};

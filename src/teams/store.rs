@@ -67,6 +67,8 @@ pub trait TeamStore: Send + Sync {
     /// Fetch a team by its ID. Returns `None` if not found.
     async fn get_team(&self, id: &str) -> crate::error::Result<Option<Team>>;
 
+    async fn get_team_by_name(&self, name: &str) -> crate::error::Result<Option<Team>>;
+
     /// List all teams as lightweight summaries (with member/task counts).
     async fn list_teams(&self) -> crate::error::Result<Vec<TeamSummary>>;
 
@@ -219,6 +221,18 @@ impl TeamStore for SqliteTeamStore {
             )
             .map_err(db_err)?;
         stmt.query_row(params![id], read_team_row)
+            .optional()
+            .map_err(db_err)
+    }
+
+    async fn get_team_by_name(&self, name: &str) -> crate::error::Result<Option<Team>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at FROM teams WHERE name = ?1",
+            )
+            .map_err(db_err)?;
+        stmt.query_row(params![name], read_team_row)
             .optional()
             .map_err(db_err)
     }

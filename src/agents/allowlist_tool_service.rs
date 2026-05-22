@@ -4,7 +4,7 @@
 //! the tools its AgentDef permits. Delegates all passing calls to the inner
 //! service unchanged.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;

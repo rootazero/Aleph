@@ -22,13 +22,10 @@ impl TeammateManager {
     /// The `parent_agent_id` becomes the team leader.
     /// Returns the team ID.
     pub async fn ensure_team(&self, team_name: &str, parent_agent_id: &str) -> Result<String> {
-        // Check if team already exists by listing and filtering
-        let teams = self.team_store.list_teams().await?;
-        if let Some(existing) = teams.iter().find(|t| t.name == team_name) {
-            return Ok(existing.id.clone());
+        if let Some(existing) = self.team_store.get_team_by_name(team_name).await? {
+            return Ok(existing.id);
         }
 
-        // Create new team — may race with a concurrent call
         match self
             .team_store
             .create_team(NewTeam {
@@ -40,12 +37,10 @@ impl TeammateManager {
         {
             Ok(team) => Ok(team.id),
             Err(e) => {
-                // Race: another call created the team first. Retry lookup.
-                let teams = self.team_store.list_teams().await?;
-                teams
-                    .iter()
-                    .find(|t| t.name == team_name)
-                    .map(|t| t.id.clone())
+                self.team_store
+                    .get_team_by_name(team_name)
+                    .await?
+                    .map(|t| t.id)
                     .ok_or_else(|| crate::error::AlephError::Other {
                         message: format!("Failed to create or find team '{}': {}", team_name, e),
                         suggestion: None,

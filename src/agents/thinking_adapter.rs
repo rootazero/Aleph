@@ -102,9 +102,9 @@ impl ThinkingAdapter {
 
         // Check if model supports reasoning_effort (o1/o3 family or gpt-5.x)
         let model_lower = config.model.to_lowercase();
-        let supports_reasoning_effort = model_lower.contains("o1")
-            || model_lower.contains("o3")
-            || model_lower.contains("gpt-5");
+        let supports_reasoning_effort = model_lower.starts_with("o1")
+            || model_lower.starts_with("o3")
+            || model_lower.starts_with("gpt-5");
 
         if !supports_reasoning_effort {
             return None;
@@ -152,10 +152,10 @@ impl ThinkingAdapter {
 
         // Check if model supports new thinking_config (Gemini 2.5+, 3.x)
         let model_lower = config.model.to_lowercase();
-        let supports_budget = model_lower.contains("2.5")
-            || model_lower.contains("3.0")
-            || model_lower.contains("3-")
-            || model_lower.contains("gemini-3");
+        let supports_budget = model_lower.starts_with("gemini-2.5")
+            || model_lower.starts_with("gemini-3")
+            || model_lower.starts_with("gemini-pro-2.5")
+            || model_lower.starts_with("gemini-flash-2.5");
 
         if supports_budget {
             match level {
