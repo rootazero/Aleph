@@ -127,7 +127,9 @@ fn normalize_path_components(path: &std::path::Path) -> std::path::PathBuf {
             Component::ParentDir => {
                 normalized.pop();
             }
-            _ => {}
+            Component::Prefix(p) => {
+                normalized.push(p.as_os_str());
+            }
         }
     }
     normalized

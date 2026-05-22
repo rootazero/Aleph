@@ -31,7 +31,7 @@ pub struct ApprovalGate {
     /// exists, then wire the real requester via `set_requester` once channels
     /// are up. An empty slot denies — never a silent auto-approve.
     requester: RwLock<Option<Arc<dyn ApprovalRequester>>>,
-    retry_counts: HashMap<String, u8>,
+    retry_counts: std::sync::Mutex<HashMap<String, u8>>,
 }
 
 impl ApprovalGate {
@@ -39,7 +39,7 @@ impl ApprovalGate {
         Self {
             config,
             requester: RwLock::new(requester),
-            retry_counts: HashMap::new(),
+            retry_counts: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -127,19 +127,28 @@ impl ApprovalGate {
             ApprovalAction::Block {
                 action: crate::sandbox::exec_approval::types::BlockAction::Retry
             }
-        ) && self.retry_counts.get(tool_name).copied().unwrap_or(0) < 2
+        ) && self.retry_counts.lock().unwrap_or_else(|e| e.into_inner())
+            .get(tool_name)
+            .copied()
+            .unwrap_or(0) < 2
     }
 
-    pub fn record_retry(&mut self, tool_name: &str) {
-        *self.retry_counts.entry(tool_name.to_string()).or_insert(0) += 1;
+    pub fn record_retry(&self, tool_name: &str) {
+        *self.retry_counts.lock().unwrap_or_else(|e| e.into_inner())
+            .entry(tool_name.to_string())
+            .or_insert(0) += 1;
     }
 
-    pub fn reset_retry(&mut self, tool_name: &str) {
-        self.retry_counts.remove(tool_name);
+    pub fn reset_retry(&self, tool_name: &str) {
+        self.retry_counts.lock().unwrap_or_else(|e| e.into_inner())
+            .remove(tool_name);
     }
 
     pub fn retry_count(&self, tool_name: &str) -> u8 {
-        self.retry_counts.get(tool_name).copied().unwrap_or(0)
+        self.retry_counts.lock().unwrap_or_else(|e| e.into_inner())
+            .get(tool_name)
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -201,7 +210,7 @@ mod tests {
     #[test]
     fn block_retry_with_count() {
         let config = ApprovalConfig::default();
-        let mut gate = ApprovalGate::new(config, None);
+        let gate = ApprovalGate::new(config, None);
         let response = make_response_with_approval(
             r#"<exec-approval>{"action":"block","block_action":"retry","reason":"alternative"}</exec-approval>"#,
         );

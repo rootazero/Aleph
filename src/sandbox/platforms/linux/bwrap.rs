@@ -589,7 +589,7 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         let start = std::time::Instant::now();
         let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
 
-        let elapsed_ms = start.elapsed().as_millis() as u64;
+        let elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
 
         match result {
             Ok(Ok(output)) => {

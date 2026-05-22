@@ -242,7 +242,7 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
                 Ok(Err(e)) => return Err(crate::sandbox::SandboxError::Io(e.to_string())),
                 Err(_) => {
                     return Err(crate::sandbox::SandboxError::Timeout {
-                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        elapsed_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                     });
                 }
             }
@@ -266,7 +266,7 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             exit_code: exec.status.code(),
             signal,
             truncated: false,
-            duration_ms: started.elapsed().as_millis() as u64,
+            duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
         })
     }
 }

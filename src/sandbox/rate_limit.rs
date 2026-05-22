@@ -162,11 +162,14 @@ impl SandboxRateLimiter {
             }
         }
 
-        let count = entry.timestamps.len() as u32;
+        let count: u32 = entry.timestamps.len().try_into().unwrap_or(u32::MAX);
         let max = wc.max_requests + wc.burst_allow;
 
         if count >= max {
-            let oldest = entry.timestamps.front().expect("timestamps non-empty");
+            let oldest = match entry.timestamps.front() {
+                Some(t) => t,
+                None => return Ok(()),
+            };
             let retry_after = (*oldest + window_dur).duration_since(now);
             return Err(format!(
                 "rate limit exceeded for {:?}: {}/{} in {}s window (retry after {:?})",

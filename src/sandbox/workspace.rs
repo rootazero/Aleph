@@ -136,7 +136,9 @@ fn normalize_path(path: &std::path::Path, workspace_root: &std::path::Path) -> s
                 // pop the last component for ..
                 normalized.pop();
             }
-            _ => {}
+            Component::Prefix(p) => {
+                normalized.push(p.as_os_str());
+            }
         }
     }
     normalized
