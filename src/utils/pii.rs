@@ -33,7 +33,7 @@ fn get_patterns() -> &'static PiiPatterns {
             .expect("ssn regex should be valid"),
         credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b")
             .expect("credit_card regex should be valid"),
-        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-]{20,})\b")
+        api_key: Regex::new(r#"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-=]{20,})(?=\s|$|["'])"#)
             .expect("api_key regex should be valid"),
         china_mobile: Regex::new(r"\b1[3-9]\d{9}\b")
             .expect("china_mobile regex should be valid"),
@@ -175,6 +175,20 @@ mod tests {
         let text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
         let scrubbed = scrub_pii(text);
         assert_eq!(scrubbed, "Authorization: [REDACTED]");
+    }
+
+    #[test]
+    fn test_scrub_bearer_token_with_trailing_equals() {
+        let text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9=";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "Authorization: [REDACTED]");
+    }
+
+    #[test]
+    fn test_scrub_api_key_in_quotes() {
+        let text = r#""sk-proj1234567890abcdefghijklmnopqrstuvwxyz""#;
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, r#""[REDACTED]""#);
     }
 
     #[test]

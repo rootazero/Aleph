@@ -12,6 +12,9 @@ pub fn format_timestamp(timestamp: i64) -> String {
 }
 
 pub fn truncate_text(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
     // Single-pass: find the byte offset of the (max_chars)th character
     match text.char_indices().nth(max_chars) {
         None => text.to_string(),                         // under limit
@@ -45,6 +48,12 @@ mod tests {
         let result = format_timestamp(-999999999999);
         // Should return "Unknown" for invalid timestamps
         assert!(result == "Unknown" || result.contains("1938") || result.contains("-"));
+    }
+
+    #[test]
+    fn test_truncate_text_zero_limit() {
+        let text = "Hello world";
+        assert_eq!(truncate_text(text, 0), "");
     }
 
     #[test]

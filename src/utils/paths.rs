@@ -339,9 +339,10 @@ pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
         || agent_id.contains('\\')
         || agent_id.contains("..")
         || agent_id.is_empty()
+        || agent_id.contains('\0')
     {
         return Err(AlephError::config(format!(
-            "Invalid agent ID '{}': must not contain path separators or '..'",
+            "Invalid agent ID '{}': must not contain path separators, '..', or null bytes",
             agent_id
         )));
     }
@@ -436,6 +437,23 @@ mod tests {
         let aleph_idx = dirs.iter().position(|d| d == &aleph_skills);
         let claude_idx = dirs.iter().position(|d| d == &claude_skills);
         assert!(aleph_idx < claude_idx);
+    }
+
+    #[test]
+    fn test_get_agent_config_dir_rejects_null_bytes() {
+        let result = get_agent_config_dir("agent\0name");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("null bytes"), "error should mention null bytes: {}", err);
+    }
+
+    #[test]
+    fn test_get_agent_config_dir_rejects_invalid_chars() {
+        assert!(get_agent_config_dir("").is_err());
+        assert!(get_agent_config_dir("a/b").is_err());
+        assert!(get_agent_config_dir("a\\b").is_err());
+        assert!(get_agent_config_dir("a..b").is_err());
+        assert!(get_agent_config_dir("a\0b").is_err());
     }
 
     #[test]

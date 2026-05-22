@@ -19,7 +19,18 @@ pub fn is_path_within(base: &Path, target: &Path) -> bool {
             Component::CurDir => {}
         }
     }
-    normalized.starts_with(base)
+
+    match normalized.strip_prefix(base) {
+        Ok(remainder) => {
+            remainder.as_os_str().is_empty()
+                || remainder
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .first()
+                    == Some(&b'/')
+        }
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]
@@ -34,5 +45,24 @@ mod tests {
             &base,
             &PathBuf::from("/skills/demo/../other/x")
         ));
+    }
+
+    #[test]
+    fn prefix_confusion_not_allowed() {
+        let base = PathBuf::from("/skills/demo");
+        assert!(!is_path_within(
+            &base,
+            &PathBuf::from("/skills/demonstration/x.md")
+        ));
+        assert!(!is_path_within(
+            &base,
+            &PathBuf::from("/skills/demo2/x.md")
+        ));
+    }
+
+    #[test]
+    fn exact_base_is_within() {
+        let base = PathBuf::from("/skills/demo");
+        assert!(is_path_within(&base, &base));
     }
 }
