@@ -194,12 +194,27 @@ impl ClaudeSupervisor {
             // Give the process a moment to exit gracefully after EOF.
             std::thread::sleep(std::time::Duration::from_millis(100));
 
-            let already_exited = matches!(child.try_wait(), Ok(Some(_)));
-            if !already_exited {
-                if let Err(e) = child.kill() {
-                    tracing::warn!("Failed to kill supervised process: {}", e);
+            // Retrieve exit status without consuming it via try_wait first;
+            // if the process is still running, kill it and then block on wait().
+            let exit_status = match child.try_wait() {
+                Ok(Some(status)) => Some(status),
+                Ok(None) => {
+                    if let Err(e) = child.kill() {
+                        tracing::warn!("Failed to kill supervised process: {}", e);
+                    }
+                    match child.wait() {
+                        Ok(status) => Some(status),
+                        Err(e) => {
+                            tracing::warn!("Failed to retrieve exit status: {}", e);
+                            None
+                        }
+                    }
                 }
-            }
+                Err(e) => {
+                    tracing::warn!("try_wait failed: {}", e);
+                    None
+                }
+            };
 
             // Wait for reader thread with timeout to avoid indefinite blocking
             let mut timed_out = true;
@@ -207,7 +222,9 @@ impl ClaudeSupervisor {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 while std::time::Instant::now() < deadline {
                     if handle.is_finished() {
-                        let _ = handle.join();
+                        if let Err(e) = handle.join() {
+                            tracing::warn!("Reader thread panicked: {:?}", e);
+                        }
                         timed_out = false;
                         break;
                     }
@@ -218,14 +235,7 @@ impl ClaudeSupervisor {
                 }
             }
 
-            // Wait for the child process itself to exit so we get a real exit code.
-            let exit_code = match child.wait() {
-                Ok(status) => status.exit_code() as i32,
-                Err(e) => {
-                    tracing::warn!("Failed to retrieve exit status: {}", e);
-                    -1
-                }
-            };
+            let exit_code = exit_status.map(|s| s.exit_code() as i32).unwrap_or(-1);
 
             if let Some(tx) = self.event_tx.take() {
                 let _ = tx.send(SupervisorEvent::Exited(exit_code));
@@ -259,19 +269,21 @@ fn strip_ansi(text: &str) -> String {
 /// Uses heuristic string matching — patterns may need adjustment for
 /// different CLI tool versions or localization.
 fn detect_event(text: &str) -> SupervisorEvent {
+    let lower = text.to_lowercase();
+
     // Approval request detection
-    if text.contains("Do you want to run") || text.contains("Allow this command") {
+    if lower.contains("do you want to run") || lower.contains("allow this command") {
         return SupervisorEvent::ApprovalRequest(text.to_string());
     }
 
     // Context overflow detection
-    if text.contains("Context window") && text.contains("full") {
+    if lower.contains("context window") && lower.contains("full") {
         return SupervisorEvent::ContextOverflow;
     }
 
     // Error detection — require a leading word boundary to reduce false
     // positives in normal prose (e.g. "The error: 0 value is fine").
-    if text.starts_with("Error:") || text.contains(" error:") || text.contains("\terror:") {
+    if lower.starts_with("error:") || lower.contains(" error:") || lower.contains("\terror:") {
         return SupervisorEvent::Error(text.to_string());
     }
 
@@ -394,5 +406,38 @@ mod tests {
         let supervisor = ClaudeSupervisor::new(config);
         let masked = supervisor.masker.mask("Token: SECRET_12345");
         assert!(masked.contains("SECRET_REDACTED"));
+    }
+
+    #[test]
+    fn test_detect_error_uppercase() {
+        let text = "ERROR: Connection refused";
+        let event = detect_event(text);
+        assert!(matches!(event, SupervisorEvent::Error(_)));
+    }
+
+    #[test]
+    fn test_detect_error_mixed_case() {
+        let text = "Error: Something went wrong";
+        let event = detect_event(text);
+        assert!(matches!(event, SupervisorEvent::Error(_)));
+    }
+
+    #[test]
+    fn test_args_validation_rejects_single_quote() {
+        let result = SupervisorConfig::new("/tmp").with_args(vec!["foo'bar".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_args_validation_rejects_double_quote() {
+        let result = SupervisorConfig::new("/tmp").with_args(vec!["foo\"bar".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_detect_approval_request_lowercase() {
+        let text = "do you want to run this command?";
+        let event = detect_event(text);
+        assert!(matches!(event, SupervisorEvent::ApprovalRequest(_)));
     }
 }

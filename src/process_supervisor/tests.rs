@@ -102,23 +102,17 @@ fn test_is_running_state() {
         "Should not be running before spawn"
     );
 
-    let mut rx = supervisor.spawn().expect("Failed to spawn");
+    let _rx = supervisor.spawn().expect("Failed to spawn");
 
     // Give it a moment to start
     std::thread::sleep(Duration::from_millis(50));
+    assert!(supervisor.is_running(), "Should be running after spawn");
 
-    // Wait for exit
+    // Poll until the reader thread sets running to false or we time out.
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while std::time::Instant::now() < deadline {
-        match rx.try_recv() {
-            Ok(SupervisorEvent::Exited(_)) => break,
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
-            _ => std::thread::sleep(Duration::from_millis(10)),
-        }
+    while supervisor.is_running() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
     }
-
-    // After echo exits, should eventually show not running
-    std::thread::sleep(Duration::from_millis(100));
     assert!(
         !supervisor.is_running(),
         "Should not be running after process exits"
