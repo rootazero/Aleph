@@ -296,10 +296,21 @@ impl MemoryEventRow {
     /// Construct from a rusqlite row.
     /// Expected column order: id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        let seq_i64: i64 = row.get(2)?;
+        let seq = u64::try_from(seq_i64).map_err(|_| {
+            rusqlite::Error::FromSqlConversionFailure(
+                2,
+                rusqlite::types::Type::Integer,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("memory_events seq must be non-negative, got {seq_i64}"),
+                )),
+            )
+        })?;
         Ok(Self {
             id: row.get(0)?,
             fact_id: row.get(1)?,
-            seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+            seq,
             event_type: row.get::<_, String>(3)?,
             event_json: row.get(4)?,
             actor: row.get(5)?,

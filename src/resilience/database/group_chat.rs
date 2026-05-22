@@ -7,11 +7,26 @@ use super::StateDatabase;
 use crate::error::AlephError;
 use rusqlite::params;
 
-/// A single conversation turn: (round, sequence, speaker_type, speaker_id, speaker_name, content, timestamp).
-pub type GroupChatTurn = (u32, u32, String, Option<String>, String, String, i64);
+/// A single conversation turn.
+#[derive(Debug, Clone)]
+pub struct GroupChatTurn {
+    pub round: u32,
+    pub sequence: u32,
+    pub speaker_type: String,
+    pub speaker_id: Option<String>,
+    pub speaker_name: String,
+    pub content: String,
+    pub timestamp: i64,
+}
 
-/// An active session summary: (id, topic, source_channel, created_at).
-pub type GroupChatSessionSummary = (String, Option<String>, String, i64);
+/// An active session summary.
+#[derive(Debug, Clone)]
+pub struct GroupChatSessionSummary {
+    pub id: String,
+    pub topic: Option<String>,
+    pub source_channel: String,
+    pub created_at: i64,
+}
 
 impl StateDatabase {
     // =========================================================================
@@ -100,8 +115,6 @@ impl StateDatabase {
     }
 
     /// Get all turns for a group chat session, ordered by round and sequence.
-    ///
-    /// Returns tuples of (round, sequence, speaker_type, speaker_id, speaker_name, content, timestamp).
     pub fn get_group_chat_turns(&self, session_id: &str) -> Result<Vec<GroupChatTurn>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
@@ -120,15 +133,15 @@ impl StateDatabase {
 
         let turns = stmt
             .query_map(params![session_id], |row| {
-                Ok((
-                    row.get::<_, u32>(0)?,
-                    row.get::<_, u32>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, i64>(6)?,
-                ))
+                Ok(GroupChatTurn {
+                    round: row.get::<_, u32>(0)?,
+                    sequence: row.get::<_, u32>(1)?,
+                    speaker_type: row.get::<_, String>(2)?,
+                    speaker_id: row.get::<_, Option<String>>(3)?,
+                    speaker_name: row.get::<_, String>(4)?,
+                    content: row.get::<_, String>(5)?,
+                    timestamp: row.get::<_, i64>(6)?,
+                })
             })
             .map_err(|e| AlephError::config(format!("Failed to query group chat turns: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
@@ -140,8 +153,6 @@ impl StateDatabase {
     }
 
     /// List all active group chat sessions.
-    ///
-    /// Returns tuples of (id, topic, source_channel, created_at).
     pub fn list_active_group_chats(&self) -> Result<Vec<GroupChatSessionSummary>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
@@ -159,12 +170,12 @@ impl StateDatabase {
 
         let sessions = stmt
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
+                Ok(GroupChatSessionSummary {
+                    id: row.get::<_, String>(0)?,
+                    topic: row.get::<_, Option<String>>(1)?,
+                    source_channel: row.get::<_, String>(2)?,
+                    created_at: row.get::<_, i64>(3)?,
+                })
             })
             .map_err(|e| AlephError::config(format!("Failed to query active group chats: {}", e)))?
             .collect::<Result<Vec<_>, _>>()

@@ -39,13 +39,14 @@ impl StateDatabase {
         bot_id: &str,
         update_id: i64,
     ) -> Result<(), AlephError> {
+        let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             r#"
             INSERT OR REPLACE INTO channel_offsets (channel_id, bot_id, last_update_id, updated_at)
-            VALUES (?1, ?2, ?3, datetime('now'))
+            VALUES (?1, ?2, ?3, ?4)
             "#,
-            params![channel_id, bot_id, update_id],
+            params![channel_id, bot_id, update_id, now],
         )
         .map_err(|e| AlephError::config(format!("Failed to set channel offset: {}", e)))?;
         Ok(())

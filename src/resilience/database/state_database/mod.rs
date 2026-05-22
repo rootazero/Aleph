@@ -249,15 +249,25 @@ impl StateDatabase {
             })?;
 
         match stored {
-            Some(dim) if dim == target_dim.to_string() => Ok(false),
-            Some(dim) => {
-                tracing::info!(
-                    stored_dim = %dim,
-                    target_dim = target_dim,
-                    "Embedding dimension change detected"
-                );
-                Ok(true)
-            }
+            Some(dim_str) => match dim_str.parse::<u32>() {
+                Ok(stored_dim) if stored_dim == target_dim => Ok(false),
+                Ok(stored_dim) => {
+                    tracing::info!(
+                        stored_dim = stored_dim,
+                        target_dim = target_dim,
+                        "Embedding dimension change detected"
+                    );
+                    Ok(true)
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        stored_dim = %dim_str,
+                        target_dim = target_dim,
+                        "Invalid stored embedding dimension, treating as changed"
+                    );
+                    Ok(true)
+                }
+            },
             None => Ok(false),
         }
     }
@@ -337,15 +347,25 @@ impl StateDatabase {
             })?;
 
         match current_dimension {
-            Some(dim) if dim == DEFAULT_EMBEDDING_DIM.to_string() => Ok(false), // Already at current dimension
-            Some(dim) => {
-                tracing::info!(
-                    stored_dim = %dim,
-                    current_dim = DEFAULT_EMBEDDING_DIM,
-                    "Embedding dimension mismatch detected"
-                );
-                Ok(true) // Needs migration (different dimension)
-            }
+            Some(dim_str) => match dim_str.parse::<u32>() {
+                Ok(dim) if dim == DEFAULT_EMBEDDING_DIM => Ok(false), // Already at current dimension
+                Ok(dim) => {
+                    tracing::info!(
+                        stored_dim = dim,
+                        current_dim = DEFAULT_EMBEDDING_DIM,
+                        "Embedding dimension mismatch detected"
+                    );
+                    Ok(true) // Needs migration (different dimension)
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        stored_dim = %dim_str,
+                        current_dim = DEFAULT_EMBEDDING_DIM,
+                        "Invalid stored embedding dimension, treating as mismatch"
+                    );
+                    Ok(true)
+                }
+            },
             None => Ok(true), // No dimension stored, needs migration
         }
     }
