@@ -107,7 +107,7 @@ where
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     /// Build a successful `ToolOutput` for assertion paths.
     fn ok_output() -> ToolOutput {

@@ -401,7 +401,7 @@ impl ToolService for ScopedToolService {
         }
     }
 
-    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+    fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
         use std::sync::atomic::Ordering;
 
         // Bump generation if the refresh source signals external changes.
@@ -868,7 +868,7 @@ mod tests {
     use serde_json::{json, Value};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc as StdArc;
+    use crate::sync_primitives::Arc as StdArc;
 
     // -------------------------------------------------------------------------
     // Stubs
@@ -890,8 +890,8 @@ mod tests {
         async fn describe(&self, _: &str) -> Option<ToolDefinition> {
             None
         }
-        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
-            std::sync::Arc::from([])
+    fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
+            Arc::from([])
         }
     }
 
@@ -1276,7 +1276,7 @@ mod tests {
         let s1 = svc.metadata_schema();
         let s2 = svc.metadata_schema();
         assert!(
-            std::sync::Arc::ptr_eq(&s1, &s2),
+            Arc::ptr_eq(&s1, &s2),
             "without refresh signal cache should hold across calls"
         );
         assert_eq!(s1.len(), 2);

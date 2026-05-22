@@ -101,7 +101,7 @@ pub trait ToolService: Send + Sync + 'static {
     ///
     /// REQUIRED — no default impl. A default returning empty would silently
     /// hide the LLM's tool list on any forgotten override. Test mocks must
-    /// also implement, typically returning `std::sync::Arc::from([])`.
+    /// also implement, typically returning `Arc::from([])`.
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]>;
 }
 
