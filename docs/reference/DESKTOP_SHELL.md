@@ -29,8 +29,8 @@ lifecycle, OS notifications, and launch-at-login.
 
 ```
 ┌──────────────────── aleph-desktop-shell (Tauri v2) ────────────────────┐
-│  main.rs    builder, window, plugins, run-loop, window-close = hide     │
-│  daemon.rs  locate aleph-server → launch detached → poll /ready         │
+│  main.rs    builder, window, plugins, run-loop, daemon supervisor       │
+│  daemon.rs  locate / launch / probe aleph-server; relaunch if it dies   │
 │  tray.rs    system tray icon + menu                                     │
 │  notify.rs  ws://…/ws  → subscribe → OS notifications  (best-effort)     │
 └────────────────────────────────────────────────────────────────────────┘
@@ -42,13 +42,24 @@ lifecycle, OS notifications, and launch-at-login.
 
 ### Startup flow
 
-1. The window opens showing the bundled splash (`splash/index.html`).
-2. A background thread (its own Tokio runtime) checks whether the daemon is
-   up; if not, it launches `aleph-server` **detached** and polls
+1. The window opens showing the bundled splash (`splash/index.html`), at the
+   size and position it had last run.
+2. A background thread (its own Tokio runtime) probes the daemon port. If a
+   foreign process holds it the shell fails fast with a clear message;
+   otherwise it launches `aleph-server` **detached** when needed and polls
    `GET /ready`.
 3. Once ready, the webview navigates to the Panel.
-4. Closing the window only **hides** it — the shell stays in the tray. The
+4. A daemon **health supervisor** then runs for the rest of the shell's
+   lifetime (see below).
+5. Closing the window only **hides** it — the shell stays in the tray. The
    tray offers *Quit (keeps the daemon running)* and *Quit & Stop Aleph*.
+
+### One window, one instance
+
+A second launch of the app does not open a second window: the
+single-instance plugin routes it to the already-running shell and focuses
+that. The window's size and position are remembered across restarts (the
+window-state plugin); the shell still owns visibility itself.
 
 ### Daemon lifecycle
 
@@ -61,11 +72,28 @@ only one daemon ever runs.
 `aleph-server` is bundled inside the app (Tauri `externalBin`), so it resolves
 as a sibling of the shell executable; `PATH` is a dev-only fallback.
 
+The shell tells *its* daemon apart from a stranger by the `/ready` probe:
+`aleph-server` answers it the moment it binds the port (`200` ready, `503`
+booting). Any other reply means a foreign process holds the port — the shell
+then refuses to wait on it as if it were a daemon mid-boot, and surfaces an
+actionable error instead of silently burning the readiness timeout.
+
 On first launch — and after every app update, gated by a per-version marker
 file — the shell **reconciles** the daemon: it removes the pre-app
 bash-installer autostart service (the keep-alive launchd / systemd / Task
 Scheduler entry that would otherwise resurrect a stale `aleph-server`) and
 stops whatever daemon is running, so the version bundled in this app wins.
+
+### Daemon health supervision
+
+The daemon can crash, be killed, or be stopped out from under the shell. A
+supervisor task probes `GET /ready` every few seconds for the shell's whole
+lifetime. After a short run of failures it declares the daemon down,
+relaunches it (only when the port is genuinely free — a foreign occupant is
+left untouched), and once `/ready` is green again it silently reloads the
+Panel webview. It never shows or focuses the window (R5); it only keeps the
+plumbing connected. A failed *initial* boot is handled by the same machinery:
+the supervisor simply keeps retrying until the daemon comes up.
 
 ### OS notifications
 

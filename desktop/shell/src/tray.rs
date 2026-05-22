@@ -6,7 +6,7 @@
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager,
+    AppHandle,
 };
 
 /// Build the tray icon and its menu, wiring menu/click events.
@@ -29,7 +29,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => reveal(app),
+            "show" => crate::focus_window(app),
             "quit" => app.exit(0),
             "quit_stop" => {
                 crate::daemon::stop_daemon();
@@ -45,7 +45,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                 ..
             } = event
             {
-                reveal(tray.app_handle());
+                crate::focus_window(tray.app_handle());
             }
         });
 
@@ -55,13 +55,4 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     }
     builder.build(app)?;
     Ok(())
-}
-
-/// Show, un-minimise and focus the main window.
-fn reveal(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
 }
