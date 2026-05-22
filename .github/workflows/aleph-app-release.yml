@@ -76,8 +76,16 @@ jobs:
 
       # Stage the daemon (+ Swift bridge) as Tauri externalBin inputs, then
       # bundle. Tauri cannot cross-compile — each runner builds its own app.
+      #
+      # Auto-update artifacts (signed update bundles + `.sig` files) are
+      # produced only when the TAURI_SIGNING_PRIVATE_KEY secret is set; the
+      # CalVer release model is otherwise unchanged. Without the secret the
+      # build still produces the normal installers.
       - name: Stage bundled binaries and build the app
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           triple="$(rustc -vV | sed -n 's/host: //p')"
           mkdir -p desktop/shell/binaries
@@ -91,7 +99,14 @@ jobs:
                "desktop/shell/binaries/AlephBridge-$triple"
           fi
           version="$(tr -d '[:space:]' < VERSION)"
-          cd desktop/shell && cargo tauri build --verbose --config "{\"version\":\"$version\"}"
+          config="{\"version\":\"$version\"}"
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "Signing key present — enabling auto-update artifacts."
+            config="{\"version\":\"$version\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
+          else
+            echo "No signing key — building installers only (no auto-update artifacts)."
+          fi
+          cd desktop/shell && cargo tauri build --verbose --config "$config"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -104,6 +119,10 @@ jobs:
             target/release/bundle/rpm/*.rpm
             target/release/bundle/msi/*.msi
             target/release/bundle/nsis/*.exe
+            target/release/bundle/macos/*.app.tar.gz
+            target/release/bundle/macos/*.app.tar.gz.sig
+            target/release/bundle/appimage/*.AppImage.sig
+            target/release/bundle/nsis/*.exe.sig
 
   release:
     name: Create Release
@@ -140,6 +159,38 @@ jobs:
             echo "See [CHANGELOG.md](https://github.com/rootazero/Aleph/blob/main/CHANGELOG.md) for details." > /tmp/release_body.md
           fi
 
+      # Assemble the Tauri updater manifest from each platform's signed
+      # update bundle. Skipped cleanly when no `.sig` artifacts are present
+      # (the signing secret was not configured for this build).
+      - name: Generate updater manifest (latest.json)
+        run: |
+          TAG="${{ steps.version.outputs.value }}"
+          VERSION="${TAG#v}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/$TAG"
+          platforms='{}'
+          add() {
+            if [ -f "$2" ] && [ -f "$3" ]; then
+              platforms=$(jq --arg k "$1" --arg s "$(cat "$3")" \
+                --arg u "$BASE/$(basename "$2")" \
+                '.[$k]={signature:$s,url:$u}' <<<"$platforms")
+              echo "  + $1 -> $(basename "$2")"
+            else
+              echo "  - $1 skipped (no updater artifact)"
+            fi
+          }
+          add darwin-aarch64  artifacts/aleph-macos/macos/*.app.tar.gz     artifacts/aleph-macos/macos/*.app.tar.gz.sig
+          add linux-x86_64    artifacts/aleph-linux/appimage/*.AppImage    artifacts/aleph-linux/appimage/*.AppImage.sig
+          add windows-x86_64  artifacts/aleph-windows/nsis/*-setup.exe     artifacts/aleph-windows/nsis/*-setup.exe.sig
+          if [ "$platforms" = '{}' ]; then
+            echo "No updater artifacts — skipping latest.json (auto-update not configured)."
+            exit 0
+          fi
+          jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson p "$platforms" \
+            '{version:$v,pub_date:$d,platforms:$p}' > latest.json
+          echo "--- latest.json ---"
+          cat latest.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -153,3 +204,6 @@ jobs:
             artifacts/**/*.rpm
             artifacts/**/*.msi
             artifacts/**/*.exe
+            artifacts/**/*.app.tar.gz
+            artifacts/**/*.sig
+            latest.json

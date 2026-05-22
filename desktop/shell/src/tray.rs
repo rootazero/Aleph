@@ -12,6 +12,13 @@ use tauri::{
 /// Build the tray icon and its menu, wiring menu/click events.
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Aleph", true, None::<&str>)?;
+    // Dual-purpose: a manual update check until an update is found, then the
+    // button to apply it — the auto-updater relabels it (see `update.rs`).
+    let update_item =
+        MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
+    // Let the auto-updater relabel this item once an update is staged.
+    app.state::<crate::update::Updater>()
+        .attach_tray_item(update_item.clone());
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(
         app,
@@ -21,14 +28,22 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let quit_stop = MenuItem::with_id(app, "quit_stop", "Quit & Stop Aleph", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &separator, &quit, &quit_stop])?;
+    let menu = Menu::with_items(app, &[&show, &update_item, &separator, &quit, &quit_stop])?;
 
     let mut builder = TrayIconBuilder::with_id("aleph-tray")
         .tooltip("Aleph")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => reveal(app),
+            "show" => crate::focus_window(app),
+            // Apply a staged update, or trigger a fresh check if none.
+            "update" => {
+                if crate::update::has_staged_update(app) {
+                    crate::update::apply_staged_update(app);
+                } else {
+                    crate::update::check_now(app);
+                }
+            }
             "quit" => app.exit(0),
             "quit_stop" => {
                 crate::daemon::stop_daemon();
@@ -44,7 +59,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                 ..
             } = event
             {
-                reveal(tray.app_handle());
+                crate::focus_window(tray.app_handle());
             }
         });
 
@@ -54,13 +69,4 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     }
     builder.build(app)?;
     Ok(())
-}
-
-/// Show, un-minimise and focus the main window.
-fn reveal(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
 }

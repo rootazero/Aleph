@@ -11,14 +11,29 @@
 )]
 
 mod daemon;
+mod deeplink;
+mod hotkey;
+#[cfg(target_os = "macos")]
+mod menu;
 mod notify;
 mod tray;
+mod update;
+
+use std::time::Duration;
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_window_state::{StateFlags, WindowExt};
 
 /// The local daemon's Panel origin. The webview navigates here once the
 /// daemon reports ready; until then it shows the bundled splash.
 const PANEL_URL: &str = "http://127.0.0.1:18790";
+
+/// How often the daemon health supervisor probes `/ready`.
+const HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// Consecutive failed probes before the daemon is declared down. At the
+/// poll interval above this is ~15s of sustained silence — long enough to
+/// ride out a brief stall, short enough to recover quickly.
+const FAILURES_TO_DECLARE_DOWN: u32 = 3;
 
 /// Injected into every document the webview loads (splash and Panel). It
 /// marks the page as shell-hosted, and on macOS records the platform so the
@@ -32,15 +47,53 @@ const SHELL_MARKER_JS: &str = "var e=document.documentElement;\
 #[cfg(not(target_os = "macos"))]
 const SHELL_MARKER_JS: &str = "document.documentElement.setAttribute('data-shell','aleph-tauri');";
 
+/// The window-geometry facets the shell persists across restarts. Visibility
+/// stays out of it — the shell drives that itself (hidden until the daemon
+/// is ready, hidden again when the user closes to the tray).
+fn window_state_flags() -> StateFlags {
+    StateFlags::SIZE | StateFlags::POSITION
+}
+
 fn main() {
     init_tracing();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
+        // Single-instance must be registered first: a second launch focuses
+        // the running shell instead of spawning a duplicate window. Its
+        // `deep-link` feature also routes a second-launch `aleph://` link to
+        // the running shell on Windows and Linux.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            focus_window(app);
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // Remember the window's size and position across restarts.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(window_state_flags())
+                .skip_initial_state("main")
+                .build(),
+        )
+        // Background auto-update, the `aleph://` scheme, and the global
+        // summon hotkey — all pure OS integration.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Shared update state: the background checker, the tray, and the
+        // macOS menu all read it.
+        .manage(update::Updater::default());
+
+    // macOS shows an app menu in the system menu bar regardless of window
+    // chrome; give it shell-aware items. Windows and Linux stay chromeless.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(menu::build)
+        .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()));
+
+    builder
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -53,12 +106,17 @@ fn main() {
             // autostart once, then never fight the user's later choice.
             ensure_autostart(&handle);
 
+            // Global summon hotkey and the `aleph://` deep-link scheme.
+            hotkey::setup(&handle);
+            deeplink::setup(&handle);
+
             #[cfg(target_os = "macos")]
             apply_macos_vibrancy(&handle);
 
             // Background worker: bring the daemon up, reveal the Panel, then
-            // keep an OS-notification bridge alive. It runs on its own Tokio
-            // runtime so the shell never depends on Tauri runtime internals.
+            // keep the notification bridge, daemon supervisor, and update
+            // checker alive. It runs on its own Tokio runtime so the shell
+            // never depends on Tauri runtime internals.
             spawn_background(handle);
             Ok(())
         })
@@ -74,7 +132,7 @@ fn main() {
         .expect("failed to build the Aleph desktop shell")
         .run(|_app, event| {
             // A window-close-driven exit is vetoed (stay in the tray); an
-            // explicit tray "Quit" calls `app.exit(code)` and is allowed.
+            // explicit "Quit" calls `app.exit(code)` and is allowed.
             if let RunEvent::ExitRequested { code, api, .. } = event {
                 if code.is_none() {
                     api.prevent_exit();
@@ -103,7 +161,13 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
     }
-    builder.build()?;
+    let window = builder.build()?;
+
+    // Restore the window's last size and position. On first run there is
+    // nothing saved, so it keeps the centered default set above.
+    if let Err(e) = window.restore_state(window_state_flags()) {
+        tracing::warn!("could not restore window geometry: {e}");
+    }
     Ok(())
 }
 
@@ -128,15 +192,27 @@ fn spawn_background(handle: tauri::AppHandle) {
                 let version = handle.package_info().version.to_string();
                 daemon::reconcile_for_version(&version).await;
 
-                match daemon::ensure_ready().await {
-                    Ok(()) => reveal_panel(&handle),
+                let daemon_up = match daemon::ensure_ready().await {
+                    Ok(()) => {
+                        reveal_panel(&handle);
+                        true
+                    }
                     Err(e) => {
                         tracing::error!("daemon did not become ready: {e}");
                         show_daemon_error(&handle, &e);
+                        false
                     }
-                }
-                // Best-effort OS-notification bridge; never blocks the shell.
-                notify::run_notification_bridge(handle).await;
+                };
+
+                // Three resident background tasks for the lifetime of the
+                // shell: the OS-notification bridge, the daemon health
+                // supervisor, and the auto-update checker. None returns;
+                // run them together.
+                tokio::join!(
+                    notify::run_notification_bridge(handle.clone()),
+                    supervise_daemon(handle.clone(), daemon_up),
+                    update::run_update_checker(handle),
+                );
             });
         });
     if let Err(e) = spawned {
@@ -144,10 +220,12 @@ fn spawn_background(handle: tauri::AppHandle) {
     }
 }
 
-/// Point the main window's webview at the live Panel and bring it forward.
-fn reveal_panel(handle: &tauri::AppHandle) {
+/// Point the main window's webview at the live Panel, without disturbing the
+/// window's visibility — used for the first reveal and for a silent reload
+/// after the daemon recovers.
+fn navigate_to_panel(handle: &tauri::AppHandle) {
     let Some(window) = handle.get_webview_window("main") else {
-        tracing::error!("main window missing — cannot reveal the Panel");
+        tracing::error!("main window missing — cannot reach the Panel");
         return;
     };
     match PANEL_URL.parse() {
@@ -158,8 +236,25 @@ fn reveal_panel(handle: &tauri::AppHandle) {
         }
         Err(e) => tracing::error!("invalid Panel URL: {e}"),
     }
+}
+
+/// Bring the main window forward: show it, un-minimise it, focus it. Shared
+/// by the tray, the single-instance handler, and the first Panel reveal.
+pub(crate) fn focus_window(handle: &tauri::AppHandle) {
+    let Some(window) = handle.get_webview_window("main") else {
+        return;
+    };
     let _ = window.show();
+    let _ = window.unminimize();
     let _ = window.set_focus();
+}
+
+/// Reveal the Panel for the first time: navigate to it and bring the window
+/// forward. The window starts hidden, so this is what the user sees on a
+/// normal launch.
+fn reveal_panel(handle: &tauri::AppHandle) {
+    navigate_to_panel(handle);
+    focus_window(handle);
 }
 
 /// Surface a daemon-startup failure on the splash screen.
@@ -172,6 +267,96 @@ fn show_daemon_error(handle: &tauri::AppHandle, message: &str) {
     let _ = window.eval(format!(
         "window.__alephError && window.__alephError('{safe}')"
     ));
+}
+
+/// Whether the daemon is currently believed to be serving the Panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaemonHealth {
+    Up,
+    Down,
+}
+
+/// What the supervisor must do after folding in one probe result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SupervisorAction {
+    /// The daemon's state is unchanged — do nothing.
+    Idle,
+    /// The daemon is unreachable; try to bring it back.
+    Relaunch,
+    /// The daemon just came back; reload the Panel webview.
+    ReloadPanel,
+}
+
+/// A small state machine that turns a stream of `/ready` probe results into
+/// daemon-lifecycle actions. Deliberately free of I/O so it can be
+/// unit-tested without a running daemon.
+struct Supervisor {
+    health: DaemonHealth,
+    consecutive_failures: u32,
+}
+
+impl Supervisor {
+    /// Start supervising. `daemon_up` is the outcome of the initial boot:
+    /// a failed boot starts the supervisor in `Down` so it keeps retrying.
+    fn new(daemon_up: bool) -> Self {
+        Self {
+            health: if daemon_up {
+                DaemonHealth::Up
+            } else {
+                DaemonHealth::Down
+            },
+            consecutive_failures: 0,
+        }
+    }
+
+    /// Fold one probe result into the state machine and report the action
+    /// the caller must take.
+    fn tick(&mut self, ready: bool) -> SupervisorAction {
+        match (self.health, ready) {
+            (DaemonHealth::Up, true) => {
+                self.consecutive_failures = 0;
+                SupervisorAction::Idle
+            }
+            (DaemonHealth::Up, false) => {
+                self.consecutive_failures += 1;
+                if self.consecutive_failures >= FAILURES_TO_DECLARE_DOWN {
+                    self.health = DaemonHealth::Down;
+                    SupervisorAction::Relaunch
+                } else {
+                    SupervisorAction::Idle
+                }
+            }
+            (DaemonHealth::Down, false) => SupervisorAction::Relaunch,
+            (DaemonHealth::Down, true) => {
+                self.health = DaemonHealth::Up;
+                self.consecutive_failures = 0;
+                SupervisorAction::ReloadPanel
+            }
+        }
+    }
+}
+
+/// Keep the daemon alive for the lifetime of the shell. After the initial
+/// boot this is the only thing standing between a crashed daemon and a dead
+/// Panel: it relaunches the daemon when it disappears and reloads the Panel
+/// once it is back. Silent by design — it never shows or focuses the window
+/// (R5), it just keeps the plumbing connected.
+async fn supervise_daemon(handle: tauri::AppHandle, daemon_up: bool) {
+    let mut supervisor = Supervisor::new(daemon_up);
+    loop {
+        tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
+        match supervisor.tick(daemon::is_ready().await) {
+            SupervisorAction::Idle => {}
+            SupervisorAction::Relaunch => {
+                tracing::warn!("daemon unreachable — attempting relaunch");
+                daemon::relaunch_if_down().await;
+            }
+            SupervisorAction::ReloadPanel => {
+                tracing::info!("daemon recovered — reloading the Panel");
+                navigate_to_panel(&handle);
+            }
+        }
+    }
 }
 
 /// Enable launch-at-login on first run only, leaving later user choices
@@ -222,4 +407,59 @@ fn init_tracing() {
     let filter =
         EnvFilter::try_from_env("ALEPH_SHELL_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supervisor_stays_idle_while_the_daemon_is_healthy() {
+        let mut sup = Supervisor::new(true);
+        assert_eq!(sup.tick(true), SupervisorAction::Idle);
+        assert_eq!(sup.tick(true), SupervisorAction::Idle);
+        assert_eq!(sup.health, DaemonHealth::Up);
+    }
+
+    #[test]
+    fn supervisor_tolerates_a_brief_stall() {
+        let mut sup = Supervisor::new(true);
+        // A blip short of the threshold must not declare the daemon down.
+        for _ in 0..FAILURES_TO_DECLARE_DOWN - 1 {
+            assert_eq!(sup.tick(false), SupervisorAction::Idle);
+            assert_eq!(sup.health, DaemonHealth::Up);
+        }
+        // A recovery before the threshold resets the failure counter.
+        assert_eq!(sup.tick(true), SupervisorAction::Idle);
+        assert_eq!(sup.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn supervisor_declares_down_after_sustained_failure() {
+        let mut sup = Supervisor::new(true);
+        let mut action = SupervisorAction::Idle;
+        for _ in 0..FAILURES_TO_DECLARE_DOWN {
+            action = sup.tick(false);
+        }
+        assert_eq!(action, SupervisorAction::Relaunch);
+        assert_eq!(sup.health, DaemonHealth::Down);
+    }
+
+    #[test]
+    fn supervisor_keeps_relaunching_while_down() {
+        // A failed boot starts the supervisor already down.
+        let mut sup = Supervisor::new(false);
+        assert_eq!(sup.tick(false), SupervisorAction::Relaunch);
+        assert_eq!(sup.tick(false), SupervisorAction::Relaunch);
+    }
+
+    #[test]
+    fn supervisor_reloads_the_panel_on_recovery() {
+        let mut sup = Supervisor::new(false);
+        assert_eq!(sup.tick(false), SupervisorAction::Relaunch);
+        assert_eq!(sup.tick(true), SupervisorAction::ReloadPanel);
+        assert_eq!(sup.health, DaemonHealth::Up);
+        // Back to steady state once recovered.
+        assert_eq!(sup.tick(true), SupervisorAction::Idle);
+    }
 }

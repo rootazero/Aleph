@@ -1,7 +1,8 @@
 //! `aleph-server` daemon lifecycle.
 //!
 //! Locate the daemon binary, launch it detached when it is not already
-//! running, and wait until its HTTP `/ready` probe turns green.
+//! running, wait until its HTTP `/ready` probe turns green, and — for the
+//! lifetime of the shell — relaunch it if it ever disappears.
 //!
 //! The daemon is deliberately NOT a child of the shell: the shell may quit
 //! while the daemon keeps serving (R5/R6). We launch it detached and never
@@ -19,18 +20,41 @@ const DAEMON_PORT: u16 = 18790;
 const READY_TIMEOUT: Duration = Duration::from_secs(40);
 /// Interval between `/ready` polls.
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
+/// Upper bound on a single localhost HTTP probe (connect + write + read).
+/// A process that accepts the connection but never replies cannot hang it.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What is currently answering on the daemon's port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PortOccupant {
+    /// Nothing is listening — the port is free to use.
+    Free,
+    /// `aleph-server` is up and `/ready` reports 200.
+    DaemonReady,
+    /// `aleph-server` holds the port but is still booting (`/ready` → 503).
+    DaemonBooting,
+    /// Some other process holds the port — not `aleph-server`.
+    Foreign,
+}
 
 /// Ensure the daemon is running and ready to serve the Panel.
 pub async fn ensure_ready() -> Result<(), String> {
-    if is_ready().await {
-        return Ok(());
+    match probe_port().await {
+        PortOccupant::DaemonReady => Ok(()),
+        // The daemon is mid-boot (or a second `start` would just hit the
+        // flock and exit 64) — wait rather than relaunch.
+        PortOccupant::DaemonBooting => wait_until_ready().await,
+        PortOccupant::Free => {
+            launch_detached()?;
+            wait_until_ready().await
+        }
+        // A non-daemon process holds the port. Waiting on `/ready` would
+        // only burn the timeout, so fail fast with an actionable message.
+        PortOccupant::Foreign => Err(format!(
+            "port {DAEMON_PORT} is held by another process, not aleph-server; \
+             free the port and relaunch Aleph"
+        )),
     }
-    // If the port is already open the daemon is mid-boot (or a second start
-    // would just hit the flock and exit 64) — wait rather than relaunch.
-    if !port_open().await {
-        launch_detached()?;
-    }
-    wait_until_ready().await
 }
 
 /// Best-effort `aleph-server stop` — used only by the explicit
@@ -51,6 +75,25 @@ pub fn stop_daemon() {
             String::from_utf8_lossy(&out.stderr).trim()
         ),
         Err(e) => tracing::warn!("aleph-server stop failed: {e}"),
+    }
+}
+
+/// Bring the daemon back if it has gone away: when the port is free,
+/// relaunch it; otherwise leave whatever holds it untouched. Non-blocking —
+/// it does not wait for the daemon to finish booting. Used by the shell's
+/// health supervisor to recover from a mid-session daemon crash.
+pub async fn relaunch_if_down() {
+    match probe_port().await {
+        PortOccupant::Free => {
+            if let Err(e) = launch_detached() {
+                tracing::error!("failed to relaunch daemon: {e}");
+            }
+        }
+        PortOccupant::Foreign => tracing::warn!(
+            "daemon port {DAEMON_PORT} held by a foreign process; \
+             cannot relaunch aleph-server"
+        ),
+        PortOccupant::DaemonReady | PortOccupant::DaemonBooting => {}
     }
 }
 
@@ -199,9 +242,32 @@ async fn wait_until_ready() -> Result<(), String> {
     }
 }
 
-/// True once the daemon's `/ready` probe reports 200 (boot complete).
-async fn is_ready() -> bool {
+/// True once the daemon's `/ready` probe reports 200 (boot complete). Used
+/// by `wait_until_ready` and by the shell's health supervisor.
+pub async fn is_ready() -> bool {
     matches!(http_get_status("/ready").await, Some(200))
+}
+
+/// Inspect the daemon port: free, ours, or taken by a stranger?
+///
+/// `aleph-server` serves `/ready` the moment it binds the port (200 when
+/// ready, 503 while booting). Any other reply — a different status, or no
+/// usable HTTP at all — means a foreign process holds the port, and the
+/// shell must not wait on it as if it were a daemon mid-boot.
+async fn probe_port() -> PortOccupant {
+    if !port_open().await {
+        return PortOccupant::Free;
+    }
+    classify_ready_status(http_get_status("/ready").await)
+}
+
+/// Map a `/ready` probe result to the kind of process holding the port.
+fn classify_ready_status(status: Option<u16>) -> PortOccupant {
+    match status {
+        Some(200) => PortOccupant::DaemonReady,
+        Some(503) => PortOccupant::DaemonBooting,
+        _ => PortOccupant::Foreign,
+    }
 }
 
 /// True if something is listening on the daemon's port.
@@ -211,13 +277,17 @@ async fn port_open() -> bool {
 
 /// Minimal HTTP/1.0 GET that returns just the numeric status code. Avoids
 /// pulling a full HTTP client into the shell for a single localhost probe.
+/// The whole exchange is bounded by [`PROBE_TIMEOUT`].
 async fn http_get_status(path: &str) -> Option<u16> {
-    let mut stream = tokio::time::timeout(
-        Duration::from_secs(2),
-        TcpStream::connect((DAEMON_HOST, DAEMON_PORT)),
-    )
-    .await
-    .ok()??;
+    tokio::time::timeout(PROBE_TIMEOUT, http_get_status_inner(path))
+        .await
+        .ok()?
+}
+
+/// The unbounded body of [`http_get_status`]; always call it through the
+/// timeout wrapper above so a stalled peer cannot hang the probe.
+async fn http_get_status_inner(path: &str) -> Option<u16> {
+    let mut stream = TcpStream::connect((DAEMON_HOST, DAEMON_PORT)).await.ok()?;
     let request =
         format!("GET {path} HTTP/1.0\r\nHost: {DAEMON_HOST}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).await.ok()?;
@@ -312,4 +382,25 @@ fn spawn_detached(bin: &Path) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("failed to spawn {}: {e}", bin.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_ready_status_recognises_the_daemon() {
+        assert_eq!(classify_ready_status(Some(200)), PortOccupant::DaemonReady);
+        assert_eq!(classify_ready_status(Some(503)), PortOccupant::DaemonBooting);
+    }
+
+    #[test]
+    fn classify_ready_status_treats_non_daemon_replies_as_foreign() {
+        // A different HTTP service answering on the port.
+        assert_eq!(classify_ready_status(Some(404)), PortOccupant::Foreign);
+        assert_eq!(classify_ready_status(Some(500)), PortOccupant::Foreign);
+        assert_eq!(classify_ready_status(Some(201)), PortOccupant::Foreign);
+        // Connection accepted, but no usable HTTP reply at all.
+        assert_eq!(classify_ready_status(None), PortOccupant::Foreign);
+    }
 }
