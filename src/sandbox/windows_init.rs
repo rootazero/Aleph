@@ -88,27 +88,40 @@ pub fn capability_names_for_network(net: &crate::sandbox::capabilities::NetworkP
 #[allow(dead_code)]
 pub(crate) const DACL_INHERIT_FLAGS_FOR_APPCONTAINER: u32 = 0x2 | 0x1;
 
-/// Cycle 3: Compute the absolute paths of protected-metadata
-/// subdirectories that actually exist under `workspace_root`. Cross-
-/// platform on purpose so unit tests can run on macOS / Linux dev
-/// boxes; the Windows-only ACE stamper consumes the result.
-///
-/// We only return paths that exist because `SetNamedSecurityInfoW`
-/// fails with `ERROR_FILE_NOT_FOUND` if the target is missing — there
-/// is no point trying to deny writes to a path the agent will create
-/// later (when it does, DACL inheritance from the workspace root grants
-/// the AppContainer SID `GENERIC_ALL`, which is the failure mode we're
-/// trying to prevent, but we can only know about pre-existing
-/// metadata; spec-deferred follow-up: file-system filter driver or
-/// `CreateFile` hook).
+/// Cycle 5: one protected-metadata subpath under a workspace root,
+/// tagged with whether it was absent on disk at classification time.
 #[allow(dead_code)]
-pub(crate) fn protected_metadata_targets_under(
-    workspace_root: &std::path::Path,
-) -> Vec<std::path::PathBuf> {
+pub(crate) struct MetadataTarget {
+    /// Absolute path of the protected subpath (`<ws>/.git`, …).
+    pub path: std::path::PathBuf,
+    /// `true` when the path did not exist. The Windows ACE stamper
+    /// pre-creates an empty stub directory for every absent path before
+    /// applying its deny ACE — otherwise the sandboxed process could
+    /// `mkdir` the directory itself and inherit the workspace root's
+    /// `GENERIC_ALL` grant.
+    pub absent: bool,
+}
+
+/// Cycle 3 + Cycle 5: resolve the four protected-metadata subpaths
+/// under `workspace_root`, each tagged with on-disk existence. Cross-
+/// platform on purpose so the partition logic unit-tests on macOS /
+/// Linux dev boxes; only the Windows ACE/stub stamper consumes it.
+///
+/// Cycle 3 only protected children that already existed, because
+/// `SetNamedSecurityInfoW` fails with `ERROR_FILE_NOT_FOUND` on a
+/// missing target. Cycle 5 keeps the absent ones too so the Windows
+/// stamper can pre-create an empty stub directory for each — closing
+/// the gap where a sandboxed process `mkdir`s `.git` and inherits the
+/// workspace root's inherited `GENERIC_ALL`.
+#[allow(dead_code)]
+pub(crate) fn classify_protected_metadata(workspace_root: &std::path::Path) -> Vec<MetadataTarget> {
     crate::sandbox::protected_paths::PROTECTED_METADATA_SUBPATHS
         .iter()
-        .map(|sub| workspace_root.join(sub))
-        .filter(|p| p.exists())
+        .map(|sub| {
+            let path = workspace_root.join(sub);
+            let absent = !path.exists();
+            MetadataTarget { path, absent }
+        })
         .collect()
 }
 
@@ -490,17 +503,20 @@ mod imp {
         // hard-fail this step (per spec § 3, even when
         // require_app_container=true).
         //
-        // Cycle 3 follow-up: after the workspace grant, we also stamp
-        // DENY_ACCESS ACEs on every protected metadata subpath that
-        // actually exists (e.g. `<ws>/.git`, `<ws>/.aleph`). The grant
+        // Cycle 3 + Cycle 5: after the workspace grant, protect every
+        // metadata subpath (`<ws>/.git`, `<ws>/.aleph`, …). The grant
         // gives the AppContainer SID `GENERIC_ALL` on the workspace
-        // root, which inherits down to children; the deny ACEs on the
-        // protected children pin them read-only because deny is
-        // evaluated before allow in canonical ACL order.
+        // root, which inherits down to children; a `DENY_ACCESS` ACE on
+        // each protected child pins it read-only (deny is evaluated
+        // before allow in canonical ACL order). Cycle 3 only protected
+        // children that already existed — Cycle 5 also pre-creates an
+        // empty stub directory for each absent one, so the sandboxed
+        // process cannot `mkdir` it and inherit `GENERIC_ALL`.
         //
-        // `denied_paths` tracks which deny ACEs we successfully applied
-        // so the post-wait cleanup revokes the exact same set.
-        let mut denied_paths: Vec<String> = Vec::new();
+        // `metadata_protection` records which deny ACEs were applied
+        // and which stub directories were created, so the post-wait
+        // cleanup revokes and removes the exact same sets.
+        let mut metadata_protection = MetadataProtection::default();
         if let Some(ref ws) = parsed.policy.workspace_path {
             use windows_sys::Win32::Foundation::GENERIC_ALL;
             if let Err(e) = unsafe {
@@ -516,7 +532,7 @@ mod imp {
                      target may fail on workspace writes"
                 );
             }
-            denied_paths = stamp_protected_metadata_deny(ws, ac_sid);
+            metadata_protection = ensure_protected_metadata_deny(ws, ac_sid);
         }
 
         // ---------- 4. Build SECURITY_CAPABILITIES + attribute list ----------
@@ -640,13 +656,15 @@ mod imp {
         let mut code: u32 = 0;
         let code_ok = unsafe { GetExitCodeProcess(pi.hProcess, &mut code) };
 
-        // ---------- 6.5. SP-6 v2 + Cycle 3: revoke all DACL ACEs ----------
+        // ---------- 6.5. SP-6 v2 + Cycle 3 + Cycle 5: undo DACL + stubs ----------
         // Best-effort. The SID is about to be invalidated by
         // DeleteAppContainerProfile, which makes any leftover ACE dead
         // weight (spec § 7 risk register), so revoke failure is logged
         // but ignored. REVOKE_ACCESS clears every ACE for the trustee
         // regardless of mask, so a single call per path covers both the
-        // workspace grant and the metadata deny ACE.
+        // workspace grant and the metadata deny ACE. Cycle 5 also
+        // removes the empty stub directories created before spawn so the
+        // workspace is left exactly as we found it.
         if let Some(ref ws) = parsed.policy.workspace_path {
             use windows_sys::Win32::Foundation::GENERIC_ALL;
             if let Err(e) = unsafe {
@@ -663,7 +681,7 @@ mod imp {
                 );
             }
             // Revoke each deny ACE we actually stamped earlier.
-            for p in &denied_paths {
+            for p in &metadata_protection.denied {
                 if let Err(e) = unsafe {
                     set_workspace_dacl_entry(
                         p,
@@ -675,6 +693,18 @@ mod imp {
                     eprintln!(
                         "aleph sandbox-init-windows: metadata DACL revoke failed on {p} ({e}); \
                          AppContainer SID is about to be invalidated, ACE will become dead weight"
+                    );
+                }
+            }
+            // Remove the empty stub directories we created before spawn.
+            // `remove_dir` (not `remove_dir_all`) only succeeds on an
+            // empty directory — if a deny ACE failed and the target
+            // populated a stub, we leave it rather than destroy data.
+            for p in &metadata_protection.created_stubs {
+                if let Err(e) = std::fs::remove_dir(p) {
+                    eprintln!(
+                        "aleph sandbox-init-windows: could not remove protected metadata \
+                         stub {p} ({e}); leaving it in place"
                     );
                 }
             }
@@ -721,11 +751,32 @@ mod imp {
         }
     }
 
-    /// Cycle 3: Stamp DENY_ACCESS ACEs on every protected metadata
-    /// subpath under `workspace_path_str` that actually exists on disk
-    /// (e.g. `<ws>/.git`, `<ws>/.aleph`). Returns the list of paths
-    /// where we successfully applied the ACE so the caller can revoke
-    /// the exact same set after the target exits.
+    /// Cycle 3 + Cycle 5: result of [`ensure_protected_metadata_deny`].
+    /// Tells the post-wait cleanup which ACEs to revoke and which stub
+    /// directories to remove.
+    #[derive(Default)]
+    pub(super) struct MetadataProtection {
+        /// Paths carrying a deny ACE we must revoke after the target
+        /// exits.
+        pub denied: Vec<String>,
+        /// Empty stub directories created before spawn; remove them
+        /// after the target exits (best-effort, empty-only — never
+        /// destroys agent data).
+        pub created_stubs: Vec<String>,
+    }
+
+    /// Cycle 3 + Cycle 5: protect every
+    /// `<ws>/{.git,.aleph,.codex,.agents}` metadata subpath against the
+    /// per-execution AppContainer SID.
+    ///
+    /// For each of the four subpaths:
+    /// - **existing** → stamp a `DENY_ACCESS` ACE (Cycle 3 behavior);
+    /// - **absent** → create an empty stub directory first, then stamp
+    ///   the ACE. Without the stub the sandboxed process could `mkdir`
+    ///   the directory itself; the new directory would inherit the
+    ///   workspace root's `GENERIC_ALL` grant and defeat the
+    ///   protection. This is the Windows analogue of the Linux
+    ///   synthetic-tmpfs fix (Cycle 5 Item 1).
     ///
     /// The mask is `GENERIC_WRITE | DELETE` — the AppContainer SID can
     /// still *read* `.git` (so the agent can run `git log` / `git
@@ -733,42 +784,54 @@ mod imp {
     /// not part of `GENERIC_WRITE`, so we OR it in explicitly to block
     /// `rm -rf .git`-style attacks.
     ///
-    /// Best-effort throughout: a failed ACE stamp is logged and
-    /// skipped; the affected path stays writable but the rest of the
-    /// sandbox is unaffected.
-    pub(super) fn stamp_protected_metadata_deny(
+    /// Best-effort throughout: a failed stub creation or ACE stamp is
+    /// logged and skipped; the affected path stays writable but the
+    /// rest of the sandbox is unaffected.
+    pub(super) fn ensure_protected_metadata_deny(
         workspace_path_str: &str,
         ac_sid: *mut core::ffi::c_void,
-    ) -> Vec<String> {
+    ) -> MetadataProtection {
         // GENERIC_WRITE is in Foundation; DELETE is a standard right
         // (0x0001_0000) — hard-coding it avoids reaching for the
         // `windows_sys::Win32::Storage::FileSystem` re-export.
         const DELETE_RIGHT: u32 = 0x0001_0000;
-        use windows_sys::Win32::Security::Authorization::DENY_ACCESS;
         use windows_sys::Win32::Foundation::GENERIC_WRITE;
+        use windows_sys::Win32::Security::Authorization::DENY_ACCESS;
 
         let mask = GENERIC_WRITE | DELETE_RIGHT;
-        let mut applied = Vec::new();
         let root = std::path::Path::new(workspace_path_str);
-        for target in
-            crate::sandbox::windows_init::protected_metadata_targets_under(root)
-        {
-            let Some(s) = target.to_str() else {
+        let mut out = MetadataProtection::default();
+
+        for target in crate::sandbox::windows_init::classify_protected_metadata(root) {
+            let Some(s) = target.path.to_str() else {
                 eprintln!(
                     "aleph sandbox-init-windows: skipping protected metadata path with \
                      non-UTF-8 chars under {workspace_path_str}"
                 );
                 continue;
             };
+            // Absent path → create an empty stub directory so the deny
+            // ACE has a real object to bind to, and record it for
+            // post-wait removal.
+            if target.absent {
+                if let Err(e) = std::fs::create_dir(&target.path) {
+                    eprintln!(
+                        "aleph sandbox-init-windows: could not create protected metadata \
+                         stub {s} ({e}); path stays unprotected"
+                    );
+                    continue;
+                }
+                out.created_stubs.push(s.to_string());
+            }
             match unsafe { set_workspace_dacl_entry(s, ac_sid, DENY_ACCESS, mask) } {
-                Ok(()) => applied.push(s.to_string()),
+                Ok(()) => out.denied.push(s.to_string()),
                 Err(e) => eprintln!(
                     "aleph sandbox-init-windows: deny ACE on protected metadata {s} \
                      failed ({e}); target may be able to modify it"
                 ),
             }
         }
-        applied
+        out
     }
 
     /// SP-6 v2 / Cycle 3: Add or remove an inheritable ACE for `ac_sid`
@@ -1238,13 +1301,12 @@ mod tests {
     }
 
     #[test]
-    fn protected_metadata_targets_returns_only_existing_dirs() {
-        // The Windows-only DACL stamper iterates this list to apply
-        // DENY ACEs. If `protected_metadata_targets_under` ever drifts
-        // into returning non-existent paths, `SetNamedSecurityInfoW`
-        // would fail with ERROR_FILE_NOT_FOUND and the deny would
-        // silently no-op. Test on macOS / Linux dev boxes — file-system
-        // semantics are identical here.
+    fn classify_marks_existing_and_absent_metadata() {
+        // The Windows stamper stamps a deny ACE on every entry and
+        // pre-creates a stub for each `absent` one. If the `absent`
+        // flag ever drifts, an absent `.git` would silently lose
+        // protection. File-system semantics are identical on macOS /
+        // Linux dev boxes, so the test runs everywhere.
         let tmp = tempfile::tempdir().expect("tempdir");
         let ws = tmp.path();
         // Create two of the four protected subpaths.
@@ -1252,46 +1314,52 @@ mod tests {
         std::fs::create_dir(ws.join(".aleph")).unwrap();
         // .codex and .agents intentionally absent.
 
-        let targets = protected_metadata_targets_under(ws);
-        let names: std::collections::HashSet<String> = targets
-            .iter()
-            .filter_map(|p| p.file_name().and_then(|f| f.to_str()).map(String::from))
-            .collect();
-
+        let targets = classify_protected_metadata(ws);
         assert_eq!(
             targets.len(),
-            2,
-            "should return exactly the existing protected dirs, got {targets:?}"
+            crate::sandbox::protected_paths::PROTECTED_METADATA_SUBPATHS.len(),
+            "one entry per protected subpath"
         );
-        assert!(names.contains(".git"), "got: {names:?}");
-        assert!(names.contains(".aleph"), "got: {names:?}");
-        assert!(!names.contains(".codex"));
-        assert!(!names.contains(".agents"));
+        for t in &targets {
+            let name = t.path.file_name().unwrap().to_str().unwrap();
+            let expect_absent = name == ".codex" || name == ".agents";
+            assert_eq!(t.absent, expect_absent, "wrong absent flag for {name}");
+        }
     }
 
     #[test]
-    fn protected_metadata_targets_empty_when_workspace_missing() {
-        // Non-existent workspace root → empty list (every join is
-        // filtered out by the .exists() check). Confirms the helper
-        // doesn't try to walk a missing directory and panic.
-        let bogus = std::path::PathBuf::from("/this/does/not/exist/.aleph/test/abcdef");
-        let targets = protected_metadata_targets_under(&bogus);
-        assert!(targets.is_empty(), "got: {targets:?}");
+    fn classify_marks_all_absent_when_workspace_missing() {
+        // Non-existent workspace root → every subpath is absent. The
+        // Windows stamper's `create_dir` then fails (missing parent)
+        // and logs — no panic. Confirms classification never walks a
+        // missing directory.
+        let bogus = std::path::PathBuf::from("/this/does/not/exist/aleph/test/abcdef");
+        let targets = classify_protected_metadata(&bogus);
+        assert_eq!(
+            targets.len(),
+            crate::sandbox::protected_paths::PROTECTED_METADATA_SUBPATHS.len()
+        );
+        assert!(
+            targets.iter().all(|t| t.absent),
+            "every entry should be absent for a missing workspace"
+        );
     }
 
     #[test]
-    fn protected_metadata_targets_skips_file_named_dot_git() {
-        // `.exists()` returns true for both files and dirs, so a stray
-        // *file* named `.git` would also produce a deny-ACE target.
-        // That's fine — Windows can DACL a file just like a directory,
-        // and we'd rather deny writes to a regular file masquerading as
-        // metadata than miss the protection. This test pins the
-        // behavior so a future "directory-only" refactor is intentional.
+    fn classify_treats_file_named_dot_git_as_existing() {
+        // `.exists()` is true for files too, so a stray *file* named
+        // `.git` counts as existing — the stamper DACLs the file in
+        // place rather than trying to create a stub directory over it.
+        // Pin the behavior so a future "directory-only" refactor is
+        // intentional.
         let tmp = tempfile::tempdir().expect("tempdir");
         let ws = tmp.path();
         std::fs::write(ws.join(".git"), b"weird but legal\n").unwrap();
-        let targets = protected_metadata_targets_under(ws);
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0], ws.join(".git"));
+        let targets = classify_protected_metadata(ws);
+        let git = targets
+            .iter()
+            .find(|t| t.path == ws.join(".git"))
+            .expect(".git entry present");
+        assert!(!git.absent, "a file named .git counts as existing");
     }
 }

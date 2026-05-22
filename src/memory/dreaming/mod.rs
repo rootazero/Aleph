@@ -18,6 +18,7 @@ pub mod validation;
 use crate::config::{DreamingConfig as ConfigDreamingConfig, MemoryConfig};
 use crate::error::AlephError;
 use crate::memory::embedding_provider::EmbeddingProvider;
+use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
 use crate::memory::notes::NoteIndexer;
 use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::store::{DreamStore, MemoryBackend};
@@ -28,6 +29,7 @@ use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
 use chrono::{Local, NaiveTime, TimeZone};
 use once_cell::sync::{Lazy, OnceCell};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
@@ -65,6 +67,24 @@ pub struct NoteEntry {
     pub updated_at: i64,
     pub last_accessed_at: Option<i64>,
     pub content_hash: String,
+}
+
+impl NoteEntry {
+    /// Build a `NoteEntry` from a stored note index entry.
+    ///
+    /// `last_accessed_at` is not tracked in the note index, so it is left
+    /// `None` — decay stages fall back to `updated_at` when it is absent.
+    fn from_index_entry(e: &NoteIndexEntry) -> Self {
+        Self {
+            path: e.path.clone(),
+            category: e.category.clone(),
+            tags: e.tags.clone(),
+            created_at: e.created_at,
+            updated_at: e.updated_at,
+            last_accessed_at: None,
+            content_hash: e.content_hash.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +273,15 @@ pub fn ensure_dream_daemon(
     provider: Option<Arc<dyn AiProvider>>,
     command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
 ) {
-    ensure_dream_daemon_with_orientation(database, config, provider, command_handler, None);
+    ensure_dream_daemon_with_orientation(
+        database,
+        config,
+        provider,
+        command_handler,
+        None,
+        None,
+        None,
+    );
 }
 
 /// Ensure DreamDaemon is running (once) when memory is enabled, with optional orientation handle.
@@ -263,6 +291,8 @@ pub fn ensure_dream_daemon_with_orientation(
     provider: Option<Arc<dyn AiProvider>>,
     command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
     orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
+    note_memory_dir: Option<PathBuf>,
 ) {
     if cfg!(test) {
         return;
@@ -300,6 +330,18 @@ pub fn ensure_dream_daemon_with_orientation(
 
     let daemon_builder = if let Some(p) = provider {
         daemon_builder.with_provider(p)
+    } else {
+        daemon_builder
+    };
+
+    let daemon_builder = if let Some(e) = embedder {
+        daemon_builder.with_embedder(e)
+    } else {
+        daemon_builder
+    };
+
+    let daemon_builder = if let Some(dir) = note_memory_dir {
+        daemon_builder.with_note_memory_dir(dir)
     } else {
         daemon_builder
     };
@@ -370,6 +412,12 @@ pub struct DreamDaemon {
     command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
     /// Optional AI provider for LLM-powered dream stages.
     provider: Option<Arc<dyn AiProvider>>,
+    /// Optional embedding provider — required to build a `DreamContext`.
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
+    /// Note memory directory (parent of agent dirs). Falls back to
+    /// `get_note_memory_dir()` when unset; injected explicitly so the dir
+    /// matches the rest of the boot wiring and the daemon is unit-testable.
+    note_memory_dir: Option<PathBuf>,
     /// Optional wiki orientation — forwarded into DreamContext for IndexRefresherStage.
     orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Strategy selector with personality adaptation.
@@ -390,6 +438,8 @@ impl DreamDaemon {
             is_running: AtomicBool::new(false),
             command_handler: None,
             provider: None,
+            embedder: None,
+            note_memory_dir: None,
             orientation: None,
             selector: crate::sync_primitives::Mutex::new(StrategySelector::new()),
             mutation_gate: crate::sync_primitives::Mutex::new(MutationGate::new()),
@@ -399,6 +449,18 @@ impl DreamDaemon {
     /// Attach an AI provider for LLM-powered dream stages.
     pub fn with_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
         self.provider = Some(provider);
+        self
+    }
+
+    /// Attach an embedding provider — required to construct a `DreamContext`.
+    pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingProvider>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    /// Set the note memory directory (parent of per-agent note dirs).
+    pub fn with_note_memory_dir(mut self, dir: PathBuf) -> Self {
+        self.note_memory_dir = Some(dir);
         self
     }
 
@@ -474,7 +536,7 @@ impl DreamDaemon {
             })
             .await;
 
-        let result = self.run_dream(run_start, run_date).await;
+        let result = self.run_dream(run_start, run_date, true).await;
         let duration_ms = ((now_timestamp() - run_start).max(0) as u64) * 1000;
 
         match &result {
@@ -595,7 +657,7 @@ impl DreamDaemon {
             })
             .await?;
 
-        let run_future = self.run_dream(run_start, run_date.clone());
+        let run_future = self.run_dream(run_start, run_date.clone(), false);
         let run_result = tokio::time::timeout(
             Duration::from_secs(self.config.max_duration_seconds as u64),
             run_future,
@@ -668,11 +730,21 @@ impl DreamDaemon {
         &self,
         run_start: i64,
         _run_date: String,
+        force: bool,
     ) -> Result<(DreamRunStatus, DreamReport), AlephError> {
+        // --- Phase 0: Resolve note memory dir + load the note index ---
+        let memory_dir = self.note_memory_dir.clone().unwrap_or_else(|| {
+            crate::utils::paths::get_note_memory_dir()
+                .unwrap_or_else(|_| PathBuf::from(".aleph/data/memory"))
+        });
+        let note_index = self
+            .database
+            .list_notes(DEFAULT_AGENT_ID)
+            .await
+            .unwrap_or_default();
+
         // --- Phase 1: Collect signals ---
-        // For now, use empty metrics since DreamContext wiring is still pending.
-        // When fully wired, populate RawMetrics from database queries.
-        let raw_metrics = RawMetrics::default();
+        let raw_metrics = compute_raw_metrics(&note_index);
         let signal_snapshot = SignalSnapshot::from_metrics(&raw_metrics);
 
         // --- Phase 2: Mutation gate evaluation ---
@@ -690,20 +762,70 @@ impl DreamDaemon {
         let strategy = selection.strategy;
         info!(strategy = %strategy, rationale = %selection.rationale, "Dream strategy selected");
 
-        // --- Phase 4: Build and run pipeline ---
+        // --- Phase 4: Build and run the consolidation pipeline ---
         let pipeline = DreamPipeline::from_strategy(strategy, &self.config);
-
-        // NOTE: Full DreamContext wiring requires NoteIndexer and EmbeddingProvider
-        // (same constraint as before). Return stub report until those are wired.
-        let _pipeline = pipeline;
-        let report = DreamReport {
-            pipeline_type: strategy.to_string(),
-            started_at: run_start,
-            finished_at: now_timestamp(),
-            duration_ms: 0,
-            status: DreamReportStatus::Completed,
-            stages_executed: Vec::new(),
-            ..Default::default()
+        let (report, run_status) = match (self.provider.clone(), self.embedder.clone()) {
+            (Some(provider), Some(embedder)) => {
+                let mut indexer = NoteIndexer::new(memory_dir.clone(), self.database.clone());
+                if let Some(orientation) = &self.orientation {
+                    indexer = indexer.with_orientation(orientation.clone());
+                }
+                let notes: Vec<NoteEntry> =
+                    note_index.iter().map(NoteEntry::from_index_entry).collect();
+                // Scheduled cycles yield to fresh user activity; forced cycles
+                // (run_now / E2E harness) run to completion.
+                let activity_checker: Arc<dyn Fn() -> bool + Send + Sync> = if force {
+                    Arc::new(|| false)
+                } else {
+                    let threshold = self.config.idle_threshold_seconds as i64;
+                    Arc::new(move || idle_seconds() < threshold)
+                };
+                let ctx = DreamContext {
+                    notes,
+                    note_contents: HashMap::new(),
+                    agent_id: DEFAULT_AGENT_ID.to_string(),
+                    database: self.database.clone(),
+                    indexer,
+                    provider,
+                    embedder,
+                    report: DreamReport {
+                        pipeline_type: strategy.to_string(),
+                        started_at: run_start,
+                        ..Default::default()
+                    },
+                    pipeline_type: strategy.to_string(),
+                    activity_checker,
+                    strategy,
+                    orientation: self.orientation.clone(),
+                };
+                let mut report = pipeline.run(ctx).await?;
+                report.finished_at = now_timestamp();
+                report.duration_ms = ((report.finished_at - run_start).max(0) as u64) * 1000;
+                let status = if report.status == DreamReportStatus::Interrupted {
+                    DreamRunStatus::Cancelled
+                } else {
+                    DreamRunStatus::Success
+                };
+                (report, status)
+            }
+            _ => {
+                // Consolidation needs both an AI provider and an embedder
+                // (`DreamContext` requires them). The ingestion-only boot path
+                // supplies neither — skip the pipeline rather than panic. The
+                // production server always supplies both.
+                warn!(
+                    "DreamDaemon: AI provider or embedder unavailable — \
+                     skipping consolidation pipeline"
+                );
+                let report = DreamReport {
+                    pipeline_type: strategy.to_string(),
+                    started_at: run_start,
+                    finished_at: now_timestamp(),
+                    status: DreamReportStatus::Completed,
+                    ..Default::default()
+                };
+                (report, DreamRunStatus::Success)
+            }
         };
 
         // --- Phase 5: Validation (L1 + L2, deterministic) ---
@@ -725,8 +847,6 @@ impl DreamDaemon {
         };
 
         // --- Phase 6: Solidify (event log) ---
-        let memory_dir = crate::utils::paths::get_note_memory_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from(".aleph/data/memory"));
         let agent_dir = memory_dir.join(DEFAULT_AGENT_ID);
         let event_log = EventLog::new(&agent_dir);
         let cycle = event_log.next_cycle().await.unwrap_or(1);
@@ -762,7 +882,23 @@ impl DreamDaemon {
             gate.tick_cooldown();
         }
 
-        Ok((DreamRunStatus::Success, report))
+        Ok((run_status, report))
+    }
+}
+
+/// Compute a cheap `RawMetrics` snapshot from the note index.
+///
+/// Only `total_notes` and `notes_added_24h` are populated — enough to drive a
+/// meaningful `note_growth_rate` signal for strategy selection. Quality and
+/// recall rates require dedicated aggregate queries and are left at zero; a
+/// follow-up can fold in the `dream_report` / `recall_signals` tables.
+fn compute_raw_metrics(notes: &[NoteIndexEntry]) -> RawMetrics {
+    let day_ago = now_timestamp() - 86_400;
+    let notes_added_24h = notes.iter().filter(|n| n.created_at >= day_ago).count() as u32;
+    RawMetrics {
+        total_notes: notes.len() as u32,
+        notes_added_24h,
+        ..Default::default()
     }
 }
 
@@ -859,5 +995,108 @@ mod tests {
         let pipeline = DreamPipeline::from_strategy(DreamStrategy::Conserve, &cfg);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
         assert_eq!(names, vec!["note_lint", "note_review", "index_refresher"]);
+    }
+
+    // -----------------------------------------------------------------
+    // run_dream wiring — regression guard for the historical
+    // `let _pipeline = pipeline` stub that discarded the pipeline.
+    // -----------------------------------------------------------------
+
+    use crate::memory::store::SqliteMemoryBackend;
+    use crate::providers::mock::MockProvider;
+
+    /// Minimal embedding provider stub — the stages exercised here never
+    /// invoke embedding, so empty vectors suffice.
+    struct StubEmbedder;
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for StubEmbedder {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(Vec::new())
+        }
+        async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(Vec::new())
+        }
+        fn dimensions(&self) -> usize {
+            0
+        }
+        fn model_name(&self) -> &str {
+            "stub"
+        }
+        fn provider_id(&self) -> &str {
+            "stub"
+        }
+    }
+
+    fn test_daemon(store: Arc<SqliteMemoryBackend>, dir: PathBuf) -> DreamDaemon {
+        let cfg = MemoryConfig::default();
+        DreamDaemon::from_config(store, &cfg)
+            .expect("valid default dreaming config")
+            .with_provider(Arc::new(MockProvider::new("")))
+            .with_embedder(Arc::new(StubEmbedder))
+            .with_note_memory_dir(dir)
+    }
+
+    #[test]
+    fn compute_raw_metrics_counts_notes_and_recency() {
+        let now = now_timestamp();
+        let entry = |created: i64| NoteIndexEntry {
+            path: "p".into(),
+            filename: "p".into(),
+            agent_id: "default".into(),
+            category: "reference".into(),
+            tags: vec![],
+            link_count: 0,
+            created_at: created,
+            updated_at: created,
+            content_hash: "h".into(),
+        };
+        // One fresh, one ~25h old (excluded), one fresh.
+        let notes = vec![entry(now), entry(now - 90_000), entry(now - 100)];
+        let m = compute_raw_metrics(&notes);
+        assert_eq!(m.total_notes, 3);
+        assert_eq!(m.notes_added_24h, 2);
+    }
+
+    #[tokio::test]
+    async fn run_dream_executes_pipeline_not_stub() {
+        let temp = std::env::temp_dir().join(format!("aleph_dream_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let daemon = test_daemon(store, temp.clone());
+
+        let (status, report) = daemon
+            .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
+            .await
+            .expect("run_dream succeeds");
+
+        assert_eq!(status, DreamRunStatus::Success);
+        // The historical stub returned an empty `stages_executed`. A real
+        // pipeline run always executes `note_lint` (first stage of every
+        // strategy, no `should_run` override).
+        assert!(
+            report.stages_executed.contains(&"note_lint".to_string()),
+            "pipeline did not execute — stages_executed = {:?}",
+            report.stages_executed
+        );
+        assert!(report.finished_at >= report.started_at);
+    }
+
+    #[tokio::test]
+    async fn run_dream_skips_gracefully_without_provider() {
+        let temp = std::env::temp_dir().join(format!("aleph_dream_np_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        // No provider / embedder → DreamContext cannot be built; the daemon
+        // must skip the pipeline gracefully rather than panic.
+        let daemon = DreamDaemon::from_config(store, &MemoryConfig::default())
+            .unwrap()
+            .with_note_memory_dir(temp.clone());
+
+        let (status, report) = daemon
+            .run_dream(now_timestamp(), "2026-05-21".to_string(), true)
+            .await
+            .expect("run_dream succeeds without a provider");
+
+        assert_eq!(status, DreamRunStatus::Success);
+        assert!(report.stages_executed.is_empty());
     }
 }

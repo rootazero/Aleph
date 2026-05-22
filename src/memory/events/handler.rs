@@ -9,6 +9,7 @@ use crate::sync_primitives::Arc;
 use uuid::Uuid;
 
 use crate::error::AlephError;
+use crate::memory::context::{FactSource, NoteType};
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
@@ -294,6 +295,86 @@ impl MemoryCommandHandler {
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_notes(&fact_id_ref).await?;
+        Ok(())
+    }
+
+    // ── Audit-trail entry points (event-log only) ────────────────────────────
+    //
+    // Callers that own their own notes-filesystem write path — currently the
+    // `note_manage` tool — use these to record a note's lifecycle into the
+    // per-note event stream, keyed by the stable `category/filename` note path.
+    //
+    // Unlike `create_fact` / `update_content` / `delete_fact`, these do NOT
+    // project to the notes layer (the caller has already written the note);
+    // they only append the event that `MemoryTimeTraveler` and the
+    // `memory_timeline` tool read. This is what turns the event log — and
+    // therefore the timeline view — from permanently-empty into live.
+
+    /// Record that a note was created.
+    pub async fn log_note_created(
+        &self,
+        note_path: &str,
+        content: String,
+        agent: String,
+        note_type: NoteType,
+        actor: EventActor,
+    ) -> Result<(), AlephError> {
+        let event = MemoryEvent::NoteCreated {
+            note_path: note_path.to_string(),
+            content,
+            note_type,
+            path: note_path.to_string(),
+            namespace: agent.clone(),
+            agent,
+            source: FactSource::Manual,
+            source_memory_ids: vec![],
+        };
+        self.append_note_event(note_path, event, actor).await
+    }
+
+    /// Record that a note's content was updated or appended to.
+    pub async fn log_note_updated(
+        &self,
+        note_path: &str,
+        new_content: String,
+        reason: String,
+        actor: EventActor,
+    ) -> Result<(), AlephError> {
+        let event = MemoryEvent::NoteContentUpdated {
+            note_path: note_path.to_string(),
+            old_content: String::new(),
+            new_content,
+            reason,
+        };
+        self.append_note_event(note_path, event, actor).await
+    }
+
+    /// Record that a note was deleted.
+    pub async fn log_note_deleted(
+        &self,
+        note_path: &str,
+        reason: String,
+        actor: EventActor,
+    ) -> Result<(), AlephError> {
+        let event = MemoryEvent::NoteDeleted {
+            note_path: note_path.to_string(),
+            reason,
+        };
+        self.append_note_event(note_path, event, actor).await
+    }
+
+    /// Append an event to the per-note event stream without projecting it to
+    /// the notes filesystem.
+    async fn append_note_event(
+        &self,
+        note_path: &str,
+        event: MemoryEvent,
+        actor: EventActor,
+    ) -> Result<(), AlephError> {
+        let seq = self.db.get_memory_event_latest_seq(note_path).await? + 1;
+        let envelope =
+            MemoryEventEnvelope::new(note_path.to_string(), seq, event, actor, None);
+        self.db.append_memory_event(&envelope).await?;
         Ok(())
     }
 }
@@ -666,5 +747,48 @@ mod tests {
         assert_eq!(events[0].seq, 1); // Created
         assert_eq!(events[1].seq, 2); // Accessed
         assert_eq!(events[2].seq, 3); // ContentUpdated
+    }
+
+    #[tokio::test]
+    async fn test_log_note_lifecycle_events_keyed_by_path() {
+        let handler = make_handler();
+        let note_path = "preference/editor-prefs";
+
+        handler
+            .log_note_created(
+                note_path,
+                "- Prefers Vim".into(),
+                "default".into(),
+                NoteType::Preference,
+                EventActor::Agent,
+            )
+            .await
+            .unwrap();
+        handler
+            .log_note_updated(
+                note_path,
+                "- Prefers Neovim".into(),
+                "note_manage update".into(),
+                EventActor::Agent,
+            )
+            .await
+            .unwrap();
+        handler
+            .log_note_deleted(note_path, "note_manage delete".into(), EventActor::Agent)
+            .await
+            .unwrap();
+
+        // All three events land in one stream keyed by the stable note path.
+        let events = handler
+            .db
+            .get_memory_events_for_fact(note_path)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].event.event_type_tag(), "NoteCreated");
+        assert_eq!(events[1].event.event_type_tag(), "NoteContentUpdated");
+        assert_eq!(events[2].event.event_type_tag(), "NoteDeleted");
+        assert_eq!(events[0].seq, 1);
+        assert_eq!(events[2].seq, 3);
     }
 }

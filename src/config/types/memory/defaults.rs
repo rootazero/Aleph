@@ -18,22 +18,6 @@ pub fn default_similarity_threshold() -> f32 {
     0.3
 }
 
-pub fn default_ai_retrieval_enabled() -> bool {
-    true
-}
-
-pub fn default_ai_retrieval_timeout_ms() -> u64 {
-    3000
-}
-
-pub fn default_ai_retrieval_max_candidates() -> u32 {
-    20
-}
-
-pub fn default_ai_retrieval_fallback_count() -> u32 {
-    3
-}
-
 pub fn default_compression_enabled() -> bool {
     true
 }

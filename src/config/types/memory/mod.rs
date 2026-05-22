@@ -46,15 +46,6 @@ pub struct MemoryConfig {
     #[serde(default = "defaults::default_similarity_threshold")]
     pub similarity_threshold: f32,
 
-    #[serde(default = "defaults::default_ai_retrieval_enabled")]
-    pub ai_retrieval_enabled: bool,
-    #[serde(default = "defaults::default_ai_retrieval_timeout_ms")]
-    pub ai_retrieval_timeout_ms: u64,
-    #[serde(default = "defaults::default_ai_retrieval_max_candidates")]
-    pub ai_retrieval_max_candidates: u32,
-    #[serde(default = "defaults::default_ai_retrieval_fallback_count")]
-    pub ai_retrieval_fallback_count: u32,
-
     #[serde(default = "defaults::default_compression_enabled")]
     pub compression_enabled: bool,
     #[serde(default = "defaults::default_compression_idle_timeout")]
@@ -83,14 +74,7 @@ pub struct MemoryConfig {
     #[serde(default = "defaults::default_bm25_bonus")]
     pub bm25_bonus_weight: f32,
     #[serde(default)]
-    pub query_expansion_enabled: bool,
-    #[serde(default)]
     pub rerank: crate::memory::rerank::RerankConfig,
-
-    #[serde(default)]
-    pub scoring_pipeline: crate::memory::scoring_pipeline::config::ScoringPipelineConfig,
-    #[serde(default)]
-    pub noise_filter: crate::memory::noise_filter::NoiseFilterConfig,
 
     #[serde(default = "defaults::default_dedup_similarity_threshold")]
     pub dedup_similarity_threshold: f32,
@@ -133,10 +117,6 @@ impl Default for MemoryConfig {
             retention_days: defaults::default_retention_days(),
             vector_db: defaults::default_vector_db(),
             similarity_threshold: defaults::default_similarity_threshold(),
-            ai_retrieval_enabled: defaults::default_ai_retrieval_enabled(),
-            ai_retrieval_timeout_ms: defaults::default_ai_retrieval_timeout_ms(),
-            ai_retrieval_max_candidates: defaults::default_ai_retrieval_max_candidates(),
-            ai_retrieval_fallback_count: defaults::default_ai_retrieval_fallback_count(),
             compression_enabled: defaults::default_compression_enabled(),
             compression_idle_timeout_seconds: defaults::default_compression_idle_timeout(),
             compression_turn_threshold: defaults::default_compression_turn_threshold(),
@@ -149,10 +129,7 @@ impl Default for MemoryConfig {
             memory_decay: MemoryDecayPolicy::default(),
             rrf_k: defaults::default_rrf_k(),
             bm25_bonus_weight: defaults::default_bm25_bonus(),
-            query_expansion_enabled: false,
             rerank: crate::memory::rerank::RerankConfig::default(),
-            scoring_pipeline: crate::memory::scoring_pipeline::config::ScoringPipelineConfig::default(),
-            noise_filter: crate::memory::noise_filter::NoiseFilterConfig::default(),
             dedup_similarity_threshold: defaults::default_dedup_similarity_threshold(),
             backup_enabled: defaults::default_backup_enabled(),
             backup_max_files: defaults::default_backup_max_files(),

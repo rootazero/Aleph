@@ -23,8 +23,9 @@ struct FileAttachment {
 #[component]
 pub fn ChatView() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
-    let chat = ChatState::new();
-    provide_context(chat);
+    // ChatState is provided once at the app root so the chat sidebar
+    // (left column) and this view share one session / agent selection.
+    let chat = expect_context::<ChatState>();
 
     // Subscribe to run.* events directly (no Effect — this is a one-shot mount action)
     let sub_id = subscribe_run_events(&dashboard, chat);
@@ -84,7 +85,8 @@ fn MessageList() -> impl IntoView {
     });
 
     view! {
-        <div node_ref=scroll_ref class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+        <div node_ref=scroll_ref class="flex-1 overflow-y-auto px-4 py-6">
+            <div class="max-w-3xl mx-auto space-y-4">
             <For
                 each=move || chat.messages.get()
                 key=|msg| format!("{}:{}:{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.is_intermediate, msg.tool_calls.len(), msg.model_info.is_some())
@@ -99,6 +101,7 @@ fn MessageList() -> impl IntoView {
                     {move || t_string!(i18n, chat.thinking).to_string()}
                 </div>
             </Show>
+            </div>
         </div>
     }
 }
@@ -737,6 +740,7 @@ fn InputArea() -> impl IntoView {
 
     view! {
         <div class="border-t border-border px-4 py-3">
+            <div class="max-w-3xl mx-auto">
             // Attachment preview bar
             <Show when=move || !attachments.get().is_empty()>
                 <div class="flex flex-wrap gap-2 mb-2">
@@ -910,6 +914,7 @@ fn InputArea() -> impl IntoView {
                         </svg>
                     </button>
                 </Show>
+            </div>
             </div>
         </div>
     }

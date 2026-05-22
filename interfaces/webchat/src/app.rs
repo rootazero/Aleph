@@ -17,10 +17,10 @@ use crate::views::settings::*;
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 // Layout components
-use crate::components::bottom_bar::{BottomBar, PanelMode};
-use crate::components::mode_sidebar::ModeSidebar;
+use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
 use crate::components::top_bar::TopBar;
 use crate::context::{DashboardContext, DashboardState};
+use crate::views::chat::ChatState;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -36,6 +36,10 @@ pub fn App() -> impl IntoView {
 #[component]
 fn AppContent() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+
+    // Chat state lives above both the chat sidebar (left column) and the
+    // chat view (main area) so they share one session / agent selection.
+    provide_context(ChatState::new());
 
     // Setup WebSocket connection and alert subscriptions on mount
     Effect::new(move || {
@@ -82,9 +86,6 @@ fn AppContent() -> impl IntoView {
                         <MainContent />
                     </main>
                 </div>
-
-                // Bottom navigation bar (fixed)
-                <BottomBar />
             </Router>
         </div>
     }

@@ -14,7 +14,6 @@
 //! - `NoteStore`: Knowledge Notes index operations
 
 // Public submodules
-pub mod ai_retrieval;
 pub mod assembler;
 pub mod audit;
 pub mod cli;
@@ -30,17 +29,13 @@ pub mod events;
 pub mod extensions;
 pub mod ingestion;
 pub mod namespace;
-pub mod noise_filter;
 pub mod note_retrieval;
 pub mod notes;
-pub mod query_expander;
 pub mod reembed;
 pub mod reflector;
 pub mod rerank;
-pub mod reranker;
 pub mod retrieval;
 pub mod ripple;
-pub mod scoring_pipeline;
 pub mod scratchpad;
 pub mod session_compactor;
 pub mod session_resume;
@@ -57,7 +52,6 @@ mod loom_concurrency;
 mod proptest_enums;
 
 // Re-export commonly used types
-pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
 pub use audit::{
     AuditAction, AuditActor, AuditDetails, AuditEntry, ExplainedEvent, FactExplanation,
     ForgettingExplanation,
@@ -97,8 +91,6 @@ pub use events::{
 };
 pub use ingestion::MemoryIngestion;
 pub use namespace::NamespaceScope;
-pub use noise_filter::{NoiseFilter, NoiseFilterConfig};
-pub use reranker::{NoOpReranker, RerankResult, Reranker};
 pub use retrieval::MemoryRetrieval;
 pub use ripple::{RippleConfig, RippleResult, RippleTask};
 pub use scratchpad::{ScratchpadConfig, ScratchpadManager, SessionHistory};
@@ -111,7 +103,6 @@ pub use store::types::{MemoryFilter, ScoredFact, SearchFilter};
 pub use store::MemoryBackend;
 // Workspace types are now canonical in gateway::agent_env; re-export for backward compatibility
 pub use crate::gateway::agent_env::{AgentEnv, AgentEnvContext, AgentEnvFilter, DEFAULT_AGENT};
-pub use scoring_pipeline::{ScoringContext, ScoringPipeline, ScoringPipelineConfig};
 pub use session_compactor::{
     CompactorMetrics, CompressResult, SessionCompactor, SessionCompactorConfig,
 };
