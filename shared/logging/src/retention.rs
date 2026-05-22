@@ -42,18 +42,29 @@ pub fn cleanup_old_logs(
 
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        let prefix = component_prefix.unwrap_or("aleph-");
-        if !file_name.starts_with(prefix) {
-            continue;
-        }
-        // Only match actual log files: "prefix.log" or "prefix.log.YYYY-MM-DD"
-        let is_log_file = file_name == format!("{}.log", prefix)
-            || (file_name.starts_with(&format!("{}.log.", prefix)) && {
-                let suffix = &file_name[format!("{}.log.", prefix).len()..];
-                suffix.len() == 10
-                    && suffix.chars().nth(4) == Some('-')
-                    && suffix.chars().nth(7) == Some('-')
-            });
+        let is_log_file = if let Some(prefix) = component_prefix {
+            if !file_name.starts_with(prefix) {
+                continue;
+            }
+            file_name == format!("{}.log", prefix)
+                || (file_name.starts_with(&format!("{}.log.", prefix)) && {
+                    let suffix = &file_name[format!("{}.log.", prefix).len()..];
+                    suffix.len() == 10
+                        && suffix.chars().nth(4) == Some('-')
+                        && suffix.chars().nth(7) == Some('-')
+                })
+        } else {
+            // When no prefix is specified, match all aleph-*.log and aleph-*.log.YYYY-MM-DD files
+            if !file_name.starts_with("aleph-") {
+                continue;
+            }
+            file_name.ends_with(".log")
+                || file_name.rsplit_once(".log.").is_some_and(|(_, suffix)| {
+                    suffix.len() == 10
+                        && suffix.chars().nth(4) == Some('-')
+                        && suffix.chars().nth(7) == Some('-')
+                })
+        };
         if !is_log_file {
             continue;
         }
@@ -175,5 +186,48 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let deleted = cleanup_old_logs(temp_dir.path(), 7, None).unwrap();
         assert_eq!(deleted, 0);
+    }
+
+    #[test]
+    fn test_cleanup_all_components_with_none_prefix() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_dir = temp_dir.path();
+
+        create_test_log_file(log_dir, "aleph-server.log.2025-01-01", 10).unwrap();
+        create_test_log_file(log_dir, "aleph-desktop.log.2025-01-10", 5).unwrap();
+        create_test_log_file(log_dir, "aleph-cli.log.2025-01-20", 1).unwrap();
+
+        let deleted = cleanup_old_logs(log_dir, 7, None).unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(log_dir.join("aleph-desktop.log.2025-01-10").exists());
+        assert!(log_dir.join("aleph-cli.log.2025-01-20").exists());
+        assert!(!log_dir.join("aleph-server.log.2025-01-01").exists());
+    }
+
+    #[test]
+    fn test_cleanup_skip_non_log_files_with_none_prefix() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_dir = temp_dir.path();
+
+        create_test_log_file(log_dir, "aleph-server.log.2025-01-01", 10).unwrap();
+        create_test_log_file(log_dir, "other.txt", 10).unwrap();
+        create_test_log_file(log_dir, "README.md", 10).unwrap();
+
+        let deleted = cleanup_old_logs(log_dir, 7, None).unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(log_dir.join("other.txt").exists());
+        assert!(log_dir.join("README.md").exists());
+    }
+
+    #[test]
+    fn test_cleanup_retention_days_zero_with_none_prefix() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_dir = temp_dir.path();
+
+        create_test_log_file(log_dir, "aleph-server.log.2025-01-01", 40).unwrap();
+        let deleted = cleanup_old_logs(log_dir, 0, None).unwrap();
+        assert_eq!(deleted, 1);
     }
 }

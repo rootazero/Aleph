@@ -25,6 +25,12 @@ static GUARD: OnceLock<Result<tracing_appender::non_blocking::WorkerGuard, Strin
 /// * `retention_days` - Number of days to keep log files (1-30)
 /// * `default_filter` - Default log filter when `RUST_LOG` is not set
 ///
+/// # Notes
+///
+/// This function uses a global `OnceLock` and can only successfully initialize
+/// logging once per process. Subsequent calls will return `Ok(())` but ignore
+/// the provided `component`, `retention_days`, and `default_filter` arguments.
+///
 /// # Example
 ///
 /// ```rust,no_run
