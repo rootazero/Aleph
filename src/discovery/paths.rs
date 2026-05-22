@@ -85,8 +85,11 @@ pub fn aleph_plugins_dir() -> DiscoveryResult<PathBuf> {
 /// Find the git root directory from a starting path
 ///
 /// Traverses upward until finding a .git directory or reaching filesystem root.
+/// Guarded by a max depth to prevent unbounded traversal in pathological cases.
 pub fn find_git_root(start: &Path) -> Option<PathBuf> {
+    const MAX_DEPTH: usize = 100;
     let mut current = start.to_path_buf();
+    let mut depth = 0;
 
     // Canonicalize to resolve symlinks and get absolute path
     if let Ok(canonical) = current.canonicalize() {
@@ -94,12 +97,19 @@ pub fn find_git_root(start: &Path) -> Option<PathBuf> {
     }
 
     loop {
+        if depth >= MAX_DEPTH {
+            return None;
+        }
+
         if current.join(".git").exists() {
             return Some(current);
         }
 
         match current.parent() {
-            Some(parent) => current = parent.to_path_buf(),
+            Some(parent) => {
+                current = parent.to_path_buf();
+                depth += 1;
+            }
             None => return None,
         }
     }
@@ -121,12 +131,21 @@ where
     let mut current = start.to_path_buf();
     let mut depth = 0;
 
-    // Canonicalize paths for comparison; if canonicalization fails,
-    // fall back to the original path so traversal still works.
-    let stop = stop.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
-    if let Ok(canonical) = current.canonicalize() {
-        current = canonical;
+    // Try to canonicalize current; track whether it succeeded.
+    // If current can't be canonicalized, we must NOT canonicalize stop either,
+    // otherwise the comparison will never match (critical bug).
+    let current_canonicalized = current.canonicalize().ok();
+    if let Some(ref canonical) = current_canonicalized {
+        current = canonical.clone();
     }
+
+    let stop = stop.map(|p| {
+        if current_canonicalized.is_some() {
+            p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+        } else {
+            p.to_path_buf()
+        }
+    });
 
     loop {
         if depth >= max_depth {
@@ -147,6 +166,10 @@ where
         match current.parent() {
             Some(parent) => {
                 current = parent.to_path_buf();
+                // Keep canonicalization consistent with stop so the comparison works
+                if let Ok(canonical) = current.canonicalize() {
+                    current = canonical;
+                }
                 depth += 1;
             }
             None => break,
@@ -186,7 +209,7 @@ pub fn find_dir_upward(
 pub fn ensure_dir(path: &Path) -> DiscoveryResult<()> {
     match std::fs::create_dir_all(path) {
         Ok(()) => {
-            tracing::info!("Created directory: {:?}", path);
+            tracing::info!("Ensured directory exists: {:?}", path);
             Ok(())
         }
         Err(e) => Err(e.into()),

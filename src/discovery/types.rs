@@ -74,8 +74,9 @@ impl DiscoveredPath {
     pub fn new(path: PathBuf, source: DiscoverySource, priority: u32) -> Self {
         let name = path
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
 
         Self {
             path,

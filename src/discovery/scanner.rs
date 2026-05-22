@@ -103,10 +103,11 @@ impl DirectoryScanner {
 
             // Reverse to get proper priority (deeper = higher priority)
             for (i, dir) in claude_dirs.into_iter().rev().enumerate() {
+                let priority = 20u32.saturating_add(i as u32);
                 dirs.push(ScanDirectory::new(
                     dir,
                     DiscoverySource::Project,
-                    20 + i as u32,
+                    priority,
                 ));
             }
         }
@@ -148,11 +149,23 @@ impl DirectoryScanner {
     }
 
     /// Discover a specific component type (skills, commands, agents, plugins)
-    pub fn discover_component(&self, component_name: &str) -> DiscoveryResult<Vec<DiscoveredPath>> {
+    pub fn discover_component(
+        &self,
+        component_name: &str,
+    ) -> DiscoveryResult<Vec<DiscoveredPath>> {
+        const MAX_COMPONENT_NAME_LEN: usize = 256;
+
         if component_name.is_empty() {
             return Err(DiscoveryError::InvalidPath(
                 "component name cannot be empty".to_string(),
             ));
+        }
+        if component_name.len() > MAX_COMPONENT_NAME_LEN {
+            return Err(DiscoveryError::InvalidPath(format!(
+                "component name too long (max {} bytes): got {} bytes",
+                MAX_COMPONENT_NAME_LEN,
+                component_name.len()
+            )));
         }
         if component_name.contains('/') || component_name.contains('\\') {
             return Err(DiscoveryError::InvalidPath(format!(
