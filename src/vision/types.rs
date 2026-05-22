@@ -3,6 +3,9 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Maximum allowed image file size in bytes (10 MB).
+pub const MAX_IMAGE_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Image Input
 // ---------------------------------------------------------------------------
@@ -119,7 +122,7 @@ impl Rect {
 
     /// Return the area of the rectangle.
     pub fn area(&self) -> f64 {
-        if self.width < 0.0 || self.height < 0.0 {
+        if self.width < 0.0 || self.height < 0.0 || !self.width.is_finite() || !self.height.is_finite() {
             0.0
         } else {
             self.width * self.height

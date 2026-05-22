@@ -510,6 +510,16 @@ mod tests {
         let round_trip: ImageInput = serde_json::from_value(json).unwrap();
         assert!(matches!(round_trip, ImageInput::Url { .. }));
 
+        // ImageInput::FilePath
+        let input = ImageInput::FilePath {
+            path: std::path::PathBuf::from("/tmp/test.png"),
+        };
+        let json = serde_json::to_value(&input).unwrap();
+        assert_eq!(json["type"], "file_path");
+        assert_eq!(json["path"], "/tmp/test.png");
+        let round_trip: ImageInput = serde_json::from_value(json).unwrap();
+        assert!(matches!(round_trip, ImageInput::FilePath { .. }));
+
         // VisionResult
         let result = VisionResult {
             description: "A cat on a mat".to_string(),

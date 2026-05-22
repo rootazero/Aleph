@@ -54,13 +54,28 @@ impl PlatformOcrProvider {
                     .decode(data)
                     .map_err(|e| VisionError::ImageError(format!("Invalid base64 image: {e}")))
             }
-            ImageInput::FilePath { path } => std::fs::read(path).map_err(|e| {
-                VisionError::ImageError(format!(
-                    "Failed to read image file {}: {}",
-                    path.display(),
-                    e
-                ))
-            }),
+            ImageInput::FilePath { path } => {
+                let metadata = std::fs::metadata(path).map_err(|e| {
+                    VisionError::ImageError(format!(
+                        "Failed to read image metadata {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?;
+                if metadata.len() > crate::vision::types::MAX_IMAGE_FILE_SIZE {
+                    return Err(VisionError::ImageError(format!(
+                        "image file exceeds maximum size of {} MB",
+                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
+                    )));
+                }
+                std::fs::read(path).map_err(|e| {
+                    VisionError::ImageError(format!(
+                        "Failed to read image file {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })
+            }
             ImageInput::Url { url } => Err(VisionError::ImageError(format!(
                 "Platform OCR does not support URL images directly: {url}"
             ))),

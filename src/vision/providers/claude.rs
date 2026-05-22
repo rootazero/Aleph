@@ -12,9 +12,10 @@ use crate::providers::anthropic::{
 };
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
-use crate::vision::types::{ImageFormat, ImageInput, OcrResult, VisionCapabilities, VisionResult};
+use crate::vision::types::{
+    ImageFormat, ImageInput, OcrResult, VisionCapabilities, VisionResult, MAX_IMAGE_FILE_SIZE,
+};
 
-const MAX_IMAGE_FILE_SIZE: u64 = 10 * 1024 * 1024;
 const API_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Vision provider backed by Anthropic's Claude multimodal model.
@@ -36,7 +37,10 @@ impl ClaudeVisionProvider {
         Client::builder()
             .timeout(API_TIMEOUT)
             .build()
-            .expect("failed to build reqwest client")
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "failed to build reqwest client with timeout, using default");
+                Client::new()
+            })
     }
 
     /// Create a new Claude Vision provider.
@@ -85,27 +89,6 @@ impl ClaudeVisionProvider {
 
     fn endpoint(&self) -> String {
         format!("{}/v1/messages", self.base_url.trim_end_matches('/'))
-    }
-
-    fn mime_from_url(url: &str) -> &'static str {
-        // Strip query string and fragment before extracting extension
-        let clean = url
-            .split('?')
-            .next()
-            .unwrap_or(url)
-            .split('#')
-            .next()
-            .unwrap_or(url);
-        clean
-            .rsplit('.')
-            .next()
-            .map(|ext| match ext.to_lowercase().as_str() {
-                "png" => "image/png",
-                "jpg" | "jpeg" => "image/jpeg",
-                "webp" => "image/webp",
-                _ => "image/jpeg",
-            })
-            .unwrap_or("image/jpeg")
     }
 
     fn to_content_block(&self, image: &ImageInput) -> Result<ContentBlock, VisionError> {
