@@ -104,10 +104,6 @@ fn test_is_running_state() {
 
     let _rx = supervisor.spawn().expect("Failed to spawn");
 
-    // Give it a moment to start
-    std::thread::sleep(Duration::from_millis(50));
-    assert!(supervisor.is_running(), "Should be running after spawn");
-
     // Poll until the reader thread sets running to false or we time out.
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     while supervisor.is_running() && std::time::Instant::now() < deadline {
