@@ -11,8 +11,13 @@
 )]
 
 mod daemon;
+mod deeplink;
+mod hotkey;
+#[cfg(target_os = "macos")]
+mod menu;
 mod notify;
 mod tray;
+mod update;
 
 use std::time::Duration;
 
@@ -53,9 +58,11 @@ fn window_state_flags() -> StateFlags {
 fn main() {
     init_tracing();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Single-instance must be registered first: a second launch focuses
-        // the running shell instead of spawning a duplicate window.
+        // the running shell instead of spawning a duplicate window. Its
+        // `deep-link` feature also routes a second-launch `aleph://` link to
+        // the running shell on Windows and Linux.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             focus_window(app);
         }))
@@ -71,6 +78,23 @@ fn main() {
                 .skip_initial_state("main")
                 .build(),
         )
+        // Background auto-update, the `aleph://` scheme, and the global
+        // summon hotkey — all pure OS integration.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Shared update state: the background checker, the tray, and the
+        // macOS menu all read it.
+        .manage(update::Updater::default());
+
+    // macOS shows an app menu in the system menu bar regardless of window
+    // chrome; give it shell-aware items. Windows and Linux stay chromeless.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(menu::build)
+        .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()));
+
+    builder
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -83,12 +107,17 @@ fn main() {
             // autostart once, then never fight the user's later choice.
             ensure_autostart(&handle);
 
+            // Global summon hotkey and the `aleph://` deep-link scheme.
+            hotkey::setup(&handle);
+            deeplink::setup(&handle);
+
             #[cfg(target_os = "macos")]
             apply_macos_vibrancy(&handle);
 
             // Background worker: bring the daemon up, reveal the Panel, then
-            // keep an OS-notification bridge alive. It runs on its own Tokio
-            // runtime so the shell never depends on Tauri runtime internals.
+            // keep the notification bridge, daemon supervisor, and update
+            // checker alive. It runs on its own Tokio runtime so the shell
+            // never depends on Tauri runtime internals.
             spawn_background(handle);
             Ok(())
         })
@@ -104,7 +133,7 @@ fn main() {
         .expect("failed to build the Aleph desktop shell")
         .run(|_app, event| {
             // A window-close-driven exit is vetoed (stay in the tray); an
-            // explicit tray "Quit" calls `app.exit(code)` and is allowed.
+            // explicit "Quit" calls `app.exit(code)` and is allowed.
             if let RunEvent::ExitRequested { code, api, .. } = event {
                 if code.is_none() {
                     api.prevent_exit();
@@ -180,12 +209,14 @@ fn spawn_background(handle: tauri::AppHandle) {
                     }
                 };
 
-                // Two resident background tasks for the lifetime of the
-                // shell: the OS-notification bridge and the daemon health
-                // supervisor. Neither returns; run them together.
+                // Three resident background tasks for the lifetime of the
+                // shell: the OS-notification bridge, the daemon health
+                // supervisor, and the auto-update checker. None returns;
+                // run them together.
                 tokio::join!(
                     notify::run_notification_bridge(handle.clone()),
-                    supervise_daemon(handle, daemon_up),
+                    supervise_daemon(handle.clone(), daemon_up),
+                    update::run_update_checker(handle),
                 );
             });
         });

@@ -28,5 +28,17 @@
     "shortDescription": "Your resident AI assistant",
     "longDescription": "Aleph desktop shell — a native window, system tray, and lifecycle host for the Aleph Panel, backed by the local aleph-server daemon."
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ5RDdGMTkxREREM0RFQ0EKUldUSzN0UGRrZkhYMmQ0S0c5cDB3UEtGWVo1R05IZExyVlB6R3NXdDJkbnpGdlpYUWp4ejdMcU8K",
+      "endpoints": [
+        "https://github.com/rootazero/Aleph/releases/latest/download/latest.json"
+      ]
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["aleph"]
+      }
+    }
+  }
 }

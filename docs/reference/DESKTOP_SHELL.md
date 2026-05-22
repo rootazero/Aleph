@@ -22,17 +22,21 @@ lifecycle, OS notifications, and launch-at-login.
 |---|---|
 | R1 — brain/limb separation | Lives in `desktop/`, never in `src/`. Phase 1 made **zero** `src/` changes. |
 | R2 — single source of UI truth | Hosts the webview only; no business UI. All product UI stays in the Panel. |
-| R3 / R10 / P6 — thin, dumb | ~4 small modules, pure I/O + OS bridging. No reasoning, no business logic. |
+| R3 / R10 / P6 — thin, dumb | A handful of small modules, pure I/O + OS bridging. No reasoning, no business logic. |
 | macOS Swift Bridge | Untouched — orthogonal to the shell. |
 
 ## Architecture
 
 ```
 ┌──────────────────── aleph-desktop-shell (Tauri v2) ────────────────────┐
-│  main.rs    builder, window, plugins, run-loop, daemon supervisor       │
-│  daemon.rs  locate / launch / probe aleph-server; relaunch if it dies   │
-│  tray.rs    system tray icon + menu                                     │
-│  notify.rs  ws://…/ws  → subscribe → OS notifications  (best-effort)     │
+│  main.rs     builder, window, plugins, run-loop, daemon supervisor      │
+│  daemon.rs   locate / launch / probe aleph-server; relaunch if it dies  │
+│  tray.rs     system tray icon + menu                                    │
+│  notify.rs   ws://…/ws  → subscribe → OS notifications  (best-effort)    │
+│  update.rs   background GitHub-Releases auto-update    (best-effort)     │
+│  deeplink.rs aleph:// URL scheme → focus window + forward to the Panel   │
+│  hotkey.rs   global summon shortcut (CmdOrCtrl+Shift+A, configurable)    │
+│  menu.rs     macOS application menu                       (macOS only)  │
 └────────────────────────────────────────────────────────────────────────┘
         │ hosts webview                       │ launches / probes
         ▼                                     ▼
@@ -119,6 +123,53 @@ The notification bridge is best-effort. If the Gateway requires
 authentication, set `ALEPH_GATEWAY_TOKEN` so the shell can authenticate;
 otherwise notifications degrade silently and nothing else is affected.
 
+### Auto-update
+
+The shell checks GitHub Releases for a newer Aleph in the background — once
+about 90 s after launch, then every six hours. It never restarts under the
+user (R5): a found update is *staged*, surfaced through a desktop
+notification and the tray's update item (relabelled "Restart to update to
+vX.Y.Z"), and applied only when the user picks it. Applying downloads,
+installs, and restarts the app — and with it the bundled `aleph-server`.
+The macOS menu's *Check for Updates…* and the tray item also run a manual
+check, which always reports its outcome.
+
+Updates are verified against a minisign public key embedded in
+`tauri.conf.json`. The checker is best-effort — an unreachable or
+unconfigured endpoint is logged and the shell carries on unaffected. CalVer
+versions (`YY.M.D`) are valid semver, so the updater's version comparison
+works unchanged; see *Build & release* for how CI signs and publishes the
+update manifest.
+
+### `aleph://` deep links
+
+The shell registers the `aleph://` URL scheme. Opening an `aleph://…` link
+— from a browser, another app, an email — brings the window forward and
+hands the raw URL to the Panel as an `aleph:deep-link` DOM event; the Panel
+(R2/R4) decides what to do with it. The shell adds no semantics of its own.
+A link opened while the shell is already running is routed to it by the
+single-instance plugin's `deep-link` feature on Windows/Linux, and directly
+by the OS on macOS.
+
+### Global summon hotkey
+
+A single system-wide shortcut — `CmdOrCtrl+Shift+A` by default — summons
+Aleph from anywhere: it shows and focuses the window, or hides it again if
+it is already in front. It is the keyboard form of R5. The combination can
+be overridden with the `ALEPH_SHELL_HOTKEY` environment variable; a
+combination already claimed by another app is logged and skipped, leaving
+the tray and window as the other ways in.
+
+### macOS application menu
+
+macOS shows an app menu in the system menu bar regardless of the window's
+chrome. The shell builds a tailored one — **Aleph** (About, Show Aleph,
+Check for Updates…, Hide, Quit), **Edit**, **Window**. The Edit submenu
+uses Tauri's predefined items so the webview keeps native Cmd+C / V / X / A
+text editing. Quit is an app-owned item, not the predefined macOS Quit,
+which would call `NSApplication terminate` and bypass the close-to-tray
+lifecycle. Windows and Linux keep their chromeless look with no menu.
+
 ## Panel native-aesthetics pass (Phase 2)
 
 Phase 2 is a CSS/theme-layer pass on `interfaces/webchat/`:
@@ -153,9 +204,19 @@ The bundle version is the `VERSION` file value (`YY.M.D`, e.g. `26.5.7`),
 injected via `cargo tauri build --config`. That form is valid semver and
 satisfies the Windows MSI version constraints.
 
-Tauri cannot cross-compile: `.github/workflows/aleph-server-release.yml`
+Tauri cannot cross-compile: `.github/workflows/aleph-app-release.yml`
 builds the daemon and bundles the app on a per-platform matrix
 (macOS / Linux / Windows), attaching each installer to the release.
+
+**Auto-update signing.** Update bundles must be signed with a minisign key
+whose public half lives in `tauri.conf.json` (`plugins.updater.pubkey`).
+The release workflow produces and signs the updater artifacts — and
+assembles the `latest.json` manifest the shell polls — only when the
+`TAURI_SIGNING_PRIVATE_KEY` repository secret (and, if the key has one,
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) is configured. Without the secret the
+build is unchanged and simply ships no auto-update artifacts that release.
+Auto-update is therefore an additive, opt-in layer over the CalVer release
+model, not a change to it.
 
 ## Follow-ups (not in this cycle)
 
@@ -166,6 +227,11 @@ builds the daemon and bundles the app on a per-platform matrix
 - **Window drag region.** Native titlebar drag works; extending the drag
   region across the whole top bar needs a Tauri drag handler on the external
   Panel page.
+- **Panel-side deep-link routing.** The shell forwards every `aleph://` URL
+  to the Panel as an `aleph:deep-link` DOM event, but the Panel does not yet
+  listen for it — today a deep link reliably summons the window, and routing
+  to a specific view awaits a Panel-side handler. A link that cold-starts
+  the app may also arrive before the Panel finishes loading.
 - **Code signing / notarization.** Required for warning-free `.dmg` / `.msi`
   distribution. The bundled `externalBin` daemon must be signed with the same
   identity as the app, or Gatekeeper blocks it — a one-time account/cert

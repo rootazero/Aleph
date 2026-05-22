@@ -2,7 +2,8 @@
 
 A thin **Tauri v2** native shell that turns the Aleph Panel into a real
 desktop app: a native window, a system tray, daemon lifecycle, OS
-notifications, and launch-at-login.
+notifications, launch-at-login, background auto-update, an `aleph://` URL
+scheme, a global summon hotkey, and a macOS application menu.
 
 ## What it is — and is not
 
@@ -16,6 +17,7 @@ logic and no business UI** — those live in the Panel (R2) and the daemon
 | Concern | Owner |
 |---|---|
 | Window, tray, notifications, autostart, daemon lifecycle | this crate |
+| Auto-update, `aleph://` links, global hotkey, macOS menu | this crate |
 | All product UI (chat, memory, settings, …) | Panel (`interfaces/webchat`) |
 | All reasoning / tools / state | `aleph-server` daemon |
 
@@ -31,6 +33,12 @@ logic and no business UI** — those live in the Panel (R2) and the daemon
    *Quit & Stop Aleph*.
 5. A best-effort WebSocket bridge subscribes to the daemon's EventBus and
    raises native notifications for `approval.requested` / `agent.ask.user`.
+6. For the shell's lifetime: a daemon health supervisor relaunches the
+   daemon if it dies, and a background checker watches GitHub Releases for
+   updates (staged for the user to apply — never restarted under them).
+7. Entry points beyond the tray: a global summon hotkey
+   (`CmdOrCtrl+Shift+A`), the `aleph://` URL scheme, and — on macOS — the
+   system menu bar.
 
 ## Daemon discovery
 
@@ -72,3 +80,4 @@ produced on its own CI runner (see `.github/workflows/aleph-server-release.yml`)
 |---|---|
 | `ALEPH_SHELL_LOG` | log filter, e.g. `debug` (default `info`) |
 | `ALEPH_GATEWAY_TOKEN` | token used by the notification bridge to authenticate |
+| `ALEPH_SHELL_HOTKEY` | override the global summon shortcut (default `CmdOrCtrl+Shift+A`) |
