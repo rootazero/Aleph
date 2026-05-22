@@ -133,7 +133,7 @@ impl ToolRetrieval {
                 // The notes vector_search returns raw L2 distance (lower = more similar).
                 // Convert to a similarity score in [0, 1] to match the threshold semantics
                 // used by the old facts-based retrieval: similarity = 1 / (1 + distance).
-                let similarity = 1.0 / (1.0 + r.score);
+                let similarity = 1.0 / (1.0 + r.score.max(0.0));
                 let mut nsr = r;
                 nsr.score = similarity;
                 let scored = nsr.to_scored_fact(TOOL_AGENT_ID);
@@ -188,7 +188,7 @@ impl ToolRetrieval {
             .map(|r| {
                 // RRF scores from hybrid_search_notes are already small positive values.
                 // Convert with the same formula for consistency with threshold comparisons.
-                let similarity = 1.0 / (1.0 + r.score);
+                let similarity = 1.0 / (1.0 + r.score.max(0.0));
                 let mut nsr = r;
                 nsr.score = similarity;
                 let scored = nsr.to_scored_fact(TOOL_AGENT_ID);

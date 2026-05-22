@@ -37,4 +37,4 @@ pub use loom::sync::{Mutex, MutexGuard, RwLock};
 #[allow(unused_imports)] // AtomicUsize used by test code only
 pub use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(not(feature = "loom"))]
-pub use std::sync::{Mutex, MutexGuard, RwLock};
+pub use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockWriteGuard};

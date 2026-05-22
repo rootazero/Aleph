@@ -12,9 +12,8 @@ mod registration;
 mod state;
 mod types;
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock};
 use std::collections::HashMap;
-use tokio::sync::RwLock;
 
 use crate::config::RoutingRuleConfig;
 use crate::skill::SkillInfo;
@@ -89,7 +88,7 @@ impl Default for ToolRegistry {
 impl ToolRegistry {
     /// Create a new empty registry
     pub fn new() -> Self {
-        let tools: ToolStorage = Arc::new(RwLock::new(HashMap::new()));
+        let tools: ToolStorage = Arc::new(AsyncRwLock::new(HashMap::new()));
         Self {
             registrar: ToolRegistrar::new(Arc::clone(&tools)),
             conflict_resolver: ConflictResolver::new(Arc::clone(&tools)),

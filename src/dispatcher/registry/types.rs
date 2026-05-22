@@ -2,14 +2,13 @@
 //!
 //! Core data structure for the ToolRegistry.
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock};
 use std::collections::HashMap;
-use tokio::sync::RwLock;
 
 use super::super::types::UnifiedTool;
 
 /// Shared tool storage type
-pub type ToolStorage = Arc<RwLock<HashMap<String, UnifiedTool>>>;
+pub type ToolStorage = Arc<AsyncRwLock<HashMap<String, UnifiedTool>>>;
 
 /// Result of resolving a user slash command
 #[derive(Debug, Clone)]

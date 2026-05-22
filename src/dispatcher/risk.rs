@@ -28,19 +28,19 @@ fn get_high_risk_patterns() -> &'static Vec<Regex> {
     PATTERNS.get_or_init(|| {
         vec![
             // Network/API patterns
-            Regex::new(r"(?i)(api|http|request|fetch|curl|wget)")
+            Regex::new(r"(?i)\b(api|http|request|fetch|curl|wget)\b")
                 .expect("hardcoded regex is valid"),
             // Execution patterns
-            Regex::new(r"(?i)(execute|run|eval|shell|command|exec)")
+            Regex::new(r"(?i)\b(execute|run|eval|shell|command|exec)\b")
                 .expect("hardcoded regex is valid"),
             // File modification patterns
-            Regex::new(r"(?i)(write|delete|remove|modify|create)\s*(file|文件)")
+            Regex::new(r"(?i)\b(write|delete|remove|modify|create)\s*(file|文件)\b")
                 .expect("hardcoded regex is valid"),
             // Send/Upload patterns
-            Regex::new(r"(?i)(send|post|upload|publish|发送|上传)")
+            Regex::new(r"(?i)\b(send|post|upload|publish|发送|上传)\b")
                 .expect("hardcoded regex is valid"),
             // Financial patterns
-            Regex::new(r"(?i)(pay|purchase|transaction|transfer|支付|购买|转账)")
+            Regex::new(r"(?i)\b(pay|purchase|transaction|transfer|支付|购买|转账)\b")
                 .expect("hardcoded regex is valid"),
             // Chinese API patterns
             Regex::new(r"(?i)(调用|请求|接口)").expect("hardcoded regex is valid"),

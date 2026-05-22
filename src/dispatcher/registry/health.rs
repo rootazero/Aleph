@@ -215,9 +215,11 @@ impl ToolHealthCache {
             cached_at: Instant::now(),
             ttl: probe.ttl(),
         };
-        let mut next = (**self.entries.load()).clone();
-        next.insert(name.to_string(), cached);
-        self.entries.store(Arc::new(next));
+        self.entries.rcu(|entries| {
+            let mut next = (**entries).clone();
+            next.insert(name.to_string(), cached.clone());
+            Arc::new(next)
+        });
         self.generation.fetch_add(1, Ordering::Release);
         result
     }

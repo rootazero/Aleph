@@ -316,7 +316,13 @@ impl ToolQuery {
         let tools = self.tools.read().await;
         tools
             .values()
-            .filter(|t| t.name == name || t.id.ends_with(&format!(":{}", name)))
+            .filter(|t| {
+                t.name == name
+                    || t.id
+                        .rsplit_once(':')
+                        .map(|(_, n)| n == name)
+                        .unwrap_or(false)
+            })
             .max_by(|a, b| {
                 a.source
                     .priority()
