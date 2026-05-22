@@ -36,24 +36,22 @@ impl Config {
         // Guard: detect embedding provider loss before writing.
         // If the file already exists with providers but we're about to write empty,
         // refuse the save and log a backtrace to catch the culprit.
-        if path.exists() {
-            if self.memory.embedding.providers.is_empty() {
-                // Check if the on-disk version has providers
-                if let Ok(existing) = fs::read_to_string(path) {
-                    if existing.contains("[[memory.embedding.providers]]") {
-                        error!(
-                            path = %path.display(),
-                            backtrace = %std::backtrace::Backtrace::force_capture(),
-                            "GUARD: save_to_file would ERASE embedding providers! \
-                             On-disk config has providers but in-memory has 0. \
-                             Aborting save to prevent data loss."
-                        );
-                        return Err(AlephError::invalid_config(
-                            "Refusing to save: would erase existing embedding providers. \
-                             This is likely a bug — please report."
-                                .to_string(),
-                        ));
-                    }
+        if path.exists() && self.memory.embedding.providers.is_empty() {
+            // Check if the on-disk version has providers
+            if let Ok(existing) = fs::read_to_string(path) {
+                if existing.contains("[[memory.embedding.providers]]") {
+                    error!(
+                        path = %path.display(),
+                        backtrace = %std::backtrace::Backtrace::force_capture(),
+                        "GUARD: save_to_file would ERASE embedding providers! \
+                         On-disk config has providers but in-memory has 0. \
+                         Aborting save to prevent data loss."
+                    );
+                    return Err(AlephError::invalid_config(
+                        "Refusing to save: would erase existing embedding providers. \
+                         This is likely a bug — please report."
+                            .to_string(),
+                    ));
                 }
             }
         }

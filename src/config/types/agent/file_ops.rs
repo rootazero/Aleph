@@ -187,7 +187,8 @@ pub fn parse_file_size(s: &str) -> Result<u64, String> {
         .parse()
         .map_err(|_| format!("Invalid number in file size: '{}'", num_part))?;
 
-    Ok(num * multiplier)
+    num.checked_mul(multiplier)
+        .ok_or_else(|| format!("File size overflow: '{}' exceeds maximum", s))
 }
 
 // =============================================================================

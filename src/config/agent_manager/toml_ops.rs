@@ -62,10 +62,14 @@ impl AgentManager {
         {
             use std::fs::OpenOptions;
             use std::io::Write;
-            if let Ok(mut f) = OpenOptions::new().write(true).open(&tmp_path) {
-                let _ = f.flush();
-                let _ = f.sync_all();
-            }
+            let mut f = OpenOptions::new()
+                .write(true)
+                .open(&tmp_path)
+                .map_err(|e| AlephError::IoError(format!("Failed to open temp file for fsync: {}", e)))?;
+            f.flush()
+                .map_err(|e| AlephError::IoError(format!("Failed to flush temp file: {}", e)))?;
+            f.sync_all()
+                .map_err(|e| AlephError::IoError(format!("Failed to fsync temp file: {}", e)))?;
         }
 
         fs::rename(&tmp_path, &self.config_path)

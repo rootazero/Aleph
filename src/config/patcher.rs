@@ -27,7 +27,10 @@ fn cached_config_schema() -> &'static serde_json::Value {
     SCHEMA.get_or_init(|| {
         let schema = generate_config_schema();
         serde_json::to_value(&schema)
-            .expect("Config schema serialization should never fail: generated from schemars")
+            .unwrap_or_else(|e| {
+                tracing::error!("Config schema serialization failed: {}", e);
+                serde_json::Value::Object(serde_json::Map::new())
+            })
     })
 }
 

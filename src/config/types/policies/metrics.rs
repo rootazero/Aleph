@@ -107,7 +107,7 @@ impl MetricsPolicy {
         if !self.warning_multiplier.is_finite() || self.warning_multiplier < 0.0 {
             return target_ms;
         }
-        (target_ms as f64 * self.warning_multiplier).clamp(0.0, u64::MAX as f64) as u64
+        (target_ms as f64 * self.warning_multiplier).clamp(0.0, f64::MAX) as u64
     }
 
     /// Check if a duration exceeds the warning threshold for hotkey->clipboard

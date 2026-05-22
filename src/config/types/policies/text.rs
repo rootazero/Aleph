@@ -83,19 +83,19 @@ fn default_truncation_suffix() -> String {
 impl TextFormatPolicy {
     /// Truncate text to the default length
     pub fn truncate_default(&self, text: &str) -> String {
-        let len = self.default_truncate_length.min(usize::MAX as u64) as usize;
+        let len = self.default_truncate_length.try_into().unwrap_or(usize::MAX);
         self.truncate_to_length(text, len)
     }
 
     /// Truncate text to the search snippet length
     pub fn truncate_search_snippet(&self, text: &str) -> String {
-        let len = self.search_snippet_length.min(usize::MAX as u64) as usize;
+        let len = self.search_snippet_length.try_into().unwrap_or(usize::MAX);
         self.truncate_to_length(text, len)
     }
 
     /// Truncate text to the MCP result length
     pub fn truncate_mcp_result(&self, text: &str) -> String {
-        let len = self.mcp_result_length.min(usize::MAX as u64) as usize;
+        let len = self.mcp_result_length.try_into().unwrap_or(usize::MAX);
         self.truncate_to_length(text, len)
     }
 
