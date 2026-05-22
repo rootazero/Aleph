@@ -72,15 +72,13 @@ impl FileOpsHandler {
         }
 
         // Extract module names from paths
-        let old_module = self.path_to_module_name(old_path);
-        let new_module = self.path_to_module_name(new_path);
-
-        if old_module.is_none() || new_module.is_none() {
-            return Ok(updated_files);
-        }
-
-        let old_mod = old_module.unwrap();
-        let new_mod = new_module.unwrap();
+        let (old_mod, new_mod) = match (
+            self.path_to_module_name(old_path),
+            self.path_to_module_name(new_path),
+        ) {
+            (Some(old), Some(new)) => (old, new),
+            _ => return Ok(updated_files),
+        };
 
         // Find all Rust files in the workspace
         let mut rust_files = Vec::new();

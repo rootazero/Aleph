@@ -190,13 +190,19 @@ impl EditOps for EditOpsHandler {
 
             // Perform replacement based on pattern type
             let new_content = match pattern {
-                SearchPattern::Regex { .. } => regex
-                    .as_ref()
-                    .unwrap()
-                    .replace_all(&content, replacement)
-                    .to_string(),
+                SearchPattern::Regex { .. } => {
+                    match regex {
+                        Some(ref re) => re.replace_all(&content, replacement).to_string(),
+                        None => {
+                            return Ok(AtomicResult {
+                                success: false,
+                                output: String::new(),
+                                error: Some("Regex pattern not compiled".to_string()),
+                            });
+                        }
+                    }
+                }
                 SearchPattern::Fuzzy { text, .. } => {
-                    // Simple case-insensitive replacement
                     content.replace(text, replacement)
                 }
                 SearchPattern::Ast { .. } => {

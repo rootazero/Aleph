@@ -85,7 +85,7 @@ impl ExecutorContext {
         if !normalized.starts_with(&normalized_working) {
             return Err(crate::error::AlephError::tool(format!(
                 "Path escapes sandbox: {} (working dir: {})",
-                path.display(),
+                resolved.display(),
                 self.working_dir.display()
             )));
         }

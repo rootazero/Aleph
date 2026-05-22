@@ -221,10 +221,20 @@ impl ReflexLayer {
         }
     }
 
+    /// Maximum serialized action size to cache (1MB)
+    const MAX_CACHED_ACTION_SIZE: usize = 1024 * 1024;
+
     /// Learn from successful L3 reasoning
     pub fn learn_from_success(&self, input: &str, action: AtomicAction) {
         // Only cache simple, deterministic inputs
         if input.len() < 100 && !input.contains("complex") {
+            // Guard against caching huge actions that could exhaust memory
+            if let Ok(action_json) = serde_json::to_string(&action) {
+                if action_json.len() > Self::MAX_CACHED_ACTION_SIZE {
+                    debug!(input = %input, size = action_json.len(), "Action too large to cache");
+                    return;
+                }
+            }
             info!(input = %input, action = ?action, "Learning new L1 rule");
             self.exact_cache.insert(input.to_string(), action);
         }

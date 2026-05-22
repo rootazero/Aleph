@@ -115,6 +115,9 @@ impl PerformanceOptimizer {
         None
     }
 
+    /// Maximum size of a single cached result (10MB)
+    const MAX_CACHED_RESULT_SIZE: usize = 10 * 1024 * 1024;
+
     /// Cache a query result
     ///
     /// # Arguments
@@ -122,6 +125,12 @@ impl PerformanceOptimizer {
     /// * `query` - The input query
     /// * `result` - The routing result to cache
     pub fn cache(&self, query: &str, result: String) {
+        // Guard against caching huge results that could exhaust memory
+        if result.len() > Self::MAX_CACHED_RESULT_SIZE {
+            debug!(query = %query, size = result.len(), "Result too large to cache");
+            return;
+        }
+
         // Check cache size limit
         if self.cache.len() >= self.max_cache_size {
             self.evict_oldest();
