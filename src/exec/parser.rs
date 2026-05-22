@@ -74,6 +74,13 @@ fn contains_unquoted_redirect(command: &str) -> bool {
             '>' | '<' if !in_single && !in_double => {
                 return true;
             }
+            '&' if !in_single && !in_double => {
+                // Could be part of >& or <& (fd duplication redirects)
+                // We check the previous char in the next iteration via peek, but
+                // for simplicity we flag bare & in unquoted context as suspicious
+                // since shell fd redirects like `2>&1` contain & adjacent to >
+                return true;
+            }
             _ => {}
         }
     }

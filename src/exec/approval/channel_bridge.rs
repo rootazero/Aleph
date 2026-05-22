@@ -385,7 +385,10 @@ impl ChannelApprovalBridge {
     }
 
     pub async fn get_pending_approvals(&self) -> Vec<PendingApprovalState> {
-        self.pending_approvals.read().await.clone()
+        let mut approvals = self.pending_approvals.write().await;
+        let now = Utc::now();
+        approvals.retain(|p| p.expires_at > now);
+        approvals.clone()
     }
 
     pub async fn remove_pending(&self, approval_id: &str) {

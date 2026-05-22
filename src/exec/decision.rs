@@ -172,8 +172,8 @@ fn is_safe_bin_usage(executable: &str, argv: &[String]) -> bool {
         if arg.starts_with('-') {
             continue;
         }
-        // Disallow paths
-        if arg.contains('/') || arg.contains('\\') {
+        // Disallow paths (including parent directory traversal)
+        if arg.contains('/') || arg.contains('\\') || arg == ".." {
             return false;
         }
     }
@@ -318,6 +318,9 @@ mod tests {
             &["cat".into(), "/etc/passwd".into()]
         ));
         assert!(!is_safe_bin_usage("npm", &["npm".into(), "install".into()]));
+        // Parent directory traversal should be blocked even without '/'
+        assert!(!is_safe_bin_usage("ls", &["ls".into(), "..".into()]));
+        assert!(!is_safe_bin_usage("cat", &["cat".into(), "..".into()]));
     }
 
     #[test]

@@ -116,7 +116,8 @@ fn normalize_path_components(path: &Path) -> PathBuf {
 /// Check if path is in sensitive directory
 pub fn is_sensitive_directory(path: &Path) -> bool {
     let sensitive_components = [".ssh", ".gnupg", ".aws"];
-    let sensitive_substrings = ["Keychain.app", ".config/gcloud"];
+    // Multi-segment sensitive paths that must match as complete path components
+    let sensitive_path_segments = [(".config", "gcloud")];
 
     // Check path components for exact directory matches
     let has_sensitive_component = path.components().any(|comp| {
@@ -132,11 +133,25 @@ pub fn is_sensitive_directory(path: &Path) -> bool {
         return true;
     }
 
-    // Check full path string for multi-segment patterns
-    let path_str = path.to_string_lossy();
-    sensitive_substrings
-        .iter()
-        .any(|pattern| path_str.contains(pattern))
+    // Check for multi-segment sensitive paths using component-level matching
+    // to avoid substring false positives (e.g. ".config/gcloud-backup" should not match)
+    let components: Vec<_> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect();
+
+    for i in 0..components.len().saturating_sub(1) {
+        for &(parent, child) in &sensitive_path_segments {
+            if components[i] == parent && components[i + 1] == child {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -162,6 +177,17 @@ mod tests {
 
         let path = PathBuf::from("/Users/test/Documents/file.txt");
         assert!(!is_sensitive_directory(&path));
+    }
+
+    #[test]
+    fn test_sensitive_directory_no_false_positive() {
+        // Substring matches should not trigger (e.g. "gcloud-backup" vs "gcloud")
+        let path = PathBuf::from("/Users/test/.config/gcloud-backup/data");
+        assert!(!is_sensitive_directory(&path));
+
+        // Exact match should still trigger
+        let path = PathBuf::from("/Users/test/.config/gcloud/credentials");
+        assert!(is_sensitive_directory(&path));
     }
 
     #[test]

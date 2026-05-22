@@ -186,10 +186,10 @@ fn parse_capabilities_from_strings(capability_strings: &[String]) -> SandboxCapa
         if let Some(fs_type) = cap_str.strip_prefix("filesystem.") {
             match fs_type {
                 "read_write" => {
-                    capabilities.fs_write.push(PathBuf::from("/tmp"));
+                    capabilities.fs_write.push(PathBuf::from("."));
                 }
                 "read_only" => {
-                    capabilities.fs_read.push(PathBuf::from("/tmp"));
+                    capabilities.fs_read.push(PathBuf::from("."));
                 }
                 _ => {}
             }
