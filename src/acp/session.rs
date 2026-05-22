@@ -70,6 +70,8 @@ pub struct AcpSession {
     initialized: bool,
     /// ACP session ID returned by `session/new`.
     acp_session_id: Option<String>,
+    /// Background task reading stderr for diagnostic logging.
+    _stderr_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl AcpSession {
@@ -79,7 +81,7 @@ impl AcpSession {
         cmd.args(&config.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
+            .stderr(std::process::Stdio::piped());
 
         if let Some(ref cwd) = config.cwd {
             cmd.current_dir(cwd);
@@ -109,8 +111,23 @@ impl AcpSession {
                 harness_id
             ))
         })?;
+        let stderr = child.stderr.take();
 
         let transport = StdioTransport::new(stdin, stdout);
+
+        let stderr_handle = stderr.map(|s| {
+            let hid = harness_id.to_string();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let reader = BufReader::new(s);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if !line.trim().is_empty() {
+                        warn!(harness_id = %hid, stderr_line = %line, "ACP harness stderr");
+                    }
+                }
+            })
+        });
 
         info!(harness_id, executable = %config.executable, "ACP session spawned");
 
@@ -121,6 +138,7 @@ impl AcpSession {
             state: AcpSessionState::Idle,
             initialized: false,
             acp_session_id: None,
+            _stderr_handle: stderr_handle,
         })
     }
 

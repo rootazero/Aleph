@@ -133,11 +133,44 @@ impl SessionKey {
         Self {
             harness_id: harness_id.to_string(),
             cwd: std::fs::canonicalize(cwd).unwrap_or_else(|_| {
-                debug!(cwd, "SessionKey: canonicalize failed, using raw path");
-                PathBuf::from(cwd)
+                let path = PathBuf::from(cwd);
+                let normalized = normalize_path(&path);
+                let final_path = if normalized.is_absolute() {
+                    normalized
+                } else {
+                    std::env::current_dir()
+                        .map(|cd| cd.join(&normalized))
+                        .unwrap_or(normalized)
+                };
+                debug!(cwd, ?final_path, "SessionKey: canonicalize failed, using normalized path");
+                final_path
             }),
         }
     }
+}
+
+fn normalize_path(path: &std::path::Path) -> PathBuf {
+    use std::path::Component;
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => result.push(prefix.as_os_str()),
+            Component::RootDir => result.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if result.parent().is_some() {
+                    result.pop();
+                } else {
+                    result.push("..");
+                }
+            }
+            Component::Normal(name) => result.push(name),
+        }
+    }
+    if result.as_os_str().is_empty() {
+        result.push(".");
+    }
+    result
 }
 
 // =============================================================================
@@ -997,5 +1030,33 @@ mod tests {
         let k1 = SessionKey::new("claude-code", "/tmp");
         let k2 = SessionKey::new("codex", "/tmp");
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn test_normalize_path_removes_dot() {
+        let path = std::path::Path::new("/tmp/./foo");
+        let normalized = normalize_path(path);
+        assert_eq!(normalized, std::path::PathBuf::from("/tmp/foo"));
+    }
+
+    #[test]
+    fn test_normalize_path_resolves_dotdot() {
+        let path = std::path::Path::new("/tmp/foo/../bar");
+        let normalized = normalize_path(path);
+        assert_eq!(normalized, std::path::PathBuf::from("/tmp/bar"));
+    }
+
+    #[test]
+    fn test_normalize_path_preserves_relative() {
+        let path = std::path::Path::new("foo/../bar");
+        let normalized = normalize_path(path);
+        assert_eq!(normalized, std::path::PathBuf::from("bar"));
+    }
+
+    #[test]
+    fn test_normalize_path_empty_becomes_dot() {
+        let path = std::path::Path::new(".");
+        let normalized = normalize_path(path);
+        assert_eq!(normalized, std::path::PathBuf::from("."));
     }
 }

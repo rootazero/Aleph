@@ -115,7 +115,7 @@ impl AcpAdapter for GenericAcpAdapter {
             executable: self.executable.clone(),
             args: self.resolve_args(self.default_mode),
             cwd: cwd.map(String::from),
-            timeout: self.timeout,
+            timeout: self.timeout.max(Duration::from_secs(1)),
             ..Default::default()
         }
     }
@@ -172,15 +172,16 @@ impl AcpAdapter for GenericAcpAdapter {
     }
 
     async fn spawn_session(&self, cwd: Option<&str>) -> Result<AcpSession> {
+        let timeout = self.timeout.max(Duration::from_secs(1));
         let config = AdapterConfig {
             executable: self.executable.clone(),
             args: self.native_acp_args.clone(),
             cwd: cwd.map(String::from),
-            timeout: self.timeout,
+            timeout,
             ..Default::default()
         };
         let mut session = AcpSession::spawn(self.id(), &config).await?;
-        session.initialize(self.timeout).await?;
+        session.initialize(timeout).await?;
         Ok(session)
     }
 }
@@ -278,5 +279,21 @@ mod tests {
         assert_eq!(harness.executable, "my-tool");
         assert_eq!(harness.oneshot_args, vec!["run"]);
         assert_eq!(harness.native_acp_args, vec!["--acp"]);
+    }
+
+    #[test]
+    fn test_generic_harness_timeout_clamped_to_minimum() {
+        let harness = GenericAcpAdapter::new(
+            "test",
+            "Test",
+            "test-exe",
+            AdapterMode::Oneshot,
+            vec!["exec".to_string()],
+            vec!["--acp".to_string()],
+            OutputFormat::PlainText,
+        );
+
+        let config = harness.build_config(None);
+        assert_eq!(config.timeout, std::time::Duration::from_secs(300));
     }
 }

@@ -66,7 +66,7 @@ impl AcpAdapter for CustomAcpAdapter {
             args: self.config.args.clone(),
             cwd: cwd.map(String::from).or_else(|| self.config.cwd.clone()),
             env,
-            timeout: Duration::from_secs(self.config.timeout_seconds),
+            timeout: Duration::from_secs(self.config.timeout_seconds.max(1)),
         }
     }
 
@@ -125,5 +125,36 @@ impl AcpAdapter for CustomAcpAdapter {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(OutputFormat::from(&self.config.output_format).parse(&stdout))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_custom_harness_timeout_clamped_to_minimum() {
+        let entry = AcpAdapterEntry {
+            display_name: "Test".to_string(),
+            executable: Some("test".to_string()),
+            timeout_seconds: 0,
+            ..Default::default()
+        };
+        let adapter = CustomAcpAdapter::new("test".to_string(), entry);
+        let config = adapter.build_config(None);
+        assert_eq!(config.timeout, std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_custom_harness_timeout_respects_valid_value() {
+        let entry = AcpAdapterEntry {
+            display_name: "Test".to_string(),
+            executable: Some("test".to_string()),
+            timeout_seconds: 60,
+            ..Default::default()
+        };
+        let adapter = CustomAcpAdapter::new("test".to_string(), entry);
+        let config = adapter.build_config(None);
+        assert_eq!(config.timeout, std::time::Duration::from_secs(60));
     }
 }
