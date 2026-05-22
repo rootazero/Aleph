@@ -6,12 +6,29 @@
 
 use crate::gateway::channel::{ChannelId, ConversationId};
 use crate::routing::session_key::SessionKey;
+use tracing::warn;
+
+/// Maximum nesting depth for subagent parent-key chains.
+const MAX_SUBAGENT_DEPTH: usize = 16;
 
 /// 解出审批提示应投递到的通道与会话。
 ///
 /// `Main` / `Task` / `Ephemeral` 无通道来源 → `None`（调用方据此明确 Denied）。
-/// `Subagent` 递归其 `parent_key`。
+/// `Subagent` 递归其 `parent_key`，深度受 [`MAX_SUBAGENT_DEPTH`] 限制以防止栈溢出。
 pub(crate) fn channel_route(key: &SessionKey) -> Option<(ChannelId, ConversationId)> {
+    channel_route_inner(key, 0)
+}
+
+fn channel_route_inner(
+    key: &SessionKey,
+    depth: usize,
+) -> Option<(ChannelId, ConversationId)> {
+    if depth > MAX_SUBAGENT_DEPTH {
+        warn!(
+            "Subagent nesting depth exceeded {MAX_SUBAGENT_DEPTH}, stopping channel route resolution"
+        );
+        return None;
+    }
     match key {
         SessionKey::DirectMessage {
             channel, peer_id, ..
@@ -22,7 +39,7 @@ pub(crate) fn channel_route(key: &SessionKey) -> Option<(ChannelId, Conversation
             ChannelId::new(channel.clone()),
             ConversationId::new(peer_id.clone()),
         )),
-        SessionKey::Subagent { parent_key, .. } => channel_route(parent_key),
+        SessionKey::Subagent { parent_key, .. } => channel_route_inner(parent_key, depth + 1),
         SessionKey::Main { .. } | SessionKey::Task { .. } | SessionKey::Ephemeral { .. } => None,
     }
 }

@@ -177,8 +177,10 @@ impl ConfigApprovalPolicy {
 
     /// Load the policy from the given path.
     ///
-    /// If the file does not exist or cannot be parsed, a sensible default
-    /// policy is returned instead.
+    /// If the file does not exist, a sensible default policy is returned.
+    /// If the file exists but cannot be read or parsed, a **safe** default
+    /// is returned instead — all actions require explicit approval.
+    /// This prevents configuration errors from silently weakening security.
     pub fn load_from(path: PathBuf) -> Self {
         match std::fs::read_to_string(&path) {
             Ok(contents) => match serde_json::from_str::<PolicyConfig>(&contents) {
@@ -188,11 +190,11 @@ impl ConfigApprovalPolicy {
                 }
                 Err(e) => {
                     error!(
-                        "Failed to parse approval policy at {}: {}. Using defaults.",
+                        "Failed to parse approval policy at {}: {}. Using safe defaults (all actions require approval).",
                         path.display(),
                         e
                     );
-                    Self::default()
+                    Self::safe_default()
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -204,11 +206,11 @@ impl ConfigApprovalPolicy {
             }
             Err(e) => {
                 error!(
-                    "Failed to read approval policy at {}: {}. Using defaults.",
+                    "Failed to read approval policy at {}: {}. Using safe defaults (all actions require approval).",
                     path.display(),
                     e
                 );
-                Self::default()
+                Self::safe_default()
             }
         }
     }
@@ -216,14 +218,29 @@ impl ConfigApprovalPolicy {
     /// Return the expected path for the configuration file.
     fn config_path() -> PathBuf {
         dirs::home_dir()
+            .map(|home| home.join(".aleph").join("approval-policy.json"))
             .unwrap_or_else(|| {
                 warn!(
-                    "Cannot determine home directory; approval policy will use temp dir fallback"
+                    "Cannot determine home directory; approval policy will use current dir fallback"
                 );
-                std::env::temp_dir()
+                std::env::current_dir()
+                    .unwrap_or_else(|_| std::env::temp_dir())
+                    .join(".aleph")
+                    .join("approval-policy.json")
             })
-            .join(".aleph")
-            .join("approval-policy.json")
+    }
+
+    /// Safe fallback when the policy file exists but cannot be read or parsed.
+    ///
+    /// Every action type returns [`ApprovalDecision::Ask`] — never silently
+    /// allow or deny. This ensures configuration errors cannot weaken security.
+    fn safe_default() -> Self {
+        Self::new(PolicyConfig {
+            version: 1,
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![],
+        })
     }
 }
 
