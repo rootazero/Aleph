@@ -64,11 +64,12 @@ pub async fn execute_batch_move(
 
                     match fs::rename(&path, &dest_path) {
                         Ok(_) => {
+                            let size = fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0);
                             moved_files.push(FileInfo {
                                 name: file_name.to_string_lossy().to_string(),
                                 path: dest_path.to_string_lossy().to_string(),
                                 is_dir: false,
-                                size: 0,
+                                size,
                                 extension: path
                                     .extension()
                                     .map(|e| e.to_string_lossy().to_string()),
@@ -127,7 +128,6 @@ pub async fn execute_batch_move(
 /// Automatically organizes files by type into categorized folders
 pub async fn execute_organize(
     dir: &Path,
-    create_parents: bool,
     denied_paths: &[String],
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
@@ -217,9 +217,11 @@ pub async fn execute_organize(
             .map(|(name, _)| *name)
             .unwrap_or("Others");
 
-        // Create category directory if needed
+        // Create the category directory. Sorting files into category folders
+        // is `organize`'s whole purpose, so it always creates them — each is a
+        // one-level child of an already-existing directory.
         let category_dir = canonical.join(category);
-        if !category_dir.exists() && create_parents {
+        if !category_dir.exists() {
             if let Err(e) = fs::create_dir(&category_dir) {
                 errors.push(format!("Failed to create {}: {}", category, e));
                 continue;
@@ -238,11 +240,12 @@ pub async fn execute_organize(
         match fs::rename(&path, &dest_path) {
             Ok(_) => {
                 *category_counts.entry(category.to_string()).or_insert(0) += 1;
+                let size = fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0);
                 moved_files.push(FileInfo {
                     name: file_name.to_string_lossy().to_string(),
                     path: dest_path.to_string_lossy().to_string(),
                     is_dir: false,
-                    size: 0,
+                    size,
                     extension: Some(ext),
                     lines: None,
                 });
@@ -285,4 +288,49 @@ pub async fn execute_organize(
         items_affected: Some(count),
         summary: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn organize_sorts_files_into_category_folders() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("photo.png"), b"image-bytes").unwrap();
+        fs::write(dir.path().join("notes.md"), b"# notes").unwrap();
+        fs::write(dir.path().join("main.rs"), b"fn main() {}").unwrap();
+
+        // `organize` must always create its category folders — historically it
+        // only did so when an unrelated `create_parents` flag was set.
+        let out = execute_organize(dir.path(), &[], None).await.unwrap();
+
+        assert!(out.success, "message: {}", out.message);
+        assert_eq!(out.items_affected, Some(3));
+        assert!(dir.path().join("Images/photo.png").is_file());
+        assert!(dir.path().join("Documents/notes.md").is_file());
+        assert!(dir.path().join("Code/main.rs").is_file());
+
+        // FileInfo.size must report the real moved-file size, not a 0 placeholder.
+        let files = out.files.unwrap();
+        assert!(files.iter().all(|f| f.size > 0), "sizes: {files:?}");
+    }
+
+    #[tokio::test]
+    async fn batch_move_reports_real_file_sizes() {
+        let src = tempdir().unwrap();
+        let dst = tempdir().unwrap();
+        fs::write(src.path().join("a.log"), b"hello-log").unwrap();
+
+        let out = execute_batch_move(src.path(), "*.log", dst.path(), false, &[], None)
+            .await
+            .unwrap();
+
+        assert!(out.success, "message: {}", out.message);
+        let files = out.files.unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].size, 9, "size must be the real byte count");
+    }
 }

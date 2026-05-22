@@ -18,6 +18,12 @@ use tokio::fs;
 /// Implementation: write to a randomly-named temp file in the same directory,
 /// fsync, then rename. POSIX rename is atomic within a single filesystem,
 /// so readers either see the old file or the new file but never a partial write.
+///
+/// When `path` already exists, its permission bits are copied onto the staging
+/// file before the rename — `tempfile` creates the staging file `0600`, so
+/// without this an atomic overwrite would silently strip an existing file's
+/// mode (e.g. drop the executable bit from a `0755` script). A brand-new file
+/// keeps the `0600` staging default.
 pub async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephError> {
     let parent = path.parent().ok_or_else(|| AlephError::ConfigError {
         message: format!("Path has no parent directory: {path:?}"),
@@ -51,6 +57,12 @@ pub async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephEr
         message: format!("Failed to sync temp file: {e}"),
         suggestion: None,
     })?;
+
+    // Preserve the destination's existing permissions across the rename.
+    // Best-effort: a failure here must not abort an otherwise-good write.
+    if let Ok(meta) = fs::metadata(path).await {
+        let _ = fs::set_permissions(&tmp_path, meta.permissions()).await;
+    }
 
     fs::rename(&tmp_path, path)
         .await
@@ -94,5 +106,39 @@ mod tests {
         atomic_write_file(&path, "hi").await.unwrap();
         let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
         assert_eq!(entries.len(), 1, "only the final file should remain");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preserves_permissions_on_overwrite() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("script.sh");
+        tokio::fs::write(&path, "#!/bin/sh\necho old\n")
+            .await
+            .unwrap();
+        // Mark the file executable, as a shell script would be.
+        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .await
+            .unwrap();
+
+        atomic_write_file(&path, "#!/bin/sh\necho new\n")
+            .await
+            .unwrap();
+
+        let mode = tokio::fs::metadata(&path)
+            .await
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o755,
+            "executable bit must survive the atomic overwrite"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            "#!/bin/sh\necho new\n"
+        );
     }
 }

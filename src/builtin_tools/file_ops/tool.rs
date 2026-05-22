@@ -183,13 +183,7 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                 .await
             }
             FileOperation::Organize => {
-                execute_organize(
-                    path,
-                    args.create_parents,
-                    &self.denied_paths,
-                    output_dir_ref,
-                )
-                .await
+                execute_organize(path, &self.denied_paths, output_dir_ref).await
             }
             FileOperation::Stats => {
                 execute_stats(

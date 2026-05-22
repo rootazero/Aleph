@@ -187,10 +187,14 @@ impl FileEditTool {
         let replacements = applied.len();
         let new_content = apply_ranges(&content, applied, &args.new_string);
 
-        // Write back
-        std::fs::write(&canonical, &new_content).map_err(|e| {
-            ToolError::Execution(format!("Failed to write {}: {}", canonical.display(), e))
-        })?;
+        // Write back atomically: stage to a temp file in the same directory,
+        // fsync, then rename. A crash mid-write must never leave the user's
+        // existing file truncated. File permissions are preserved.
+        crate::utils::atomic_write::atomic_write_file(&canonical, &new_content)
+            .await
+            .map_err(|e| {
+                ToolError::Execution(format!("Failed to write {}: {}", canonical.display(), e))
+            })?;
 
         let path_str = canonical.to_string_lossy().to_string();
         let message = format!(
@@ -470,5 +474,33 @@ mod tests {
         assert!(err.contains("whitespace"), "err was: {err}");
         // The file must be untouched when the match fails.
         assert_eq!(fs::read_to_string(&file).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn edit_preserves_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("run.sh");
+        fs::write(&file, "echo one").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: "one".to_string(),
+                new_string: "two".to_string(),
+                replace_all: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(result.success);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "echo two");
+        // The atomic temp-file-and-rename write must not drop the file's mode.
+        let mode = fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "executable bit must survive the edit");
     }
 }

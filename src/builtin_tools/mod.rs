@@ -7,7 +7,6 @@
 //! - [`SearchTool`] - Web search via SearXNG
 //! - [`WebFetchTool`] - Web page fetching
 //! - [`FileOpsTool`] - File system operations (list, read, write, move, copy, delete, mkdir, search)
-//! - [`AtomicOpsTool`] - Atomic operations (search, replace, move) powered by Atomic Engine
 //! - [`CodeExecTool`] - Code execution (Python, JavaScript, Shell)
 //! - [`PdfGenerateTool`] - PDF generation from text/Markdown
 //! - [`ImageGenerateTool`] - Image generation from text prompts
@@ -32,7 +31,6 @@ pub mod acp_tools;
 pub mod agent_manage;
 pub mod arena;
 pub mod ask_user;
-pub mod atomic_ops;
 pub mod automation_tool;
 pub mod bash_exec;
 // pub mod browser; — deleted; Task 13 recreates with text-first design
@@ -106,7 +104,6 @@ pub use arena::{
     ArenaCreateArgs, ArenaCreateOutput, ArenaCreateTool, ArenaQueryArgs, ArenaQueryOutput,
     ArenaQueryTool, ArenaSettleArgs, ArenaSettleOutput, ArenaSettleTool, SlotSummary,
 };
-pub use atomic_ops::{AtomicOpsArgs, AtomicOpsOutput, AtomicOpsTool};
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
 // pub use browser::*; — removed; Task 13 will re-export new types

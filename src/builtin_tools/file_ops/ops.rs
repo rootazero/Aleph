@@ -150,7 +150,10 @@ pub(super) async fn execute_write(
     }
 
     let bytes = content.len() as u64;
-    fs::write(&canonical, content)
+    // Atomic write: staged temp file + rename, so a crash never leaves a
+    // half-written file. Parent directories are already created above.
+    crate::utils::atomic_write::atomic_write_file(&canonical, content)
+        .await
         .map_err(|e| ToolError::Execution(format!("Failed to write file: {}", e)))?;
 
     info!(path = %canonical.display(), bytes, "Wrote file");
@@ -312,6 +315,23 @@ fn copy_dir_recursive(
     Ok(total_bytes)
 }
 
+/// Recursively count a path plus every entry beneath it, so `delete` can report
+/// a truthful item count — `remove_dir_all` itself returns none. Symlinks count
+/// as a single entry and are not followed, matching `remove_dir_all`, which
+/// unlinks a symlink rather than descending into its target.
+fn count_path_entries(path: &Path) -> usize {
+    let mut total = 1; // the path itself
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            match entry.file_type() {
+                Ok(ft) if ft.is_dir() => total += count_path_entries(&entry.path()),
+                _ => total += 1,
+            }
+        }
+    }
+    total
+}
+
 /// Execute a delete operation
 pub async fn execute_delete(
     path: &Path,
@@ -329,10 +349,9 @@ pub async fn execute_delete(
 
     let is_dir = canonical.is_dir();
     let items_deleted = if is_dir {
-        let count = fs::read_dir(&canonical)
-            .map(|entries| entries.filter(|e| e.is_ok()).count())
-            .unwrap_or(0)
-            + 1;
+        // Count the whole tree before removal so the reported figure is the
+        // true total, not just the directory's top-level entries.
+        let count = count_path_entries(&canonical);
         fs::remove_dir_all(&canonical)
             .map_err(|e| ToolError::Execution(format!("Failed to delete directory: {}", e)))?;
         count
@@ -402,4 +421,44 @@ pub async fn execute_mkdir(
         items_affected: Some(1),
         summary: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn delete_reports_full_recursive_item_count() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("tree");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("a.txt"), b"a").unwrap();
+        fs::create_dir(target.join("sub")).unwrap();
+        fs::write(target.join("sub/b.txt"), b"b").unwrap();
+        fs::write(target.join("sub/c.txt"), b"c").unwrap();
+        // tree + a.txt + sub + sub/b.txt + sub/c.txt = 5 entries.
+
+        let out = execute_delete(&target, &[], None).await.unwrap();
+
+        assert!(out.success);
+        assert_eq!(
+            out.items_affected,
+            Some(5),
+            "must count nested entries, not only the top level"
+        );
+        assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn write_then_read_back_roundtrips() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested/out.txt");
+        let (canonical, bytes) = execute_write(&path, "payload", true, &[], None)
+            .await
+            .unwrap();
+        assert_eq!(bytes, 7);
+        assert_eq!(fs::read_to_string(&canonical).unwrap(), "payload");
+    }
 }
