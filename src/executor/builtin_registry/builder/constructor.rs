@@ -486,8 +486,7 @@ impl BuiltinToolRegistry {
         // The handle is filled by A2A subsystem init *after* this registry is
         // built — see commands/start/mod.rs. Tools register now; calls before
         // the handle is populated return a clear "not available" error.
-        let (a2a_delegate_tool, a2a_agents_tool) = if let Some(ref handle) =
-            config.a2a_tool_handle
+        let (a2a_delegate_tool, a2a_agents_tool) = if let Some(ref handle) = config.a2a_tool_handle
         {
             use crate::builtin_tools::a2a_tools::{A2AAgentsTool, A2ADelegateTool};
             use crate::tools::AlephTool;
@@ -990,12 +989,10 @@ impl BuiltinToolRegistry {
             // tool reads. Event-log only (no note_indexer) — note_manage owns
             // the notes-filesystem write path.
             if let Some(ref state_db) = config.state_db {
-                let handler = Arc::new(
-                    crate::memory::events::handler::MemoryCommandHandler::new(
-                        Arc::clone(state_db),
-                        Some(db.clone()),
-                    ),
-                );
+                let handler = Arc::new(crate::memory::events::handler::MemoryCommandHandler::new(
+                    Arc::clone(state_db),
+                    Some(db.clone()),
+                ));
                 tool = tool.with_command_handler(handler);
             }
 
@@ -1242,7 +1239,8 @@ impl BuiltinToolRegistry {
             // ClarificationManager is always injected via deferred wiring at
             // boot (created alongside channels) — start the cell empty.
             clarification_manager_cell: Arc::new(tokio::sync::OnceCell::new()),
-            clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool::new(),
+            clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool::new()
+                .expect("ClawHubTool::new() should not fail with standard config"),
             gateway_route_tool: crate::builtin_tools::gateway_route::GatewayRouteTool::default(),
             task_create_tool,
             task_update_tool,

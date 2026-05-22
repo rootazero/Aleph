@@ -733,7 +733,9 @@ pub fn create_tool_boxed(
                     Arc::clone(pipeline),
                 )) as Box<dyn AlephToolDyn>
             }),
-        "clawhub" => Some(Box::new(crate::builtin_tools::clawhub::ClawHubTool::new())),
+        "clawhub" => crate::builtin_tools::clawhub::ClawHubTool::new()
+            .ok()
+            .map(|tool| Box::new(tool) as Box<dyn AlephToolDyn>),
         "media_send" => Some(Box::new(
             crate::builtin_tools::media_send::MediaSendTool::new(),
         )),
@@ -818,8 +820,13 @@ pub fn create_tool_boxed(
         // Memory lifecycle & knowledge-wiki tools require a memory backend / wiki /
         // profile synthesizer + per-session context — built dynamically in
         // BuiltinToolRegistry::with_config(), same as note_manage below.
-        "memory_reflect" | "recall_context" | "note_orient" | "note_schema" | "user_profile"
-        | "session_complete" | "flag_user_correction" => None,
+        "memory_reflect"
+        | "recall_context"
+        | "note_orient"
+        | "note_schema"
+        | "user_profile"
+        | "session_complete"
+        | "flag_user_correction" => None,
         // note_manage requires memory backend — cannot create standalone fallback
         "note_manage" => None,
         _ => None,

@@ -24,6 +24,8 @@ use super::types::*;
 
 const DEFAULT_REGISTRY: &str = "https://clawhub.ai";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// Maximum download size (100 MiB) to prevent memory exhaustion.
+const MAX_DOWNLOAD_BYTES: usize = 100 * 1024 * 1024;
 
 /// Percent-encode a slug for use in URL path segments.
 /// Encodes everything except alphanumerics, `-`, `_`, `.`, `~`, and `/` (slug separator).
@@ -47,7 +49,7 @@ pub struct ClawHubClient {
 
 impl ClawHubClient {
     /// Create a new client, honoring `CLAWHUB_REGISTRY` env var if set.
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self> {
         let registry = std::env::var("CLAWHUB_REGISTRY")
             .ok()
             .filter(|s| !s.is_empty())
@@ -56,18 +58,18 @@ impl ClawHubClient {
     }
 
     /// Create a client pointing to a custom registry URL
-    pub fn with_registry(url: &str) -> Self {
+    pub fn with_registry(url: &str) -> Result<Self> {
         let ua = format!("aleph/{}", env!("ALEPH_VERSION"));
         let http = Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .user_agent(ua)
             .build()
-            .expect("reqwest Client builder should not fail with standard config");
+            .map_err(|e| AlephError::network(format!("Failed to build HTTP client: {}", e)))?;
 
-        Self {
+        Ok(Self {
             base_url: url.trim_end_matches('/').to_string(),
             http,
-        }
+        })
     }
 
     /// Get the registry base URL
@@ -159,18 +161,18 @@ impl ClawHubClient {
             });
         }
 
-        // Fallback: browse endpoint returned empty, use search instead
+        // Fallback: browse endpoint returned empty. Return empty results rather than
+        // running a broad search that may return unrelated skills.
         if api_resp.next_cursor.is_some() {
             warn!(
                 cursor = api_resp.next_cursor,
-                "Browse returned empty but has next_cursor; falling back to search (pagination lost)"
+                "Browse returned empty but has next_cursor; pagination may be broken"
             );
         } else {
-            debug!("Browse returned empty, falling back to search");
+            debug!("Browse returned empty results");
         }
-        let results = self.search("", limit).await?;
         Ok(BrowseResponse {
-            skills: results,
+            skills: Vec::new(),
             cursor: None,
             has_more: false,
         })
@@ -226,12 +228,20 @@ impl ClawHubClient {
             .await
             .map_err(|e| AlephError::network(format!("ClawHub download read error: {}", e)))?;
 
+        if bytes.len() > MAX_DOWNLOAD_BYTES {
+            return Err(AlephError::network(format!(
+                "ClawHub download exceeds maximum size ({} > {} bytes)",
+                bytes.len(),
+                MAX_DOWNLOAD_BYTES
+            )));
+        }
+
         // Sanitize slug for filename: "owner/skill" → "owner-skill"
         let safe_slug = slug.replace('/', "-");
         let safe_slug = if safe_slug.len() > 100 {
-            &safe_slug[..100]
+            safe_slug.chars().take(100).collect::<String>()
         } else {
-            &safe_slug
+            safe_slug
         };
         let temp_path = std::env::temp_dir().join(format!(
             "clawhub-{}-{}.zip",
@@ -307,7 +317,7 @@ impl ClawHubClient {
 
 impl Default for ClawHubClient {
     fn default() -> Self {
-        Self::new()
+        Self::new().expect("ClawHubClient::new() should not fail with standard config")
     }
 }
 
@@ -333,13 +343,13 @@ mod tests {
     #[test]
     fn test_default_client() {
         // Use with_registry directly to avoid env var dependency
-        let client = ClawHubClient::with_registry("https://clawhub.ai");
+        let client = ClawHubClient::with_registry("https://clawhub.ai").unwrap();
         assert_eq!(client.base_url, "https://clawhub.ai");
     }
 
     #[test]
     fn test_custom_registry() {
-        let client = ClawHubClient::with_registry("https://my-clawhub.com/");
+        let client = ClawHubClient::with_registry("https://my-clawhub.com/").unwrap();
         assert_eq!(client.base_url, "https://my-clawhub.com");
     }
 
@@ -404,13 +414,13 @@ mod tests {
 
     #[test]
     fn test_with_registry_trims_trailing_slash() {
-        let client = ClawHubClient::with_registry("https://my-hub.com/");
+        let client = ClawHubClient::with_registry("https://my-hub.com/").unwrap();
         assert_eq!(client.base_url, "https://my-hub.com");
     }
 
     #[test]
     fn test_with_registry_preserves_path() {
-        let client = ClawHubClient::with_registry("https://my-hub.com/api");
+        let client = ClawHubClient::with_registry("https://my-hub.com/api").unwrap();
         assert_eq!(client.base_url, "https://my-hub.com/api");
     }
 }

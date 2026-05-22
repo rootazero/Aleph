@@ -51,6 +51,9 @@ pub struct SkillSearchResult {
     pub stars: u64,
     #[serde(default)]
     pub owner_handle: String,
+    /// RFC 3339 timestamp when the skill was last updated (from API `updatedAt`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub updated_at: String,
 }
 
 /// Paginated browse response
@@ -203,6 +206,7 @@ pub struct SearchHit {
 
 impl From<SearchHit> for SkillSearchResult {
     fn from(hit: SearchHit) -> Self {
+        let updated_at = hit.updated_at.map(unix_ms_to_rfc3339).unwrap_or_default();
         Self {
             slug: hit.slug,
             name: hit.display_name,
@@ -211,6 +215,7 @@ impl From<SearchHit> for SkillSearchResult {
             downloads: 0,
             stars: 0,
             owner_handle: String::new(),
+            updated_at,
         }
     }
 }
@@ -263,6 +268,7 @@ impl From<BrowseSkill> for SkillSearchResult {
             downloads,
             stars,
             owner_handle: String::new(),
+            updated_at: String::new(),
         }
     }
 }

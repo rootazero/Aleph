@@ -20,7 +20,9 @@ use crate::tools::AlephTool;
 /// Shared `ClawHubTool` — also exposes the inner `ClawHubClient` for direct use.
 fn get_tool() -> &'static ClawHubTool {
     static TOOL: OnceLock<ClawHubTool> = OnceLock::new();
-    TOOL.get_or_init(ClawHubTool::new)
+    TOOL.get_or_init(|| {
+        ClawHubTool::new().expect("ClawHubTool::new() should not fail with standard config")
+    })
 }
 
 // =============================================================================
@@ -84,7 +86,12 @@ pub async fn handle_browse(request: JsonRpcRequest) -> JsonRpcResponse {
         Some("stars") => SortOrder::Stars,
         Some("updated") => SortOrder::Updated,
         Some("trending") => SortOrder::Trending,
-        _ => SortOrder::Downloads,
+        Some("downloads") => SortOrder::Downloads,
+        Some(other) => {
+            tracing::warn!(sort = other, "Unknown sort order, defaulting to downloads");
+            SortOrder::Downloads
+        }
+        None => SortOrder::Downloads,
     };
 
     match get_tool()
