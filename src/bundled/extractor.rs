@@ -107,7 +107,7 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
         let name = name_os.to_string_lossy().to_string();
 
         // Defensive: reject empty or path-traversal directory names
-        if name.is_empty() || name == "." || name == ".." {
+        if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
             warn!(skill = %name, "Skipping bundled skill with invalid name");
             continue;
         }
@@ -153,10 +153,17 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
 fn extract_plugins(bundled: &Dir, cache_dir: &Path) -> bool {
     let tmp_dir = cache_dir.with_extension("tmp");
 
-    // Clean up any leftover temp directory from a previous crash
-    if tmp_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&tmp_dir) {
-            warn!(error = %e, "Failed to remove old plugin cache temp directory");
+    // Clean up any leftover temp directory from a previous crash.
+    // Use symlink_metadata to avoid following symlinks — prevents deletion
+    // outside the cache_dir if tmp_dir is a malicious symlink.
+    if let Ok(meta) = tmp_dir.symlink_metadata() {
+        if meta.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&tmp_dir) {
+                warn!(error = %e, "Failed to remove old plugin cache temp directory");
+                return false;
+            }
+        } else {
+            warn!(path = %tmp_dir.display(), "Plugin cache temp path exists but is not a directory, skipping removal");
             return false;
         }
     }
@@ -260,7 +267,11 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
         );
         let tmp = target.join(&tmp_name);
         std::fs::write(&tmp, file.contents())?;
-        std::fs::rename(&tmp, &dest)?;
+        if let Err(e) = std::fs::rename(&tmp, &dest) {
+            // Clean up the temp file so we don't leak partial extractions.
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
     }
 
     for subdir in dir.dirs() {
