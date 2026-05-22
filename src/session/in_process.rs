@@ -118,8 +118,14 @@ impl SessionService for InProcessActorSessionService {
                 reply: tx,
             })
             .await
-            .map_err(|_| SessionError::ActorShutdown)?;
-        rx.await.map_err(|_| SessionError::ActorShutdown)?
+            .map_err(|e| {
+                tracing::warn!(session_id = ?id, error = %e, "GetEvents send failed");
+                SessionError::ActorShutdown
+            })?;
+        rx.await.map_err(|e| {
+            tracing::warn!(session_id = ?id, error = %e, "GetEvents reply dropped");
+            SessionError::ActorShutdown
+        })?
     }
 
     async fn emit_event(
@@ -135,8 +141,14 @@ impl SessionService for InProcessActorSessionService {
         sender
             .send(ActorCommand::EmitEvent { event, reply: tx })
             .await
-            .map_err(|_| SessionError::ActorShutdown)?;
-        rx.await.map_err(|_| SessionError::ActorShutdown)?
+            .map_err(|e| {
+                tracing::warn!(session_id = ?id, error = %e, "EmitEvent send failed");
+                SessionError::ActorShutdown
+            })?;
+        rx.await.map_err(|e| {
+            tracing::warn!(session_id = ?id, error = %e, "EmitEvent reply dropped");
+            SessionError::ActorShutdown
+        })?
     }
 
     async fn subscribe(
@@ -153,13 +165,18 @@ impl SessionService for InProcessActorSessionService {
 
         // Slow path: spawn (or re-spawn) the actor atomically.
         self.spawn_actor(id).await?;
+
+        if self.sender_for(id).await.is_none() {
+            return Err(SessionError::ActorShutdown);
+        }
+
         let bcast = self
             .broadcasters
             .read()
             .await
             .get(id)
             .cloned()
-            .ok_or_else(|| SessionError::Other("broadcaster missing".into()))?;
+            .ok_or_else(|| SessionError::Other("broadcaster missing after spawn".into()))?;
         Ok(bcast.subscribe())
     }
 
@@ -167,8 +184,14 @@ impl SessionService for InProcessActorSessionService {
         // 1. Shutdown old actor if present.
         if let Some(sender) = self.senders.write().await.remove(id) {
             let (tx, rx) = oneshot::channel();
-            let _ = sender.send(ActorCommand::Shutdown { reply: tx }).await;
-            let _ = timeout(SHUTDOWN_GRACE, rx).await;
+            if let Err(e) = sender.send(ActorCommand::Shutdown { reply: tx }).await {
+                tracing::warn!(session_id = ?id, error = %e, "Wake shutdown send failed");
+            }
+            match timeout(SHUTDOWN_GRACE, rx).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::warn!(session_id = ?id, error = %e, "Wake shutdown reply dropped"),
+                Err(_) => tracing::warn!(session_id = ?id, "Wake shutdown timed out after {:?}", SHUTDOWN_GRACE),
+            }
         }
         self.broadcasters.write().await.remove(id);
 
@@ -190,8 +213,14 @@ impl SessionService for InProcessActorSessionService {
                 reply: tx,
             })
             .await
-            .map_err(|_| SessionError::ActorShutdown)?;
-        let new_head = rx.await.map_err(|_| SessionError::ActorShutdown)??;
+            .map_err(|e| {
+                tracing::warn!(session_id = ?id, error = %e, "Wake EmitEvent send failed");
+                SessionError::ActorShutdown
+            })?;
+        let new_head = rx.await.map_err(|e| {
+            tracing::warn!(session_id = ?id, error = %e, "Wake EmitEvent reply dropped");
+            SessionError::ActorShutdown
+        })??;
 
         Ok(SessionHandle {
             id: id.clone(),
@@ -202,8 +231,14 @@ impl SessionService for InProcessActorSessionService {
     async fn detach(&self, id: &SessionId) -> Result<(), SessionError> {
         if let Some(sender) = self.senders.write().await.remove(id) {
             let (tx, rx) = oneshot::channel();
-            let _ = sender.send(ActorCommand::Shutdown { reply: tx }).await;
-            let _ = timeout(SHUTDOWN_GRACE, rx).await;
+            if let Err(e) = sender.send(ActorCommand::Shutdown { reply: tx }).await {
+                tracing::warn!(session_id = ?id, error = %e, "Detach shutdown send failed");
+            }
+            match timeout(SHUTDOWN_GRACE, rx).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::warn!(session_id = ?id, error = %e, "Detach shutdown reply dropped"),
+                Err(_) => tracing::warn!(session_id = ?id, "Detach shutdown timed out after {:?}", SHUTDOWN_GRACE),
+            }
         }
         self.broadcasters.write().await.remove(id);
         Ok(())

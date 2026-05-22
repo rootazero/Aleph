@@ -260,20 +260,27 @@ impl SafetyGuard {
     }
 }
 
-/// Recursively extract all string values from a JSON value into the haystack.
-///
-/// This ensures blocked-pattern regexes match against actual string content
-/// rather than JSON-encoded text, preventing bypass via escape sequences.
 fn collect_string_values(v: &Value, out: &mut String) {
-    match v {
-        Value::String(s) => {
-            out.push(' ');
-            out.push_str(s);
+    const MAX_DEPTH: usize = 64;
+
+    fn recurse(v: &Value, out: &mut String, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
         }
-        Value::Object(m) => m.values().for_each(|v| collect_string_values(v, out)),
-        Value::Array(a) => a.iter().for_each(|v| collect_string_values(v, out)),
-        _ => {}
+        match v {
+            Value::String(s) => {
+                out.push(' ');
+                out.push_str(s);
+            }
+            Value::Object(m) => m
+                .values()
+                .for_each(|v| recurse(v, out, depth + 1)),
+            Value::Array(a) => a.iter().for_each(|v| recurse(v, out, depth + 1)),
+            _ => {}
+        }
     }
+
+    recurse(v, out, 0);
 }
 
 /// Default blocked patterns for dangerous system commands.

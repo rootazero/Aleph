@@ -159,7 +159,8 @@ impl SessionEventStore for SqliteEventStore {
         let session_key = session_id_to_string(session_id)?;
         let turn_id = extract_turn_id(event).map(|u| u.to_string());
         let event_type = event_type_tag(event);
-        let seq_i64 = seq as i64;
+        let seq_i64 = i64::try_from(seq)
+            .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
 
         let conn = self.conn.lock().await;
         conn.execute(
@@ -194,8 +195,10 @@ impl SessionEventStore for SqliteEventStore {
         to: Option<EventSeq>,
     ) -> Result<Vec<SessionEventRecord>, SessionError> {
         let session_key = session_id_to_string(session_id)?;
-        let from_val = from.unwrap_or(0) as i64;
-        let to_val = to.map(|v| v as i64).unwrap_or(i64::MAX);
+        let from_val = i64::try_from(from.unwrap_or(0)).unwrap_or(0);
+        let to_val = to
+            .and_then(|v| i64::try_from(v).ok())
+            .unwrap_or(i64::MAX);
 
         let conn = self.conn.lock().await;
         let mut stmt = conn
@@ -221,8 +224,10 @@ impl SessionEventStore for SqliteEventStore {
             let (seq, payload, created_at) =
                 row.map_err(|e| SessionError::Storage(e.to_string()))?;
             let event: SessionEvent = serde_json::from_str(&payload)?;
+            let seq = u64::try_from(seq)
+                .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
             out.push(SessionEventRecord {
-                seq: seq as EventSeq,
+                seq,
                 event,
                 created_at_ms: created_at,
             });
@@ -244,7 +249,16 @@ impl SessionEventStore for SqliteEventStore {
             .map_err(|e| SessionError::Storage(e.to_string()))?
             .flatten();
 
-        Ok(max_seq.map(|v| v as EventSeq).unwrap_or(0))
+        let head = match max_seq {
+            Some(v) if v >= 0 => v as u64,
+            Some(v) => {
+                return Err(SessionError::Storage(format!(
+                    "stored seq {v} is negative"
+                )))
+            }
+            None => 0,
+        };
+        Ok(head)
     }
 
     async fn load_run_markers(
@@ -279,8 +293,10 @@ impl SessionEventStore for SqliteEventStore {
                 row.map_err(|e| SessionError::Storage(e.to_string()))?;
             let session_id: SessionId = serde_json::from_str(&session_id_str)?;
             let event: SessionEvent = serde_json::from_str(&payload)?;
+            let seq = u64::try_from(seq)
+                .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
             let record = SessionEventRecord {
-                seq: seq as EventSeq,
+                seq,
                 event,
                 created_at_ms: created_at,
             };
