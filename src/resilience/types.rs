@@ -244,7 +244,7 @@ impl AgentTask {
     /// Builder: set parent task for recursion tracking
     pub fn with_parent_task(mut self, parent_id: impl Into<String>, parent_depth: u32) -> Self {
         self.parent_task_id = Some(parent_id.into());
-        self.recursion_depth = parent_depth + 1;
+        self.recursion_depth = parent_depth.saturating_add(1);
         self
     }
 

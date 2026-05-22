@@ -168,6 +168,12 @@ impl StateDatabase {
     ///
     /// Use this when the embedding dimension is known from configuration.
     pub fn new_with_dim(db_path: PathBuf, embedding_dim: u32) -> Result<Self, AlephError> {
+        if embedding_dim == 0 || embedding_dim > 16_384 {
+            return Err(AlephError::config(format!(
+                "embedding dimension must be in 1..=16384, got {embedding_dim}"
+            )));
+        }
+
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 AlephError::config(format!("Failed to create database directory: {}", e))

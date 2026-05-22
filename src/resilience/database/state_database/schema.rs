@@ -377,7 +377,7 @@ impl StateDatabase {
 
     /// SQL for creating vec0 virtual tables with dynamic dimension
     pub(super) fn vec_schema_sql(dim: u32) -> String {
-        assert!(
+        debug_assert!(
             dim > 0 && dim <= 16_384,
             "embedding dimension must be in 1..=16384, got {dim}"
         );
