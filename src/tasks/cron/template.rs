@@ -53,18 +53,24 @@ pub fn render_template(
 
     // User-defined variables from the job's JSON `context_vars` object.
     if let Some(vars_json) = context_vars {
-        if let Ok(serde_json::Value::Object(map)) =
-            serde_json::from_str::<serde_json::Value>(vars_json)
-        {
-            for (key, value) in map {
-                let placeholder = format!("{{{{{key}}}}}");
-                if result.contains(&placeholder) {
-                    let replacement = match value {
-                        serde_json::Value::String(s) => s,
-                        other => other.to_string(),
-                    };
-                    result = result.replace(&placeholder, &replacement);
+        match serde_json::from_str::<serde_json::Value>(vars_json) {
+            Ok(serde_json::Value::Object(map)) => {
+                for (key, value) in map {
+                    let placeholder = format!("{{{{{key}}}}}");
+                    if result.contains(&placeholder) {
+                        let replacement = match value {
+                            serde_json::Value::String(s) => s,
+                            other => other.to_string(),
+                        };
+                        result = result.replace(&placeholder, &replacement);
+                    }
                 }
+            }
+            Ok(_) => {
+                tracing::warn!("job context_vars is not a JSON object, ignoring");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to parse job context_vars JSON, ignoring");
             }
         }
     }

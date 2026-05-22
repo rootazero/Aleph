@@ -10,7 +10,7 @@ pub fn should_send_alert(
         return None;
     }
     if let Some(last_alert) = job.state.last_failure_alert_at_ms {
-        if now_ms - last_alert < alert_config.cooldown_ms {
+        if now_ms.saturating_sub(last_alert) < alert_config.cooldown_ms {
             return None; // Cooldown
         }
     }

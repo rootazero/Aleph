@@ -132,13 +132,13 @@ pub async fn run_heartbeat_loop(
 /// catchup. Threshold: `max(job_timeout * 2, 2h)`.
 async fn clear_stale_running_markers(state: &HeartbeatServiceState) {
     let stale_threshold_ms = ((state.config.job_timeout_secs as i64) * 2 * 1000).max(7_200_000);
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = state.clock.now_ms();
 
     let mut store = state.store.lock().await;
     let mut cleared = 0_usize;
     for task in store.tasks_mut().iter_mut() {
         if let Some(running_at) = task.state.running_at_ms {
-            if now_ms - running_at > stale_threshold_ms {
+            if now_ms.saturating_sub(running_at) > stale_threshold_ms {
                 task.state.running_at_ms = None;
                 cleared += 1;
             }
@@ -164,7 +164,7 @@ async fn collect_due_tasks(
     wake_requests: &[WakeRequest],
 ) -> Vec<(HeartbeatTask, Option<String>)> {
     let mut store = state.store.lock().await;
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = state.clock.now_ms();
 
     // First pass (immutable): identify which tasks are due.
     let mut due_ids: Vec<(String, Option<String>)> = Vec::new();
@@ -330,7 +330,7 @@ async fn writeback_one(
     tick_result: HeartbeatTickResult,
 ) {
     let mut store = state.store.lock().await;
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = state.clock.now_ms();
 
     if let Some(task) = store.get_task_mut(task_id) {
         task.state.running_at_ms = None;
@@ -348,7 +348,10 @@ async fn writeback_one(
                 "Delivered" => Some(crate::tasks::cron::config::RunStatus::Ok),
                 "Deduped" => Some(crate::tasks::cron::config::RunStatus::Skipped),
                 "Error" => Some(crate::tasks::cron::config::RunStatus::Error),
-                _ => None,
+                unknown => {
+                    tracing::warn!(l2_status = %unknown, "unrecognized heartbeat L2 status");
+                    None
+                }
             };
         }
 
@@ -365,7 +368,7 @@ async fn writeback_one(
         // Recompute next due (wall-clock + interval + error backoff).
         let interval = task.interval_ms as i64;
         let backoff = error_backoff_ms(task.state.consecutive_errors) as i64;
-        task.state.next_due_ms = Some(now_ms + interval + backoff);
+        task.state.next_due_ms = Some(now_ms.saturating_add(interval).saturating_add(backoff));
 
         // Write history record.
         let run_record = HeartbeatRunRecord {
