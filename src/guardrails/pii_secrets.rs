@@ -10,7 +10,7 @@
 //! tool_call surface — the unique location where the next consumer is a
 //! tool runtime (not the user) and plaintext is appropriate.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -165,7 +165,7 @@ mod delegation_tests {
     use crate::secrets::injection::AsyncSecretResolver;
     use crate::secrets::types::{DecryptedSecret, SecretError};
     use async_trait::async_trait;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     struct StubResolver;
 

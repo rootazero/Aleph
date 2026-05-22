@@ -2,7 +2,7 @@
 //! once the harness callsite lands. This file currently only exercises
 //! the registry surface for input traits.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 

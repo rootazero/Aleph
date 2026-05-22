@@ -2,7 +2,7 @@
 //! integration test lives in `src/harness/tests/` once Task 4 lands; this file
 //! covers the registry surface for output traits.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 
