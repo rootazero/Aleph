@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::pin::Pin;
 
 use futures::Stream;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
 use crate::a2a::domain::*;
 use crate::a2a::port::{A2AResult, A2AStreamingHandler};
+use crate::sync_primitives::AsyncRwLock;
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 256;
 
@@ -17,14 +18,14 @@ const DEFAULT_CHANNEL_CAPACITY: usize = 256;
 /// subscribers per task. Channels are lazily created on first access and
 /// can be cleaned up via `remove_channel` after task completion.
 pub struct StreamHub {
-    channels: RwLock<HashMap<String, broadcast::Sender<UpdateEvent>>>,
+    channels: AsyncRwLock<HashMap<String, broadcast::Sender<UpdateEvent>>>,
     capacity: usize,
 }
 
 impl StreamHub {
     pub fn new() -> Self {
         Self {
-            channels: RwLock::new(HashMap::new()),
+            channels: AsyncRwLock::new(HashMap::new()),
             capacity: DEFAULT_CHANNEL_CAPACITY,
         }
     }
@@ -33,7 +34,7 @@ impl StreamHub {
         // broadcast::channel panics if capacity is 0
         let capacity = capacity.max(1);
         Self {
-            channels: RwLock::new(HashMap::new()),
+            channels: AsyncRwLock::new(HashMap::new()),
             capacity,
         }
     }

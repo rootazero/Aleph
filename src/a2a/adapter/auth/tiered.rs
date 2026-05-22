@@ -7,6 +7,8 @@ use crate::a2a::port::authenticator::{
 };
 use crate::a2a::port::A2AResult;
 
+use crate::sync_primitives::AsyncRwLock;
+
 use super::token_store::TokenStore;
 
 /// Tiered trust authenticator implementing localhost -> token -> OAuth2 -> reject.
@@ -18,7 +20,7 @@ use super::token_store::TokenStore;
 /// - **Reject**: No valid credentials results in Unauthorized error
 pub struct TieredAuthenticator {
     local_bypass: bool,
-    token_store: Arc<tokio::sync::RwLock<TokenStore>>,
+    token_store: Arc<AsyncRwLock<TokenStore>>,
     local_permissions: Vec<String>,
     trusted_permissions: Vec<String>,
     public_permissions: Vec<String>,
@@ -28,7 +30,7 @@ impl TieredAuthenticator {
     pub fn new(local_bypass: bool, tokens: Vec<String>) -> Self {
         Self {
             local_bypass,
-            token_store: Arc::new(tokio::sync::RwLock::new(TokenStore::new(tokens))),
+            token_store: Arc::new(AsyncRwLock::new(TokenStore::new(tokens))),
             local_permissions: vec!["*".to_string()],
             trusted_permissions: vec!["*".to_string()],
             public_permissions: vec!["read".to_string()],

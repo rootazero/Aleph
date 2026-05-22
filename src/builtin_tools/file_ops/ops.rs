@@ -280,8 +280,8 @@ pub async fn execute_copy(
     })
 }
 
-/// Recursively copy a directory
-fn copy_dir_recursive(from: &Path, to: &Path) -> Result<u64, ToolError> {
+/// Recursively copy a directory with symlink-cycle guard.
+fn copy_dir_recursive(from: &Path, to: &Path, visited: &mut std::collections::HashSet<PathBuf>) -> Result<u64, ToolError> {
     fs::create_dir_all(to)
         .map_err(|e| ToolError::Execution(format!("Failed to create directory: {}", e)))?;
 
@@ -296,8 +296,19 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> Result<u64, ToolError> {
         let from_path = entry.path();
         let to_path = to.join(entry.file_name());
 
+        if from_path.is_symlink() {
+            let canonical = fs::canonicalize(&from_path)
+                .map_err(|e| ToolError::Execution(format!("Failed to canonicalize symlink: {}", e)))?;
+            if !visited.insert(canonical.clone()) {
+                return Err(ToolError::Execution(format!(
+                    "Symlink cycle detected at {}",
+                    from_path.display()
+                )));
+            }
+        }
+
         if from_path.is_dir() {
-            total_bytes += copy_dir_recursive(&from_path, &to_path)?;
+            total_bytes += copy_dir_recursive(&from_path, &to_path, visited)?;
         } else {
             total_bytes += fs::copy(&from_path, &to_path)
                 .map_err(|e| ToolError::Execution(format!("Failed to copy file: {}", e)))?;

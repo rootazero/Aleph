@@ -30,7 +30,7 @@ pub struct A2ASubAgent {
     smart_router: Arc<SmartRouter>,
     client_pool: Arc<A2AClientPool>,
     /// Cached lowercased agent/skill names for sync can_handle matching
-    cached_names: tokio::sync::RwLock<Vec<String>>,
+    cached_names: crate::sync_primitives::AsyncRwLock<Vec<String>>,
     /// Optional writer for raw memory delegation hooks (Spec 1 G2).
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
     /// row before returning a successful result.
@@ -59,7 +59,7 @@ impl A2ASubAgent {
         Self {
             smart_router,
             client_pool,
-            cached_names: tokio::sync::RwLock::new(Vec::new()),
+            cached_names: crate::sync_primitives::AsyncRwLock::new(Vec::new()),
             raw_memory_writer: None,
             capture_registry: None,
         }

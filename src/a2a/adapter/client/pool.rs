@@ -1,23 +1,22 @@
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use tokio::sync::RwLock;
-
 use super::http_client::A2AClient;
 use crate::a2a::port::{A2AResult, AgentHealth, RegisteredAgent};
+use crate::sync_primitives::AsyncRwLock;
 
 /// Connection pool managing A2AClient instances per agent.
 ///
 /// Lazily creates clients on first access and caches them by agent ID.
-/// Thread-safe via `tokio::sync::RwLock` (read-heavy, write-rare pattern).
+/// Thread-safe via `AsyncRwLock` (read-heavy, write-rare pattern).
 pub struct A2AClientPool {
-    clients: RwLock<HashMap<String, Arc<A2AClient>>>,
+    clients: AsyncRwLock<HashMap<String, Arc<A2AClient>>>,
 }
 
 impl A2AClientPool {
     pub fn new() -> Self {
         Self {
-            clients: RwLock::new(HashMap::new()),
+            clients: AsyncRwLock::new(HashMap::new()),
         }
     }
 

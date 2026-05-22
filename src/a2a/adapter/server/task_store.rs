@@ -1,24 +1,24 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use tokio::sync::RwLock;
 
 use crate::a2a::domain::*;
 use crate::a2a::port::{A2AResult, A2ATaskManager};
+use crate::sync_primitives::AsyncRwLock;
 
 /// In-memory implementation of the A2ATaskManager port.
 ///
-/// Uses `tokio::sync::RwLock` for concurrent access. Suitable for
+/// Uses `AsyncRwLock` for concurrent access. Suitable for
 /// single-process deployments and testing; production may swap in
 /// a database-backed adapter via the same trait.
 pub struct TaskStore {
-    tasks: RwLock<HashMap<String, A2ATask>>,
+    tasks: AsyncRwLock<HashMap<String, A2ATask>>,
 }
 
 impl TaskStore {
     pub fn new() -> Self {
         Self {
-            tasks: RwLock::new(HashMap::new()),
+            tasks: AsyncRwLock::new(HashMap::new()),
         }
     }
 }

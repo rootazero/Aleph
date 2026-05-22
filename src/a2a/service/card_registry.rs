@@ -1,18 +1,17 @@
 use chrono::Utc;
-use tokio::sync::RwLock;
-
 use crate::a2a::config::A2AConfig;
 use crate::a2a::domain::*;
 use crate::a2a::port::*;
+use crate::sync_primitives::AsyncRwLock;
 
 /// In-memory registry of known A2A agents.
 ///
 /// Stores `RegisteredAgent` entries and implements the `AgentResolver` trait
 /// for lookup operations. Network-dependent methods (`fetch_card`, `resolve_by_intent`)
-/// return stub results — they'll be properly wired when the A2AClient and
+/// return stub results — they'll be properly wired when A2AClient and
 /// SmartRouter are integrated.
 pub struct CardRegistry {
-    agents: RwLock<Vec<RegisteredAgent>>,
+    agents: AsyncRwLock<Vec<RegisteredAgent>>,
 }
 
 impl Default for CardRegistry {
@@ -24,7 +23,7 @@ impl Default for CardRegistry {
 impl CardRegistry {
     pub fn new() -> Self {
         Self {
-            agents: RwLock::new(Vec::new()),
+            agents: AsyncRwLock::new(Vec::new()),
         }
     }
 

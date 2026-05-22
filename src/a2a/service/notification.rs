@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 
 use crate::a2a::domain::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 use crate::a2a::port::A2AResult;
+use crate::sync_primitives::AsyncRwLock;
 
 /// Configuration for push notifications on a task
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,18 +20,18 @@ pub struct PushNotificationConfig {
 
 /// Push notification service — manages webhook configs and fires notifications
 pub struct NotificationService {
-    configs: RwLock<HashMap<String, PushNotificationConfig>>,
+    configs: AsyncRwLock<HashMap<String, PushNotificationConfig>>,
     http_client: reqwest::Client,
 }
 
 impl NotificationService {
     pub fn new() -> Self {
         Self {
-            configs: RwLock::new(HashMap::new()),
+            configs: AsyncRwLock::new(HashMap::new()),
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .unwrap_or_default(),
+                .expect("reqwest client with timeout should always build"),
         }
     }
 

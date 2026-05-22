@@ -45,12 +45,36 @@ impl TaskState {
 
     /// Returns true if transitioning from this state to `target` is valid.
     /// Terminal states (Completed, Canceled, Failed, Rejected) cannot transition further.
-    pub fn can_transition_to(&self, _target: &TaskState) -> bool {
+    pub fn can_transition_to(&self, target: &TaskState) -> bool {
         if self.is_terminal() {
             return false;
         }
-        // Non-terminal states can transition to any other state
-        true
+        if self == target {
+            return true;
+        }
+        matches!(
+            (self, target),
+            (Self::Submitted, Self::Working)
+                | (Self::Submitted, Self::InputRequired)
+                | (Self::Submitted, Self::AuthRequired)
+                | (Self::Submitted, Self::Completed)
+                | (Self::Submitted, Self::Rejected)
+                | (Self::Submitted, Self::Failed)
+                | (Self::Submitted, Self::Canceled)
+                | (Self::Working, Self::InputRequired)
+                | (Self::Working, Self::AuthRequired)
+                | (Self::Working, Self::Completed)
+                | (Self::Working, Self::Failed)
+                | (Self::Working, Self::Canceled)
+                | (Self::InputRequired, Self::Working)
+                | (Self::InputRequired, Self::Completed)
+                | (Self::InputRequired, Self::Failed)
+                | (Self::InputRequired, Self::Canceled)
+                | (Self::AuthRequired, Self::Working)
+                | (Self::AuthRequired, Self::Completed)
+                | (Self::AuthRequired, Self::Failed)
+                | (Self::AuthRequired, Self::Canceled)
+        )
     }
 }
 
