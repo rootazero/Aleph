@@ -93,7 +93,12 @@ pub fn truncate_with_head_tail(
     }
 
     let usable = max_chars - marker_overhead;
-    let head_chars = (usable as f64 * head_ratio / (head_ratio + tail_ratio)) as usize;
+    let sum = head_ratio + tail_ratio;
+    let head_chars = if sum == 0.0 {
+        usable / 2
+    } else {
+        (usable as f64 * head_ratio / sum) as usize
+    };
     let tail_chars = usable.saturating_sub(head_chars);
 
     let truncated_count = content

@@ -27,7 +27,9 @@ impl MemoryContextProvider {
         // configured char budget actually allows. The 2/3 form is integer
         // math for `max_output_chars / 1.5`.
         let budget = AssemblyBudget {
-            total_tokens: (self.config.max_output_chars as u64 * 2 / 3) as u32,
+            total_tokens: (self.config.max_output_chars as u64)
+                .saturating_mul(2)
+                .saturating_div(3) as u32,
         };
         let mut envelope = self
             .assembler

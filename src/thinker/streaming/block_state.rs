@@ -91,8 +91,10 @@ impl ThinkingTagParser {
                     } else if self.check_inline_code() {
                         // Handle inline code start
                         continue;
-                    } else if self.buffer.contains('<') && self.buffer.len() < 20 {
-                        // Potential partial tag, wait for more input
+                    } else if self.buffer.contains('<') && self.buffer.len() < 64 {
+                        // Potential partial tag, wait for more input.
+                        // Threshold must accommodate long tag names with attributes
+                        // (e.g. <antthinking attr="value">).
                         break;
                     } else {
                         // No tag found, output all content
@@ -111,8 +113,9 @@ impl ThinkingTagParser {
                         // Transition back to content
                         self.state = BlockState::Content;
                         self.buffer = post;
-                    } else if self.buffer.contains('<') && self.buffer.len() < 20 {
-                        // Potential partial tag, wait for more input
+                    } else if self.buffer.contains('<') && self.buffer.len() < 64 {
+                        // Potential partial tag, wait for more input.
+                        // Threshold must accommodate long tag names with attributes.
                         break;
                     } else {
                         // No closing tag, output as thinking

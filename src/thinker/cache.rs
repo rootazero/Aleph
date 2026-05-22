@@ -104,9 +104,9 @@ impl Default for CacheContext {
 impl CacheContext {
     /// Create context from system prompt and messages
     pub fn new(system_prompt: &str, _message_count: usize, provider_type: ProviderType) -> Self {
-        // Estimate tokens (rough: 4 chars per token)
-        // Approximate token count (4 chars ≈ 1 token for English; CJK may be 1–2 chars/token).
-        let estimated_tokens = (system_prompt.len() / 4) as u64;
+        // Estimate tokens (rough: 4 chars per token for English text).
+        // Uses char count (not byte length) so CJK text is not over-estimated.
+        let estimated_tokens = (system_prompt.chars().count() / 4) as u64;
 
         // Calculate content hash
         let mut hasher = Sha256::new();

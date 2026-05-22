@@ -476,11 +476,11 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        // 37 after SessionBudgetLayer was added (Phase 4, 2026-05-20)
-        // alongside ProviderGuidanceLayer (Phase 3) and ChainContextLayer
-        // (Phase 2). The previous count was 36 — see `default_layers`
-        // for the full layer table.
-        assert_eq!(pipeline.layer_count(), 37);
+        // 38 after ToolRuntimeStateLayer was added (Phase 5, 2026-05-21).
+        // Previous counts: 36 → 37 (SessionBudgetLayer, Phase 4, 2026-05-20)
+        // → 38 (ToolRuntimeStateLayer). See `default_layers` for the full
+        // layer table.
+        assert_eq!(pipeline.layer_count(), 38);
     }
 
     #[test]
