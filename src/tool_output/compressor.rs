@@ -80,6 +80,7 @@ pub(crate) fn compress_tool_output(tool_name: &str, output: &str) -> String {
         "list_network_requests" => compress_network_requests(output),
         "list_console_messages" => compress_console_messages(output),
         "get_network_request" => compress_generic(output, 8 * 1024),
+        "get_console_message" => compress_generic(output, 8 * 1024),
         _ => compress_generic(output, 10 * 1024),
     }
 }
@@ -163,16 +164,12 @@ fn compress_snapshot(output: &str) -> String {
         let summary_lines = lines.len().min(20);
         let mut result = lines[..summary_lines].join("\n");
         if lines.len() > summary_lines {
-            let line_word = if lines.len() - summary_lines == 1 {
-                "line"
-            } else {
-                "lines"
-            };
+            let total_line_word = if lines.len() == 1 { "line" } else { "lines" };
             result.push_str(&format!(
                 "\n[Snapshot compressed: no interactive elements; kept first {} of {} {}]",
                 summary_lines,
                 lines.len(),
-                line_word
+                total_line_word
             ));
         }
         return result;
@@ -180,9 +177,10 @@ fn compress_snapshot(output: &str) -> String {
 
     let kept_count = kept.len();
     let mut result = kept.join("\n");
+    let nodes_word = if total_nodes == 1 { "node" } else { "nodes" };
     result.push_str(&format!(
-        "\n[Snapshot compressed: kept {} interactive elements out of {} total nodes]",
-        kept_count, total_nodes,
+        "\n[Snapshot compressed: kept {} interactive elements out of {} total {}]",
+        kept_count, total_nodes, nodes_word,
     ));
     result
 }
@@ -356,7 +354,7 @@ mod tests {
         let result = compress_tool_output("take_screenshot", output);
         assert!(result.contains("width: 1920"));
         assert!(result.contains("format: png"));
-        assert!(result.contains("1 more lines omitted"));
+        assert!(result.contains("1 more line omitted"));
     }
 
     // --- snapshot ---
@@ -416,6 +414,32 @@ mod tests {
         assert!(result.contains("paragraph \"Content line 19\""));
         assert!(!result.contains("paragraph \"Content line 20\""));
         assert!(result.contains("no interactive elements"));
+    }
+
+    #[test]
+    fn test_compress_snapshot_fallback_grammar_exactly_21_lines() {
+        let lines: Vec<String> = (0..21)
+            .map(|i| format!("  paragraph \"Line {} {}\"", i, "x".repeat(200)))
+            .collect();
+        let input = lines.join("\n");
+        assert!(input.len() > 4 * 1024);
+
+        let result = compress_tool_output("take_snapshot", &input);
+        assert!(result.contains("kept first 20 of 21 lines"));
+        assert!(!result.contains("kept first 20 of 21 line\""));
+    }
+
+    #[test]
+    fn test_compress_snapshot_single_node_summary_grammar() {
+        let mut lines: Vec<String> = (0..200)
+            .map(|i| format!("  paragraph \"Content line {}\"", i))
+            .collect();
+        lines.push("  button \"Submit\"".to_owned());
+        let input = lines.join("\n");
+        assert!(input.len() > 4 * 1024);
+
+        let result = compress_tool_output("take_snapshot", &input);
+        assert!(result.contains("kept 1 interactive elements out of 201 total nodes"));
     }
 
     // --- evaluate_script ---
