@@ -4,8 +4,8 @@
 //! Inspired by IronClaw's SecretsCrypto design.
 
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use hkdf::Hkdf;
 use secrecy::{ExposeSecret, SecretString};
@@ -48,8 +48,13 @@ impl SecretsCrypto {
     fn derive_key(&self, salt: &[u8; 32]) -> Result<[u8; 32], SecretError> {
         let hkdf = Hkdf::<Sha256>::new(Some(salt), self.master_key.expose_secret().as_bytes());
         let mut key = [0u8; 32];
-        hkdf.expand(HKDF_INFO, &mut key)
-            .map_err(|e| SecretError::EncryptionFailed(format!("HKDF expand failed: {}", e)))?;
+        if let Err(e) = hkdf.expand(HKDF_INFO, &mut key) {
+            key.zeroize();
+            return Err(SecretError::EncryptionFailed(format!(
+                "HKDF expand failed: {}",
+                e
+            )));
+        }
         Ok(key)
     }
 

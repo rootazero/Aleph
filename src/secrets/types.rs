@@ -40,7 +40,7 @@ impl DecryptedSecret {
 
 impl fmt::Debug for DecryptedSecret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[REDACTED, {} bytes]", self.len())
+        write!(f, "[REDACTED]")
     }
 }
 
@@ -77,12 +77,21 @@ pub struct EntryMetadata {
 }
 
 /// Serializable vault file format.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
 pub struct VaultData {
     /// Format version for future migrations
     pub version: u32,
     /// Encrypted entries keyed by name
     pub entries: std::collections::HashMap<String, EncryptedEntry>,
+}
+
+impl Default for VaultData {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            entries: std::collections::HashMap::new(),
+        }
+    }
 }
 
 /// Secret error types.
@@ -140,8 +149,7 @@ mod tests {
         let secret = DecryptedSecret::new("sk-ant-api03-xxx");
         let debug = format!("{:?}", secret);
         assert!(!debug.contains("sk-ant"));
-        assert!(debug.contains("REDACTED"));
-        assert!(debug.contains("16 bytes"));
+        assert_eq!(debug, "[REDACTED]");
     }
 
     #[test]
@@ -168,7 +176,7 @@ mod tests {
     #[test]
     fn test_vault_data_default() {
         let data = VaultData::default();
-        assert_eq!(data.version, 0);
+        assert_eq!(data.version, 1);
         assert!(data.entries.is_empty());
     }
 

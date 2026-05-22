@@ -91,17 +91,20 @@ impl SecretVault {
         io.write(&bytes)?;
 
         // Restrict vault file permissions on Unix (owner-only read/write).
+        // tempfile creates files with 0o600 by default; this is defense-in-depth.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
             if let Err(e) = std::fs::set_permissions(&self.path, perms) {
-                tracing::error!(
+                // Don't fail the entire save if chmod fails (e.g. on filesystems
+                // that don't support Unix permissions). The tempfile-based
+                // atomic write already created the file with 0o600 on Unix.
+                tracing::warn!(
                     path = %self.path.display(),
                     error = %e,
-                    "Failed to set vault file permissions — vault may be readable by other users"
+                    "Failed to set vault file permissions — tempfile default 0o600 likely still applies"
                 );
-                return Err(SecretError::Io(e));
             }
         }
 
@@ -196,7 +199,13 @@ impl SecretVault {
     pub fn default_path() -> PathBuf {
         crate::utils::paths::get_config_dir()
             .map(|d| d.join("secrets.vault"))
-            .unwrap_or_else(|_| PathBuf::from("secrets.vault"))
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "Failed to determine config directory ({}), using relative path 'secrets.vault'",
+                    e
+                );
+                PathBuf::from("secrets.vault")
+            })
     }
 }
 

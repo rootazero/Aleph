@@ -66,29 +66,33 @@ static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
     vec![
         (
             "Anthropic API Key",
-            Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
+            Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").expect("static Anthropic pattern compiles"),
         ),
         (
             "OpenAI API Key",
-            Regex::new(r"sk-[a-zA-Z0-9\-]{20,}").unwrap(),
+            Regex::new(r"sk-[a-zA-Z0-9\-]{20,}").expect("static OpenAI pattern compiles"),
         ),
         (
             "Google API Key",
-            Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
+            Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").expect("static Google pattern compiles"),
         ),
-        ("AWS Access Key", Regex::new(r"AKIA[A-Z0-9]{16}").unwrap()),
+        (
+            "AWS Access Key",
+            Regex::new(r"AKIA[A-Z0-9]{16}").expect("static AWS pattern compiles"),
+        ),
         (
             "GitHub Token",
-            Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
+            Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").expect("static GitHub pattern compiles"),
         ),
         (
             // GitLab personal/group/project access tokens — mirrors SECRET_PATTERN_SOURCES entry
             "GitLab Token",
-            Regex::new(r"glpat-[A-Za-z0-9_\-]{20,}").unwrap(),
+            Regex::new(r"glpat-[A-Za-z0-9_\-]{20,}").expect("static GitLab pattern compiles"),
         ),
         (
             "Private Key Block",
-            Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----").unwrap(),
+            Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----")
+                .expect("static private key pattern compiles"),
         ),
     ]
 });
