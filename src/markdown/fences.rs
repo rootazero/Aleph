@@ -125,7 +125,8 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
                     None
                 } else {
                     // Extract just the language (first word)
-                    Some(info.split_whitespace().next().unwrap_or(info).to_string())
+                    // unwrap is safe: info is non-empty after trim, so split_whitespace yields Some
+                    Some(info.split_whitespace().next().unwrap().to_string())
                 };
 
                 current_fence = Some(OpenFence {
@@ -462,5 +463,22 @@ mod tests {
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].language, Some("rust".to_string()));
+    }
+
+    #[test]
+    fn test_whitespace_only_info_string() {
+        let text = "```   \ncode\n```";
+        let spans = parse_fence_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].language, None);
+    }
+
+    #[test]
+    fn test_cr_line_endings() {
+        // Legacy Mac CR-only format — str::lines() does NOT split on \r alone
+        let text = "foo\r```\rcode\r```\rbar";
+        let spans = parse_fence_spans(text);
+        // Entire text treated as single line; fences not recognized
+        assert!(spans.is_empty());
     }
 }
