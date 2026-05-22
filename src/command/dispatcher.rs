@@ -15,6 +15,11 @@ pub trait DirectHandler: Send + Sync {
 }
 
 /// Dispatches Direct-mode commands to their handlers
+///
+/// **Note**: This dispatcher uses a standard `HashMap` and is **not** designed
+/// for concurrent registration. `register` requires `&mut self`, while `execute`
+/// only needs `&self`. If you need runtime handler registration from multiple
+/// threads/tasks, wrap this dispatcher in an `RwLock` or `Mutex`.
 pub struct CommandDispatcher {
     handlers: HashMap<String, Box<dyn DirectHandler>>,
 }

@@ -120,7 +120,10 @@ fn tool_to_command_context(tool: &UnifiedTool) -> CommandContext {
         ToolSource::Custom { .. } => CommandContext::Custom {
             system_prompt: tool.routing_system_prompt.clone(),
             provider: None, // Provider is resolved at routing time
-            pattern: tool.routing_regex.clone().unwrap_or_default(),
+            pattern: tool
+                .routing_regex
+                .clone()
+                .unwrap_or_else(|| tool.name.clone()),
         },
         ToolSource::Plugin { plugin_id } => CommandContext::Mcp {
             server_name: format!("plugin:{}", plugin_id),
@@ -171,5 +174,4 @@ mod tests {
         let parser = CommandParser::new(registry);
         assert!(parser.parse_async("hello").await.is_none());
     }
-
 }

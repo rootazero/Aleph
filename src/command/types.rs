@@ -101,6 +101,10 @@ pub struct CommandNode {
 
 impl CommandNode {
     /// Create a new command node
+    ///
+    /// **Note**: The `source_type` defaults to `Custom`. For proper categorization,
+    /// prefer [`CommandNode::new_with_source`] which requires an explicit source type,
+    /// or chain `.with_source_type(...)` after this constructor.
     pub fn new(
         key: impl Into<String>,
         description: impl Into<String>,
@@ -114,7 +118,7 @@ impl CommandNode {
             node_type,
             has_children: false, // Flat namespace: no children
             source_id: None,
-            source_type: ToolSourceType::Custom, // Default, should be set explicitly
+            source_type: ToolSourceType::Custom,
         }
     }
 
