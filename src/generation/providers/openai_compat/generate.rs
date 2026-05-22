@@ -111,10 +111,13 @@ impl GenerationProvider for OpenAiCompatProvider {
 
                 // Validate task_id to prevent URL injection from untrusted API responses
                 let task_id = &submit.task_id;
-                if task_id.contains("..")
+                if task_id.is_empty()
+                    || task_id.contains("..")
+                    || task_id.contains('\\')
                     || task_id.contains('?')
                     || task_id.contains('#')
                     || task_id.starts_with('/')
+                    || task_id.contains('%')
                 {
                     return Err(GenerationError::serialization(format!(
                         "Invalid task_id format: {}",

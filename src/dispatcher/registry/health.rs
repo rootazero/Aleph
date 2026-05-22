@@ -128,19 +128,24 @@ impl ToolHealthCache {
     /// `ToolEmitCache`) invalidate on the next read.
     pub fn register_probe(&self, name: impl Into<String>, probe: Arc<dyn ToolHealthProbe>) {
         let name = name.into();
-        let mut next = (**self.probes.load()).clone();
-        next.insert(name, probe);
-        self.probes.store(Arc::new(next));
+        self.probes.rcu(|probes| {
+            let mut next = (**probes).clone();
+            next.insert(name.clone(), probe.clone());
+            Arc::new(next)
+        });
         self.generation.fetch_add(1, Ordering::Release);
     }
 
     /// Remove a probe by name. Bumps generation. Returns `true` if a
     /// probe was actually removed.
     pub fn unregister_probe(&self, name: &str) -> bool {
-        let mut next = (**self.probes.load()).clone();
-        let removed = next.remove(name).is_some();
+        let mut removed = false;
+        self.probes.rcu(|probes| {
+            let mut next = (**probes).clone();
+            removed = next.remove(name).is_some();
+            Arc::new(next)
+        });
         if removed {
-            self.probes.store(Arc::new(next));
             self.generation.fetch_add(1, Ordering::Release);
         }
         removed

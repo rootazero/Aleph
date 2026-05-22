@@ -120,13 +120,11 @@ impl GoogleVeoProvider {
     ///
     /// Validates operation_name to prevent path traversal attacks from tampered API responses.
     pub(crate) fn operation_url(&self, operation_name: &str) -> String {
-        // Validate: must not contain ".." or start with "/" (prevent path traversal)
-        debug_assert!(
-            !operation_name.contains("..") && !operation_name.starts_with('/'),
-            "Unexpected operation_name format: {}",
-            operation_name
-        );
-        let sanitized = operation_name.trim_start_matches('/').replace("..", "");
+        let sanitized = operation_name
+            .trim_start_matches('/')
+            .trim_start_matches('\\')
+            .replace("..", "")
+            .replace('\\', "");
         format!("{}/v1beta/{}", self.endpoint, sanitized)
     }
 
@@ -226,6 +224,9 @@ impl GoogleVeoProvider {
     /// Determine video duration from request parameters
     pub(crate) fn determine_duration(&self, request: &GenerationRequest) -> u32 {
         if let Some(duration) = request.params.duration_seconds {
+            if duration < 0.0 {
+                return DEFAULT_DURATION_SECS;
+            }
             let dur = duration as u32;
             if self.is_veo3() {
                 // Veo 3: must be 4, 6, or 8

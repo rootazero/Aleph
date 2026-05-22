@@ -175,12 +175,14 @@ pub fn create_provider(
                 let mode = match model.to_lowercase().as_str() {
                     "fast" | "mj-fast" => MidjourneyMode::Fast,
                     "relax" | "mj-relax" => MidjourneyMode::Relax,
-                    other => {
-                        warn!(
-                            model = %other,
-                            "Unknown Midjourney mode, defaulting to Fast. Use 'fast' or 'relax'."
-                        );
-                        MidjourneyMode::Fast
+                    _ => {
+                        return Err(GenerationError::invalid_parameters(
+                            format!(
+                                "Invalid midjourney mode: '{}'. Supported: fast, relax",
+                                model
+                            ),
+                            Some("model".to_string()),
+                        ));
                     }
                 };
                 builder = builder.mode(mode);

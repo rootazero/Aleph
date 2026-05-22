@@ -353,24 +353,24 @@ impl GenerationProvider for ElevenLabsProvider {
 
             // Build request body
             let body = self.build_request_body(&request);
-            let mut url = self.tts_url(&voice_id);
-
-            // Add output format as query parameter if specified
-            if let Some(ref format) = request.params.format {
-                url = format!("{}?output_format={}", url, format);
-            }
+            let url = self.tts_url(&voice_id);
 
             debug!(url = %url, "Sending request to ElevenLabs TTS");
 
             // Make API request
-            let response = self
+            let mut request_builder = self
                 .client
                 .post(&url)
                 .header("xi-api-key", &self.api_key)
                 .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
+                .json(&body);
+
+            // Add output format as query parameter if specified
+            if let Some(ref format) = request.params.format {
+                request_builder = request_builder.query(&[("output_format", format.as_str())]);
+            }
+
+            let response = request_builder.send().await
                 .map_err(|e| {
                     if e.is_timeout() {
                         GenerationError::timeout(Duration::from_secs(constants::DEFAULT_TIMEOUT_SECS))

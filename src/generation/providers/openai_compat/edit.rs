@@ -60,7 +60,8 @@ pub(crate) async fn edit_image_impl(
     form = form.text("prompt", request.prompt.clone());
 
     // Add image - handle URL, data URI, or raw base64
-    if reference_image.starts_with("http://") || reference_image.starts_with("https://") {
+    let lower_ref = reference_image.to_lowercase();
+    if lower_ref.starts_with("http://") || lower_ref.starts_with("https://") {
         // Download image from URL first
         let image_bytes = provider
             .client
@@ -80,7 +81,7 @@ pub(crate) async fn edit_image_impl(
     } else {
         // Extract base64 from data URI or assume raw base64
         let base64_data = if let Some(idx) = reference_image.find(",") {
-            if reference_image.starts_with("data:image/") {
+            if reference_image[..idx].to_lowercase().starts_with("data:") {
                 &reference_image[idx + 1..]
             } else {
                 reference_image
