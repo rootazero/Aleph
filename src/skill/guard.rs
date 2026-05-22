@@ -182,7 +182,10 @@ pub fn scan_skill_directory(dir: &std::path::Path) -> ScanVerdict {
 fn scan_skill_directory_inner(dir: &std::path::Path, verdicts: &mut Vec<ScanVerdict>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(e) => {
+            tracing::warn!(path = %dir.display(), error = %e, "skill guard: cannot read directory");
+            return;
+        }
     };
     for entry in entries.flatten() {
         let path = entry.path();

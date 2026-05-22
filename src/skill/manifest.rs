@@ -138,7 +138,7 @@ pub fn parse_skill_content(
     source: SkillSource,
 ) -> Result<SkillManifest, SkillParseError> {
     let (yaml_str, body_str) = split_frontmatter(content_str)?;
-    let raw: RawFrontmatter = serde_yaml::from_str(yaml_str)?;
+    let raw: RawFrontmatter = serde_yaml::from_str(&yaml_str)?;
 
     // Build the id from the name (lowercase, replace spaces with hyphens)
     let id_str = raw.name.to_lowercase().replace(' ', "-");
@@ -250,7 +250,7 @@ pub fn parse_skill_content(
 ///
 /// Expects the content to start with `---\n` and contain a closing `---\n`
 /// (or `---` at end of string).
-pub fn split_frontmatter(content: &str) -> Result<(&str, &str), SkillParseError> {
+pub fn split_frontmatter(content: &str) -> Result<(String, String), SkillParseError> {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
         return Err(SkillParseError::NoFrontmatter);
@@ -282,7 +282,10 @@ pub fn split_frontmatter(content: &str) -> Result<(&str, &str), SkillParseError>
                                                   // Skip optional newline after closing ---
     let body = after_closing.strip_prefix('\n').unwrap_or(after_closing);
 
-    Ok((yaml_str, body))
+    let yaml_normalized = yaml_str.replace("\r\n", "\n").replace('\r', "\n");
+    let body_normalized = body.replace("\r\n", "\n").replace('\r', "\n");
+
+    Ok((yaml_normalized, body_normalized))
 }
 
 #[cfg(test)]

@@ -307,6 +307,10 @@ impl SkillSystem {
     /// registered dir owns this skill's `SKILL.md`. Best-effort — silently
     /// no-ops if the skill cannot be located on disk.
     pub async fn record_patch(&self, id: &SkillId) {
+        if id.as_str().contains("..") || id.as_str().contains(|c| c == '/' || c == '\\') {
+            tracing::warn!(skill_id = %id.as_str(), "record_patch: rejecting malformed skill id");
+            return;
+        }
         let dirs = self.inner.skill_dirs.read().await.clone();
         for dir in &dirs {
             let candidate = dir.join(id.as_str()).join("SKILL.md");
@@ -521,6 +525,12 @@ fn scan_directory(dir: &Path, source: SkillSource) -> Vec<SkillManifest> {
 
     for entry in entries.flatten() {
         let path = entry.path();
+
+        if let Ok(file_type) = entry.file_type() {
+            if file_type.is_symlink() {
+                continue;
+            }
+        }
 
         if path.is_file() && is_skill_file(&path) {
             match parse_skill_file(&path, source.clone()) {

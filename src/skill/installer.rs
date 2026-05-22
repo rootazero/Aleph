@@ -34,6 +34,9 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
             if url.contains('\'') {
                 return None;
             }
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return None;
+            }
             Some(format!("curl -fsSL -o {} '{}'", spec.package, url))
         }),
     }
