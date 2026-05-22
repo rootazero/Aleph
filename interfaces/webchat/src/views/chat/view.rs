@@ -58,11 +58,38 @@ pub fn ChatView() -> impl IntoView {
     });
 
     view! {
-        <div class="flex flex-col h-full bg-surface">
-            // Message list (scrollable)
+        // Transparent — the shell's light-field shows through.
+        <div class="flex flex-col h-full">
+            // Message list (scrollable) — or the welcome hero when empty
             <MessageList />
             // Input area (pinned to bottom)
             <InputArea />
+        </div>
+    }
+}
+
+/// Welcome hero — shown in the message area while a conversation is empty.
+/// A breathing ℵ orb above a shimmering greeting, with a staggered reveal.
+#[component]
+fn ChatHero() -> impl IntoView {
+    view! {
+        <div class="h-full flex flex-col items-center justify-center px-6 pb-10 text-center select-none">
+            <div class="aleph-rise mb-7" style="animation-delay: 0s">
+                <div class="aleph-hero-orb w-16 h-16 rounded-2xl flex items-center justify-center">
+                    <span class="text-3xl font-semibold text-white leading-none">"\u{2135}"</span>
+                </div>
+            </div>
+            <div class="aleph-rise" style="animation-delay: 0.09s">
+                <h2 class="aleph-hero-title text-[2rem] leading-tight font-semibold tracking-tight">
+                    "我们从哪里开始？"
+                </h2>
+            </div>
+            <p
+                class="aleph-rise mt-3 text-sm text-text-tertiary max-w-sm leading-relaxed"
+                style="animation-delay: 0.18s"
+            >
+                "直接输入消息，或输入 / 调用命令与技能。"
+            </p>
         </div>
     }
 }
@@ -85,23 +112,30 @@ fn MessageList() -> impl IntoView {
     });
 
     view! {
-        <div node_ref=scroll_ref class="flex-1 overflow-y-auto px-4 py-6">
-            <div class="max-w-3xl mx-auto space-y-4">
-            <For
-                each=move || chat.messages.get()
-                key=|msg| format!("{}:{}:{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.is_intermediate, msg.tool_calls.len(), msg.model_info.is_some())
-                children=move |msg| {
-                    view! { <MessageBubble message=msg /> }
+        <div node_ref=scroll_ref class="flex-1 overflow-y-auto">
+            <Show
+                when=move || chat.messages.get().is_empty()
+                fallback=move || view! {
+                    <div class="max-w-3xl mx-auto px-4 py-6 space-y-4">
+                        <For
+                            each=move || chat.messages.get()
+                            key=|msg| format!("{}:{}:{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.is_intermediate, msg.tool_calls.len(), msg.model_info.is_some())
+                            children=move |msg| {
+                                view! { <MessageBubble message=msg /> }
+                            }
+                        />
+                        // Thinking indicator
+                        <Show when=move || chat.phase.get() == ChatPhase::Thinking>
+                            <div class="flex items-center gap-2 text-text-secondary text-sm px-3 py-2">
+                                <span class="inline-block w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+                                {move || t_string!(i18n, chat.thinking).to_string()}
+                            </div>
+                        </Show>
+                    </div>
                 }
-            />
-            // Thinking indicator
-            <Show when=move || chat.phase.get() == ChatPhase::Thinking>
-                <div class="flex items-center gap-2 text-text-secondary text-sm px-3 py-2">
-                    <span class="inline-block w-2 h-2 rounded-full bg-primary animate-pulse"></span>
-                    {move || t_string!(i18n, chat.thinking).to_string()}
-                </div>
+            >
+                <ChatHero />
             </Show>
-            </div>
         </div>
     }
 }
@@ -739,7 +773,7 @@ fn InputArea() -> impl IntoView {
     };
 
     view! {
-        <div class="border-t border-border px-4 py-3">
+        <div class="px-4 pb-5 pt-2">
             <div class="max-w-3xl mx-auto">
             // Attachment preview bar
             <Show when=move || !attachments.get().is_empty()>
@@ -783,7 +817,7 @@ fn InputArea() -> impl IntoView {
 
             // Slash command palette (above the input)
             <Show when=move || show_palette.get() && !palette_entries.get().is_empty()>
-                <div class="mb-1 rounded-xl border border-border bg-surface-raised shadow-lg
+                <div class="mb-2 rounded-2xl border border-border bg-surface-raised shadow-lg
                             max-h-[200px] overflow-y-auto">
                     // Namespace breadcrumb header
                     <Show when=move || current_namespace.get().is_some()>
@@ -848,7 +882,8 @@ fn InputArea() -> impl IntoView {
                 </div>
             </Show>
 
-            <div class="flex items-end gap-2">
+            // Codex-style composer card — glossy, rounded, focus-lit
+            <div class="aleph-composer px-3.5 pt-3 pb-2.5">
                 // Hidden file input
                 <input
                     type="file"
@@ -858,25 +893,10 @@ fn InputArea() -> impl IntoView {
                     on:change=on_file_change
                 />
 
-                // Attachment button (paperclip)
-                <button
-                    class="p-2.5 rounded-xl text-text-secondary hover:text-text-primary
-                           hover:bg-surface-raised transition-colors"
-                    title=move || t_string!(i18n, chat.attach).to_string()
-                    on:click=on_attach_click
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path fill-rule="evenodd"
-                              d="M15.621 4.379a3 3 0 0 0-4.242 0l-7 7a3 3 0 0 0 4.241 4.243h.001l.497-.5a.75.75 0 0 1 1.064 1.057l-.498.501-.002.002a4.5 4.5 0 0 1-6.364-6.364l7-7a4.5 4.5 0 0 1 6.368 6.36l-3.455 3.553A2.625 2.625 0 1 1 9.52 9.52l3.45-3.451a.75.75 0 1 1 1.061 1.06l-3.45 3.451a1.125 1.125 0 0 0 1.587 1.595l3.454-3.553a3 3 0 0 0 0-4.242Z"
-                              clip-rule="evenodd" />
-                    </svg>
-                </button>
-
                 <textarea
-                    class="flex-1 resize-none rounded-xl border border-border bg-surface-sunken px-4 py-2.5
-                           text-sm text-text-primary placeholder:text-text-tertiary
-                           focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary
-                           min-h-[40px] max-h-[120px]"
+                    class="w-full resize-none bg-transparent px-1 text-sm leading-relaxed
+                           text-text-primary placeholder:text-text-tertiary
+                           focus:outline-none min-h-[40px] max-h-[140px]"
                     placeholder=move || t_string!(i18n, chat.send_placeholder).to_string()
                     rows=1
                     prop:value=move || input_text.get()
@@ -888,32 +908,57 @@ fn InputArea() -> impl IntoView {
                     on:keydown=on_keydown
                 />
 
-                // Abort button (when running)
-                <Show when=move || chat.active_run_id.get().is_some()>
+                // Toolbar row — attachments on the left, send / stop on the right
+                <div class="flex items-center justify-between gap-2 pt-1">
+                    // Attachment button (paperclip)
                     <button
-                        class="p-2.5 rounded-xl bg-danger/10 text-danger hover:bg-danger/20 transition-colors"
-                        title=move || t_string!(i18n, chat.stop).to_string()
-                        on:click=on_abort
+                        class="p-1.5 -ml-0.5 rounded-lg text-text-tertiary hover:text-text-primary
+                               hover:bg-surface-sunken transition-colors"
+                        title=move || t_string!(i18n, chat.attach).to_string()
+                        on:click=on_attach_click
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-                            <rect x="4" y="4" width="12" height="12" rx="2" />
+                            <path fill-rule="evenodd"
+                                  d="M15.621 4.379a3 3 0 0 0-4.242 0l-7 7a3 3 0 0 0 4.241 4.243h.001l.497-.5a.75.75 0 0 1 1.064 1.057l-.498.501-.002.002a4.5 4.5 0 0 1-6.364-6.364l7-7a4.5 4.5 0 0 1 6.368 6.36l-3.455 3.553A2.625 2.625 0 1 1 9.52 9.52l3.45-3.451a.75.75 0 1 1 1.061 1.06l-3.45 3.451a1.125 1.125 0 0 0 1.587 1.595l3.454-3.553a3 3 0 0 0 0-4.242Z"
+                                  clip-rule="evenodd" />
                         </svg>
                     </button>
-                </Show>
 
-                // Send button (when idle)
-                <Show when=move || chat.active_run_id.get().is_none()>
-                    <button
-                        class="p-2.5 rounded-xl bg-primary text-white hover:bg-primary/90
-                               disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                        disabled=move || !can_send.get()
-                        on:click=move |_| send_message()
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path d="M3.105 2.288a.75.75 0 0 0-.826.95l1.414 4.926A1.5 1.5 0 0 0 5.135 9.25h6.115a.75.75 0 0 1 0 1.5H5.135a1.5 1.5 0 0 0-1.442 1.086l-1.414 4.926a.75.75 0 0 0 .826.95l14.095-5.61a.75.75 0 0 0 0-1.394L3.105 2.288Z" />
-                        </svg>
-                    </button>
-                </Show>
+                    <div class="flex items-center gap-2">
+                        // Abort button (when running)
+                        <Show when=move || chat.active_run_id.get().is_some()>
+                            <button
+                                class="w-8 h-8 rounded-full bg-danger/15 text-danger flex items-center
+                                       justify-center hover:bg-danger/25 transition-colors"
+                                title=move || t_string!(i18n, chat.stop).to_string()
+                                on:click=on_abort
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                    <rect x="4" y="4" width="12" height="12" rx="2" />
+                                </svg>
+                            </button>
+                        </Show>
+
+                        // Send button (when idle)
+                        <Show when=move || chat.active_run_id.get().is_none()>
+                            <button
+                                class="w-8 h-8 rounded-full bg-primary text-white flex items-center
+                                       justify-center shadow-sm hover:bg-primary-hover
+                                       disabled:opacity-35 disabled:cursor-not-allowed
+                                       disabled:shadow-none transition-all"
+                                disabled=move || !can_send.get()
+                                on:click=move |_| send_message()
+                            >
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+                                     class="w-4 h-4">
+                                    <path d="M12 19V5" />
+                                    <path d="M5 12l7-7 7 7" />
+                                </svg>
+                            </button>
+                        </Show>
+                    </div>
+                </div>
             </div>
             </div>
         </div>

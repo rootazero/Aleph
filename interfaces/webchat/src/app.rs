@@ -18,7 +18,6 @@ use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 // Layout components
 use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
-use crate::components::top_bar::TopBar;
 use crate::context::{DashboardContext, DashboardState};
 use crate::views::chat::ChatState;
 
@@ -71,21 +70,16 @@ fn AppContent() -> impl IntoView {
     });
 
     view! {
-        <div class="flex flex-col h-screen bg-surface text-text-primary font-sans selection:bg-primary/30">
+        // Two-column shell (Codex) floating on the drifting light-field.
+        <div class="aleph-shell flex h-screen text-text-primary font-sans selection:bg-primary/30">
             <Router>
-                // Top bar (fixed)
-                <TopBar />
+                // Left column — context-aware sidebar, full window height
+                <ModeSidebar />
 
-                // Middle: sidebar + main content
-                <div class="flex flex-1 overflow-hidden">
-                    // Context-aware sidebar
-                    <ModeSidebar />
-
-                    // Main content area — reactive routing via use_location()
-                    <main class="flex-1 overflow-y-auto relative">
-                        <MainContent />
-                    </main>
-                </div>
+                // Main content area — transparent, so the light-field shows through
+                <main class="flex-1 overflow-y-auto relative">
+                    <MainContent />
+                </main>
             </Router>
         </div>
     }

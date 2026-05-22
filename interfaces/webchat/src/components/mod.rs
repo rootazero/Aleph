@@ -13,12 +13,10 @@ pub mod nav_menu;
 pub mod settings_sidebar;
 pub mod sidebar;
 pub mod theme_toggle;
-pub mod top_bar;
 pub mod ui;
 
 // Re-export layout components
 pub use mode_sidebar::{ModeSidebar, PanelMode};
-pub use top_bar::TopBar;
 
 // Re-export commonly used form components
 pub use forms::{

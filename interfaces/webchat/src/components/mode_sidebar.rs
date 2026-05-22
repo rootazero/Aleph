@@ -10,6 +10,7 @@ use super::agents_sidebar::AgentsSidebar;
 use super::chat_sidebar::ChatSidebar;
 use super::dashboard_sidebar::DashboardSidebar;
 use super::nav_menu::NavMenu;
+use super::theme_toggle::ThemeToggle;
 use crate::components::settings_sidebar::SETTINGS_GROUPS;
 use crate::i18n::*;
 use leptos::prelude::*;
@@ -52,7 +53,10 @@ pub fn ModeSidebar() -> impl IntoView {
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
 
     view! {
-        <aside class="w-64 border-r border-border bg-sidebar flex flex-col flex-shrink-0 overflow-hidden">
+        <aside class="aleph-sidebar w-64 flex flex-col flex-shrink-0 overflow-hidden">
+            // Brand row — ℵ wordmark + theme picker, pinned to the top
+            <SidebarBrand />
+
             // Section-specific secondary menu
             <div class="flex-1 min-h-0 overflow-hidden">
                 {move || match mode.get() {
@@ -68,6 +72,25 @@ pub fn ModeSidebar() -> impl IntoView {
             // Persistent bottom-left section switcher
             <NavMenu />
         </aside>
+    }
+}
+
+/// Brand row pinned to the top of the left column — the ℵ wordmark plus
+/// the theme picker. Padded down on macOS (via `.aleph-sidebar-head`) so
+/// it clears the overlay traffic lights.
+#[component]
+fn SidebarBrand() -> impl IntoView {
+    view! {
+        <div class="aleph-sidebar-head flex items-center justify-between px-3.5 pb-2.5">
+            <div class="flex items-center gap-2.5">
+                <div class="aleph-mark w-7 h-7 rounded-xl flex items-center justify-center
+                            text-text-inverse">
+                    <span class="text-base font-semibold leading-none">"\u{2135}"</span>
+                </div>
+                <span class="text-[15px] font-semibold tracking-tight">"Aleph"</span>
+            </div>
+            <ThemeToggle />
+        </div>
     }
 }
 
