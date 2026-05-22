@@ -535,4 +535,127 @@ mod tests {
         policy.apply(&mut body);
         assert_eq!(body, serde_json::json!("not an object"));
     }
+
+    use crate::providers::protocols::anthropic::AnthropicProtocol;
+
+    fn official_caps() -> AnthropicCapabilities {
+        resolve_anthropic_capabilities(AnthropicEndpointClass::Official, None)
+    }
+
+    #[test]
+    fn test_beta_headers_standard_model() {
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-3-5-sonnet-20241022",
+            None,
+            false,
+            &official_caps(),
+        );
+        // Should include the two always-on betas
+        assert!(headers.contains("interleaved-thinking-2025-05-14"));
+        assert!(headers.contains("fine-grained-tool-streaming-2025-05-14"));
+        // Standard model should NOT have 128k output beta
+        assert!(!headers.contains("output-128k-2025-02-19"));
+    }
+
+    #[test]
+    fn test_beta_headers_opus4_model() {
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-opus-4-20250514",
+            None,
+            false,
+            &official_caps(),
+        );
+        assert!(headers.contains("interleaved-thinking-2025-05-14"));
+        assert!(headers.contains("output-128k-2025-02-19"));
+    }
+
+    #[test]
+    fn test_beta_headers_sonnet4_model() {
+        let headers = AnthropicProtocol::build_beta_headers(
+            "claude-sonnet-4-5",
+            None,
+            false,
+            &official_caps(),
+        );
+        assert!(headers.contains("output-128k-2025-02-19"));
+    }
+
+    #[test]
+    fn beta_headers_omits_fine_grained_when_capability_off() {
+        use crate::providers::protocols::anthropic::provider_policy::{
+            resolve_anthropic_capabilities, AnthropicEndpointClass,
+        };
+        let caps = resolve_anthropic_capabilities(
+            AnthropicEndpointClass::Custom,
+            Some("https://api.minimax.io/anthropic/v1/messages"),
+        );
+        let headers =
+            AnthropicProtocol::build_beta_headers("claude-3-5-sonnet", None, false, &caps);
+        assert!(
+            !headers.contains("fine-grained-tool-streaming-2025-05-14"),
+            "MiniMax must not see fine-grained-tool-streaming, got {}",
+            headers,
+        );
+        // Interleaved-thinking is still allowed
+        assert!(headers.contains("interleaved-thinking-2025-05-14"));
+        // No context-1m on MiniMax
+        assert!(!headers.contains("context-1m-2025-08-07"));
+    }
+
+    #[test]
+    fn beta_headers_includes_context_1m_on_azure_for_claude_4() {
+        use crate::providers::protocols::anthropic::provider_policy::{
+            resolve_anthropic_capabilities, AnthropicEndpointClass,
+        };
+        let caps = resolve_anthropic_capabilities(
+            AnthropicEndpointClass::Custom,
+            Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
+        );
+        let headers =
+            AnthropicProtocol::build_beta_headers("claude-sonnet-4-6", None, false, &caps);
+        assert!(
+            headers.contains("context-1m-2025-08-07"),
+            "Azure + claude-4 must enable context-1m, got {}",
+            headers,
+        );
+    }
+
+    #[test]
+    fn beta_headers_omits_context_1m_on_pre_claude_4_models_even_if_capability_on() {
+        use crate::providers::protocols::anthropic::provider_policy::{
+            resolve_anthropic_capabilities, AnthropicEndpointClass,
+        };
+        let caps = resolve_anthropic_capabilities(
+            AnthropicEndpointClass::Custom,
+            Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
+        );
+        let headers =
+            AnthropicProtocol::build_beta_headers("claude-3-5-sonnet-20241022", None, false, &caps);
+        // 1M context is meaningless on pre-4 models — gate keeps headers clean
+        assert!(!headers.contains("context-1m-2025-08-07"));
+    }
+
+    #[test]
+    fn beta_headers_omits_context_1m_on_official_by_default() {
+        let caps = official_caps();
+        let headers = AnthropicProtocol::build_beta_headers("claude-opus-4-7", None, false, &caps);
+        // Native Anthropic 400s on subscriptions without long-context beta.
+        assert!(!headers.contains("context-1m-2025-08-07"));
+    }
+
+    #[test]
+    fn test_is_large_context_model() {
+        assert!(AnthropicProtocol::is_large_context_model(
+            "claude-opus-4-20250514"
+        ));
+        assert!(AnthropicProtocol::is_large_context_model(
+            "claude-sonnet-4-5"
+        ));
+        assert!(!AnthropicProtocol::is_large_context_model(
+            "claude-3-5-sonnet-20241022"
+        ));
+        assert!(!AnthropicProtocol::is_large_context_model(
+            "claude-3-opus-20240229"
+        ));
+    }
 }

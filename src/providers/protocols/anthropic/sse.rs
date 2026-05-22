@@ -212,3 +212,279 @@ pub(crate) fn parse_anthropic_sse_event(
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_anthropic_sse_event;
+    use crate::providers::adapter::{StopReason, TokenUsage};
+    use crate::providers::delta::{IndexIdTracker, ProviderDelta};
+    use std::collections::VecDeque;
+
+    // Helper: run parse_anthropic_sse_event on a raw JSON string (without "data: " prefix)
+    fn parse(data: &str) -> Vec<ProviderDelta> {
+        let mut block_ids = IndexIdTracker::new();
+        let mut pending = VecDeque::new();
+        parse_anthropic_sse_event(data, &mut block_ids, &mut pending, None);
+        pending.into_iter().map(|r| r.unwrap()).collect()
+    }
+
+    // Helper: run a sequence of SSE data payloads through the parser with shared state
+    fn parse_sequence(events: &[&str]) -> Vec<ProviderDelta> {
+        let mut block_ids = IndexIdTracker::new();
+        let mut all = Vec::new();
+        for data in events {
+            let mut pending = VecDeque::new();
+            parse_anthropic_sse_event(data, &mut block_ids, &mut pending, None);
+            all.extend(pending.into_iter().map(|r| r.unwrap()));
+        }
+        all
+    }
+    // ── Test 1: Text-only response ──────────────────────────────────────────
+
+    #[test]
+    fn test_text_only_response() {
+        let events = [
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}"#,
+            r#"{"type":"message_stop"}"#,
+        ];
+        let deltas = parse_sequence(&events);
+
+        // Should have TextDelta("Hello"), Usage, Done(EndTurn)
+        let text_deltas: Vec<_> = deltas
+            .iter()
+            .filter_map(|d| match d {
+                ProviderDelta::TextDelta(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text_deltas, vec!["Hello"]);
+
+        let done = deltas.iter().find(|d| matches!(d, ProviderDelta::Done(_)));
+        assert!(matches!(
+            done,
+            Some(ProviderDelta::Done(StopReason::EndTurn))
+        ));
+    }
+
+    // ── Test 2: Tool use response ───────────────────────────────────────────
+
+    #[test]
+    fn test_tool_use_response() {
+        let events = [
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"search","input":{}}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"q\":\"rust\"}"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":20}}"#,
+        ];
+        let deltas = parse_sequence(&events);
+
+        // ToolCallStart
+        let start = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::ToolCallStart { .. }));
+        assert!(matches!(
+            start,
+            Some(ProviderDelta::ToolCallStart { id, name, .. }) if id == "toolu_1" && name == "search"
+        ));
+
+        // ToolCallArgDelta
+        let arg_delta = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::ToolCallArgDelta { .. }));
+        assert!(matches!(
+            arg_delta,
+            Some(ProviderDelta::ToolCallArgDelta { id, delta }) if id == "toolu_1" && delta.contains("rust")
+        ));
+
+        // ToolCallEnd
+        let end = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::ToolCallEnd { .. }));
+        assert!(matches!(
+            end,
+            Some(ProviderDelta::ToolCallEnd { id }) if id == "toolu_1"
+        ));
+
+        // Done(ToolUse)
+        let done = deltas.iter().find(|d| matches!(d, ProviderDelta::Done(_)));
+        assert!(matches!(
+            done,
+            Some(ProviderDelta::Done(StopReason::ToolUse))
+        ));
+    }
+
+    // ── Test 3: Thinking + text response ───────────────────────────────────
+
+    #[test]
+    fn test_thinking_response() {
+        let events = [
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_abc"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer"}}"#,
+            r#"{"type":"content_block_stop","index":1}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}"#,
+        ];
+        let deltas = parse_sequence(&events);
+
+        let thinking = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::ThinkingDelta(_)));
+        assert!(matches!(
+            thinking,
+            Some(ProviderDelta::ThinkingDelta(t)) if t == "Let me think"
+        ));
+
+        let signature = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::ThinkingSignatureDelta(_)));
+        assert!(matches!(
+            signature,
+            Some(ProviderDelta::ThinkingSignatureDelta(s)) if s == "sig_abc"
+        ));
+
+        let text = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::TextDelta(_)));
+        assert!(matches!(
+            text,
+            Some(ProviderDelta::TextDelta(t)) if t == "Answer"
+        ));
+
+        let done = deltas.iter().find(|d| matches!(d, ProviderDelta::Done(_)));
+        assert!(matches!(
+            done,
+            Some(ProviderDelta::Done(StopReason::EndTurn))
+        ));
+    }
+    // ── Test 5: Error event ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_error_event() {
+        let data = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+        let deltas = parse(data);
+        assert_eq!(deltas.len(), 1);
+        assert!(matches!(&deltas[0], ProviderDelta::Error(msg) if msg == "Overloaded"));
+    }
+
+    // ── Test 6: Usage in message_delta ─────────────────────────────────────
+
+    #[test]
+    fn test_message_delta_usage() {
+        let data = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":42}}"#;
+        let deltas = parse(data);
+
+        let usage = deltas.iter().find(|d| matches!(d, ProviderDelta::Usage(_)));
+        assert!(matches!(
+            usage,
+            Some(ProviderDelta::Usage(TokenUsage {
+                output_tokens: 42,
+                ..
+            }))
+        ));
+    }
+
+    // ── Test 7: content_block_stop does not emit ToolCallEnd for text blocks ─
+
+    #[test]
+    fn test_text_block_stop_no_tool_call_end() {
+        // Process a text block start + stop: should NOT produce ToolCallEnd
+        let events = [
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+        ];
+        let deltas = parse_sequence(&events);
+        // There should be no ToolCallEnd
+        assert!(!deltas
+            .iter()
+            .any(|d| matches!(d, ProviderDelta::ToolCallEnd { .. })));
+    }
+    // ── Test 10: message_start emits input tokens + cache_creation ──────────
+
+    #[test]
+    fn message_start_emits_input_tokens_and_cache_creation() {
+        let data = r#"{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":150,"output_tokens":0,"cache_read_input_tokens":80,"cache_creation_input_tokens":30}}}"#;
+        let deltas = parse(data);
+
+        let usage = deltas.iter().find_map(|d| match d {
+            ProviderDelta::Usage(u) => Some(u),
+            _ => None,
+        });
+        assert!(usage.is_some(), "expected a Usage delta from message_start");
+        let u = usage.unwrap();
+        assert_eq!(u.input_tokens, 150);
+        assert_eq!(u.cache_read_tokens, Some(80));
+        assert_eq!(u.cache_creation_tokens, Some(30));
+    }
+
+    // ── Test 11: message_delta carries cache_creation_input_tokens ───────────
+
+    #[test]
+    fn message_delta_emits_cache_creation_tokens() {
+        let data = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10,"cache_creation_input_tokens":25}}"#;
+        let deltas = parse(data);
+
+        let usage = deltas.iter().find_map(|d| match d {
+            ProviderDelta::Usage(u) => Some(u),
+            _ => None,
+        });
+        assert!(usage.is_some(), "expected a Usage delta from message_delta");
+        let u = usage.unwrap();
+        assert_eq!(u.output_tokens, 10);
+        assert_eq!(u.cache_creation_tokens, Some(25));
+    }
+    // ── Test 12: extended stop_reason mapping ───────────────────────────────
+
+    /// Run a `message_delta` event carrying `reason` and return its `Done` value.
+    fn done_for_stop_reason(reason: &str) -> Option<StopReason> {
+        let data = format!(
+            r#"{{"type":"message_delta","delta":{{"stop_reason":"{reason}","stop_sequence":null}},"usage":{{"output_tokens":3}}}}"#
+        );
+        parse(&data).into_iter().find_map(|d| match d {
+            ProviderDelta::Done(sr) => Some(sr),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn message_delta_maps_stop_sequence() {
+        assert_eq!(
+            done_for_stop_reason("stop_sequence"),
+            Some(StopReason::StopSequence)
+        );
+    }
+
+    #[test]
+    fn message_delta_maps_pause_turn() {
+        assert_eq!(
+            done_for_stop_reason("pause_turn"),
+            Some(StopReason::PauseTurn)
+        );
+    }
+
+    #[test]
+    fn message_delta_maps_refusal() {
+        assert_eq!(done_for_stop_reason("refusal"), Some(StopReason::Refusal));
+    }
+
+    #[test]
+    fn message_delta_maps_context_window_exceeded_to_max_tokens() {
+        assert_eq!(
+            done_for_stop_reason("model_context_window_exceeded"),
+            Some(StopReason::MaxTokens),
+        );
+    }
+
+    #[test]
+    fn message_delta_unknown_stop_reason_falls_through() {
+        assert_eq!(
+            done_for_stop_reason("some_future_reason"),
+            Some(StopReason::Unknown)
+        );
+    }
+}
