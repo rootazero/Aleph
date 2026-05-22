@@ -137,6 +137,8 @@ fn normalize_path(path: &std::path::Path, workspace_root: &std::path::Path) -> s
                 normalized.pop();
             }
             Component::Prefix(p) => {
+                // Preserve Windows drive/UNC prefix so the path remains
+                // valid for canonicalize and stays on the intended volume.
                 normalized.push(p.as_os_str());
             }
         }

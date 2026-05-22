@@ -128,6 +128,9 @@ fn normalize_path_components(path: &std::path::Path) -> std::path::PathBuf {
                 normalized.pop();
             }
             Component::Prefix(p) => {
+                // On Windows, preserve the drive letter / UNC prefix so that
+                // paths on different drives do not collapse into the same
+                // namespace and bypass the prefix check.
                 normalized.push(p.as_os_str());
             }
         }

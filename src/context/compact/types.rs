@@ -34,6 +34,8 @@ pub enum PressureLevel {
 
 impl PressureLevel {
     /// Derive a `PressureLevel` from a fill ratio in `[0.0, 1.0+]`.
+    ///
+    /// NaN or negative inputs are treated as `Calm` (no pressure).
     pub fn from_ratio(ratio: f64) -> Self {
         if ratio.is_nan() || ratio < 0.0 {
             return Self::Calm;
