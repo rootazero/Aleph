@@ -110,3 +110,18 @@ async fn threshold_minimum_is_two() {
     let v = ToolLoopVerifier::new().with_threshold(1);
     assert_eq!(v.threshold(), 2);
 }
+
+#[tokio::test]
+async fn threshold_two_vetoes_at_exactly_two() {
+    let v = ToolLoopVerifier::new().with_threshold(2);
+    let history = vec![make("read", 1), make("read", 1)];
+    let ctx = TurnVerifyContext {
+        iterations: 2,
+        tool_calls_made: 2,
+        final_text: None,
+        recent_tool_calls: &history,
+        stop_reason: None,
+    };
+    let cancel = CancellationToken::new();
+    assert!(v.verify(&ctx, &cancel).await.is_veto());
+}

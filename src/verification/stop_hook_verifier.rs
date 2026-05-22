@@ -8,7 +8,7 @@
 //! is `None` (mid-turn check) the verifier short-circuits to
 //! `Continue` so non-stop turns pay zero cost.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;

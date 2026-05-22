@@ -16,8 +16,7 @@
 //! a stronger model would never trigger; verifiers are watchdogs, not
 //! judges. See Stage 6a plan §9.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;

@@ -6,7 +6,7 @@
 //! - exit 2: block stop (stdout = reason)
 //! - other: hook error (logged, does not block)
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use serde::Serialize;

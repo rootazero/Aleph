@@ -1,15 +1,14 @@
 //! `VerifierChain` semantics: empty / first-veto-wins / kill-switch /
 //! concurrency hammer.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{Arc, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::ErrorClass;
 use crate::verification::turn_verifier::{
-    TurnVerifier, TurnVerifyContext, VerifierChain, VerifierVerdict,
+    hash_tool_args, ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierChain, VerifierVerdict,
 };
 
 struct AlwaysContinue;
@@ -160,4 +159,19 @@ async fn concurrent_verify_vs_disable_all_is_consistent() {
 
     let total = blocks.load(Ordering::Relaxed) + allows.load(Ordering::Relaxed);
     assert_eq!(total, READERS * ITERS);
+}
+
+#[test]
+fn hash_tool_args_is_deterministic() {
+    let args = serde_json::json!({"path": "/tmp/test", "limit": 10});
+    let h1 = hash_tool_args(&args);
+    let h2 = hash_tool_args(&args);
+    assert_eq!(h1, h2);
+}
+
+#[test]
+fn hash_tool_args_different_inputs_produce_different_hashes() {
+    let a = serde_json::json!({"a": 1});
+    let b = serde_json::json!({"a": 2});
+    assert_ne!(hash_tool_args(&a), hash_tool_args(&b));
 }
