@@ -85,19 +85,19 @@ impl CompressionScheduler {
     ///
     /// Priority: TurnThreshold > IdleTimeout
     pub fn should_trigger_compression(&self) -> CompressionTrigger {
-        let turns = self.pending_turns.load(Ordering::Acquire);
         let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let turns = self.pending_turns.load(Ordering::Acquire);
 
         // Check turn threshold first (higher priority)
         if turns >= config.turn_threshold {
             return CompressionTrigger::TurnThreshold(turns);
         }
 
-        // Check idle timeout
-        let idle_duration = self.get_idle_duration();
         let idle_threshold = Duration::from_secs(config.idle_timeout_seconds as u64);
         drop(config);
 
+        // Check idle timeout
+        let idle_duration = self.get_idle_duration();
         if idle_duration >= idle_threshold && turns > 0 {
             return CompressionTrigger::IdleTimeout(idle_duration);
         }

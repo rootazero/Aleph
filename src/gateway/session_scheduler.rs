@@ -23,6 +23,9 @@ use super::reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
 /// Maximum age for a queued task before it is dropped (5 minutes).
 const MAX_QUEUE_AGE: Duration = Duration::from_secs(300);
 
+/// Maximum number of pending tasks per session before new messages are dropped.
+const MAX_QUEUE_DEPTH: usize = 100;
+
 // ---------------------------------------------------------------------------
 // SessionQueue (private)
 // ---------------------------------------------------------------------------
@@ -101,6 +104,7 @@ impl SessionScheduler {
     /// appended to the session's queue and will run once the current run completes.
     pub async fn enqueue(&self, enriched: EnrichedMessage) {
         let session_key_str = enriched.merged.primary_context.session_key.to_key_string();
+        let run_id = Uuid::new_v4().to_string();
 
         let should_execute = {
             let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
@@ -109,23 +113,34 @@ impl SessionScheduler {
                 .or_insert_with(SessionQueue::new);
 
             if queue.is_idle() {
+                queue.active_run_id = Some(run_id.clone());
                 true
             } else {
-                debug!(
-                    session = %session_key_str,
-                    depth = queue.pending.len() + 1,
-                    "Session busy — queuing message"
-                );
-                queue.pending.push_back(QueuedTask {
-                    enriched: enriched.clone(),
-                    enqueued_at: Instant::now(),
-                });
-                false
+                if queue.pending.len() >= MAX_QUEUE_DEPTH {
+                    warn!(
+                        session = %session_key_str,
+                        depth = queue.pending.len(),
+                        "Queue depth exceeded — dropping message"
+                    );
+                    false
+                } else {
+                    debug!(
+                        session = %session_key_str,
+                        depth = queue.pending.len() + 1,
+                        "Session busy — queuing message"
+                    );
+                    queue.pending.push_back(QueuedTask {
+                        enriched: enriched.clone(),
+                        enqueued_at: Instant::now(),
+                    });
+                    false
+                }
             }
         };
 
         if should_execute {
-            self.execute_enriched(enriched, &session_key_str).await;
+            self.execute_enriched(enriched, &session_key_str, &run_id)
+                .await;
         }
     }
 
@@ -138,30 +153,29 @@ impl SessionScheduler {
     }
 
     /// Execute an enriched message on its session.
-    async fn execute_enriched(&self, enriched: EnrichedMessage, session_key_str: &str) {
+    async fn execute_enriched(
+        &self,
+        enriched: EnrichedMessage,
+        session_key_str: &str,
+        run_id: &str,
+    ) {
         let ctx = &enriched.merged.primary_context;
         let agent_id = ctx.session_key.agent_id().to_string();
-        let run_id = Uuid::new_v4().to_string();
-
-        // Set active run id
-        {
-            let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
-            let queue = queues
-                .entry(session_key_str.to_string())
-                .or_insert_with(SessionQueue::new);
-            queue.active_run_id = Some(run_id.clone());
-        }
 
         // Resolve agent
         let agent = match self.agent_registry.get(&agent_id).await {
             Some(a) => a,
             None => {
                 error!(agent_id = %agent_id, "Agent not found — dropping message");
-                // Clear active run
-                let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(queue) = queues.get_mut(session_key_str) {
-                    queue.active_run_id = None;
-                }
+                drain_queue(
+                    session_key_str,
+                    self.queues.clone(),
+                    self.execution_adapter.clone(),
+                    self.agent_registry.clone(),
+                    self.channel_registry.clone(),
+                    self.app_config.clone(),
+                )
+                .await;
                 return;
             }
         };
@@ -198,7 +212,7 @@ impl SessionScheduler {
             Arc::new(ReplyEmitter::with_config(
                 self.channel_registry.clone(),
                 enriched.merged.primary_context.reply_route.clone(),
-                run_id.clone(),
+                run_id.to_string(),
                 reply_config,
                 pending_media.clone(),
             ));
@@ -232,7 +246,7 @@ impl SessionScheduler {
         }
 
         let request = RunRequest {
-            run_id: run_id.clone(),
+            run_id: run_id.to_string(),
             input: enriched.enriched_text.clone(),
             session_key: enriched.merged.primary_context.session_key.clone(),
             timeout_secs: None,
@@ -249,10 +263,11 @@ impl SessionScheduler {
             "Spawning execution"
         );
 
+        let run_id_owned = run_id.to_string();
         let adapter = Arc::clone(&self.execution_adapter);
         tokio::spawn(async move {
             if let Err(e) = adapter.execute(request, agent, listener).await {
-                error!(run_id = %run_id, error = %e, "Execution failed");
+                error!(run_id = %run_id_owned, error = %e, "Execution failed");
             }
         });
     }
@@ -292,61 +307,89 @@ struct SchedulerEventListener {
 }
 
 impl SchedulerEventListener {
-    /// Called when a run completes or errors — drains expired tasks and starts
-    /// the next one if available.  If the next task's agent is missing, the loop
-    /// continues until a runnable task is found or the queue is empty.
+    /// Called when a run completes or errors — delegates to `drain_queue`.
     async fn on_run_finished(&self) {
-        loop {
-            let next_task = {
-                let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(queue) = queues.get_mut(&self.session_key) {
-                    queue.active_run_id = None;
+        drain_queue(
+            &self.session_key,
+            Arc::clone(&self.queues),
+            Arc::clone(&self.execution_adapter),
+            Arc::clone(&self.agent_registry),
+            Arc::clone(&self.channel_registry),
+            self.app_config.clone(),
+        )
+        .await;
+    }
+}
 
-                    // Drop expired tasks
-                    let before = queue.pending.len();
-                    queue
-                        .pending
-                        .retain(|t| t.enqueued_at.elapsed() < MAX_QUEUE_AGE);
-                    let dropped = before - queue.pending.len();
-                    if dropped > 0 {
-                        warn!(
-                            session = %self.session_key,
-                            dropped,
-                            "Dropped expired queued tasks"
-                        );
+/// Drain the session queue: clear the active run, drop expired tasks, and start
+/// the next queued task.  If the next task's agent is missing, the loop continues
+/// until a runnable task is found or the queue is empty.
+async fn drain_queue(
+    session_key_str: &str,
+    queues: Arc<Mutex<HashMap<String, SessionQueue>>>,
+    execution_adapter: Arc<dyn ExecutionAdapter>,
+    agent_registry: Arc<AgentRegistry>,
+    channel_registry: Arc<ChannelRegistry>,
+    app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
+) {
+    loop {
+        let next_task = {
+            let mut queues = queues.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(queue) = queues.get_mut(session_key_str) {
+                queue.active_run_id = None;
+
+                // Drop expired tasks with per-item logging (first 3 samples)
+                let mut dropped = 0usize;
+                queue.pending.retain(|t| {
+                    let keep = t.enqueued_at.elapsed() < MAX_QUEUE_AGE;
+                    if !keep {
+                        dropped += 1;
+                        if dropped <= 3 {
+                            warn!(
+                                session = %session_key_str,
+                                age_secs = ?t.enqueued_at.elapsed().as_secs(),
+                                "Dropping expired queued task"
+                            );
+                        }
                     }
-
-                    queue.pending.pop_front()
-                } else {
-                    None
+                    keep
+                });
+                if dropped > 3 {
+                    warn!(
+                        session = %session_key_str,
+                        total_dropped = dropped,
+                        "Additional expired tasks dropped (total)"
+                    );
                 }
-            };
 
-            if let Some(task) = next_task {
-                debug!(
-                    session = %self.session_key,
-                    "Dequeuing next task for session"
-                );
-                // We need to execute the next task. Build a temporary scheduler-like
-                // context inline to avoid circular references.
-                if execute_next(
-                    task.enriched,
-                    &self.session_key,
-                    Arc::clone(&self.queues),
-                    Arc::clone(&self.execution_adapter),
-                    Arc::clone(&self.agent_registry),
-                    Arc::clone(&self.channel_registry),
-                    self.app_config.clone(),
-                )
-                .await
-                {
-                    break; // task started successfully
-                }
-                // Agent missing — loop again to try the next queued task.
-                continue;
+                queue.pending.pop_front()
+            } else {
+                None
             }
-            break;
+        };
+
+        if let Some(task) = next_task {
+            debug!(
+                session = %session_key_str,
+                "Dequeuing next task for session"
+            );
+            if execute_next(
+                task.enriched,
+                session_key_str,
+                Arc::clone(&queues),
+                Arc::clone(&execution_adapter),
+                Arc::clone(&agent_registry),
+                Arc::clone(&channel_registry),
+                app_config.clone(),
+            )
+            .await
+            {
+                break; // task started successfully
+            }
+            // Agent missing — loop again to try the next queued task.
+            continue;
         }
+        break;
     }
 }
 
