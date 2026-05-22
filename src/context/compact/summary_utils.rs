@@ -29,16 +29,19 @@ rather than abbreviating it.";
 pub fn strip_analysis_block(text: &str) -> String {
     if let Some(start) = text.find("<analysis>") {
         if let Some(end) = text.find("</analysis>") {
-            let after_end = end + "</analysis>".len();
-            let mut result = String::new();
-            result.push_str(text[..start].trim());
-            if after_end < text.len() {
-                if !result.is_empty() {
-                    result.push('\n');
+            // Only strip when the closing tag appears after the opening tag.
+            if end > start {
+                let after_end = end + "</analysis>".len();
+                let mut result = String::new();
+                result.push_str(text[..start].trim());
+                if after_end < text.len() {
+                    if !result.is_empty() {
+                        result.push('\n');
+                    }
+                    result.push_str(text[after_end..].trim());
                 }
-                result.push_str(text[after_end..].trim());
+                return result;
             }
-            return result;
         }
     }
     text.to_string()

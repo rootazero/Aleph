@@ -35,6 +35,9 @@ pub enum PressureLevel {
 impl PressureLevel {
     /// Derive a `PressureLevel` from a fill ratio in `[0.0, 1.0+]`.
     pub fn from_ratio(ratio: f64) -> Self {
+        if ratio.is_nan() || ratio < 0.0 {
+            return Self::Calm;
+        }
         if ratio >= 0.85 {
             Self::Critical
         } else if ratio >= 0.80 {

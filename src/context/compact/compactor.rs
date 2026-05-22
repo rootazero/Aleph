@@ -168,6 +168,17 @@ impl ContextCompactor {
         // Step 3: limit window and serialize
         let window_start = cut_end.saturating_sub(self.config.max_window);
 
+        // Guard: a zero-width window means there is nothing to compress.
+        if window_start >= cut_end {
+            return Ok(CompactResult {
+                tokens_before: 0,
+                tokens_after: 0,
+                strategy_used: CompactStrategy::Skipped {
+                    reason: "compression window is empty (max_window may be zero)".into(),
+                },
+            });
+        }
+
         // Fast path: reuse pre-existing hierarchical session summaries (zero
         // API cost). Active only when summary reuse is wired and the caller
         // supplied a session id; otherwise fall through to the LLM path.
