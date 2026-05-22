@@ -8,7 +8,7 @@
 //!                       service::ToolDefinition and pin source=Builtin,
 //!                       carrying requires_confirmation through metadata.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -98,7 +98,7 @@ mod builtin_handler_tests {
     #[test]
     fn definition_populates_max_duration_ms_from_table() {
         let handler =
-            BuiltinHandler::new("memory_search".to_string(), std::sync::Arc::new(FakeTool));
+            BuiltinHandler::new("memory_search".to_string(), Arc::new(FakeTool));
         let def = handler.definition();
         assert_eq!(def.metadata.max_duration_ms, Some(5_000));
     }
@@ -107,7 +107,7 @@ mod builtin_handler_tests {
     fn definition_leaves_max_duration_ms_none_for_unlisted_tool() {
         let handler = BuiltinHandler::new(
             "unknown_custom_tool".to_string(),
-            std::sync::Arc::new(FakeTool),
+            Arc::new(FakeTool),
         );
         let def = handler.definition();
         assert_eq!(def.metadata.max_duration_ms, None);

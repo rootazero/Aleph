@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
+use crate::sync_primitives::Arc;
 
 /// Runtime context providing workspace-scoped output paths to tools.
 ///
@@ -33,7 +34,7 @@ impl ToolContext {
 }
 
 /// Type alias for the shared handle, matching existing handle patterns.
-pub type ToolContextHandle = std::sync::Arc<tokio::sync::RwLock<ToolContext>>;
+pub type ToolContextHandle = Arc<tokio::sync::RwLock<ToolContext>>;
 
 /// Create a new ToolContext handle with default paths (main workspace).
 pub fn new_tool_context_handle() -> ToolContextHandle {
@@ -52,5 +53,5 @@ pub fn new_tool_context_handle() -> ToolContextHandle {
             output_dir: default_workspace.join("output"),
         }
     });
-    std::sync::Arc::new(tokio::sync::RwLock::new(ctx))
+    Arc::new(tokio::sync::RwLock::new(ctx))
 }

@@ -13,9 +13,6 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use alephcore::tool_metadata::{
-    HealthReason, ProbeResult, ToolHealthProbe, ToolCatalog,
-};
 use alephcore::orchestrator::harness_bridge::compute_runtime_state_blocks;
 use alephcore::thinker::context::{ContextAggregator, ResolvedContext};
 use alephcore::thinker::interaction::{InteractionManifest, InteractionParadigm};
@@ -23,6 +20,7 @@ use alephcore::thinker::layers::ToolRuntimeStateLayer;
 use alephcore::thinker::prompt_builder::PromptConfig;
 use alephcore::thinker::prompt_layer::{LayerInput, PromptLayer};
 use alephcore::thinker::security_context::SecurityContext;
+use alephcore::tool_metadata::{HealthReason, ProbeResult, ToolCatalog, ToolHealthProbe};
 use alephcore::tools::runtime_state::ToolStatus;
 
 struct CannedDead(&'static str);

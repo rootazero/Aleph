@@ -2,7 +2,6 @@
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
-use crate::sync_primitives::Arc;
 use crate::providers::message::ContentBlock as UCB;
 use crate::providers::message::UnifiedMessage;
 use crate::providers::openai::types::{OpenAiFunctionCallOut, OpenAiToolCallOut};
@@ -10,6 +9,7 @@ use crate::providers::openai::{
     ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent,
 };
 use crate::providers::openai::{OpenAiFunctionCall, OpenAiToolCall};
+use crate::sync_primitives::Arc;
 
 use super::{sanitize_tool_name, OpenAiProtocol};
 

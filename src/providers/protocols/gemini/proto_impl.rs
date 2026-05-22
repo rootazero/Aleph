@@ -2,9 +2,9 @@
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
-use crate::sync_primitives::Arc;
 use crate::providers::gemini::{Content, Part, ThinkingConfig};
 use crate::providers::message::UnifiedMessage;
+use crate::sync_primitives::Arc;
 
 use super::GeminiProtocol;
 

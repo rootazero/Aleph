@@ -113,7 +113,10 @@ impl MemoryCommandHandler {
                     match indexer.store().find_by_filename(&title, agent_id).await {
                         Ok(paths) if !paths.is_empty() => {
                             for note_path in paths {
-                                let file = indexer.memory_dir().join(agent_id).join(format!("{note_path}.md"));
+                                let file = indexer
+                                    .memory_dir()
+                                    .join(agent_id)
+                                    .join(format!("{note_path}.md"));
                                 if file.exists() {
                                     tokio::fs::remove_file(&file).await.ok();
                                 }

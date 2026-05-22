@@ -100,7 +100,7 @@ impl AlephToolServer {
     pub fn tool(self, tool: impl AlephToolDyn + 'static) -> Self {
         let name = tool.name().to_string();
         let tool_arc = Arc::new(tool);
-        let mut guard = self.tools.lock().unwrap();
+        let mut guard = self.tools.lock().unwrap_or_else(|e| e.into_inner());
         guard.insert(name, tool_arc);
         drop(guard);
         self
@@ -116,7 +116,7 @@ impl AlephToolServer {
     pub fn tool_boxed(self, tool: Box<dyn AlephToolDyn>) -> Self {
         let name = tool.name().to_string();
         let tool_arc = Arc::from(tool);
-        let mut guard = self.tools.lock().unwrap();
+        let mut guard = self.tools.lock().unwrap_or_else(|e| e.into_inner());
         guard.insert(name, tool_arc);
         drop(guard);
         self
@@ -293,7 +293,10 @@ impl AlephToolServer {
     /// Add a pre-boxed dynamic tool (internal helper).
     async fn add_tool_dyn(&self, tool: Box<dyn AlephToolDyn>) -> Result<()> {
         let name = tool.name().to_string();
-        self.tools.lock().unwrap().insert(name, Arc::from(tool));
+        self.tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(name, Arc::from(tool));
         Ok(())
     }
 }

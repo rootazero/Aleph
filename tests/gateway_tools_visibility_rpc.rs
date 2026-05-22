@@ -13,9 +13,9 @@
 //! a duplicate integration here would only re-test the same code path.
 
 use alephcore::agents::{AgentDef, AgentMode, AgentRegistry};
-use alephcore::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
 use alephcore::gateway::handlers::tools_visibility::{handle_catalog, handle_effective};
 use alephcore::gateway::protocol::JsonRpcRequest;
+use alephcore::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
 use serde_json::json;
 
 /// Build a registry seeded with one tool per source family used by the

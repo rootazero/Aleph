@@ -24,7 +24,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::about(app, Some("About Aleph"), None)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, ID_SHOW, "Show Aleph", true, None::<&str>)?,
-            &MenuItem::with_id(app, ID_CHECK_UPDATE, "Check for Updates…", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                ID_CHECK_UPDATE,
+                "Check for Updates…",
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::hide(app, None)?,
             &PredefinedMenuItem::hide_others(app, None)?,
@@ -32,7 +38,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             // App-owned Quit items, not the predefined one: the predefined
             // macOS Quit calls NSApplication terminate, bypassing the
             // shell's close-to-tray lifecycle.
-            &MenuItem::with_id(app, ID_QUIT, "Quit (Aleph keeps running)", true, Some("Cmd+Q"))?,
+            &MenuItem::with_id(
+                app,
+                ID_QUIT,
+                "Quit (Aleph keeps running)",
+                true,
+                Some("Cmd+Q"),
+            )?,
             &MenuItem::with_id(app, ID_QUIT_STOP, "Quit & Stop Aleph", true, None::<&str>)?,
         ],
     )?;

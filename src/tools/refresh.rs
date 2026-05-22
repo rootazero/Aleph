@@ -41,11 +41,11 @@ pub fn build_refreshed_registry(tools: Vec<Box<dyn LoopTool>>) -> LoopToolRegist
 
 /// Combines multiple refresh sources: changed if ANY changed; tools = union.
 pub struct CompositeRefreshSource {
-    sources: Vec<std::sync::Arc<dyn ToolRefreshSource>>,
+    sources: Vec<Arc<dyn ToolRefreshSource>>,
 }
 
 impl CompositeRefreshSource {
-    pub fn new(sources: Vec<std::sync::Arc<dyn ToolRefreshSource>>) -> Self {
+    pub fn new(sources: Vec<Arc<dyn ToolRefreshSource>>) -> Self {
         Self { sources }
     }
 }
@@ -76,7 +76,7 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     // -- Mock tool --
 

@@ -25,7 +25,7 @@ use tracing::debug;
 
 use super::error::ToolError;
 use crate::error::Result;
-use crate::tool_metadata::{ToolIndexEntry, ToolCatalog};
+use crate::tool_metadata::{ToolCatalog, ToolIndexEntry};
 use crate::tools::AlephTool;
 
 // ============================================================================

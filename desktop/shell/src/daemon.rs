@@ -391,7 +391,10 @@ mod tests {
     #[test]
     fn classify_ready_status_recognises_the_daemon() {
         assert_eq!(classify_ready_status(Some(200)), PortOccupant::DaemonReady);
-        assert_eq!(classify_ready_status(Some(503)), PortOccupant::DaemonBooting);
+        assert_eq!(
+            classify_ready_status(Some(503)),
+            PortOccupant::DaemonBooting
+        );
     }
 
     #[test]

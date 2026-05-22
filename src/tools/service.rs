@@ -2,7 +2,7 @@
 //!
 //! See: docs/superpowers/specs/2026-04-18-tool-service-facade-design.md
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

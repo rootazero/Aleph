@@ -222,7 +222,11 @@ impl CapabilityLedger {
                     .iter()
                     .map(|p| p.to_string_lossy().to_string())
                     .collect::<Vec<_>>()
-                    .join(if cfg!(target_os = "windows") { ";" } else { ":" })
+                    .join(if cfg!(target_os = "windows") {
+                        ";"
+                    } else {
+                        ":"
+                    })
             }
         }
     }

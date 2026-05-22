@@ -122,7 +122,7 @@ impl AlephToolServer {
     pub fn with_memory_search(
         self,
         database: crate::memory::store::MemoryBackend,
-        embedder: std::sync::Arc<dyn crate::memory::EmbeddingProvider>,
+        embedder: Arc<dyn crate::memory::EmbeddingProvider>,
     ) -> Self {
         self.tool(MemorySearchTool::new_with_embedder(database, embedder))
     }
@@ -194,7 +194,7 @@ impl AlephToolServer {
     /// let server = AlephToolServer::new()
     ///     .with_vision(pipeline);
     /// ```
-    pub fn with_vision(self, pipeline: std::sync::Arc<crate::vision::VisionPipeline>) -> Self {
+    pub fn with_vision(self, pipeline: Arc<crate::vision::VisionPipeline>) -> Self {
         self.tool(VisionTool::new(pipeline))
     }
 }

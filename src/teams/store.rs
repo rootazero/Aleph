@@ -344,8 +344,9 @@ impl TeamStore for SqliteTeamStore {
         let affected = conn
             .execute(
                 r#"
-            INSERT OR IGNORE INTO team_members (team_id, agent_id, role, joined_at)
+            INSERT INTO team_members (team_id, agent_id, role, joined_at)
             VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT (team_id, agent_id) DO UPDATE SET role = excluded.role
             "#,
                 params![input.team_id, input.agent_id, input.role, now],
             )

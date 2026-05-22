@@ -97,9 +97,8 @@ impl SessionCoordinator {
             .await?
             .ok_or_else(|| AlephError::other(format!("Session not found: {session_id}")))?;
 
-        // turn_number is computed atomically inside add_turn to avoid TOCTOU races.
-        // We pass 0 as a placeholder; the store ignores this value.
-        self.session_store
+        let turn_number = self
+            .session_store
             .add_turn(
                 session_id,
                 SessionTurn {
@@ -110,16 +109,6 @@ impl SessionCoordinator {
                 },
             )
             .await?;
-
-        // Re-fetch session to get the authoritative turn count for final-round check
-        let updated = self
-            .session_store
-            .get_session(session_id)
-            .await?
-            .ok_or_else(|| {
-                AlephError::other(format!("Session not found after turn: {session_id}"))
-            })?;
-        let turn_number = updated.transcript.len() as u32;
 
         // If this was the final round, notify participants
         if turn_number == session.max_rounds {

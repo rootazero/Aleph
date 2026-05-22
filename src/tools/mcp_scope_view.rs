@@ -2,7 +2,7 @@
 //! the existing `AllowlistToolService` gate. Parent's tools take precedence;
 //! `extras` fill in tools the parent doesn't expose.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 

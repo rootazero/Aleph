@@ -582,9 +582,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "get_tool_schema" => Box::pin(async move {
                 let registry = self.tool_catalog.as_ref().ok_or_else(|| {
-                    AlephError::tool(
-                        "get_tool_schema not available: no tool catalog configured",
-                    )
+                    AlephError::tool("get_tool_schema not available: no tool catalog configured")
                 })?;
                 let tool = GetToolSchemaTool::new(Arc::clone(registry));
                 tool.call_json(arguments).await

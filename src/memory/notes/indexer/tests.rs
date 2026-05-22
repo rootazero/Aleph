@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::memory::store::SqliteMemoryBackend;
 use tempfile::TempDir;

@@ -51,15 +51,32 @@ pub async fn build_handoff_context(
     // --- Dependency results (fan-in from completed upstream tasks) ---
     let mut dep_section = String::new();
     for dep_id in &task.dependencies {
-        if let Ok(Some(dep)) = coord_store.get_task(dep_id).await {
-            if dep.status == CoordTaskStatus::Completed {
-                if let Some(result) = &dep.result {
-                    dep_section.push_str(&format!(
-                        "### {}\n{}\n",
-                        dep.subject,
-                        truncate_utf8(result, MAX_SECTION_BYTES)
-                    ));
+        match coord_store.get_task(dep_id).await {
+            Ok(Some(dep)) => {
+                if dep.status == CoordTaskStatus::Completed {
+                    if let Some(result) = &dep.result {
+                        dep_section.push_str(&format!(
+                            "### {}\n{}\n",
+                            dep.subject,
+                            truncate_utf8(result, MAX_SECTION_BYTES)
+                        ));
+                    }
                 }
+            }
+            Ok(None) => {
+                tracing::warn!(task_id = %task.id, dep_id = %dep_id, "Handoff: dependency task not found");
+                dep_section.push_str(&format!(
+                    "### Dependency `{}`\n*(missing from store)*\n",
+                    dep_id
+                ));
+            }
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, dep_id = %dep_id, error = %e, "Handoff: failed to fetch dependency");
+                dep_section.push_str(&format!(
+                    "### Dependency `{}`\n*(fetch error: {})*\n",
+                    dep_id,
+                    e
+                ));
             }
         }
     }

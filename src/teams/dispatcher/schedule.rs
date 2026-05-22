@@ -246,7 +246,7 @@ impl TeamDispatcher {
         match outcome.status {
             MemberRunStatus::Completed => {
                 let reply = outcome.reply.unwrap_or_default();
-                let _ = self
+                if let Err(e) = self
                     .coord_store
                     .update_task(
                         &task_id,
@@ -256,21 +256,25 @@ impl TeamDispatcher {
                             ..Default::default()
                         },
                     )
-                    .await;
-                self.persist_artifact(&task_id, &owner, &task.subject, &reply)
-                    .await;
-                GlobalBus::global()
-                    .broadcast(
-                        "team_dispatcher",
-                        &task_id,
-                        AlephEvent::TeamTaskCompleted {
-                            team_id: team_id.clone(),
-                            task_id: task_id.clone(),
-                            result_summary: Some(summarize(&reply, 500)),
-                        },
-                    )
-                    .await;
-                tracing::info!(task_id = %task_id, "dispatcher: task completed");
+                    .await
+                {
+                    tracing::warn!(task_id = %task_id, error = %e, "dispatcher: failed to persist task completion state; skipping artifact and event broadcast");
+                } else {
+                    self.persist_artifact(&task_id, &owner, &task.subject, &reply)
+                        .await;
+                    GlobalBus::global()
+                        .broadcast(
+                            "team_dispatcher",
+                            &task_id,
+                            AlephEvent::TeamTaskCompleted {
+                                team_id: team_id.clone(),
+                                task_id: task_id.clone(),
+                                result_summary: Some(summarize(&reply, 500)),
+                            },
+                        )
+                        .await;
+                    tracing::info!(task_id = %task_id, "dispatcher: task completed");
+                }
             }
             MemberRunStatus::Failed | MemberRunStatus::Timeout => {
                 let err = outcome.error.unwrap_or_else(|| "unknown error".to_string());
@@ -286,8 +290,9 @@ impl TeamDispatcher {
     }
 
     /// Mark a task `Failed` and broadcast a `TeamTaskFailed` event.
+    /// Only broadcasts the event when the database update succeeds.
     async fn fail_task(&self, task: &CoordTask, error: &str) {
-        let _ = self
+        if let Err(e) = self
             .coord_store
             .update_task(
                 &task.id,
@@ -297,7 +302,11 @@ impl TeamDispatcher {
                     ..Default::default()
                 },
             )
-            .await;
+            .await
+        {
+            tracing::warn!(task_id = %task.id, error = %e, "dispatcher: failed to persist task failure state; skipping event broadcast");
+            return;
+        }
         GlobalBus::global()
             .broadcast(
                 "team_dispatcher",

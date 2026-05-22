@@ -14,7 +14,7 @@
 //! (`PermissionLayer` / `ExecAuditLayer` / `TimeoutLayer` / `CoreDispatch`),
 //! which was unreachable: gateway always overrode it.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;

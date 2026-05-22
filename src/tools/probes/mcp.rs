@@ -8,7 +8,7 @@
 //! prompt-side gate only needs to be coarsely accurate.
 
 use std::borrow::Cow;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 

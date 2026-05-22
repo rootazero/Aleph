@@ -189,8 +189,12 @@ impl SessionService for InProcessActorSessionService {
             }
             match timeout(SHUTDOWN_GRACE, rx).await {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => tracing::warn!(session_id = ?id, error = %e, "Wake shutdown reply dropped"),
-                Err(_) => tracing::warn!(session_id = ?id, "Wake shutdown timed out after {:?}", SHUTDOWN_GRACE),
+                Ok(Err(e)) => {
+                    tracing::warn!(session_id = ?id, error = %e, "Wake shutdown reply dropped")
+                }
+                Err(_) => {
+                    tracing::warn!(session_id = ?id, "Wake shutdown timed out after {:?}", SHUTDOWN_GRACE)
+                }
             }
         }
         self.broadcasters.write().await.remove(id);
@@ -236,8 +240,12 @@ impl SessionService for InProcessActorSessionService {
             }
             match timeout(SHUTDOWN_GRACE, rx).await {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => tracing::warn!(session_id = ?id, error = %e, "Detach shutdown reply dropped"),
-                Err(_) => tracing::warn!(session_id = ?id, "Detach shutdown timed out after {:?}", SHUTDOWN_GRACE),
+                Ok(Err(e)) => {
+                    tracing::warn!(session_id = ?id, error = %e, "Detach shutdown reply dropped")
+                }
+                Err(_) => {
+                    tracing::warn!(session_id = ?id, "Detach shutdown timed out after {:?}", SHUTDOWN_GRACE)
+                }
             }
         }
         self.broadcasters.write().await.remove(id);

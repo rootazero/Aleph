@@ -196,9 +196,7 @@ impl SessionEventStore for SqliteEventStore {
     ) -> Result<Vec<SessionEventRecord>, SessionError> {
         let session_key = session_id_to_string(session_id)?;
         let from_val = i64::try_from(from.unwrap_or(0)).unwrap_or(0);
-        let to_val = to
-            .and_then(|v| i64::try_from(v).ok())
-            .unwrap_or(i64::MAX);
+        let to_val = to.and_then(|v| i64::try_from(v).ok()).unwrap_or(i64::MAX);
 
         let conn = self.conn.lock().await;
         let mut stmt = conn
@@ -251,11 +249,7 @@ impl SessionEventStore for SqliteEventStore {
 
         let head = match max_seq {
             Some(v) if v >= 0 => v as u64,
-            Some(v) => {
-                return Err(SessionError::Storage(format!(
-                    "stored seq {v} is negative"
-                )))
-            }
+            Some(v) => return Err(SessionError::Storage(format!("stored seq {v} is negative"))),
             None => 0,
         };
         Ok(head)

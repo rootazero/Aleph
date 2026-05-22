@@ -1787,9 +1787,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 def.description,
                 DToolSource::Builtin,
             );
-            tool_catalog
-                .register_with_conflict_resolution(tool)
-                .await;
+            tool_catalog.register_with_conflict_resolution(tool).await;
         }
 
         // Register custom commands from config routing rules
@@ -1856,9 +1854,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         .collect();
 
                     if !command_skill_infos.is_empty() {
-                        tool_catalog
-                            .register_skills(&command_skill_infos)
-                            .await;
+                        tool_catalog.register_skills(&command_skill_infos).await;
                         if !daemon {
                             println!(
                                 "  Dispatch registry: {} plugin commands registered",
@@ -2049,9 +2045,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // Wire command.execute to resolve slash commands via CommandParser + ToolRegistry
         {
-            let parser = Arc::new(alephcore::command::CommandParser::new(
-                tool_catalog.clone(),
-            ));
+            let parser = Arc::new(alephcore::command::CommandParser::new(tool_catalog.clone()));
 
             // Inject parser into chat.send handler (created earlier, uses deferred cell)
             {

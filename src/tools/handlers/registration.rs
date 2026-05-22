@@ -5,7 +5,7 @@
 //! and a matching cleanup path when it tears down. Extension/plugin variants
 //! were removed 2026-05-20 — see `tools::handlers::mod` for rationale.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::mcp::{McpClient, McpTool};
 use crate::tool_metadata::ToolCatalog;

@@ -10,7 +10,7 @@
 //! The qualified tool name injected into the registry is `{server_id}__{tool}`
 //! to avoid collisions across servers — see design §4.3.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -66,11 +66,13 @@ impl ToolHandler for McpHandler {
                         metadata: ToolOutputMetadata::default(),
                     })
                 } else {
+                    let error_msg = result
+                        .error
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "MCP tool returned failure without message".to_string());
                     Err(ToolError::Execution {
                         name: qualified,
-                        cause: crate::mcp::redact_mcp_error(&result.error.unwrap_or_else(|| {
-                            "MCP tool returned failure without message".to_string()
-                        })),
+                        cause: crate::mcp::redact_mcp_error(&error_msg),
                     })
                 }
             }

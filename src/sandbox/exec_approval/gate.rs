@@ -127,25 +127,36 @@ impl ApprovalGate {
             ApprovalAction::Block {
                 action: crate::sandbox::exec_approval::types::BlockAction::Retry
             }
-        ) && self.retry_counts.lock().unwrap_or_else(|e| e.into_inner())
+        ) && self
+            .retry_counts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .get(tool_name)
             .copied()
-            .unwrap_or(0) < 2
+            .unwrap_or(0)
+            < 2
     }
 
     pub fn record_retry(&self, tool_name: &str) {
-        *self.retry_counts.lock().unwrap_or_else(|e| e.into_inner())
+        *self
+            .retry_counts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .entry(tool_name.to_string())
             .or_insert(0) += 1;
     }
 
     pub fn reset_retry(&self, tool_name: &str) {
-        self.retry_counts.lock().unwrap_or_else(|e| e.into_inner())
+        self.retry_counts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .remove(tool_name);
     }
 
     pub fn retry_count(&self, tool_name: &str) -> u8 {
-        self.retry_counts.lock().unwrap_or_else(|e| e.into_inner())
+        self.retry_counts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .get(tool_name)
             .copied()
             .unwrap_or(0)

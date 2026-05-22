@@ -334,7 +334,9 @@ pub fn classify(raw: &str) -> RetryVerdict {
 /// Compute exponential backoff: `base * 2^attempt`, capped at `max_delay`.
 pub fn backoff_delay(base: Duration, attempt: u32, max_delay: Duration) -> Duration {
     let factor = 2u64.saturating_pow(attempt);
-    let delay_ms = u64::try_from(base.as_millis()).unwrap_or(u64::MAX).saturating_mul(factor);
+    let delay_ms = u64::try_from(base.as_millis())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(factor);
     Duration::from_millis(delay_ms.min(u64::try_from(max_delay.as_millis()).unwrap_or(u64::MAX)))
 }
 

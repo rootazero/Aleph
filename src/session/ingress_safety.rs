@@ -272,9 +272,7 @@ fn collect_string_values(v: &Value, out: &mut String) {
                 out.push(' ');
                 out.push_str(s);
             }
-            Value::Object(m) => m
-                .values()
-                .for_each(|v| recurse(v, out, depth + 1)),
+            Value::Object(m) => m.values().for_each(|v| recurse(v, out, depth + 1)),
             Value::Array(a) => a.iter().for_each(|v| recurse(v, out, depth + 1)),
             _ => {}
         }

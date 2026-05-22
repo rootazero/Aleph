@@ -394,6 +394,7 @@ dependencies = [
  "htmd",
  "http-body-util",
  "httpdate",
+ "idna",
  "image",
  "include_dir",
  "inquire",

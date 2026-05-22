@@ -6,7 +6,9 @@
 //! exists but was offloaded.
 
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
+
+use crate::sync_primitives::Arc;
 
 use crate::context::budget::pressure::estimate_tokens_smart;
 

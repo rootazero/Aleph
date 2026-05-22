@@ -50,7 +50,8 @@ pub trait SessionStore: Send + Sync {
     async fn get_session(&self, id: &str) -> crate::error::Result<Option<CollaborativeSession>>;
 
     /// Add a turn to an existing session. Fails if turn_number > max_rounds.
-    async fn add_turn(&self, session_id: &str, turn: SessionTurn) -> crate::error::Result<()>;
+    /// On success returns the authoritative turn number assigned by the store.
+    async fn add_turn(&self, session_id: &str, turn: SessionTurn) -> crate::error::Result<u32>;
 
     /// Conclude a session with an outcome. Sets status to Concluded.
     async fn conclude_session(
@@ -316,7 +317,7 @@ impl SessionStore for SqliteSessionStore {
         Self::materialise(&conn, id).map(Some)
     }
 
-    async fn add_turn(&self, session_id: &str, turn: SessionTurn) -> crate::error::Result<()> {
+    async fn add_turn(&self, session_id: &str, turn: SessionTurn) -> crate::error::Result<u32> {
         let conn = self.conn.lock().await;
 
         // Fetch max_rounds and current status
@@ -367,7 +368,7 @@ impl SessionStore for SqliteSessionStore {
         )
         .map_err(db_err)?;
 
-        Ok(())
+        Ok(turn_number)
     }
 
     async fn conclude_session(

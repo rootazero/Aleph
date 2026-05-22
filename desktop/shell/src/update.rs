@@ -160,7 +160,11 @@ async fn check(app: &AppHandle, announce: Announce) {
         Err(e) => {
             tracing::debug!("update check failed: {e}");
             if matches!(announce, Announce::Always) {
-                notify(app, "Update check failed", "Could not reach the update server.");
+                notify(
+                    app,
+                    "Update check failed",
+                    "Could not reach the update server.",
+                );
             }
         }
     }
@@ -216,6 +220,9 @@ mod tests {
 
     #[test]
     fn staged_tray_label_names_the_version() {
-        assert_eq!(staged_tray_label("26.5.30"), "Restart to update to v26.5.30");
+        assert_eq!(
+            staged_tray_label("26.5.30"),
+            "Restart to update to v26.5.30"
+        );
     }
 }

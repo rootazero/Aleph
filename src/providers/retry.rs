@@ -106,7 +106,8 @@ pub fn calculate_delay(
 
     // Exponential backoff: initial * factor^(attempt-1)
     let exponent = attempt.saturating_sub(1);
-    let delay_ms = (RETRY_INITIAL_DELAY_MS as f64) * RETRY_BACKOFF_FACTOR.powi(i32::try_from(exponent).unwrap_or(i32::MAX));
+    let delay_ms = (RETRY_INITIAL_DELAY_MS as f64)
+        * RETRY_BACKOFF_FACTOR.powi(i32::try_from(exponent).unwrap_or(i32::MAX));
     let capped_ms = (delay_ms as u64).min(RETRY_MAX_DELAY_NO_HEADERS_MS);
     Duration::from_millis(capped_ms)
 }

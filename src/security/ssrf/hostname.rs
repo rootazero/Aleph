@@ -7,11 +7,30 @@
 ///
 /// Blocked: "localhost", "localhost.localdomain", "metadata.google.internal",
 /// "metadata.internal", and suffixes ".localhost", ".local", ".internal".
+///
+/// Also checks the Unicode-decoded form of IDNA/punycode hostnames to prevent
+/// homograph attacks (e.g., `localhоst` with Cyrillic `о`).
 pub(crate) fn is_blocked_hostname(hostname: &str) -> bool {
     let lower = hostname.to_lowercase();
+    if check_blocked(&lower) {
+        return true;
+    }
+    // If the hostname looks like punycode, also check the Unicode decoded form
+    // to catch homograph attacks that bypass the ASCII blocklist.
+    if lower.contains("xn--") {
+        let unicode = url::quirks::domain_to_unicode(hostname);
+        let unicode_lower = unicode.to_lowercase();
+        if check_blocked(&unicode_lower) {
+            return true;
+        }
+    }
+    false
+}
+
+fn check_blocked(lower: &str) -> bool {
     // Exact matches
     if matches!(
-        lower.as_str(),
+        lower,
         "localhost" | "localhost.localdomain" | "metadata.google.internal" | "metadata.internal"
     ) {
         return true;
@@ -151,6 +170,16 @@ mod tests {
     fn allows_public_hostname() {
         assert!(!is_blocked_hostname("example.com"));
         assert!(!is_blocked_hostname("api.github.com"));
+    }
+
+    #[test]
+    fn blocks_idna_homograph_localhost() {
+        // Cyrillic 'о' (U+043E) instead of Latin 'o' — parsed as punycode by url crate.
+        // The decoded Unicode form must still match the blocklist.
+        assert!(
+            is_blocked_hostname("xn--localhst-"),
+            "punycode form of Cyrillic homograph should be blocked"
+        );
     }
 
     // --- Allowlist matching ---

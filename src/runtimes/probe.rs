@@ -83,7 +83,11 @@ fn probe_system_path(spec: &RuntimeSpec) -> Option<ProbeResult> {
 /// without the `which` binary).
 fn find_on_path(bin_name: &str) -> Option<PathBuf> {
     // 1. Try the native locator first (more reliable, handles aliases, etc.)
-    let locator = if cfg!(target_os = "windows") { "where" } else { "which" };
+    let locator = if cfg!(target_os = "windows") {
+        "where"
+    } else {
+        "which"
+    };
     trace!("looking for '{}' via {}", bin_name, locator);
     if let Ok(output) = Command::new(locator).arg(bin_name).output() {
         if output.status.success() {

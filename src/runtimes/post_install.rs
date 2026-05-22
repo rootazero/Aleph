@@ -68,7 +68,11 @@ async fn run_subcommand(
         let expanded = expand_home(td)?;
         if let Some(parent) = PathBuf::from(&expanded).parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                warn!("Failed to create target directory {}: {}", parent.display(), e);
+                warn!(
+                    "Failed to create target directory {}: {}",
+                    parent.display(),
+                    e
+                );
             }
         }
         cmd.arg(&expanded);

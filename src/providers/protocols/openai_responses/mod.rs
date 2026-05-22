@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 
 use crate::config::ProviderConfig;
-use crate::sync_primitives::Arc;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
 use crate::providers::delta::ProviderDelta;
@@ -16,6 +15,7 @@ use crate::providers::responses::shared;
 use crate::providers::responses::types::{
     ContextManagement, ResponsesRequest, StreamEvent, TextConfig,
 };
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};

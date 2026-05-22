@@ -61,6 +61,7 @@ impl SafeFetchRequest {
 }
 
 /// Response from `safe_fetch`.
+#[derive(Debug)]
 pub struct SafeFetchResponse {
     pub status: StatusCode,
     pub headers: HeaderMap,
@@ -193,13 +194,13 @@ pub async fn safe_fetch(
     // Redirect loop
     let mut visited: HashSet<String> = HashSet::new();
     visited.insert(current_url.to_string());
-    let mut redirect_count: u8 = 0;
+    let mut redirect_count: u16 = 0;
     let mut current_method = request.method;
     let mut current_headers = request.headers;
 
     while response.status().is_redirection() {
         redirect_count += 1;
-        if redirect_count > policy.max_redirects {
+        if redirect_count > u16::from(policy.max_redirects) {
             return Err(SsrfError::TooManyRedirects(policy.max_redirects));
         }
 
@@ -298,6 +299,9 @@ async fn bypass_fetch(
     url: &str,
     request: SafeFetchRequest,
 ) -> Result<SafeFetchResponse, SsrfError> {
+    let parsed = Url::parse(url).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
+    validate_scheme(&parsed)?;
+
     let client = reqwest::Client::builder()
         .timeout(request.timeout)
         .build()
@@ -453,5 +457,40 @@ mod tests {
         assert!(!headers.contains_key("cookie"));
         assert!(!headers.contains_key("proxy-authorization"));
         assert!(headers.contains_key("content-type"));
+    }
+
+    #[test]
+    fn bypass_fetch_rejects_file_scheme() {
+        // Even with SSRF disabled, bypass_fetch should reject non-http(s) schemes
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            bypass_fetch(
+                "file:///etc/passwd",
+                SafeFetchRequest::get(Duration::from_secs(5)),
+            )
+            .await
+        });
+        assert!(
+            matches!(result, Err(SsrfError::InvalidUrl(ref s)) if s.contains("unsupported scheme")),
+            "bypass_fetch should reject file:// scheme, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn bypass_fetch_rejects_gopher_scheme() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            bypass_fetch(
+                "gopher://example.com",
+                SafeFetchRequest::get(Duration::from_secs(5)),
+            )
+            .await
+        });
+        assert!(
+            matches!(result, Err(SsrfError::InvalidUrl(ref s)) if s.contains("unsupported scheme")),
+            "bypass_fetch should reject gopher:// scheme, got {:?}",
+            result
+        );
     }
 }

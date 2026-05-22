@@ -569,7 +569,13 @@ impl ScopedToolService {
                         async move {
                             let raw = match target {
                                 RoutingTarget::Subagent => {
-                                    let st = self.subagent_tool.as_ref().expect("checked above");
+                                    let st = self.subagent_tool.as_ref().ok_or_else(|| {
+                                        ToolError::Execution {
+                                            name: name_owned.clone(),
+                                            cause: "SubagentTool was checked above but is now None"
+                                                .into(),
+                                        }
+                                    })?;
                                     st.execute(input).await
                                 }
                                 RoutingTarget::Inner => {

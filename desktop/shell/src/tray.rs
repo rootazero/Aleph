@@ -14,8 +14,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Aleph", true, None::<&str>)?;
     // Dual-purpose: a manual update check until an update is found, then the
     // button to apply it — the auto-updater relabels it (see `update.rs`).
-    let update_item =
-        MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
+    let update_item = MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
     // Let the auto-updater relabel this item once an update is staged.
     app.state::<crate::update::Updater>()
         .attach_tray_item(update_item.clone());
