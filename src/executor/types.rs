@@ -83,7 +83,7 @@ impl ExecutionResult {
 
     /// Builder: set execution time from Duration
     pub fn with_execution_time(mut self, time: Duration) -> Self {
-        self.execution_time_ms = time.as_millis() as u64;
+        self.execution_time_ms = u64::try_from(time.as_millis()).unwrap_or(u64::MAX);
         self
     }
 
@@ -180,7 +180,7 @@ impl ToolCallRecord {
 
     /// Builder: set execution time from Duration
     pub fn with_execution_time(mut self, time: Duration) -> Self {
-        self.execution_time_ms = time.as_millis() as u64;
+        self.execution_time_ms = u64::try_from(time.as_millis()).unwrap_or(u64::MAX);
         self
     }
 
@@ -288,7 +288,7 @@ impl TaskExecutionResult {
 
     /// Builder: set execution time from Duration
     pub fn with_execution_time(mut self, time: Duration) -> Self {
-        self.execution_time_ms = time.as_millis() as u64;
+        self.execution_time_ms = u64::try_from(time.as_millis()).unwrap_or(u64::MAX);
         self
     }
 

@@ -2,13 +2,12 @@
 
 #![allow(dead_code)]
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock as RwLock};
 use lru::LruCache;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::time::Instant;
-use tokio::sync::RwLock;
 
 use super::action_types::ActionResult;
 

@@ -210,10 +210,8 @@ impl BuiltinToolRegistry {
             let sk_handle = search_tool.default_session_key_handle();
             let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
                 dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".aleph")
-                    .join("memory")
-                    .join("note")
+                    .map(|p| p.join(".aleph").join("memory").join("note"))
+                    .unwrap_or_else(|| std::env::temp_dir().join("aleph").join("memory").join("note"))
             });
             let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
             let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder));
@@ -228,10 +226,8 @@ impl BuiltinToolRegistry {
         } else if config.memory_db.is_some() {
             let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
                 dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".aleph")
-                    .join("memory")
-                    .join("note")
+                    .map(|p| p.join(".aleph").join("memory").join("note"))
+                    .unwrap_or_else(|| std::env::temp_dir().join("aleph").join("memory").join("note"))
             });
             let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
             info!("Created memory_browse tool (no embedder for memory_search)");
@@ -394,7 +390,9 @@ impl BuiltinToolRegistry {
                     .unwrap_or_else(|| {
                         Arc::new(
                             crate::gateway::SessionManager::with_defaults()
-                                .expect("fallback SessionManager for agent tools"),
+                                .unwrap_or_else(|e| {
+                                    panic!("fallback SessionManager for agent tools: {}", e)
+                                }),
                         )
                     });
                 let create = {
@@ -593,7 +591,9 @@ impl BuiltinToolRegistry {
                 .unwrap_or_else(|| {
                     Arc::new(
                         crate::gateway::SessionManager::with_defaults()
-                            .expect("fallback SessionManager for team tools"),
+                            .unwrap_or_else(|e| {
+                                panic!("fallback SessionManager for team tools: {}", e)
+                            }),
                     )
                 });
             let create = TeamCreateTool::new(
@@ -976,11 +976,8 @@ impl BuiltinToolRegistry {
         let note_manage_tool = if let Some(ref db) = config.memory_db {
             let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
                 dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".aleph")
-                    .join("data")
-                    .join("memory")
-                    .join("note")
+                    .map(|p| p.join(".aleph").join("data").join("memory").join("note"))
+                    .unwrap_or_else(|| std::env::temp_dir().join("aleph").join("data").join("memory").join("note"))
             });
             let mut tool =
                 crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone());
@@ -1240,7 +1237,7 @@ impl BuiltinToolRegistry {
             // boot (created alongside channels) — start the cell empty.
             clarification_manager_cell: Arc::new(tokio::sync::OnceCell::new()),
             clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool::new()
-                .expect("ClawHubTool::new() should not fail with standard config"),
+                .unwrap_or_else(|e| panic!("ClawHubTool::new() failed: {}", e)),
             gateway_route_tool: crate::builtin_tools::gateway_route::GatewayRouteTool::default(),
             task_create_tool,
             task_update_tool,
