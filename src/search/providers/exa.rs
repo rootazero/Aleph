@@ -31,6 +31,7 @@ struct ExaContents {
 
 #[derive(Deserialize)]
 struct ExaResponse {
+    #[serde(default)]
     results: Vec<ExaResult>,
 }
 

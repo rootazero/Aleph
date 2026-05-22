@@ -18,7 +18,8 @@ pub struct BraveProvider {
 
 #[derive(Deserialize)]
 struct BraveResponse {
-    web: BraveWeb,
+    #[serde(default)]
+    web: Option<BraveWeb>,
 }
 
 #[derive(Deserialize)]
@@ -69,7 +70,8 @@ impl SearchProvider for BraveProvider {
 
         let results = brave_response
             .web
-            .results
+            .map(|w| w.results)
+            .unwrap_or_default()
             .into_iter()
             .take(options.validated_max_results())
             .map(|r| SearchResult {

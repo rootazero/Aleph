@@ -72,7 +72,7 @@ impl SearchRegistry {
                     Ok(results) => return Ok(results),
                     Err(e) => {
                         let msg = format!("Provider '{}' failed: {}", self.default_provider, e);
-                        log::warn!("Search {}", msg);
+                        log::warn!("{}", msg);
                         errors.push(msg);
                     }
                 }
@@ -105,7 +105,7 @@ impl SearchRegistry {
                     }
                     Err(e) => {
                         let msg = format!("Provider '{}' failed: {}", provider_name, e);
-                        log::warn!("Search {}", msg);
+                        log::warn!("{}", msg);
                         errors.push(msg);
                     }
                 }
