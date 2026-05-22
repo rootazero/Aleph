@@ -139,10 +139,7 @@ impl SessionRecorder {
     ) -> Result<(), RecorderError> {
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| RecorderError::Lock(e.to_string()))?;
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         conn.execute(
             r#"
@@ -162,10 +159,7 @@ impl SessionRecorder {
     pub fn update_session(&self, session_id: &str) -> Result<(), RecorderError> {
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| RecorderError::Lock(e.to_string()))?;
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         conn.execute(
             r#"
@@ -190,10 +184,7 @@ impl SessionRecorder {
     ) -> Result<(), RecorderError> {
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| RecorderError::Lock(e.to_string()))?;
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Build dynamic update query
         // ?1 = now, then optional fields, last param = session_id
@@ -244,10 +235,7 @@ impl SessionRecorder {
     pub fn append_part(&self, session_id: &str, part: &SessionPart) -> Result<i64, RecorderError> {
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| RecorderError::Lock(e.to_string()))?;
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Get next sequence number for this session
         let sequence: i64 = conn
@@ -280,10 +268,7 @@ impl SessionRecorder {
 
     /// Get all parts for a session
     pub fn get_session_parts(&self, session_id: &str) -> Result<Vec<SessionPart>, RecorderError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| RecorderError::Lock(e.to_string()))?;
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut stmt = conn
             .prepare("SELECT part_data FROM session_parts WHERE session_id = ?1 ORDER BY sequence")
@@ -309,10 +294,7 @@ impl SessionRecorder {
 
     /// Get session info
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>, RecorderError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| RecorderError::Lock(e.to_string()))?;
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let result = conn.query_row(
             r#"

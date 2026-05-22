@@ -4,8 +4,9 @@
 //! Publishes: LoopContinue, LoopStop, ToolCallRequested
 
 use async_trait::async_trait;
-use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::RwLock;
+
+use crate::sync_primitives::{AtomicU32, Ordering};
 
 use crate::components::types::{ExecutionSession, ToolCallRecord};
 use crate::event::{

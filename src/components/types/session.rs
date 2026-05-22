@@ -1,6 +1,6 @@
 //! Execution session types
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicBool};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -126,7 +126,7 @@ pub struct ComponentContext {
     pub session: Arc<RwLock<ExecutionSession>>,
     pub tools: Arc<ToolRegistry>,
     pub bus: EventBus,
-    pub abort_signal: Arc<std::sync::atomic::AtomicBool>,
+    pub abort_signal: Arc<AtomicBool>,
     pub session_id: String,
 }
 
@@ -135,7 +135,7 @@ impl ComponentContext {
         session: Arc<RwLock<ExecutionSession>>,
         tools: Arc<ToolRegistry>,
         bus: EventBus,
-        abort_signal: Arc<std::sync::atomic::AtomicBool>,
+        abort_signal: Arc<AtomicBool>,
     ) -> Self {
         let session_id = uuid::Uuid::new_v4().to_string();
         Self {

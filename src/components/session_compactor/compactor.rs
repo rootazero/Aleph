@@ -4,6 +4,7 @@ use crate::components::types::{
     CompactionMarker, ExecutionSession, SessionPart, SessionStatus, SummaryPart,
 };
 use crate::event::CompactionInfo;
+use crate::sync_primitives::Arc;
 
 use super::config::{CompactionConfig, LlmCallback, PruneInfo, COMPACTION_PROMPT};
 use super::model_limits::TokenTracker;
@@ -41,12 +42,12 @@ pub struct SessionCompactor {
     /// Optional writer for raw memory pre-compress hooks (Spec 1 G1).
     /// When set, `replace_with_summary` will write a `RawMemory(PreCompress)` row
     /// carrying the chunk about to be dropped before draining it.
-    raw_memory_writer: Option<std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     /// Optional capture-filter registry (Spec 4 Task 6).
     /// When set, raw-memory writes go through `insert_with_capture_filter`.
     /// Task 11 will wire the real registry at startup; `None` falls back to
     /// direct `insert_raw_memory` (no behaviour change).
-    capture_registry: Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
 }
 
 impl Default for SessionCompactor {
@@ -96,7 +97,7 @@ impl SessionCompactor {
     /// rescue knowledge from it later.
     pub fn with_raw_memory_writer(
         mut self,
-        writer: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     ) -> Self {
         self.raw_memory_writer = Some(writer);
         self
@@ -109,7 +110,7 @@ impl SessionCompactor {
     /// server startup; leave `None` for unchanged behaviour in the interim.
     pub fn with_capture_registry(
         mut self,
-        registry: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+        registry: Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     ) -> Self {
         self.capture_registry = Some(registry);
         self
@@ -552,7 +553,7 @@ impl SessionCompactor {
         // Create summary part
         let summary_part = SessionPart::Summary(SummaryPart {
             content: summary,
-            original_count: compact_count as u32,
+            original_count: u32::try_from(compact_count).unwrap_or(u32::MAX),
             compacted_at: chrono::Utc::now().timestamp(),
         });
 
@@ -579,8 +580,7 @@ impl SessionCompactor {
                 let cap_agent = session.agent_id.clone();
                 let cap_session = session.id.clone();
                 // Erase to trait object once so both branches can share the same Arc.
-                let store: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
-                    writer;
+                let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> = writer;
                 if let Ok(rt) = tokio::runtime::Handle::try_current() {
                     rt.spawn(async move {
                         if let Some(registry) = registry_opt {
