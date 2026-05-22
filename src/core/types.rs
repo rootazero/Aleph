@@ -97,9 +97,18 @@ impl MediaAttachment {
         let size_bytes = match encoding {
             // Base64 encoding inflates size by ~33%; store original decoded size
             // Account for padding characters (=) at the end of base64 strings
+            // Strip whitespace (newlines, spaces) before calculating to handle
+            // PEM-style or RFC 2045 wrapped base64 strings correctly.
             ContentEncoding::Base64 => {
-                let padding = data.chars().rev().take(2).filter(|&c| c == '=').count();
-                ((data.len() - padding).saturating_mul(3) / 4) as u64
+                let clean_len = data.chars().filter(|c| !c.is_whitespace()).count();
+                let padding = data
+                    .chars()
+                    .rev()
+                    .filter(|c| !c.is_whitespace())
+                    .take(2)
+                    .filter(|&c| c == '=')
+                    .count();
+                ((clean_len - padding).saturating_mul(3) / 4) as u64
             }
             ContentEncoding::Utf8 => data.len() as u64,
         };
