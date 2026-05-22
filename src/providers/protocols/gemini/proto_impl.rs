@@ -2,6 +2,7 @@
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
+use crate::sync_primitives::Arc;
 use crate::providers::gemini::{Content, Part, ThinkingConfig};
 use crate::providers::message::UnifiedMessage;
 
@@ -12,7 +13,7 @@ impl GeminiProtocol {
     pub fn new(client: reqwest::Client) -> Self {
         Self {
             client,
-            stream_idle_timeout_secs: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+            stream_idle_timeout_secs: Arc::new(crate::sync_primitives::AtomicU64::new(
                 crate::providers::protocols::stream_idle::DEFAULT_STREAM_IDLE_SECS,
             )),
         }

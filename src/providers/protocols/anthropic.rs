@@ -68,7 +68,7 @@ pub struct AnthropicProtocol {
     /// single primitive: lock-free load/store is appropriate and avoids
     /// any contention between concurrent `build_request` and `stream_deltas`
     /// calls within the same protocol instance.
-    stream_idle_timeout_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    stream_idle_timeout_secs: Arc<crate::sync_primitives::AtomicU64>,
 }
 
 mod adapter;

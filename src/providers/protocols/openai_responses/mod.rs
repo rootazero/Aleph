@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use crate::config::ProviderConfig;
+use crate::sync_primitives::Arc;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
 use crate::providers::delta::ProviderDelta;
@@ -608,7 +609,42 @@ fn parse_sse_event_multi(
             );
         }
 
-        _ => {}
+        StreamEvent::Created { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "response.created — lifecycle event, no canonical delta emitted"
+            );
+        }
+        StreamEvent::InProgress { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "response.in_progress — lifecycle event, no canonical delta emitted"
+            );
+        }
+        StreamEvent::ContentPartAdded { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "response.content_part.added — boundary marker, no canonical delta emitted"
+            );
+        }
+        StreamEvent::ContentPartDone { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "response.content_part.done — boundary marker, no canonical delta emitted"
+            );
+        }
+        StreamEvent::OutputItemAdded { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "response.output_item.added — non-tool item, no canonical delta emitted"
+            );
+        }
+        StreamEvent::OutputItemDone { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "response.output_item.done — non-tool item, no canonical delta emitted"
+            );
+        }
     }
 }
 
