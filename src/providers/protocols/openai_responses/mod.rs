@@ -80,7 +80,7 @@ pub struct OpenAiResponsesProtocol {
     /// `ProviderConfig.stream_idle_timeout_secs` in `build_request` and read
     /// in `stream_deltas`. An `AtomicU64` because `&self` is shared (`Arc`)
     /// and the value must cross into the `'static` stream closure.
-    stream_idle_timeout_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    stream_idle_timeout_secs: Arc<crate::sync_primitives::AtomicU64>,
 }
 
 impl OpenAiResponsesProtocol {
@@ -89,7 +89,7 @@ impl OpenAiResponsesProtocol {
         Self {
             client,
             variant,
-            stream_idle_timeout_secs: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+            stream_idle_timeout_secs: Arc::new(crate::sync_primitives::AtomicU64::new(
                 crate::providers::protocols::stream_idle::DEFAULT_STREAM_IDLE_SECS,
             )),
         }
