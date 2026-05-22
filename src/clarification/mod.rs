@@ -154,7 +154,7 @@ impl ClarificationRequest {
             options: Some(options),
             groups: None,
             default_value: if has_options {
-                Some("0".to_string())
+                Some("1".to_string())
             } else {
                 None
             },
@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(request.clarification_type, ClarificationType::Select);
         assert!(request.options.is_some());
         assert_eq!(request.options.as_ref().unwrap().len(), 2);
-        assert_eq!(request.default_value, Some("0".to_string()));
+        assert_eq!(request.default_value, Some("1".to_string()));
     }
 
     #[test]

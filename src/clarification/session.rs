@@ -144,25 +144,33 @@ impl ClarificationManager {
     /// Returns the number of entries reaped.
     pub async fn cleanup_expired(&self) -> usize {
         let mut pending = self.pending.write().await;
-        let expired: Vec<String> = pending
-            .iter()
-            .filter(|(_, e)| e.is_expired())
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in &expired {
-            if let Some(mut entry) = pending.remove(key) {
+        let mut count = 0;
+        pending.retain(|_, entry| {
+            if entry.is_expired() {
                 if let Some(sender) = entry.sender.take() {
                     let _ = sender.send(ClarificationResult::timeout());
                 }
+                count += 1;
+                false
+            } else {
+                true
             }
-        }
-        expired.len()
+        });
+        count
     }
 }
+
+/// Maximum length of a user reply before truncation.
+const MAX_REPLY_LENGTH: usize = 10_000;
 
 /// Map a user's free-text reply onto a [`ClarificationResult`] for `request`.
 fn interpret_reply(request: &ClarificationRequest, reply: &str) -> ClarificationResult {
     let trimmed = reply.trim();
+    let trimmed = if trimmed.len() > MAX_REPLY_LENGTH {
+        &trimmed[..MAX_REPLY_LENGTH]
+    } else {
+        trimmed
+    };
 
     match request.clarification_type {
         ClarificationType::Select => {
@@ -202,7 +210,7 @@ fn interpret_reply(request: &ClarificationRequest, reply: &str) -> Clarification
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clarification::ClarificationOption;
+    use crate::clarification::{ClarificationOption, ClarificationResultType};
 
     fn text_request() -> ClarificationRequest {
         ClarificationRequest::text("ask-1", "Which language?", None)
@@ -340,5 +348,57 @@ mod tests {
         // The clone sees the same pending entry.
         assert!(clone.has_pending("sess-h").await);
         assert!(clone.resolve("sess-h", "via clone").await);
+    }
+
+    #[tokio::test]
+    async fn resolve_whitespace_only_reply_falls_back_to_text() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-ws", select_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+
+        assert!(mgr.resolve("sess-ws", "   ").await);
+        let result = rx.await.unwrap();
+        assert_eq!(result.result_type, ClarificationResultType::TextInput);
+        assert_eq!(result.get_value(), Some(""));
+    }
+
+    #[tokio::test]
+    async fn resolve_after_cancel_returns_false() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-cancel", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+
+        assert!(mgr.cancel("sess-cancel").await);
+        assert!(!mgr.resolve("sess-cancel", "reply").await);
+        let result = rx.await.unwrap();
+        assert_eq!(result.result_type, ClarificationResultType::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn cleanup_after_resolve_is_noop() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-clean", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+
+        assert!(mgr.resolve("sess-clean", "reply").await);
+        assert_eq!(mgr.cleanup_expired().await, 0);
+        let result = rx.await.unwrap();
+        assert_eq!(result.get_value(), Some("reply"));
+    }
+
+    #[tokio::test]
+    async fn resolve_long_reply_truncates() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-long", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+
+        let long_reply = "x".repeat(MAX_REPLY_LENGTH + 100);
+        assert!(mgr.resolve("sess-long", &long_reply).await);
+        let result = rx.await.unwrap();
+        assert_eq!(result.get_value(), Some("x".repeat(MAX_REPLY_LENGTH).as_str()));
     }
 }
