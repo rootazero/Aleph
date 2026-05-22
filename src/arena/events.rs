@@ -52,7 +52,10 @@ impl ArenaEvent {
             ArenaEvent::ArtifactPublished { .. } | ArenaEvent::StageCompleted { .. } => {
                 ArenaEventTier::Critical
             }
-            _ => ArenaEventTier::Important,
+            ArenaEvent::ProgressUpdated { .. }
+            | ArenaEvent::MergeRequested { .. }
+            | ArenaEvent::ConflictDetected { .. }
+            | ArenaEvent::SettlingStarted { .. } => ArenaEventTier::Important,
         }
     }
 

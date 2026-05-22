@@ -132,6 +132,9 @@ impl ArenaHandle {
     /// Create a snapshot of the arena state suitable for swarm context injection.
     ///
     /// Returns `(arena_id, goal, active_agents, completed_steps, total_steps, latest_artifacts)`.
+    ///
+    /// TODO: With many participants and artifacts, collecting and sorting all artifacts
+    /// in-memory may cause latency. Consider streaming or heap-based top-N extraction.
     pub fn snapshot_for_context(&self) -> (String, String, Vec<String>, usize, usize, Vec<String>) {
         let arena = self.arena.read().unwrap_or_else(|e| e.into_inner());
         let arena_id = arena.id().to_string();

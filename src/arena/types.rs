@@ -295,15 +295,15 @@ impl ArenaManifest {
                 for stage in &stages {
                     if !participant_ids.contains(&stage.agent_id) {
                         return Err(format!(
-                            "Stage '{}' is assigned to '{}', but '{}' is not a participant",
-                            stage.agent_id, stage.agent_id, stage.agent_id
+                            "Stage agent '{}' is not a participant",
+                            stage.agent_id
                         ));
                     }
                     for dep in &stage.depends_on {
                         if !participant_ids.contains(dep) {
                             return Err(format!(
-                                "Stage '{}' depends on '{}', but '{}' is not a participant",
-                                stage.agent_id, dep, dep
+                                "Stage '{}' depends on '{}' who is not a participant",
+                                stage.agent_id, dep
                             ));
                         }
                     }
@@ -692,7 +692,7 @@ mod tests {
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
-            .contains("is assigned to 'nonexistent', but 'nonexistent' is not a participant"));
+            .contains("Stage agent 'nonexistent' is not a participant"));
     }
 
     #[test]
@@ -719,7 +719,7 @@ mod tests {
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
-            .contains("depends on 'nonexistent', but 'nonexistent' is not a participant"));
+            .contains("depends on 'nonexistent' who is not a participant"));
     }
 
     #[test]

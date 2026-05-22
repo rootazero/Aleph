@@ -96,6 +96,8 @@ pub fn update_arena_status(
     Ok(())
 }
 
+/// TODO: This API only loads `goal` and `status`. Expand to load all columns
+/// (strategy, participants, created_by, created_at) if full ArenaManifest reconstruction is needed.
 pub fn load_arena(
     db: &StateDatabase,
     arena_id: &ArenaId,
@@ -149,6 +151,8 @@ pub fn save_artifact(
     Ok(())
 }
 
+/// TODO: This API only loads `id` and `content`. Expand to load `kind`, `reference`,
+/// and `created_at` if full Artifact reconstruction is needed.
 pub fn load_artifacts(
     db: &StateDatabase,
     arena_id: &ArenaId,
