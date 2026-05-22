@@ -142,7 +142,10 @@ fn render_markdown(o: &FlowOutcome) -> String {
     }
 
     if !o.tool_timeline.is_empty() {
-        out.push_str(&format!("\n**Tools** ({} calls)\n\n", o.tool_timeline.len()));
+        out.push_str(&format!(
+            "\n**Tools** ({} calls)\n\n",
+            o.tool_timeline.len()
+        ));
         out.push_str("| # | Tool | Duration | Result |\n");
         out.push_str("|---|------|----------|--------|\n");
         for (i, inv) in o.tool_timeline.iter().enumerate() {
@@ -279,7 +282,10 @@ fn format_token_breakdown(o: &FlowOutcome) -> String {
         parts.push(format!("cache {}", format_token_count(cache_total)));
     }
     if b.reasoning > 0 {
-        parts.push(format!("reasoning {}", format_token_count(b.reasoning.into())));
+        parts.push(format!(
+            "reasoning {}",
+            format_token_count(b.reasoning.into())
+        ));
     }
     if parts.is_empty() {
         "no breakdown".into()
@@ -289,11 +295,7 @@ fn format_token_breakdown(o: &FlowOutcome) -> String {
 }
 
 fn format_tool_glyph(inv: &ToolInvocation) -> String {
-    let mark = if inv.success {
-        "\u{2713}"
-    } else {
-        "\u{2718}"
-    };
+    let mark = if inv.success { "\u{2713}" } else { "\u{2718}" };
     format!(
         "{emoji} {name} ({dur}) {mark}",
         emoji = emoji_for(&inv.name),

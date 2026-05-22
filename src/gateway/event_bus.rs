@@ -484,8 +484,7 @@ mod tests {
             health: 2,
             config: 0,
         };
-        let ev = TopicEvent::new("presence.joined", serde_json::json!({}))
-            .with_state_version(snap);
+        let ev = TopicEvent::new("presence.joined", serde_json::json!({})).with_state_version(snap);
         assert_eq!(ev.state_version, Some(snap));
 
         let json = serde_json::to_string(&ev).unwrap();

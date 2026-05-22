@@ -73,7 +73,11 @@ pub struct CostBreakdown {
 
 /// Estimate USD cost for a model + token counts. Returns None if the model
 /// name does not match any known pricing entry.
-pub fn estimate_cost(model_name: &str, input_tokens: u64, output_tokens: u64) -> Option<CostBreakdown> {
+pub fn estimate_cost(
+    model_name: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+) -> Option<CostBreakdown> {
     let needle = model_name.to_ascii_lowercase();
     let entry = PRICING_TABLE
         .iter()

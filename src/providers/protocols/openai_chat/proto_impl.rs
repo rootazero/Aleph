@@ -2,13 +2,13 @@
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
+use crate::providers::message::ContentBlock as UCB;
 use crate::providers::message::UnifiedMessage;
+use crate::providers::openai::types::{OpenAiFunctionCallOut, OpenAiToolCallOut};
 use crate::providers::openai::{
     ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent,
 };
 use crate::providers::openai::{OpenAiFunctionCall, OpenAiToolCall};
-use crate::providers::openai::types::{OpenAiFunctionCallOut, OpenAiToolCallOut};
-use crate::providers::message::ContentBlock as UCB;
 
 use super::{sanitize_tool_name, OpenAiProtocol};
 
@@ -53,7 +53,10 @@ impl OpenAiProtocol {
     }
 
     /// Convert UnifiedMessages to OpenAI Messages
-    pub(super) fn convert_messages(messages: &[UnifiedMessage], system_prompt: Option<&str>) -> Vec<Message> {
+    pub(super) fn convert_messages(
+        messages: &[UnifiedMessage],
+        system_prompt: Option<&str>,
+    ) -> Vec<Message> {
         let mut result = Vec::new();
 
         // Add system message if provided
@@ -76,7 +79,7 @@ impl OpenAiProtocol {
                                 }
                                 UCB::Image { data, mime_type } => Some(OaiContentBlock::ImageUrl {
                                     image_url: ImageUrl {
-                                        url: format!("data:{};base64,{}" , mime_type, data),
+                                        url: format!("data:{};base64,{}", mime_type, data),
                                         detail: Some("auto".to_string()),
                                     },
                                 }),
@@ -132,17 +135,14 @@ impl OpenAiProtocol {
                                 name,
                                 arguments,
                                 ..
-                            } => {
-                                Some(OpenAiToolCall {
-                                    id: id.clone(),
-                                    call_type: Some("function".to_string()),
-                                    function: OpenAiFunctionCall {
-                                        name: sanitize_tool_name(name),
-                                        arguments: serde_json::to_string(arguments)
-                                            .unwrap_or_default(),
-                                    },
-                                })
-                            }
+                            } => Some(OpenAiToolCall {
+                                id: id.clone(),
+                                call_type: Some("function".to_string()),
+                                function: OpenAiFunctionCall {
+                                    name: sanitize_tool_name(name),
+                                    arguments: serde_json::to_string(arguments).unwrap_or_default(),
+                                },
+                            }),
                             _ => None,
                         })
                         .collect();

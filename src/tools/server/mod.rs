@@ -17,9 +17,9 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::dispatcher::ToolDefinition;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
+use crate::tool_metadata::ToolDefinition;
 use crate::tools::traits::AlephToolDyn;
 use crate::tools::types::{ToolRepairInfo, ToolUpdateInfo};
 

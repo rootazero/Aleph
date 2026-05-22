@@ -32,6 +32,8 @@ pub use tokio::sync::RwLock as AsyncRwLock;
 pub use loom::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "loom")]
 pub use loom::sync::{Mutex, MutexGuard, RwLock};
+#[cfg(feature = "loom")]
+pub use std::sync::{PoisonError, RwLockWriteGuard};
 
 #[cfg(not(feature = "loom"))]
 #[allow(unused_imports)] // AtomicUsize used by test code only

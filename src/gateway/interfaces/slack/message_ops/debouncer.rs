@@ -1,6 +1,4 @@
-use crate::gateway::channel::{
-    InboundMessage, InboundMessageSender,
-};
+use crate::gateway::channel::{InboundMessage, InboundMessageSender};
 use std::time::Duration;
 
 /// Debounce entry for coalescing rapid messages.

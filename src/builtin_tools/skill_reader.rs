@@ -217,7 +217,9 @@ impl ReadSkillTool {
         }
         let path = std::path::Path::new(file_name);
         if path.is_absolute() {
-            return Err(ToolError::InvalidArgs("file_name cannot be absolute".into()));
+            return Err(ToolError::InvalidArgs(
+                "file_name cannot be absolute".into(),
+            ));
         }
         for component in path.components() {
             match component {

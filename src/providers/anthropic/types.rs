@@ -418,8 +418,12 @@ mod tests {
             thinking: None,
             tools: None,
             service_tier: Some("auto".to_string()),
-            metadata: Some(Metadata { user_id: Some("u_42".to_string()) }),
-            output_config: Some(OutputConfig { effort: Some("high".to_string()) }),
+            metadata: Some(Metadata {
+                user_id: Some("u_42".to_string()),
+            }),
+            output_config: Some(OutputConfig {
+                effort: Some("high".to_string()),
+            }),
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["model"], "claude-3-5-sonnet");

@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
-use crate::dispatcher::{ToolSource, UnifiedTool};
+use crate::builtin_tools::skill_reader::{
+    ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
+};
 use crate::builtin_tools::{
     AutomationTool, CodeExecTool, DesktopTool, FileEditTool, FileReadTool, FileWriteTool,
     MediaTool, PdfGenerateTool, PermissionTool, PimTool, ReadConfigGuideTool, ScratchpadTool,
     SearchTool, SelfManageTool, SystemTool,
 };
-use crate::builtin_tools::skill_reader::{
-    ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
-};
+use crate::tool_metadata::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
 
 use super::BuiltinToolRegistry;
@@ -211,7 +211,7 @@ impl BuiltinToolRegistry {
             "media_send",
             crate::builtin_tools::media_send::MediaSendTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::media_send::MediaSendArgs))
-            .unwrap_or_default(),
+                .unwrap_or_default(),
         );
     }
 }

@@ -194,13 +194,7 @@ mod tests {
             enabled: Some(false),
             scope_override: None,
         };
-        let e = SkillStatusEntry::build(
-            &m,
-            &EligibilityResult::Eligible,
-            Some(&cfg),
-            false,
-            None,
-        );
+        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, Some(&cfg), false, None);
         assert!(e.disabled);
     }
 
@@ -244,13 +238,7 @@ mod tests {
             view_count: 2,
             ..Default::default()
         };
-        let e = SkillStatusEntry::build(
-            &m,
-            &EligibilityResult::Eligible,
-            None,
-            false,
-            Some(stats),
-        );
+        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false, Some(stats));
         let u = e.usage.expect("usage should pass through");
         assert_eq!(u.use_count, 5);
         assert_eq!(u.view_count, 2);

@@ -807,10 +807,9 @@ CONFIDENCE: 0.75
 REASON: Financial analyst can help with market data analysis";
 
     let provider = Arc::new(MockRoutingProvider::new(mock_response));
-    let llm_matcher: Arc<dyn LlmMatcher> =
-        Arc::new(SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn crate::providers::AiProvider>),
-        )));
+    let llm_matcher: Arc<dyn LlmMatcher> = Arc::new(SemanticLlmMatcher::new(Arc::new(
+        crate::providers::StaticDefault::new(provider as Arc<dyn crate::providers::AiProvider>),
+    )));
 
     let router = SmartRouter::new(resolver).with_llm_matcher(llm_matcher);
 

@@ -7,8 +7,8 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::dispatcher::UnifiedTool;
 use crate::executor::ToolRegistry;
+use crate::tool_metadata::UnifiedTool;
 
 use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
 
@@ -169,8 +169,8 @@ pub fn build_registry_from_tools<R: ToolRegistry + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::ToolSource;
     use crate::executor::ToolRegistry;
+    use crate::tool_metadata::ToolSource;
     use serde_json::json;
     use std::collections::HashMap;
     use std::future::Future;

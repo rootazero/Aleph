@@ -85,9 +85,7 @@ pub fn migrate_dream_reports_drop_legacy_fields(conn: &Connection) -> Result<(),
 ///
 /// Checks column existence first, so it is safe to call on fresh or already-
 /// migrated databases (i.e. fully idempotent).
-pub(crate) fn migrate_dream_reports_drop_legacy_cols(
-    conn: &Connection,
-) -> Result<(), AlephError> {
+pub(crate) fn migrate_dream_reports_drop_legacy_cols(conn: &Connection) -> Result<(), AlephError> {
     let legacy_cols = [
         "facts_collected",
         "clusters_found",
@@ -165,9 +163,7 @@ pub fn drop_obsolete_facts_tables(conn: &Connection) -> Result<(), AlephError> {
 /// existing `main` row, the `main` row wins (INSERT OR IGNORE). The
 /// `default` row's content is dropped, since `main` is the canonical,
 /// canvas-visible source of truth.
-pub(crate) fn migrate_unify_default_to_main_agent(
-    conn: &Connection,
-) -> Result<(), AlephError> {
+pub(crate) fn migrate_unify_default_to_main_agent(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(
         "INSERT OR IGNORE INTO notes_index
             (path, filename, agent_id, category, tags_json,

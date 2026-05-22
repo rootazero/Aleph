@@ -6,9 +6,9 @@
 use serde_json::Value;
 
 use super::ToolMap;
-use crate::dispatcher::ToolDefinition;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
+use crate::tool_metadata::ToolDefinition;
 use crate::tools::traits::AlephToolDyn;
 use crate::tools::types::ToolUpdateInfo;
 

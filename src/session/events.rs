@@ -272,7 +272,9 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let parsed: SessionEvent = serde_json::from_str(&json).unwrap();
         match parsed {
-            SessionEvent::SessionForked { parent_session_id, .. } => {
+            SessionEvent::SessionForked {
+                parent_session_id, ..
+            } => {
                 assert_eq!(parent_session_id, "agent:a/main:k:s2");
             }
             other => panic!("expected SessionForked, got {other:?}"),

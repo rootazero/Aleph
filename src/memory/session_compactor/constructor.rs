@@ -1,4 +1,4 @@
-use super::{SessionCompactor, CompactorMetrics, SessionCompactorConfig};
+use super::{CompactorMetrics, SessionCompactor, SessionCompactorConfig};
 use crate::memory::store::MemoryBackend;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
@@ -38,13 +38,19 @@ impl SessionCompactor {
     }
 
     /// Attach an optional raw-memory writer for pre-compress hooks.
-    pub fn with_raw_memory_writer(mut self, writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>) -> Self {
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) -> Self {
         self.raw_memory_writer = Some(writer);
         self
     }
 
     /// Attach a capture-filter registry.
-    pub fn with_capture_registry(mut self, registry: Arc<crate::memory::extensions::MemoryExtensionRegistry>) -> Self {
+    pub fn with_capture_registry(
+        mut self,
+        registry: Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+    ) -> Self {
         if let Some(indexer) = self.indexer.take() {
             self.indexer = Some(indexer.with_capture_registry(registry.clone()));
         }

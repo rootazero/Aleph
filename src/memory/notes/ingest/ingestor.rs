@@ -286,7 +286,10 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
         if let Some(em) = &self.embedding_manager {
             for path in &report.touched_paths {
                 let safe_path = path.replace("..", "").replace('\\', "/");
-                let file = self.memory_dir.join(agent_id).join(format!("{safe_path}.md"));
+                let file = self
+                    .memory_dir
+                    .join(agent_id)
+                    .join(format!("{safe_path}.md"));
                 match tokio::fs::read_to_string(&file).await {
                     Ok(content) => {
                         em.push_pending(agent_id, path, &content).await;
@@ -773,8 +776,6 @@ mod plan_tests {
 
     #[tokio::test]
     async fn end_to_end_append_on_existing() {
-        
-
         let (dir, backend, indexer) = mk().await;
 
         // Seed: create learning/rust-async first

@@ -4,7 +4,7 @@
 //! - manifest.json doesn't exist (first install or upgrade from old version)
 //! - bundled_version differs from manifest's bundled_version
 
-use super::manifest::{SkillEntry, InstallRegistry, SkillOrigin};
+use super::manifest::{InstallRegistry, SkillEntry, SkillOrigin};
 use super::{BUNDLED_PLUGINS, BUNDLED_SKILLS, BUNDLED_VERSION};
 use include_dir::Dir;
 use std::path::Path;
@@ -107,7 +107,12 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
         let name = name_os.to_string_lossy().to_string();
 
         // Defensive: reject empty or path-traversal directory names
-        if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        if name.is_empty()
+            || name == "."
+            || name == ".."
+            || name.contains('/')
+            || name.contains('\\')
+        {
             warn!(skill = %name, "Skipping bundled skill with invalid name");
             continue;
         }

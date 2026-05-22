@@ -1,7 +1,7 @@
 use super::MemoryContextProvider;
 use crate::config::types::memory::MemoryInjectionMode;
-use crate::memory::assembler::AssemblyBudget;
 use crate::memory::assembler::render::{render_with, RenderStyle};
+use crate::memory::assembler::AssemblyBudget;
 use crate::providers::message::UnifiedMessage;
 
 impl MemoryContextProvider {

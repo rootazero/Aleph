@@ -248,13 +248,20 @@ mod tests {
         let (store, base) = test_store("budget_none");
         let big = "x".repeat(60_000);
         let out = apply_result_budget("c2", "read_file", &big, Some(&store), None);
-        assert!(out.persisted_path.is_none(), "must not persist when budget is None");
+        assert!(
+            out.persisted_path.is_none(),
+            "must not persist when budget is None"
+        );
         assert!(
             !out.text.starts_with("[Full output persisted:"),
-            "should be truncated, got: {}", &out.text[..80.min(out.text.len())]
+            "should be truncated, got: {}",
+            &out.text[..80.min(out.text.len())]
         );
         // The store directory should remain empty.
-        let entries: Vec<_> = std::fs::read_dir(&base).unwrap().filter_map(|e| e.ok()).collect();
+        let entries: Vec<_> = std::fs::read_dir(&base)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
         assert_eq!(entries.len(), 0, "no file should be written");
     }
 
@@ -265,10 +272,14 @@ mod tests {
         let out = apply_result_budget("c3", "bash", &big, Some(&store), Some(100));
         assert!(
             out.text.starts_with("[Full output persisted:"),
-            "expected marker, got: {}", &out.text[..80.min(out.text.len())]
+            "expected marker, got: {}",
+            &out.text[..80.min(out.text.len())]
         );
         assert!(out.persisted_path.is_some());
-        let entries: Vec<_> = std::fs::read_dir(&base).unwrap().filter_map(|e| e.ok()).collect();
+        let entries: Vec<_> = std::fs::read_dir(&base)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
         assert_eq!(entries.len(), 1, "exactly one file should be written");
     }
 
@@ -280,7 +291,8 @@ mod tests {
         assert!(!out.text.starts_with("[Full output persisted:"));
         assert!(
             out.text.contains("[output truncated"),
-            "expected truncate marker: {}", &out.text[..120.min(out.text.len())]
+            "expected truncate marker: {}",
+            &out.text[..120.min(out.text.len())]
         );
     }
 
@@ -296,7 +308,11 @@ mod tests {
         let text = format!("HEAD{}TAIL", "x".repeat(80_000));
         let out = truncate_with_budget(&text, 100);
         assert!(out.starts_with("HEAD"), "head missing: {}", &out[..80]);
-        assert!(out.ends_with("TAIL"), "tail missing: {}", &out[out.len() - 80..]);
+        assert!(
+            out.ends_with("TAIL"),
+            "tail missing: {}",
+            &out[out.len() - 80..]
+        );
         assert!(out.contains("[output truncated"));
     }
 }

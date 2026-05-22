@@ -64,7 +64,8 @@ impl FlowRunTool {
         input: FlowRunInput,
         ctx: FlowRunContext,
     ) -> Result<String, FlowError> {
-        if ctx.current_depth >= MAX_FLOW_DEPTH {
+        // Consistent with resolver::depth_guard: depth > MAX_FLOW_DEPTH is rejected.
+        if ctx.current_depth > MAX_FLOW_DEPTH {
             return Err(FlowError::RecursionLimit {
                 max: MAX_FLOW_DEPTH,
             });

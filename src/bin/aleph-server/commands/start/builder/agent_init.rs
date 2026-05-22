@@ -36,7 +36,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
-    pub dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
+    pub dispatch_registry: Option<Arc<alephcore::tool_metadata::ToolRegistry>>,
     pub embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     pub compression_service:
         Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
@@ -119,7 +119,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
-    let dispatch_reg: Option<Arc<alephcore::dispatcher::ToolRegistry>>;
+    let dispatch_reg: Option<Arc<alephcore::tool_metadata::ToolRegistry>>;
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     let mut compression_out: Option<
         std::sync::Arc<alephcore::memory::compression::CompressionService>,
@@ -830,8 +830,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
 
-        use alephcore::dispatcher::{ToolSource, UnifiedTool};
         use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
+        use alephcore::tool_metadata::{ToolSource, UnifiedTool};
         let mut tools: Vec<UnifiedTool> = BUILTIN_TOOL_DEFINITIONS
             .iter()
             .map(|def| {
@@ -1768,8 +1768,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // Create unified dispatch registry (command discovery + resolution)
     // This is independent of the AI provider — it only maps command names to metadata.
     {
-        use alephcore::dispatcher::ToolRegistry as DispatchRegistry;
         use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
+        use alephcore::tool_metadata::ToolRegistry as DispatchRegistry;
 
         let dispatch_registry = Arc::new(DispatchRegistry::new());
 
@@ -1778,7 +1778,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // Also register executor builtin tools as commands (search, screenshot, ocr, etc.)
         for def in BUILTIN_TOOL_DEFINITIONS {
-            use alephcore::dispatcher::{ToolSource as DToolSource, UnifiedTool as DUnifiedTool};
+            use alephcore::tool_metadata::{
+                ToolSource as DToolSource, UnifiedTool as DUnifiedTool,
+            };
             let tool = DUnifiedTool::new(
                 format!("builtin:{}", def.name),
                 def.name,

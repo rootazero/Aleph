@@ -1,11 +1,11 @@
 use super::*;
-use std::collections::HashMap;
-use reqwest::Client;
 use crate::config::ProviderConfig;
 use crate::providers::adapter::{RequestPayload, StopReason};
 use crate::providers::delta::ProviderDelta;
 use crate::providers::responses::shared;
 use crate::providers::responses::types::{InputItem, MessageContent, StreamEvent};
+use reqwest::Client;
+use std::collections::HashMap;
 
 #[test]
 fn openai_responses_usage_deserializes_cache_and_reasoning_tokens() {
@@ -97,8 +97,7 @@ fn test_default_variant() {
 #[test]
 fn test_build_endpoint_default() {
     let config = ProviderConfig::test_config("gpt-4o");
-    let endpoint =
-        OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
+    let endpoint = OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
     assert_eq!(endpoint, "https://api.openai.com/v1/responses");
 }
 
@@ -106,8 +105,7 @@ fn test_build_endpoint_default() {
 fn test_build_endpoint_custom() {
     let mut config = ProviderConfig::test_config("gpt-4o");
     config.base_url = Some("https://custom.api.com/v1".to_string());
-    let endpoint =
-        OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
+    let endpoint = OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
     assert_eq!(endpoint, "https://custom.api.com/v1/responses");
 }
 
@@ -115,8 +113,7 @@ fn test_build_endpoint_custom() {
 fn test_build_endpoint_openrouter() {
     let mut config = ProviderConfig::test_config("gpt-4o");
     config.base_url = Some("https://openrouter.ai/api/v1".to_string());
-    let endpoint =
-        OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
+    let endpoint = OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
     assert_eq!(endpoint, "https://openrouter.ai/api/v1/responses");
 }
 
@@ -124,8 +121,7 @@ fn test_build_endpoint_openrouter() {
 fn test_build_endpoint_trailing_slash() {
     let mut config = ProviderConfig::test_config("gpt-4o");
     config.base_url = Some("https://api.example.com/v1/".to_string());
-    let endpoint =
-        OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
+    let endpoint = OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
     assert_eq!(endpoint, "https://api.example.com/v1/responses");
 }
 
@@ -407,7 +403,11 @@ fn responses_reasoning_summary_text_done_emits_no_delta() {
     let mut out = std::collections::VecDeque::new();
     let mut tracker = Default::default();
     super::parse_sse_event_multi(json, &mut tracker, &mut out);
-    assert_eq!(out.len(), 0, "text.done should not emit (already accumulated)");
+    assert_eq!(
+        out.len(),
+        0,
+        "text.done should not emit (already accumulated)"
+    );
 }
 
 #[test]
@@ -440,7 +440,11 @@ fn responses_reasoning_text_done_emits_no_delta() {
     let mut out = std::collections::VecDeque::new();
     let mut tracker = Default::default();
     super::parse_sse_event_multi(json, &mut tracker, &mut out);
-    assert_eq!(out.len(), 0, "reasoning_text.done should not emit (already accumulated)");
+    assert_eq!(
+        out.len(),
+        0,
+        "reasoning_text.done should not emit (already accumulated)"
+    );
 }
 
 // ─── top-level error frame handling ──────────────────────────────────
@@ -749,7 +753,8 @@ fn test_parse_sse_event_tool_call_start() {
 fn test_parse_sse_event_arg_delta_requires_mapping() {
     let mut map = HashMap::new();
     // Without the mapping, arg delta produces no output
-    let data = r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"q\":"}"#;
+    let data =
+        r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"q\":"}"#;
     let delta = drain_one(data, &mut map);
     assert!(
         delta.is_none(),
@@ -824,9 +829,8 @@ fn test_include_default_for_official_endpoint() {
     let variant = ResponsesVariant::default();
     let config = ProviderConfig::test_config("o3-mini");
 
-    let request = OpenAiResponsesProtocol::build_responses_request(
-        &payload, "o3-mini", &variant, &config,
-    );
+    let request =
+        OpenAiResponsesProtocol::build_responses_request(&payload, "o3-mini", &variant, &config);
     assert!(request.include.is_some());
     assert!(request
         .include
@@ -843,9 +847,8 @@ fn test_include_none_for_third_party() {
     let mut config = ProviderConfig::test_config("o3-mini");
     config.base_url = Some("https://openrouter.ai/api/v1".to_string());
 
-    let request = OpenAiResponsesProtocol::build_responses_request(
-        &payload, "o3-mini", &variant, &config,
-    );
+    let request =
+        OpenAiResponsesProtocol::build_responses_request(&payload, "o3-mini", &variant, &config);
     assert!(request.include.is_none());
 }
 
@@ -880,9 +883,8 @@ fn responses_text_merges_format_into_variant_verbosity() {
     let msgs = [];
     let payload = RequestPayload::new(&msgs);
     let variant = standard_variant_with_verbosity("medium");
-    let req = OpenAiResponsesProtocol::build_responses_request(
-        &payload, "gpt-4o", &variant, &config,
-    );
+    let req =
+        OpenAiResponsesProtocol::build_responses_request(&payload, "gpt-4o", &variant, &config);
 
     let text = req.text.expect("text should be populated");
     assert!(matches!(text.format, Some(TextFormat::JsonObject)));
@@ -896,9 +898,8 @@ fn responses_text_passes_through_when_no_response_format() {
     let msgs = [];
     let payload = RequestPayload::new(&msgs);
     let variant = standard_variant_with_verbosity("low");
-    let req = OpenAiResponsesProtocol::build_responses_request(
-        &payload, "gpt-4o", &variant, &config,
-    );
+    let req =
+        OpenAiResponsesProtocol::build_responses_request(&payload, "gpt-4o", &variant, &config);
 
     let text = req.text.expect("text should be the variant's original");
     assert!(text.format.is_none());
@@ -913,9 +914,8 @@ fn responses_parallel_tool_calls_respects_config_some_false() {
     let msgs = [];
     let payload = RequestPayload::new(&msgs);
     let variant = standard_test_variant();
-    let req = OpenAiResponsesProtocol::build_responses_request(
-        &payload, "gpt-4o", &variant, &config,
-    );
+    let req =
+        OpenAiResponsesProtocol::build_responses_request(&payload, "gpt-4o", &variant, &config);
 
     assert_eq!(req.parallel_tool_calls, Some(false));
 }
@@ -927,9 +927,8 @@ fn responses_parallel_tool_calls_none_omits_field() {
     let msgs = [];
     let payload = RequestPayload::new(&msgs);
     let variant = standard_test_variant();
-    let req = OpenAiResponsesProtocol::build_responses_request(
-        &payload, "gpt-4o", &variant, &config,
-    );
+    let req =
+        OpenAiResponsesProtocol::build_responses_request(&payload, "gpt-4o", &variant, &config);
 
     // Verifies the hardcoded `Some(true)` is gone — when config is None,
     // the wire field must also be None.

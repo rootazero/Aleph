@@ -102,9 +102,9 @@ impl SandboxCapabilities {
 /// `None` = unlimited.
 fn limit_within(child: Option<u64>, baseline: Option<u64>) -> bool {
     match (child, baseline) {
-        (_, None) => true,             // unlimited baseline accepts anything
-        (None, Some(_)) => false,      // unlimited child violates limited baseline
-        (Some(c), Some(b)) => c <= b,  // both limited: child must be ≤ baseline
+        (_, None) => true,            // unlimited baseline accepts anything
+        (None, Some(_)) => false,     // unlimited child violates limited baseline
+        (Some(c), Some(b)) => c <= b, // both limited: child must be ≤ baseline
     }
 }
 

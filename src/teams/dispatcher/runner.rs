@@ -86,8 +86,11 @@ pub async fn execute_member_task(
     // G2 — provision a worktree handle when the caller requests isolation.
     // Kept in this function's scope so `Drop` fires on every exit path; the
     // happy path also calls `cleanup()` explicitly below.
-    let worktree_handle: Option<WorktreeHandle> =
-        if isolate_workspace { provision_worktree(team_id, task_id).await } else { None };
+    let worktree_handle: Option<WorktreeHandle> = if isolate_workspace {
+        provision_worktree(team_id, task_id).await
+    } else {
+        None
+    };
     let sandbox_override: Option<Arc<dyn Sandbox>> = worktree_handle
         .as_ref()
         .map(|h| Arc::new(WorktreeSandbox::new(h.path().to_path_buf())) as Arc<dyn Sandbox>);
@@ -184,11 +187,7 @@ pub async fn execute_member_task(
 /// `ALEPH_TEAM_MEMBER_WORKTREE` is `"0"`, or when `git worktree add` itself
 /// fails. The fallback path matches the pre-G2 behaviour (no isolation).
 async fn provision_worktree(team_id: &str, task_id: &str) -> Option<WorktreeHandle> {
-    if std::env::var("ALEPH_TEAM_MEMBER_WORKTREE")
-        .ok()
-        .as_deref()
-        == Some("0")
-    {
+    if std::env::var("ALEPH_TEAM_MEMBER_WORKTREE").ok().as_deref() == Some("0") {
         return None;
     }
     let repo_root = match std::env::current_dir() {
@@ -198,8 +197,14 @@ async fn provision_worktree(team_id: &str, task_id: &str) -> Option<WorktreeHand
             return None;
         }
     };
-    let safe_team = team_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>();
-    let safe_task = task_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>();
+    let safe_team = team_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect::<String>();
+    let safe_task = task_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect::<String>();
     let label = if safe_team.is_empty() {
         format!("team-task-{safe_task}")
     } else {

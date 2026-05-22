@@ -235,7 +235,9 @@ pub fn classify_http_error(
             let delay = resolve_retry_delay(headers, 0, Duration::from_secs(2), MAX_DELAY);
             RetryVerdict::Retry { delay }
         }
-        413 => RetryVerdict::CompactAndRetry { token_gap: parse_token_gap_str(error_text) },
+        413 => RetryVerdict::CompactAndRetry {
+            token_gap: parse_token_gap_str(error_text),
+        },
         401 | 403 => RetryVerdict::Fallback {
             reason: "authentication failed — check your API key".into(),
         },
@@ -787,11 +789,7 @@ mod tests {
     fn test_resolve_ratelimit_reset_timestamp() {
         let mut headers = reqwest::header::HeaderMap::new();
         let now = std::time::SystemTime::now();
-        let ts = now
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            + 60;
+        let ts = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 60;
         headers.insert(
             "x-ratelimit-reset-requests",
             ts.to_string().parse().unwrap(),

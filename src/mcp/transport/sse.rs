@@ -491,7 +491,11 @@ impl SseTransport {
     /// Send a response to a server-initiated request
     ///
     /// Used for responding to sampling/createMessage and other server-initiated RPCs.
-    pub async fn send_response(&self, request_id: serde_json::Value, result: serde_json::Value) -> Result<()> {
+    pub async fn send_response(
+        &self,
+        request_id: serde_json::Value,
+        result: serde_json::Value,
+    ) -> Result<()> {
         let response = serde_json::json!({
             "jsonrpc": "2.0",
             "id": request_id,
@@ -539,8 +543,9 @@ impl SseTransport {
             },
         });
 
-        let response_json = serde_json::to_string(&response)
-            .map_err(|e| AlephError::IoError(format!("Failed to serialize error response: {}", e)))?;
+        let response_json = serde_json::to_string(&response).map_err(|e| {
+            AlephError::IoError(format!("Failed to serialize error response: {}", e))
+        })?;
 
         let http_response = self
             .build_request(response_json)

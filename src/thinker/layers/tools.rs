@@ -137,8 +137,8 @@ impl PromptLayer for HydratedToolsLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::tool_index::HydrationResult;
     use crate::thinker::prompt_builder::PromptConfig;
+    use crate::tool_metadata::tool_index::HydrationResult;
     use crate::tools::info::ToolInfo;
 
     #[test]

@@ -132,12 +132,12 @@ impl ChromeMcpDriver {
                 );
                 Ok(ChromeMcpSession { client })
             }
-        Err(e) => {
-            tracing::info!(
-                "Chrome DevTools MCP connection failed, attempting to launch Chrome: {e}"
-            );
-            let _ = client.stop_all().await;
-            self.ensure_chrome_running().await?;
+            Err(e) => {
+                tracing::info!(
+                    "Chrome DevTools MCP connection failed, attempting to launch Chrome: {e}"
+                );
+                let _ = client.stop_all().await;
+                self.ensure_chrome_running().await?;
 
                 // Retry after Chrome launch
                 let retry_config = ExternalServerConfig {

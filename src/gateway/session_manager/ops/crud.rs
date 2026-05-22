@@ -1,7 +1,9 @@
 use rusqlite::params;
 use tracing::debug;
 
-use super::{map_session_metadata, SessionManager, SessionManagerError, SessionMetadata, SessionState};
+use super::{
+    map_session_metadata, SessionManager, SessionManagerError, SessionMetadata, SessionState,
+};
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::types::MessageRecord;
 
@@ -302,9 +304,7 @@ impl SessionManager {
     }
 
     /// Reset (clear) a session
-    pub async fn reset_session(&self,
-        key: &SessionKey,
-    ) -> Result<bool, SessionManagerError> {
+    pub async fn reset_session(&self, key: &SessionKey) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
         let conn = self
             .conn
@@ -337,9 +337,7 @@ impl SessionManager {
     }
 
     /// Delete a session entirely
-    pub async fn delete_session(&self,
-        key: &SessionKey,
-    ) -> Result<bool, SessionManagerError> {
+    pub async fn delete_session(&self, key: &SessionKey) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
         let conn = self
             .conn

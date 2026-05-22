@@ -33,10 +33,11 @@ pub async fn handle_marketplace_list(request: JsonRpcRequest) -> JsonRpcResponse
 pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse {
     use crate::config::PluginMarketplaceEntry;
 
-    let params: crate::gateway::handlers::plugins::types::MarketplaceAddParams = match parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
+    let params: crate::gateway::handlers::plugins::types::MarketplaceAddParams =
+        match parse_params(&request) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
 
     // Derive name from source if not provided
     let name = params.name.unwrap_or_else(|| {
@@ -82,10 +83,11 @@ pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse 
 
 /// Remove a marketplace source
 pub async fn handle_marketplace_remove(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: crate::gateway::handlers::plugins::types::MarketplaceRemoveParams = match parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
+    let params: crate::gateway::handlers::plugins::types::MarketplaceRemoveParams =
+        match parse_params(&request) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
 
     let mut config = match crate::config::Config::load() {
         Ok(c) => c,
@@ -115,8 +117,9 @@ pub async fn handle_marketplace_remove(request: JsonRpcRequest) -> JsonRpcRespon
 pub async fn handle_marketplace_update(request: JsonRpcRequest) -> JsonRpcResponse {
     // Params are optional — empty object is fine
     let params: crate::gateway::handlers::plugins::types::MarketplaceUpdateParams =
-        serde_json::from_value(request.params.clone().unwrap_or(json!({})))
-            .unwrap_or(crate::gateway::handlers::plugins::types::MarketplaceUpdateParams { name: None });
+        serde_json::from_value(request.params.clone().unwrap_or(json!({}))).unwrap_or(
+            crate::gateway::handlers::plugins::types::MarketplaceUpdateParams { name: None },
+        );
 
     let manager = match build_marketplace_manager() {
         Ok(m) => m,
@@ -137,10 +140,11 @@ pub async fn handle_marketplace_update(request: JsonRpcRequest) -> JsonRpcRespon
 
 /// Install a plugin from a marketplace by name
 pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcResponse {
-    let params: crate::gateway::handlers::plugins::types::MarketplaceInstallParams = match parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
+    let params: crate::gateway::handlers::plugins::types::MarketplaceInstallParams =
+        match parse_params(&request) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
 
     // Parse scope (default: user)
     let scope_str = params.scope.as_deref().unwrap_or("user");

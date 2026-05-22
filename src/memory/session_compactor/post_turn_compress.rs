@@ -1,9 +1,9 @@
-use super::{SessionCompactor, CompressResult};
+use super::{CompressResult, SessionCompactor};
 use crate::error::AlephError;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::router::SessionKey;
-use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::extensions::insert_with_capture_filter;
+use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::sync_primitives::{Arc, Ordering};
 use tracing::{info, warn};
@@ -39,7 +39,8 @@ impl SessionCompactor {
             })
             .collect();
 
-        let split = super::context_window::partition_fresh_tail_pairs(&pairs, self.config.fresh_tail_count);
+        let split =
+            super::context_window::partition_fresh_tail_pairs(&pairs, self.config.fresh_tail_count);
         if split == 0 {
             return Ok(CompressResult::default());
         }
@@ -57,8 +58,13 @@ impl SessionCompactor {
             })
             .collect();
 
-        let units = crate::context::compact::tool_aware_chunker::parse_semantic_units(&compressible_messages);
-        let chunker = crate::context::compact::tool_aware_chunker::ToolAwareChunker::new(self.config.leaf_chunk_tokens, ratio);
+        let units = crate::context::compact::tool_aware_chunker::parse_semantic_units(
+            &compressible_messages,
+        );
+        let chunker = crate::context::compact::tool_aware_chunker::ToolAwareChunker::new(
+            self.config.leaf_chunk_tokens,
+            ratio,
+        );
         let semantic_chunks =
             chunker.chunk(&units, &compressible_messages, compressible_messages.len());
 
@@ -116,7 +122,10 @@ impl SessionCompactor {
             }
 
             let summary_text = self.generate_summary(&chunk, 0, None).await;
-            let source_tokens: usize = chunk.iter().map(|(_, c)| super::context_window::estimate_tokens(c, ratio)).sum();
+            let source_tokens: usize = chunk
+                .iter()
+                .map(|(_, c)| super::context_window::estimate_tokens(c, ratio))
+                .sum();
 
             let fact = super::summary_engine::summary_to_fact(
                 &session_id,
@@ -133,7 +142,8 @@ impl SessionCompactor {
                 .with_session(&session_id)
                 .with_path(fact.path.clone());
             let insert_ok = if let Some(ref registry) = self.capture_registry {
-                let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> = self.database.clone();
+                let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
+                    self.database.clone();
                 let ctx = CaptureCtx {
                     agent_id: agent_id.clone(),
                     namespace: crate::memory::namespace::NamespaceScope::Owner,

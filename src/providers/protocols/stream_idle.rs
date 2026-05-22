@@ -82,7 +82,8 @@ mod tests {
     async fn idle_timeout_zero_disables() {
         let pending: BoxStream<'static, Result<Bytes>> = futures::stream::pending().boxed();
         let mut wrapped = wrap_idle_timeout(pending, 0, "TestProvider");
-        let raced = tokio::time::timeout(std::time::Duration::from_millis(50), wrapped.next()).await;
+        let raced =
+            tokio::time::timeout(std::time::Duration::from_millis(50), wrapped.next()).await;
         assert!(raced.is_err(), "idle_secs==0 must not inject any timeout");
     }
 
@@ -91,7 +92,9 @@ mod tests {
         let pending: BoxStream<'static, Result<Bytes>> = futures::stream::pending().boxed();
         let mut wrapped = wrap_idle_timeout(pending, 1, "Gemini");
         match wrapped.next().await {
-            Some(Err(AlephError::Timeout { suggestion: Some(msg) })) => {
+            Some(Err(AlephError::Timeout {
+                suggestion: Some(msg),
+            })) => {
                 assert!(msg.contains("Gemini"), "label must appear in: {msg}");
             }
             other => panic!("expected labelled Timeout, got {other:?}"),

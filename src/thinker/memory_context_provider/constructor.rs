@@ -1,4 +1,4 @@
-use super::{MemoryContextProvider, MemoryContextConfig, NoopReranker};
+use super::{MemoryContextConfig, MemoryContextProvider, NoopReranker};
 use crate::config::types::memory::{AssemblerConfig, MemoryInjectionMode};
 use crate::memory::assembler::hybrid::AiProviderReranker;
 use crate::memory::assembler::{HybridAssembler, UserProfileLoader, WorkingMemoryAssembler};

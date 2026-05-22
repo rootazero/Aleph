@@ -149,10 +149,7 @@ mod tests {
         let freed = stage.prepare(&mut messages, &make_pressure(), 3).await;
         assert!(freed > 100, "expected significant savings, got {freed}");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
-        assert!(
-            text.starts_with("[pruned tool_result"),
-            "got: {text}"
-        );
+        assert!(text.starts_with("[pruned tool_result"), "got: {text}");
     }
 
     #[test]
@@ -160,7 +157,10 @@ mod tests {
         assert_eq!(result_hint("single line"), "single line");
         assert_eq!(result_hint("first\nsecond\nthird"), "first (3 lines)");
         // Leading blank lines are skipped; the first real line is the hint.
-        assert_eq!(result_hint("   \n  real first  \nx"), "real first (3 lines)");
+        assert_eq!(
+            result_hint("   \n  real first  \nx"),
+            "real first (3 lines)"
+        );
         assert_eq!(result_hint(""), "");
     }
 

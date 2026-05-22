@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    
+
     use super::super::body_text_sha256;
     use crate::memory::notes::store::NoteStore;
     use crate::memory::notes::KnowledgeNote;
@@ -30,20 +30,38 @@ mod tests {
         let note1 = make_note("rust async", "general");
         let note2 = make_note("python sync", "general");
 
-        backend.index_note(&note1, "agent1", "general").await.unwrap();
-        backend.index_note(&note2, "agent1", "general").await.unwrap();
+        backend
+            .index_note(&note1, "agent1", "general")
+            .await
+            .unwrap();
+        backend
+            .index_note(&note2, "agent1", "general")
+            .await
+            .unwrap();
 
-        let results = backend.search_notes_fts("rust async", "agent1", 10).await.unwrap();
-        assert!(!results.is_empty(), "Should return results for 'rust async'");
+        let results = backend
+            .search_notes_fts("rust async", "agent1", 10)
+            .await
+            .unwrap();
+        assert!(
+            !results.is_empty(),
+            "Should return results for 'rust async'"
+        );
     }
 
     #[tokio::test]
     async fn fts_search_finds_by_content_direct() {
         let backend = make_backend();
         let note = make_note("search test", "general");
-        backend.index_note(&note, "agent1", "general").await.unwrap();
+        backend
+            .index_note(&note, "agent1", "general")
+            .await
+            .unwrap();
 
-        let results = backend.search_notes_fts("search test fact", "agent1", 10).await.unwrap();
+        let results = backend
+            .search_notes_fts("search test fact", "agent1", 10)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path, "general/search_test");
     }
@@ -54,8 +72,14 @@ mod tests {
         let note = make_note("scoped", "test");
         backend.index_note(&note, "agent1", "test").await.unwrap();
 
-        let results = backend.search_notes_fts("scoped", "agent2", 10).await.unwrap();
-        assert!(results.is_empty(), "Should not find agent1's note when searching as agent2");
+        let results = backend
+            .search_notes_fts("scoped", "agent2", 10)
+            .await
+            .unwrap();
+        assert!(
+            results.is_empty(),
+            "Should not find agent1's note when searching as agent2"
+        );
     }
 
     #[tokio::test]
@@ -64,14 +88,26 @@ mod tests {
         let mut note = make_note("update test", "general");
 
         // Create
-        backend.index_note(&note, "agent1", "general").await.unwrap();
-        let found = backend.get_note_index("general/update_test", "agent1").await.unwrap();
+        backend
+            .index_note(&note, "agent1", "general")
+            .await
+            .unwrap();
+        let found = backend
+            .get_note_index("general/update_test", "agent1")
+            .await
+            .unwrap();
         assert!(found.is_some());
 
         // Update
         note.tags.push("updated".to_string());
-        backend.index_note(&note, "agent1", "general").await.unwrap();
-        let found = backend.get_note_index("general/update_test", "agent1").await.unwrap();
+        backend
+            .index_note(&note, "agent1", "general")
+            .await
+            .unwrap();
+        let found = backend
+            .get_note_index("general/update_test", "agent1")
+            .await
+            .unwrap();
         assert!(found.is_some());
     }
 
@@ -81,21 +117,42 @@ mod tests {
         let note = make_note("delete me", "trash");
         backend.index_note(&note, "agent1", "trash").await.unwrap();
 
-        backend.remove_note_index("trash/delete_me", "agent1").await.unwrap();
-        let found = backend.get_note_index("trash/delete_me", "agent1").await.unwrap();
+        backend
+            .remove_note_index("trash/delete_me", "agent1")
+            .await
+            .unwrap();
+        let found = backend
+            .get_note_index("trash/delete_me", "agent1")
+            .await
+            .unwrap();
         assert!(found.is_none());
     }
 
     #[tokio::test]
     async fn list_notes_by_category_filters_correctly() {
         let backend = make_backend();
-        backend.index_note(&make_note("a", "cat1"), "agent1", "cat1").await.unwrap();
-        backend.index_note(&make_note("b", "cat2"), "agent1", "cat2").await.unwrap();
-        backend.index_note(&make_note("c", "cat1"), "agent1", "cat1").await.unwrap();
+        backend
+            .index_note(&make_note("a", "cat1"), "agent1", "cat1")
+            .await
+            .unwrap();
+        backend
+            .index_note(&make_note("b", "cat2"), "agent1", "cat2")
+            .await
+            .unwrap();
+        backend
+            .index_note(&make_note("c", "cat1"), "agent1", "cat1")
+            .await
+            .unwrap();
 
-        let cat1 = backend.get_notes_by_category("agent1", "cat1", 10).await.unwrap();
+        let cat1 = backend
+            .get_notes_by_category("agent1", "cat1", 10)
+            .await
+            .unwrap();
         assert_eq!(cat1.len(), 2);
-        let cat2 = backend.get_notes_by_category("agent1", "cat2", 10).await.unwrap();
+        let cat2 = backend
+            .get_notes_by_category("agent1", "cat2", 10)
+            .await
+            .unwrap();
         assert_eq!(cat2.len(), 1);
     }
 
@@ -107,8 +164,14 @@ mod tests {
         let mut note2 = make_note("new", "chrono");
         note2.created_at = 2000;
 
-        backend.index_note(&note1, "agent1", "chrono").await.unwrap();
-        backend.index_note(&note2, "agent1", "chrono").await.unwrap();
+        backend
+            .index_note(&note1, "agent1", "chrono")
+            .await
+            .unwrap();
+        backend
+            .index_note(&note2, "agent1", "chrono")
+            .await
+            .unwrap();
 
         let notes = backend.list_notes("agent1").await.unwrap();
         assert_eq!(notes.len(), 2);
@@ -124,7 +187,10 @@ mod tests {
         backend.index_note(&note1, "agent1", "links").await.unwrap();
         backend.index_note(&note2, "agent1", "links").await.unwrap();
 
-        let edges = backend.get_outgoing_links("links/source", "agent1").await.unwrap();
+        let edges = backend
+            .get_outgoing_links("links/source", "agent1")
+            .await
+            .unwrap();
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0], "links/target");
     }
@@ -136,10 +202,19 @@ mod tests {
         note1.links = vec!["backlinks/target".to_string()];
         let note2 = make_note("target", "backlinks");
 
-        backend.index_note(&note1, "agent1", "backlinks").await.unwrap();
-        backend.index_note(&note2, "agent1", "backlinks").await.unwrap();
+        backend
+            .index_note(&note1, "agent1", "backlinks")
+            .await
+            .unwrap();
+        backend
+            .index_note(&note2, "agent1", "backlinks")
+            .await
+            .unwrap();
 
-        let backlinks = backend.get_incoming_links("backlinks/target", "agent1").await.unwrap();
+        let backlinks = backend
+            .get_incoming_links("backlinks/target", "agent1")
+            .await
+            .unwrap();
         assert_eq!(backlinks.len(), 1);
         assert_eq!(backlinks[0], "backlinks/source");
     }
@@ -147,8 +222,14 @@ mod tests {
     #[tokio::test]
     async fn count_all_notes_returns_correct_count() {
         let backend = make_backend();
-        backend.index_note(&make_note("a", "stats"), "agent1", "stats").await.unwrap();
-        backend.index_note(&make_note("b", "stats"), "agent1", "stats").await.unwrap();
+        backend
+            .index_note(&make_note("a", "stats"), "agent1", "stats")
+            .await
+            .unwrap();
+        backend
+            .index_note(&make_note("b", "stats"), "agent1", "stats")
+            .await
+            .unwrap();
 
         let count = backend.count_all_notes().await.unwrap();
         assert_eq!(count, 2);

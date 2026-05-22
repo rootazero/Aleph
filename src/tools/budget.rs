@@ -13,22 +13,22 @@
 /// harness-wide `turn_timeout`. Values are milliseconds.
 pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
     // Read-only / pure query — should be fast
-    ("memory_search",   5_000),
-    ("memory_browse",   5_000),
+    ("memory_search", 5_000),
+    ("memory_browse", 5_000),
     ("memory_timeline", 5_000),
-    ("memory_explore",  5_000),
-    ("recall_context",  5_000),
-    ("session_search",  5_000),
-    ("user_profile",    3_000),
-    ("skill_status",    3_000),
-    ("skill_reader",    5_000),
-    ("list_tools",      2_000),
+    ("memory_explore", 5_000),
+    ("recall_context", 5_000),
+    ("session_search", 5_000),
+    ("user_profile", 3_000),
+    ("skill_status", 3_000),
+    ("skill_reader", 5_000),
+    ("list_tools", 2_000),
     ("get_tool_schema", 2_000),
-    ("note_orient",     3_000),
-    ("note_schema",     3_000),
+    ("note_orient", 3_000),
+    ("note_schema", 3_000),
     // Legit slow
-    ("search",         20_000),
-    ("web_fetch",      30_000),
+    ("search", 20_000),
+    ("web_fetch", 30_000),
     ("markdown_skill", 60_000),
 ];
 

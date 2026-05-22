@@ -567,7 +567,10 @@ mod tests {
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
         let at = now_ms();
-        store.append(&sid, 1, &turn_started(tid, at), at).await.unwrap();
+        store
+            .append(&sid, 1, &turn_started(tid, at), at)
+            .await
+            .unwrap();
         let markers = store.load_run_markers().await.unwrap();
         assert!(markers.is_empty());
     }
@@ -579,8 +582,14 @@ mod tests {
         let tid = uuid::Uuid::new_v4();
         let at = now_ms();
         // Interleave a non-marker event between two markers.
-        store.append(&sid, 1, &run_started("r1", at), at).await.unwrap();
-        store.append(&sid, 2, &turn_started(tid, at), at).await.unwrap();
+        store
+            .append(&sid, 1, &run_started("r1", at), at)
+            .await
+            .unwrap();
+        store
+            .append(&sid, 2, &turn_started(tid, at), at)
+            .await
+            .unwrap();
         store
             .append(&sid, 3, &run_finished("r1", at + 5), at + 5)
             .await
@@ -609,8 +618,14 @@ mod tests {
         let sid_a = SessionKey::ephemeral("sess-a");
         let sid_b = SessionKey::ephemeral("sess-b");
         let at = now_ms();
-        store.append(&sid_a, 1, &run_started("ra", at), at).await.unwrap();
-        store.append(&sid_b, 1, &run_started("rb", at), at).await.unwrap();
+        store
+            .append(&sid_a, 1, &run_started("ra", at), at)
+            .await
+            .unwrap();
+        store
+            .append(&sid_b, 1, &run_started("rb", at), at)
+            .await
+            .unwrap();
         let markers = store.load_run_markers().await.unwrap();
         assert_eq!(markers.len(), 2);
     }

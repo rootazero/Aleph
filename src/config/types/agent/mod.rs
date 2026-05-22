@@ -17,7 +17,7 @@ pub use subagents::SubagentsConfigToml;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::dispatcher::{
+use crate::tool_metadata::{
     DEFAULT_SANDBOX_ENABLED, MAX_PARALLELISM, MAX_TASK_RETRIES, REQUIRE_CONFIRMATION,
 };
 

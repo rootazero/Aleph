@@ -149,7 +149,7 @@ impl ToolService for ScriptedTools {
         None
     }
 
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }
@@ -555,7 +555,7 @@ impl ToolService for ScriptedToolsNever {
         None
     }
 
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }

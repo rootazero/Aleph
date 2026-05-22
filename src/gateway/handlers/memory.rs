@@ -231,8 +231,7 @@ pub async fn handle_clear(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRp
     JsonRpcResponse::error(
         request.id,
         INTERNAL_ERROR,
-        "Bulk memory clearing is not supported in the notes-based memory model."
-            .to_string(),
+        "Bulk memory clearing is not supported in the notes-based memory model.".to_string(),
     )
 }
 

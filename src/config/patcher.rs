@@ -26,11 +26,10 @@ fn cached_config_schema() -> &'static serde_json::Value {
     static SCHEMA: OnceLock<serde_json::Value> = OnceLock::new();
     SCHEMA.get_or_init(|| {
         let schema = generate_config_schema();
-        serde_json::to_value(&schema)
-            .unwrap_or_else(|e| {
-                tracing::error!("Config schema serialization failed: {}", e);
-                serde_json::Value::Object(serde_json::Map::new())
-            })
+        serde_json::to_value(&schema).unwrap_or_else(|e| {
+            tracing::error!("Config schema serialization failed: {}", e);
+            serde_json::Value::Object(serde_json::Map::new())
+        })
     })
 }
 

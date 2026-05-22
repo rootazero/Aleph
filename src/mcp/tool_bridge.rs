@@ -11,15 +11,15 @@
 //! connected server advertises that capability, so the agent is never offered
 //! a tool that every call would reject.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
 use crate::builtin_tools::mcp_prompt::McpGetPromptTool;
 use crate::builtin_tools::mcp_resource::McpReadResourceTool;
-use crate::dispatcher::ToolRegistry as DispatchRegistry;
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
+use crate::tool_metadata::ToolRegistry as DispatchRegistry;
 use crate::tools::handlers::builtin::BuiltinHandler;
 use crate::tools::handlers::registration::{register_mcp_tools, unregister_mcp_tools};
 use crate::tools::handlers::ToolHandler;

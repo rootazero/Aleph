@@ -2,10 +2,7 @@
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
-use crate::providers::gemini::{
-    Content,
-    Part, ThinkingConfig,
-};
+use crate::providers::gemini::{Content, Part, ThinkingConfig};
 use crate::providers::message::UnifiedMessage;
 
 use super::GeminiProtocol;

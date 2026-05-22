@@ -119,7 +119,7 @@ pub async fn execute_batch_move(
         content: None,
         bytes_written: None,
         items_affected: Some(count),
-    summary: None,
+        summary: None,
     })
 }
 
@@ -285,6 +285,6 @@ pub async fn execute_organize(
         content: None,
         bytes_written: None,
         items_affected: Some(count),
-    summary: None,
+        summary: None,
     })
 }

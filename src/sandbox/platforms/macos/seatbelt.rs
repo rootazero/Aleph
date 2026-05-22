@@ -607,17 +607,17 @@ impl SeatbeltDriver {
         // Append metadata-protection deny rules. Last-match-wins in SBPL,
         // so these override the writable allow above.
         if !writable_roots.is_empty() {
-            let protected =
-                crate::sandbox::protected_paths::protected_paths_for(writable_roots.iter().copied());
+            let protected = crate::sandbox::protected_paths::protected_paths_for(
+                writable_roots.iter().copied(),
+            );
             if !protected.is_empty() {
-                profile.push_str("; protected metadata subpaths (read-only inside writable roots)\n");
+                profile
+                    .push_str("; protected metadata subpaths (read-only inside writable roots)\n");
                 for path in &protected {
                     if let Some(path_str) = path.to_str() {
                         let path_str = escape_sbpl(path_str);
-                        profile.push_str(&format!(
-                            "(deny file-write* (subpath \"{}\"))\n",
-                            path_str
-                        ));
+                        profile
+                            .push_str(&format!("(deny file-write* (subpath \"{}\"))\n", path_str));
                     }
                 }
             }
@@ -927,15 +927,11 @@ mod tests {
         // cwd is the first writable root + each WritePaths entry.
         for root in ["/tmp/ws", "/tmp/extra1", "/tmp/extra2"] {
             assert!(
-                profile.contains(&format!(
-                    "(deny file-write* (subpath \"{root}/.git\"))"
-                )),
+                profile.contains(&format!("(deny file-write* (subpath \"{root}/.git\"))")),
                 "missing .git protection under {root}"
             );
             assert!(
-                profile.contains(&format!(
-                    "(deny file-write* (subpath \"{root}/.aleph\"))"
-                )),
+                profile.contains(&format!("(deny file-write* (subpath \"{root}/.aleph\"))")),
                 "missing .aleph protection under {root}"
             );
         }
@@ -1138,7 +1134,9 @@ mod tests {
         let profile = driver.generate_profile(&policy, cwd).unwrap();
 
         assert!(profile.contains("(global-name \"com.apple.SecurityServer\")"));
-        assert!(profile.contains("(global-name \"com.apple.SystemConfiguration.DNSConfiguration\")"));
+        assert!(
+            profile.contains("(global-name \"com.apple.SystemConfiguration.DNSConfiguration\")")
+        );
         assert!(profile.contains("(allow network-outbound (remote ip \"10.0.0.1\"))"));
     }
 

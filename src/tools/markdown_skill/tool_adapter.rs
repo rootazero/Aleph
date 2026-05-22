@@ -6,8 +6,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tracing::warn;
 
-use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
+use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
 
 use super::parser::{extract_first_paragraph, extract_markdown_section};

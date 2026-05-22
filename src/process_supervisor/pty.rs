@@ -152,8 +152,8 @@ impl ClaudeSupervisor {
                 }
             }
             running.store(false, Ordering::Release);
-            // Notify that the process has terminated (exact code retrieved later).
-            let _ = tx.send(SupervisorEvent::Exited(-1));
+            // Do NOT send Exited here — shutdown()/Drop will fetch the real exit
+            // code and emit a single Exited event to avoid duplicates.
         });
 
         self.reader_handle = Some(handle);

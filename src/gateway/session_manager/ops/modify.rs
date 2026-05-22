@@ -6,9 +6,7 @@ use crate::gateway::router::SessionKey;
 
 impl SessionManager {
     /// Compact a session by removing old messages
-    pub async fn compact_session(&self,
-        key: &SessionKey,
-    ) -> Result<usize, SessionManagerError> {
+    pub async fn compact_session(&self, key: &SessionKey) -> Result<usize, SessionManagerError> {
         let key_str = key.to_key_string();
         let keep = self.config.compaction_keep as i64;
 
@@ -349,10 +347,7 @@ impl SessionManager {
     }
 
     /// Transition session to running state (agent loop active)
-    pub async fn set_running(
-        &self,
-        key: &SessionKey,
-    ) -> Result<(), SessionManagerError> {
+    pub async fn set_running(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
         self.set_state(key, SessionState::Running).await
     }
 }

@@ -131,7 +131,13 @@ pub async fn create(
     let id = uuid::Uuid::new_v4();
     let safe_label: String = label
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let path = std::env::temp_dir().join(format!("aleph-subagent-{safe_label}-{id}"));
 
@@ -309,10 +315,7 @@ mod tests {
         let err = create(tmp.path(), "task3-non-git", None)
             .await
             .expect_err("must fail outside git repo");
-        assert!(
-            matches!(err, WorktreeError::NotAGitRepo(_)),
-            "got {err:?}"
-        );
+        assert!(matches!(err, WorktreeError::NotAGitRepo(_)), "got {err:?}");
     }
 
     #[tokio::test]

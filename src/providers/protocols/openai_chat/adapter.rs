@@ -4,9 +4,7 @@ use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, ToolChoice};
 use crate::providers::delta::ProviderDelta;
-use crate::providers::openai::{
-    OpenAiFunction, OpenAiTool,
-};
+use crate::providers::openai::{OpenAiFunction, OpenAiTool};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt as _;
@@ -15,8 +13,8 @@ use serde_json::json;
 use std::collections::VecDeque;
 use tracing::debug;
 
-use super::{sanitize_tool_name, OpenAiProtocol};
 use super::sse::parse_chat_sse_event;
+use super::{sanitize_tool_name, OpenAiProtocol};
 
 use crate::providers::protocols::openai_common::max_tokens::uses_max_completion_tokens;
 use crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema;
@@ -94,16 +92,14 @@ impl ProtocolAdapter for OpenAiProtocol {
             }
         }
 
-        let policy = build_payload_policy(
-            config.base_url.as_deref(),
-            "openai-chat",
-            None,
-        );
+        let policy = build_payload_policy(config.base_url.as_deref(), "openai-chat", None);
 
         // response_format: emit only when capability-enabled
         if let Some(ref fmt) = config.response_format {
             if policy.capabilities.supports_response_format {
-                if let Some(v) = to_chat_response_format(fmt, policy.capabilities.supports_strict_schema) {
+                if let Some(v) =
+                    to_chat_response_format(fmt, policy.capabilities.supports_strict_schema)
+                {
                     body["response_format"] = v;
                 }
             }

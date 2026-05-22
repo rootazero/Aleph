@@ -242,6 +242,11 @@ impl PiiEngine {
                         result
                             .replace_range(detection.start..detection.end, &detection.placeholder);
                         blocked_count += 1;
+                        warn!(
+                            rule = %detection.rule_name,
+                            severity = %detection.severity,
+                            "PII detected and blocked before API call"
+                        );
                     } else {
                         warn!(
                             rule = %detection.rule_name,
@@ -251,11 +256,6 @@ impl PiiEngine {
                             "PII match has invalid offsets, skipping replacement"
                         );
                     }
-                    warn!(
-                        rule = %detection.rule_name,
-                        severity = %detection.severity,
-                        "PII detected and blocked before API call"
-                    );
                 }
                 PiiAction::Warn => {
                     warned_count += 1;

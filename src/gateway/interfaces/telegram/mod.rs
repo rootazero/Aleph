@@ -76,7 +76,7 @@ pub struct TelegramChannel {
     /// Active bot instances (one per account)
     bot_instances: Vec<bot_instance::BotInstance>,
     /// ToolRegistry for building slash commands at startup
-    tool_registry: Option<Arc<crate::dispatcher::ToolRegistry>>,
+    tool_registry: Option<Arc<crate::tool_metadata::ToolRegistry>>,
     /// Centralized access controller (pairing, allowlists, policies).
     access: Arc<AccessController>,
     /// Per-conversation error cooldown and typing circuit breaker.
@@ -159,7 +159,7 @@ impl TelegramChannel {
 
     /// Set the ToolRegistry so this channel can query builtin tools at startup
     /// and register them as Telegram slash commands.
-    pub fn set_tool_registry(&mut self, registry: Arc<crate::dispatcher::ToolRegistry>) {
+    pub fn set_tool_registry(&mut self, registry: Arc<crate::tool_metadata::ToolRegistry>) {
         self.tool_registry = Some(registry);
     }
 
@@ -664,7 +664,7 @@ impl Channel for TelegramChannel {
             ));
 
             instance.shutdown_tx = Some(shutdown_tx);
-            
+
             // Spawn periodic health check for this bot instance
             {
                 let account_id = instance.account_id.clone();
@@ -674,11 +674,8 @@ impl Channel for TelegramChannel {
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
                     loop {
                         interval.tick().await;
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(10),
-                            bot.get_me(),
-                        )
-                        .await
+                        match tokio::time::timeout(std::time::Duration::from_secs(10), bot.get_me())
+                            .await
                         {
                             Ok(Ok(_)) => {
                                 is_healthy.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -702,7 +699,7 @@ impl Channel for TelegramChannel {
                     }
                 });
             }
-            
+
             self.bot_instances.push(instance);
         }
 

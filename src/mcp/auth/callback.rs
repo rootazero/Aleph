@@ -274,8 +274,8 @@ fn url_decode(s: &str) -> String {
                     encoded_buf.clear();
                 }
                 result.push('%');
-                result.push(h1 as char);
-                result.push(h2 as char);
+                result.push(char::from_u32(h1.into()).unwrap_or('\u{FFFD}'));
+                result.push(char::from_u32(h2.into()).unwrap_or('\u{FFFD}'));
             } else {
                 // Truncated sequence at end of input
                 if !encoded_buf.is_empty() {
@@ -284,7 +284,7 @@ fn url_decode(s: &str) -> String {
                 }
                 result.push('%');
                 if let Some(h) = h1 {
-                    result.push(h as char);
+                    result.push(char::from_u32(h.into()).unwrap_or('\u{FFFD}'));
                 }
             }
         } else {
@@ -296,7 +296,7 @@ fn url_decode(s: &str) -> String {
             if b == b'+' {
                 result.push(' ');
             } else {
-                result.push(b as char);
+                result.push(char::from_u32(b.into()).unwrap_or('\u{FFFD}'));
             }
         }
     }

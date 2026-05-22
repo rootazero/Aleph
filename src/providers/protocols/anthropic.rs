@@ -71,23 +71,20 @@ pub struct AnthropicProtocol {
     stream_idle_timeout_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
-mod proto_impl;
 mod adapter;
-mod sse;
+mod proto_impl;
 pub mod provider_policy;
-
+mod sse;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use crate::agents::thinking::ThinkLevel;
     use crate::config::ProviderConfig;
     use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
-    
-    
+
     use crate::providers::message::UnifiedMessage;
-    
 
     #[test]
     fn test_build_endpoint_default() {
@@ -178,8 +175,8 @@ mod tests {
 
     #[test]
     fn test_build_request_includes_tools() {
-        use crate::dispatcher::ToolDefinition;
         use crate::providers::message::UnifiedMessage;
+        use crate::tool_metadata::ToolDefinition;
         use crate::ToolCategory;
 
         let protocol = AnthropicProtocol::new(Client::new());
@@ -525,7 +522,10 @@ mod tests {
         config.top_k = Some(40);
 
         let body = body_of(protocol.build_request(&payload, &config).unwrap());
-        assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-4, "top_p should be ~0.9");
+        assert!(
+            (body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-4,
+            "top_p should be ~0.9"
+        );
         assert_eq!(body["top_k"], 40);
     }
 
@@ -539,7 +539,10 @@ mod tests {
         config.stop_sequences = Some("END, STOP, DONE".to_string());
 
         let body = body_of(protocol.build_request(&payload, &config).unwrap());
-        assert_eq!(body["stop_sequences"], serde_json::json!(["END", "STOP", "DONE"]));
+        assert_eq!(
+            body["stop_sequences"],
+            serde_json::json!(["END", "STOP", "DONE"])
+        );
     }
 
     #[test]
@@ -552,7 +555,10 @@ mod tests {
         config.stop_sequences = Some("".to_string());
 
         let body = body_of(protocol.build_request(&payload, &config).unwrap());
-        assert!(body.get("stop_sequences").is_none(), "empty CSV should produce no field");
+        assert!(
+            body.get("stop_sequences").is_none(),
+            "empty CSV should produce no field"
+        );
     }
 
     #[test]
@@ -623,7 +629,10 @@ mod tests {
         config.base_url = Some("https://kimi-for-coding.example.com/v1".to_string());
 
         let body = body_of(protocol.build_request(&payload, &config).unwrap());
-        assert!(body.get("metadata").is_none(), "metadata must be stripped on Custom");
+        assert!(
+            body.get("metadata").is_none(),
+            "metadata must be stripped on Custom"
+        );
     }
 
     #[test]
@@ -650,7 +659,10 @@ mod tests {
         config.base_url = Some("https://kimi-for-coding.example.com/v1".to_string());
 
         let body = body_of(protocol.build_request(&payload, &config).unwrap());
-        assert!(body.get("output_config").is_none(), "output_config must be stripped on Custom");
+        assert!(
+            body.get("output_config").is_none(),
+            "output_config must be stripped on Custom"
+        );
     }
 
     #[test]
@@ -690,12 +702,12 @@ mod tests {
 #[cfg(test)]
 mod stream_tests {
     use super::*;
-    use std::collections::VecDeque;
     use crate::config::ProviderConfig;
     use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
+    use crate::providers::anthropic::types::{ContentBlock, MessageContent};
     use crate::providers::delta::{IndexIdTracker, ProviderDelta};
     use crate::providers::protocols::anthropic::sse::parse_anthropic_sse_event;
-    use crate::providers::anthropic::types::{ContentBlock, MessageContent};
+    use std::collections::VecDeque;
 
     // Helper: run parse_anthropic_sse_event on a raw JSON string (without "data: " prefix)
     fn parse(data: &str) -> Vec<ProviderDelta> {
@@ -914,7 +926,8 @@ mod stream_tests {
     // ── Test 4: Beta headers ────────────────────────────────────────────────
 
     /// Default capabilities for Official-class endpoints (used in beta-header tests).
-    fn official_caps() -> crate::providers::protocols::anthropic::provider_policy::AnthropicCapabilities {
+    fn official_caps(
+    ) -> crate::providers::protocols::anthropic::provider_policy::AnthropicCapabilities {
         crate::providers::protocols::anthropic::provider_policy::resolve_anthropic_capabilities(
             crate::providers::protocols::anthropic::provider_policy::AnthropicEndpointClass::Official,
             None,
@@ -968,12 +981,8 @@ mod stream_tests {
             AnthropicEndpointClass::Custom,
             Some("https://api.minimax.io/anthropic/v1/messages"),
         );
-        let headers = AnthropicProtocol::build_beta_headers(
-            "claude-3-5-sonnet",
-            None,
-            false,
-            &caps,
-        );
+        let headers =
+            AnthropicProtocol::build_beta_headers("claude-3-5-sonnet", None, false, &caps);
         assert!(
             !headers.contains("fine-grained-tool-streaming-2025-05-14"),
             "MiniMax must not see fine-grained-tool-streaming, got {}",
@@ -994,12 +1003,8 @@ mod stream_tests {
             AnthropicEndpointClass::Custom,
             Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
         );
-        let headers = AnthropicProtocol::build_beta_headers(
-            "claude-sonnet-4-6",
-            None,
-            false,
-            &caps,
-        );
+        let headers =
+            AnthropicProtocol::build_beta_headers("claude-sonnet-4-6", None, false, &caps);
         assert!(
             headers.contains("context-1m-2025-08-07"),
             "Azure + claude-4 must enable context-1m, got {}",
@@ -1016,12 +1021,8 @@ mod stream_tests {
             AnthropicEndpointClass::Custom,
             Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
         );
-        let headers = AnthropicProtocol::build_beta_headers(
-            "claude-3-5-sonnet-20241022",
-            None,
-            false,
-            &caps,
-        );
+        let headers =
+            AnthropicProtocol::build_beta_headers("claude-3-5-sonnet-20241022", None, false, &caps);
         // 1M context is meaningless on pre-4 models — gate keeps headers clean
         assert!(!headers.contains("context-1m-2025-08-07"));
     }
@@ -1029,12 +1030,7 @@ mod stream_tests {
     #[test]
     fn beta_headers_omits_context_1m_on_official_by_default() {
         let caps = official_caps();
-        let headers = AnthropicProtocol::build_beta_headers(
-            "claude-opus-4-7",
-            None,
-            false,
-            &caps,
-        );
+        let headers = AnthropicProtocol::build_beta_headers("claude-opus-4-7", None, false, &caps);
         // Native Anthropic 400s on subscriptions without long-context beta.
         assert!(!headers.contains("context-1m-2025-08-07"));
     }
@@ -1198,12 +1194,18 @@ mod stream_tests {
 
     #[test]
     fn message_delta_maps_stop_sequence() {
-        assert_eq!(done_for_stop_reason("stop_sequence"), Some(StopReason::StopSequence));
+        assert_eq!(
+            done_for_stop_reason("stop_sequence"),
+            Some(StopReason::StopSequence)
+        );
     }
 
     #[test]
     fn message_delta_maps_pause_turn() {
-        assert_eq!(done_for_stop_reason("pause_turn"), Some(StopReason::PauseTurn));
+        assert_eq!(
+            done_for_stop_reason("pause_turn"),
+            Some(StopReason::PauseTurn)
+        );
     }
 
     #[test]
@@ -1221,7 +1223,10 @@ mod stream_tests {
 
     #[test]
     fn message_delta_unknown_stop_reason_falls_through() {
-        assert_eq!(done_for_stop_reason("some_future_reason"), Some(StopReason::Unknown));
+        assert_eq!(
+            done_for_stop_reason("some_future_reason"),
+            Some(StopReason::Unknown)
+        );
     }
 
     // ── Test 13: extended thinking is incompatible with sampling params ─────
@@ -1255,8 +1260,14 @@ mod stream_tests {
             body.get("temperature").is_none(),
             "temperature must be stripped when thinking is enabled (Anthropic rejects it)",
         );
-        assert!(body.get("top_p").is_none(), "top_p must be stripped with thinking");
-        assert!(body.get("top_k").is_none(), "top_k must be stripped with thinking");
+        assert!(
+            body.get("top_p").is_none(),
+            "top_p must be stripped with thinking"
+        );
+        assert!(
+            body.get("top_k").is_none(),
+            "top_k must be stripped with thinking"
+        );
     }
 
     #[test]
@@ -1269,7 +1280,10 @@ mod stream_tests {
         config.temperature = Some(0.7);
 
         let body = build_body(&payload, &config);
-        assert!(body.get("thinking").is_none(), "thinking absent without think_level");
+        assert!(
+            body.get("thinking").is_none(),
+            "thinking absent without think_level"
+        );
         assert!(
             body.get("temperature").is_some(),
             "temperature preserved when thinking is off",
@@ -1286,7 +1300,9 @@ mod stream_tests {
 
     #[test]
     fn is_oauth_token_recognises_jwt_and_claude_code_prefixes() {
-        assert!(AnthropicProtocol::is_oauth_token("eyJhbGciOiJIUzI1NiJ9.payload"));
+        assert!(AnthropicProtocol::is_oauth_token(
+            "eyJhbGciOiJIUzI1NiJ9.payload"
+        ));
         assert!(AnthropicProtocol::is_oauth_token("cc-opaque-access-token"));
     }
 
@@ -1321,13 +1337,22 @@ mod stream_tests {
         config.api_key = Some("sk-ant-api03-realkey".to_string());
 
         let req = build_http(&payload, &config);
-        assert!(req.headers().get("x-api-key").is_some(), "x-api-key must be set for console API keys");
+        assert!(
+            req.headers().get("x-api-key").is_some(),
+            "x-api-key must be set for console API keys"
+        );
         assert!(
             req.headers().get("authorization").is_none(),
             "console keys must NOT set Authorization (would 401)",
         );
         // Claude Code identity headers belong only to OAuth requests
-        assert!(req.headers().get("user-agent").map(|v| v.to_str().unwrap_or("").starts_with("claude-cli/")).unwrap_or(false) == false);
+        assert!(
+            req.headers()
+                .get("user-agent")
+                .map(|v| v.to_str().unwrap_or("").starts_with("claude-cli/"))
+                .unwrap_or(false)
+                == false
+        );
         assert!(req.headers().get("x-app").is_none());
     }
 
@@ -1391,39 +1416,73 @@ mod stream_tests {
             .get("anthropic-beta")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        assert!(beta.contains("claude-code-20250219"), "missing claude-code beta in {}", beta);
-        assert!(beta.contains("oauth-2025-04-20"), "missing oauth-2025-04-20 in {}", beta);
-        assert!(beta.contains("token-restricted"), "missing token-restricted in {}", beta);
+        assert!(
+            beta.contains("claude-code-20250219"),
+            "missing claude-code beta in {}",
+            beta
+        );
+        assert!(
+            beta.contains("oauth-2025-04-20"),
+            "missing oauth-2025-04-20 in {}",
+            beta
+        );
+        assert!(
+            beta.contains("token-restricted"),
+            "missing token-restricted in {}",
+            beta
+        );
     }
 
     // ── Test 16: adaptive thinking on Claude 4.6/4.7 ────────────────────────
 
     #[test]
     fn supports_adaptive_thinking_recognises_4_6_and_4_7_models() {
-        assert!(AnthropicProtocol::supports_adaptive_thinking("claude-opus-4-6"));
-        assert!(AnthropicProtocol::supports_adaptive_thinking("claude-opus-4-7"));
-        assert!(AnthropicProtocol::supports_adaptive_thinking("claude-sonnet-4-6-20251110"));
-        assert!(AnthropicProtocol::supports_adaptive_thinking("anthropic/claude-opus-4.6"));
+        assert!(AnthropicProtocol::supports_adaptive_thinking(
+            "claude-opus-4-6"
+        ));
+        assert!(AnthropicProtocol::supports_adaptive_thinking(
+            "claude-opus-4-7"
+        ));
+        assert!(AnthropicProtocol::supports_adaptive_thinking(
+            "claude-sonnet-4-6-20251110"
+        ));
+        assert!(AnthropicProtocol::supports_adaptive_thinking(
+            "anthropic/claude-opus-4.6"
+        ));
     }
 
     #[test]
     fn supports_adaptive_thinking_rejects_pre_4_6_models() {
-        assert!(!AnthropicProtocol::supports_adaptive_thinking("claude-3-5-sonnet"));
-        assert!(!AnthropicProtocol::supports_adaptive_thinking("claude-opus-4-5"));
-        assert!(!AnthropicProtocol::supports_adaptive_thinking("claude-haiku-4-5"));
-        assert!(!AnthropicProtocol::supports_adaptive_thinking("claude-3-opus"));
+        assert!(!AnthropicProtocol::supports_adaptive_thinking(
+            "claude-3-5-sonnet"
+        ));
+        assert!(!AnthropicProtocol::supports_adaptive_thinking(
+            "claude-opus-4-5"
+        ));
+        assert!(!AnthropicProtocol::supports_adaptive_thinking(
+            "claude-haiku-4-5"
+        ));
+        assert!(!AnthropicProtocol::supports_adaptive_thinking(
+            "claude-3-opus"
+        ));
     }
 
     #[test]
     fn map_think_level_to_adaptive_effort_downgrades_xhigh_on_4_6() {
         use crate::agents::thinking::ThinkLevel;
         assert_eq!(
-            AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::XHigh, "claude-opus-4-6"),
+            AnthropicProtocol::map_think_level_to_adaptive_effort(
+                &ThinkLevel::XHigh,
+                "claude-opus-4-6"
+            ),
             Some("max"),
             "4.6 rejects xhigh — should downgrade to max",
         );
         assert_eq!(
-            AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::XHigh, "claude-opus-4-7"),
+            AnthropicProtocol::map_think_level_to_adaptive_effort(
+                &ThinkLevel::XHigh,
+                "claude-opus-4-7"
+            ),
             Some("xhigh"),
             "4.7 supports xhigh natively",
         );
@@ -1432,11 +1491,41 @@ mod stream_tests {
     #[test]
     fn map_think_level_to_adaptive_effort_maps_other_levels() {
         use crate::agents::thinking::ThinkLevel;
-        assert_eq!(AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::Off, "claude-opus-4-7"), None);
-        assert_eq!(AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::Minimal, "claude-opus-4-7"), Some("low"));
-        assert_eq!(AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::Low, "claude-opus-4-7"), Some("low"));
-        assert_eq!(AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::Medium, "claude-opus-4-7"), Some("medium"));
-        assert_eq!(AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::High, "claude-opus-4-7"), Some("high"));
+        assert_eq!(
+            AnthropicProtocol::map_think_level_to_adaptive_effort(
+                &ThinkLevel::Off,
+                "claude-opus-4-7"
+            ),
+            None
+        );
+        assert_eq!(
+            AnthropicProtocol::map_think_level_to_adaptive_effort(
+                &ThinkLevel::Minimal,
+                "claude-opus-4-7"
+            ),
+            Some("low")
+        );
+        assert_eq!(
+            AnthropicProtocol::map_think_level_to_adaptive_effort(
+                &ThinkLevel::Low,
+                "claude-opus-4-7"
+            ),
+            Some("low")
+        );
+        assert_eq!(
+            AnthropicProtocol::map_think_level_to_adaptive_effort(
+                &ThinkLevel::Medium,
+                "claude-opus-4-7"
+            ),
+            Some("medium")
+        );
+        assert_eq!(
+            AnthropicProtocol::map_think_level_to_adaptive_effort(
+                &ThinkLevel::High,
+                "claude-opus-4-7"
+            ),
+            Some("high")
+        );
     }
 
     #[test]
@@ -1453,8 +1542,11 @@ mod stream_tests {
         assert_eq!(body["thinking"]["type"], "adaptive");
         assert_eq!(body["thinking"]["display"], "summarized");
         // budget_tokens must be omitted under adaptive (skip_serializing_if)
-        assert!(body["thinking"].get("budget_tokens").is_none(),
-            "adaptive thinking must NOT set budget_tokens, got {:?}", body["thinking"]);
+        assert!(
+            body["thinking"].get("budget_tokens").is_none(),
+            "adaptive thinking must NOT set budget_tokens, got {:?}",
+            body["thinking"]
+        );
         // ThinkLevel-derived effort lands on output_config.effort
         assert_eq!(body["output_config"]["effort"], "high");
     }
@@ -1488,8 +1580,10 @@ mod stream_tests {
         config.top_k = Some(40);
 
         let body = build_body(&payload, &config);
-        assert!(body.get("temperature").is_none(),
-            "4.7 forbids non-default temperature even without thinking");
+        assert!(
+            body.get("temperature").is_none(),
+            "4.7 forbids non-default temperature even without thinking"
+        );
         assert!(body.get("top_p").is_none());
         assert!(body.get("top_k").is_none());
     }
@@ -1498,8 +1592,8 @@ mod stream_tests {
 
     #[test]
     fn build_request_strips_top_level_oneof_from_tool_schema() {
-        use crate::dispatcher::ToolDefinition;
         use crate::providers::message::UnifiedMessage;
+        use crate::tool_metadata::ToolDefinition;
         use crate::ToolCategory;
 
         let tools = vec![ToolDefinition::new(
@@ -1520,8 +1614,11 @@ mod stream_tests {
 
         let body = build_body(&payload, &config);
         let schema = &body["tools"][0]["input_schema"];
-        assert!(schema.get("oneOf").is_none(),
-            "oneOf must be stripped from tool input_schema, got {:?}", schema);
+        assert!(
+            schema.get("oneOf").is_none(),
+            "oneOf must be stripped from tool input_schema, got {:?}",
+            schema
+        );
         // Fallback type must be present
         assert_eq!(schema["type"], "object");
         // Properties fallback so validator has something to check
@@ -1530,8 +1627,8 @@ mod stream_tests {
 
     #[test]
     fn build_request_strips_top_level_anyof_and_allof_from_tool_schema() {
-        use crate::dispatcher::ToolDefinition;
         use crate::providers::message::UnifiedMessage;
+        use crate::tool_metadata::ToolDefinition;
         use crate::ToolCategory;
 
         let tools = vec![ToolDefinition::new(
@@ -1557,8 +1654,8 @@ mod stream_tests {
 
     #[test]
     fn build_request_keeps_clean_tool_schema_unchanged() {
-        use crate::dispatcher::ToolDefinition;
         use crate::providers::message::UnifiedMessage;
+        use crate::tool_metadata::ToolDefinition;
         use crate::ToolCategory;
 
         let tools = vec![ToolDefinition::new(
@@ -1586,8 +1683,8 @@ mod stream_tests {
 
     #[test]
     fn build_request_drops_duplicate_tool_names() {
-        use crate::dispatcher::ToolDefinition;
         use crate::providers::message::UnifiedMessage;
+        use crate::tool_metadata::ToolDefinition;
         use crate::ToolCategory;
 
         let schema = serde_json::json!({"type": "object", "properties": {}});
@@ -1603,7 +1700,12 @@ mod stream_tests {
 
         let body = build_body(&payload, &config);
         let tools_array = body["tools"].as_array().unwrap();
-        assert_eq!(tools_array.len(), 2, "duplicate tool name must be dropped, got {:?}", tools_array);
+        assert_eq!(
+            tools_array.len(),
+            2,
+            "duplicate tool name must be dropped, got {:?}",
+            tools_array
+        );
         // First occurrence wins
         assert_eq!(tools_array[0]["name"], "search");
         assert_eq!(tools_array[0]["description"], "first");
@@ -1612,15 +1714,20 @@ mod stream_tests {
 
     #[test]
     fn build_request_dedup_detects_post_sanitization_collisions() {
-        use crate::dispatcher::ToolDefinition;
         use crate::providers::message::UnifiedMessage;
+        use crate::tool_metadata::ToolDefinition;
         use crate::ToolCategory;
 
         // Both sanitize to the same name `foo_bar`. The second must be dropped.
         let schema = serde_json::json!({"type": "object", "properties": {}});
         let tools = vec![
             ToolDefinition::new("foo.bar", "first", schema.clone(), ToolCategory::Builtin),
-            ToolDefinition::new("foo/bar", "DUPLICATE", schema.clone(), ToolCategory::Builtin),
+            ToolDefinition::new(
+                "foo/bar",
+                "DUPLICATE",
+                schema.clone(),
+                ToolCategory::Builtin,
+            ),
         ];
         let msgs = [UnifiedMessage::user("Hi")];
         let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
@@ -1629,7 +1736,11 @@ mod stream_tests {
 
         let body = build_body(&payload, &config);
         let tools_array = body["tools"].as_array().unwrap();
-        assert_eq!(tools_array.len(), 1, "post-sanitization collision must dedup");
+        assert_eq!(
+            tools_array.len(),
+            1,
+            "post-sanitization collision must dedup"
+        );
         assert_eq!(tools_array[0]["name"], "foo_bar");
         assert_eq!(tools_array[0]["description"], "first");
     }
@@ -1644,8 +1755,10 @@ mod stream_tests {
         config.api_key = Some("sk-ant-api-test".to_string());
 
         let body = build_body(&payload, &config);
-        assert_eq!(body["output_config"]["effort"], "max",
-            "4.6 rejects xhigh — effort must be downgraded to max");
+        assert_eq!(
+            body["output_config"]["effort"], "max",
+            "4.6 rejects xhigh — effort must be downgraded to max"
+        );
     }
 
     #[test]

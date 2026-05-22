@@ -7,15 +7,14 @@ use crate::sync_primitives::Arc;
 use crate::extension::ExtensionManager;
 use crate::gateway::protocol::{JsonRpcResponse, INTERNAL_ERROR};
 
-
-mod marketplace;
 mod install;
 mod manage;
+mod marketplace;
 mod runtime;
 
-pub use marketplace::*;
 pub use install::*;
 pub use manage::*;
+pub use marketplace::*;
 pub use runtime::*;
 
 // ============================================================================
@@ -48,8 +47,8 @@ pub fn get_extension_manager() -> Result<&'static Arc<ExtensionManager>, JsonRpc
 // Internal helper — build MarketplaceManager from config
 // ============================================================================
 
-pub(crate) fn build_marketplace_manager() -> Result<crate::extension::marketplace::MarketplaceManager, String>
-{
+pub(crate) fn build_marketplace_manager(
+) -> Result<crate::extension::marketplace::MarketplaceManager, String> {
     use crate::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
     use std::collections::HashMap;
 

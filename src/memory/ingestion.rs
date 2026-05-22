@@ -65,7 +65,6 @@ impl MemoryIngestion {
 
 #[cfg(test)]
 mod tests {
-    
 
     #[test]
     fn test_store_memory_disabled() {

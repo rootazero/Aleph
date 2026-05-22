@@ -24,8 +24,8 @@ pub struct TestConnectionResult {
     pub message: String,
 }
 
-pub mod helpers;
 pub mod handlers;
+pub mod helpers;
 pub mod voices;
 
 pub use handlers::*;

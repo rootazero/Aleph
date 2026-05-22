@@ -142,10 +142,7 @@ impl OpenAiResponsesProtocol {
             "openai-responses",
             variant.store,
         );
-        let tools = shared::build_tools(
-            payload.tools,
-            policy.capabilities.supports_strict_schema,
-        );
+        let tools = shared::build_tools(payload.tools, policy.capabilities.supports_strict_schema);
         let tool_choice = shared::map_tool_choice(payload.tool_choice.as_ref())
             .or_else(|| Some(serde_json::Value::from("auto")));
 
@@ -611,4 +608,3 @@ fn parse_sse_event_multi(
 
 #[cfg(test)]
 mod tests;
-

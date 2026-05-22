@@ -1,9 +1,9 @@
 use serde_json::json;
 
+use super::super::types::*;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use super::super::types::*;
 
 /// List all installed plugins
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {

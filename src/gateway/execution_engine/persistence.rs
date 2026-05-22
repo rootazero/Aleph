@@ -58,10 +58,7 @@ where
         true
     }
 
-    pub(super) async fn persist_run_task_status(&self,
-        run_id: &str,
-        status: TaskStatus,
-    ) {
+    pub(super) async fn persist_run_task_status(&self, run_id: &str, status: TaskStatus) {
         let Some(db) = self.state_database.as_ref() else {
             return;
         };

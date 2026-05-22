@@ -178,7 +178,7 @@ impl MemoryReflector {
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::memory::reflector::types::Synthesis;
 
     /// Verifies the stub shape that the empty-packet short-circuit returns.

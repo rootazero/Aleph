@@ -5,7 +5,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::dispatcher::{
+use crate::tool_metadata::{
     DEFAULT_FILE_OPS_ENABLED, DEFAULT_MAX_FILE_SIZE, DEFAULT_REQUIRE_CONFIRMATION_FOR_DELETE,
     DEFAULT_REQUIRE_CONFIRMATION_FOR_WRITE,
 };

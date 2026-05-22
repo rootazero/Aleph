@@ -4,9 +4,7 @@ use std::collections::HashMap;
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
-use crate::providers::anthropic::{
-    ContentBlock, ImageSource, Message, MessageContent,
-};
+use crate::providers::anthropic::{ContentBlock, ImageSource, Message, MessageContent};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::protocols::anthropic::provider_policy::AnthropicCapabilities;
 use crate::sync_primitives::{Arc, RwLock};
@@ -19,9 +17,7 @@ impl AnthropicProtocol {
         Self {
             client,
             name_map: Arc::new(RwLock::new(HashMap::new())),
-            stream_idle_timeout_secs: std::sync::Arc::new(
-                std::sync::atomic::AtomicU64::new(60),
-            ),
+            stream_idle_timeout_secs: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(60)),
         }
     }
 
@@ -54,10 +50,14 @@ impl AnthropicProtocol {
                     let mut blocks = Vec::new();
                     for block in content {
                         match block {
-                            crate::providers::message::ContentBlock::Text { text, cache_control } => {
+                            crate::providers::message::ContentBlock::Text {
+                                text,
+                                cache_control,
+                            } => {
                                 blocks.push(ContentBlock::Text {
                                     text: text.clone(),
-                                    cache_control: cache_control.map(|_| crate::thinker::cache::CacheControl::ephemeral()),
+                                    cache_control: cache_control
+                                        .map(|_| crate::thinker::cache::CacheControl::ephemeral()),
                                 });
                             }
                             crate::providers::message::ContentBlock::Image { data, mime_type } => {
@@ -121,11 +121,16 @@ impl AnthropicProtocol {
                     let mut pending_thinking: Option<String> = None;
                     for block in content {
                         match block {
-                            crate::providers::message::ContentBlock::Text { text, cache_control } => {
+                            crate::providers::message::ContentBlock::Text {
+                                text,
+                                cache_control,
+                            } => {
                                 if !text.trim().is_empty() {
                                     blocks.push(ContentBlock::Text {
                                         text: text.clone(),
-                                        cache_control: cache_control.map(|_| crate::thinker::cache::CacheControl::ephemeral()),
+                                        cache_control: cache_control.map(|_| {
+                                            crate::thinker::cache::CacheControl::ephemeral()
+                                        }),
                                     });
                                 }
                             }
@@ -423,6 +428,4 @@ impl AnthropicProtocol {
             }
         }
     }
-
 }
-

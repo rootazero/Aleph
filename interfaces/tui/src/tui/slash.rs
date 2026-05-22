@@ -83,8 +83,14 @@ pub enum LocalCommand {
 const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/clear", "Clear the screen"),
     ("/verbose", "Toggle verbose/debug output"),
-    ("/usage", "Show token usage + cost estimate for this session"),
-    ("/compress", "Compact session history (server-side summarisation)"),
+    (
+        "/usage",
+        "Show token usage + cost estimate for this session",
+    ),
+    (
+        "/compress",
+        "Compact session history (server-side summarisation)",
+    ),
     ("/stop", "Abort the currently active run"),
     ("/undo", "Remove the last user+assistant turn from history"),
     ("/retry", "Undo + re-send the previous user message"),
@@ -200,7 +206,10 @@ mod tests {
 
     #[test]
     fn parse_control_panel_commands() {
-        assert_eq!(parse_input("/usage"), ParsedInput::Local(LocalCommand::Usage));
+        assert_eq!(
+            parse_input("/usage"),
+            ParsedInput::Local(LocalCommand::Usage)
+        );
         assert_eq!(
             parse_input("/compress"),
             ParsedInput::Local(LocalCommand::Compress)
@@ -211,9 +220,15 @@ mod tests {
             ParsedInput::Local(LocalCommand::Compress)
         );
         assert_eq!(parse_input("/stop"), ParsedInput::Local(LocalCommand::Stop));
-        assert_eq!(parse_input("/abort"), ParsedInput::Local(LocalCommand::Stop));
+        assert_eq!(
+            parse_input("/abort"),
+            ParsedInput::Local(LocalCommand::Stop)
+        );
         assert_eq!(parse_input("/undo"), ParsedInput::Local(LocalCommand::Undo));
-        assert_eq!(parse_input("/retry"), ParsedInput::Local(LocalCommand::Retry));
+        assert_eq!(
+            parse_input("/retry"),
+            ParsedInput::Local(LocalCommand::Retry)
+        );
     }
 
     #[test]

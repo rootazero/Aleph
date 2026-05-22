@@ -20,8 +20,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
-    let quit_stop =
-        MenuItem::with_id(app, "quit_stop", "Quit & Stop Aleph", true, None::<&str>)?;
+    let quit_stop = MenuItem::with_id(app, "quit_stop", "Quit & Stop Aleph", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &separator, &quit, &quit_stop])?;
 
     let mut builder = TrayIconBuilder::with_id("aleph-tray")

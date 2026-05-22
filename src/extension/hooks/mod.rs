@@ -905,8 +905,7 @@ mod tests {
         let fp = consent.entries()[0].fingerprint.clone();
         consent.approve(&fp).expect("approve");
 
-        let executor =
-            HookExecutor::new(vec![command_hook(cmd)]).with_consent(consent.clone());
+        let executor = HookExecutor::new(vec![command_hook(cmd)]).with_consent(consent.clone());
         let result = executor
             .execute(HookEvent::BeforeToolCall, &HookContext::new("s"))
             .await
@@ -969,8 +968,7 @@ mod tests {
         } else {
             format!("touch '{}'", sentinel.display())
         };
-        let executor =
-            HookExecutor::new(vec![observer_command_hook(HookEvent::MessageSent, &cmd)]);
+        let executor = HookExecutor::new(vec![observer_command_hook(HookEvent::MessageSent, &cmd)]);
 
         // A mismatched event must not run the MessageSent observer.
         fire_observer(&executor, HookEvent::MessageReceived, "s", vec![]).await;

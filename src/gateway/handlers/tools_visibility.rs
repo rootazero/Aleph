@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::agents::AgentDef;
-use crate::dispatcher::{ToolRegistry, ToolSource, UnifiedTool};
+use crate::tool_metadata::{ToolRegistry, ToolSource, UnifiedTool};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 
@@ -362,7 +362,9 @@ mod tests {
         ];
         let filtered = filter_by_source(tools, Some("mcp:*"));
         assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().all(|t| matches!(t.source, ToolSource::Mcp { .. })));
+        assert!(filtered
+            .iter()
+            .all(|t| matches!(t.source, ToolSource::Mcp { .. })));
     }
 
     #[test]

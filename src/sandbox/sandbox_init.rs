@@ -63,9 +63,7 @@ pub struct LinuxInitPolicy {
 
 /// System-minimum read paths granted unconditionally. Without these,
 /// dynamic linker / libc / shells in `/usr/bin` cannot load.
-pub const SYSTEM_READ_PATHS: &[&str] = &[
-    "/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc",
-];
+pub const SYSTEM_READ_PATHS: &[&str] = &["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc"];
 
 /// Frozen seccomp denylist. Each name corresponds to a syscall that gets
 /// `SECCOMP_RET_ERRNO(EPERM)`; everything else falls through to allow.
@@ -237,8 +235,8 @@ fn parse_init_args(args: &[String]) -> Result<ParsedInitArgs, String> {
         }
     }
     let policy_str = policy_json.ok_or_else(|| "missing --policy".to_string())?;
-    let policy: LinuxInitPolicy = serde_json::from_str(policy_str)
-        .map_err(|e| format!("--policy JSON parse error: {e}"))?;
+    let policy: LinuxInitPolicy =
+        serde_json::from_str(policy_str).map_err(|e| format!("--policy JSON parse error: {e}"))?;
 
     let target = args
         .get(i)
@@ -329,8 +327,8 @@ fn apply_seccomp(policy: &LinuxInitPolicy) -> Result<(), String> {
 
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
     for name in SECCOMP_DENYLIST_SIMPLE {
-        let nr = syscall_nr(name)
-            .ok_or_else(|| format!("unknown syscall name in denylist: {name}"))?;
+        let nr =
+            syscall_nr(name).ok_or_else(|| format!("unknown syscall name in denylist: {name}"))?;
         // Empty rule vec = unconditional match for this syscall.
         rules.insert(nr, vec![]);
     }
@@ -583,7 +581,10 @@ mod tests {
                         keyctl,add_key,request_key,userfaultfd,io_uring_setup,\
                         io_uring_register,io_uring_enter,mknod,mknodat,swapon,swapoff,\
                         nfsservctl,syslog,reboot,setns";
-        assert_eq!(joined, expected, "seccomp denylist changed — update SP-2 spec");
+        assert_eq!(
+            joined, expected,
+            "seccomp denylist changed — update SP-2 spec"
+        );
     }
 
     #[test]

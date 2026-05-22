@@ -77,8 +77,8 @@ impl LoopTool for BuiltinToolAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::{ToolCategory, ToolDefinition as DispatcherToolDefinition};
     use crate::error::{AlephError, Result};
+    use crate::tool_metadata::{ToolCategory, ToolDefinition as DispatcherToolDefinition};
     use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;

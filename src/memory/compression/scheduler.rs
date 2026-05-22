@@ -147,7 +147,10 @@ impl CompressionScheduler {
 
     /// Get current configuration
     pub fn get_config(&self) -> SchedulerConfig {
-        self.config.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 

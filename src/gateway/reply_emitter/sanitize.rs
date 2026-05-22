@@ -1,6 +1,6 @@
+use regex::Regex;
 use std::borrow::Cow;
 use std::sync::LazyLock;
-use regex::Regex;
 
 // ── LLM output sanitization ────────────────────────────────────────────────
 
@@ -391,4 +391,3 @@ fn try_extract_paired_tag_bytes(bytes: &[u8], pos: usize, tag: &[u8]) -> Option<
     }
     None
 }
-

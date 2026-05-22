@@ -1,18 +1,21 @@
 use super::*;
-use std::collections::VecDeque;
-use reqwest::Client;
-use crate::config::ProviderConfig;
 use crate::config::types::provider::ResponseFormat;
+use crate::config::ProviderConfig;
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason};
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
-use crate::providers::openai::{ChatCompletionResponse, OpenAiFunctionCall, OpenAiTool, OpenAiFunction, OpenAiToolCall};
+use crate::providers::openai::{
+    ChatCompletionResponse, OpenAiFunction, OpenAiFunctionCall, OpenAiTool, OpenAiToolCall,
+};
+use reqwest::Client;
+use std::collections::VecDeque;
 
 use crate::providers::protocols::openai_chat::sse::{defer_done_until_usage, parse_chat_sse_event};
 
 #[test]
 fn openai_chat_usage_deserializes_cache_and_reasoning_tokens() {
-    let fixture = include_str!("../../../../tests/fixtures/openai_sse/chat_completion_with_cache.txt");
+    let fixture =
+        include_str!("../../../../tests/fixtures/openai_sse/chat_completion_with_cache.txt");
 
     let json_line = fixture
         .lines()
@@ -294,7 +297,7 @@ fn test_parse_malformed_function_arguments() {
 
 #[test]
 fn test_build_request_includes_tools() {
-    use crate::dispatcher::ToolDefinition;
+    use crate::tool_metadata::ToolDefinition;
     use crate::ToolCategory;
 
     let protocol = OpenAiProtocol::new(Client::new());
@@ -348,7 +351,7 @@ fn test_build_request_no_tools_when_none() {
 
 #[test]
 fn test_build_request_with_multiple_tools() {
-    use crate::dispatcher::ToolDefinition;
+    use crate::tool_metadata::ToolDefinition;
     use crate::ToolCategory;
 
     let protocol = OpenAiProtocol::new(Client::new());
@@ -604,7 +607,8 @@ fn test_parse_sse_null_reasoning_content_falls_through_to_reasoning() {
     // a co-present `reasoning` field must still be picked up.
     let mut tracker = IndexIdTracker::new();
     let mut pending = VecDeque::new();
-    let data = r#"{"choices":[{"delta":{"reasoning_content":null,"reasoning":"fallback"},"index":0}]}"#;
+    let data =
+        r#"{"choices":[{"delta":{"reasoning_content":null,"reasoning":"fallback"},"index":0}]}"#;
     parse_chat_sse_event(data, &mut tracker, &mut pending);
 
     assert_eq!(pending.len(), 1);
@@ -727,13 +731,16 @@ fn assert_finish_reason_maps_to(input: &str, expected: StopReason) {
     let mut tracker = IndexIdTracker::default();
     parse_chat_sse_event(&json_line, &mut tracker, &mut out);
 
-    let done = out
-        .iter()
-        .find_map(|r| match r {
-            Ok(ProviderDelta::Done(reason)) => Some(reason.clone()),
-            _ => None,
-        });
-    assert_eq!(done, Some(expected), "finish_reason `{}` mapping wrong", input);
+    let done = out.iter().find_map(|r| match r {
+        Ok(ProviderDelta::Done(reason)) => Some(reason.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        done,
+        Some(expected),
+        "finish_reason `{}` mapping wrong",
+        input
+    );
 }
 
 #[test]
@@ -778,12 +785,10 @@ fn chat_finish_reason_unknown_falls_back_to_endturn() {
     let mut tracker = IndexIdTracker::default();
     parse_chat_sse_event(json_line, &mut tracker, &mut out);
 
-    let done = out
-        .iter()
-        .find_map(|r| match r {
-            Ok(ProviderDelta::Done(reason)) => Some(reason.clone()),
-            _ => None,
-        });
+    let done = out.iter().find_map(|r| match r {
+        Ok(ProviderDelta::Done(reason)) => Some(reason.clone()),
+        _ => None,
+    });
     assert_eq!(
         done,
         Some(StopReason::EndTurn),
@@ -799,7 +804,11 @@ fn assert_chat_stop_field(stop_sequences: Option<&str>, assertion: impl Fn(serde
     let proto = super::OpenAiProtocol::new(Client::new());
     let msgs = [UnifiedMessage::user("hi")];
     let payload = RequestPayload::new(&msgs);
-    let req = proto.build_request(&payload, &cfg).unwrap().build().unwrap();
+    let req = proto
+        .build_request(&payload, &cfg)
+        .unwrap()
+        .build()
+        .unwrap();
     let body: serde_json::Value =
         serde_json::from_slice(req.body().unwrap().as_bytes().unwrap()).unwrap();
     assertion(body);
@@ -873,17 +882,24 @@ fn build_chat_body_for_max_tokens(model: &str, max_tokens: Option<u32>) -> serde
 #[test]
 fn chat_uses_max_completion_tokens_for_o3_mini() {
     let body = build_chat_body_for_max_tokens("o3-mini", Some(4096));
-    assert_eq!(body.get("max_completion_tokens"), Some(&serde_json::json!(4096)));
-    assert!(body.get("max_tokens").is_none(),
-        "max_tokens must NOT be present for o3-mini (reasoning model)");
+    assert_eq!(
+        body.get("max_completion_tokens"),
+        Some(&serde_json::json!(4096))
+    );
+    assert!(
+        body.get("max_tokens").is_none(),
+        "max_tokens must NOT be present for o3-mini (reasoning model)"
+    );
 }
 
 #[test]
 fn chat_uses_max_tokens_for_gpt4o() {
     let body = build_chat_body_for_max_tokens("gpt-4o", Some(4096));
     assert_eq!(body.get("max_tokens"), Some(&serde_json::json!(4096)));
-    assert!(body.get("max_completion_tokens").is_none(),
-        "max_completion_tokens must NOT be present for gpt-4o (legacy model)");
+    assert!(
+        body.get("max_completion_tokens").is_none(),
+        "max_completion_tokens must NOT be present for gpt-4o (legacy model)"
+    );
 }
 
 #[test]
@@ -897,8 +913,8 @@ fn chat_omits_max_tokens_when_both_none() {
 
 #[test]
 fn chat_response_format_json_schema_emits_strict_for_openai() {
-    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     use crate::config::ProviderConfig;
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
     let mut config = ProviderConfig::test_config("gpt-4o");
     config.response_format = Some(ResponseFormat::JsonSchema {
@@ -923,15 +939,24 @@ fn chat_response_format_json_schema_emits_strict_for_openai() {
             .build_request(&payload, &config)
             .expect("build_request should succeed"),
     );
-    assert_eq!(body["response_format"]["type"], serde_json::json!("json_schema"));
-    assert_eq!(body["response_format"]["json_schema"]["name"], serde_json::json!("answer"));
-    assert_eq!(body["response_format"]["json_schema"]["strict"], serde_json::json!(true));
+    assert_eq!(
+        body["response_format"]["type"],
+        serde_json::json!("json_schema")
+    );
+    assert_eq!(
+        body["response_format"]["json_schema"]["name"],
+        serde_json::json!("answer")
+    );
+    assert_eq!(
+        body["response_format"]["json_schema"]["strict"],
+        serde_json::json!(true)
+    );
 }
 
 #[test]
 fn chat_response_format_json_object() {
-    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     use crate::config::ProviderConfig;
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
     let mut config = ProviderConfig::test_config("gpt-4o");
     config.response_format = Some(ResponseFormat::JsonObject);
@@ -952,13 +977,16 @@ fn chat_response_format_json_object() {
             .build_request(&payload, &config)
             .expect("build_request should succeed"),
     );
-    assert_eq!(body["response_format"], serde_json::json!({"type":"json_object"}));
+    assert_eq!(
+        body["response_format"],
+        serde_json::json!({"type":"json_object"})
+    );
 }
 
 #[test]
 fn chat_response_format_stripped_for_third_party_endpoint() {
-    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     use crate::config::ProviderConfig;
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
     let mut config = ProviderConfig::test_config("gpt-4o");
     config.base_url = Some("http://localhost:8080".into());
@@ -988,8 +1016,8 @@ fn chat_response_format_stripped_for_third_party_endpoint() {
 
 #[test]
 fn chat_response_format_none_omits_field() {
-    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     use crate::config::ProviderConfig;
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
     let config = ProviderConfig::test_config("gpt-4o");
     // response_format: None by default
@@ -1017,8 +1045,8 @@ fn chat_response_format_none_omits_field() {
 
 #[test]
 fn chat_parallel_tool_calls_some_true() {
-    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     use crate::config::ProviderConfig;
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
     let mut config = ProviderConfig::test_config("gpt-4o");
     config.parallel_tool_calls = Some(true);
@@ -1044,8 +1072,8 @@ fn chat_parallel_tool_calls_some_true() {
 
 #[test]
 fn chat_parallel_tool_calls_some_false() {
-    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     use crate::config::ProviderConfig;
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
     let mut config = ProviderConfig::test_config("gpt-4o");
     config.parallel_tool_calls = Some(false);
@@ -1071,8 +1099,8 @@ fn chat_parallel_tool_calls_some_false() {
 
 #[test]
 fn chat_parallel_tool_calls_none_omits_field() {
-    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     use crate::config::ProviderConfig;
+    use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
     let protocol = super::OpenAiProtocol::new(reqwest::Client::new());
     let config = ProviderConfig::test_config("gpt-4o");
     // parallel_tool_calls: None by default

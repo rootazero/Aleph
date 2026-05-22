@@ -3,8 +3,8 @@
 //! Fluent builder API for constructing UnifiedTool instances with optional fields.
 
 use super::{ChannelType, DispatchMode, UnifiedTool};
-use crate::dispatcher::types::definition::{Capability, StructuredToolMeta, ToolDiff};
-use crate::dispatcher::types::safety::ToolSafetyLevel;
+use crate::tool_metadata::types::definition::{Capability, StructuredToolMeta, ToolDiff};
+use crate::tool_metadata::types::safety::ToolSafetyLevel;
 use serde_json::Value;
 
 impl UnifiedTool {

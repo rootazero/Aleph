@@ -59,7 +59,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // Dispatcher-side ToolRegistry — owns the `ToolHealthCache` whose snapshot
     // feeds `runtime_state_blocks`. Threaded so `build_system_prompt` can
     // populate `<tool_runtime_state>` fragments.
-    dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
+    dispatch_registry: Option<Arc<alephcore::tool_metadata::ToolRegistry>>,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     security_store: Arc<alephcore::gateway::security::SecurityStore>,
     // Gateway session-epoch registrar for compaction-driven session-split.

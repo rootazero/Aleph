@@ -773,10 +773,7 @@ impl InboundMessageRouter {
                         // model as plain text. Only handles namespace-like
                         // tokens (not shorthand) — and is_shorthand list
                         // above already short-circuited those.
-                        if self
-                            .try_send_unknown_command_help(&msg, namespace)
-                            .await
-                        {
+                        if self.try_send_unknown_command_help(&msg, namespace).await {
                             return Ok(());
                         }
                     }
@@ -887,7 +884,7 @@ impl InboundMessageRouter {
     fn build_namespace_keyboard(
         &self,
         namespace: &str,
-        children: &[crate::dispatcher::UnifiedTool],
+        children: &[crate::tool_metadata::UnifiedTool],
     ) -> super::channel::InlineKeyboard {
         use super::channel::{InlineButton, InlineKeyboard};
 

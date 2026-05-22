@@ -11,7 +11,7 @@ mod sections;
 mod tests;
 
 use crate::config::ProfileConfig;
-use crate::dispatcher::tool_index::HydrationResult;
+use crate::tool_metadata::tool_index::HydrationResult;
 use crate::tools::info::ToolInfo;
 
 use crate::agents::AgentDef;

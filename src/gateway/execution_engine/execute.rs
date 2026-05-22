@@ -189,9 +189,7 @@ where
         if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY).cloned() {
             if let Ok(mode) = serde_json::from_str::<serde_json::Value>(&mode_json) {
                 if mode.get("type").and_then(|v| v.as_str()) == Some("skill") {
-                    if let Some(instructions) =
-                        mode.get("instructions").and_then(|v| v.as_str())
-                    {
+                    if let Some(instructions) = mode.get("instructions").and_then(|v| v.as_str()) {
                         if !instructions.is_empty() {
                             request.metadata.insert(
                                 "slash_skill_instructions".to_string(),
@@ -205,10 +203,9 @@ where
                             .filter_map(|v| v.as_str().map(str::to_string))
                             .collect();
                         if !tools.is_empty() {
-                            request.metadata.insert(
-                                "slash_skill_allowed_tools".to_string(),
-                                tools.join(","),
-                            );
+                            request
+                                .metadata
+                                .insert("slash_skill_allowed_tools".to_string(), tools.join(","));
                         }
                     }
                 }

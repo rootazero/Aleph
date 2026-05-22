@@ -45,7 +45,10 @@ impl<'a> StatusBar<'a> {
             Span::styled("\u{2502}", sep_style.bg(DEFAULT_THEME.status_bg)),
             Span::styled(format!(" {} ", token_str), text_style),
             Span::styled("\u{2502}", sep_style.bg(DEFAULT_THEME.status_bg)),
-            Span::styled(format!(" T:{} ", self.tool_progress_mode.glyph()), text_style),
+            Span::styled(
+                format!(" T:{} ", self.tool_progress_mode.glyph()),
+                text_style,
+            ),
             Span::styled("\u{2502}", sep_style.bg(DEFAULT_THEME.status_bg)),
             Span::styled(" /help for commands ", text_style),
         ]);

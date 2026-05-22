@@ -39,11 +39,11 @@ impl LeakDecision {
 /// `LEAK_PATTERNS` to share this list would change existing redaction behavior
 /// and break tests — kept separate by design.
 pub const SECRET_PATTERN_SOURCES: &[(&str, &str)] = &[
-    ("sk_proj",     r"sk-proj-[A-Za-z0-9_\-]{20,}"),
-    ("sk_ant",      r"sk-ant-[A-Za-z0-9_\-]{20,}"),
-    ("aws_akia",    r"AKIA[0-9A-Z]{16}"),
-    ("github_pat",  r"ghp_[A-Za-z0-9]{20,}"),
-    ("gitlab_pat",  r"glpat-[A-Za-z0-9_\-]{20,}"),
+    ("sk_proj", r"sk-proj-[A-Za-z0-9_\-]{20,}"),
+    ("sk_ant", r"sk-ant-[A-Za-z0-9_\-]{20,}"),
+    ("aws_akia", r"AKIA[0-9A-Z]{16}"),
+    ("github_pat", r"ghp_[A-Za-z0-9]{20,}"),
+    ("gitlab_pat", r"glpat-[A-Za-z0-9_\-]{20,}"),
 ];
 
 /// Produce bytes-flavored regexes matching the same patterns as
@@ -53,7 +53,10 @@ pub fn default_patterns_bytes() -> Vec<(&'static str, regex::bytes::Regex)> {
     SECRET_PATTERN_SOURCES
         .iter()
         .map(|(name, src)| {
-            (*name, regex::bytes::Regex::new(src).expect("static pattern compiles"))
+            (
+                *name,
+                regex::bytes::Regex::new(src).expect("static pattern compiles"),
+            )
         })
         .collect()
 }

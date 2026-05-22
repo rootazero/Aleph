@@ -1,13 +1,9 @@
+use super::{current_timestamp_ms, SecurityStore};
 use rusqlite::{params, Result as SqliteResult};
-use super::{SecurityStore, current_timestamp_ms};
 
 impl SecurityStore {
     /// Approve a channel sender
-    pub fn approve_sender(
-        &self,
-        channel: &str,
-        sender_id: &str,
-    ) -> SqliteResult<()> {
+    pub fn approve_sender(&self, channel: &str, sender_id: &str) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO approved_senders (channel, sender_id, approved_at)
@@ -21,11 +17,7 @@ impl SecurityStore {
     }
 
     /// Check if sender is approved
-    pub fn is_sender_approved(
-        &self,
-        channel: &str,
-        sender_id: &str,
-    ) -> SqliteResult<bool> {
+    pub fn is_sender_approved(&self, channel: &str, sender_id: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT 1 FROM approved_senders WHERE channel = ?1 AND sender_id = ?2 AND revoked_at IS NULL",
@@ -35,11 +27,7 @@ impl SecurityStore {
     }
 
     /// Revoke a sender
-    pub fn revoke_sender(
-        &self,
-        channel: &str,
-        sender_id: &str,
-    ) -> SqliteResult<bool> {
+    pub fn revoke_sender(&self, channel: &str, sender_id: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows = conn.execute(
             "UPDATE approved_senders SET revoked_at = ?1 WHERE channel = ?2 AND sender_id = ?3 AND revoked_at IS NULL",
@@ -49,10 +37,7 @@ impl SecurityStore {
     }
 
     /// List approved senders for a channel
-    pub fn list_senders(
-        &self,
-        channel: &str,
-    ) -> SqliteResult<Vec<(String, i64)>> {
+    pub fn list_senders(&self, channel: &str) -> SqliteResult<Vec<(String, i64)>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT sender_id, approved_at FROM approved_senders

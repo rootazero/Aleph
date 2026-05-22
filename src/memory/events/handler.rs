@@ -372,8 +372,7 @@ impl MemoryCommandHandler {
         actor: EventActor,
     ) -> Result<(), AlephError> {
         let seq = self.db.get_memory_event_latest_seq(note_path).await? + 1;
-        let envelope =
-            MemoryEventEnvelope::new(note_path.to_string(), seq, event, actor, None);
+        let envelope = MemoryEventEnvelope::new(note_path.to_string(), seq, event, actor, None);
         self.db.append_memory_event(&envelope).await?;
         Ok(())
     }

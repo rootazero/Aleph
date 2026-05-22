@@ -608,7 +608,12 @@ mod tests {
         let tool = MarkdownCliTool::new(spec);
 
         // The aleph extensions must be present.
-        let aleph = tool.spec.metadata.aleph.as_ref().expect("aleph extensions present");
+        let aleph = tool
+            .spec
+            .metadata
+            .aleph
+            .as_ref()
+            .expect("aleph extensions present");
 
         // Sandbox mode must be Host.
         assert!(
@@ -641,7 +646,11 @@ mod tests {
     fn host_network_none_contract_sets_no_proxy() {
         let mut cmd = std::process::Command::new("true");
         let spec = make_spec(NetworkMode::None, SandboxMode::Host);
-        let aleph = spec.metadata.aleph.as_ref().expect("aleph extensions present");
+        let aleph = spec
+            .metadata
+            .aleph
+            .as_ref()
+            .expect("aleph extensions present");
 
         // Mirror executor.rs::execute_on_host lines 59-70.
         if matches!(aleph.security.network, NetworkMode::None) {

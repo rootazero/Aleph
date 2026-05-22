@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::memory::store::sqlite::schema::{
-        ddl, drop_obsolete_facts_tables, init_schema, migrations,
-        migrate_unify_default_to_main_agent, migrate_notes_links_to_raw,
+        ddl, drop_obsolete_facts_tables, init_schema, migrate_notes_links_to_raw,
+        migrate_unify_default_to_main_agent, migrations,
     };
     use rusqlite::{Connection, OptionalExtension};
 
@@ -215,11 +215,8 @@ mod tests {
             )",
         )
         .unwrap();
-        migrations::migrate_dream_reports_drop_legacy_cols(&conn,
-        )
-        .unwrap();
-        migrations::migrate_dream_reports_drop_legacy_cols(&conn)
-            .unwrap(); // idempotent
+        migrations::migrate_dream_reports_drop_legacy_cols(&conn).unwrap();
+        migrations::migrate_dream_reports_drop_legacy_cols(&conn).unwrap(); // idempotent
         let cols: Vec<String> = conn
             .prepare("PRAGMA table_info(dream_reports)")
             .unwrap()

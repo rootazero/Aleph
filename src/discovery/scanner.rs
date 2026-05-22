@@ -104,11 +104,7 @@ impl DirectoryScanner {
             // Reverse to get proper priority (deeper = higher priority)
             for (i, dir) in claude_dirs.into_iter().rev().enumerate() {
                 let priority = 20u32.saturating_add(i as u32);
-                dirs.push(ScanDirectory::new(
-                    dir,
-                    DiscoverySource::Project,
-                    priority,
-                ));
+                dirs.push(ScanDirectory::new(dir, DiscoverySource::Project, priority));
             }
         }
 
@@ -149,10 +145,7 @@ impl DirectoryScanner {
     }
 
     /// Discover a specific component type (skills, commands, agents, plugins)
-    pub fn discover_component(
-        &self,
-        component_name: &str,
-    ) -> DiscoveryResult<Vec<DiscoveredPath>> {
+    pub fn discover_component(&self, component_name: &str) -> DiscoveryResult<Vec<DiscoveredPath>> {
         const MAX_COMPONENT_NAME_LEN: usize = 256;
 
         if component_name.is_empty() {

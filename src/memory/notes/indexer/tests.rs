@@ -1,334 +1,335 @@
-    use super::*;
-    use crate::memory::store::SqliteMemoryBackend;
-    use tempfile::TempDir;
-    use uuid::Uuid;
 
-    const AGENT: &str = "default";
+use super::*;
+use crate::memory::store::SqliteMemoryBackend;
+use tempfile::TempDir;
+use uuid::Uuid;
 
-    fn create_test_db() -> Arc<SqliteMemoryBackend> {
-        let temp_dir = std::env::temp_dir();
-        let db_path = temp_dir.join(format!("test_indexer_{}", Uuid::new_v4()));
-        Arc::new(SqliteMemoryBackend::new(&db_path).unwrap())
+const AGENT: &str = "default";
+
+fn create_test_db() -> Arc<SqliteMemoryBackend> {
+    let temp_dir = std::env::temp_dir();
+    let db_path = temp_dir.join(format!("test_indexer_{}", Uuid::new_v4()));
+    Arc::new(SqliteMemoryBackend::new(&db_path).unwrap())
+}
+
+fn sample_md(category: &str, facts: &[&str], links: &[&str]) -> String {
+    let mut out = String::new();
+    out.push_str("---\n");
+    out.push_str(&format!("category: {category}\n"));
+    out.push_str("tags: [test]\n");
+    out.push_str("created: 2026-04-01\n");
+    out.push_str("updated: 2026-04-10\n");
+    out.push_str("---\n\n");
+    for fact in facts {
+        out.push_str(&format!("- {fact}\n"));
     }
+    if !links.is_empty() {
+        out.push('\n');
+        let link_strs: Vec<String> = links.iter().map(|l| format!("[[{l}]]")).collect();
+        out.push_str(&format!("Related: {}\n", link_strs.join(" ")));
+    }
+    out
+}
 
-    fn sample_md(category: &str, facts: &[&str], links: &[&str]) -> String {
-        let mut out = String::new();
-        out.push_str("---\n");
-        out.push_str(&format!("category: {category}\n"));
-        out.push_str("tags: [test]\n");
-        out.push_str("created: 2026-04-01\n");
-        out.push_str("updated: 2026-04-10\n");
-        out.push_str("---\n\n");
-        for fact in facts {
-            out.push_str(&format!("- {fact}\n"));
+/// Create memory_dir/{agent_id}/{category}/ directory structure.
+async fn setup_category_dir(memory_dir: &Path, agent_id: &str, category: &str) -> PathBuf {
+    let cat_dir = memory_dir.join(agent_id).join(category);
+    fs::create_dir_all(&cat_dir).await.unwrap();
+    cat_dir
+}
+
+#[tokio::test]
+async fn ensure_dirs_creates_all_categories() {
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db);
+
+    indexer.ensure_dirs(AGENT).await.unwrap();
+
+    for cat in CATEGORY_DIRS {
+        assert!(
+            memory_dir.join(AGENT).join(cat).is_dir(),
+            "Missing dir: {cat}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn full_rebuild_indexes_all_notes() {
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+
+    // Write files into category subdirs
+    let pref_dir = setup_category_dir(&memory_dir, AGENT, "preference").await;
+    let skill_dir = setup_category_dir(&memory_dir, AGENT, "skill").await;
+
+    let note1 = sample_md("preference", &["User likes Vim"], &["Dev Environment"]);
+    let note2 = sample_md("skill", &["User knows Rust"], &["Editor Preferences"]);
+
+    fs::write(pref_dir.join("Editor Preferences.md"), &note1)
+        .await
+        .unwrap();
+    fs::write(skill_dir.join("Rust Learning.md"), &note2)
+        .await
+        .unwrap();
+
+    let indexer = NoteIndexer::new(memory_dir, db.clone());
+
+    let stats = indexer.full_rebuild(AGENT).await.unwrap();
+    assert_eq!(stats.indexed, 2);
+    assert_eq!(stats.errors, 0);
+    assert_eq!(stats.skipped, 0);
+
+    // Verify indexed
+    let notes = db.list_notes(AGENT).await.unwrap();
+    assert_eq!(notes.len(), 2);
+
+    // Verify wikilinks are indexed
+    let out_links = db
+        .get_outgoing_links("preference/Editor Preferences", AGENT)
+        .await
+        .unwrap();
+    assert!(out_links.contains(&"Dev Environment".to_string()));
+
+    let out_links2 = db
+        .get_outgoing_links("skill/Rust Learning", AGENT)
+        .await
+        .unwrap();
+    assert!(out_links2.contains(&"preference/Editor Preferences".to_string()));
+}
+
+#[tokio::test]
+async fn full_rebuild_skips_unchanged() {
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+
+    let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
+    let note1 = sample_md("other", &["fact one"], &[]);
+    fs::write(misc_dir.join("Note1.md"), &note1).await.unwrap();
+
+    let indexer = NoteIndexer::new(memory_dir, db.clone());
+
+    // First rebuild
+    let stats1 = indexer.full_rebuild(AGENT).await.unwrap();
+    assert_eq!(stats1.indexed, 1);
+
+    // Second rebuild — same content → skip
+    let stats2 = indexer.full_rebuild(AGENT).await.unwrap();
+    assert_eq!(stats2.skipped, 1);
+    assert_eq!(stats2.indexed, 0);
+}
+
+#[tokio::test]
+async fn index_file_detects_change() {
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+
+    let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
+    let path = misc_dir.join("Dynamic.md");
+    fs::write(&path, sample_md("other", &["v1"], &[]))
+        .await
+        .unwrap();
+
+    let indexer = NoteIndexer::new(memory_dir, db.clone());
+
+    // First index
+    assert!(indexer.index_file(AGENT, "other", &path).await.unwrap());
+    // Same content → skip
+    assert!(!indexer.index_file(AGENT, "other", &path).await.unwrap());
+
+    // Change content
+    fs::write(&path, sample_md("other", &["v2"], &[]))
+        .await
+        .unwrap();
+    // Changed → re-index
+    assert!(indexer.index_file(AGENT, "other", &path).await.unwrap());
+}
+
+#[tokio::test]
+async fn write_note_creates_file() {
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+
+    let indexer = NoteIndexer::new(memory_dir.clone(), db);
+
+    let note = KnowledgeNote {
+        title: "Test Note".to_string(),
+        category: "other".to_string(),
+        tags: vec!["a".to_string()],
+        facts: vec!["hello".to_string()],
+        links: vec![],
+        created_at: 1_700_000_000,
+        updated_at: 1_700_000_000,
+        content_hash: String::new(),
+        ..Default::default()
+    };
+
+    let path = indexer.write_note(AGENT, "other", &note).await.unwrap();
+    assert!(path.exists());
+    assert!(path.starts_with(memory_dir.join(AGENT).join("other")));
+
+    let content = fs::read_to_string(&path).await.unwrap();
+    assert!(content.contains("category: other"));
+    assert!(content.contains("- hello"));
+}
+
+#[tokio::test]
+async fn append_to_existing_note() {
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+
+    let pref_dir = setup_category_dir(&memory_dir, AGENT, "preference").await;
+    let initial = sample_md("preference", &["fact1"], &["Link1"]);
+    fs::write(pref_dir.join("Target.md"), &initial)
+        .await
+        .unwrap();
+
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+
+    indexer
+        .append_to_note(
+            AGENT,
+            "preference/Target",
+            &["fact2".to_string()],
+            &["Link1".to_string(), "Link2".to_string()],
+        )
+        .await
+        .unwrap();
+
+    // Read back the file
+    let content = fs::read_to_string(pref_dir.join("Target.md"))
+        .await
+        .unwrap();
+    assert!(content.contains("- fact1"));
+    assert!(content.contains("- fact2"));
+    assert!(content.contains("[[Link1]]"));
+    assert!(content.contains("[[Link2]]"));
+
+    // Verify indexed
+    let entry = db
+        .get_note_index("preference/Target", AGENT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.link_count, 2); // Link1 deduped + Link2
+}
+
+#[tokio::test]
+async fn append_creates_new_note() {
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+
+    indexer
+        .append_to_note(AGENT, "other/Brand New", &["a fact".to_string()], &[])
+        .await
+        .unwrap();
+
+    assert!(memory_dir
+        .join(AGENT)
+        .join("other")
+        .join("Brand New.md")
+        .exists());
+
+    let entry = db
+        .get_note_index("other/Brand New", AGENT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.category, "other");
+}
+
+#[tokio::test]
+async fn full_rebuild_parallel_matches_serial_results() {
+    // Phase B B3 parity contract: parallel full_rebuild must produce the
+    // same (indexed + skipped) total and the same set of indexed rows as
+    // the prior serial implementation.
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
+    indexer.ensure_dirs(AGENT).await.unwrap();
+
+    // 50 notes spread across 5 categories.
+    for cat in &["preference", "skill", "reference", "plan", "learning"] {
+        for i in 0..10 {
+            let note = KnowledgeNote {
+                title: format!("n-{cat}-{i}"),
+                category: (*cat).into(),
+                facts: vec![format!("fact {i}")],
+                content_hash: String::new(),
+                ..Default::default()
+            };
+            indexer.write_note(AGENT, cat, &note).await.unwrap();
         }
-        if !links.is_empty() {
-            out.push('\n');
-            let link_strs: Vec<String> = links.iter().map(|l| format!("[[{l}]]")).collect();
-            out.push_str(&format!("Related: {}\n", link_strs.join(" ")));
-        }
-        out
     }
 
-    /// Create memory_dir/{agent_id}/{category}/ directory structure.
-    async fn setup_category_dir(memory_dir: &Path, agent_id: &str, category: &str) -> PathBuf {
-        let cat_dir = memory_dir.join(agent_id).join(category);
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        cat_dir
-    }
+    let stats = indexer.full_rebuild(AGENT).await.unwrap();
+    assert_eq!(stats.indexed + stats.skipped, 50);
+    assert_eq!(stats.errors, 0);
 
-    #[tokio::test]
-    async fn ensure_dirs_creates_all_categories() {
-        let dir = TempDir::new().unwrap();
-        let memory_dir = dir.path().to_path_buf();
-        let db = create_test_db();
-        let indexer = NoteIndexer::new(memory_dir.clone(), db);
+    let listed = db.list_notes(AGENT).await.unwrap();
+    assert_eq!(listed.len(), 50);
+}
 
-        indexer.ensure_dirs(AGENT).await.unwrap();
+#[tokio::test]
+async fn rename_note_cascades_wikilinks() {
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
 
-        for cat in CATEGORY_DIRS {
-            assert!(
-                memory_dir.join(AGENT).join(cat).is_dir(),
-                "Missing dir: {cat}"
-            );
-        }
-    }
+    // Create two notes in the same category
+    let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
+    let note_a = sample_md("other", &["fact A"], &["Old Name"]);
+    let note_b = sample_md("other", &["fact B"], &[]);
+    fs::write(misc_dir.join("Linker.md"), &note_a)
+        .await
+        .unwrap();
+    fs::write(misc_dir.join("Old Name.md"), &note_b)
+        .await
+        .unwrap();
 
-    #[tokio::test]
-    async fn full_rebuild_indexes_all_notes() {
-        let dir = TempDir::new().unwrap();
-        let memory_dir = dir.path().to_path_buf();
-        let db = create_test_db();
+    let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
 
-        // Write files into category subdirs
-        let pref_dir = setup_category_dir(&memory_dir, AGENT, "preference").await;
-        let skill_dir = setup_category_dir(&memory_dir, AGENT, "skill").await;
+    // Initial index
+    indexer.full_rebuild(AGENT).await.unwrap();
 
-        let note1 = sample_md("preference", &["User likes Vim"], &["Dev Environment"]);
-        let note2 = sample_md("skill", &["User knows Rust"], &["Editor Preferences"]);
+    // Rename "Old Name" → "New Name"
+    indexer
+        .rename_note(AGENT, "Old Name", "New Name")
+        .await
+        .unwrap();
 
-        fs::write(pref_dir.join("Editor Preferences.md"), &note1)
-            .await
-            .unwrap();
-        fs::write(skill_dir.join("Rust Learning.md"), &note2)
-            .await
-            .unwrap();
+    // Old file gone, new file exists
+    assert!(!misc_dir.join("Old Name.md").exists());
+    assert!(misc_dir.join("New Name.md").exists());
 
-        let indexer = NoteIndexer::new(memory_dir, db.clone());
+    // Linker.md should now reference [[New Name]]
+    let linker_content = fs::read_to_string(misc_dir.join("Linker.md"))
+        .await
+        .unwrap();
+    assert!(linker_content.contains("[[New Name]]"));
+    assert!(!linker_content.contains("[[Old Name]]"));
 
-        let stats = indexer.full_rebuild(AGENT).await.unwrap();
-        assert_eq!(stats.indexed, 2);
-        assert_eq!(stats.errors, 0);
-        assert_eq!(stats.skipped, 0);
+    // Old index entry removed, new one present
+    let old_paths = db.find_by_filename("Old Name", AGENT).await.unwrap();
+    assert!(old_paths.is_empty());
+    let new_paths = db.find_by_filename("New Name", AGENT).await.unwrap();
+    assert!(!new_paths.is_empty());
 
-        // Verify indexed
-        let notes = db.list_notes(AGENT).await.unwrap();
-        assert_eq!(notes.len(), 2);
-
-        // Verify wikilinks are indexed
-        let out_links = db
-            .get_outgoing_links("preference/Editor Preferences", AGENT)
-            .await
-            .unwrap();
-        assert!(out_links.contains(&"Dev Environment".to_string()));
-
-        let out_links2 = db
-            .get_outgoing_links("skill/Rust Learning", AGENT)
-            .await
-            .unwrap();
-        assert!(out_links2.contains(&"preference/Editor Preferences".to_string()));
-    }
-
-    #[tokio::test]
-    async fn full_rebuild_skips_unchanged() {
-        let dir = TempDir::new().unwrap();
-        let memory_dir = dir.path().to_path_buf();
-        let db = create_test_db();
-
-        let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
-        let note1 = sample_md("other", &["fact one"], &[]);
-        fs::write(misc_dir.join("Note1.md"), &note1).await.unwrap();
-
-        let indexer = NoteIndexer::new(memory_dir, db.clone());
-
-        // First rebuild
-        let stats1 = indexer.full_rebuild(AGENT).await.unwrap();
-        assert_eq!(stats1.indexed, 1);
-
-        // Second rebuild — same content → skip
-        let stats2 = indexer.full_rebuild(AGENT).await.unwrap();
-        assert_eq!(stats2.skipped, 1);
-        assert_eq!(stats2.indexed, 0);
-    }
-
-    #[tokio::test]
-    async fn index_file_detects_change() {
-        let dir = TempDir::new().unwrap();
-        let memory_dir = dir.path().to_path_buf();
-        let db = create_test_db();
-
-        let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
-        let path = misc_dir.join("Dynamic.md");
-        fs::write(&path, sample_md("other", &["v1"], &[]))
-            .await
-            .unwrap();
-
-        let indexer = NoteIndexer::new(memory_dir, db.clone());
-
-        // First index
-        assert!(indexer.index_file(AGENT, "other", &path).await.unwrap());
-        // Same content → skip
-        assert!(!indexer.index_file(AGENT, "other", &path).await.unwrap());
-
-        // Change content
-        fs::write(&path, sample_md("other", &["v2"], &[]))
-            .await
-            .unwrap();
-        // Changed → re-index
-        assert!(indexer.index_file(AGENT, "other", &path).await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn write_note_creates_file() {
-        let dir = TempDir::new().unwrap();
-        let memory_dir = dir.path().to_path_buf();
-        let db = create_test_db();
-
-        let indexer = NoteIndexer::new(memory_dir.clone(), db);
-
-        let note = KnowledgeNote {
-            title: "Test Note".to_string(),
-            category: "other".to_string(),
-            tags: vec!["a".to_string()],
-            facts: vec!["hello".to_string()],
-            links: vec![],
-            created_at: 1_700_000_000,
-            updated_at: 1_700_000_000,
-            content_hash: String::new(),
-            ..Default::default()
-        };
-
-        let path = indexer.write_note(AGENT, "other", &note).await.unwrap();
-        assert!(path.exists());
-        assert!(path.starts_with(memory_dir.join(AGENT).join("other")));
-
-        let content = fs::read_to_string(&path).await.unwrap();
-        assert!(content.contains("category: other"));
-        assert!(content.contains("- hello"));
-    }
-
-    #[tokio::test]
-    async fn append_to_existing_note() {
-        let dir = TempDir::new().unwrap();
-        let memory_dir = dir.path().to_path_buf();
-        let db = create_test_db();
-
-        let pref_dir = setup_category_dir(&memory_dir, AGENT, "preference").await;
-        let initial = sample_md("preference", &["fact1"], &["Link1"]);
-        fs::write(pref_dir.join("Target.md"), &initial)
-            .await
-            .unwrap();
-
-        let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
-
-        indexer
-            .append_to_note(
-                AGENT,
-                "preference/Target",
-                &["fact2".to_string()],
-                &["Link1".to_string(), "Link2".to_string()],
-            )
-            .await
-            .unwrap();
-
-        // Read back the file
-        let content = fs::read_to_string(pref_dir.join("Target.md"))
-            .await
-            .unwrap();
-        assert!(content.contains("- fact1"));
-        assert!(content.contains("- fact2"));
-        assert!(content.contains("[[Link1]]"));
-        assert!(content.contains("[[Link2]]"));
-
-        // Verify indexed
-        let entry = db
-            .get_note_index("preference/Target", AGENT)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(entry.link_count, 2); // Link1 deduped + Link2
-    }
-
-    #[tokio::test]
-    async fn append_creates_new_note() {
-        let dir = TempDir::new().unwrap();
-        let memory_dir = dir.path().to_path_buf();
-        let db = create_test_db();
-
-        let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
-
-        indexer
-            .append_to_note(AGENT, "other/Brand New", &["a fact".to_string()], &[])
-            .await
-            .unwrap();
-
-        assert!(memory_dir
-            .join(AGENT)
-            .join("other")
-            .join("Brand New.md")
-            .exists());
-
-        let entry = db
-            .get_note_index("other/Brand New", AGENT)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(entry.category, "other");
-    }
-
-    #[tokio::test]
-    async fn full_rebuild_parallel_matches_serial_results() {
-        // Phase B B3 parity contract: parallel full_rebuild must produce the
-        // same (indexed + skipped) total and the same set of indexed rows as
-        // the prior serial implementation.
-        let dir = TempDir::new().unwrap();
-        let memory_dir = dir.path().to_path_buf();
-        let db = create_test_db();
-        let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
-        indexer.ensure_dirs(AGENT).await.unwrap();
-
-        // 50 notes spread across 5 categories.
-        for cat in &["preference", "skill", "reference", "plan", "learning"] {
-            for i in 0..10 {
-                let note = KnowledgeNote {
-                    title: format!("n-{cat}-{i}"),
-                    category: (*cat).into(),
-                    facts: vec![format!("fact {i}")],
-                    content_hash: String::new(),
-                    ..Default::default()
-                };
-                indexer.write_note(AGENT, cat, &note).await.unwrap();
-            }
-        }
-
-        let stats = indexer.full_rebuild(AGENT).await.unwrap();
-        assert_eq!(stats.indexed + stats.skipped, 50);
-        assert_eq!(stats.errors, 0);
-
-        let listed = db.list_notes(AGENT).await.unwrap();
-        assert_eq!(listed.len(), 50);
-    }
-
-    #[tokio::test]
-    async fn rename_note_cascades_wikilinks() {
-        let dir = TempDir::new().unwrap();
-        let memory_dir = dir.path().to_path_buf();
-        let db = create_test_db();
-
-        // Create two notes in the same category
-        let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
-        let note_a = sample_md("other", &["fact A"], &["Old Name"]);
-        let note_b = sample_md("other", &["fact B"], &[]);
-        fs::write(misc_dir.join("Linker.md"), &note_a)
-            .await
-            .unwrap();
-        fs::write(misc_dir.join("Old Name.md"), &note_b)
-            .await
-            .unwrap();
-
-        let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
-
-        // Initial index
-        indexer.full_rebuild(AGENT).await.unwrap();
-
-        // Rename "Old Name" → "New Name"
-        indexer
-            .rename_note(AGENT, "Old Name", "New Name")
-            .await
-            .unwrap();
-
-        // Old file gone, new file exists
-        assert!(!misc_dir.join("Old Name.md").exists());
-        assert!(misc_dir.join("New Name.md").exists());
-
-        // Linker.md should now reference [[New Name]]
-        let linker_content = fs::read_to_string(misc_dir.join("Linker.md"))
-            .await
-            .unwrap();
-        assert!(linker_content.contains("[[New Name]]"));
-        assert!(!linker_content.contains("[[Old Name]]"));
-
-        // Old index entry removed, new one present
-        let old_paths = db.find_by_filename("Old Name", AGENT).await.unwrap();
-        assert!(old_paths.is_empty());
-        let new_paths = db.find_by_filename("New Name", AGENT).await.unwrap();
-        assert!(!new_paths.is_empty());
-
-        // Linker's outgoing links updated
-        let out = db.get_outgoing_links("other/Linker", AGENT).await.unwrap();
-        assert!(out.contains(&"New Name".to_string()));
-        assert!(!out.contains(&"Old Name".to_string()));
-    }
+    // Linker's outgoing links updated
+    let out = db.get_outgoing_links("other/Linker", AGENT).await.unwrap();
+    assert!(out.contains(&"New Name".to_string()));
+    assert!(!out.contains(&"Old Name".to_string()));
+}
 
 #[cfg(test)]
 mod reference_hook_tests {

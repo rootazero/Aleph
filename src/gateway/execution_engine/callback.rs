@@ -1,8 +1,8 @@
 //! Callback adapter that bridges AgentLoop events to Gateway StreamEvents.
 
-use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
 use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 use crate::gateway::media::PendingMedia;
+use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
 
 /// Persists trace events to the state database.
 pub(super) struct TracePersistence {

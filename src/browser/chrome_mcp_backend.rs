@@ -124,9 +124,7 @@ impl BrowserBackend for ChromeMcpBackend {
                     .map(|s| s.trim().to_string());
 
                 match id {
-                    Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) => {
-                        Ok(id)
-                    }
+                    Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) => Ok(id),
                     _ => Err(BrowserError::TabNotFound(format!(
                         "Could not determine tab ID after opening {url}"
                     ))),

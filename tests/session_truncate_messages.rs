@@ -53,7 +53,10 @@ async fn truncate_drops_tail_and_keeps_head() {
     seed(&sm, &key, 6).await;
 
     let result = sm.truncate_messages(&key, 4).await.unwrap();
-    assert_eq!(result.messages_removed, 2, "2 tail messages should be dropped");
+    assert_eq!(
+        result.messages_removed, 2,
+        "2 tail messages should be dropped"
+    );
     // Each dropped message contributes input+output tokens = 15
     assert_eq!(result.tokens_removed_estimate, 30);
 

@@ -702,7 +702,11 @@ mod tests {
     async fn transient_error_retried_in_place_then_succeeds() {
         let primary = ScriptProvider::new("primary", vec![Err("connection reset".into()), Ok(())]);
         let fallback = ScriptProvider::ok("fallback");
-        let fp = build(primary.clone(), vec![], vec![node("fallback", fallback.clone())]);
+        let fp = build(
+            primary.clone(),
+            vec![],
+            vec![node("fallback", fallback.clone())],
+        );
 
         let msgs = [UnifiedMessage::user("hi")];
         let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();

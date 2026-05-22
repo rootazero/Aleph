@@ -64,7 +64,7 @@ mod stubs {
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
         }
-        fn dispatcher_schema(&self) -> Arc<[crate::dispatcher::ToolDefinition]> {
+        fn dispatcher_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
             Arc::from([])
         }
     }

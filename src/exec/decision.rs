@@ -11,8 +11,8 @@ use super::config::{ExecAsk, ExecSecurity, ResolvedExecConfig};
 /// - env can execute arbitrary commands (e.g., `env rm -rf /`)
 pub const DEFAULT_SAFE_BINS: &[&str] = &[
     "jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc", "cat", "echo", "pwd", "ls",
-    "which", "date", "true", "false", "test", "basename", "dirname", "realpath", "stat",
-    "file", "diff", "comm", "seq", "printf",
+    "which", "date", "true", "false", "test", "basename", "dirname", "realpath", "stat", "file",
+    "diff", "comm", "seq", "printf",
 ];
 
 /// Decision result for command execution

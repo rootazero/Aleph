@@ -1,6 +1,6 @@
-use rusqlite::{params, Result as SqliteResult};
-use super::{SecurityStore, current_timestamp_ms};
 use super::types::*;
+use super::{current_timestamp_ms, SecurityStore};
+use rusqlite::{params, Result as SqliteResult};
 
 impl SecurityStore {
     /// Insert or update a device
@@ -42,10 +42,7 @@ impl SecurityStore {
     }
 
     /// Get device by fingerprint
-    pub fn get_device_by_fingerprint(
-        &self,
-        fingerprint: &str,
-    ) -> SqliteResult<Option<DeviceRow>> {
+    pub fn get_device_by_fingerprint(&self, fingerprint: &str) -> SqliteResult<Option<DeviceRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT device_id, device_name, device_type, public_key, fingerprint, role, scopes,
@@ -64,9 +61,8 @@ impl SecurityStore {
     /// Check if device is approved (not revoked)
     pub fn is_device_approved(&self, device_id: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT 1 FROM devices WHERE device_id = ?1 AND revoked_at IS NULL",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT 1 FROM devices WHERE device_id = ?1 AND revoked_at IS NULL")?;
         let exists: Result<i32, _> = stmt.query_row(params![device_id], |row| row.get(0));
         Ok(exists.is_ok())
     }

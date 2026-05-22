@@ -125,8 +125,12 @@ mod tests {
                 })
             })
         }
-        fn name(&self) -> &str { "fake" }
-        fn color(&self) -> &str { "#000" }
+        fn name(&self) -> &str {
+            "fake"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
     }
 
     struct CapturingSink(Mutex<Vec<LoopTraceEvent>>);
@@ -189,8 +193,12 @@ mod tests {
             ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
                 Box::pin(async { Ok(ProviderResponse::default()) })
             }
-            fn name(&self) -> &str { "empty" }
-            fn color(&self) -> &str { "#000" }
+            fn name(&self) -> &str {
+                "empty"
+            }
+            fn color(&self) -> &str {
+                "#000"
+            }
         }
         let sink = Arc::new(CapturingSink(Mutex::new(Vec::new())));
         let metering = MeteringProvider::new(

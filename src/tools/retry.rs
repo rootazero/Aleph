@@ -136,7 +136,11 @@ mod tests {
             }
         })
         .await;
-        assert!(result.is_ok(), "expected ok after retry: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "expected ok after retry: {:?}",
+            result.err()
+        );
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 

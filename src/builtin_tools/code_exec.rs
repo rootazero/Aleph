@@ -26,11 +26,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::dispatcher::DEFAULT_CODE_EXEC_TIMEOUT;
 use crate::error::Result;
 use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::{current_session, Sandbox};
+use crate::tool_metadata::DEFAULT_CODE_EXEC_TIMEOUT;
 use crate::tools::AlephTool;
 
 /// Supported programming languages

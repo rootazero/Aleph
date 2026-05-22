@@ -92,9 +92,9 @@ where
         let body = resp.json::<T>()?;
         Ok(body)
     } else {
-        let text = resp.text().unwrap_or_else(|e| {
-            format!("(failed to read response body: {e})")
-        });
+        let text = resp
+            .text()
+            .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
         anyhow::bail!("server returned {status}: {text}")
     }
 }

@@ -139,7 +139,9 @@ pub fn provider_deltas_to_sse(
                                         (deltas, tracker, usage_acc, false),
                                     ));
                                 }
-                                ProviderDelta::ToolCallStart { id: tc_id, name, .. } => {
+                                ProviderDelta::ToolCallStart {
+                                    id: tc_id, name, ..
+                                } => {
                                     let index = tracker.index_for(&tc_id);
                                     let chunk = make_chunk(
                                         &id,

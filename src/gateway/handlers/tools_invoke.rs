@@ -132,8 +132,8 @@ fn merge_agent_id(mut arguments: Value, agent_id: Option<&str>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::UnifiedTool;
     use crate::error::Result as AlephResult;
+    use crate::tool_metadata::UnifiedTool;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -315,7 +315,10 @@ mod tests {
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
         let resp = handle_invoke(req, tool_reg.clone(), Some(agents)).await;
 
-        assert!(!resp.is_success(), "expected error for out-of-allowlist tool");
+        assert!(
+            !resp.is_success(),
+            "expected error for out-of-allowlist tool"
+        );
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
         assert!(
             tool_reg.last_call().is_none(),
@@ -325,8 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn permits_tool_inside_agent_allowlist() {
-        let tool_reg =
-            Arc::new(StubRegistry::new().with_ok("allowed_one", json!({"hits": 1})));
+        let tool_reg = Arc::new(StubRegistry::new().with_ok("allowed_one", json!({"hits": 1})));
         let agents = registry_with_restricted_agent();
 
         let params = json!({

@@ -5,9 +5,9 @@ use serde_json::Value;
 use super::ops::*;
 use super::repair::{call_with_repair_impl, try_repair_tool_name_impl};
 use super::ToolMap;
-use crate::dispatcher::ToolDefinition;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
+use crate::tool_metadata::ToolDefinition;
 use crate::tools::traits::AlephToolDyn;
 use crate::tools::types::{ToolRepairInfo, ToolUpdateInfo};
 

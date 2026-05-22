@@ -300,7 +300,10 @@ mod tests {
         let stats = store.get("alpha").unwrap();
         assert_eq!(stats.state, SkillState::Stale);
         assert!(stats.pinned);
-        assert!(stats.archived_at.is_none(), "stale must not stamp archived_at");
+        assert!(
+            stats.archived_at.is_none(),
+            "stale must not stamp archived_at"
+        );
 
         store.set_state("alpha", SkillState::Archived);
         let stats = store.get("alpha").unwrap();
@@ -344,7 +347,10 @@ mod tests {
         assert_eq!(stats.patch_count, 0);
         assert_eq!(stats.state, SkillState::Active);
         assert!(!stats.pinned);
-        assert!(stats.created_at.is_none(), "legacy rows should not synthesize created_at on read");
+        assert!(
+            stats.created_at.is_none(),
+            "legacy rows should not synthesize created_at on read"
+        );
     }
 
     #[test]

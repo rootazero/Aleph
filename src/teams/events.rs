@@ -264,9 +264,8 @@ impl EventLogStore for SqliteEventLogStore {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
         let ts_str = now.to_rfc3339();
-        let payload_str = serde_json::to_string(&input.payload).map_err(|e| {
-            db_err(format!("failed to serialize event payload: {e}"))
-        })?;
+        let payload_str = serde_json::to_string(&input.payload)
+            .map_err(|e| db_err(format!("failed to serialize event payload: {e}")))?;
 
         conn.execute(
             r#"

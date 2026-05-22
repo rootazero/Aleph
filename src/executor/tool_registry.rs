@@ -13,8 +13,8 @@
 use crate::sync_primitives::Arc;
 use serde_json::Value;
 
-use crate::dispatcher::UnifiedTool;
 use crate::error::Result;
+use crate::tool_metadata::UnifiedTool;
 
 /// Trait for tool registry lookup and execution.
 pub trait ToolRegistry: Send + Sync {

@@ -10,10 +10,10 @@ use std::path::Path;
 use tracing::{debug, info};
 
 mod devices;
-mod tokens;
 mod pairing;
 mod senders;
 mod sessions;
+mod tokens;
 mod types;
 
 #[cfg(test)]

@@ -5,8 +5,8 @@
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
-use crate::dispatcher::ToolDefinition;
 use crate::error::Result;
+use crate::tool_metadata::ToolDefinition;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
@@ -123,7 +123,10 @@ impl<'a> RequestPayload<'a> {
     }
 
     /// Set metadata for provider-specific features
-    pub fn with_metadata(mut self, metadata: Option<std::collections::HashMap<String, String>>) -> Self {
+    pub fn with_metadata(
+        mut self,
+        metadata: Option<std::collections::HashMap<String, String>>,
+    ) -> Self {
         self.metadata = metadata;
         self
     }

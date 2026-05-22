@@ -1,13 +1,10 @@
-use rusqlite::{params, Result as SqliteResult};
-use super::{SecurityStore, current_timestamp_ms};
 use super::types::*;
+use super::{current_timestamp_ms, SecurityStore};
+use rusqlite::{params, Result as SqliteResult};
 
 impl SecurityStore {
     /// Insert a pairing request
-    pub fn insert_pairing_request(
-        &self,
-        data: &PairingRequestData<'_>,
-    ) -> SqliteResult<()> {
+    pub fn insert_pairing_request(&self, data: &PairingRequestData<'_>) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
 
@@ -37,17 +34,17 @@ impl SecurityStore {
     }
 
     /// Get pairing request by code
-    pub fn get_pairing_request(
-        &self,
-        code: &str,
-    ) -> SqliteResult<Option<PairingRequestRow>> {
+    pub fn get_pairing_request(&self, code: &str) -> SqliteResult<Option<PairingRequestRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT request_id, code, pairing_type, device_name, device_type, public_key, channel, sender_id, remote_addr, metadata, created_at, expires_at
              FROM pairing_requests WHERE code = ?1 AND expires_at > ?2",
         )?;
 
-        let result = stmt.query_row(params![code, current_timestamp_ms()], PairingRequestRow::from_row);
+        let result = stmt.query_row(
+            params![code, current_timestamp_ms()],
+            PairingRequestRow::from_row,
+        );
         match result {
             Ok(req) => Ok(Some(req)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -56,10 +53,7 @@ impl SecurityStore {
     }
 
     /// Delete a pairing request
-    pub fn delete_pairing_request(
-        &self,
-        code: &str,
-    ) -> SqliteResult<bool> {
+    pub fn delete_pairing_request(&self, code: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows = conn.execute(
             "DELETE FROM pairing_requests WHERE code = ?1",
@@ -69,9 +63,7 @@ impl SecurityStore {
     }
 
     /// List pending pairing requests
-    pub fn list_pairing_requests(
-        &self,
-    ) -> SqliteResult<Vec<PairingRequestRow>> {
+    pub fn list_pairing_requests(&self) -> SqliteResult<Vec<PairingRequestRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT request_id, code, pairing_type, device_name, device_type, public_key, channel, sender_id, remote_addr, metadata, created_at, expires_at
@@ -83,21 +75,16 @@ impl SecurityStore {
     }
 
     /// Count pending pairing requests
-    pub fn count_pairing_requests(
-        &self,
-    ) -> SqliteResult<usize> {
+    pub fn count_pairing_requests(&self) -> SqliteResult<usize> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT COUNT(*) FROM pairing_requests WHERE expires_at > ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT COUNT(*) FROM pairing_requests WHERE expires_at > ?1")?;
         let count: i64 = stmt.query_row(params![current_timestamp_ms()], |row| row.get(0))?;
         Ok(count as usize)
     }
 
     /// Delete expired pairing requests
-    pub fn delete_expired_pairing_requests(
-        &self,
-    ) -> SqliteResult<u64> {
+    pub fn delete_expired_pairing_requests(&self) -> SqliteResult<u64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows = conn.execute(
             "DELETE FROM pairing_requests WHERE expires_at <= ?1",

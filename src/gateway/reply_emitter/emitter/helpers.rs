@@ -1,9 +1,9 @@
 use crate::sync_primitives::Ordering;
 use tracing::{debug, error, info, warn};
 
-use crate::gateway::channel::OutboundMessage;
-use super::ReplyEmitter;
 use super::super::sanitize::sanitize_llm_output;
+use super::ReplyEmitter;
+use crate::gateway::channel::OutboundMessage;
 
 impl ReplyEmitter {
     /// Returns true when voice output should be attempted.
@@ -80,9 +80,13 @@ impl ReplyEmitter {
                 }
             };
 
-            if let Some(attachment) =
-                crate::gateway::voice::outbound::generate_tts(text, &voice_state, registry, &gen_config)
-                    .await
+            if let Some(attachment) = crate::gateway::voice::outbound::generate_tts(
+                text,
+                &voice_state,
+                registry,
+                &gen_config,
+            )
+            .await
             {
                 // Success — reset failure counter
                 self.voice_state.lock().await.record_success();
@@ -149,8 +153,7 @@ impl ReplyEmitter {
     }
 
     /// Drain pending media, download in parallel via MediaCache, return Attachments.
-    pub(crate) async fn drain_and_send_media(&self,
-    ) -> Vec<crate::gateway::channel::Attachment> {
+    pub(crate) async fn drain_and_send_media(&self) -> Vec<crate::gateway::channel::Attachment> {
         let pending_count = self.pending_media.lock().await.len();
         debug!(run_id = %self.run_id, pending_count = pending_count, "drain_and_send_media called");
         let media_items = std::mem::take(&mut *self.pending_media.lock().await);
@@ -267,11 +270,7 @@ impl ReplyEmitter {
     ///
     /// Callers that have already called `sanitize_llm_output` should use this
     /// to avoid redundant sanitization passes.
-    pub(crate) async fn send_to_channel_sanitized(
-        &self,
-        content: &str,
-        reasoning: Option<&str>,
-    ) {
+    pub(crate) async fn send_to_channel_sanitized(&self, content: &str, reasoning: Option<&str>) {
         if content.is_empty() && reasoning.is_none_or(|r| r.is_empty()) {
             return;
         }

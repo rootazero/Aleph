@@ -13,8 +13,7 @@ use std::path::{Path, PathBuf};
 /// Names of subdirectories that stay read-only even inside writable
 /// workspace roots. Stable list — adding entries is backwards-compatible
 /// (tighter), removing entries is not.
-pub const PROTECTED_METADATA_SUBPATHS: &[&str] =
-    &[".git", ".aleph", ".codex", ".agents"];
+pub const PROTECTED_METADATA_SUBPATHS: &[&str] = &[".git", ".aleph", ".codex", ".agents"];
 
 /// Cartesian product `writable_roots × PROTECTED_METADATA_SUBPATHS`,
 /// returning concrete absolute paths each driver should remount or deny

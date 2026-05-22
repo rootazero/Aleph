@@ -265,13 +265,15 @@ mod tests {
         let gate = ApprovalGate::new(ApprovalConfig::default(), None);
         // No requester wired → denied (never a silent auto-approve).
         assert_eq!(
-            gate.request_approval_for_tool("code_exec", "allow_network").await,
+            gate.request_approval_for_tool("code_exec", "allow_network")
+                .await,
             ApprovalOutcome::Denied
         );
         // Once the requester is installed, escalations reach it.
         gate.set_requester(Arc::new(AlwaysApprove));
         assert_eq!(
-            gate.request_approval_for_tool("code_exec", "allow_network").await,
+            gate.request_approval_for_tool("code_exec", "allow_network")
+                .await,
             ApprovalOutcome::Approved
         );
     }

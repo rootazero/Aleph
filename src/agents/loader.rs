@@ -29,11 +29,10 @@ pub enum LoaderError {
         id: String,
     },
 
-    #[error("forbidden system field '{field}' in {path}: must not be set by user/project frontmatter")]
-    ForbiddenSystemField {
-        path: PathBuf,
-        field: &'static str,
-    },
+    #[error(
+        "forbidden system field '{field}' in {path}: must not be set by user/project frontmatter"
+    )]
+    ForbiddenSystemField { path: PathBuf, field: &'static str },
 
     #[error("io error reading {path}: {source}")]
     Io {
@@ -99,15 +98,15 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
         source: e,
     })?;
 
-    let (yaml, body) = split_frontmatter(&content).ok_or_else(|| LoaderError::MissingDelimiter {
-        path: path.to_path_buf(),
-    })?;
-
-    let fm: UserFrontmatter =
-        serde_yaml::from_str(yaml).map_err(|e| LoaderError::Frontmatter {
+    let (yaml, body) =
+        split_frontmatter(&content).ok_or_else(|| LoaderError::MissingDelimiter {
             path: path.to_path_buf(),
-            source: e,
         })?;
+
+    let fm: UserFrontmatter = serde_yaml::from_str(yaml).map_err(|e| LoaderError::Frontmatter {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
 
     if fm.mode.is_some() {
         return Err(LoaderError::ForbiddenSystemField {
@@ -151,26 +150,22 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
         def = def.with_denied_tools(fm.denied_tools);
     }
     if let Some(n) = fm.max_iterations {
-        def = def.with_max_iterations(
-            u32::try_from(n).map_err(|_| LoaderError::Io {
-                path: path.to_path_buf(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("max_iterations {n} exceeds u32 limit"),
-                ),
-            })?,
-        );
+        def = def.with_max_iterations(u32::try_from(n).map_err(|_| LoaderError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("max_iterations {n} exceeds u32 limit"),
+            ),
+        })?);
     }
     if let Some(n) = fm.token_budget {
-        def = def.with_token_budget(
-            u32::try_from(n).map_err(|_| LoaderError::Io {
-                path: path.to_path_buf(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("token_budget {n} exceeds u32 limit"),
-                ),
-            })?,
-        );
+        def = def.with_token_budget(u32::try_from(n).map_err(|_| LoaderError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("token_budget {n} exceeds u32 limit"),
+            ),
+        })?);
     }
     if let Some(cm) = fm.context_mode {
         def = def.with_context_mode(cm);
@@ -333,7 +328,10 @@ mod tests {
             "---\nid: evil\ndescription: Tries to escalate\nwhen_to_use: never\nmode: Primary\n---\n",
         );
         let err = parse_file(&path, AgentSource::User).unwrap_err();
-        assert!(matches!(err, LoaderError::ForbiddenSystemField { field: "mode", .. }));
+        assert!(matches!(
+            err,
+            LoaderError::ForbiddenSystemField { field: "mode", .. }
+        ));
     }
 
     #[test]
@@ -402,9 +400,17 @@ mod tests {
     #[test]
     fn scan_dir_skips_malformed_files() {
         let tmp = tempfile::tempdir().unwrap();
-        write_tmp(&tmp, "good.md", "---\nid: good\ndescription: ok\nwhen_to_use: yes\n---\n");
+        write_tmp(
+            &tmp,
+            "good.md",
+            "---\nid: good\ndescription: ok\nwhen_to_use: yes\n---\n",
+        );
         write_tmp(&tmp, "bad.md", "no frontmatter\n");
-        write_tmp(&tmp, "mode-primary.md", "---\nid: mode-primary\ndescription: x\nwhen_to_use: x\nmode: Primary\n---\n");
+        write_tmp(
+            &tmp,
+            "mode-primary.md",
+            "---\nid: mode-primary\ndescription: x\nwhen_to_use: x\nmode: Primary\n---\n",
+        );
 
         let agents = scan_dir(tmp.path(), AgentSource::User).unwrap();
         assert_eq!(agents.len(), 1, "only good.md should load");
@@ -450,7 +456,9 @@ body
         assert_eq!(def.mcp_servers.len(), 2);
         assert_eq!(
             def.mcp_servers[0],
-            McpServerSpec::Reference { name: "github".into() }
+            McpServerSpec::Reference {
+                name: "github".into()
+            }
         );
         assert_eq!(
             def.mcp_servers[1],

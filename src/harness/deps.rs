@@ -112,7 +112,8 @@ pub struct HarnessDeps {
     /// Registrar that makes a split-created child epoch visible to gateway
     /// epoch resolution. `None` disables session-split — the loop falls back
     /// to `FinalReply` when the budget asks for a split.
-    pub session_epoch_registrar: Option<std::sync::Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>>,
+    pub session_epoch_registrar:
+        Option<std::sync::Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>>,
 }
 
 // ---------------------------------------------------------------------------

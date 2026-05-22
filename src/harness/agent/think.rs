@@ -19,16 +19,14 @@ use crate::verification::{hash_tool_args, ToolCallSummary, TurnVerifyContext, Ve
 /// `LoopDirective::FinalReply` fires and the prior assistant turn ended
 /// on an unresolved tool_use. Tools are also stripped at the request
 /// layer (no `.with_tools(...)`), so the model cannot loop further.
-const GRACE_NUDGE_BUDGET: &str =
-    "You are out of context budget and cannot call any more tools. \
+const GRACE_NUDGE_BUDGET: &str = "You are out of context budget and cannot call any more tools. \
      Respond now with a final summary for the user based on what you have so far.";
 
 /// Ephemeral nudge for the grace turn fired by
 /// `LoopDirective::StopDiminishing` — same shape as
 /// `GRACE_NUDGE_BUDGET` but framed around lack of measurable progress
 /// rather than budget exhaustion.
-const GRACE_NUDGE_DIMINISHING: &str =
-    "You have not been making measurable progress on this task. \
+const GRACE_NUDGE_DIMINISHING: &str = "You have not been making measurable progress on this task. \
      Stop calling tools and summarize what you have found so far for the user.";
 
 /// Ephemeral nudge for the grace turn fired when the `max_iterations`
@@ -90,9 +88,7 @@ fn last_assistant_has_text(events: &[SessionEventRecord]) -> bool {
         .iter()
         .rev()
         .find_map(|r| match &r.event {
-            SessionEvent::AssistantMessage { content, .. } => {
-                Some(!content.text.trim().is_empty())
-            }
+            SessionEvent::AssistantMessage { content, .. } => Some(!content.text.trim().is_empty()),
             _ => None,
         })
         .unwrap_or(false)
@@ -104,7 +100,10 @@ fn last_assistant_has_text(events: &[SessionEventRecord]) -> bool {
 /// so the context-budget sensor accounts for the per-request overhead the tool
 /// definitions add on top of the conversation messages. Pure arithmetic
 /// scaffolding (R10): no reasoning, no decision.
-fn estimate_tool_schema_tokens(tools: &[crate::dispatcher::ToolDefinition], ratio: f64) -> usize {
+fn estimate_tool_schema_tokens(
+    tools: &[crate::tool_metadata::ToolDefinition],
+    ratio: f64,
+) -> usize {
     use crate::memory::session_compactor::context_window::estimate_tokens;
     tools
         .iter()
@@ -368,12 +367,12 @@ impl AgentHarness {
         // 2d. Derive the optional tool-schema reference for the request payload
         // from the dispatcher tools fetched above (Stage 2). Cache invalidation
         // is owned by `ToolService` impls; see `to_dispatcher_form`.
-        let tools_ref: Option<&[crate::dispatcher::ToolDefinition]> = if dispatcher_tools.is_empty()
-        {
-            None
-        } else {
-            Some(dispatcher_tools.as_ref())
-        };
+        let tools_ref: Option<&[crate::tool_metadata::ToolDefinition]> =
+            if dispatcher_tools.is_empty() {
+                None
+            } else {
+                Some(dispatcher_tools.as_ref())
+            };
 
         // Build the request fresh on each call — H3's empty-response retry
         // re-issues it, and `RequestPayload` is a cheap borrow of `messages`.
@@ -641,7 +640,12 @@ impl AgentHarness {
                     outcome: crate::harness::trace::LoopTraceTurnOutcome::Stop,
                     metrics: metrics_for_trace.clone(),
                 });
-                return Ok((TurnState::Done, metrics_for_trace.executed_tool_calls, false, None));
+                return Ok((
+                    TurnState::Done,
+                    metrics_for_trace.executed_tool_calls,
+                    false,
+                    None,
+                ));
             }
         }
 

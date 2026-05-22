@@ -345,8 +345,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                     ),
                     suggestion: None,
                 })?;
-        let safe_cat = sanitize_title(category)
-            .unwrap_or_else(|_| "other".to_string());
+        let safe_cat = sanitize_title(category).unwrap_or_else(|_| "other".to_string());
 
         let safe_title = sanitize_title(filename)?;
         let file_path = self
@@ -437,8 +436,8 @@ impl<S: NoteStore> NoteIndexer<S> {
         } else {
             "other".to_string()
         };
-        let category = crate::memory::notes::sanitize_title(&category)
-            .unwrap_or_else(|_| "other".to_string());
+        let category =
+            crate::memory::notes::sanitize_title(&category).unwrap_or_else(|_| "other".to_string());
 
         let cat_dir = self.memory_dir.join(agent_id).join(&category);
         let old_path = cat_dir.join(format!("{safe_old}.md"));
@@ -532,8 +531,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                     ),
                     suggestion: None,
                 })?;
-        let safe_cat = sanitize_title(cat)
-            .unwrap_or_else(|_| "other".to_string());
+        let safe_cat = sanitize_title(cat).unwrap_or_else(|_| "other".to_string());
         let safe_title = sanitize_title(filename)?;
         let file_path = self
             .memory_dir

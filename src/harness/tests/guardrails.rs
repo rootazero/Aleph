@@ -129,7 +129,7 @@ impl ToolService for EmptyTools {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }
@@ -527,7 +527,7 @@ impl ToolService for RecordingTools {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }

@@ -59,7 +59,9 @@ pub struct WindowsInitPolicy {
 
 /// Translate `NetworkPolicy` → AppContainer capability names. Lives at
 /// crate top so it's testable cross-platform.
-pub fn capability_names_for_network(net: &crate::sandbox::capabilities::NetworkPolicy) -> Vec<String> {
+pub fn capability_names_for_network(
+    net: &crate::sandbox::capabilities::NetworkPolicy,
+) -> Vec<String> {
     use crate::sandbox::capabilities::NetworkPolicy;
     match net {
         NetworkPolicy::None => Vec::new(),
@@ -172,9 +174,7 @@ pub fn run_init(args: Vec<String>) -> ! {
                 std::process::exit(65);
             }
             Err(other) => {
-                eprintln!(
-                    "aleph sandbox-init-windows: unexpected AppContainer error: {other:?}"
-                );
+                eprintln!("aleph sandbox-init-windows: unexpected AppContainer error: {other:?}");
                 std::process::exit(65);
             }
         }
@@ -269,8 +269,8 @@ pub(crate) fn parse_init_args(args: &[String]) -> Result<ParsedInitArgs, String>
         }
     }
     let policy_str = policy_json.ok_or_else(|| "missing --policy".to_string())?;
-    let policy: WindowsInitPolicy = serde_json::from_str(policy_str)
-        .map_err(|e| format!("--policy JSON parse error: {e}"))?;
+    let policy: WindowsInitPolicy =
+        serde_json::from_str(policy_str).map_err(|e| format!("--policy JSON parse error: {e}"))?;
 
     let target = args
         .get(i)
@@ -297,14 +297,14 @@ mod imp {
 
     // LocalFree lives in Foundation in windows-sys 0.61+ (was Memory in 0.59).
     use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, LocalFree, INVALID_HANDLE_VALUE, HANDLE,
+        CloseHandle, GetLastError, LocalFree, HANDLE, INVALID_HANDLE_VALUE,
     };
+    use windows_sys::Win32::Security::Authorization::{ConvertStringSidToSidW, ACCESS_MODE};
     use windows_sys::Win32::Security::{
-        CreateRestrictedToken, SetTokenInformation, TokenIntegrityLevel,
-        DISABLE_MAX_PRIVILEGE, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY,
-        TOKEN_DUPLICATE, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+        CreateRestrictedToken, SetTokenInformation, TokenIntegrityLevel, DISABLE_MAX_PRIVILEGE,
+        TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_MANDATORY_LABEL,
+        TOKEN_QUERY,
     };
-    use windows_sys::Win32::Security::Authorization::{ACCESS_MODE, ConvertStringSidToSidW};
     use windows_sys::Win32::System::Console::{
         GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
     };
@@ -391,9 +391,7 @@ mod imp {
     /// Capability SIDs are derived from the policy's
     /// `app_container_capabilities` name list. The AppContainer profile
     /// is deleted after the target exits.
-    pub(super) fn launch_with_app_container(
-        parsed: &ParsedInitArgs,
-    ) -> Result<i32, LaunchError> {
+    pub(super) fn launch_with_app_container(parsed: &ParsedInitArgs) -> Result<i32, LaunchError> {
         use std::iter::once;
 
         use windows_sys::Win32::Foundation::LocalFree;
@@ -401,20 +399,18 @@ mod imp {
         use windows_sys::Win32::Security::Isolation::{
             CreateAppContainerProfile, DeleteAppContainerProfile,
         };
-        use windows_sys::Win32::Security::{
-            FreeSid, SID_AND_ATTRIBUTES, SECURITY_CAPABILITIES,
+        use windows_sys::Win32::Security::{FreeSid, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES};
+        use windows_sys::Win32::System::Console::{
+            GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
         };
         use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapAlloc, HeapFree};
         use windows_sys::Win32::System::SystemServices::SE_GROUP_ENABLED;
         use windows_sys::Win32::System::Threading::{
             CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
-            InitializeProcThreadAttributeList, UpdateProcThreadAttribute,
-            WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST,
+            InitializeProcThreadAttributeList, UpdateProcThreadAttribute, WaitForSingleObject,
+            EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST,
             PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTF_USESTDHANDLES,
             STARTUPINFOEXW,
-        };
-        use windows_sys::Win32::System::Console::{
-            GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
         };
 
         // ---------- 1. Generate unique per-execution profile name ----------
@@ -540,12 +536,7 @@ mod imp {
         unsafe {
             // First call with NULL probes for required size; sets last
             // error to ERROR_INSUFFICIENT_BUFFER which we ignore.
-            InitializeProcThreadAttributeList(
-                std::ptr::null_mut(),
-                1,
-                0,
-                &mut attr_size,
-            );
+            InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
         }
         let attr_buffer = unsafe { HeapAlloc(GetProcessHeap(), 0, attr_size) };
         if attr_buffer.is_null() {
@@ -557,9 +548,7 @@ mod imp {
         }
         let attr_list = attr_buffer as LPPROC_THREAD_ATTRIBUTE_LIST;
 
-        let ok = unsafe {
-            InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size)
-        };
+        let ok = unsafe { InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) };
         if ok == 0 {
             unsafe { HeapFree(GetProcessHeap(), 0, attr_buffer) };
             cleanup_sids(&cap_sids, &group_sid_ptrs, ac_sid);
@@ -726,9 +715,7 @@ mod imp {
             )));
         }
         if code_ok == 0 {
-            return Err(LaunchError::WaitFailed(
-                "GetExitCodeProcess failed".into(),
-            ));
+            return Err(LaunchError::WaitFailed("GetExitCodeProcess failed".into()));
         }
         Ok(code as i32)
     }
@@ -864,8 +851,8 @@ mod imp {
         use std::iter::once;
         use windows_sys::Win32::Foundation::ERROR_SUCCESS;
         use windows_sys::Win32::Security::Authorization::{
-            GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW,
-            EXPLICIT_ACCESS_W, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
+            GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W,
+            SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
         };
         use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION};
 
@@ -906,7 +893,9 @@ mod imp {
         let mut new_dacl: *mut ACL = std::ptr::null_mut();
         let status = SetEntriesInAclW(1, &ea, old_dacl, &mut new_dacl);
         if status != ERROR_SUCCESS {
-            return Err(format!("SetEntriesInAclW({target_path}) failed: {status:#010x}"));
+            return Err(format!(
+                "SetEntriesInAclW({target_path}) failed: {status:#010x}"
+            ));
         }
         let _dacl_guard = LocalFreeGuard(new_dacl as *mut core::ffi::c_void);
 
@@ -933,10 +922,7 @@ mod imp {
         let ok = unsafe {
             OpenProcessToken(
                 GetCurrentProcess(),
-                TOKEN_DUPLICATE
-                    | TOKEN_QUERY
-                    | TOKEN_ASSIGN_PRIMARY
-                    | TOKEN_ADJUST_DEFAULT,
+                TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT,
                 &mut token,
             )
         };
@@ -1016,10 +1002,7 @@ mod imp {
         Ok(())
     }
 
-    fn spawn_and_wait(
-        parsed: &ParsedInitArgs,
-        token: Option<HANDLE>,
-    ) -> Result<i32, LaunchError> {
+    fn spawn_and_wait(parsed: &ParsedInitArgs, token: Option<HANDLE>) -> Result<i32, LaunchError> {
         // Build a mutable wide-char command line. CreateProcess writes
         // into the buffer, so we must own it.
         let cmd_line_str = build_command_line(&parsed.target, &parsed.target_args);
@@ -1235,20 +1218,15 @@ mod tests {
 
     #[test]
     fn parse_init_args_rejects_missing_target() {
-        let argv = vec![
-            "--policy".to_string(),
-            "{}".to_string(),
-            "--".to_string(),
-        ];
+        let argv = vec!["--policy".to_string(), "{}".to_string(), "--".to_string()];
         let err = parse_init_args(&argv).unwrap_err();
         assert!(err.contains("missing target"), "got: {err}");
     }
 
     #[test]
     fn capability_names_for_allow_all() {
-        let names = capability_names_for_network(
-            &crate::sandbox::capabilities::NetworkPolicy::AllowAll,
-        );
+        let names =
+            capability_names_for_network(&crate::sandbox::capabilities::NetworkPolicy::AllowAll);
         assert_eq!(
             names,
             vec![
@@ -1260,9 +1238,8 @@ mod tests {
 
     #[test]
     fn capability_names_for_none_returns_empty() {
-        let names = capability_names_for_network(
-            &crate::sandbox::capabilities::NetworkPolicy::None,
-        );
+        let names =
+            capability_names_for_network(&crate::sandbox::capabilities::NetworkPolicy::None);
         assert!(names.is_empty());
     }
 

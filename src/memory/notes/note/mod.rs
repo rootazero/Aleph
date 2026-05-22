@@ -9,9 +9,9 @@ use super::wikilink::extract_wikilinks;
 
 mod helpers;
 mod parsing;
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use helpers::sanitize_title;
 pub use types::{FactProvenance, ProvenanceOrigin, Severity};

@@ -195,8 +195,13 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                 .await
             }
             FileOperation::Stats => {
-                execute_stats(path, args.pattern.as_deref(), &self.denied_paths, output_dir_ref)
-                    .await
+                execute_stats(
+                    path,
+                    args.pattern.as_deref(),
+                    &self.denied_paths,
+                    output_dir_ref,
+                )
+                .await
             }
         };
 

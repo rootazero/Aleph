@@ -28,20 +28,16 @@ impl NoteOrientation for FixedOrient {
             recent_log_tail: "## [2026-04-14] ingest | touched=3".into(),
         })
     }
-    async fn record_ingest(&self, _: &str, _: LogEntry,
-    ) -> Result<(), AlephError> {
+    async fn record_ingest(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
         Ok(())
     }
-    async fn record_query(&self, _: &str, _: LogEntry,
-    ) -> Result<(), AlephError> {
+    async fn record_query(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
         Ok(())
     }
-    async fn record_lint(&self, _: &str, _: LogEntry,
-    ) -> Result<(), AlephError> {
+    async fn record_lint(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
         Ok(())
     }
-    async fn record_session_end(&self, _: &str, _: LogEntry,
-    ) -> Result<(), AlephError> {
+    async fn record_session_end(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
         Ok(())
     }
     async fn rebuild_index(&self, _: &str) -> Result<IndexStats, AlephError> {
@@ -71,20 +67,16 @@ impl NoteOrientation for NoopOrient {
             recent_log_tail: "z".into(),
         })
     }
-    async fn record_ingest(&self, _: &str, _: LogEntry,
-    ) -> Result<(), AlephError> {
+    async fn record_ingest(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
         Ok(())
     }
-    async fn record_query(&self, _: &str, _: LogEntry,
-    ) -> Result<(), AlephError> {
+    async fn record_query(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
         Ok(())
     }
-    async fn record_lint(&self, _: &str, _: LogEntry,
-    ) -> Result<(), AlephError> {
+    async fn record_lint(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
         Ok(())
     }
-    async fn record_session_end(&self, _: &str, _: LogEntry,
-    ) -> Result<(), AlephError> {
+    async fn record_session_end(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
         Ok(())
     }
     async fn rebuild_index(&self, _: &str) -> Result<IndexStats, AlephError> {
@@ -104,10 +96,7 @@ impl ProfileSynthesizer for FixedProfile {
         unimplemented!()
     }
 
-    async fn current(
-        &self,
-        _agent_id: &str,
-    ) -> Result<Option<UserProfile>, AlephError> {
+    async fn current(&self, _agent_id: &str) -> Result<Option<UserProfile>, AlephError> {
         let mut sections = BTreeMap::new();
         sections.insert(
             ProfileSection::Identity.heading().to_string(),
@@ -136,8 +125,7 @@ impl ProfileSynthesizer for FixedProfile {
 
 #[tokio::test]
 async fn tools_mode_returns_none_regardless_of_envelope() {
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools);
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools);
     let msg = provider
         .build_memory_user_message("agent-1", "any query")
         .await
@@ -147,8 +135,7 @@ async fn tools_mode_returns_none_regardless_of_envelope() {
 
 #[tokio::test]
 async fn context_mode_with_empty_envelope_returns_none() {
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context);
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context);
     let msg = provider
         .build_memory_user_message("agent-1", "any query")
         .await
@@ -161,8 +148,7 @@ async fn context_mode_with_empty_envelope_returns_none() {
 
 #[tokio::test]
 async fn hybrid_mode_with_empty_envelope_returns_none() {
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Hybrid);
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Hybrid);
     let msg = provider
         .build_memory_user_message("agent-1", "any query")
         .await
@@ -193,8 +179,7 @@ async fn build_memory_user_message_invokes_on_retrieve_extension() {
         }
     }
 
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Hybrid);
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Hybrid);
     let rec = Arc::new(Recorder(Mutex::new(0)));
     let reg = MemoryExtensionRegistry::new();
     reg.register(rec.clone());
@@ -232,8 +217,7 @@ async fn tools_mode_skips_on_retrieve_dispatch() {
         }
     }
 
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools);
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools);
     let rec = Arc::new(Recorder(Mutex::new(0)));
     let reg = MemoryExtensionRegistry::new();
     reg.register(rec.clone());
@@ -250,9 +234,8 @@ async fn tools_mode_skips_on_retrieve_dispatch() {
 
 #[tokio::test]
 async fn orientation_message_injected_in_context_mode() {
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
-            .with_orientation(Arc::new(FixedOrient));
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+        .with_orientation(Arc::new(FixedOrient));
 
     let msg = provider
         .build_orientation_user_message("default", MemoryInjectionMode::Context)
@@ -268,9 +251,8 @@ async fn orientation_message_injected_in_context_mode() {
 
 #[tokio::test]
 async fn orientation_skipped_in_tools_mode() {
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools)
-            .with_orientation(Arc::new(NoopOrient));
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools)
+        .with_orientation(Arc::new(NoopOrient));
 
     let msg = provider
         .build_orientation_user_message("default", MemoryInjectionMode::Tools)
@@ -281,9 +263,8 @@ async fn orientation_skipped_in_tools_mode() {
 
 #[tokio::test]
 async fn profile_message_injected_in_context_mode() {
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
-            .with_profile(Arc::new(FixedProfile));
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+        .with_profile(Arc::new(FixedProfile));
 
     let msg = provider
         .build_profile_user_message("default", MemoryInjectionMode::Context)
@@ -297,9 +278,8 @@ async fn profile_message_injected_in_context_mode() {
 
 #[tokio::test]
 async fn profile_skipped_in_tools_mode() {
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools)
-            .with_profile(Arc::new(FixedProfile));
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools)
+        .with_profile(Arc::new(FixedProfile));
 
     let msg = provider
         .build_profile_user_message("default", MemoryInjectionMode::Tools)
@@ -314,14 +294,13 @@ async fn first_call_captures_snapshot_subsequent_calls_hit_cache() {
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
-            .with_curated_config(CuratedConfig {
-                memory_char_limit: 100,
-                user_char_limit: 100,
-                legacy_warn_threshold: 0.95,
-            })
-            .with_curated_root_for_test(dir.path().to_path_buf());
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+        .with_curated_config(CuratedConfig {
+            memory_char_limit: 100,
+            user_char_limit: 100,
+            legacy_warn_threshold: 0.95,
+        })
+        .with_curated_root_for_test(dir.path().to_path_buf());
 
     // Pre-seed MEMORY.md (with trailing § so it's classified as curated,
     // not legacy — see Task 7's serialize-with-trailing-delimiter fix).
@@ -387,14 +366,13 @@ async fn invalidate_curated_for_agent_drops_all_sessions_only_for_target() {
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
-    let provider =
-        MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
-            .with_curated_config(CuratedConfig {
-                memory_char_limit: 200,
-                user_char_limit: 200,
-                legacy_warn_threshold: 0.95,
-            })
-            .with_curated_root_for_test(dir.path().to_path_buf());
+    let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+        .with_curated_config(CuratedConfig {
+            memory_char_limit: 200,
+            user_char_limit: 200,
+            legacy_warn_threshold: 0.95,
+        })
+        .with_curated_root_for_test(dir.path().to_path_buf());
 
     // Pre-seed two agents, each with curated entries.
     let a_dir = dir.path().join("agent-A");

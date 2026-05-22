@@ -163,7 +163,11 @@ fn compress_snapshot(output: &str) -> String {
         let summary_lines = lines.len().min(20);
         let mut result = lines[..summary_lines].join("\n");
         if lines.len() > summary_lines {
-            let line_word = if lines.len() - summary_lines == 1 { "line" } else { "lines" };
+            let line_word = if lines.len() - summary_lines == 1 {
+                "line"
+            } else {
+                "lines"
+            };
             result.push_str(&format!(
                 "\n[Snapshot compressed: no interactive elements; kept first {} of {} {}]",
                 summary_lines,

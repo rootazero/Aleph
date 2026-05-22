@@ -264,9 +264,7 @@ impl A2ASubAgent {
                 .smart_router
                 .route(prompt)
                 .await
-                .map_err(|e| {
-                    crate::error::AlephError::other(format!("A2A routing failed: {}", e))
-                })?
+                .map_err(|e| crate::error::AlephError::other(format!("A2A routing failed: {}", e)))?
                 .map(|d| {
                     tracing::info!(
                         agent = %d.agent.card.name,
@@ -774,8 +772,7 @@ mod tests {
             is_final: true,
             metadata: None,
         });
-        let env =
-            serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": completed}).to_string();
+        let env = serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": completed}).to_string();
         format!("event: status-update\ndata: {}\n\n", env)
     }
 
@@ -784,10 +781,10 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/a2a/stream"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_raw(sse_completed_body("streamed answer 42"), "text/event-stream"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                sse_completed_body("streamed answer 42"),
+                "text/event-stream",
+            ))
             .mount(&server)
             .await;
 

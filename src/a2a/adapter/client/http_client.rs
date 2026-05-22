@@ -409,8 +409,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/a2a/stream"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_raw(two_event_sse_body(), "text/event-stream"),
+                ResponseTemplate::new(200).set_body_raw(two_event_sse_body(), "text/event-stream"),
             )
             .mount(&server)
             .await;

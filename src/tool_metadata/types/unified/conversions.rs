@@ -5,11 +5,11 @@
 
 use super::UnifiedTool;
 use crate::config::ToolSafetyPolicy;
-use crate::dispatcher::types::category::ToolCategory;
-use crate::dispatcher::types::conflict::ToolSource;
-use crate::dispatcher::types::definition::ToolDefinition;
-use crate::dispatcher::types::index::{truncate_string, ToolIndexCategory, ToolIndexEntry};
-use crate::dispatcher::types::safety::ToolSafetyLevel;
+use crate::tool_metadata::types::category::ToolCategory;
+use crate::tool_metadata::types::conflict::ToolSource;
+use crate::tool_metadata::types::definition::ToolDefinition;
+use crate::tool_metadata::types::index::{truncate_string, ToolIndexCategory, ToolIndexEntry};
+use crate::tool_metadata::types::safety::ToolSafetyLevel;
 
 impl UnifiedTool {
     // =========================================================================

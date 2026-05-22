@@ -67,7 +67,11 @@ impl EligibilityService {
     /// 5. any_bins
     /// 6. required_env
     /// 7. required_config
-    pub fn evaluate(&self, manifest: &SkillManifest, config: &serde_json::Value) -> EligibilityResult {
+    pub fn evaluate(
+        &self,
+        manifest: &SkillManifest,
+        config: &serde_json::Value,
+    ) -> EligibilityResult {
         let spec = manifest.eligibility();
         self.evaluate_spec(spec, config)
     }
@@ -75,7 +79,11 @@ impl EligibilityService {
     /// Evaluate an eligibility spec directly.
     ///
     /// `config` is the Aleph main configuration serialized as a `serde_json::Value`.
-    pub fn evaluate_spec(&self, spec: &EligibilitySpec, config: &serde_json::Value) -> EligibilityResult {
+    pub fn evaluate_spec(
+        &self,
+        spec: &EligibilitySpec,
+        config: &serde_json::Value,
+    ) -> EligibilityResult {
         // 1. always flag
         if spec.always {
             return EligibilityResult::Eligible;
@@ -155,10 +163,7 @@ impl EligibilityService {
 ///
 /// `config_get_path(json, "a.b.c")` is equivalent to `json["a"]["b"]["c"]`.
 /// Returns `None` if any segment is absent.
-fn config_get_path<'a>(
-    root: &'a serde_json::Value,
-    path: &str,
-) -> Option<&'a serde_json::Value> {
+fn config_get_path<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     let mut current = root;
     for segment in path.split('.') {
         current = current.get(segment)?;

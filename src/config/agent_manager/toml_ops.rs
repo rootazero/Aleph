@@ -65,7 +65,9 @@ impl AgentManager {
             let mut f = OpenOptions::new()
                 .write(true)
                 .open(&tmp_path)
-                .map_err(|e| AlephError::IoError(format!("Failed to open temp file for fsync: {}", e)))?;
+                .map_err(|e| {
+                    AlephError::IoError(format!("Failed to open temp file for fsync: {}", e))
+                })?;
             f.flush()
                 .map_err(|e| AlephError::IoError(format!("Failed to flush temp file: {}", e)))?;
             f.sync_all()

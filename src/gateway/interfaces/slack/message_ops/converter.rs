@@ -156,5 +156,4 @@ impl SlackMessageOps {
             metadata: vec![],
         })
     }
-
 }

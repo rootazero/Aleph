@@ -407,11 +407,8 @@ mod tests {
     #[test]
     fn report_progress_fails_when_not_active() {
         let mut arena = SharedArena::new(test_manifest(&["agent-a"]));
-        let result = arena.report_progress(
-            &"agent-a".to_string(),
-            Some("task 1".to_string()),
-            Some(1),
-        );
+        let result =
+            arena.report_progress(&"agent-a".to_string(), Some("task 1".to_string()), Some(1));
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

@@ -49,7 +49,9 @@ pub enum HealthReason {
     DependencyDown(Cow<'static, str>),
     AuthMissing(Cow<'static, str>),
     /// Wall-clock millis-from-epoch when the rate-limit lifts.
-    RateLimited { until_ms_from_epoch: i64 },
+    RateLimited {
+        until_ms_from_epoch: i64,
+    },
     Custom(Cow<'static, str>),
 }
 

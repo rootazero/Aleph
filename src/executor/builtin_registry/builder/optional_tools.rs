@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use tracing::info;
 
-use crate::dispatcher::{ToolSource, UnifiedTool};
-use crate::sync_primitives::Arc;
-use crate::tools::AlephTool;
+use crate::builtin_tools::meta_tools::{GetToolSchemaTool, ListToolsTool};
+use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::builtin_tools::{
     ImageGenerateTool, MemoryBrowseTool, MemoryExploreTool, MemorySearchTool, VaultStoreTool,
 };
-use crate::builtin_tools::meta_tools::{GetToolSchemaTool, ListToolsTool};
-use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
+use crate::sync_primitives::Arc;
+use crate::tool_metadata::{ToolSource, UnifiedTool};
+use crate::tools::AlephTool;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 

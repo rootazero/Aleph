@@ -9,13 +9,13 @@
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 
-use crate::dispatcher::ToolCategory;
-use crate::dispatcher::ToolDefinition as DispatcherToolDefinition;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::delta::{response_to_delta_stream, ProviderDelta};
 use crate::providers::message::{transform_messages, UnifiedMessage};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
+use crate::tool_metadata::ToolCategory;
+use crate::tool_metadata::ToolDefinition as DispatcherToolDefinition;
 
 use crate::tools::runtime::ToolDefinition as LoopToolDefinition;
 

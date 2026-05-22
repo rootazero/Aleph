@@ -5,12 +5,12 @@ use crate::sync_primitives::{AtomicBool, AtomicU64};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use super::config::ReplyEmitterConfig;
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::inbound_context::ReplyRoute;
 use crate::gateway::media::PendingMedia;
 use crate::gateway::streaming::{StreamingConfig, StreamingController};
 use crate::media::cache::MediaCache;
-use super::config::ReplyEmitterConfig;
 
 /// Streaming cursor appended to intermediate edits, removed on final.
 const STREAMING_CURSOR: &str = "▍";

@@ -252,9 +252,9 @@ mod tests {
     #[test]
     fn build_routing_prompt_includes_agent_info() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let skill = make_skill(
             "translate",
@@ -281,9 +281,9 @@ mod tests {
     #[test]
     fn build_routing_prompt_handles_no_description() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("SimpleBot", None, vec![])];
         let prompt = matcher.build_routing_prompt("hello", &agents);
@@ -297,9 +297,9 @@ mod tests {
     #[test]
     fn parse_response_valid() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![
             make_agent("Agent0", None, vec![]),
@@ -320,9 +320,9 @@ mod tests {
     #[test]
     fn parse_response_negative_index() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("Agent0", None, vec![])];
         let response = "AGENT_INDEX: -1\nCONFIDENCE: 0.0\nREASON: No suitable agent found";
@@ -334,9 +334,9 @@ mod tests {
     #[test]
     fn parse_response_index_out_of_bounds() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("Agent0", None, vec![])];
         let response = "AGENT_INDEX: 5\nCONFIDENCE: 0.9\nREASON: Out of range";
@@ -348,9 +348,9 @@ mod tests {
     #[test]
     fn parse_response_below_confidence_threshold() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("Agent0", None, vec![])];
         let response = "AGENT_INDEX: 0\nCONFIDENCE: 0.1\nREASON: Very weak match";
@@ -362,9 +362,9 @@ mod tests {
     #[test]
     fn parse_response_missing_confidence_defaults_to_half() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("Agent0", None, vec![])];
         let response = "AGENT_INDEX: 0\nREASON: Some reason";
@@ -378,9 +378,9 @@ mod tests {
     #[test]
     fn parse_response_missing_index_returns_none() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("Agent0", None, vec![])];
         let response = "CONFIDENCE: 0.9\nREASON: No index provided";
@@ -392,9 +392,9 @@ mod tests {
     #[test]
     fn parse_response_clamps_confidence() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("Agent0", None, vec![])];
         let response = "AGENT_INDEX: 0\nCONFIDENCE: 1.5\nREASON: Over-confident";
@@ -407,9 +407,9 @@ mod tests {
     #[test]
     fn parse_response_tolerates_extra_whitespace() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("Agent0", None, vec![])];
         let response = "  AGENT_INDEX:   0  \n  CONFIDENCE:  0.7  \n  REASON:  Matched well  ";
@@ -424,9 +424,9 @@ mod tests {
     #[test]
     fn parse_response_garbage_returns_none() {
         let provider = Arc::new(MockProvider::with_response(""));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("Agent0", None, vec![])];
         let response = "I think Agent0 is the best match because it handles coding tasks well.";
@@ -440,9 +440,9 @@ mod tests {
     #[tokio::test]
     async fn match_intent_empty_agents() {
         let provider = Arc::new(MockProvider::with_response("should not be called"));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let result = matcher.match_intent("do something", &[]).await;
         assert!(result.is_none());
@@ -453,9 +453,9 @@ mod tests {
         let provider = Arc::new(MockProvider::with_response(
             "AGENT_INDEX: 0\nCONFIDENCE: 0.9\nREASON: Best match for translation",
         ));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent(
             "TranslateBot",
@@ -476,9 +476,9 @@ mod tests {
     #[tokio::test]
     async fn match_intent_provider_error_returns_none() {
         let provider = Arc::new(MockProvider::with_error("API rate limited"));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("Agent0", None, vec![])];
         let result = matcher.match_intent("do something", &agents).await;
@@ -490,9 +490,9 @@ mod tests {
         let provider = Arc::new(MockProvider::with_response(
             "AGENT_INDEX: -1\nCONFIDENCE: 0.0\nREASON: No suitable agent found",
         ));
-        let matcher = SemanticLlmMatcher::new(Arc::new(
-            crate::providers::StaticDefault::new(provider as Arc<dyn AiProvider>),
-        ));
+        let matcher = SemanticLlmMatcher::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
 
         let agents = vec![make_agent("Agent0", None, vec![])];
         let result = matcher

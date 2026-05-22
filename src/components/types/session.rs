@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use crate::dispatcher::ToolRegistry;
 use crate::event::EventBus;
+use crate::tool_metadata::ToolRegistry;
 
 use super::parts::SessionPart;
 use super::status::SessionStatus;

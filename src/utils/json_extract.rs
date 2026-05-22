@@ -114,11 +114,7 @@ fn extract_from_json_code_block(response: &str) -> Option<String> {
             let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
             let line_prefix = &before[line_start..];
             if line_prefix.trim().is_empty() {
-                return Some(
-                    content[content_start..abs_pos]
-                        .trim()
-                        .to_string(),
-                );
+                return Some(content[content_start..abs_pos].trim().to_string());
             }
             search_pos = abs_pos + end_marker.len();
         }

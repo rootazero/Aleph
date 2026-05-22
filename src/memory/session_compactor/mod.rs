@@ -31,7 +31,6 @@ pub mod tool_compactor;
 
 pub use summary_source::SessionSummarySource;
 
-
 mod constructor;
 mod helpers;
 mod post_turn_compress;

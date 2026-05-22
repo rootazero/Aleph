@@ -219,7 +219,11 @@ fn canonical_provider(provider: &str) -> &'static str {
     let p = provider.trim().to_ascii_lowercase();
     if p.contains("anthropic") || p.contains("claude") {
         "anthropic"
-    } else if p.contains("openai") || p.contains("gpt") || p.starts_with("o1") || p.starts_with("o3") {
+    } else if p.contains("openai")
+        || p.contains("gpt")
+        || p.starts_with("o1")
+        || p.starts_with("o3")
+    {
         "openai"
     } else if p.contains("google") || p.contains("gemini") {
         "google"
@@ -286,7 +290,10 @@ pub fn estimate(provider: &str, model: &str, breakdown: &TokenBreakdown) -> Cost
         Some((_, e)) => *e,
         None => return CostEstimate::unknown(provider, model),
     };
-    let rate = match entries.iter().find(|r| canonical.starts_with(r.model_prefix)) {
+    let rate = match entries
+        .iter()
+        .find(|r| canonical.starts_with(r.model_prefix))
+    {
         Some(r) => r,
         None => return CostEstimate::unknown(provider, model),
     };

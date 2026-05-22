@@ -8,7 +8,6 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::StreamExt;
 
-use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::gateway::openai_api::auth::ApiError;
 use crate::gateway::openai_api::state::OpenAiApiState;
 use crate::gateway::openai_api::stream;
@@ -18,6 +17,7 @@ use crate::gateway::openai_api::types::{
 use crate::providers::adapter::{RequestPayload, ToolChoice};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
+use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use serde_json::{json, Value};
 
 /// Convert OpenAI-format tool definitions to internal `ToolDefinition`.

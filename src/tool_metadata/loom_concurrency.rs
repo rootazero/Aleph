@@ -1,6 +1,6 @@
-//! Loom concurrency tests for dispatcher module.
+//! Loom concurrency tests for tool_metadata module.
 //!
-//! Tests abstract concurrency patterns extracted from dispatcher internals.
+//! Tests abstract concurrency patterns extracted from tool_metadata internals.
 //! Run with: `just test-loom`
 
 use crate::sync_primitives::{Arc, AtomicBool, AtomicU64, Ordering, RwLock};
@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// Verify concurrent read/write to a registry-like structure doesn't deadlock
 /// and readers always see consistent state.
 ///
-/// Models: dispatcher/registry/mod.rs tool registry pattern
+/// Models: tool_metadata/registry/mod.rs tool registry pattern
 #[test]
 fn loom_registry_concurrent_read_write() {
     loom::model(|| {
@@ -38,7 +38,7 @@ fn loom_registry_concurrent_read_write() {
 
 /// Verify pause/resume/cancel atomic flags never enter illegal combinations.
 ///
-/// Models: dispatcher/engine/core.rs AtomicBool coordination
+/// Models: tool_metadata/registry/mod.rs AtomicBool coordination
 #[test]
 fn loom_engine_pause_resume_cancel() {
     loom::model(|| {
@@ -65,7 +65,7 @@ fn loom_engine_pause_resume_cancel() {
 
 /// Verify atomic counter fetch_add returns unique monotonic values.
 ///
-/// Models: dispatcher/engine/core.rs event sequence counter
+/// Models: tool_metadata/registry/mod.rs event sequence counter
 #[test]
 fn loom_atomic_counter_monotonic() {
     loom::model(|| {
@@ -87,7 +87,7 @@ fn loom_atomic_counter_monotonic() {
 
 /// Verify RwLock-protected progress state is never torn when read concurrently.
 ///
-/// Models: dispatcher/monitor/progress.rs snapshot pattern
+/// Models: tool_metadata/registry/health.rs snapshot pattern
 #[test]
 fn loom_progress_snapshot() {
     loom::model(|| {

@@ -22,13 +22,13 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// Slack message length limit (characters).
 pub(crate) const SLACK_MSG_LIMIT: usize = 3000;
 
-mod debouncer;
 mod api;
 mod converter;
+mod debouncer;
 mod socket;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use debouncer::SlackDebouncer;
 pub use api::SlackMessageOps;
+pub(crate) use debouncer::SlackDebouncer;

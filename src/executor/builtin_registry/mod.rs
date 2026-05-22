@@ -35,7 +35,7 @@ mod tests {
 
     use tokio::sync::RwLock;
 
-    use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource};
+    use crate::tool_metadata::{ToolRegistry as DispatcherToolRegistry, ToolSource};
 
     use super::*;
 
@@ -190,11 +190,11 @@ mod tests {
         let mut tools = std::collections::HashMap::new();
         tools.insert(
             "legacy_tool".to_string(),
-            crate::dispatcher::UnifiedTool::new(
+            crate::tool_metadata::UnifiedTool::new(
                 "plugin:legacy:legacy_tool",
                 "legacy_tool",
                 "Legacy plugin tool",
-                crate::dispatcher::ToolSource::Plugin {
+                crate::tool_metadata::ToolSource::Plugin {
                     plugin_id: "legacy-plugin".to_string(),
                 },
             ),

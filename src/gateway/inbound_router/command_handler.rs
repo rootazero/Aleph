@@ -152,7 +152,11 @@ impl InboundMessageRouter {
                     return None; // exact match — caller should have resolved
                 }
                 let dist = levenshtein_distance(&name, &needle);
-                let threshold = if name.len().max(needle.len()) <= 6 { 2 } else { 3 };
+                let threshold = if name.len().max(needle.len()) <= 6 {
+                    2
+                } else {
+                    3
+                };
                 let substring_hit = name.contains(&needle) || needle.contains(&name);
                 if dist <= threshold || substring_hit {
                     let effective = if substring_hit { dist.min(2) } else { dist };
@@ -320,5 +324,4 @@ impl InboundMessageRouter {
             }
         }
     }
-
 }

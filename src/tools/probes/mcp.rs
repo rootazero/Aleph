@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::dispatcher::{HealthReason, ProbeResult, ToolHealthProbe};
 use crate::mcp::McpClient;
+use crate::tool_metadata::{HealthReason, ProbeResult, ToolHealthProbe};
 
 pub struct McpServerProbe {
     client: Arc<McpClient>,

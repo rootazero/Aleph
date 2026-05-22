@@ -286,7 +286,10 @@ impl DeltaCollector {
             return None;
         }
         let name = action.get("tool_name").and_then(Value::as_str)?.to_string();
-        let arguments = action.get("arguments").cloned().unwrap_or(Value::Object(serde_json::Map::new()));
+        let arguments = action
+            .get("arguments")
+            .cloned()
+            .unwrap_or(Value::Object(serde_json::Map::new()));
         // Generate a deterministic synthetic id from the tool name so the
         // harness can correlate tool results on subsequent turns.
         let id = format!("json_{}", name);
@@ -562,7 +565,11 @@ mod tests {
         });
 
         let response = collector.finish();
-        assert_eq!(response.tool_calls.len(), 1, "tool call should be preserved");
+        assert_eq!(
+            response.tool_calls.len(),
+            1,
+            "tool call should be preserved"
+        );
         let call = &response.tool_calls[0];
         assert_eq!(call.id, "call_truncated");
         assert_eq!(call.name, "Read");
@@ -625,8 +632,14 @@ mod tests {
         c.push(ProviderDelta::Done(StopReason::EndTurn));
 
         let usage = c.finish().usage.expect("usage present");
-        assert_eq!(usage.input_tokens, 150, "input_tokens from message_start kept");
-        assert_eq!(usage.output_tokens, 42, "output_tokens from message_delta applied");
+        assert_eq!(
+            usage.input_tokens, 150,
+            "input_tokens from message_start kept"
+        );
+        assert_eq!(
+            usage.output_tokens, 42,
+            "output_tokens from message_delta applied"
+        );
         assert_eq!(usage.cache_read_tokens, Some(80), "cache_read kept");
         assert_eq!(usage.cache_creation_tokens, Some(30), "cache_creation kept");
     }

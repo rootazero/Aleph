@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
-use crate::dispatcher::ToolRegistry as DispatchRegistry;
 use crate::mcp::{McpClient, McpTool};
+use crate::tool_metadata::ToolRegistry as DispatchRegistry;
 use crate::tools::handlers::mcp::McpHandler;
 use crate::tools::handlers::ToolHandler;
 use crate::tools::probes::mcp::McpServerProbe;

@@ -1,6 +1,5 @@
 //! Session Manager operations: CRUD, query, compaction, and cleanup methods.
 
-
 use super::{
     session_type_str, SessionIdentityMeta, SessionManager, SessionManagerError, SessionMetadata,
     SessionPatch, SessionSearchResult, SessionState,

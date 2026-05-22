@@ -19,8 +19,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::dispatcher::ToolDefinition as DispatcherToolDefinition;
 use crate::session::events::ToolOutput;
+use crate::tool_metadata::ToolDefinition as DispatcherToolDefinition;
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 
 /// Fail-closed `ToolService` used as the unreachable fallback in
@@ -66,7 +66,10 @@ mod tests {
     #[tokio::test]
     async fn execute_returns_not_found() {
         let svc = NullToolService::new();
-        let err = svc.execute("anything", serde_json::json!({})).await.unwrap_err();
+        let err = svc
+            .execute("anything", serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::NotFound { ref name } if name == "anything"));
     }
 

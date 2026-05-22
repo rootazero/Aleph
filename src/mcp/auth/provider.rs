@@ -508,11 +508,13 @@ async fn parse_token_response(response: reqwest::Response) -> Result<OAuthTokens
         .map_err(|e| AlephError::IoError(format!("Failed to parse token response: {}", e)))?;
 
     let expires_at = token_response.expires_in.map(|exp| {
-        std::time::SystemTime::now()
+        let now: i64 = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() as i64
-            + exp
+            .as_secs()
+            .try_into()
+            .unwrap_or(i64::MAX);
+        now.saturating_add(exp)
     });
 
     Ok(OAuthTokens {

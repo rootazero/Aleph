@@ -99,4 +99,3 @@ pub async fn handle_get(request: JsonRpcRequest, db: Arc<StateDatabase>) -> Json
         }
     }
 }
-

@@ -39,9 +39,9 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 pub mod constants;
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use types::{ElevenLabsErrorDetail, ElevenLabsErrorResponse, TtsRequest, VoiceSettings};
 
@@ -143,7 +143,10 @@ impl ElevenLabsProvider {
                     format!(
                         "Unknown voice: '{}'. Available: {:?}",
                         voice,
-                        constants::VOICES.iter().map(|(n, _)| *n).collect::<Vec<_>>()
+                        constants::VOICES
+                            .iter()
+                            .map(|(n, _)| *n)
+                            .collect::<Vec<_>>()
                     ),
                     Some("voice".to_string()),
                 )
@@ -336,7 +339,10 @@ impl GenerationProvider for ElevenLabsProvider {
                 if !constants::OUTPUT_FORMATS.contains(&format.as_str()) {
                     return Err(GenerationError::unsupported_format(
                         format.clone(),
-                        constants::OUTPUT_FORMATS.iter().map(|s| s.to_string()).collect(),
+                        constants::OUTPUT_FORMATS
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect(),
                     ));
                 }
             }
@@ -370,16 +376,15 @@ impl GenerationProvider for ElevenLabsProvider {
                 request_builder = request_builder.query(&[("output_format", format.as_str())]);
             }
 
-            let response = request_builder.send().await
-                .map_err(|e| {
-                    if e.is_timeout() {
-                        GenerationError::timeout(Duration::from_secs(constants::DEFAULT_TIMEOUT_SECS))
-                    } else if e.is_connect() {
-                        GenerationError::network(format!("Connection failed: {}", e))
-                    } else {
-                        GenerationError::network(e.to_string())
-                    }
-                })?;
+            let response = request_builder.send().await.map_err(|e| {
+                if e.is_timeout() {
+                    GenerationError::timeout(Duration::from_secs(constants::DEFAULT_TIMEOUT_SECS))
+                } else if e.is_connect() {
+                    GenerationError::network(format!("Connection failed: {}", e))
+                } else {
+                    GenerationError::network(e.to_string())
+                }
+            })?;
 
             let status = response.status();
 

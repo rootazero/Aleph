@@ -1,13 +1,13 @@
 //! ExecutionAdapter trait implementation for ExecutionEngine.
 
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 
+use super::{engine::ExecutionEngine, ExecutionError, RunRequest, RunStatus};
+use crate::executor::ToolRegistry;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter};
 use crate::gateway::execution_adapter::ExecutionAdapter;
-use super::{engine::ExecutionEngine, ExecutionError, RunRequest, RunStatus};
-use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
 /// Implement ExecutionAdapter for the ExecutionEngine.

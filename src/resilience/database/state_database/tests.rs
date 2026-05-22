@@ -218,8 +218,6 @@ fn test_task_traces_use_structured_agent_trace_schema() {
     );
 }
 
-
-
 #[test]
 fn test_new_with_dim_default() {
     let temp_dir = tempdir().unwrap();

@@ -79,9 +79,18 @@ mod tests {
 
     #[test]
     fn severity_serializes_lowercase() {
-        assert_eq!(serde_json::to_string(&types::Severity::Low).unwrap(), "\"low\"");
-        assert_eq!(serde_json::to_string(&types::Severity::Med).unwrap(), "\"med\"");
-        assert_eq!(serde_json::to_string(&types::Severity::High).unwrap(), "\"high\"");
+        assert_eq!(
+            serde_json::to_string(&types::Severity::Low).unwrap(),
+            "\"low\""
+        );
+        assert_eq!(
+            serde_json::to_string(&types::Severity::Med).unwrap(),
+            "\"med\""
+        );
+        assert_eq!(
+            serde_json::to_string(&types::Severity::High).unwrap(),
+            "\"high\""
+        );
         assert_eq!(
             serde_json::to_string(&types::Severity::Critical).unwrap(),
             "\"critical\""
@@ -96,7 +105,11 @@ mod tests {
             (n.confidence - 1.0).abs() < 1e-6,
             "old notes get confidence=1.0"
         );
-        assert_eq!(n.severity, types::Severity::Low, "old notes get severity=Low");
+        assert_eq!(
+            n.severity,
+            types::Severity::Low,
+            "old notes get severity=Low"
+        );
         assert!(
             n.source_notes.is_empty(),
             "old notes get empty source_notes"
@@ -294,8 +307,14 @@ Related: [[Rust Learning]] [[Dev Environment]]
 
     #[test]
     fn sanitize_title_strips_path_traversal() {
-        assert_eq!(helpers::sanitize_title("../../etc/passwd").unwrap(), "etcpasswd");
-        assert_eq!(helpers::sanitize_title("normal title").unwrap(), "normal title");
+        assert_eq!(
+            helpers::sanitize_title("../../etc/passwd").unwrap(),
+            "etcpasswd"
+        );
+        assert_eq!(
+            helpers::sanitize_title("normal title").unwrap(),
+            "normal title"
+        );
         assert_eq!(helpers::sanitize_title("has/slash").unwrap(), "hasslash");
         assert_eq!(helpers::sanitize_title("has\\back").unwrap(), "hasback");
         assert_eq!(helpers::sanitize_title("a]b*c?d").unwrap(), "a]bcd");
@@ -315,8 +334,14 @@ Related: [[Rust Learning]] [[Dev Environment]]
 
     #[test]
     fn sanitize_title_returns_ok_for_normal_input() {
-        assert_eq!(helpers::sanitize_title("rust learning").unwrap(), "rust learning");
-        assert_eq!(helpers::sanitize_title("../etc/passwd").unwrap(), "etcpasswd");
+        assert_eq!(
+            helpers::sanitize_title("rust learning").unwrap(),
+            "rust learning"
+        );
+        assert_eq!(
+            helpers::sanitize_title("../etc/passwd").unwrap(),
+            "etcpasswd"
+        );
     }
 
     #[test]
@@ -371,7 +396,11 @@ Related: [[Rust Learning]] [[Dev Environment]]
 
     #[test]
     fn yaml_inline_array_quotes_leading_and_trailing_space() {
-        let s = helpers::yaml_inline_array(&[" lead".to_string(), "trail ".to_string(), "".to_string()]);
+        let s = helpers::yaml_inline_array(&[
+            " lead".to_string(),
+            "trail ".to_string(),
+            "".to_string(),
+        ]);
         assert_eq!(s, "[' lead', 'trail ', '']");
     }
 
@@ -482,7 +511,8 @@ tags: []
 
     #[test]
     fn extract_facts_keeps_continuation_lines() {
-        let body = "- claim line one\n  continuation line two\n  continuation line three\n- next claim\n";
+        let body =
+            "- claim line one\n  continuation line two\n  continuation line three\n- next claim\n";
         let facts = parsing::extract_facts(body);
         assert_eq!(facts.len(), 2);
         assert!(facts[0].contains("continuation line two"));

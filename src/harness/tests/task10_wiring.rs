@@ -130,7 +130,7 @@ impl ToolService for NoopTools {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }
@@ -653,8 +653,15 @@ async fn diminishing_returns_fires_grace_and_hits_limit() {
         .await
         .expect("run_turn should succeed on StopDiminishing");
 
-    assert_eq!(state, TurnState::Done, "StopDiminishing must produce TurnState::Done");
-    assert!(harness.hit_limit(), "hit_limit must be set when DiminishingReturnsDetector trips");
+    assert_eq!(
+        state,
+        TurnState::Done,
+        "StopDiminishing must produce TurnState::Done"
+    );
+    assert!(
+        harness.hit_limit(),
+        "hit_limit must be set when DiminishingReturnsDetector trips"
+    );
     assert_eq!(
         provider.call_count(),
         2,
@@ -813,7 +820,7 @@ impl ToolService for SleepyBudgetedTool {
             },
         })
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }
@@ -992,7 +999,9 @@ async fn split_session_directive_continues_run_in_child_session() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-        session_epoch_registrar: Some(registrar.clone() as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>),
+        session_epoch_registrar: Some(
+            registrar.clone() as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>
+        ),
     };
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();
@@ -1065,7 +1074,8 @@ async fn split_session_failsoft_falls_back_to_final_reply() {
         turn_budget: None,
         result_store: None,
         // FailRegistrar always returns Err → split fails → fall back to FinalReply.
-        session_epoch_registrar: Some(Arc::new(FailRegistrar) as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>),
+        session_epoch_registrar: Some(Arc::new(FailRegistrar)
+            as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>),
     };
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();
@@ -1220,7 +1230,7 @@ impl ToolService for CountingTools {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }

@@ -31,7 +31,7 @@ pub enum ToolResult {
 
 /// Lightweight tool definition for LLM function calling.
 ///
-/// Intentionally simpler than `crate::dispatcher::ToolDefinition` —
+/// Intentionally simpler than `crate::tool_metadata::ToolDefinition` —
 /// no category, confirmation, or strict-mode fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
@@ -436,9 +436,7 @@ mod tests {
             json!({ "type": "object", "properties": {} })
         }
         async fn execute(&self, _input: Value) -> ToolResult {
-            ToolResult::Success {
-                output: json!({}),
-            }
+            ToolResult::Success { output: json!({}) }
         }
         fn max_result_tokens(&self) -> Option<usize> {
             Some(4_000)

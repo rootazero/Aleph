@@ -88,7 +88,9 @@ mod tests {
         let _ = system.init(crate::skill::default_skill_dirs()).await;
         let tool = SkillStatusTool::new(system);
         let out = tool
-            .call(SkillStatusArgs { filter: "all".to_string() })
+            .call(SkillStatusArgs {
+                filter: "all".to_string(),
+            })
             .await
             .unwrap();
         // total >= filtered is a tautology; the assertion guards against a panic

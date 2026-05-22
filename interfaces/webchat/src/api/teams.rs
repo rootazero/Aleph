@@ -197,10 +197,7 @@ impl TeamsApi {
         params.insert("team_id".to_string(), Value::String(team_id.to_string()));
         params.insert("subject".to_string(), Value::String(input.subject));
         if !input.description.is_empty() {
-            params.insert(
-                "description".to_string(),
-                Value::String(input.description),
-            );
+            params.insert("description".to_string(), Value::String(input.description));
         }
         if let Some(o) = input.owner.filter(|s| !s.is_empty()) {
             params.insert("owner".to_string(), Value::String(o));

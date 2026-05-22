@@ -49,7 +49,6 @@ mod config;
 pub mod context;
 mod core;
 pub mod discovery;
-pub mod dispatcher;
 pub mod domain;
 pub mod engine;
 mod error;
@@ -77,6 +76,7 @@ pub mod sandbox;
 pub mod search;
 pub mod session;
 pub mod skill;
+pub mod tool_metadata;
 
 pub mod harness;
 pub(crate) mod process_supervisor;
@@ -123,7 +123,9 @@ pub use crate::config::{
     types::acp::{AcpAdapterEntry, AcpConfig, AdapterModeSerde, OutputFormatSerde},
     types::generation::GenerationConfig,
     types::memory::DreamingConfig,
-    types::phase6_wiring::{ContextBudgetToml, FallbackProviderToml, GuardrailsToml, StabilityToml},
+    types::phase6_wiring::{
+        ContextBudgetToml, FallbackProviderToml, GuardrailsToml, StabilityToml,
+    },
     types::resume::ResumeConfig,
     types::stop_hooks::StopHookConfig,
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
@@ -155,25 +157,16 @@ pub use crate::thinker::{
 // Unified tool traits
 pub use crate::tools::{AlephTool, AlephToolDyn, AlephToolServer, AlephToolServerHandle};
 
-// Dispatcher (tool registry)
-pub use crate::dispatcher::{
+// Tool Metadata (registry)
+pub use crate::tool_metadata::{
     ToolCategory, ToolDefinition, ToolRegistry, ToolResult, ToolSafetyLevel, ToolSource,
     ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
 
 // Tool Index (Tool-as-Resource)
-pub use crate::dispatcher::tool_index::{
-    HydratedTool,
-    // Retrieval
-    HydrationLevel,
-    // Inference
-    InferredPurpose,
-    SemanticPurposeInferrer,
-    // Coordinator
-    ToolIndexCoordinator,
-    ToolMeta,
-    ToolRetrieval,
-    // Config
+pub use crate::tool_metadata::tool_index::{
+    HydratedTool, HydrationLevel, HydrationPipeline, HydrationPipelineConfig, HydrationResult,
+    InferredPurpose, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta, ToolRetrieval,
     ToolRetrievalConfig,
 };
 

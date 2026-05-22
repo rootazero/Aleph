@@ -128,7 +128,7 @@ impl ToolService for EmptyTools {
         None
     }
 
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }
@@ -415,7 +415,7 @@ async fn callback_fires_on_delta_and_tool_call() {
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             std::sync::Arc::from([])
         }
     }
@@ -551,7 +551,7 @@ async fn think_tool_use_after_act_returns_continue() {
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             std::sync::Arc::from([])
         }
     }

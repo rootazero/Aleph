@@ -29,10 +29,12 @@ impl OAuthTokens {
     /// Check if the token is expired (with 5 minute buffer)
     pub fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.expires_at {
-            let now = std::time::SystemTime::now()
+            let now: i64 = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_secs() as i64;
+                .as_secs()
+                .try_into()
+                .unwrap_or(i64::MAX);
             // Add 5 minute buffer (saturating to prevent overflow on adversarial values)
             expires_at.saturating_sub(300) < now
         } else {

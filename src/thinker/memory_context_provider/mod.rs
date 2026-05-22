@@ -59,7 +59,8 @@ pub struct MemoryContextProvider {
     pub(crate) injection_mode: MemoryInjectionMode,
     /// Plugin-contributed enhancements to the retrieved envelope.
     /// Default-empty registry means no plugins registered = no-op.
-    pub(crate) extensions: crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+    pub(crate) extensions:
+        crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     /// Optional wiki orientation provider for injecting structural context.
     pub(crate) orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Token budget for orientation snapshots.

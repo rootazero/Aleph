@@ -399,6 +399,9 @@ mod tests {
         let long_reply = "x".repeat(MAX_REPLY_LENGTH + 100);
         assert!(mgr.resolve("sess-long", &long_reply).await);
         let result = rx.await.unwrap();
-        assert_eq!(result.get_value(), Some("x".repeat(MAX_REPLY_LENGTH).as_str()));
+        assert_eq!(
+            result.get_value(),
+            Some("x".repeat(MAX_REPLY_LENGTH).as_str())
+        );
     }
 }

@@ -20,7 +20,7 @@ pub use types::{CommandExecutionResult, CommandNode, CommandTriggers, CommandTyp
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::ToolSourceType;
+    use crate::tool_metadata::ToolSourceType;
 
     #[test]
     fn test_command_type_display() {

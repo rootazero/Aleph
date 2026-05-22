@@ -3,8 +3,8 @@
 use serde_json::Value;
 
 use super::AlephToolServer;
-use crate::dispatcher::ToolDefinition;
 use crate::error::{AlephError, Result};
+use crate::tool_metadata::ToolDefinition;
 use crate::tools::traits::AlephToolDyn;
 use crate::tools::types::ToolRepairType;
 
@@ -30,7 +30,7 @@ impl AlephToolDyn for DynamicMockTool {
                 },
                 "required": ["input"]
             }),
-            crate::dispatcher::ToolCategory::Builtin,
+            crate::tool_metadata::ToolCategory::Builtin,
         )
     }
 

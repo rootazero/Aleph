@@ -13,14 +13,14 @@
 //!
 //! Mode is controlled by `BehaviorConfig.output_mode` in config.toml.
 
-mod sanitize;
 mod config;
 mod emitter;
+mod sanitize;
 
 #[cfg(test)]
 mod tests;
 
-pub use config::{ReplyEmitterConfig};
+pub use config::ReplyEmitterConfig;
 pub use emitter::ReplyEmitter;
 pub(crate) use sanitize::sanitize_llm_output;
 

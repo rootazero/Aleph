@@ -49,9 +49,10 @@ impl Lane {
         if let Some(dot) = method.rfind('.') {
             let suffix = &method[dot + 1..];
             match suffix {
-                "get" | "list" | "search" | "status" | "describe" | "history"
-                | "effective" | "catalog" | "neighbors" | "subscribe" | "unsubscribe"
-                | "stats" => return Lane::Query,
+                "get" | "list" | "search" | "status" | "describe" | "history" | "effective"
+                | "catalog" | "neighbors" | "subscribe" | "unsubscribe" | "stats" => {
+                    return Lane::Query
+                }
                 "install" | "uninstall" => return Lane::System,
                 "run" | "send" | "invoke" | "execute" => return Lane::Execute,
                 _ => {}
@@ -66,9 +67,7 @@ impl Lane {
         match method {
             // Read-only ops with no dot-suffix (or whose suffix doesn't
             // match the Query rule).
-            "health" | "echo" | "version" | "system.info" | "request.state" => {
-                Some(Lane::Query)
-            }
+            "health" | "echo" | "version" | "system.info" | "request.state" => Some(Lane::Query),
             // gateway.identity.get matches the .get suffix; listed
             // defensively in case it's ever renamed.
             "gateway.identity.get" => Some(Lane::Query),

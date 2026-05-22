@@ -897,8 +897,7 @@ struct TruncateReply {
 
 async fn execute_undo(state: &mut AppState, client: &AlephClient) {
     if state.current_run.is_some() {
-        state
-            .add_system_message("Stop the active run first (/stop), then /undo.".to_string());
+        state.add_system_message("Stop the active run first (/stop), then /undo.".to_string());
         return;
     }
     // Count non-system messages — we only undo the last user+assistant pair.
@@ -933,8 +932,7 @@ async fn execute_undo(state: &mut AppState, client: &AlephClient) {
 
 async fn execute_retry(state: &mut AppState, client: &AlephClient) {
     if state.current_run.is_some() {
-        state
-            .add_system_message("Stop the active run first (/stop), then /retry.".to_string());
+        state.add_system_message("Stop the active run first (/stop), then /retry.".to_string());
         return;
     }
     let Some(last_user) = last_user_message(state) else {
@@ -988,7 +986,10 @@ fn pop_last_turn_locally(state: &mut AppState) {
         state.messages.pop();
     }
     // Drop the trailing assistant turn (if any)…
-    if matches!(state.messages.last(), Some(app::ChatMessage::Assistant { .. })) {
+    if matches!(
+        state.messages.last(),
+        Some(app::ChatMessage::Assistant { .. })
+    ) {
         state.messages.pop();
     }
     // …and the preceding user message.

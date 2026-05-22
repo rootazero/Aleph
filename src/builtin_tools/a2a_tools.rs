@@ -544,7 +544,11 @@ mod tests {
     async fn agents_list_then_remove_roundtrip() {
         let (handle, registry) = build_handle();
         registry
-            .upsert(sample_registered("rev", "Reviewer", "https://r.example.com"))
+            .upsert(sample_registered(
+                "rev",
+                "Reviewer",
+                "https://r.example.com",
+            ))
             .await;
         let tool = A2AAgentsTool::new(handle);
 

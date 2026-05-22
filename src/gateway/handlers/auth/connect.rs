@@ -640,8 +640,7 @@ mod tests {
             store.clone(),
             "/tmp/aleph_test.vault",
         ));
-        let state_versions =
-            Arc::new(crate::gateway::state_version::StateVersionTracker::new());
+        let state_versions = Arc::new(crate::gateway::state_version::StateVersionTracker::new());
         // Bump config once so the snapshot is non-zero and observable.
         state_versions.bump_config();
 

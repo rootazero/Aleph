@@ -26,7 +26,7 @@ use crate::builtin_tools::{
     MemorySearchTool, PdfGenerateTool, PermissionTool, PimTool, ReadConfigGuideTool,
     ScratchpadTool, SearchTool, SelfManageTool, SystemTool, VaultStoreTool, WebFetchTool,
 };
-use crate::dispatcher::{ToolSource, UnifiedTool};
+use crate::tool_metadata::{ToolSource, UnifiedTool};
 
 impl BuiltinToolRegistry {
     /// Create a new registry with custom configuration
@@ -211,7 +211,12 @@ impl BuiltinToolRegistry {
             let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
                 dirs::home_dir()
                     .map(|p| p.join(".aleph").join("memory").join("note"))
-                    .unwrap_or_else(|| std::env::temp_dir().join("aleph").join("memory").join("note"))
+                    .unwrap_or_else(|| {
+                        std::env::temp_dir()
+                            .join("aleph")
+                            .join("memory")
+                            .join("note")
+                    })
             });
             let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
             let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder));
@@ -227,7 +232,12 @@ impl BuiltinToolRegistry {
             let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
                 dirs::home_dir()
                     .map(|p| p.join(".aleph").join("memory").join("note"))
-                    .unwrap_or_else(|| std::env::temp_dir().join("aleph").join("memory").join("note"))
+                    .unwrap_or_else(|| {
+                        std::env::temp_dir()
+                            .join("aleph")
+                            .join("memory")
+                            .join("note")
+                    })
             });
             let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
             info!("Created memory_browse tool (no embedder for memory_search)");
@@ -389,10 +399,9 @@ impl BuiltinToolRegistry {
                     .or_else(|| config.session_manager.clone())
                     .unwrap_or_else(|| {
                         Arc::new(
-                            crate::gateway::SessionManager::with_defaults()
-                                .unwrap_or_else(|e| {
-                                    panic!("fallback SessionManager for agent tools: {}", e)
-                                }),
+                            crate::gateway::SessionManager::with_defaults().unwrap_or_else(|e| {
+                                panic!("fallback SessionManager for agent tools: {}", e)
+                            }),
                         )
                     });
                 let create = {
@@ -531,7 +540,7 @@ impl BuiltinToolRegistry {
                 // Register parameter schemas for task tools
                 {
                     use crate::tools::AlephTool;
-                    let mut defs: Vec<crate::dispatcher::ToolDefinition> =
+                    let mut defs: Vec<crate::tool_metadata::ToolDefinition> =
                         vec![create.definition(), list.definition()];
                     if let Some(ref u) = update {
                         defs.push(u.definition());
@@ -590,10 +599,9 @@ impl BuiltinToolRegistry {
                 .or_else(|| config.session_manager.clone())
                 .unwrap_or_else(|| {
                     Arc::new(
-                        crate::gateway::SessionManager::with_defaults()
-                            .unwrap_or_else(|e| {
-                                panic!("fallback SessionManager for team tools: {}", e)
-                            }),
+                        crate::gateway::SessionManager::with_defaults().unwrap_or_else(|e| {
+                            panic!("fallback SessionManager for team tools: {}", e)
+                        }),
                     )
                 });
             let create = TeamCreateTool::new(
@@ -704,7 +712,7 @@ impl BuiltinToolRegistry {
             // Register parameter schemas
             {
                 use crate::tools::AlephTool;
-                let mut defs: Vec<crate::dispatcher::ToolDefinition> = Vec::new();
+                let mut defs: Vec<crate::tool_metadata::ToolDefinition> = Vec::new();
                 if let Some(ref s) = send {
                     defs.push(s.definition());
                 }
@@ -768,7 +776,7 @@ impl BuiltinToolRegistry {
             // Register parameter schemas
             {
                 use crate::tools::AlephTool;
-                let mut defs: Vec<crate::dispatcher::ToolDefinition> = Vec::new();
+                let mut defs: Vec<crate::tool_metadata::ToolDefinition> = Vec::new();
                 if let Some(ref s) = submit {
                     defs.push(s.definition());
                 }
@@ -827,7 +835,7 @@ impl BuiltinToolRegistry {
             // Register parameter schemas (same pattern as plan_submit/resolve above).
             if let Some((ref idle, ref request, ref resolve)) = triad {
                 use crate::tools::AlephTool;
-                let defs: [crate::dispatcher::ToolDefinition; 3] = [
+                let defs: [crate::tool_metadata::ToolDefinition; 3] = [
                     idle.definition(),
                     request.definition(),
                     resolve.definition(),
@@ -909,7 +917,7 @@ impl BuiltinToolRegistry {
             // Register parameter schemas
             {
                 use crate::tools::AlephTool;
-                let mut defs: Vec<crate::dispatcher::ToolDefinition> = Vec::new();
+                let mut defs: Vec<crate::tool_metadata::ToolDefinition> = Vec::new();
                 if let Some(ref c) = collaborate {
                     defs.push(c.definition());
                 }
@@ -977,7 +985,13 @@ impl BuiltinToolRegistry {
             let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
                 dirs::home_dir()
                     .map(|p| p.join(".aleph").join("data").join("memory").join("note"))
-                    .unwrap_or_else(|| std::env::temp_dir().join("aleph").join("data").join("memory").join("note"))
+                    .unwrap_or_else(|| {
+                        std::env::temp_dir()
+                            .join("aleph")
+                            .join("data")
+                            .join("memory")
+                            .join("note")
+                    })
             });
             let mut tool =
                 crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone());

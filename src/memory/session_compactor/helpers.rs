@@ -1,7 +1,7 @@
 use super::SessionCompactor;
 use crate::error::AlephError;
-use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::extensions::insert_with_capture_filter;
+use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
@@ -32,7 +32,8 @@ impl SessionCompactor {
             match self.call_llm(provider.as_ref(), &prompt).await {
                 Ok(text)
                     if !text.is_empty()
-                        && super::context_window::estimate_tokens(&text, ratio) < source_token_count =>
+                        && super::context_window::estimate_tokens(&text, ratio)
+                            < source_token_count =>
                 {
                     return super::summary_engine::strip_analysis_block(&text);
                 }
@@ -61,7 +62,8 @@ impl SessionCompactor {
             match self.call_llm(provider.as_ref(), &prompt).await {
                 Ok(text)
                     if !text.is_empty()
-                        && super::context_window::estimate_tokens(&text, ratio) < source_token_count =>
+                        && super::context_window::estimate_tokens(&text, ratio)
+                            < source_token_count =>
                 {
                     return super::summary_engine::strip_analysis_block(&text);
                 }
@@ -86,7 +88,10 @@ impl SessionCompactor {
 
         self.metrics.fallback_count.fetch_add(1, Ordering::Relaxed);
         tracing::warn!(target: "session_compactor", depth, "fallback");
-        let target = super::fallback::target_tokens(source_token_count, super::fallback::FallbackLevel::Normal);
+        let target = super::fallback::target_tokens(
+            source_token_count,
+            super::fallback::FallbackLevel::Normal,
+        );
         let max_chars = (target as f64 * ratio) as usize;
         super::fallback::deterministic_truncate(messages, max_chars)
     }
@@ -131,7 +136,8 @@ impl SessionCompactor {
             .with_session(session_id)
             .with_path(path);
         if let Some(ref registry) = self.capture_registry {
-            let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> = self.database.clone();
+            let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
+                self.database.clone();
             let ctx = CaptureCtx {
                 agent_id: "default".into(),
                 namespace: crate::memory::namespace::NamespaceScope::Owner,
@@ -197,7 +203,9 @@ impl SessionCompactor {
 
         let source_tokens: usize = messages
             .iter()
-            .map(|(_, c)| super::context_window::estimate_tokens(c, self.config.token_estimate_ratio))
+            .map(|(_, c)| {
+                super::context_window::estimate_tokens(c, self.config.token_estimate_ratio)
+            })
             .sum();
 
         let fact = super::summary_engine::summary_to_fact(
@@ -215,7 +223,8 @@ impl SessionCompactor {
             .with_session(session_id)
             .with_path(fact.path.clone());
         if let Some(ref registry) = self.capture_registry {
-            let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> = self.database.clone();
+            let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
+                self.database.clone();
             let ctx = CaptureCtx {
                 agent_id: agent_id.to_string(),
                 namespace: crate::memory::namespace::NamespaceScope::Owner,

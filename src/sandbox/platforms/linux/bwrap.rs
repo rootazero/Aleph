@@ -479,8 +479,7 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             .find_bwrap()
             .ok_or_else(|| SandboxError::ExecutionFailed("bubblewrap (bwrap) not found".into()))?;
 
-        let mut bwrap_args: Vec<String> =
-            profile.contents.lines().map(|s| s.to_string()).collect();
+        let mut bwrap_args: Vec<String> = profile.contents.lines().map(|s| s.to_string()).collect();
 
         // SP-2: bind-mount the currently-running aleph-server binary
         // read-only inside the bwrap namespace at a fixed path, then
@@ -492,9 +491,11 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         if init_policy_json.is_some() {
             let aleph_exe = std::env::current_exe()
                 .and_then(std::fs::canonicalize)
-                .map_err(|e| SandboxError::ExecutionFailed(
-                    format!("cannot determine aleph-server path: {e}"),
-                ))?;
+                .map_err(|e| {
+                    SandboxError::ExecutionFailed(format!(
+                        "cannot determine aleph-server path: {e}"
+                    ))
+                })?;
             bwrap_args.push("--ro-bind".into());
             bwrap_args.push(aleph_exe.to_string_lossy().into_owned());
             bwrap_args.push("/aleph-sandbox-init".into());
@@ -541,37 +542,35 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         // frame; its Drop fires after `wait_with_output()` completes and
         // rmdir's the cgroup directory. RLIMIT_AS (above) continues to
         // apply as a fallback when cgroups are unavailable.
-        let _cgroup_scope: Option<crate::sandbox::cgroup_v2::CgroupV2Scope> = if self
-            .options
-            .cgroup_enabled
-        {
-            let limits = crate::sandbox::cgroup_v2::CgroupV2Limits {
-                memory_mb: profile.max_memory_mb,
-                cpu_quota_percent: self.options.cpu_quota_percent,
-                max_pids: self.options.max_pids,
-            };
-            let scope = crate::sandbox::cgroup_v2::CgroupV2Scope::try_create(limits);
-            if scope.is_none() && self.options.require_cgroups {
-                return Err(SandboxError::ExecutionFailed(
-                    "cgroup v2 setup failed and require_cgroups=true".into(),
-                ));
-            }
-            // Capture the child's cgroup.procs path by clone so pre_exec
-            // doesn't share Arc state with the parent (which would
-            // double-leak the ref count across fork+exec).
-            if let Some(ref s) = scope {
-                let procs_path = s.procs_path();
-                unsafe {
-                    cmd.pre_exec(move || {
-                        let pid = std::process::id();
-                        std::fs::write(&procs_path, pid.to_string().as_bytes())
-                    });
+        let _cgroup_scope: Option<crate::sandbox::cgroup_v2::CgroupV2Scope> =
+            if self.options.cgroup_enabled {
+                let limits = crate::sandbox::cgroup_v2::CgroupV2Limits {
+                    memory_mb: profile.max_memory_mb,
+                    cpu_quota_percent: self.options.cpu_quota_percent,
+                    max_pids: self.options.max_pids,
+                };
+                let scope = crate::sandbox::cgroup_v2::CgroupV2Scope::try_create(limits);
+                if scope.is_none() && self.options.require_cgroups {
+                    return Err(SandboxError::ExecutionFailed(
+                        "cgroup v2 setup failed and require_cgroups=true".into(),
+                    ));
                 }
-            }
-            scope
-        } else {
-            None
-        };
+                // Capture the child's cgroup.procs path by clone so pre_exec
+                // doesn't share Arc state with the parent (which would
+                // double-leak the ref count across fork+exec).
+                if let Some(ref s) = scope {
+                    let procs_path = s.procs_path();
+                    unsafe {
+                        cmd.pre_exec(move || {
+                            let pid = std::process::id();
+                            std::fs::write(&procs_path, pid.to_string().as_bytes())
+                        });
+                    }
+                }
+                scope
+            } else {
+                None
+            };
 
         let mut child = cmd
             .spawn()
@@ -778,11 +777,9 @@ mod tests {
         let args = driver.generate_args(&policy, cwd).unwrap();
         // FullWrite = danger-full-access; explicit caller contract, no
         // auto metadata protection.
-        assert!(
-            !args
-                .windows(3)
-                .any(|w| w == ["--ro-bind-try", "/tmp/ws/.git", "/tmp/ws/.git"])
-        );
+        assert!(!args
+            .windows(3)
+            .any(|w| w == ["--ro-bind-try", "/tmp/ws/.git", "/tmp/ws/.git"]));
     }
 
     #[test]

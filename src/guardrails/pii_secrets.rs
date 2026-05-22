@@ -164,8 +164,8 @@ mod delegation_tests {
     use crate::guardrails::traits::{InputGuardrail, OutputGuardrail, ToolCallGuardrail};
     use crate::secrets::injection::AsyncSecretResolver;
     use crate::secrets::types::{DecryptedSecret, SecretError};
-    use async_trait::async_trait;
     use crate::sync_primitives::Arc;
+    use async_trait::async_trait;
 
     struct StubResolver;
 
@@ -180,8 +180,11 @@ mod delegation_tests {
     }
 
     fn guard(with_resolver: bool) -> PiiSecretsGuardrail {
-        let resolver: Option<Arc<dyn AsyncSecretResolver>> =
-            if with_resolver { Some(Arc::new(StubResolver)) } else { None };
+        let resolver: Option<Arc<dyn AsyncSecretResolver>> = if with_resolver {
+            Some(Arc::new(StubResolver))
+        } else {
+            None
+        };
         PiiSecretsGuardrail::with_resolver(resolver)
     }
 
@@ -256,7 +259,10 @@ mod delegation_tests {
         let dec = g.evaluate_tool_call("bash_exec", &args).await;
         match dec {
             GuardrailDecision::Block { reason, .. } => {
-                assert!(reason.contains("ghost"), "reason must name the missing secret");
+                assert!(
+                    reason.contains("ghost"),
+                    "reason must name the missing secret"
+                );
             }
             other => panic!("expected Block, got {:?}", other),
         }
@@ -276,13 +282,7 @@ mod input_blocking_tests {
     #[tokio::test]
     async fn input_blocks_pasted_api_keys() {
         let g = PiiSecretsGuardrail::with_resolver(None);
-        let cases = [
-            "sk-proj-",
-            "sk-ant-",
-            "AKIA",
-            "ghp_",
-            "glpat-",
-        ];
+        let cases = ["sk-proj-", "sk-ant-", "AKIA", "ghp_", "glpat-"];
         for prefix in cases {
             let text = pasted(prefix);
             let dec = g.evaluate_input(&text).await;

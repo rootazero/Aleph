@@ -9,8 +9,8 @@ use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
+use crate::tool_metadata::{ToolCategory, ToolDefinition};
 
 // =============================================================================
 // AlephTool - Static Dispatch Trait

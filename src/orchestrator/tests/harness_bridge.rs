@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use crate::dispatcher::{HealthReason, ProbeResult, ToolHealthProbe};
 use crate::orchestrator::harness_bridge::{compute_runtime_state_blocks, AgentHarnessRunner};
+use crate::tool_metadata::{HealthReason, ProbeResult, ToolHealthProbe};
 use crate::tools::runtime_state::ToolStatus;
 
 #[test]
@@ -20,7 +20,7 @@ fn compute_runtime_state_blocks_empty_when_no_dispatch_registry() {
 
 #[test]
 fn compute_runtime_state_blocks_empty_when_no_probes_registered() {
-    let registry = Arc::new(crate::dispatcher::ToolRegistry::new());
+    let registry = Arc::new(crate::tool_metadata::ToolRegistry::new());
     assert!(compute_runtime_state_blocks(Some(&registry)).is_empty());
 }
 
@@ -38,7 +38,7 @@ impl ToolHealthProbe for DeadProbe {
 
 #[tokio::test]
 async fn compute_runtime_state_blocks_surfaces_unhealthy_probes() {
-    let registry = Arc::new(crate::dispatcher::ToolRegistry::new());
+    let registry = Arc::new(crate::tool_metadata::ToolRegistry::new());
     let cache = registry.health();
     cache.register_probe("alpha", Arc::new(DeadProbe("alpha offline")));
     cache.register_probe("beta", Arc::new(DeadProbe("beta offline")));

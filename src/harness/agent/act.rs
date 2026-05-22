@@ -119,7 +119,10 @@ impl AgentHarness {
             // inside this single tool batch return the first result without
             // re-executing. The memo is per-`act()` call, so a cross-turn
             // repeat always re-runs against fresh state.
-            let cache_key = (call.name.clone(), super::canonical_json_string(&call.arguments));
+            let cache_key = (
+                call.name.clone(),
+                super::canonical_json_string(&call.arguments),
+            );
             if let Some(cached) = tool_call_cache.get(&cache_key) {
                 tracing::warn!(
                     tool = %call.name,
@@ -173,7 +176,8 @@ impl AgentHarness {
                 .await
                 .and_then(|d| d.metadata.max_duration_ms)
                 .map(std::time::Duration::from_millis);
-            let effective_budget = resolve_effective_budget(per_tool_budget, self.deps.turn_timeout);
+            let effective_budget =
+                resolve_effective_budget(per_tool_budget, self.deps.turn_timeout);
 
             let exec_result: Result<
                 Result<ToolOutput, crate::tools::service::ToolError>,
@@ -274,11 +278,7 @@ impl AgentHarness {
                         .session
                         .emit_event(session_id, result_event)
                         .await?;
-                    let dur_ms: u64 = started
-                        .elapsed()
-                        .as_millis()
-                        .try_into()
-                        .unwrap_or(u64::MAX);
+                    let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
                     self.emit(
                         || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                             iteration,
@@ -322,11 +322,7 @@ impl AgentHarness {
                             "failed to persist ToolError event",
                         );
                     }
-                    let dur_ms: u64 = started
-                        .elapsed()
-                        .as_millis()
-                        .try_into()
-                        .unwrap_or(u64::MAX);
+                    let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
                     let error_for_timeline = error_msg.clone();
                     self.emit(
                         || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {

@@ -1,62 +1,9 @@
-use crate::sync_primitives::Arc;
+use super::{sanitize_llm_output, split_reasoning, ReplyEmitter, ReplyEmitterConfig};
 use crate::gateway::channel::{ChannelId, ConversationId};
 use crate::gateway::channel_registry::ChannelRegistry;
-use crate::gateway::inbound_context::ReplyRoute;
-use super::{ReplyEmitter, ReplyEmitterConfig, sanitize_llm_output, split_reasoning};
 use crate::gateway::event_emitter::EventEmitter;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+use crate::gateway::inbound_context::ReplyRoute;
+use crate::sync_primitives::Arc;
 
 #[cfg(test)]
 mod tests {

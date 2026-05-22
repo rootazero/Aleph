@@ -2,7 +2,10 @@
 
 use std::path::Path;
 
-use super::{CustomLeakPattern, CustomPiiRule, CustomPiiSeverity, CustomRiskPattern, PiiAction, SecretsProtectionConfig, SecurityConfig, ShellSecurityConfig, VirtualKeyEntry};
+use super::{
+    CustomLeakPattern, CustomPiiRule, CustomPiiSeverity, CustomRiskPattern, PiiAction,
+    SecretsProtectionConfig, SecurityConfig, ShellSecurityConfig, VirtualKeyEntry,
+};
 use crate::config::patcher::ConfigPatcher;
 
 /// Write gateway.host to the config TOML file on disk.
@@ -254,7 +257,9 @@ pub(super) fn read_custom_pii_rules_from_toml(patcher: &ConfigPatcher) -> Vec<Cu
 }
 
 /// Read secret protection from [secrets_config] section.
-pub(super) fn read_secrets_protection_from_toml(patcher: &ConfigPatcher) -> SecretsProtectionConfig {
+pub(super) fn read_secrets_protection_from_toml(
+    patcher: &ConfigPatcher,
+) -> SecretsProtectionConfig {
     let config_path = patcher.config_path();
     if let Ok(contents) = std::fs::read_to_string(config_path) {
         if let Ok(table) = contents.parse::<toml::Table>() {
@@ -621,4 +626,3 @@ pub(super) fn write_secrets_protection_to_toml(
 
     Ok(())
 }
-

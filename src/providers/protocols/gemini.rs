@@ -14,8 +14,8 @@ pub struct GeminiProtocol {
     stream_idle_timeout_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
-mod proto_impl;
 mod adapter;
+mod proto_impl;
 mod sse;
 
 #[cfg(test)]

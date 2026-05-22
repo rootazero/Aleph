@@ -121,8 +121,7 @@ fn chunk_indices_map_back_to_pairs() {
         .map(|i| ("user".to_string(), format!("message {i}")))
         .collect();
 
-    let unified: Vec<UnifiedMessage> =
-        pairs.iter().map(|(_, c)| UnifiedMessage::user(c)).collect();
+    let unified: Vec<UnifiedMessage> = pairs.iter().map(|(_, c)| UnifiedMessage::user(c)).collect();
 
     let units = parse_semantic_units(&unified);
     let chunker = ToolAwareChunker::new(20, 4.0);

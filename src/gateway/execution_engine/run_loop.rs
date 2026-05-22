@@ -109,10 +109,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // AgentEnd — observers only; the run is already over, nothing to block.
         if let Some(executor) = hook_executor.as_ref() {
             let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
-            ctx = ctx.with_env(
-                "AGENT_OUTCOME",
-                if result.is_ok() { "ok" } else { "error" },
-            );
+            ctx = ctx.with_env("AGENT_OUTCOME", if result.is_ok() { "ok" } else { "error" });
             if let Err(ref e) = result {
                 ctx = ctx.with_env("AGENT_ERROR", e.to_string());
             }
@@ -172,10 +169,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // resolved once by `run_agent_loop` and threaded in as parameters.
 
         // Build tool registry inputs (filtered by agent whitelist).
-        let base_allowed_tools: Vec<crate::dispatcher::UnifiedTool> = self
+        let base_allowed_tools: Vec<crate::tool_metadata::UnifiedTool> = self
             .tools
             .iter()
-            .filter(|t| !matches!(t.source, crate::dispatcher::ToolSource::Plugin { .. }))
+            .filter(|t| !matches!(t.source, crate::tool_metadata::ToolSource::Plugin { .. }))
             .filter(|t| agent.is_tool_allowed(&t.name))
             .cloned()
             .collect();
@@ -186,7 +183,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             allowed_tools.extend(
                 self.tools
                     .iter()
-                    .filter(|t| matches!(t.source, crate::dispatcher::ToolSource::Plugin { .. }))
+                    .filter(|t| matches!(t.source, crate::tool_metadata::ToolSource::Plugin { .. }))
                     .filter(|t| agent.is_tool_allowed(&t.name))
                     .cloned(),
             );
@@ -207,8 +204,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // prompt to nudge the LLM to follow the skill's spec. A dedicated
         // overlay slot in PromptBuilder is the right place to plumb it.
         if let Some(raw) = request.metadata.get("slash_skill_allowed_tools") {
-            let skill_whitelist: std::collections::HashSet<&str> =
-                raw.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+            let skill_whitelist: std::collections::HashSet<&str> = raw
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
             if !skill_whitelist.is_empty() {
                 let before = allowed_tools.len();
                 allowed_tools.retain(|t| skill_whitelist.contains(t.name.as_str()));
@@ -549,9 +549,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // session event log already holds the full trajectory. The
             // `ResumeCoordinator` sets `metadata["resume"] = "true"`; the
             // harness bridge then skips seeding and replays the log.
-            let flow_input = if request.metadata.get("resume").map(String::as_str)
-                == Some("true")
-            {
+            let flow_input = if request.metadata.get("resume").map(String::as_str) == Some("true") {
                 crate::orchestrator::FlowInput::Resume
             } else {
                 super::helpers::history_to_flow_input(history.clone(), request.input.clone())

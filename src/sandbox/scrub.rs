@@ -113,7 +113,10 @@ mod tests {
         let input = format!("key={key_str}").into_bytes();
         let out = scrub_secrets_bytes(&input, &[injected]);
         let s = String::from_utf8_lossy(out.bytes.as_ref());
-        assert!(s.contains(&key_str), "expected injected key passthrough, got `{s}`");
+        assert!(
+            s.contains(&key_str),
+            "expected injected key passthrough, got `{s}`"
+        );
         assert!(out.hits.is_empty());
     }
 }

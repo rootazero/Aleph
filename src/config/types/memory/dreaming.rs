@@ -47,8 +47,10 @@ impl Default for DreamingConfig {
             synthesis_min_cluster_size: super::defaults::default_synthesis_min_cluster_size(),
             synthesis_max_insights: super::defaults::default_synthesis_max_insights(),
             skill_distill_max_per_cycle: super::defaults::default_skill_distill_max_per_cycle(),
-            feedback_distill_max_per_cycle: super::defaults::default_feedback_distill_max_per_cycle(),
-            feedback_distill_min_candidates: super::defaults::default_feedback_distill_min_candidates(),
+            feedback_distill_max_per_cycle: super::defaults::default_feedback_distill_max_per_cycle(
+            ),
+            feedback_distill_min_candidates:
+                super::defaults::default_feedback_distill_min_candidates(),
             feedback_lookback: super::defaults::default_feedback_lookback(),
         }
     }

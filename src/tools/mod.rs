@@ -32,8 +32,8 @@
 //! ```
 
 pub mod adapters;
-mod builtin;
 pub mod budget;
+mod builtin;
 pub mod context;
 pub mod execution_context;
 pub mod info;
@@ -42,9 +42,9 @@ pub mod result_processing;
 pub mod result_store;
 pub mod retry;
 pub mod runtime;
-pub mod turn_budget;
 mod server;
 mod traits;
+pub mod turn_budget;
 mod types;
 
 // Markdown skill system
@@ -67,8 +67,8 @@ pub mod schema_strictify;
 pub mod handlers;
 pub mod mcp_scope_view;
 pub mod null;
-pub mod registry;
 pub mod probes;
+pub mod registry;
 pub mod runtime_state;
 pub mod scoped;
 pub mod service;

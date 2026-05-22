@@ -28,7 +28,10 @@ pub use config::{
 };
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 pub use events::SkillSystemEvent;
-pub use guard::{install_allowed, merge_verdicts, scan_content, scan_skill_directory, ScanVerdict, ThreatLevel, TrustLevel};
+pub use guard::{
+    install_allowed, merge_verdicts, scan_content, scan_skill_directory, ScanVerdict, ThreatLevel,
+    TrustLevel,
+};
 pub use installer::{
     build_install_command, filter_install_specs_for_current_os, select_best_install,
     InstallExecutor, InstallResult,
@@ -465,8 +468,12 @@ impl SkillSystem {
             .unwrap_or_else(|| serde_json::json!({}));
 
         let registry = self.inner.registry.read().await;
-        let new_snapshot =
-            SkillSnapshot::build(&registry, &self.inner.eligibility, current_version, &config_value);
+        let new_snapshot = SkillSnapshot::build(
+            &registry,
+            &self.inner.eligibility,
+            current_version,
+            &config_value,
+        );
         let skill_ids: Vec<String> = registry
             .list_all()
             .iter()

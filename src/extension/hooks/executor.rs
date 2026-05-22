@@ -495,7 +495,13 @@ impl HookExecutor {
             .map(|hook| async move {
                 for action in &hook.actions {
                     if let Err(e) = self
-                        .execute_action(action, context, &hook.plugin_root, &hook.plugin_name, event)
+                        .execute_action(
+                            action,
+                            context,
+                            &hook.plugin_root,
+                            &hook.plugin_name,
+                            event,
+                        )
                         .await
                     {
                         warn!(

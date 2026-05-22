@@ -327,9 +327,9 @@ impl InitializationCoordinator {
             .map_err(|e| InitError::new("config", format!("Failed to serialize config: {}", e)))?;
 
         let temp_path = config_path.with_extension("tmp");
-        tokio::fs::write(&temp_path, toml_str)
-            .await
-            .map_err(|e| InitError::new("config", format!("Failed to write temporary config: {}", e)))?;
+        tokio::fs::write(&temp_path, toml_str).await.map_err(|e| {
+            InitError::new("config", format!("Failed to write temporary config: {}", e))
+        })?;
 
         if let Err(e) = tokio::fs::rename(&temp_path, &config_path).await {
             // Clean up temp file on rename failure to avoid leaving stale artifacts

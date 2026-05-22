@@ -254,7 +254,10 @@ impl ServiceManager {
                 let service_result: ServiceResult = match serde_json::from_value(value.clone()) {
                     Ok(r) => r,
                     Err(e) => {
-                        warn!("Failed to parse service stop result as ServiceResult: {}", e);
+                        warn!(
+                            "Failed to parse service stop result as ServiceResult: {}",
+                            e
+                        );
                         ServiceResult::ok()
                     }
                 };

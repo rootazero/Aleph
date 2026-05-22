@@ -805,9 +805,13 @@ mod tests {
             .await
             .expect("execute");
         let env = last_env.read().await;
-        assert_eq!(env.get("ALEPH_SANDBOX").map(String::as_str), Some("seatbelt"));
         assert_eq!(
-            env.get("ALEPH_SANDBOX_NETWORK_DISABLED").map(String::as_str),
+            env.get("ALEPH_SANDBOX").map(String::as_str),
+            Some("seatbelt")
+        );
+        assert_eq!(
+            env.get("ALEPH_SANDBOX_NETWORK_DISABLED")
+                .map(String::as_str),
             Some("1"),
             "strict caps deny network → env var must be set"
         );
@@ -842,7 +846,10 @@ mod tests {
             .await
             .expect("execute");
         let env = last_env.read().await;
-        assert_eq!(env.get("ALEPH_SANDBOX").map(String::as_str), Some("seatbelt"));
+        assert_eq!(
+            env.get("ALEPH_SANDBOX").map(String::as_str),
+            Some("seatbelt")
+        );
         assert!(
             !env.contains_key("ALEPH_SANDBOX_NETWORK_DISABLED"),
             "AllowAll caps must not set the network-disabled annotation"
@@ -991,7 +998,10 @@ mod scrub_integration_tests {
         );
         // The redaction marker must be present.
         assert!(
-            output.stdout.windows(b"[REDACTED".len()).any(|w| w == b"[REDACTED"),
+            output
+                .stdout
+                .windows(b"[REDACTED".len())
+                .any(|w| w == b"[REDACTED"),
             "stdout must contain [REDACTED marker"
         );
         // stderr is untouched (nothing was planted there).
@@ -1019,7 +1029,10 @@ mod scrub_integration_tests {
             "raw secret must be redacted from stderr"
         );
         assert!(
-            output.stderr.windows(b"[REDACTED".len()).any(|w| w == b"[REDACTED"),
+            output
+                .stderr
+                .windows(b"[REDACTED".len())
+                .any(|w| w == b"[REDACTED"),
             "stderr must contain [REDACTED marker"
         );
     }

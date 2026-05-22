@@ -5,7 +5,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::dispatcher::{
+use crate::tool_metadata::{
     DEFAULT_ALLOW_NETWORK, DEFAULT_CODE_EXEC_ENABLED, DEFAULT_CODE_EXEC_RUNTIME,
     DEFAULT_CODE_EXEC_TIMEOUT, DEFAULT_PASS_ENV, DEFAULT_SANDBOX_ENABLED,
 };

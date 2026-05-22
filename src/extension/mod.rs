@@ -171,7 +171,6 @@ pub struct ExtensionManager {
     memory_registry: crate::sync_primitives::RwLock<
         Option<crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
     >,
-
 }
 
 impl ExtensionManager {

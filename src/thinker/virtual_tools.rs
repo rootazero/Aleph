@@ -7,7 +7,7 @@
 //! tools allow the LLM to signal non-tool decisions (task completion, asking for
 //! clarification, reporting failure) using the same mechanism.
 
-use crate::dispatcher::{ToolCategory, ToolDefinition};
+use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use serde_json::json;
 
 /// Prefix for virtual tools -- double underscore to avoid collision with real tools

@@ -16,11 +16,11 @@
 //! This means a request timeout no longer corrupts the transport: the reader
 //! keeps draining stdout regardless, so later requests still resolve.
 
+use crate::sync_primitives::{Arc, Mutex as StdMutex};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -49,9 +49,9 @@ pub struct StdioTransport {
     /// Server stdin — writes are serialized through this lock
     stdin: Mutex<ChildStdin>,
     /// In-flight requests awaiting a response, keyed by JSON-RPC id
-    pending: std::sync::Arc<PendingMap>,
+    pending: Arc<PendingMap>,
     /// Handler for server-initiated notifications (installed after connect)
-    notification_handler: std::sync::Arc<StdMutex<Option<NotificationCallback>>>,
+    notification_handler: Arc<StdMutex<Option<NotificationCallback>>>,
     /// Background stdout reader; aborted on drop
     reader_task: JoinHandle<()>,
 }
@@ -118,16 +118,15 @@ impl StdioTransport {
             AlephError::IoError(format!("MCP server '{}' stdout not available", name))
         })?;
 
-        let pending: std::sync::Arc<PendingMap> =
-            std::sync::Arc::new(StdMutex::new(HashMap::new()));
-        let notification_handler: std::sync::Arc<StdMutex<Option<NotificationCallback>>> =
-            std::sync::Arc::new(StdMutex::new(None));
+        let pending: Arc<PendingMap> = Arc::new(StdMutex::new(HashMap::new()));
+        let notification_handler: Arc<StdMutex<Option<NotificationCallback>>> =
+            Arc::new(StdMutex::new(None));
 
         let reader_task = tokio::spawn(reader_loop(
             stdout,
             name.clone(),
-            std::sync::Arc::clone(&pending),
-            std::sync::Arc::clone(&notification_handler),
+            Arc::clone(&pending),
+            Arc::clone(&notification_handler),
         ));
 
         Ok(Self {
@@ -281,7 +280,7 @@ impl StdioTransport {
 }
 
 /// Acquire a [`StdMutex`], recovering the guard if a previous holder panicked.
-fn lock<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+fn lock<T>(mutex: &StdMutex<T>) -> crate::sync_primitives::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -370,8 +369,8 @@ fn dispatch_line(
 async fn reader_loop(
     stdout: ChildStdout,
     server_name: String,
-    pending: std::sync::Arc<PendingMap>,
-    notification_handler: std::sync::Arc<StdMutex<Option<NotificationCallback>>>,
+    pending: Arc<PendingMap>,
+    notification_handler: Arc<StdMutex<Option<NotificationCallback>>>,
 ) {
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();

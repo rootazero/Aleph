@@ -398,11 +398,17 @@ mod tests {
     fn same_origin_with_explicit_default_port() {
         let a = Url::parse("https://example.com").unwrap();
         let b = Url::parse("https://example.com:443").unwrap();
-        assert!(!is_cross_origin(&a, &b), "explicit default port should be same origin");
+        assert!(
+            !is_cross_origin(&a, &b),
+            "explicit default port should be same origin"
+        );
 
         let c = Url::parse("http://example.com").unwrap();
         let d = Url::parse("http://example.com:80").unwrap();
-        assert!(!is_cross_origin(&c, &d), "explicit default port should be same origin");
+        assert!(
+            !is_cross_origin(&c, &d),
+            "explicit default port should be same origin"
+        );
     }
 
     #[test]

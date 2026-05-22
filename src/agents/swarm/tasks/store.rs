@@ -71,15 +71,16 @@ fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CoordTask> {
         owner: row.get(5)?,
         priority,
         result: result_val,
-        metadata: serde_json::from_str(&metadata_str)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+        metadata: serde_json::from_str(&metadata_str).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
                 8,
                 rusqlite::types::Type::Text,
                 Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("invalid metadata JSON: {}", e),
                 )),
-            ))?,
+            )
+        })?,
         dependencies: Vec::new(),
         created_at: row.get(9)?,
         started_at: row.get(10)?,
@@ -164,10 +165,7 @@ impl SqliteCoordTaskStore {
 
     /// Attach an event bus so the store emits topic events on mutations.
     /// Builder is no-op safe: stores constructed without a bus simply skip emission.
-    pub fn with_event_bus(
-        mut self,
-        bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
-    ) -> Self {
+    pub fn with_event_bus(mut self, bus: Arc<crate::gateway::event_bus::GatewayEventBus>) -> Self {
         self.bus = Some(bus);
         self
     }
@@ -175,8 +173,12 @@ impl SqliteCoordTaskStore {
     /// Publish a `team.<team_id>.task.<verb>` topic for a single task.
     /// No-op when no bus is attached or the task has no team_id.
     fn emit_task_topic(&self, task: &CoordTask, verb: &str) {
-        let Some(bus) = &self.bus else { return; };
-        let Some(team_id) = task.team_id.as_deref() else { return; };
+        let Some(bus) = &self.bus else {
+            return;
+        };
+        let Some(team_id) = task.team_id.as_deref() else {
+            return;
+        };
         let topic = format!("team.{team_id}.task.{verb}");
         let payload = serde_json::json!({
             "topic": topic,
@@ -1120,8 +1122,14 @@ mod tests {
             .await
             .expect("event received in time")
             .expect("event payload");
-        assert!(evt.contains(r#""topic":"team.team-T.task.created""#), "got: {evt}");
-        assert!(evt.contains(&task.id), "topic payload missing task id: {evt}");
+        assert!(
+            evt.contains(r#""topic":"team.team-T.task.created""#),
+            "got: {evt}"
+        );
+        assert!(
+            evt.contains(&task.id),
+            "topic payload missing task id: {evt}"
+        );
 
         let _ = store
             .update_task(
@@ -1138,7 +1146,10 @@ mod tests {
             .await
             .expect("update event received in time")
             .expect("update event payload");
-        assert!(evt2.contains(r#""topic":"team.team-T.task.updated""#), "got: {evt2}");
+        assert!(
+            evt2.contains(r#""topic":"team.team-T.task.updated""#),
+            "got: {evt2}"
+        );
     }
 
     #[tokio::test]

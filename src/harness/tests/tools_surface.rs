@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use proptest::prelude::*;
 use serde_json::{json, Value};
 
-use crate::dispatcher::{ToolCategory, ToolDefinition as DispatcherToolDefinition};
 use crate::session::events::{ToolOutput, ToolOutputMetadata};
+use crate::tool_metadata::{ToolCategory, ToolDefinition as DispatcherToolDefinition};
 use crate::tools::service::{
     to_dispatcher_form, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
 };

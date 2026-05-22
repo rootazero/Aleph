@@ -77,6 +77,6 @@ pub async fn execute_search(
         content: None,
         bytes_written: None,
         items_affected: Some(count),
-    summary: None,
+        summary: None,
     })
 }

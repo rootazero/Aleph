@@ -241,31 +241,32 @@ pub(crate) fn build_run_summary(outcome: &FlowOutcome) -> RunSummary {
         })
         .collect();
 
-    let token_breakdown = if outcome.token_breakdown
-        == crate::orchestrator::dispatch::TokenBreakdown::default()
-    {
-        // No usage observed (test fixtures, providers that don't report) —
-        // skip the field instead of serializing all-zeros.
-        None
-    } else {
-        Some(TokenBreakdownView {
-            input: outcome.token_breakdown.input,
-            output: outcome.token_breakdown.output,
-            cache_read: outcome.token_breakdown.cache_read,
-            cache_creation: outcome.token_breakdown.cache_creation,
-            reasoning: outcome.token_breakdown.reasoning,
-        })
-    };
+    let token_breakdown =
+        if outcome.token_breakdown == crate::orchestrator::dispatch::TokenBreakdown::default() {
+            // No usage observed (test fixtures, providers that don't report) —
+            // skip the field instead of serializing all-zeros.
+            None
+        } else {
+            Some(TokenBreakdownView {
+                input: outcome.token_breakdown.input,
+                output: outcome.token_breakdown.output,
+                cache_read: outcome.token_breakdown.cache_read,
+                cache_creation: outcome.token_breakdown.cache_creation,
+                reasoning: outcome.token_breakdown.reasoning,
+            })
+        };
 
     let (estimated_cost_usd, cost_status) = match outcome.estimated_cost.as_ref() {
         Some(c) => (
             Some(c.usd),
-            Some(match c.status {
-                crate::pricing::CostStatus::Complete => "complete",
-                crate::pricing::CostStatus::PartialMissingPrice => "partial_missing_price",
-                crate::pricing::CostStatus::Unknown => "unknown",
-            }
-            .to_string()),
+            Some(
+                match c.status {
+                    crate::pricing::CostStatus::Complete => "complete",
+                    crate::pricing::CostStatus::PartialMissingPrice => "partial_missing_price",
+                    crate::pricing::CostStatus::Unknown => "unknown",
+                }
+                .to_string(),
+            ),
         ),
         None => (None, None),
     };
@@ -298,15 +299,15 @@ pub(crate) fn build_run_summary(outcome: &FlowOutcome) -> RunSummary {
 /// common tool names; falls back to a generic wrench for anything else.
 fn tool_emoji(name: &str) -> &'static str {
     match name {
-        "bash" | "shell" => "\u{26a1}",          // ⚡
-        "read" | "read_file" | "fs_read" => "\u{1f4d6}", // 📖
-        "write" | "write_file" | "fs_write" => "\u{270d}\u{fe0f}", // ✍️
-        "edit" | "patch" => "\u{270f}\u{fe0f}",  // ✏️
-        "web_search" | "search" | "google" => "\u{1f50d}", // 🔍
-        "browser" | "web_fetch" | "fetch" => "\u{1f310}", // 🌐
+        "bash" | "shell" => "\u{26a1}",                             // ⚡
+        "read" | "read_file" | "fs_read" => "\u{1f4d6}",            // 📖
+        "write" | "write_file" | "fs_write" => "\u{270d}\u{fe0f}",  // ✍️
+        "edit" | "patch" => "\u{270f}\u{fe0f}",                     // ✏️
+        "web_search" | "search" | "google" => "\u{1f50d}",          // 🔍
+        "browser" | "web_fetch" | "fetch" => "\u{1f310}",           // 🌐
         "memory_recall" | "memory_store" | "memory" => "\u{1f9e0}", // 🧠
-        "spawn_subagent" | "subagent" => "\u{1f916}", // 🤖
-        _ => "\u{1f527}", // 🔧
+        "spawn_subagent" | "subagent" => "\u{1f916}",               // 🤖
+        _ => "\u{1f527}",                                           // 🔧
     }
 }
 
@@ -479,9 +480,7 @@ mod tests {
     /// from failed invocations.
     #[test]
     fn build_run_summary_carries_enriched_signals() {
-        use crate::orchestrator::dispatch::{
-            TerminateReason, TokenBreakdown, ToolInvocation,
-        };
+        use crate::orchestrator::dispatch::{TerminateReason, TokenBreakdown, ToolInvocation};
 
         let outcome = FlowOutcome {
             final_text: "all done".into(),
@@ -527,7 +526,10 @@ mod tests {
 
         // Enriched fields populated.
         assert_eq!(summary.duration_ms, Some(4321));
-        assert_eq!(summary.terminate_reason.as_deref(), Some("hit_max_iterations"));
+        assert_eq!(
+            summary.terminate_reason.as_deref(),
+            Some("hit_max_iterations")
+        );
         let bd = summary.token_breakdown.expect("breakdown present");
         assert_eq!(bd.input, 800);
         assert_eq!(bd.output, 600);
@@ -566,7 +568,10 @@ mod tests {
         };
         let summary = super::build_run_summary(&outcome);
         assert_eq!(summary.duration_ms, None, "zero duration → omitted");
-        assert!(summary.token_breakdown.is_none(), "all-zero breakdown → omitted");
+        assert!(
+            summary.token_breakdown.is_none(),
+            "all-zero breakdown → omitted"
+        );
         assert!(summary.tool_summaries.is_empty());
         assert!(summary.errors.is_empty());
         assert_eq!(summary.terminate_reason.as_deref(), Some("completed"));

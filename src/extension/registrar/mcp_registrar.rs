@@ -145,10 +145,10 @@ impl Drop for InlineMcpHandle {
     }
 }
 
-use std::collections::HashSet;
 use crate::agents::{AgentDef, McpServerSpec};
-use crate::harness::TraceSink;
 use crate::harness::trace::LoopTraceEvent;
+use crate::harness::TraceSink;
+use std::collections::HashSet;
 
 /// Per-agent MCP server scope (P3 Stage I).
 ///
@@ -170,7 +170,10 @@ impl std::fmt::Debug for McpScope {
             .field("agent_id", &self.agent_id)
             .field("references", &self.references)
             .field("inline_handles", &self.inline_handles)
-            .field("trace_sink", &self.trace_sink.as_ref().map(|_| "<dyn TraceSink>"))
+            .field(
+                "trace_sink",
+                &self.trace_sink.as_ref().map(|_| "<dyn TraceSink>"),
+            )
             .finish()
     }
 }
@@ -206,9 +209,9 @@ impl McpScope {
         }
 
         // Phase 2: spawn all inline servers eagerly in parallel.
-        let spawn_futures = inline_specs.into_iter().map(|(name, config)| async move {
-            spawn_inline(name, config).await
-        });
+        let spawn_futures = inline_specs
+            .into_iter()
+            .map(|(name, config)| async move { spawn_inline(name, config).await });
         let inline_handles: Vec<InlineMcpHandle> =
             futures::future::try_join_all(spawn_futures).await?;
 
@@ -459,7 +462,10 @@ mod tests {
         let handle = InlineMcpHandle::new_for_test("zombie".into());
         let cleaned = handle.cleaned_up.clone();
         drop(handle);
-        assert!(!cleaned.load(Ordering::Acquire), "no explicit cleanup → flag stays false");
+        assert!(
+            !cleaned.load(Ordering::Acquire),
+            "no explicit cleanup → flag stays false"
+        );
     }
 
     #[test]
@@ -469,7 +475,10 @@ mod tests {
         let cleaned = handle.cleaned_up.clone();
         handle.mark_cleaned();
         drop(handle);
-        assert!(cleaned.load(Ordering::Acquire), "explicit cleanup must flip the flag");
+        assert!(
+            cleaned.load(Ordering::Acquire),
+            "explicit cleanup must flip the flag"
+        );
     }
 
     #[tokio::test]
@@ -488,10 +497,11 @@ mod tests {
         registry.register_tool(tool);
         let global = Arc::new(registry);
 
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_mcp_servers(vec![McpServerSpec::Reference {
+        let agent = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(vec![
+            McpServerSpec::Reference {
                 name: "global-mcp".into(),
-            }]);
+            },
+        ]);
 
         let scope = McpScope::provision(&agent, global, None)
             .await
@@ -509,10 +519,11 @@ mod tests {
 
         let registry = make_registry_with_plugin("only-this");
         let global = Arc::new(registry);
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_mcp_servers(vec![McpServerSpec::Reference {
+        let agent = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(vec![
+            McpServerSpec::Reference {
                 name: "missing".into(),
-            }]);
+            },
+        ]);
 
         let err = McpScope::provision(&agent, global, None)
             .await
@@ -528,15 +539,16 @@ mod tests {
         let registry = make_registry_with_plugin("github");
         let global = Arc::new(registry);
 
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_mcp_servers(vec![McpServerSpec::Inline {
+        let agent = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(vec![
+            McpServerSpec::Inline {
                 name: "github".into(),
                 config: McpInlineConfig {
                     command: "node".into(),
                     args: vec!["server.js".into()],
                     env: Default::default(),
                 },
-            }]);
+            },
+        ]);
 
         let err = McpScope::provision(&agent, global, None)
             .await
@@ -559,17 +571,21 @@ mod tests {
         });
         let global = Arc::new(registry);
 
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_mcp_servers(vec![McpServerSpec::Reference {
+        let agent = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(vec![
+            McpServerSpec::Reference {
                 name: "global-mcp".into(),
-            }]);
+            },
+        ]);
         let scope = McpScope::provision(&agent, global, None)
             .await
             .expect("provision");
 
         let tools = scope.tools();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"global-tool"), "tools() must include the referenced tool: {names:?}");
+        assert!(
+            names.contains(&"global-tool"),
+            "tools() must include the referenced tool: {names:?}"
+        );
 
         scope.shutdown().await.expect("shutdown");
     }
@@ -582,15 +598,16 @@ mod tests {
         let registry = PluginRegistry::new();
         let global = Arc::new(registry);
 
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_mcp_servers(vec![McpServerSpec::Inline {
+        let agent = AgentDef::new("test", AgentMode::SubAgent).with_mcp_servers(vec![
+            McpServerSpec::Inline {
                 name: "broken".into(),
                 config: McpInlineConfig {
                     command: "/definitely/not/a/real/binary/aleph-stage-i".into(),
                     args: vec![],
                     env: Default::default(),
                 },
-            }]);
+            },
+        ]);
 
         let err = McpScope::provision(&agent, global, None)
             .await

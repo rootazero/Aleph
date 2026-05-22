@@ -52,7 +52,7 @@ impl ToolService for AllowlistToolService {
         self.inner.describe(name).await
     }
 
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         // Filter the parent's dispatcher schema down to what this child agent
         // is allowed to see. Returning an empty slice here (the previous
         // behavior) silently hid every tool from the child LLM — `list()` /
@@ -60,7 +60,7 @@ impl ToolService for AllowlistToolService {
         // schema served by Orchestrator goes through `dispatcher_schema()`,
         // so subagents got an empty tool catalog and gave up after one turn.
         let inner = self.inner.dispatcher_schema();
-        let filtered: Vec<crate::dispatcher::ToolDefinition> = inner
+        let filtered: Vec<crate::tool_metadata::ToolDefinition> = inner
             .iter()
             .filter(|d| self.agent_def.is_tool_allowed(&d.name))
             .cloned()
@@ -105,17 +105,17 @@ mod tests {
         async fn describe(&self, name: &str) -> Option<ToolDefinition> {
             self.list().await.into_iter().find(|d| d.name == name)
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             // Mirror list() so tests can verify the AllowlistToolService
             // wrapper passes its own filter through dispatcher_schema().
-            let defs: Vec<crate::dispatcher::ToolDefinition> = ["read", "write", "exec"]
+            let defs: Vec<crate::tool_metadata::ToolDefinition> = ["read", "write", "exec"]
                 .iter()
                 .map(|n| {
-                    crate::dispatcher::ToolDefinition::new(
+                    crate::tool_metadata::ToolDefinition::new(
                         *n,
                         "fake",
                         json!({}),
-                        crate::dispatcher::ToolCategory::Builtin,
+                        crate::tool_metadata::ToolCategory::Builtin,
                     )
                 })
                 .collect();

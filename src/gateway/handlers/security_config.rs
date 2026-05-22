@@ -16,8 +16,8 @@ use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-mod toml_io;
 mod rate_limit;
+mod toml_io;
 
 /// Write gateway.host to the config TOML file on disk.
 
@@ -282,7 +282,9 @@ pub async fn handle_update(
     }
 
     // Write shell security config
-    if let Err(e) = toml_io::write_shell_security_to_toml(&config_path, &security_config.shell_security) {
+    if let Err(e) =
+        toml_io::write_shell_security_to_toml(&config_path, &security_config.shell_security)
+    {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -291,7 +293,8 @@ pub async fn handle_update(
     }
 
     // Write custom PII rules
-    if let Err(e) = toml_io::write_custom_pii_rules_to_toml(&config_path, &security_config.custom_pii_rules)
+    if let Err(e) =
+        toml_io::write_custom_pii_rules_to_toml(&config_path, &security_config.custom_pii_rules)
     {
         return JsonRpcResponse::error(
             request.id,
@@ -312,9 +315,10 @@ pub async fn handle_update(
     }
 
     // Write sandbox rate limit
-    if let Err(e) =
-        rate_limit::write_sandbox_rate_limit_to_toml(&config_path, &security_config.sandbox_rate_limit)
-    {
+    if let Err(e) = rate_limit::write_sandbox_rate_limit_to_toml(
+        &config_path,
+        &security_config.sandbox_rate_limit,
+    ) {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -408,4 +412,3 @@ pub async fn handle_revoke_device(
         ),
     }
 }
-

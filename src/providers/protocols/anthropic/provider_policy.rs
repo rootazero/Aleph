@@ -230,7 +230,9 @@ impl AnthropicPolicy {
     /// `cache_control` is NOT stripped here — it's gated at injection time in
     /// `build_request` (see `policy.capabilities.supports_cache_control` check).
     pub fn apply(&self, body: &mut serde_json::Value) {
-        let Some(obj) = body.as_object_mut() else { return };
+        let Some(obj) = body.as_object_mut() else {
+            return;
+        };
         let caps = &self.capabilities;
         if !caps.supports_service_tier {
             obj.remove("service_tier");
@@ -255,8 +257,12 @@ impl AnthropicPolicy {
 
 /// Remove `metadata.user_id`. If `metadata` becomes empty afterward, remove it too.
 fn strip_metadata_user_id(obj: &mut serde_json::Map<String, serde_json::Value>) {
-    let Some(metadata) = obj.get_mut("metadata") else { return };
-    let Some(map) = metadata.as_object_mut() else { return };
+    let Some(metadata) = obj.get_mut("metadata") else {
+        return;
+    };
+    let Some(map) = metadata.as_object_mut() else {
+        return;
+    };
     map.remove("user_id");
     if map.is_empty() {
         obj.remove("metadata");
@@ -265,8 +271,12 @@ fn strip_metadata_user_id(obj: &mut serde_json::Map<String, serde_json::Value>) 
 
 /// Remove `output_config.effort`. If `output_config` becomes empty afterward, remove it too.
 fn strip_output_config_effort(obj: &mut serde_json::Map<String, serde_json::Value>) {
-    let Some(output_config) = obj.get_mut("output_config") else { return };
-    let Some(map) = output_config.as_object_mut() else { return };
+    let Some(output_config) = obj.get_mut("output_config") else {
+        return;
+    };
+    let Some(map) = output_config.as_object_mut() else {
+        return;
+    };
     map.remove("effort");
     if map.is_empty() {
         obj.remove("output_config");
@@ -281,7 +291,10 @@ fn strip_output_config_effort(obj: &mut serde_json::Map<String, serde_json::Valu
 pub fn build_anthropic_policy(base_url: Option<&str>) -> AnthropicPolicy {
     let class = detect_anthropic_endpoint_class(base_url);
     let capabilities = resolve_anthropic_capabilities(class, base_url);
-    AnthropicPolicy { class, capabilities }
+    AnthropicPolicy {
+        class,
+        capabilities,
+    }
 }
 
 // =============================================================================
@@ -319,7 +332,9 @@ mod tests {
     #[test]
     fn detect_custom_for_third_party_hosts() {
         assert_eq!(
-            detect_anthropic_endpoint_class(Some("https://kimi-for-coding.example.com/v1/messages")),
+            detect_anthropic_endpoint_class(Some(
+                "https://kimi-for-coding.example.com/v1/messages"
+            )),
             AnthropicEndpointClass::Custom
         );
         assert_eq!(
@@ -380,8 +395,10 @@ mod tests {
             AnthropicEndpointClass::Custom,
             Some("https://api.minimax.io/anthropic/v1/messages"),
         );
-        assert!(!caps.supports_fine_grained_tool_streaming,
-            "MiniMax rejects fine-grained-tool-streaming on tool-use messages");
+        assert!(
+            !caps.supports_fine_grained_tool_streaming,
+            "MiniMax rejects fine-grained-tool-streaming on tool-use messages"
+        );
         assert!(!caps.supports_context_1m, "MiniMax 400s on context-1m beta");
         // Interleaved thinking stays on (MiniMax accepts it).
         assert!(caps.supports_interleaved_thinking);
@@ -402,7 +419,10 @@ mod tests {
             AnthropicEndpointClass::Custom,
             Some("https://my-foundry.cognitiveservices.azure.com/anthropic"),
         );
-        assert!(caps.supports_context_1m, "Azure needs context-1m for 1M context");
+        assert!(
+            caps.supports_context_1m,
+            "Azure needs context-1m for 1M context"
+        );
         // Other betas still on
         assert!(caps.supports_fine_grained_tool_streaming);
         assert!(caps.supports_interleaved_thinking);
@@ -414,7 +434,10 @@ mod tests {
             AnthropicEndpointClass::Custom,
             Some("https://bedrock-runtime.us-east-1.amazonaws.com/v1/messages"),
         );
-        assert!(caps.supports_context_1m, "Bedrock needs context-1m for 1M context");
+        assert!(
+            caps.supports_context_1m,
+            "Bedrock needs context-1m for 1M context"
+        );
     }
 
     fn body_with_all_anthropic_fields() -> serde_json::Value {
@@ -445,8 +468,10 @@ mod tests {
         let policy = build_anthropic_policy(Some("https://kimi-for-coding.example.com"));
         let mut body = body_with_all_anthropic_fields();
         policy.apply(&mut body);
-        assert!(body.get("metadata").is_none(),
-            "metadata object should be removed when only field (user_id) is stripped");
+        assert!(
+            body.get("metadata").is_none(),
+            "metadata object should be removed when only field (user_id) is stripped"
+        );
     }
 
     #[test]

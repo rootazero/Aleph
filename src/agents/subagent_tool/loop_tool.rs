@@ -460,8 +460,7 @@ impl LoopTool for SubagentTool {
                         timeout_secs: timeout,
                     };
 
-                    let runtime =
-                        self.build_runtime(child_chain.clone(), self.cancel_for_child());
+                    let runtime = self.build_runtime(child_chain.clone(), self.cancel_for_child());
                     handles.push(tokio::spawn(async move {
                         let outcome = AssertUnwindSafe(runtime.run(runtime_config))
                             .catch_unwind()

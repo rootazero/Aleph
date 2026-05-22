@@ -3,11 +3,11 @@
 /// Functions for constructing chat completion requests.
 use crate::config::ProviderConfig;
 use crate::core::MediaAttachment;
-use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::providers::shared::{
     build_document_context, combine_with_document_context, separate_attachments,
     should_use_prepend_mode,
 };
+use crate::tool_metadata::DEFAULT_MAX_TOKENS;
 
 use super::types::{ChatCompletionRequest, ContentBlock, ImageUrl, Message, MessageContent};
 

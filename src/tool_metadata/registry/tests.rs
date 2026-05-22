@@ -2,7 +2,7 @@ use super::super::types::{
     ChannelType, ConflictInfo, ConflictResolution, ToolSafetyLevel, ToolSource,
 };
 use super::*;
-use crate::dispatcher::types::ToolPriority;
+use crate::tool_metadata::types::ToolPriority;
 
 #[tokio::test]
 async fn test_registry_new() {

@@ -102,7 +102,7 @@ pub trait ToolService: Send + Sync + 'static {
     /// REQUIRED — no default impl. A default returning empty would silently
     /// hide the LLM's tool list on any forgotten override. Test mocks must
     /// also implement, typically returning `std::sync::Arc::from([])`.
-    fn dispatcher_schema(&self) -> Arc<[crate::dispatcher::ToolDefinition]>;
+    fn dispatcher_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]>;
 }
 
 /// Convert a slice of loop-side `ToolDefinition`s into the dispatcher-side
@@ -116,14 +116,14 @@ pub trait ToolService: Send + Sync + 'static {
 /// Information loss (e.g., `ToolSource::Mcp` collapses to `category: Builtin`,
 /// `metadata.requires_approval` is dropped) is preserved as-is from the
 /// pre-Stage-2 behavior. Fixing the lossy mapping is out of Stage 2 scope.
-pub fn to_dispatcher_form(defs: &[ToolDefinition]) -> Arc<[crate::dispatcher::ToolDefinition]> {
+pub fn to_dispatcher_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]> {
     defs.iter()
-        .map(|def| crate::dispatcher::ToolDefinition {
+        .map(|def| crate::tool_metadata::ToolDefinition {
             name: def.name.clone(),
             description: def.description.clone(),
             parameters: def.input_schema.clone(),
             requires_confirmation: false,
-            category: crate::dispatcher::ToolCategory::Builtin,
+            category: crate::tool_metadata::ToolCategory::Builtin,
             llm_context: None,
             strict: false,
         })
@@ -134,7 +134,7 @@ pub fn to_dispatcher_form(defs: &[ToolDefinition]) -> Arc<[crate::dispatcher::To
 #[cfg(test)]
 mod dispatcher_form_tests {
     use super::*;
-    use crate::dispatcher::{ToolCategory, ToolDefinition as DispatcherToolDefinition};
+    use crate::tool_metadata::{ToolCategory, ToolDefinition as DispatcherToolDefinition};
     use serde_json::json;
 
     fn loop_def(name: &str) -> ToolDefinition {
@@ -197,7 +197,8 @@ mod metadata_tests {
 
     #[test]
     fn metadata_max_duration_ms_defaults_to_none_when_field_absent() {
-        let legacy_json = r#"{"hidden_from_llm":false,"requires_approval":false,"tags":[],"idempotent":false}"#;
+        let legacy_json =
+            r#"{"hidden_from_llm":false,"requires_approval":false,"tags":[],"idempotent":false}"#;
         let parsed: ToolDefinitionMetadata = serde_json::from_str(legacy_json).unwrap();
         assert_eq!(parsed.max_duration_ms, None);
     }

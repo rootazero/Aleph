@@ -218,9 +218,7 @@ fn is_local_host(host: &str) -> bool {
         .cloned()
         .collect();
 
-    local_hosts.contains(host)
-        || host.ends_with(".localhost")
-        || host.ends_with(".local")
+    local_hosts.contains(host) || host.ends_with(".localhost") || host.ends_with(".local")
 }
 
 // =============================================================================
@@ -502,11 +500,7 @@ mod tests {
 
     #[test]
     fn test_build_policy_for_openai() {
-        let policy = build_payload_policy(
-            Some("https://api.openai.com"),
-            "openai-responses",
-            None,
-        );
+        let policy = build_payload_policy(Some("https://api.openai.com"), "openai-responses", None);
         assert_eq!(policy.endpoint_class, EndpointClass::OpenAiPublic);
         assert_eq!(policy.explicit_store, Some(true));
         assert!(!policy.strip_reasoning);
@@ -515,11 +509,8 @@ mod tests {
 
     #[test]
     fn test_build_policy_for_deepseek() {
-        let policy = build_payload_policy(
-            Some("https://api.deepseek.com"),
-            "openai-responses",
-            None,
-        );
+        let policy =
+            build_payload_policy(Some("https://api.deepseek.com"), "openai-responses", None);
         assert_eq!(policy.endpoint_class, EndpointClass::DeepSeekNative);
         assert!(policy.strip_store);
         assert!(policy.strip_reasoning);
@@ -528,11 +519,7 @@ mod tests {
 
     #[test]
     fn test_apply_policy_strips_fields() {
-        let policy = build_payload_policy(
-            Some("https://api.deepseek.com"),
-            "openai-chat",
-            None,
-        );
+        let policy = build_payload_policy(Some("https://api.deepseek.com"), "openai-chat", None);
         let mut payload = serde_json::Map::new();
         payload.insert("store".into(), serde_json::Value::Bool(true));
         payload.insert("reasoning".into(), serde_json::json!({"effort": "high"}));
@@ -547,11 +534,7 @@ mod tests {
 
     #[test]
     fn test_apply_policy_adds_compaction() {
-        let policy = build_payload_policy(
-            Some("https://api.openai.com"),
-            "openai-responses",
-            None,
-        );
+        let policy = build_payload_policy(Some("https://api.openai.com"), "openai-responses", None);
         let mut payload = serde_json::Map::new();
         policy.apply(&mut payload);
 
@@ -577,14 +560,8 @@ mod tests {
 
     #[test]
     fn test_detect_default_is_openai() {
-        assert_eq!(
-            detect_endpoint_class(None),
-            EndpointClass::OpenAiPublic
-        );
-        assert_eq!(
-            detect_endpoint_class(Some("")),
-            EndpointClass::OpenAiPublic
-        );
+        assert_eq!(detect_endpoint_class(None), EndpointClass::OpenAiPublic);
+        assert_eq!(detect_endpoint_class(Some("")), EndpointClass::OpenAiPublic);
     }
 
     #[test]
@@ -618,14 +595,9 @@ mod tests {
         assert!(caps.supports_response_format);
     }
 
-
     #[test]
     fn apply_strips_response_format_when_unsupported() {
-        let policy = build_payload_policy(
-            Some("http://localhost:8080"),
-            "openai-chat",
-            None,
-        );
+        let policy = build_payload_policy(Some("http://localhost:8080"), "openai-chat", None);
         let mut payload = serde_json::Map::new();
         payload.insert(
             "response_format".into(),
@@ -641,11 +613,7 @@ mod tests {
 
     #[test]
     fn apply_keeps_response_format_when_supported() {
-        let policy = build_payload_policy(
-            Some("https://api.openai.com"),
-            "openai-chat",
-            None,
-        );
+        let policy = build_payload_policy(Some("https://api.openai.com"), "openai-chat", None);
         let mut payload = serde_json::Map::new();
         payload.insert(
             "response_format".into(),
@@ -694,11 +662,7 @@ mod tests {
 
     #[test]
     fn apply_strips_seed_when_unsupported() {
-        let policy = build_payload_policy(
-            Some("http://localhost:8080"),
-            "openai-chat",
-            None,
-        );
+        let policy = build_payload_policy(Some("http://localhost:8080"), "openai-chat", None);
         let mut payload = serde_json::Map::new();
         payload.insert("seed".into(), serde_json::json!(42));
         payload.insert("model".into(), serde_json::Value::String("m".into()));
@@ -711,11 +675,7 @@ mod tests {
 
     #[test]
     fn apply_keeps_seed_when_supported() {
-        let policy = build_payload_policy(
-            Some("https://api.openai.com"),
-            "openai-chat",
-            None,
-        );
+        let policy = build_payload_policy(Some("https://api.openai.com"), "openai-chat", None);
         let mut payload = serde_json::Map::new();
         payload.insert("seed".into(), serde_json::json!(42));
 
@@ -761,11 +721,7 @@ mod tests {
 
     #[test]
     fn apply_strips_logprobs_when_unsupported() {
-        let policy = build_payload_policy(
-            Some("https://api.deepseek.com"),
-            "openai-chat",
-            None,
-        );
+        let policy = build_payload_policy(Some("https://api.deepseek.com"), "openai-chat", None);
         let mut payload = serde_json::Map::new();
         payload.insert("logprobs".into(), serde_json::json!(true));
         payload.insert("top_logprobs".into(), serde_json::json!(5));
@@ -780,11 +736,7 @@ mod tests {
 
     #[test]
     fn apply_keeps_logprobs_when_supported() {
-        let policy = build_payload_policy(
-            Some("https://api.groq.com"),
-            "openai-chat",
-            None,
-        );
+        let policy = build_payload_policy(Some("https://api.groq.com"), "openai-chat", None);
         let mut payload = serde_json::Map::new();
         payload.insert("logprobs".into(), serde_json::json!(true));
         payload.insert("top_logprobs".into(), serde_json::json!(3));

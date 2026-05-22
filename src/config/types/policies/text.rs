@@ -83,7 +83,10 @@ fn default_truncation_suffix() -> String {
 impl TextFormatPolicy {
     /// Truncate text to the default length
     pub fn truncate_default(&self, text: &str) -> String {
-        let len = self.default_truncate_length.try_into().unwrap_or(usize::MAX);
+        let len = self
+            .default_truncate_length
+            .try_into()
+            .unwrap_or(usize::MAX);
         self.truncate_to_length(text, len)
     }
 

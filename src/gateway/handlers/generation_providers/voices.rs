@@ -1,7 +1,7 @@
-use crate::gateway::handlers::parse_params;
-use crate::gateway::handlers::generation_providers::resolve_api_key;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::config::Config;
+use crate::gateway::handlers::generation_providers::resolve_api_key;
+use crate::gateway::handlers::parse_params;
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::gateway::security::SharedTokenManager;
 use crate::generation::providers::{ElevenLabsProvider, OpenAiTtsProvider};
 use crate::sync_primitives::Arc;
@@ -368,7 +368,7 @@ fn gpt4o_tts_voice_list() -> Vec<crate::generation::VoiceInfo> {
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::config::types::generation::GenerationProviderConfig;
     use crate::gateway::handlers::generation_providers::build_generation_provider_for_persistence;
 

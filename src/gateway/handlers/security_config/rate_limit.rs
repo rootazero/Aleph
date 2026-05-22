@@ -81,7 +81,9 @@ fn default_rate_limit_admin() -> WindowConfigSchema {
 }
 
 /// Read sandbox rate limit config from [sandbox.rate_limit] in config TOML.
-pub(super) fn read_sandbox_rate_limit_from_toml(patcher: &ConfigPatcher) -> SandboxRateLimitConfigSchema {
+pub(super) fn read_sandbox_rate_limit_from_toml(
+    patcher: &ConfigPatcher,
+) -> SandboxRateLimitConfigSchema {
     let config_path = patcher.config_path();
     if let Ok(contents) = std::fs::read_to_string(config_path) {
         if let Ok(table) = contents.parse::<toml::Table>() {

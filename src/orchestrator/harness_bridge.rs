@@ -60,8 +60,16 @@ pub(crate) fn emit_init_seams(
 ) {
     sink.on_init_seam("stage3-prompt", "PromptBuilder", true);
     sink.on_init_seam("stage4-chain", "ChainContext", true);
-    sink.on_init_seam("stage5a-guardrails", "GuardrailRegistry", guardrails_configured);
-    sink.on_init_seam("stage6a-verifier", "VerifierChain", verifier_chain_configured);
+    sink.on_init_seam(
+        "stage5a-guardrails",
+        "GuardrailRegistry",
+        guardrails_configured,
+    );
+    sink.on_init_seam(
+        "stage6a-verifier",
+        "VerifierChain",
+        verifier_chain_configured,
+    );
     sink.on_init_seam("p0-rescue-stall", "StallConfig", stall_config_configured);
     sink.on_init_seam(
         "p0-rescue-cap",
@@ -149,7 +157,7 @@ pub struct AgentHarnessRunner {
     /// snapshots drive the `<tool_runtime_state>` block emitted by
     /// `ToolRuntimeStateLayer` @502. `None` in test/early-boot paths keeps
     /// `runtime_state_blocks` empty (the layer then renders nothing).
-    pub dispatch_registry: Option<Arc<crate::dispatcher::ToolRegistry>>,
+    pub dispatch_registry: Option<Arc<crate::tool_metadata::ToolRegistry>>,
 
     /// Gateway session-epoch registrar for compaction-driven session-split.
     /// When `Some`, the harness can mint child sessions at the next epoch and
@@ -256,43 +264,45 @@ impl HarnessRunner for AgentHarnessRunner {
         // diminishing-returns counters must not leak across concurrent
         // sessions. The compactor reuses this run's provider for side-channel
         // summarization (deterministic-truncation fallback on provider error).
-        let (context_budget, context_compactor, preflight_pipeline) =
-            match self.context_budget_config.as_ref() {
-                Some(cfg) => {
-                    let budget = Arc::new(Mutex::new(ContextBudget::new(cfg)));
-                    let mut compactor_inner = ContextCompactor::new(
-                        llm.clone(),
-                        CompactorConfig {
-                            fresh_tail: cfg.fresh_tail_count,
-                            ..CompactorConfig::default()
-                        },
-                    );
-                    // Wire the zero-API-cost session-summary reuse path: the
-                    // memory backend holding the d0/d1/d2 facts plus the owning
-                    // agent id they were written under.
-                    if let Some(backend) = self.memory_backend.clone() {
-                        compactor_inner =
-                            compactor_inner.with_summary_reuse(backend, spec.agent.to_string());
-                    }
-                    let compactor = Arc::new(compactor_inner);
-                    // Cheap-pass preflight: runs unconditionally before the budget
-                    // check so token savings happen even when the compactor's LLM
-                    // call fails. Same gating as the compactor (config-presence).
-                    let pipeline = {
-                        use crate::context::budget::cheap_passes::{
-                            HistoricalImageStrippingStage, ToolResultPruningStage,
-                        };
-                        use crate::context::budget::preflight::{PreflightPipeline, PreflightStage};
-                        let stages: Vec<Box<dyn PreflightStage>> = vec![
-                            Box::new(ToolResultPruningStage::default()),
-                            Box::new(HistoricalImageStrippingStage),
-                        ];
-                        Arc::new(PreflightPipeline::new(stages))
-                    };
-                    (Some(budget), Some(compactor), Some(pipeline))
+        let (context_budget, context_compactor, preflight_pipeline) = match self
+            .context_budget_config
+            .as_ref()
+        {
+            Some(cfg) => {
+                let budget = Arc::new(Mutex::new(ContextBudget::new(cfg)));
+                let mut compactor_inner = ContextCompactor::new(
+                    llm.clone(),
+                    CompactorConfig {
+                        fresh_tail: cfg.fresh_tail_count,
+                        ..CompactorConfig::default()
+                    },
+                );
+                // Wire the zero-API-cost session-summary reuse path: the
+                // memory backend holding the d0/d1/d2 facts plus the owning
+                // agent id they were written under.
+                if let Some(backend) = self.memory_backend.clone() {
+                    compactor_inner =
+                        compactor_inner.with_summary_reuse(backend, spec.agent.to_string());
                 }
-                None => (None, None, None),
-            };
+                let compactor = Arc::new(compactor_inner);
+                // Cheap-pass preflight: runs unconditionally before the budget
+                // check so token savings happen even when the compactor's LLM
+                // call fails. Same gating as the compactor (config-presence).
+                let pipeline = {
+                    use crate::context::budget::cheap_passes::{
+                        HistoricalImageStrippingStage, ToolResultPruningStage,
+                    };
+                    use crate::context::budget::preflight::{PreflightPipeline, PreflightStage};
+                    let stages: Vec<Box<dyn PreflightStage>> = vec![
+                        Box::new(ToolResultPruningStage::default()),
+                        Box::new(HistoricalImageStrippingStage),
+                    ];
+                    Arc::new(PreflightPipeline::new(stages))
+                };
+                (Some(budget), Some(compactor), Some(pipeline))
+            }
+            None => (None, None, None),
+        };
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
@@ -482,6 +492,10 @@ impl HarnessRunner for AgentHarnessRunner {
         // and the budget-sensor flag. `total_tokens` saturates into the
         // `u32` field (`as u32` would truncate; a run is realistically far
         // below `u32::MAX` tokens).
+        //
+        // NOTE: `usize` -> `u32` conversion uses `try_from` with saturating
+        // fallback. On 64-bit platforms this is effectively a no-op for any
+        // realistic token count (< 4B tokens).
         // P2: pull the rich signals from harness accessors. The harness loop
         // recorded the precise terminate cause, per-tool timeline, and
         // per-component token breakdown — no second session read needed.
@@ -491,17 +505,22 @@ impl HarnessRunner for AgentHarnessRunner {
         // `None` when the run produced no tokens (no LLM call observed) —
         // the renderer treats `None` and `Unknown` differently (None ==
         // "did not attempt"; Unknown == "attempted, no rate").
-        let estimated_cost = if token_breakdown == crate::orchestrator::dispatch::TokenBreakdown::default() {
-            None
-        } else {
-            let model: &str = match &spec.brain {
-                crate::orchestrator::flow_spec::BrainRef::Strict {
-                    model: Some(m), ..
-                } => m.as_str(),
-                _ => provider_name.as_str(),
+        let estimated_cost =
+            if token_breakdown == crate::orchestrator::dispatch::TokenBreakdown::default() {
+                None
+            } else {
+                let model: &str = match &spec.brain {
+                    crate::orchestrator::flow_spec::BrainRef::Strict { model: Some(m), .. } => {
+                        m.as_str()
+                    }
+                    _ => provider_name.as_str(),
+                };
+                Some(crate::pricing::estimate(
+                    &provider_name,
+                    model,
+                    &token_breakdown,
+                ))
             };
-            Some(crate::pricing::estimate(&provider_name, model, &token_breakdown))
-        };
         let outcome = FlowOutcome {
             final_text,
             iterations,
@@ -540,7 +559,7 @@ impl HarnessRunner for AgentHarnessRunner {
 /// Free function so unit tests can exercise the conversion without
 /// constructing a full `AgentHarnessRunner`.
 pub fn compute_runtime_state_blocks(
-    dispatch_registry: Option<&Arc<crate::dispatcher::ToolRegistry>>,
+    dispatch_registry: Option<&Arc<crate::tool_metadata::ToolRegistry>>,
 ) -> Vec<crate::tools::runtime_state::RuntimeStateFragment> {
     let Some(registry) = dispatch_registry else {
         return Vec::new();
@@ -589,41 +608,40 @@ impl AgentHarnessRunner {
 
         let session_key_str = session_id.to_key_string();
 
-        let (curated_text, memory_text) =
-            if let Some(mcp) = self.memory_context_provider.as_ref() {
-                let curated_text: Option<String> =
-                    match mcp.build_curated_message(agent_id, &session_key_str).await {
-                        Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
-                        Err(e) => {
-                            tracing::warn!(
-                                agent_id,
-                                session = %session_key_str,
-                                error = %e,
-                                "build_curated_message failed; degrading curated envelope to None"
-                            );
-                            None
-                        }
-                    };
-
-                let memory_text: Option<String> = if user_query.is_empty() {
-                    None
-                } else {
-                    match mcp.build_memory_user_message(agent_id, user_query).await {
-                        Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
-                        Err(e) => {
-                            tracing::warn!(
-                                agent_id,
-                                error = %e,
-                                "build_memory_user_message failed; degrading memory envelope to None"
-                            );
-                            None
-                        }
+        let (curated_text, memory_text) = if let Some(mcp) = self.memory_context_provider.as_ref() {
+            let curated_text: Option<String> =
+                match mcp.build_curated_message(agent_id, &session_key_str).await {
+                    Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
+                    Err(e) => {
+                        tracing::warn!(
+                            agent_id,
+                            session = %session_key_str,
+                            error = %e,
+                            "build_curated_message failed; degrading curated envelope to None"
+                        );
+                        None
                     }
                 };
-                (curated_text, memory_text)
+
+            let memory_text: Option<String> = if user_query.is_empty() {
+                None
             } else {
-                (None, None)
+                match mcp.build_memory_user_message(agent_id, user_query).await {
+                    Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
+                    Err(e) => {
+                        tracing::warn!(
+                            agent_id,
+                            error = %e,
+                            "build_memory_user_message failed; degrading memory envelope to None"
+                        );
+                        None
+                    }
+                }
             };
+            (curated_text, memory_text)
+        } else {
+            (None, None)
+        };
 
         let agent_def = self.agent_registry.get(agent_id);
 
@@ -894,9 +912,7 @@ mod tests {
     /// callback → broadcast hop unchanged.
     #[test]
     fn broadcast_callback_on_complete_with_outcome_emits_terminal_event() {
-        use crate::orchestrator::dispatch::{
-            FlowOutcome, TerminateReason, TokenBreakdown,
-        };
+        use crate::orchestrator::dispatch::{FlowOutcome, TerminateReason, TokenBreakdown};
 
         let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(16);
         let mut cb = super::callback::BroadcastCallback::new(tx);

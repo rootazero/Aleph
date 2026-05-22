@@ -468,7 +468,11 @@ mod tests {
     async fn fold_stream_success_uses_final_message() {
         let events: Vec<A2AResult<UpdateEvent>> = vec![
             Ok(status_event(TaskState::Working, None, false)),
-            Ok(status_event(TaskState::Completed, Some("final answer"), true)),
+            Ok(status_event(
+                TaskState::Completed,
+                Some("final answer"),
+                true,
+            )),
         ];
         let mut chunks: Vec<String> = Vec::new();
         let outcome = fold_stream(futures::stream::iter(events), |c| {

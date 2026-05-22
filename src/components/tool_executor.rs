@@ -5,11 +5,11 @@
 
 use async_trait::async_trait;
 
-use crate::dispatcher::DEFAULT_MAX_RETRIES;
 use crate::event::{
     AlephEvent, ErrorKind, EventContext, EventHandler, EventType, HandlerError, TokenUsage,
     ToolCallError, ToolCallRequest, ToolCallResult, ToolCallRetry, ToolCallStarted,
 };
+use crate::tool_metadata::DEFAULT_MAX_RETRIES;
 
 // ============================================================================
 // Tool Retry Policy

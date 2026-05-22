@@ -31,9 +31,10 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(ddl::DAILY_INSIGHTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create daily_insights table: {e}")))?;
 
-    conn.execute_batch(ddl::COMPRESSION_METADATA_DDL).map_err(|e| {
-        AlephError::config(format!("Failed to create compression_metadata table: {e}"))
-    })?;
+    conn.execute_batch(ddl::COMPRESSION_METADATA_DDL)
+        .map_err(|e| {
+            AlephError::config(format!("Failed to create compression_metadata table: {e}"))
+        })?;
 
     conn.execute_batch(ddl::CREATE_RAW_MEMORIES)
         .map_err(|e| AlephError::config(format!("Failed to create raw_memories table: {e}")))?;
@@ -134,6 +135,6 @@ pub fn init_notes_vec_tables(conn: &Connection) -> Result<(), AlephError> {
     Ok(())
 }
 
-pub use migrations::{drop_obsolete_facts_tables, migrate_notes_links_to_raw};
 #[cfg(test)]
 pub(crate) use migrations::migrate_unify_default_to_main_agent;
+pub use migrations::{drop_obsolete_facts_tables, migrate_notes_links_to_raw};

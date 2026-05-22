@@ -1,5 +1,5 @@
+use super::{current_timestamp_ms, SecurityStore};
 use rusqlite::{params, Result as SqliteResult};
-use super::{SecurityStore, current_timestamp_ms};
 
 impl SecurityStore {
     /// Insert a new session.
@@ -23,23 +23,19 @@ impl SecurityStore {
     }
 
     /// Check if a session is still valid (not expired).
-    pub fn validate_session(
-        &self,
-        session_id: &str,
-    ) -> SqliteResult<bool> {
+    pub fn validate_session(&self, session_id: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT 1 FROM sessions WHERE session_id = ?1 AND expires_at > ?2",
-        )?;
-        let exists: Result<i32, _> = stmt.query_row(params![session_id, current_timestamp_ms()], |row| row.get(0));
+        let mut stmt =
+            conn.prepare("SELECT 1 FROM sessions WHERE session_id = ?1 AND expires_at > ?2")?;
+        let exists: Result<i32, _> = stmt
+            .query_row(params![session_id, current_timestamp_ms()], |row| {
+                row.get(0)
+            });
         Ok(exists.is_ok())
     }
 
     /// Update session last_used_at timestamp.
-    pub fn touch_session(
-        &self,
-        session_id: &str,
-    ) -> SqliteResult<()> {
+    pub fn touch_session(&self, session_id: &str) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE sessions SET last_used_at = ?1 WHERE session_id = ?2",
@@ -49,10 +45,7 @@ impl SecurityStore {
     }
 
     /// Delete a specific session.
-    pub fn delete_session(
-        &self,
-        session_id: &str,
-    ) -> SqliteResult<()> {
+    pub fn delete_session(&self, session_id: &str) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "DELETE FROM sessions WHERE session_id = ?1",
@@ -62,9 +55,7 @@ impl SecurityStore {
     }
 
     /// Delete all expired sessions, returning the count removed.
-    pub fn delete_expired_sessions(
-        &self,
-    ) -> SqliteResult<u64> {
+    pub fn delete_expired_sessions(&self) -> SqliteResult<u64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows = conn.execute(
             "DELETE FROM sessions WHERE expires_at <= ?1",
@@ -74,9 +65,7 @@ impl SecurityStore {
     }
 
     /// List active (non-expired) sessions as (session_id, created_at, expires_at, last_used_at).
-    pub fn list_active_sessions(
-        &self,
-    ) -> SqliteResult<Vec<(String, i64, i64, i64)>> {
+    pub fn list_active_sessions(&self) -> SqliteResult<Vec<(String, i64, i64, i64)>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT session_id, created_at, expires_at, last_used_at

@@ -215,8 +215,8 @@ fn test_supports_native_tools() {
 
 #[test]
 fn test_build_request_with_tools() {
+    use crate::tool_metadata::ToolDefinition;
     use crate::ToolCategory;
-    use crate::dispatcher::ToolDefinition;
 
     let client = Client::new();
     let protocol = GeminiProtocol::new(client);

@@ -7,7 +7,6 @@
 use tracing::debug;
 
 use crate::agents::thinking::ThinkLevel;
-use crate::dispatcher::ToolDefinition;
 use crate::providers::adapter::{NativeToolCall, ToolChoice};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::protocols::openai_common::tools::{
@@ -15,6 +14,7 @@ use crate::providers::protocols::openai_common::tools::{
     sanitize_tool_name as sanitize_tool_name_pub,
 };
 use crate::providers::responses::types::*;
+use crate::tool_metadata::ToolDefinition;
 
 /// Convert UnifiedMessages to Responses API InputItems
 pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {

@@ -2,23 +2,20 @@
 
 use std::collections::VecDeque;
 
-use crate::config::types::provider::CacheRetention;
-use crate::config::ProviderConfig;
-use crate::dispatcher::DEFAULT_MAX_TOKENS;
-use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
-use crate::providers::anthropic::{
-    AnthropicTool, MessagesRequest,
-    SystemBlock, ThinkingBlock,
-};
-use crate::providers::anthropic::types::{Metadata, OutputConfig};
-use crate::providers::delta::{IndexIdTracker, ProviderDelta};
-use crate::providers::message::{CacheControl, EphemeralTtl};
 use super::sse::parse_anthropic_sse_event;
 use super::{
     sanitize_anthropic_tool_name, AnthropicProtocol, ToolNameMap, ANTHROPIC_VERSION,
     CLAUDE_CODE_USER_AGENT,
 };
+use crate::config::types::provider::CacheRetention;
+use crate::config::ProviderConfig;
+use crate::error::{AlephError, Result};
+use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
+use crate::providers::anthropic::types::{Metadata, OutputConfig};
+use crate::providers::anthropic::{AnthropicTool, MessagesRequest, SystemBlock, ThinkingBlock};
+use crate::providers::delta::{IndexIdTracker, ProviderDelta};
+use crate::providers::message::{CacheControl, EphemeralTtl};
+use crate::tool_metadata::DEFAULT_MAX_TOKENS;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -48,7 +45,9 @@ fn parse_stop_sequences(csv: &str) -> Vec<String> {
 /// We do NOT recurse into nested properties — Anthropic only rejects the
 /// keywords at the top level; nested unions inside property schemas pass.
 fn strip_anthropic_tool_schema_unions(schema: &mut serde_json::Value) {
-    let Some(obj) = schema.as_object_mut() else { return };
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
     // Important: use a loop, not `.any()` — `.any()` short-circuits on the
     // first removal and skips the remaining keys, so a schema with both
     // `allOf` and `anyOf` would only get one stripped.
@@ -224,9 +223,10 @@ impl ProtocolAdapter for AnthropicProtocol {
             std::sync::atomic::Ordering::Relaxed,
         );
         // Cycle 4: resolve capability policy once at the top of build_request.
-        let policy = crate::providers::protocols::anthropic::provider_policy::build_anthropic_policy(
-            config.base_url.as_deref(),
-        );
+        let policy =
+            crate::providers::protocols::anthropic::provider_policy::build_anthropic_policy(
+                config.base_url.as_deref(),
+            );
         let actual_model = payload
             .model
             .as_deref()
@@ -342,9 +342,7 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         // Build system block without cache_control; injection is gated on
         // policy.capabilities.supports_cache_control below.
-        let system = payload
-            .system_prompt
-            .map(|s| vec![SystemBlock::text(s)]);
+        let system = payload.system_prompt.map(|s| vec![SystemBlock::text(s)]);
 
         // Cycle 4: wire sampling fields from config
         let top_p = config.top_p;
@@ -373,17 +371,17 @@ impl ProtocolAdapter for AnthropicProtocol {
         // Cycle 4: wire metadata + effort from config. Adaptive thinking on
         // 4.6/4.7 overrides any config-level effort — the model needs the
         // ThinkLevel-derived effort to know how hard to think on this turn.
-        let metadata = config
-            .metadata_user_id
-            .as_ref()
-            .map(|uid| Metadata { user_id: Some(uid.clone()) });
+        let metadata = config.metadata_user_id.as_ref().map(|uid| Metadata {
+            user_id: Some(uid.clone()),
+        });
         let output_config = adaptive_effort
-            .map(|e| OutputConfig { effort: Some(e.to_string()) })
+            .map(|e| OutputConfig {
+                effort: Some(e.to_string()),
+            })
             .or_else(|| {
-                config
-                    .effort
-                    .as_ref()
-                    .map(|e| OutputConfig { effort: Some(e.clone()) })
+                config.effort.as_ref().map(|e| OutputConfig {
+                    effort: Some(e.clone()),
+                })
             });
 
         let request_body = MessagesRequest {
@@ -670,7 +668,6 @@ impl ProtocolAdapter for AnthropicProtocol {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,8 +680,7 @@ mod tests {
     fn effective_retention_official_unset_defaults_short() {
         let config = crate::config::ProviderConfig::test_config("claude-3-5-sonnet");
         // cache_retention is None by default in test_config
-        let retention =
-            effective_cache_retention(&config, "https://api.anthropic.com/v1/messages");
+        let retention = effective_cache_retention(&config, "https://api.anthropic.com/v1/messages");
         assert_eq!(retention, CacheRetention::Short);
     }
 
@@ -693,8 +689,7 @@ mod tests {
         // Cycle 4: host gate moved to policy.capabilities.supports_cache_control.
         // effective_cache_retention only resolves None → Short.
         let config = crate::config::ProviderConfig::test_config("claude-3-5-sonnet");
-        let retention =
-            effective_cache_retention(&config, "https://api.moonshot.cn/v1/messages");
+        let retention = effective_cache_retention(&config, "https://api.moonshot.cn/v1/messages");
         assert_eq!(retention, CacheRetention::Short);
     }
 
@@ -702,8 +697,7 @@ mod tests {
     fn effective_retention_explicit_long_on_third_party_respected() {
         let mut config = crate::config::ProviderConfig::test_config("claude-3-5-sonnet");
         config.cache_retention = Some(CacheRetention::Long);
-        let retention =
-            effective_cache_retention(&config, "https://api.moonshot.cn/v1/messages");
+        let retention = effective_cache_retention(&config, "https://api.moonshot.cn/v1/messages");
         assert_eq!(retention, CacheRetention::Long);
     }
 
@@ -711,8 +705,7 @@ mod tests {
     fn effective_retention_explicit_off_always_off() {
         let mut config = crate::config::ProviderConfig::test_config("claude-3-5-sonnet");
         config.cache_retention = Some(CacheRetention::Off);
-        let retention =
-            effective_cache_retention(&config, "https://api.anthropic.com/v1/messages");
+        let retention = effective_cache_retention(&config, "https://api.anthropic.com/v1/messages");
         assert_eq!(retention, CacheRetention::Off);
     }
 
@@ -730,7 +723,10 @@ mod tests {
         let used = inject_cache_control_into_system_array(&mut payload, cc);
         assert!(used, "a system breakpoint was placed");
         let system = payload["system"].as_array().unwrap();
-        assert!(system[0].get("cache_control").is_none(), "first block untouched");
+        assert!(
+            system[0].get("cache_control").is_none(),
+            "first block untouched"
+        );
         assert_eq!(
             system[1]["cache_control"],
             serde_json::json!({"type": "ephemeral"}),
@@ -918,7 +914,10 @@ mod tests {
         );
         // Budget of 1 is consumed by the already-tagged message; older untouched.
         let recent = payload["messages"][1]["content"].as_array().unwrap();
-        assert!(recent[0].get("cache_control").is_none(), "no second marker added");
+        assert!(
+            recent[0].get("cache_control").is_none(),
+            "no second marker added"
+        );
         assert!(payload["messages"][0]["content"][0]
             .get("cache_control")
             .is_none());
@@ -930,8 +929,7 @@ mod tests {
     fn build_request_retention_off_no_cache_control_anywhere() {
         let mut config = crate::config::ProviderConfig::test_config("claude-3-5-sonnet");
         config.cache_retention = Some(CacheRetention::Off);
-        let retention =
-            effective_cache_retention(&config, "https://api.anthropic.com/v1/messages");
+        let retention = effective_cache_retention(&config, "https://api.anthropic.com/v1/messages");
         assert_eq!(retention, CacheRetention::Off);
         let mut payload = serde_json::json!({
             "system": [{"type": "text", "text": "sys"}],
@@ -950,12 +948,8 @@ mod tests {
     fn long_ttl_implies_extended_cache_beta_token() {
         let mut config = crate::config::ProviderConfig::test_config("claude-3-5-sonnet");
         config.cache_retention = Some(CacheRetention::Long);
-        let retention =
-            effective_cache_retention(&config, "https://api.anthropic.com/v1/messages");
+        let retention = effective_cache_retention(&config, "https://api.anthropic.com/v1/messages");
         let extended_cache_ttl = matches!(retention, CacheRetention::Long);
         assert!(extended_cache_ttl, "Long retention must signal beta header");
     }
-
 }
-
-

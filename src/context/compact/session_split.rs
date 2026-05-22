@@ -124,7 +124,9 @@ pub async fn perform_session_split(
         .await
         .map_err(|e| SplitError::Failed(anyhow::anyhow!("emit child RunStarted: {e}")))?;
 
-    Ok(SplitOutcome { child_session_id: child })
+    Ok(SplitOutcome {
+        child_session_id: child,
+    })
 }
 
 /// Wrap a summary string in a `SessionEvent::SystemMessage`.
@@ -172,9 +174,16 @@ fn event_to_message(event: &SessionEvent) -> Option<UnifiedMessage> {
             // context so the summarizer sees them.
             Some(UnifiedMessage::user(content.clone()))
         }
-        SessionEvent::ToolResult { call_id, output, .. } => {
+        SessionEvent::ToolResult {
+            call_id, output, ..
+        } => {
             let text = output.value.as_str().unwrap_or_default().to_string();
-            Some(UnifiedMessage::tool_result(call_id.clone(), "", text, false))
+            Some(UnifiedMessage::tool_result(
+                call_id.clone(),
+                "",
+                text,
+                false,
+            ))
         }
         // Lifecycle, budget, fork, and error events are dropped.
         _ => None,
@@ -274,7 +283,9 @@ mod tests {
 
     impl RecordingRegistrar {
         fn new() -> Arc<Self> {
-            Arc::new(Self { registered: Mutex::new(vec![]) })
+            Arc::new(Self {
+                registered: Mutex::new(vec![]),
+            })
         }
 
         async fn keys(&self) -> Vec<SessionId> {
@@ -415,7 +426,9 @@ mod tests {
 
         // [0] SessionForked with the parent's key string.
         match &emitted[0].1 {
-            SessionEvent::SessionForked { parent_session_id, .. } => {
+            SessionEvent::SessionForked {
+                parent_session_id, ..
+            } => {
                 assert_eq!(parent_session_id, &parent.to_key_string());
             }
             other => panic!("expected SessionForked, got {other:?}"),

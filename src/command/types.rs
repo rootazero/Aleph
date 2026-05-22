@@ -7,7 +7,7 @@
 // In flat namespace mode, all commands are at root level.
 // CommandType::Namespace is deprecated - use source_type for categorization.
 
-use crate::dispatcher::ToolSourceType;
+use crate::tool_metadata::ToolSourceType;
 
 /// Command type determining behavior on selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

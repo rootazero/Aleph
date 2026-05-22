@@ -426,7 +426,7 @@ impl crate::tools::service::ToolService for StubToolService {
             name: name.to_string(),
         })
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }

@@ -77,13 +77,14 @@ impl SandboxSummary {
     /// - non-empty `fs_write`                      → `"workspace-write"`
     /// - `network == AllowAll && fs_write covers /` → `"danger-full-access"`
     pub fn from_baseline(backend: &'static str, caps: &SandboxCapabilities) -> Self {
-        let policy_tier = if covers_root(&caps.fs_write) && matches!(caps.network, NetworkPolicy::AllowAll) {
-            "danger-full-access"
-        } else if !caps.fs_write.is_empty() {
-            "workspace-write"
-        } else {
-            "read-only"
-        };
+        let policy_tier =
+            if covers_root(&caps.fs_write) && matches!(caps.network, NetworkPolicy::AllowAll) {
+                "danger-full-access"
+            } else if !caps.fs_write.is_empty() {
+                "workspace-write"
+            } else {
+                "read-only"
+            };
 
         let mut writable_roots: Vec<PathBuf> = caps.fs_write.iter().cloned().collect();
         writable_roots.sort();

@@ -1,6 +1,6 @@
-use rusqlite::{params, Result as SqliteResult};
-use super::{SecurityStore, current_timestamp_ms};
 use super::types::*;
+use super::{current_timestamp_ms, SecurityStore};
+use rusqlite::{params, Result as SqliteResult};
 
 impl SecurityStore {
     /// Insert a new token
@@ -34,10 +34,7 @@ impl SecurityStore {
     }
 
     /// Get token by hash
-    pub fn get_token_by_hash(
-        &self,
-        token_hash: &str,
-    ) -> SqliteResult<Option<TokenRow>> {
+    pub fn get_token_by_hash(&self, token_hash: &str) -> SqliteResult<Option<TokenRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT token_id, device_id, token_hash, role, scopes, issued_at, expires_at,
@@ -124,13 +121,9 @@ impl SecurityStore {
     }
 
     /// Load the persisted HMAC secret (if any) from the shared_token table.
-    pub fn get_shared_token_secret(
-        &self,
-    ) -> SqliteResult<Option<[u8; 32]>> {
+    pub fn get_shared_token_secret(&self) -> SqliteResult<Option<[u8; 32]>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT hmac_secret FROM shared_token LIMIT 1",
-        )?;
+        let mut stmt = conn.prepare("SELECT hmac_secret FROM shared_token LIMIT 1")?;
 
         let result = stmt.query_row([], |row| {
             let blob: Option<Vec<u8>> = row.get(0)?;
@@ -152,12 +145,9 @@ impl SecurityStore {
     }
 
     /// Load the persisted plaintext token (if any) from the shared_token table.
-    pub fn get_shared_token_plaintext(&self,
-    ) -> SqliteResult<Option<String>> {
+    pub fn get_shared_token_plaintext(&self) -> SqliteResult<Option<String>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT plaintext_token FROM shared_token LIMIT 1",
-        )?;
+        let mut stmt = conn.prepare("SELECT plaintext_token FROM shared_token LIMIT 1")?;
 
         let result = stmt.query_row([], |row| {
             let text: Option<String> = row.get(0)?;
@@ -180,14 +170,9 @@ impl SecurityStore {
     }
 
     /// Check if the given hash matches the stored shared token.
-    pub fn validate_shared_token_hash(
-        &self,
-        hash: &str,
-    ) -> SqliteResult<bool> {
+    pub fn validate_shared_token_hash(&self, hash: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT 1 FROM shared_token WHERE token_hash = ?1 LIMIT 1",
-        )?;
+        let mut stmt = conn.prepare("SELECT 1 FROM shared_token WHERE token_hash = ?1 LIMIT 1")?;
         let exists: Result<i32, _> = stmt.query_row(params![hash], |row| row.get(0));
         Ok(exists.is_ok())
     }
@@ -195,10 +180,7 @@ impl SecurityStore {
     // ========== Token Manager Secret Persistence ==========
 
     /// Store the TokenManager HMAC secret so device tokens survive restarts.
-    pub fn set_token_manager_secret(
-        &self,
-        secret: &[u8; 32],
-    ) -> SqliteResult<()> {
+    pub fn set_token_manager_secret(&self, secret: &[u8; 32]) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM token_manager_secret", [])?;
         conn.execute(
@@ -210,13 +192,9 @@ impl SecurityStore {
     }
 
     /// Load the persisted TokenManager HMAC secret (if any).
-    pub fn get_token_manager_secret(
-        &self,
-    ) -> SqliteResult<Option<[u8; 32]>> {
+    pub fn get_token_manager_secret(&self) -> SqliteResult<Option<[u8; 32]>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT hmac_secret FROM token_manager_secret LIMIT 1",
-        )?;
+        let mut stmt = conn.prepare("SELECT hmac_secret FROM token_manager_secret LIMIT 1")?;
 
         let result = stmt.query_row([], |row| {
             let blob: Option<Vec<u8>> = row.get(0)?;

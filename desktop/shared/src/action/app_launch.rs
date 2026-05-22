@@ -175,7 +175,7 @@ fn exe_name_matches(exe_path: &str, target: &str) -> bool {
 
 #[cfg(target_os = "windows")]
 fn windows_quit_app(app_name: &str) -> Result<()> {
-    use windows::Win32::Foundation::{BOOL, CloseHandle, HWND, LPARAM, WPARAM};
+    use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, WPARAM};
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
         PROCESS_QUERY_LIMITED_INFORMATION,
@@ -261,10 +261,22 @@ mod tests {
 
     #[test]
     fn exe_name_matches_basename_case_insensitive() {
-        assert!(exe_name_matches(r"C:\Windows\System32\notepad.exe", "notepad"));
-        assert!(exe_name_matches(r"C:\Windows\System32\notepad.exe", "Notepad"));
-        assert!(exe_name_matches(r"C:\Windows\System32\notepad.exe", "NOTEPAD.EXE"));
-        assert!(exe_name_matches(r"C:\Program Files\Chrome\chrome.exe", "chrome.exe"));
+        assert!(exe_name_matches(
+            r"C:\Windows\System32\notepad.exe",
+            "notepad"
+        ));
+        assert!(exe_name_matches(
+            r"C:\Windows\System32\notepad.exe",
+            "Notepad"
+        ));
+        assert!(exe_name_matches(
+            r"C:\Windows\System32\notepad.exe",
+            "NOTEPAD.EXE"
+        ));
+        assert!(exe_name_matches(
+            r"C:\Program Files\Chrome\chrome.exe",
+            "chrome.exe"
+        ));
     }
 
     #[test]

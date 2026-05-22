@@ -1,13 +1,13 @@
+use crate::config::types::generation::GenerationProviderConfig;
+use crate::config::Config;
 use crate::gateway::event_bus::GatewayEventBus;
-use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::generation_providers::helpers::*;
 use crate::gateway::handlers::generation_providers::{
     build_generation_provider_for_persistence, resolve_api_key, save_config, vault_key,
     GenerationProviderEntry, TestConnectionResult,
 };
+use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::config::Config;
-use crate::config::types::generation::GenerationProviderConfig;
 use crate::gateway::security::SharedTokenManager;
 use crate::generation::GenerationType;
 use crate::sync_primitives::Arc;

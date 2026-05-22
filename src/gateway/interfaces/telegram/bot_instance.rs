@@ -11,10 +11,7 @@ fn create_bot_with_proxy(token: &str, proxy_url: Option<&str>) -> Bot {
     match proxy_url {
         Some(url) if !url.is_empty() => {
             let client = teloxide::net::default_reqwest_settings()
-                .proxy(
-                    reqwest_legacy::Proxy::all(url)
-                        .expect("Invalid proxy URL"),
-                )
+                .proxy(reqwest_legacy::Proxy::all(url).expect("Invalid proxy URL"))
                 .build()
                 .expect("Failed to build HTTP client with proxy");
             Bot::with_client(token, client)
@@ -62,12 +59,7 @@ impl BotInstance {
     ///
     /// Updates `is_healthy` flag and returns the result.
     pub async fn health_check(&self) -> bool {
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            self.bot.get_me(),
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(10), self.bot.get_me()).await {
             Ok(Ok(_me)) => {
                 self.is_healthy.store(true, Ordering::Relaxed);
                 true

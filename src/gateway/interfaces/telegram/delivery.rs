@@ -108,12 +108,12 @@ fn error_class_to_kind(ec: &ErrorClass) -> ErrorKind {
 /// Returns the `ChatId` and an optional raw thread id (i32).
 pub(crate) fn parse_conversation_id(conv_id: &str) -> ChannelResult<(ChatId, Option<i32>)> {
     if let Some((chat, topic)) = conv_id.split_once(":topic:") {
-        let chat_id = chat
-            .parse::<i64>()
-            .map_err(|_| ChannelError::Internal(format!("Invalid chat_id in conversation_id: {}", conv_id)))?;
-        let thread_id = topic
-            .parse::<i32>()
-            .map_err(|_| ChannelError::Internal(format!("Invalid thread_id in conversation_id: {}", conv_id)))?;
+        let chat_id = chat.parse::<i64>().map_err(|_| {
+            ChannelError::Internal(format!("Invalid chat_id in conversation_id: {}", conv_id))
+        })?;
+        let thread_id = topic.parse::<i32>().map_err(|_| {
+            ChannelError::Internal(format!("Invalid thread_id in conversation_id: {}", conv_id))
+        })?;
         Ok((ChatId(chat_id), Some(thread_id)))
     } else {
         let chat_id = conv_id
@@ -857,14 +857,20 @@ mod tests {
     fn test_parse_conversation_id_invalid_chat() {
         let result = parse_conversation_id("not_a_number");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid conversation_id"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid conversation_id"));
     }
 
     #[test]
     fn test_parse_conversation_id_invalid_thread() {
         let result = parse_conversation_id("-100123456789:topic:not_a_number");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid thread_id"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid thread_id"));
     }
 
     // -----------------------------------------------------------------------

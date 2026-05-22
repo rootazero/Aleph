@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 
 use crate::error::Result;
 use crate::providers::adapter::{StopReason, TokenUsage};
-use crate::providers::delta::ProviderDelta;
 use crate::providers::delta::IndexIdTracker;
+use crate::providers::delta::ProviderDelta;
 use tracing::warn;
 
 use super::ToolNameMap;

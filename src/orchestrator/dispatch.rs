@@ -344,6 +344,9 @@ struct SessionLockGuard {
 
 impl Drop for SessionLockGuard {
     fn drop(&mut self) {
+        // unwrap_or_else handles lock poisoning: if the mutex was poisoned,
+        // we recover the inner data and still remove the key. A panic during
+        // drop would abort the process, so we must never panic here.
         let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
         guard.remove(&self.key);
     }

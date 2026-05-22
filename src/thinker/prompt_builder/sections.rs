@@ -2,7 +2,7 @@
 //!
 //! All `append_*` methods that build individual prompt sections live here.
 
-use crate::dispatcher::tool_index::HydrationResult;
+use crate::tool_metadata::tool_index::HydrationResult;
 
 use super::PromptBuilder;
 use crate::thinker::context::{DisableReason, DisabledTool, EnvironmentContract};

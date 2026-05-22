@@ -1,8 +1,8 @@
 //! Windows `EscapeAbort` implementation using a low-level keyboard hook.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use aleph_desktop::platform::EscapeAbort;
@@ -92,9 +92,7 @@ impl EscapeAbort for WindowsEscapeListener {
             if let Some(addr) = self.hook.lock().unwrap().take() {
                 // SAFETY: `addr` is an `HHOOK` previously returned by
                 // `SetWindowsHookExW` and not yet unhooked.
-                let _ = unsafe {
-                    UnhookWindowsHookEx(HHOOK(addr as *mut core::ffi::c_void))
-                };
+                let _ = unsafe { UnhookWindowsHookEx(HHOOK(addr as *mut core::ffi::c_void)) };
             }
             LISTENER_PTR.store(0, Ordering::SeqCst);
         }
@@ -128,9 +126,7 @@ extern "system" fn keyboard_hook_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, KBDLLHOOKSTRUCT, WM_KEYDOWN,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, KBDLLHOOKSTRUCT, WM_KEYDOWN};
 
     if code >= 0 && wparam.0 as u32 == WM_KEYDOWN {
         // SAFETY: for `WH_KEYBOARD_LL` with `code >= 0`, `lparam` points to a

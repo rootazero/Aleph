@@ -1,20 +1,20 @@
 //! ProtocolAdapter trait implementation for GeminiProtocol.
 
 use crate::config::ProviderConfig;
-use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use crate::providers::delta::ProviderDelta;
 use crate::providers::gemini::schema::clean_schema_for_gemini;
 use crate::providers::gemini::{GeminiFunctionDeclaration, GeminiToolConfig};
+use crate::tool_metadata::DEFAULT_MAX_TOKENS;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use tracing::debug;
 
-use super::GeminiProtocol;
 use super::sse::{parse_gemini_error_body, parse_gemini_sse_chunk};
+use super::GeminiProtocol;
 
 #[async_trait]
 impl ProtocolAdapter for GeminiProtocol {

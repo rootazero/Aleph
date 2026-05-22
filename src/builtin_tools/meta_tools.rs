@@ -24,8 +24,8 @@ use tokio::sync::RwLock;
 use tracing::debug;
 
 use super::error::ToolError;
-use crate::dispatcher::{ToolIndexEntry, ToolRegistry};
 use crate::error::Result;
+use crate::tool_metadata::{ToolIndexEntry, ToolRegistry};
 use crate::tools::AlephTool;
 
 // ============================================================================

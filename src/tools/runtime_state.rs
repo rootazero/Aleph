@@ -122,10 +122,7 @@ mod tests {
 
     #[test]
     fn fragment_available_renders_xml() {
-        let f = RuntimeStateFragment::available(
-            "delegate_task",
-            vec!["depth 2 of 4".to_string()],
-        );
+        let f = RuntimeStateFragment::available("delegate_task", vec!["depth 2 of 4".to_string()]);
         let xml = f.render_xml();
         assert!(xml.contains("<tool name=\"delegate_task\">"));
         assert!(xml.contains("<hint>depth 2 of 4</hint>"));

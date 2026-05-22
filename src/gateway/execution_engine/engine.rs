@@ -16,9 +16,9 @@ use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunStatus};
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::resilience::StateDatabase;
 
-use crate::dispatcher::UnifiedTool;
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
+use crate::tool_metadata::UnifiedTool;
 
 #[allow(dead_code)]
 /// Execution engine that bridges Gateway to the AgentLoop

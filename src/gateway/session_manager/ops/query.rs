@@ -1,6 +1,9 @@
 use rusqlite::{params, OptionalExtension};
 
-use super::{map_session_metadata, SessionIdentityMeta, SessionManager, SessionManagerError, SessionMetadata, SessionSearchResult, SessionState};
+use super::{
+    map_session_metadata, SessionIdentityMeta, SessionManager, SessionManagerError,
+    SessionMetadata, SessionSearchResult, SessionState,
+};
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::types::{MessageRecord, SessionPreview};
 
@@ -180,10 +183,7 @@ impl SessionManager {
     }
 
     /// Get current session state
-    pub async fn get_state(
-        &self,
-        key: &SessionKey,
-    ) -> Result<SessionState, SessionManagerError> {
+    pub async fn get_state(&self, key: &SessionKey) -> Result<SessionState, SessionManagerError> {
         let key_str = key.to_key_string();
         let conn = self
             .conn
@@ -222,10 +222,7 @@ impl SessionManager {
     }
 
     /// Count sessions by state
-    pub async fn count_by_state(
-        &self,
-        state: SessionState,
-    ) -> Result<usize, SessionManagerError> {
+    pub async fn count_by_state(&self, state: SessionState) -> Result<usize, SessionManagerError> {
         let conn = self
             .conn
             .lock()

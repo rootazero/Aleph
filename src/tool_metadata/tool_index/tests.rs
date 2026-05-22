@@ -8,14 +8,14 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::dispatcher::tool_index::{
-        HydratedTool, HydrationLevel, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta,
-        ToolRetrieval, ToolRetrievalConfig,
-    };
     use crate::memory::context::{MemoryFact, NoteType};
     use crate::memory::store::MemoryBackend;
     use crate::memory::store::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
+    use crate::tool_metadata::tool_index::{
+        HydratedTool, HydrationLevel, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta,
+        ToolRetrieval, ToolRetrievalConfig,
+    };
 
     /// Create a test database and memory dir using a temp directory for isolation
     async fn setup_test_db() -> (MemoryBackend, tempfile::TempDir) {
@@ -461,7 +461,7 @@ mod tests {
         fact_minimal.similarity_score = Some(0.45); // Between hard and soft
 
         // Import HydratedTool for from_fact
-        use crate::dispatcher::tool_index::HydratedTool;
+        use crate::tool_metadata::tool_index::HydratedTool;
 
         let tools = vec![
             HydratedTool::from_fact(fact_full, &config),
@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn test_hydration_pipeline_config_default() {
-        use crate::dispatcher::tool_index::HydrationPipelineConfig;
+        use crate::tool_metadata::tool_index::HydrationPipelineConfig;
 
         let config = HydrationPipelineConfig::default();
         assert_eq!(config.max_full_schema, 5);
@@ -693,7 +693,7 @@ mod tests {
 
     #[test]
     fn test_hydration_pipeline_config_builder() {
-        use crate::dispatcher::tool_index::HydrationPipelineConfig;
+        use crate::tool_metadata::tool_index::HydrationPipelineConfig;
 
         let config = HydrationPipelineConfig::default()
             .with_max_full_schema(10)
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn test_hydration_result_empty() {
-        use crate::dispatcher::tool_index::HydrationResult;
+        use crate::tool_metadata::tool_index::HydrationResult;
 
         let result = HydrationResult::empty();
         assert!(result.is_empty());
@@ -717,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_hydration_result_counts() {
-        use crate::dispatcher::tool_index::HydrationResult;
+        use crate::tool_metadata::tool_index::HydrationResult;
 
         let config = ToolRetrievalConfig::default();
 
@@ -783,10 +783,10 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_empty() {
-        use crate::dispatcher::tool_index::HydrationResult;
         use crate::thinker::layers::HydratedToolsLayer;
         use crate::thinker::prompt_builder::PromptConfig;
         use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
+        use crate::tool_metadata::tool_index::HydrationResult;
 
         let config = PromptConfig::default();
         let result = HydrationResult::empty();
@@ -801,10 +801,10 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_full_schema() {
-        use crate::dispatcher::tool_index::HydrationResult;
         use crate::thinker::layers::HydratedToolsLayer;
         use crate::thinker::prompt_builder::PromptConfig;
         use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
+        use crate::tool_metadata::tool_index::HydrationResult;
 
         let prompt_config = PromptConfig::default();
 
@@ -837,10 +837,10 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_summary() {
-        use crate::dispatcher::tool_index::HydrationResult;
         use crate::thinker::layers::HydratedToolsLayer;
         use crate::thinker::prompt_builder::PromptConfig;
         use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
+        use crate::tool_metadata::tool_index::HydrationResult;
 
         let prompt_config = PromptConfig::default();
 
@@ -871,10 +871,10 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_indexed() {
-        use crate::dispatcher::tool_index::HydrationResult;
         use crate::thinker::layers::HydratedToolsLayer;
         use crate::thinker::prompt_builder::PromptConfig;
         use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
+        use crate::tool_metadata::tool_index::HydrationResult;
 
         let prompt_config = PromptConfig::default();
 

@@ -142,7 +142,11 @@ impl SessionKey {
                         .map(|cd| cd.join(&normalized))
                         .unwrap_or(normalized)
                 };
-                debug!(cwd, ?final_path, "SessionKey: canonicalize failed, using normalized path");
+                debug!(
+                    cwd,
+                    ?final_path,
+                    "SessionKey: canonicalize failed, using normalized path"
+                );
                 final_path
             }),
         }
@@ -553,11 +557,16 @@ impl AcpAdapterManager {
         {
             let mut sessions = self.sessions.write().await;
             if let Some(session) = sessions.get_mut(&key) {
-                if session.is_alive() && session.state() != crate::acp::protocol::AcpSessionState::Error {
+                if session.is_alive()
+                    && session.state() != crate::acp::protocol::AcpSessionState::Error
+                {
                     return Ok(());
                 }
                 // Dead or error session — remove it
-                warn!(harness_id, "ACP session died or entered error state, respawning");
+                warn!(
+                    harness_id,
+                    "ACP session died or entered error state, respawning"
+                );
                 self.emit_persistence_event(super::AcpSessionEvent::Removed {
                     harness_id: harness_id.to_string(),
                     cwd: cwd.to_string(),

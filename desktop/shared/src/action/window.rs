@@ -127,7 +127,10 @@ fn windows_window_list() -> Result<Vec<WindowInfo>> {
         );
     }
 
-    info!(count = state.windows.len(), "Window list retrieved (Windows)");
+    info!(
+        count = state.windows.len(),
+        "Window list retrieved (Windows)"
+    );
     Ok(state.windows)
 }
 

@@ -425,15 +425,9 @@ mod tests {
         let base_ts = chrono::Utc::now().timestamp();
         for i in 0..4i64 {
             let tid = format!("task-{i}");
-            db.insert_agent_task(&AgentTask::new(
-                &tid,
-                "s",
-                "coder",
-                "x",
-                RiskLevel::Low,
-            ))
-            .await
-            .unwrap();
+            db.insert_agent_task(&AgentTask::new(&tid, "s", "coder", "x", RiskLevel::Low))
+                .await
+                .unwrap();
             let trace = TaskTrace {
                 id: 0,
                 task_id: tid.clone(),
@@ -452,10 +446,7 @@ mod tests {
         assert_eq!(page_a.len(), 2);
         let cursor = page_a.last().unwrap().last_timestamp;
 
-        let page_b = db
-            .list_trace_tasks_paged(2, Some(cursor))
-            .await
-            .unwrap();
+        let page_b = db.list_trace_tasks_paged(2, Some(cursor)).await.unwrap();
         assert!(!page_b.is_empty());
         for r in &page_b {
             assert!(

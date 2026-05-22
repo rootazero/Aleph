@@ -1,5 +1,5 @@
-use crate::config::GenerationConfig;
 use crate::config::types::generation::GenerationProviderConfig;
+use crate::config::GenerationConfig;
 use crate::generation::GenerationType;
 
 /// Get an immutable reference to the typed provider map for a given generation type string.

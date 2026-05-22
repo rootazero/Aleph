@@ -16,9 +16,7 @@ use alephcore::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus
 use alephcore::gateway::ResumeCoordinator;
 use alephcore::routing::session_key::SessionKey;
 use alephcore::session::events::{now_ms, RunOutcome, SessionEvent, TurnId};
-use alephcore::session::store::{
-    migrate_add_session_events, SessionEventStore, SqliteEventStore,
-};
+use alephcore::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
 use alephcore::ResumeConfig;
 
 /// Mock `ExecutionAdapter` that records every `execute` call's
@@ -43,10 +41,10 @@ impl ExecutionAdapter for RecordingAdapter {
         _agent: Arc<AgentInstance>,
         _emitter: Arc<dyn EventEmitter + Send + Sync>,
     ) -> Result<(), ExecutionError> {
-        self.calls
-            .lock()
-            .await
-            .push((request.session_key.to_key_string(), request.metadata.clone()));
+        self.calls.lock().await.push((
+            request.session_key.to_key_string(),
+            request.metadata.clone(),
+        ));
         Ok(())
     }
 
@@ -228,9 +226,18 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
     let at = now_ms();
     // 3 consecutive RunStarted with no RunFinished == default max_attempts.
     for (i, ev) in [
-        SessionEvent::RunStarted { run_id: "r1".into(), at },
-        SessionEvent::RunStarted { run_id: "r2".into(), at: at + 1 },
-        SessionEvent::RunStarted { run_id: "r3".into(), at: at + 2 },
+        SessionEvent::RunStarted {
+            run_id: "r1".into(),
+            at,
+        },
+        SessionEvent::RunStarted {
+            run_id: "r2".into(),
+            at: at + 1,
+        },
+        SessionEvent::RunStarted {
+            run_id: "r3".into(),
+            at: at + 2,
+        },
     ]
     .into_iter()
     .enumerate()
@@ -256,7 +263,10 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
     assert_eq!(report.scanned, 1);
     assert_eq!(report.resumed, 0);
     assert_eq!(report.abandoned, 1);
-    assert!(calls.lock().await.is_empty(), "capped run must not re-trigger");
+    assert!(
+        calls.lock().await.is_empty(),
+        "capped run must not re-trigger"
+    );
 
     // An `Abandoned` marker was appended so the run is not re-scanned.
     let all = store.load_all_events(&sid).await.unwrap();

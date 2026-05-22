@@ -1,18 +1,18 @@
 //! Tool refresh source for extension/plugin tools.
 
-use crate::sync_primitives::{Arc, Mutex};
 use crate::executor::ToolRegistry;
 use crate::gateway::agent_instance::AgentInstance;
+use crate::sync_primitives::{Arc, Mutex};
 
 /// Convert a plugin tool registration to a unified tool.
 pub(super) fn plugin_tool_to_unified_tool(
     tool: crate::extension::ToolRegistration,
-) -> crate::dispatcher::UnifiedTool {
-    let mut unified = crate::dispatcher::UnifiedTool::new(
+) -> crate::tool_metadata::UnifiedTool {
+    let mut unified = crate::tool_metadata::UnifiedTool::new(
         format!("plugin:{}:{}", tool.plugin_id, tool.name),
         &tool.name,
         &tool.description,
-        crate::dispatcher::ToolSource::Plugin {
+        crate::tool_metadata::ToolSource::Plugin {
             plugin_id: tool.plugin_id.clone(),
         },
     );
@@ -24,7 +24,7 @@ pub(super) fn plugin_tool_to_unified_tool(
 pub(super) fn active_plugin_tools_for_agent(
     extension_manager: &crate::extension::ExtensionManager,
     agent: &AgentInstance,
-) -> Vec<crate::dispatcher::UnifiedTool> {
+) -> Vec<crate::tool_metadata::UnifiedTool> {
     extension_manager
         .active_plugin_tools_snapshot()
         .into_iter()
@@ -39,7 +39,7 @@ pub(super) struct ExtensionToolRefreshSource<R: ToolRegistry + 'static> {
     pub(super) extension_manager: Arc<crate::extension::ExtensionManager>,
     pub(super) tool_registry: Arc<R>,
     pub(super) agent: Arc<AgentInstance>,
-    pub(super) base_tools: Vec<crate::dispatcher::UnifiedTool>,
+    pub(super) base_tools: Vec<crate::tool_metadata::UnifiedTool>,
     pub(super) default_working_dir: Option<String>,
     last_seen_revision: Arc<Mutex<u64>>,
 }
@@ -49,7 +49,7 @@ impl<R: ToolRegistry + 'static> ExtensionToolRefreshSource<R> {
         extension_manager: Arc<crate::extension::ExtensionManager>,
         tool_registry: Arc<R>,
         agent: Arc<AgentInstance>,
-        base_tools: Vec<crate::dispatcher::UnifiedTool>,
+        base_tools: Vec<crate::tool_metadata::UnifiedTool>,
         default_working_dir: Option<String>,
     ) -> Self {
         Self {
@@ -62,7 +62,7 @@ impl<R: ToolRegistry + 'static> ExtensionToolRefreshSource<R> {
         }
     }
 
-    pub(super) fn merged_tools(&self) -> Vec<crate::dispatcher::UnifiedTool> {
+    pub(super) fn merged_tools(&self) -> Vec<crate::tool_metadata::UnifiedTool> {
         let mut tools = self.base_tools.clone();
         tools.extend(active_plugin_tools_for_agent(
             &self.extension_manager,

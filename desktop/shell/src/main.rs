@@ -30,8 +30,7 @@ const SHELL_MARKER_JS: &str = "var e=document.documentElement;\
     e.setAttribute('data-shell','aleph-tauri');\
     e.setAttribute('data-platform','macos');";
 #[cfg(not(target_os = "macos"))]
-const SHELL_MARKER_JS: &str =
-    "document.documentElement.setAttribute('data-shell','aleph-tauri');";
+const SHELL_MARKER_JS: &str = "document.documentElement.setAttribute('data-shell','aleph-tauri');";
 
 fn main() {
     init_tracing();
@@ -86,11 +85,7 @@ fn main() {
 
 /// Create the single main window, hosting the splash until the daemon is up.
 fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let mut builder = WebviewWindowBuilder::new(
-        app,
-        "main",
-        WebviewUrl::App("index.html".into()),
-    )
+    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Aleph")
         .inner_size(1180.0, 800.0)
         .min_inner_size(720.0, 520.0)
@@ -174,7 +169,9 @@ fn show_daemon_error(handle: &tauri::AppHandle, message: &str) {
     };
     let _ = window.show();
     let safe = message.replace('\\', "\\\\").replace('\'', "\\'");
-    let _ = window.eval(format!("window.__alephError && window.__alephError('{safe}')"));
+    let _ = window.eval(format!(
+        "window.__alephError && window.__alephError('{safe}')"
+    ));
 }
 
 /// Enable launch-at-login on first run only, leaving later user choices
@@ -182,8 +179,7 @@ fn show_daemon_error(handle: &tauri::AppHandle, message: &str) {
 fn ensure_autostart(app: &tauri::AppHandle) {
     use tauri_plugin_autostart::ManagerExt;
 
-    let Some(marker) = dirs::home_dir().map(|h| h.join(".aleph/.desktop-shell-autostart"))
-    else {
+    let Some(marker) = dirs::home_dir().map(|h| h.join(".aleph/.desktop-shell-autostart")) else {
         return;
     };
     if marker.exists() {
@@ -223,7 +219,7 @@ fn apply_macos_vibrancy(handle: &tauri::AppHandle) {
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
 
-    let filter = EnvFilter::try_from_env("ALEPH_SHELL_LOG")
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter =
+        EnvFilter::try_from_env("ALEPH_SHELL_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }

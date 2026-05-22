@@ -15,10 +15,7 @@ use serde_json::{json, Value};
 /// includes `"strict": true` inside the `json_schema` block to opt into
 /// OpenAI's strict-mode token mask.
 /// Degrades `JsonSchema` to `JsonObject` when `supports_strict` is false.
-pub fn to_chat_response_format(
-    fmt: &ResponseFormat,
-    supports_strict: bool,
-) -> Option<Value> {
+pub fn to_chat_response_format(fmt: &ResponseFormat, supports_strict: bool) -> Option<Value> {
     match fmt {
         ResponseFormat::Text => None,
         ResponseFormat::JsonObject => Some(json!({"type": "json_object"})),
@@ -49,10 +46,7 @@ pub fn to_chat_response_format(
 /// Build the Responses protocol's `text.format` typed value.
 /// Returns `None` when `Text` (omit format slot inside TextConfig).
 /// Degrades `JsonSchema` to `JsonObject` when `supports_strict` is false.
-pub fn to_responses_text_format(
-    fmt: &ResponseFormat,
-    supports_strict: bool,
-) -> Option<TextFormat> {
+pub fn to_responses_text_format(fmt: &ResponseFormat, supports_strict: bool) -> Option<TextFormat> {
     match fmt {
         ResponseFormat::Text => None,
         ResponseFormat::JsonObject => Some(TextFormat::JsonObject),
@@ -126,8 +120,14 @@ mod tests {
         assert_eq!(v["json_schema"]["name"], json!("thing"));
         // Normalization adds additionalProperties: false; check structural fields individually.
         assert_eq!(v["json_schema"]["schema"]["type"], json!("object"));
-        assert_eq!(v["json_schema"]["schema"]["properties"], schema["properties"]);
-        assert_eq!(v["json_schema"]["schema"]["additionalProperties"], json!(false));
+        assert_eq!(
+            v["json_schema"]["schema"]["properties"],
+            schema["properties"]
+        );
+        assert_eq!(
+            v["json_schema"]["schema"]["additionalProperties"],
+            json!(false)
+        );
         assert_eq!(v["json_schema"]["strict"], json!(true));
     }
 
@@ -149,10 +149,13 @@ mod tests {
     #[test]
     fn responses_json_schema_preserves_name_and_schema() {
         let schema = json!({"type": "object", "properties": {"y": {"type": "number"}}});
-        let result = to_responses_text_format(&ResponseFormat::JsonSchema {
-            name: "config".into(),
-            schema: schema.clone(),
-        }, true)
+        let result = to_responses_text_format(
+            &ResponseFormat::JsonSchema {
+                name: "config".into(),
+                schema: schema.clone(),
+            },
+            true,
+        )
         .unwrap();
         match result {
             TextFormat::JsonSchema { name, schema: s } => {

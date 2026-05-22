@@ -753,11 +753,11 @@ mod tests {
         let first = budget.before_turn(&msgs, "", 0);
         assert_eq!(first, LoopDirective::SplitSession);
         budget.record_split(); // split_count → 1 == max_splits
-        // Re-prime: reset the consecutive counter so we can trip again cleanly
-        // (pressure is still in warning band; breaker consecutive_count is >= max after the trip)
-        // We need circuit_breaker_max more warning-band calls to trip again.
+                               // Re-prime: reset the consecutive counter so we can trip again cleanly
+                               // (pressure is still in warning band; breaker consecutive_count is >= max after the trip)
+                               // We need circuit_breaker_max more warning-band calls to trip again.
         budget.before_turn(&msgs, "", 0); // consecutive_count = 1 (CompactAndContinue)
-        // Trip the breaker again: split_count=1 == max_splits=1 → FinalReply
+                                          // Trip the breaker again: split_count=1 == max_splits=1 → FinalReply
         let second = budget.before_turn(&msgs, "", 0);
         assert_eq!(
             second,

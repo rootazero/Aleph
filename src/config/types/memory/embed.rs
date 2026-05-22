@@ -133,5 +133,3 @@ impl Default for EmbeddingSettings {
         }
     }
 }
-
-

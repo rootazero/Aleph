@@ -76,8 +76,8 @@ pub use prompts::{
 pub use protocol::{
     ApprovalDecision, ApprovalRequest, ApprovalResponse, IncludeContext, SamplingChunk,
 };
-pub use resources::{McpResourceManager, ResourceContent};
 pub use redact::redact_mcp_error;
+pub use resources::{McpResourceManager, ResourceContent};
 pub use sampling::{
     extract_system_prompt, sampling_messages_to_chat, SamplingCallback, SamplingHandler,
 };

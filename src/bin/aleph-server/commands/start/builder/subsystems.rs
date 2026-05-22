@@ -203,7 +203,7 @@ pub(in crate::commands::start) async fn initialize_channels(
     server: &mut GatewayServer,
     app_config: &alephcore::Config,
     app_config_arc: &Arc<tokio::sync::RwLock<alephcore::Config>>,
-    dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
+    dispatch_registry: Option<Arc<alephcore::tool_metadata::ToolRegistry>>,
     daemon: bool,
     vault: Arc<alephcore::gateway::security::SharedTokenManager>,
 ) -> Arc<ChannelRegistry> {
@@ -393,7 +393,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     group_chat_executor: Option<Arc<alephcore::group_chat::GroupChatExecutor>>,
     workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
-    dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
+    dispatch_registry: Option<Arc<alephcore::tool_metadata::ToolRegistry>>,
     session_store: Option<Arc<dyn alephcore::gateway::session_store::SessionStore>>,
     app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
     generation_registry: Option<Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>>,

@@ -188,12 +188,7 @@ impl AgentHarness {
     pub fn duration_ms(&self) -> u64 {
         self.started_at
             .get()
-            .map(|t| {
-                t.elapsed()
-                    .as_millis()
-                    .try_into()
-                    .unwrap_or(u64::MAX)
-            })
+            .map(|t| t.elapsed().as_millis().try_into().unwrap_or(u64::MAX))
             .unwrap_or(0)
     }
 
@@ -207,10 +202,7 @@ impl AgentHarness {
         success: bool,
         error: Option<String>,
     ) {
-        let mut guard = self
-            .tool_timeline
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.tool_timeline.lock().unwrap_or_else(|e| e.into_inner());
         guard.push(ToolInvocation {
             id,
             name,
@@ -664,8 +656,7 @@ pub(crate) fn canonical_json_string(value: &Value) -> String {
             other => other.clone(),
         }
     }
-    serde_json::to_string(&canon(value))
-        .expect("canonical JSON serialization should never fail")
+    serde_json::to_string(&canon(value)).expect("canonical JSON serialization should never fail")
 }
 
 /// Find the most recent `TurnStarted` id; generate a fresh one if none exists.
@@ -993,7 +984,11 @@ mod tests {
         assert_eq!(bd.cache_read, 5);
         assert_eq!(bd.cache_creation, 3);
         assert_eq!(bd.reasoning, 99);
-        assert_eq!(bd.total(), 38, "breakdown.total() must agree with total_tokens()");
+        assert_eq!(
+            bd.total(),
+            38,
+            "breakdown.total() must agree with total_tokens()"
+        );
 
         // Clean text-only run keeps the default Completed terminate reason.
         assert_eq!(
@@ -1114,9 +1109,7 @@ mod tests {
         // phase string comes from `TurnPhase::Think` because the sleeping
         // provider hangs the LLM call (not a tool call).
         match harness.terminate_reason() {
-            crate::orchestrator::dispatch::TerminateReason::TurnTimeout {
-                phase, ..
-            } => {
+            crate::orchestrator::dispatch::TerminateReason::TurnTimeout { phase, .. } => {
                 assert!(
                     phase.to_lowercase().contains("think"),
                     "expected think-phase timeout, got phase={phase}",

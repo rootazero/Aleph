@@ -78,8 +78,7 @@ pub fn KanbanView() -> impl IntoView {
         all.into_iter()
             .filter(|t| {
                 t.subject.to_lowercase().contains(&query)
-                    || t
-                        .owner
+                    || t.owner
                         .as_deref()
                         .is_some_and(|o| o.to_lowercase().contains(&query))
             })

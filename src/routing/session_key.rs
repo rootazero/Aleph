@@ -529,11 +529,13 @@ impl SessionKey {
             // agent:id:{task_type}:{task_id}
             // Listed types are those used in the codebase; unknown types will
             // not round-trip through parse (format ambiguity with Main epoch).
-            [task_type @ ("cron" | "webhook" | "scheduled" | "team" | "heartbeat" | "a2a"), task_id] => Some(Self::Task {
-                agent_id: agent_id.to_string(),
-                task_type: task_type.to_string(),
-                task_id: task_id.to_string(),
-            }),
+            [task_type @ ("cron" | "webhook" | "scheduled" | "team" | "heartbeat" | "a2a"), task_id] => {
+                Some(Self::Task {
+                    agent_id: agent_id.to_string(),
+                    task_type: task_type.to_string(),
+                    task_id: task_id.to_string(),
+                })
+            }
 
             // agent:id:main (or any single token as main_key)
             [main_key] => Some(Self::Main {
@@ -811,9 +813,7 @@ mod tests {
     #[test]
     fn test_parse_subagent() {
         let key = SessionKey::parse("agent:main:main:subagent:coding").unwrap();
-        assert!(
-            matches!(key, SessionKey::Subagent { subagent_id, .. } if subagent_id == "coding")
-        );
+        assert!(matches!(key, SessionKey::Subagent { subagent_id, .. } if subagent_id == "coding"));
     }
 
     #[test]

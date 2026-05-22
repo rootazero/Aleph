@@ -8,17 +8,31 @@ use rand::Rng;
 /// Source of external content being sanitized.
 #[derive(Debug, Clone)]
 pub enum ContentSource {
-    WebFetch { url: String },
-    McpTool { server: String, tool: String },
-    Webhook { sender: String },
-    Email { from: String, subject: String },
+    WebFetch {
+        url: String,
+    },
+    McpTool {
+        server: String,
+        tool: String,
+    },
+    Webhook {
+        sender: String,
+    },
+    Email {
+        from: String,
+        subject: String,
+    },
     BrowserContent,
-    UserUpload { filename: String },
+    UserUpload {
+        filename: String,
+    },
     /// A tool execution error replayed back into the conversation. The
     /// error message is untrusted text by definition (it may contain
     /// reflected user input or scraped remote data), so we fence it the
     /// same way as the other external sources.
-    ToolError { tool: String },
+    ToolError {
+        tool: String,
+    },
 }
 
 impl ContentSource {

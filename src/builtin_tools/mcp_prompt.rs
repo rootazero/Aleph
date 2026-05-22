@@ -10,9 +10,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::error::Result;
 use crate::mcp::manager::McpManagerHandle;
+use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
 
 /// Arguments for mcp_get_prompt tool

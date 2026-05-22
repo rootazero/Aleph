@@ -2,8 +2,8 @@
 //!
 //! Delegates all command resolution to ToolRegistry.
 
-use crate::dispatcher::{ToolRegistry, ToolSource, ToolSourceType, UnifiedTool};
 use crate::sync_primitives::Arc;
+use crate::tool_metadata::{ToolRegistry, ToolSource, ToolSourceType, UnifiedTool};
 
 /// Parsed command result
 #[derive(Debug, Clone)]

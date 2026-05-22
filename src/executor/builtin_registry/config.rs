@@ -4,11 +4,11 @@ use crate::sync_primitives::{Arc, RwLock};
 
 use crate::acp::manager::AcpAdapterManager;
 use crate::config::{Config, ConfigPatcher};
-use crate::dispatcher::ToolRegistry as DispatcherToolRegistry;
 use crate::gateway::context::GatewayContext;
 use crate::generation::GenerationProviderRegistry;
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
+use crate::tool_metadata::ToolRegistry as DispatcherToolRegistry;
 
 /// Configuration for builtin tools
 #[derive(Clone, Default)]

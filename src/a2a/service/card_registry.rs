@@ -1,8 +1,8 @@
-use chrono::Utc;
 use crate::a2a::config::A2AConfig;
 use crate::a2a::domain::*;
 use crate::a2a::port::*;
 use crate::sync_primitives::AsyncRwLock;
+use chrono::Utc;
 
 /// In-memory registry of known A2A agents.
 ///

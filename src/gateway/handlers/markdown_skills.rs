@@ -664,14 +664,11 @@ mod tests {
             response.error.is_some(),
             "dangerous bundle must be rejected, but got success"
         );
-        let err_msg = response
-            .error
-            .as_ref()
-            .unwrap()
-            .message
-            .to_lowercase();
+        let err_msg = response.error.as_ref().unwrap().message.to_lowercase();
         assert!(
-            err_msg.contains("security") || err_msg.contains("blocked") || err_msg.contains("dangerous"),
+            err_msg.contains("security")
+                || err_msg.contains("blocked")
+                || err_msg.contains("dangerous"),
             "unexpected error message: {err_msg}"
         );
         assert_eq!(

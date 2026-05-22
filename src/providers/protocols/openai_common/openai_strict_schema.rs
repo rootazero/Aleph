@@ -76,9 +76,7 @@ pub fn ensure_openai_tool_envelope(schema: &mut Value) {
             };
             if let Some(Value::Object(props)) = branch_obj.get("properties") {
                 for (k, v) in props {
-                    merged_props
-                        .entry(k.clone())
-                        .or_insert_with(|| v.clone());
+                    merged_props.entry(k.clone()).or_insert_with(|| v.clone());
                 }
             }
             if let Some(Value::Array(req)) = branch_obj.get("required") {
@@ -244,10 +242,13 @@ fn normalize_node(
             // Case 1: exactly ["null", X] with one non-null type → anyOf transform
             if types.len() == 2 {
                 let null_idx = types.iter().position(|t| t.as_str() == Some("null"));
-                let other_idx = types.iter().position(|t| t.as_str().is_some_and(|s| s != "null"));
+                let other_idx = types
+                    .iter()
+                    .position(|t| t.as_str().is_some_and(|s| s != "null"));
                 if let (Some(_), Some(other)) = (null_idx, other_idx) {
                     let other_type = types[other].clone();
-                    let mut non_null_branch: serde_json::Map<String, Value> = map.iter()
+                    let mut non_null_branch: serde_json::Map<String, Value> = map
+                        .iter()
                         .filter(|(k, _)| k.as_str() != "type")
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
@@ -284,10 +285,7 @@ fn normalize_node(
             };
         }
 
-        let is_object = map
-            .get("type")
-            .and_then(|t| t.as_str())
-            == Some("object");
+        let is_object = map.get("type").and_then(|t| t.as_str()) == Some("object");
 
         if is_object {
             if !map.contains_key("properties") {
@@ -342,7 +340,10 @@ mod tests {
                 "name": { "type": "string" }
             }
         });
-        assert_eq!(normalize_strict_schema(&mut schema, false), StrictResult::Ok);
+        assert_eq!(
+            normalize_strict_schema(&mut schema, false),
+            StrictResult::Ok
+        );
         assert_eq!(schema["additionalProperties"], false);
     }
 
@@ -351,7 +352,10 @@ mod tests {
         let mut schema = serde_json::json!({
             "type": "object"
         });
-        assert_eq!(normalize_strict_schema(&mut schema, false), StrictResult::Ok);
+        assert_eq!(
+            normalize_strict_schema(&mut schema, false),
+            StrictResult::Ok
+        );
         assert!(schema["properties"].is_object());
         assert_eq!(schema["additionalProperties"], false);
     }
@@ -369,7 +373,10 @@ mod tests {
                 }
             }
         });
-        assert_eq!(normalize_strict_schema(&mut schema, false), StrictResult::Ok);
+        assert_eq!(
+            normalize_strict_schema(&mut schema, false),
+            StrictResult::Ok
+        );
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["properties"]["user"]["additionalProperties"], false);
     }
@@ -382,7 +389,10 @@ mod tests {
         });
         assert_eq!(normalize_strict_schema(&mut schema, true), StrictResult::Ok);
         assert_eq!(schema["strict"], true);
-        assert!(!schema["properties"].as_object().unwrap().contains_key("strict"));
+        assert!(!schema["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("strict"));
     }
 
     #[test]
@@ -396,7 +406,10 @@ mod tests {
                 }
             }
         });
-        assert_eq!(normalize_strict_schema(&mut schema, false), StrictResult::Ok);
+        assert_eq!(
+            normalize_strict_schema(&mut schema, false),
+            StrictResult::Ok
+        );
         assert_eq!(schema["items"]["additionalProperties"], false);
     }
 
@@ -414,7 +427,10 @@ mod tests {
                 }
             ]
         });
-        assert_eq!(normalize_strict_schema(&mut schema, false), StrictResult::Ok);
+        assert_eq!(
+            normalize_strict_schema(&mut schema, false),
+            StrictResult::Ok
+        );
         assert_eq!(schema["anyOf"][0]["additionalProperties"], false);
         assert_eq!(schema["anyOf"][1]["additionalProperties"], false);
     }
@@ -428,7 +444,10 @@ mod tests {
                 "name": { "type": "string" }
             }
         });
-        assert_eq!(normalize_strict_schema(&mut schema, false), StrictResult::Ok);
+        assert_eq!(
+            normalize_strict_schema(&mut schema, false),
+            StrictResult::Ok
+        );
         let req = schema["required"].as_array().unwrap();
         assert_eq!(req.len(), 1);
         assert_eq!(req[0], "name");
@@ -439,8 +458,14 @@ mod tests {
         let mut schema = serde_json::json!({
             "type": "string"
         });
-        assert_eq!(normalize_strict_schema(&mut schema, false), StrictResult::Ok);
-        assert!(!schema.as_object().unwrap().contains_key("additionalProperties"));
+        assert_eq!(
+            normalize_strict_schema(&mut schema, false),
+            StrictResult::Ok
+        );
+        assert!(!schema
+            .as_object()
+            .unwrap()
+            .contains_key("additionalProperties"));
     }
 
     #[test]
@@ -624,7 +649,10 @@ mod tests {
             "description": "raw value"
         });
         lenient_multi_type_rewrite(&mut schema);
-        assert!(schema.get("type").is_none(), "type stripped for non-null multi");
+        assert!(
+            schema.get("type").is_none(),
+            "type stripped for non-null multi"
+        );
         assert_eq!(schema["description"], "raw value", "sibling keys preserved");
     }
 

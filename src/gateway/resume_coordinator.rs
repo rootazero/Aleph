@@ -74,16 +74,13 @@ pub(crate) fn classify_markers(markers: &[SessionEventRecord]) -> ScanVerdict {
 /// every `ToolCallRequested` whose `call_id` has no matching `ToolResult`
 /// or `ToolError`. The returned events are ready to append to the log; the
 /// caller emits them in order. An already-answered call yields nothing.
-pub(crate) fn compute_boundary_repairs(
-    events: &[SessionEventRecord],
-) -> Vec<SessionEvent> {
+pub(crate) fn compute_boundary_repairs(events: &[SessionEventRecord]) -> Vec<SessionEvent> {
     use std::collections::HashSet;
 
     let mut answered: HashSet<&str> = HashSet::new();
     for record in events {
         match &record.event {
-            SessionEvent::ToolResult { call_id, .. }
-            | SessionEvent::ToolError { call_id, .. } => {
+            SessionEvent::ToolResult { call_id, .. } | SessionEvent::ToolError { call_id, .. } => {
                 answered.insert(call_id.as_str());
             }
             _ => {}
@@ -96,14 +93,12 @@ pub(crate) fn compute_boundary_repairs(
         .filter_map(|record| match &record.event {
             SessionEvent::ToolCallRequested {
                 turn_id, call_id, ..
-            } if !answered.contains(call_id.as_str()) => {
-                Some(SessionEvent::ToolError {
-                    turn_id: *turn_id,
-                    call_id: call_id.clone(),
-                    error: "interrupted by server restart".to_string(),
-                    at,
-                })
-            }
+            } if !answered.contains(call_id.as_str()) => Some(SessionEvent::ToolError {
+                turn_id: *turn_id,
+                call_id: call_id.clone(),
+                error: "interrupted by server restart".to_string(),
+                at,
+            }),
             _ => None,
         })
         .collect()
@@ -317,13 +312,9 @@ impl ResumeCoordinator {
             .map_err(|e| SessionError::Other(format!("resume semaphore closed: {e}")))?;
 
         let agent_id = session_id.agent_id().to_string();
-        let agent = self
-            .agent_registry
-            .get(&agent_id)
-            .await
-            .ok_or_else(|| {
-                SessionError::Other(format!("resume: agent '{agent_id}' not registered"))
-            })?;
+        let agent = self.agent_registry.get(&agent_id).await.ok_or_else(|| {
+            SessionError::Other(format!("resume: agent '{agent_id}' not registered"))
+        })?;
 
         let mut metadata: HashMap<String, String> = HashMap::new();
         metadata.insert("resume".to_string(), "true".to_string());
@@ -410,10 +401,7 @@ mod tests {
 
     #[test]
     fn classify_clean_when_last_marker_is_finished() {
-        let markers = vec![
-            rec(1, run_started(10), 10),
-            rec(2, run_finished(20), 20),
-        ];
+        let markers = vec![rec(1, run_started(10), 10), rec(2, run_finished(20), 20)];
         assert_eq!(classify_markers(&markers), ScanVerdict::Clean);
     }
 

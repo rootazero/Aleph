@@ -105,15 +105,15 @@ pub fn store_and_strip_channel_secrets(
 ///
 /// When `channel.start` RPC recreates a Telegram channel from config,
 /// it needs to re-attach the ToolRegistry so slash commands are registered.
-static TELEGRAM_TOOL_REGISTRY: OnceLock<Arc<crate::dispatcher::ToolRegistry>> = OnceLock::new();
+static TELEGRAM_TOOL_REGISTRY: OnceLock<Arc<crate::tool_metadata::ToolRegistry>> = OnceLock::new();
 
 /// Store ToolRegistry for use when recreating Telegram channels.
-pub fn set_telegram_tool_registry(registry: Arc<crate::dispatcher::ToolRegistry>) {
+pub fn set_telegram_tool_registry(registry: Arc<crate::tool_metadata::ToolRegistry>) {
     let _ = TELEGRAM_TOOL_REGISTRY.set(registry);
 }
 
 /// Get cached ToolRegistry for Telegram channel recreation.
-fn get_telegram_tool_registry() -> Option<Arc<crate::dispatcher::ToolRegistry>> {
+fn get_telegram_tool_registry() -> Option<Arc<crate::tool_metadata::ToolRegistry>> {
     TELEGRAM_TOOL_REGISTRY.get().cloned()
 }
 

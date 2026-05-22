@@ -54,18 +54,21 @@ impl ToolService for McpScopedToolService {
         if let Some(d) = self.parent.describe(name).await {
             return Some(d);
         }
-        self.extras.iter().find(|t| t.name == name).map(|t| ToolDefinition {
-            name: t.name.clone(),
-            description: t.description.clone(),
-            input_schema: t.parameters.clone(),
-            source: ToolSource::Extension {
-                plugin_id: t.plugin_id.clone(),
-            },
-            metadata: ToolDefinitionMetadata::default(),
-        })
+        self.extras
+            .iter()
+            .find(|t| t.name == name)
+            .map(|t| ToolDefinition {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                input_schema: t.parameters.clone(),
+                source: ToolSource::Extension {
+                    plugin_id: t.plugin_id.clone(),
+                },
+                metadata: ToolDefinitionMetadata::default(),
+            })
     }
 
-    fn dispatcher_schema(&self) -> Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
         // For Stage I MVP, compute merged schema from list snapshot.
         // AllowlistToolService above us gates which tools the LLM actually sees,
         // so extras not in the allowlist are filtered out there.
@@ -95,7 +98,7 @@ impl ToolService for McpScopedToolService {
             return parent_schema;
         }
         let extra_schema = to_dispatcher_form(&extra_defs);
-        let mut merged: Vec<crate::dispatcher::ToolDefinition> =
+        let mut merged: Vec<crate::tool_metadata::ToolDefinition> =
             parent_schema.iter().cloned().collect();
         merged.extend(extra_schema.iter().cloned());
         merged.into()

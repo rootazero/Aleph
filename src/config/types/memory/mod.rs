@@ -13,13 +13,13 @@ pub mod reflection;
 mod tests;
 
 pub use assembler::{AssemblerConfig, AssemblyLogConfig, FallbackSkeleton};
+pub use defaults::*;
 pub use dreaming::{DreamingConfig, MemoryDecayPolicy};
 pub use embed::{EmbeddingPreset, EmbeddingProviderConfig, EmbeddingSettings};
 pub use ingest::{CompoundIngestConfig, CuratedSection, QueryFilerConfig};
 pub use orientation::OrientationConfig;
 pub use profile::UserProfileConfig;
 pub use reflection::ReflectionConfig;
-pub use defaults::*;
 
 /// Controls how memory is surfaced to the LLM.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

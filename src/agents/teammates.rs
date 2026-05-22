@@ -36,16 +36,15 @@ impl TeammateManager {
             .await
         {
             Ok(team) => Ok(team.id),
-            Err(e) => {
-                self.team_store
-                    .get_team_by_name(team_name)
-                    .await?
-                    .map(|t| t.id)
-                    .ok_or_else(|| crate::error::AlephError::Other {
-                        message: format!("Failed to create or find team '{}': {}", team_name, e),
-                        suggestion: None,
-                    })
-            }
+            Err(e) => self
+                .team_store
+                .get_team_by_name(team_name)
+                .await?
+                .map(|t| t.id)
+                .ok_or_else(|| crate::error::AlephError::Other {
+                    message: format!("Failed to create or find team '{}': {}", team_name, e),
+                    suggestion: None,
+                }),
         }
     }
 

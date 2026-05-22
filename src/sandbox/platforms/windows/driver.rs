@@ -241,9 +241,11 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 Some(policy_json) => {
                     let aleph_exe = std::env::current_exe()
                         .and_then(std::fs::canonicalize)
-                        .map_err(|e| SandboxError::ExecutionFailed(format!(
-                            "cannot determine aleph-server path: {e}"
-                        )))?;
+                        .map_err(|e| {
+                            SandboxError::ExecutionFailed(format!(
+                                "cannot determine aleph-server path: {e}"
+                            ))
+                        })?;
                     let mut c = tokio::process::Command::new(aleph_exe);
                     c.arg("sandbox-init-windows")
                         .arg("--policy")
@@ -514,10 +516,7 @@ mod tests {
         // Workspace pre-resolution feeds an IP-only allowlist; mirror
         // that here so the assertion catches IP-bearing rejections.
         let policy = SandboxPolicy {
-            network: NetworkPolicy::AllowHosts(vec![
-                "203.0.113.7".into(),
-                "203.0.113.8".into(),
-            ]),
+            network: NetworkPolicy::AllowHosts(vec!["203.0.113.7".into(), "203.0.113.8".into()]),
             ..Default::default()
         };
         let cwd = Path::new("C:\\workspace");

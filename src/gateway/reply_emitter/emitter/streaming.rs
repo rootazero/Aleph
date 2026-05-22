@@ -2,11 +2,11 @@ use crate::sync_primitives::Ordering;
 use async_trait::async_trait;
 use tracing::{debug, warn};
 
+use super::super::sanitize::sanitize_llm_output;
+use super::{NativeStreamState, ReplyEmitter};
 use crate::gateway::channel::OutboundMessage;
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
-use crate::gateway::streaming::{StreamAction};
-use super::{ReplyEmitter, NativeStreamState};
-use super::super::sanitize::sanitize_llm_output;
+use crate::gateway::streaming::StreamAction;
 
 #[async_trait]
 impl EventEmitter for ReplyEmitter {
@@ -118,7 +118,9 @@ impl EventEmitter for ReplyEmitter {
                         match ctrl.poll_action() {
                             StreamAction::SendInitial(text) => {
                                 let mut text = sanitize_llm_output(&text).into_owned();
-                                text.push_str(crate::gateway::reply_emitter::emitter::STREAMING_CURSOR);
+                                text.push_str(
+                                    crate::gateway::reply_emitter::emitter::STREAMING_CURSOR,
+                                );
                                 let message = OutboundMessage {
                                     conversation_id: self.route.conversation_id.clone(),
                                     text,
@@ -171,7 +173,9 @@ impl EventEmitter for ReplyEmitter {
 
                                     // Send new message with overflow + cursor
                                     let mut overflow_text = tail.to_string();
-                                    overflow_text.push_str(crate::gateway::reply_emitter::emitter::STREAMING_CURSOR);
+                                    overflow_text.push_str(
+                                        crate::gateway::reply_emitter::emitter::STREAMING_CURSOR,
+                                    );
                                     let message = OutboundMessage {
                                         conversation_id: self.route.conversation_id.clone(),
                                         text: overflow_text,
@@ -190,7 +194,9 @@ impl EventEmitter for ReplyEmitter {
                                 } else {
                                     // Normal edit with cursor
                                     let mut text_with_cursor = text;
-                                    text_with_cursor.push_str(crate::gateway::reply_emitter::emitter::STREAMING_CURSOR);
+                                    text_with_cursor.push_str(
+                                        crate::gateway::reply_emitter::emitter::STREAMING_CURSOR,
+                                    );
                                     if let Some(msg_id) = ctrl.message_id() {
                                         let msg_id = msg_id.clone();
                                         if self
@@ -245,8 +251,7 @@ impl EventEmitter for ReplyEmitter {
                                 }
                             } else if let Some(ref mut s) = *state {
                                 // Throttle updates at 1500ms
-                                if s.last_update.elapsed()
-                                    >= std::time::Duration::from_millis(1500)
+                                if s.last_update.elapsed() >= std::time::Duration::from_millis(1500)
                                 {
                                     s.sequence += 1;
                                     if let Err(e) = handler
@@ -277,8 +282,7 @@ impl EventEmitter for ReplyEmitter {
                             if self.should_voice().await {
                                 self.send_as_voice(&text).await;
                             } else {
-                                self.send_to_channel_with_reasoning(&text,
-                                    reasoning.as_deref())
+                                self.send_to_channel_with_reasoning(&text, reasoning.as_deref())
                                     .await;
                             }
                         }
@@ -604,8 +608,7 @@ mod cap_notice_tests {
 
     #[test]
     fn hit_max_iterations_renders_label() {
-        let s = cap_notice_for(&summary_with(Some("hit_max_iterations")))
-            .expect("notice");
+        let s = cap_notice_for(&summary_with(Some("hit_max_iterations"))).expect("notice");
         assert!(s.contains("max iterations"));
         assert!(s.starts_with("\n\n"));
     }

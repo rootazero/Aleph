@@ -501,10 +501,7 @@ impl SessionStore for SessionManager {
 
 #[async_trait]
 impl crate::session::epoch_registrar::SessionEpochRegistrar for SessionManager {
-    async fn register_epoch(
-        &self,
-        key: &crate::session::service::SessionId,
-    ) -> anyhow::Result<()> {
+    async fn register_epoch(&self, key: &crate::session::service::SessionId) -> anyhow::Result<()> {
         self.get_or_create(key)
             .await
             .map(|_| ())

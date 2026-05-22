@@ -1,4 +1,3 @@
-
 use super::{SessionManager, SessionState};
 
 impl SessionManager {

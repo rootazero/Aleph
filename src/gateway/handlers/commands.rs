@@ -11,8 +11,8 @@ use serde_json::json;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use super::parse_params;
 use crate::command::{CommandContext, CommandNode, CommandParser, CommandType};
-use crate::dispatcher::{ToolRegistry, ToolSourceType, UnifiedTool};
 use crate::sync_primitives::Arc;
+use crate::tool_metadata::{ToolRegistry, ToolSourceType, UnifiedTool};
 
 /// Command info for JSON serialization (backward compat for flat lists)
 #[derive(Debug, Clone, Serialize)]
@@ -562,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_from_registry_tree_structure() {
-        use crate::dispatcher::ToolSource;
+        use crate::tool_metadata::ToolSource;
 
         let registry = ToolRegistry::new();
 
@@ -661,7 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_namespace_only() {
-        use crate::dispatcher::ToolSource;
+        use crate::tool_metadata::ToolSource;
 
         let registry = Arc::new(ToolRegistry::new());
 
@@ -700,7 +700,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_bad_subcommand() {
-        use crate::dispatcher::ToolSource;
+        use crate::tool_metadata::ToolSource;
 
         let registry = Arc::new(ToolRegistry::new());
 
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn test_build_command_tree_mixed() {
-        use crate::dispatcher::ToolSource;
+        use crate::tool_metadata::ToolSource;
 
         let tools = vec![
             UnifiedTool::new(

@@ -151,9 +151,7 @@ impl CgroupV2Scope {
             Ok(s) => s,
             Err(e) => {
                 WARN_ONCE.call_once(|| {
-                    tracing::warn!(
-                        "read /proc/self/cgroup failed: {e}; SP-5 skipped"
-                    );
+                    tracing::warn!("read /proc/self/cgroup failed: {e}; SP-5 skipped");
                 });
                 return None;
             }
@@ -171,13 +169,9 @@ impl CgroupV2Scope {
         let subtree = parent.join("cgroup.subtree_control");
         if let Err(e) = fs::write(&subtree, b"+memory +cpu +pids") {
             use std::io::ErrorKind;
-            if e.kind() != ErrorKind::AlreadyExists
-                && e.raw_os_error() != Some(libc::EBUSY)
-            {
+            if e.kind() != ErrorKind::AlreadyExists && e.raw_os_error() != Some(libc::EBUSY) {
                 WARN_ONCE.call_once(|| {
-                    tracing::warn!(
-                        "cgroup subtree_control write rejected ({e}); SP-5 skipped"
-                    );
+                    tracing::warn!("cgroup subtree_control write rejected ({e}); SP-5 skipped");
                 });
                 return None;
             }
@@ -192,9 +186,7 @@ impl CgroupV2Scope {
         let child = parent.join(format!("aleph-sandbox-{pid}-{nonce}"));
         if let Err(e) = fs::create_dir(&child) {
             WARN_ONCE.call_once(|| {
-                tracing::warn!(
-                    "mkdir {child:?} failed ({e}); SP-5 skipped"
-                );
+                tracing::warn!("mkdir {child:?} failed ({e}); SP-5 skipped");
             });
             return None;
         }
@@ -204,9 +196,7 @@ impl CgroupV2Scope {
         // than half-apply.
         let scope = CgroupV2Scope { path: child };
         if let Err(e) = scope.write_limits(&limits) {
-            tracing::warn!(
-                "cgroup limit write failed ({e}); cleaning up partial sub-cgroup"
-            );
+            tracing::warn!("cgroup limit write failed ({e}); cleaning up partial sub-cgroup");
             // Drop will run rmdir on scope.path.
             return None;
         }
@@ -234,10 +224,7 @@ impl CgroupV2Scope {
             )?;
         }
         if let Some(n) = limits.max_pids {
-            fs::write(
-                self.path.join("pids.max"),
-                n.to_string().as_bytes(),
-            )?;
+            fs::write(self.path.join("pids.max"), n.to_string().as_bytes())?;
         }
         Ok(())
     }

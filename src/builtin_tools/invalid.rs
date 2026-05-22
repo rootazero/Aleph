@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::dispatcher::ToolCategory;
 use crate::error::Result;
+use crate::tool_metadata::ToolCategory;
 use crate::AlephTool;
 
 /// Arguments for the Invalid tool

@@ -3,8 +3,8 @@
 /// This module provides utilities for retrying failed requests with
 /// exponential backoff strategy. Inspired by OpenCode's retry.ts.
 use crate::config::RetryPolicy;
-use crate::dispatcher::DEFAULT_MAX_RETRIES;
 use crate::error::{AlephError, Result};
+use crate::tool_metadata::DEFAULT_MAX_RETRIES;
 use std::future::Future;
 use std::time::Duration;
 use tracing::{debug, info, warn};

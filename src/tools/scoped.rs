@@ -12,12 +12,12 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::agents::subagent_tool::SubagentTool;
-use crate::dispatcher::ToolHealthCache;
 use crate::extension::hooks::{HookContext, HookExecutor, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
+use crate::tool_metadata::ToolHealthCache;
 use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 use crate::tools::service::{
@@ -95,7 +95,7 @@ pub struct ScopedToolService {
     /// disk and replaces them with a compact marker before they enter
     /// the conversation history.
     result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
-    schema_cache: ArcSwap<Option<(u64, Arc<[crate::dispatcher::ToolDefinition]>)>>,
+    schema_cache: ArcSwap<Option<(u64, Arc<[crate::tool_metadata::ToolDefinition]>)>>,
     cache_generation: std::sync::atomic::AtomicU64,
     /// Optional runtime health cache. When set, `list()` and
     /// `dispatcher_schema()` strip tools whose probe reports Unhealthy
@@ -401,7 +401,7 @@ impl ToolService for ScopedToolService {
         }
     }
 
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         use std::sync::atomic::Ordering;
 
         // Bump generation if the refresh source signals external changes.
@@ -472,11 +472,7 @@ impl ToolService for ScopedToolService {
 impl ScopedToolService {
     /// Tool dispatch proper. Wrapped by the `ToolService::execute` trait
     /// method, which scopes `TURN_CONTEXT` around it.
-    async fn execute_inner(
-        &self,
-        name: &str,
-        input: Value,
-    ) -> Result<ToolOutput, ToolError> {
+    async fn execute_inner(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
         // Enforce allowed filter.
         if !self.is_allowed(name) {
             return Err(ToolError::NotFound {
@@ -490,8 +486,7 @@ impl ScopedToolService {
         if self.confirm_tools.contains(name) {
             match &self.approval_requester {
                 Some(requester) => {
-                    let reason =
-                        format!("Tool `{name}` requires your confirmation to run.");
+                    let reason = format!("Tool `{name}` requires your confirmation to run.");
                     let outcome = requester.request_approval(name, &reason).await;
                     if outcome != ApprovalOutcome::Approved {
                         return Err(ToolError::Execution {
@@ -525,17 +520,10 @@ impl ScopedToolService {
         // is wired or when no hooks match the event. Runs BEFORE routing so a
         // blocked call never reaches the retry pipeline.
         let started = std::time::Instant::now();
-        let effective_input = match self
-            .run_before_tool_hooks(name, input.clone())
-            .await
-        {
+        let effective_input = match self.run_before_tool_hooks(name, input.clone()).await {
             Ok(maybe_new_input) => maybe_new_input,
             Err(err) => {
-                let duration_ms: u64 = started
-                    .elapsed()
-                    .as_millis()
-                    .try_into()
-                    .unwrap_or(u64::MAX);
+                let duration_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
                 let rejection: Result<ToolOutput, ToolError> = Err(err);
                 if let Some(ref hook) = self.hook_decorator {
                     hook.after_execute(name, &rejection);
@@ -574,22 +562,25 @@ impl ScopedToolService {
                 // may have already reached the server. R10-safe: no policy
                 // selection beyond the static idempotency classification.
                 let idempotent = crate::tools::retry::is_idempotent_builtin_name(name);
-                let raw_outcome = crate::tools::retry::execute_with_one_shot_backoff(idempotent, || {
-                    let input = effective_input.clone();
-                    let name_owned = name.to_string();
-                    async move {
-                        let raw = match target {
-                            RoutingTarget::Subagent => {
-                                let st = self.subagent_tool.as_ref().expect("checked above");
-                                st.execute(input).await
-                            }
-                            RoutingTarget::Inner => self.inner.execute(&name_owned, input).await,
-                            RoutingTarget::Missing => unreachable!(),
-                        };
-                        Self::tool_result_to_output(&name_owned, raw)
-                    }
-                })
-                .await;
+                let raw_outcome =
+                    crate::tools::retry::execute_with_one_shot_backoff(idempotent, || {
+                        let input = effective_input.clone();
+                        let name_owned = name.to_string();
+                        async move {
+                            let raw = match target {
+                                RoutingTarget::Subagent => {
+                                    let st = self.subagent_tool.as_ref().expect("checked above");
+                                    st.execute(input).await
+                                }
+                                RoutingTarget::Inner => {
+                                    self.inner.execute(&name_owned, input).await
+                                }
+                                RoutingTarget::Missing => unreachable!(),
+                            };
+                            Self::tool_result_to_output(&name_owned, raw)
+                        }
+                    })
+                    .await;
                 match raw_outcome {
                     Ok(output) => Ok(self.apply_layer_two(name, output).await),
                     Err(err) => Err(Self::sanitize_tool_error(name, err)),
@@ -603,11 +594,7 @@ impl ScopedToolService {
         self.run_after_tool_hooks(name, &effective_input, &mut result)
             .await;
 
-        let duration_ms: u64 = started
-            .elapsed()
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX);
+        let duration_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
 
         // Fire post-hooks. Both for back-compat (v1) and with-duration (v2).
         if let Some(ref hook) = self.hook_decorator {
@@ -621,11 +608,7 @@ impl ScopedToolService {
     /// Fire `BeforeToolCall` interceptors. Returns the (possibly rewritten)
     /// input on allow, or a `ToolError` when a hook blocks / denies the call
     /// or when an `Ask` decision is not approved by the user.
-    async fn run_before_tool_hooks(
-        &self,
-        name: &str,
-        input: Value,
-    ) -> Result<Value, ToolError> {
+    async fn run_before_tool_hooks(&self, name: &str, input: Value) -> Result<Value, ToolError> {
         let executor = match self.hook_executor.as_ref() {
             Some(e) if e.hook_count() > 0 => e.clone(),
             _ => return Ok(input),
@@ -709,8 +692,7 @@ impl ScopedToolService {
         match result {
             Ok(output) => {
                 let output_str = output.value.to_string();
-                let ctx = self
-                    .build_hook_context(name, input, Some(&output_str), Some(false));
+                let ctx = self.build_hook_context(name, input, Some(&output_str), Some(false));
                 // Fire fire-and-forget Observer-kind hooks in parallel first.
                 executor
                     .execute_observers(HookEvent::AfterToolCall, &ctx)
@@ -729,8 +711,7 @@ impl ScopedToolService {
             }
             Err(err) => {
                 let err_str = err.to_string();
-                let ctx = self
-                    .build_hook_context(name, input, Some(&err_str), Some(true));
+                let ctx = self.build_hook_context(name, input, Some(&err_str), Some(true));
                 executor
                     .execute_observers(HookEvent::AfterToolCallFailure, &ctx)
                     .await;
@@ -903,7 +884,7 @@ mod tests {
         async fn describe(&self, _: &str) -> Option<ToolDefinition> {
             None
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::dispatcher::ToolDefinition]> {
+        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             std::sync::Arc::from([])
         }
     }
@@ -1313,7 +1294,7 @@ mod tests {
     // Health gate tests
     // -------------------------------------------------------------------------
 
-    use crate::dispatcher::{HealthReason, ProbeResult, ToolHealthCache, ToolHealthProbe};
+    use crate::tool_metadata::{HealthReason, ProbeResult, ToolHealthCache, ToolHealthProbe};
     use std::borrow::Cow;
 
     struct AlwaysDead;

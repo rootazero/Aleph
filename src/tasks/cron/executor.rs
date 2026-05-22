@@ -322,7 +322,12 @@ async fn deliver_to_channel(
 }
 
 /// Build an error `ExecutionResult`.
-fn make_error_result(started_at: i64, error: String, reason: ErrorReason, trigger_source: TriggerSource) -> ExecutionResult {
+fn make_error_result(
+    started_at: i64,
+    error: String,
+    reason: ErrorReason,
+    trigger_source: TriggerSource,
+) -> ExecutionResult {
     let ended_at = chrono::Utc::now().timestamp_millis();
     ExecutionResult {
         started_at,
