@@ -76,7 +76,8 @@ impl InitializationCoordinator {
 
     /// Run the full initialization sequence
     pub async fn run(&self) -> InitializationResult {
-        static INITIALIZING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        static INITIALIZING: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         if INITIALIZING.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return InitializationResult {
                 success: false,
@@ -86,9 +87,16 @@ impl InitializationCoordinator {
             };
         }
 
-        let result = self.run_internal().await;
-        INITIALIZING.store(false, std::sync::atomic::Ordering::SeqCst);
-        result
+        // RAII guard ensures INITIALIZING is reset even if run_internal panics
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                INITIALIZING.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let _guard = Guard;
+
+        self.run_internal().await
     }
 
     async fn run_internal(&self) -> InitializationResult {
@@ -127,9 +135,13 @@ impl InitializationCoordinator {
                     }
 
                     // Rollback completed phases
-                    if let Err(rollback_err) = self.rollback(&completed_phases).await {
-                        warn!(error = %rollback_err, "Rollback failed");
-                    }
+                    let error_message = match self.rollback(&completed_phases).await {
+                        Ok(()) => e.message,
+                        Err(rollback_err) => {
+                            warn!(error = %rollback_err, "Rollback failed");
+                            format!("{} (rollback also failed: {})", e.message, rollback_err)
+                        }
+                    };
 
                     return InitializationResult {
                         success: false,
@@ -138,7 +150,7 @@ impl InitializationCoordinator {
                             .map(|p| p.name().to_string())
                             .collect(),
                         error_phase: Some(e.phase),
-                        error_message: Some(e.message),
+                        error_message: Some(error_message),
                     };
                 }
             }
@@ -196,8 +208,17 @@ impl InitializationCoordinator {
                     }
                 }
                 InitPhase::Database => {
-                    // Skip: memory.db may pre-exist; deleting it could destroy user data.
-                    warn!("Skipping database rollback to avoid deleting pre-existing user data");
+                    // Don't delete memory.db (may pre-exist), but clean up WAL files
+                    // that were created during this initialization.
+                    for suffix in ["-wal", "-shm"] {
+                        let wal_path = self.config_dir.join(format!("memory.db{}", suffix));
+                        if wal_path.exists() {
+                            if let Err(e) = tokio::fs::remove_file(&wal_path).await {
+                                warn!(error = %e, path = ?wal_path, "Failed to remove WAL file during rollback");
+                                errors.push(format!("wal {}: {}", suffix, e));
+                            }
+                        }
+                    }
                 }
                 InitPhase::Config => {
                     // Skip: config.toml may pre-exist; deleting it could destroy user configuration.
@@ -310,9 +331,14 @@ impl InitializationCoordinator {
             .await
             .map_err(|e| InitError::new("config", format!("Failed to write temporary config: {}", e)))?;
 
-        tokio::fs::rename(&temp_path, &config_path)
-            .await
-            .map_err(|e| InitError::new("config", format!("Failed to finalize config: {}", e)))?;
+        if let Err(e) = tokio::fs::rename(&temp_path, &config_path).await {
+            // Clean up temp file on rename failure to avoid leaving stale artifacts
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(InitError::new(
+                "config",
+                format!("Failed to finalize config: {}", e),
+            ));
+        }
 
         info!(path = ?config_path, "Default config created");
         Ok(())
@@ -364,7 +390,17 @@ impl InitializationCoordinator {
             .await
             .map_err(|e| {
                 let msg = if e.is_panic() {
-                    "Runtime init task panicked".to_string()
+                    if let Ok(payload) = e.try_into_panic() {
+                        if let Some(s) = payload.downcast_ref::<String>() {
+                            format!("Runtime init task panicked: {}", s)
+                        } else if let Some(s) = payload.downcast_ref::<&str>() {
+                            format!("Runtime init task panicked: {}", s)
+                        } else {
+                            "Runtime init task panicked (unknown payload)".to_string()
+                        }
+                    } else {
+                        "Runtime init task panicked".to_string()
+                    }
                 } else {
                     format!("Runtime init task cancelled: {}", e)
                 };
