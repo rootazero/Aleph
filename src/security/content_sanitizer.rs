@@ -209,7 +209,7 @@ fn detect_injection_patterns(content: &str) -> Vec<InjectionPattern> {
 ///
 /// - Converts fullwidth ASCII (U+FF01–U+FF5E) to halfwidth equivalents.
 /// - Converts common Cyrillic confusables to Latin equivalents.
-fn normalize_homoglyphs(text: &str) -> String {
+pub(crate) fn normalize_homoglyphs(text: &str) -> String {
     text.chars().map(normalize_char).collect()
 }
 

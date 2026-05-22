@@ -15,12 +15,17 @@ pub(crate) fn is_blocked_hostname(hostname: &str) -> bool {
     if check_blocked(&lower) {
         return true;
     }
-    // If the hostname looks like punycode, also check the Unicode decoded form
+    // If the hostname looks like punycode, decode it and normalize homoglyphs
     // to catch homograph attacks that bypass the ASCII blocklist.
     if lower.contains("xn--") {
         let unicode = url::quirks::domain_to_unicode(hostname);
         let unicode_lower = unicode.to_lowercase();
         if check_blocked(&unicode_lower) {
+            return true;
+        }
+        // Also normalize homoglyphs (e.g., Cyrillic о → Latin o) and check again
+        let normalized = crate::security::content_sanitizer::normalize_homoglyphs(&unicode_lower);
+        if check_blocked(&normalized) {
             return true;
         }
     }
@@ -177,7 +182,7 @@ mod tests {
         // Cyrillic 'о' (U+043E) instead of Latin 'o' — parsed as punycode by url crate.
         // The decoded Unicode form must still match the blocklist.
         assert!(
-            is_blocked_hostname("xn--localhst-"),
+            is_blocked_hostname("xn--localhst-sbh"),
             "punycode form of Cyrillic homograph should be blocked"
         );
     }
