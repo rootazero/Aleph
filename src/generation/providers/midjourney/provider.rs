@@ -188,7 +188,7 @@ impl GenerationProvider for MidjourneyProvider {
                 .with_model(PROVIDER_NAME)
                 .with_duration(duration)
                 .with_content_type("image/png")
-                .with_size_bytes(bytes.len() as u64);
+                .with_size_bytes(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
 
             // Add mode info
             metadata.extra.insert(

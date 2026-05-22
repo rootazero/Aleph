@@ -174,7 +174,12 @@ impl OpenAiCompatProviderBuilder {
 
         // Resolve endpoint: if URL is just a base domain (no endpoint path),
         // auto-complete with the standard OpenAI-compatible path based on primary type.
-        let gen_type = self.supported_types.first().copied().unwrap();
+        let gen_type = self.supported_types.first().copied().ok_or_else(|| {
+            GenerationError::invalid_parameters(
+                "At least one supported type must be specified",
+                Some("supported_types".to_string()),
+            )
+        })?;
         let resolved =
             crate::generation::providers::url_normalize::resolve_base_url(&self.base_url);
         let endpoint = resolved.primary_endpoint(gen_type);

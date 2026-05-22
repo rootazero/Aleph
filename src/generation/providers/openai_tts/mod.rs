@@ -40,9 +40,9 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use types::{OpenAiError, OpenAiErrorResponse, TtsRequest};
 
@@ -399,7 +399,7 @@ impl GenerationProvider for OpenAiTtsProvider {
                 .with_model(body.model.clone())
                 .with_duration(duration)
                 .with_content_type(content_type)
-                .with_size_bytes(audio_bytes.len() as u64);
+                .with_size_bytes(u64::try_from(audio_bytes.len()).unwrap_or(u64::MAX));
 
             info!(
                 duration_ms = duration.as_millis(),

@@ -5,6 +5,7 @@ use super::*;
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult, GenerationType};
 use crate::sync_primitives::Arc;
+use tracing::warn;
 
 /// Create a generation provider from configuration
 ///
@@ -174,7 +175,13 @@ pub fn create_provider(
                 let mode = match model.to_lowercase().as_str() {
                     "fast" | "mj-fast" => MidjourneyMode::Fast,
                     "relax" | "mj-relax" => MidjourneyMode::Relax,
-                    _ => MidjourneyMode::Fast,
+                    other => {
+                        warn!(
+                            model = %other,
+                            "Unknown Midjourney mode, defaulting to Fast. Use 'fast' or 'relax'."
+                        );
+                        MidjourneyMode::Fast
+                    }
                 };
                 builder = builder.mode(mode);
             }

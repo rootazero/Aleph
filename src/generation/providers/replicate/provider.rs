@@ -198,7 +198,7 @@ impl GenerationProvider for ReplicateProvider {
                 .with_provider("replicate")
                 .with_model(model)
                 .with_duration(duration)
-                .with_size_bytes(bytes.len() as u64);
+                .with_size_bytes(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
 
             if let Some(ct) = content_type {
                 metadata = metadata.with_content_type(ct);

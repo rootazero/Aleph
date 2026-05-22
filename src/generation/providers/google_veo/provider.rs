@@ -212,8 +212,8 @@ impl GoogleVeoProvider {
             if h == 0 {
                 return DEFAULT_ASPECT_RATIO.to_string();
             }
-            let ratio = w as f32 / h as f32;
-            if ratio > 1.0 {
+            // Use integer comparison to avoid f32 precision loss
+            if w > h {
                 return "16:9".to_string();
             } else {
                 return "9:16".to_string();
@@ -260,7 +260,7 @@ impl GoogleVeoProvider {
             attempts += 1;
             if attempts > MAX_POLL_ATTEMPTS {
                 return Err(GenerationError::timeout(Duration::from_secs(
-                    MAX_POLL_ATTEMPTS as u64 * POLL_INTERVAL_SECS,
+                    (MAX_POLL_ATTEMPTS as u64).saturating_mul(POLL_INTERVAL_SECS),
                 )));
             }
 
@@ -491,7 +491,7 @@ impl GenerationProvider for GoogleVeoProvider {
 
             // Add size info
             if let GenerationData::Bytes(ref b) = data {
-                metadata = metadata.with_size_bytes(b.len() as u64);
+                metadata = metadata.with_size_bytes(u64::try_from(b.len()).unwrap_or(u64::MAX));
             }
 
             info!(

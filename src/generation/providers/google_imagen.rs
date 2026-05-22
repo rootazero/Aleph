@@ -480,7 +480,7 @@ impl GenerationProvider for GoogleImagenProvider {
 
             // Add size info
             if let GenerationData::Bytes(ref b) = data {
-                metadata = metadata.with_size_bytes(b.len() as u64);
+                metadata = metadata.with_size_bytes(u64::try_from(b.len()).unwrap_or(u64::MAX));
             }
 
             info!(
