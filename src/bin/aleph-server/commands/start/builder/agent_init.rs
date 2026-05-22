@@ -1297,7 +1297,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             );
             // Spec A Task 17 — inject MCP into the tool registry so the
             // `remember` tool can resolve the per-agent CuratedMemoryStore.
-            let _ = mcp_cell_for_tools.set(mcp.clone());
+            if let Err(e) = mcp_cell_for_tools.set(mcp.clone()) {
+                tracing::warn!("Failed to set MCP cell for tools: {}", e);
+            }
 
             // Spec A Task 18 — wire post-compression invalidation:
             //   1) compression run completes → MCP drops cached
@@ -1494,7 +1496,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         workspace: agent_workspace,
                         model: agent_model,
                     };
-                let _ = event_bus.publish_json(&lifecycle_event);
+                if let Err(e) = event_bus.publish_json(&lifecycle_event) {
+                    tracing::warn!("Failed to publish agent lifecycle event: {}", e);
+                }
                 if !daemon {
                     println!("  Registered agent: {} (lazy)", agent_id);
                 }
@@ -1694,7 +1698,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 }
             }
 
-            let _ = gateway_context_cell.set(gateway_ctx);
+            if let Err(e) = gateway_context_cell.set(gateway_ctx) {
+                tracing::warn!("Failed to set gateway context cell: {}", e);
+            }
         }
     } else {
         if !daemon {

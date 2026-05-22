@@ -45,8 +45,7 @@ pub async fn serve_webchat(
             return false;
         }
         let host = uri.host().unwrap_or("");
-        matches!(host, "127.0.0.1" | "localhost" | "[::1]")
-            || host.starts_with("127.0.0.")
+        matches!(host, "127.0.0.1" | "localhost" | "[::1]") || host.starts_with("127.0.0.")
     });
     let app = Router::new().fallback_service(serve_dir).layer(
         tower_http::cors::CorsLayer::new()
@@ -228,14 +227,17 @@ where
             }
             Err(e) => {
                 tracing::error!(run_id = %run_id_clone, error = %e, "Agent run failed");
-                let _ = emitter_clone
+                if let Err(emit_err) = emitter_clone
                     .emit(StreamEvent::RunError {
                         run_id: run_id_clone.clone(),
                         seq: 0,
                         error: e.to_string(),
                         error_code: Some("EXECUTION_FAILED".to_string()),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!("Failed to emit run error event: {}", emit_err);
+                }
             }
         }
     });
@@ -424,14 +426,17 @@ where
             }
             Err(e) => {
                 tracing::error!(run_id = %run_id_clone, error = %e, "Chat run failed");
-                let _ = emitter_clone
+                if let Err(emit_err) = emitter_clone
                     .emit(StreamEvent::RunError {
                         run_id: run_id_clone.clone(),
                         seq: 0,
                         error: e.to_string(),
                         error_code: Some("EXECUTION_FAILED".to_string()),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!("Failed to emit chat run error event: {}", emit_err);
+                }
             }
         }
     });

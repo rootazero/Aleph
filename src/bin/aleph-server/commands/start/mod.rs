@@ -263,9 +263,8 @@ fn build_sqlite_session_service(
     }
     let store: Arc<dyn alephcore::session::store::SessionEventStore> =
         Arc::new(alephcore::session::store::SqliteEventStore::new(conn));
-    let service: Arc<dyn alephcore::session::service::SessionService> = Arc::new(
-        alephcore::session::in_process::InProcessActorSessionService::new(store.clone()),
-    );
+    let service: Arc<dyn alephcore::session::service::SessionService> =
+        Arc::new(alephcore::session::in_process::InProcessActorSessionService::new(store.clone()));
     Some((service, store))
 }
 
@@ -310,7 +309,9 @@ fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
             println!("\nShutting down gateway...");
         }
         remove_pid_file(&pid_file);
-        let _ = shutdown_tx.send(());
+        if let Err(e) = shutdown_tx.send(()) {
+            tracing::warn!("Failed to send shutdown signal: {:?}", e);
+        }
     });
 
     #[cfg(unix)]
@@ -1182,7 +1183,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             Ok(orch) => {
                 // Inject orchestrator into ExecutionEngine via the shared OnceLock.
                 if let Some(ref cell) = agent_result.orchestrator_cell {
-                    let _ = cell.set(orch.clone());
+                    if let Err(_) = cell.set(orch.clone()) {
+                        tracing::warn!("Failed to set orchestrator cell: cell already initialized");
+                    }
                 }
                 server.orchestrator = Some(orch);
                 if !args.daemon {
@@ -1425,9 +1428,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     })));
                     tracing::info!("A2A outbound tools wired (a2a_delegate, a2a_agents)");
                 } else {
-                    tracing::warn!(
-                        "A2A enabled but tool handle missing — a2a_* tools unavailable"
-                    );
+                    tracing::warn!("A2A enabled but tool handle missing — a2a_* tools unavailable");
                 }
 
                 // 11. One-shot startup card refresh: upgrade config agents'
@@ -1606,7 +1607,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             Ok(conn) => {
                                 // Schema should already exist (created by HeartbeatStore::open above),
                                 // but we call init here defensively.
-                                let _ = init_dedup_schema(&conn);
+                                if let Err(e) = init_dedup_schema(&conn) {
+                                    tracing::warn!("Failed to init dedup schema: {}", e);
+                                }
                                 let dedup_conn = Arc::new(tokio::sync::Mutex::new(conn));
                                 Arc::new(DedupEngine::new(
                                     hb_state.config.dedup.clone(),
@@ -1909,16 +1912,24 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Inject ChannelRegistry into BuiltinToolRegistry (deferred — channels created after tools)
     if let Some(ref cell) = agent_result.channel_registry_cell {
-        let _ = cell.set(channel_registry.clone());
-        tracing::info!(
-            "ChannelRegistry injected into BuiltinToolRegistry for channel_pairing tool"
-        );
+        if let Err(_) = cell.set(channel_registry.clone()) {
+            tracing::warn!("Failed to inject ChannelRegistry into BuiltinToolRegistry: cell already initialized");
+        } else {
+            tracing::info!(
+                "ChannelRegistry injected into BuiltinToolRegistry for channel_pairing tool"
+            );
+        }
     }
 
     // Inject ClarificationManager into BuiltinToolRegistry (deferred) — enables `ask_user` (HITL P4).
     if let Some(ref cell) = agent_result.clarification_manager_cell {
-        let _ = cell.set(clarification_manager.clone());
-        tracing::info!("ClarificationManager injected into BuiltinToolRegistry for ask_user tool");
+        if let Err(_) = cell.set(clarification_manager.clone()) {
+            tracing::warn!("Failed to inject ClarificationManager into BuiltinToolRegistry: cell already initialized");
+        } else {
+            tracing::info!(
+                "ClarificationManager injected into BuiltinToolRegistry for ask_user tool"
+            );
+        }
     }
 
     // Approval-button callback sink — intercepts `cb_` callback messages in
@@ -2092,7 +2103,9 @@ async fn runtime_startup_warmup() {
             missing.push(spec.name);
         }
     }
-    let _ = ledger.write().await.persist();
+    if let Err(e) = ledger.write().await.persist() {
+        tracing::warn!("Failed to persist runtime ledger: {}", e);
+    }
     if missing.is_empty() {
         tracing::info!("runtime warmup: all capabilities ready");
     } else {

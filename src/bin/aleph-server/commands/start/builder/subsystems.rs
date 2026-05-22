@@ -59,7 +59,12 @@ pub(in crate::commands::start) fn initialize_auth(
             "Warning: Failed to load device store from {:?}: {}. Using in-memory.",
             device_store_path, e
         );
-        DeviceStore::in_memory().expect("Failed to create in-memory device store")
+        DeviceStore::in_memory().unwrap_or_else(|e| {
+            panic!(
+                "Fatal: Failed to create in-memory device store fallback: {}",
+                e
+            )
+        })
     }));
 
     let security_store_path =
@@ -71,8 +76,12 @@ pub(in crate::commands::start) fn initialize_auth(
                     "Warning: Failed to load security store from {:?}: {}. Using in-memory.",
                     security_store_path, e
                 );
-                alephcore::gateway::security::SecurityStore::in_memory()
-                    .expect("Failed to create in-memory security store")
+                alephcore::gateway::security::SecurityStore::in_memory().unwrap_or_else(|e| {
+                    panic!(
+                        "Fatal: Failed to create in-memory security store fallback: {}",
+                        e
+                    )
+                })
             },
         ),
     );
@@ -109,8 +118,11 @@ pub(in crate::commands::start) fn initialize_auth(
     // Clean up legacy token file (token is now stored in SQLite)
     let legacy_token_file = data_dir.join(".shared_token");
     if legacy_token_file.exists() {
-        let _ = std::fs::remove_file(&legacy_token_file);
-        info!("Removed legacy token file (token is now in DB)");
+        if let Err(e) = std::fs::remove_file(&legacy_token_file) {
+            warn!("Failed to remove legacy token file: {}", e);
+        } else {
+            info!("Removed legacy token file (token is now in DB)");
+        }
     }
 
     if auth_mode.is_auth_required() {
@@ -589,8 +601,15 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             // Rebuild a fresh registry with same providers
             let mut new_reg = alephcore::generation::GenerationProviderRegistry::new();
             for name in guard.names() {
+                let name_for_log = name.clone();
                 if let Some(provider) = guard.get(&name) {
-                    let _ = new_reg.register(name, provider);
+                    if let Err(e) = new_reg.register(name, provider) {
+                        tracing::warn!(
+                            "Failed to register generation provider '{}': {}",
+                            name_for_log,
+                            e
+                        );
+                    }
                 }
             }
             Arc::new(new_reg)

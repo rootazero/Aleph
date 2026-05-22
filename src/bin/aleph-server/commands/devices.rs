@@ -17,7 +17,7 @@ pub fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::device_store::DeviceStore;
 
     let store_path = alephcore::utils::paths::get_devices_db_path()
-        .map_err(|e| format!("Failed to get device store path: {}", e))?;
+        .map_err(|e| format!("Failed to get device store path: {:#}", e))?;
     if !store_path.exists() {
         println!("No approved devices");
         return Ok(());
@@ -71,17 +71,17 @@ fn revoke_locked(device_id: &str) -> anyhow::Result<()> {
     use alephcore::gateway::device_store::DeviceStore;
 
     let store_path = alephcore::utils::paths::get_devices_db_path()
-        .map_err(|e| anyhow::anyhow!("Failed to get device store path: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to get device store path: {:#}", e))?;
     if !store_path.exists() {
         anyhow::bail!("No device store found");
     }
 
     let device_store = DeviceStore::open(&store_path)
-        .map_err(|e| anyhow::anyhow!("Failed to open device store: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to open device store: {:#}", e))?;
 
     if device_store
         .revoke_device(device_id)
-        .map_err(|e| anyhow::anyhow!("Failed to revoke device: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Failed to revoke device: {:#}", e))?
     {
         println!("Device revoked: {}", device_id);
         Ok(())

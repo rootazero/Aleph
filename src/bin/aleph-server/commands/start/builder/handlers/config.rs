@@ -107,7 +107,9 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                                     "timestamp": chrono::Utc::now().to_rfc3339(),
                                 }),
                             );
-                            let _ = event_bus_for_config.publish_json(&event);
+                            if let Err(e) = event_bus_for_config.publish_json(&event) {
+                                tracing::warn!("Failed to publish config reloaded event: {}", e);
+                            }
                         }
                         ConfigEvent::ValidationFailed(err) => {
                             if !daemon_mode {
@@ -121,7 +123,9 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                                     "timestamp": chrono::Utc::now().to_rfc3339(),
                                 }),
                             );
-                            let _ = event_bus_for_config.publish_json(&event);
+                            if let Err(e) = event_bus_for_config.publish_json(&event) {
+                                tracing::warn!("Failed to publish config error event: {}", e);
+                            }
                         }
                         ConfigEvent::FileError(err) => {
                             if !daemon_mode {
@@ -132,7 +136,9 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                 }
 
                 // Wait for watcher to finish (it won't unless there's an error)
-                let _ = watcher_handle.await;
+                if let Err(e) = watcher_handle.await {
+                    tracing::warn!("Config watcher task ended with error: {}", e);
+                }
             });
 
             if !daemon_mode {
@@ -175,9 +181,17 @@ pub(in crate::commands::start) async fn start_webchat_server(
     if let Some(webchat_path) = webchat_dir {
         if webchat_path.exists() {
             let webchat_port = args.webchat_port.unwrap_or(final_port);
-            let webchat_addr: SocketAddr = format!("{}:{}", final_bind, webchat_port)
-                .parse()
-                .expect("Invalid webchat address");
+            let webchat_addr: SocketAddr = match format!("{}:{}", final_bind, webchat_port).parse()
+            {
+                Ok(addr) => addr,
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Invalid webchat address '{}:{}': {}. WebChat server not started.",
+                        final_bind, webchat_port, e
+                    );
+                    return;
+                }
+            };
 
             // Only start separate HTTP server if port is different from WS port
             if webchat_port != final_port {

@@ -69,13 +69,13 @@ pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error
     use alephcore::cli::policy::{with_policy, CommandPolicy};
 
     let data_dir = alephcore::utils::paths::get_data_dir()
-        .map_err(|e| format!("Failed to resolve data dir: {}", e))?;
+        .map_err(|e| format!("Failed to resolve data dir: {:#}", e))?;
     let code = code.to_string();
 
     with_policy::<_, ()>(
         CommandPolicy::LockOnly,
         &data_dir,
-        move |_lock| approve_locked(&code).map_err(|e| anyhow::anyhow!("{}", e)),
+        move |_lock| approve_locked(&code).map_err(|e| anyhow::anyhow!("{:#}", e)),
         serde_json::Value::Null,
     )
     .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })
@@ -90,9 +90,9 @@ fn approve_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Get device store and security store paths
     let store_path = alephcore::utils::paths::get_devices_db_path()
-        .map_err(|e| format!("Failed to get device store path: {}", e))?;
+        .map_err(|e| format!("Failed to get device store path: {:#}", e))?;
     let security_store_path = alephcore::utils::paths::get_security_db_path()
-        .map_err(|e| format!("Failed to get security store path: {}", e))?;
+        .map_err(|e| format!("Failed to get security store path: {:#}", e))?;
     let security_store = Arc::new(SecurityStore::open(&security_store_path)?);
 
     let pairing_manager = PairingManager::new(security_store.clone());
@@ -166,7 +166,7 @@ fn approve_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
     let token_manager = TokenManager::new(security_store);
     let signed_token = token_manager
         .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
-        .map_err(|e| format!("Failed to issue token: {}", e))?;
+        .map_err(|e| format!("Failed to issue token: {:#}", e))?;
 
     let token = format!("{}:{}", signed_token.token, signed_token.signature);
 
@@ -185,13 +185,13 @@ pub async fn handle_pairing_reject(code: &str) -> Result<(), Box<dyn std::error:
     use alephcore::cli::policy::{with_policy, CommandPolicy};
 
     let data_dir = alephcore::utils::paths::get_data_dir()
-        .map_err(|e| format!("Failed to resolve data dir: {}", e))?;
+        .map_err(|e| format!("Failed to resolve data dir: {:#}", e))?;
     let code = code.to_string();
 
     with_policy::<_, ()>(
         CommandPolicy::LockOnly,
         &data_dir,
-        move |_lock| reject_locked(&code).map_err(|e| anyhow::anyhow!("{}", e)),
+        move |_lock| reject_locked(&code).map_err(|e| anyhow::anyhow!("{:#}", e)),
         serde_json::Value::Null,
     )
     .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })

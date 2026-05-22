@@ -80,7 +80,9 @@ pub fn write_pid_file(pid_file: &str) -> std::io::Result<()> {
 /// Remove PID file
 pub fn remove_pid_file(pid_file: &str) {
     let path = expand_path(pid_file);
-    let _ = std::fs::remove_file(&path);
+    if let Err(e) = std::fs::remove_file(&path) {
+        tracing::debug!("Failed to remove PID file {}: {}", path.display(), e);
+    }
 }
 
 /// Handle stop command
@@ -238,7 +240,8 @@ pub fn daemonize(
         let fd = log_file.as_raw_fd();
 
         unsafe {
-            if libc::dup2(fd, libc::STDOUT_FILENO) == -1 || libc::dup2(fd, libc::STDERR_FILENO) == -1
+            if libc::dup2(fd, libc::STDOUT_FILENO) == -1
+                || libc::dup2(fd, libc::STDERR_FILENO) == -1
             {
                 return Err("dup2 failed".into());
             }

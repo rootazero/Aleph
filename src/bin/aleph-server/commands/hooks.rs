@@ -33,9 +33,7 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
     let entries = consent.entries();
     if entries.is_empty() {
         println!("No shell-command hooks recorded.");
-        println!(
-            "Hooks register here the first time the server runs a turn that triggers them."
-        );
+        println!("Hooks register here the first time the server runs a turn that triggers them.");
         return Ok(());
     }
 
@@ -128,7 +126,10 @@ fn revoke(consent: &ShellHookConsent, target: &str) -> CmdResult {
 
     match consent.revoke(target)? {
         Some(e) => {
-            println!("Revoked consent for {} (plugin '{}').", e.fingerprint, e.plugin_name);
+            println!(
+                "Revoked consent for {} (plugin '{}').",
+                e.fingerprint, e.plugin_name
+            );
             Ok(())
         }
         None => Err(format!("No hook matches fingerprint '{target}'.").into()),
@@ -172,9 +173,7 @@ fn doctor(consent: &ShellHookConsent) -> CmdResult {
     // can no longer be trusted for those rows.
     let drifted = entries
         .iter()
-        .filter(|e| {
-            ShellHookConsent::fingerprint(&e.plugin_name, &e.command) != e.fingerprint
-        })
+        .filter(|e| ShellHookConsent::fingerprint(&e.plugin_name, &e.command) != e.fingerprint)
         .count();
     if drifted > 0 {
         issues += 1;
@@ -218,7 +217,10 @@ fn prompt_yes(prompt: &str) -> io::Result<bool> {
     io::stdout().flush()?;
     let mut line = String::new();
     io::stdin().read_line(&mut line)?;
-    Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 #[cfg(test)]
