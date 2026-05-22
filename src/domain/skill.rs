@@ -175,11 +175,14 @@ impl FromStr for Os {
     type Err = ParseOsError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "darwin" | "macos" => Ok(Os::Darwin),
-            "linux" => Ok(Os::Linux),
-            "windows" | "win" => Ok(Os::Windows),
-            _ => Err(ParseOsError(s.to_string())),
+        if s.eq_ignore_ascii_case("darwin") || s.eq_ignore_ascii_case("macos") {
+            Ok(Os::Darwin)
+        } else if s.eq_ignore_ascii_case("linux") {
+            Ok(Os::Linux)
+        } else if s.eq_ignore_ascii_case("windows") || s.eq_ignore_ascii_case("win") {
+            Ok(Os::Windows)
+        } else {
+            Err(ParseOsError(s.to_string()))
         }
     }
 }
@@ -231,6 +234,10 @@ pub struct EligibilitySpec {
     #[serde(default)]
     pub always: bool,
     /// Explicit enable/disable override.
+    ///
+    /// - `None` (default): inherit from parent configuration or system default.
+    /// - `Some(true)`: force-enable this skill regardless of other checks.
+    /// - `Some(false)`: force-disable this skill; takes precedence over `always`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
 }
