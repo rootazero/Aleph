@@ -4,6 +4,7 @@
 //! that the tool set has changed. The main loop polls cheaply each iteration and
 //! rebuilds the registry only when necessary.
 
+use crate::sync_primitives::Arc;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 
 // =============================================================================
@@ -76,7 +77,6 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use crate::sync_primitives::Arc;
 
     // -- Mock tool --
 
