@@ -96,7 +96,7 @@ impl MediaProcessor {
         session_id: &str,
         run_id: &str,
     ) -> ContentBlock {
-        let mime = &attachment.mime_type;
+        let mime = attachment.mime_type.to_ascii_lowercase();
 
         if mime.starts_with("image/") {
             self.process_image(attachment, supports_vision, session_id, run_id)
@@ -362,9 +362,10 @@ impl MediaProcessor {
 
 /// Build a generic fallback text block for a failed attachment.
 fn fallback_text(attachment: &Attachment, error: &str) -> ContentBlock {
-    let ty = if attachment.mime_type.starts_with("image/") {
+    let mime_lower = attachment.mime_type.to_ascii_lowercase();
+    let ty = if mime_lower.starts_with("image/") {
         MediaPlaceholderType::Image
-    } else if attachment.mime_type.starts_with("audio/") {
+    } else if mime_lower.starts_with("audio/") {
         MediaPlaceholderType::Audio
     } else {
         MediaPlaceholderType::File

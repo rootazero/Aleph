@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use futures::StreamExt;
 use tracing::{debug, warn};
 
 use crate::gateway::channel::Attachment;
@@ -84,9 +85,8 @@ impl MediaCache {
                 return Err(CacheError::TooLarge { size });
             }
             let dir = ensure_session_dir(session_id)?;
-            let filename = sanitize_filename(
-                attachment.filename.as_deref().unwrap_or(&attachment.id),
-            );
+            let filename =
+                sanitize_filename(attachment.filename.as_deref().unwrap_or(&attachment.id));
             let path = dir.join(filename);
             std::fs::write(&path, data)?;
             debug!(path = %path.display(), "cached inline attachment");
@@ -127,26 +127,42 @@ impl MediaCache {
                 return Err(CacheError::Download(format!("HTTP {}", resp.status())));
             }
 
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| CacheError::Download(e.to_string()))?;
-
-            let size = bytes.len() as u64;
-            if size > MAX_FILE_SIZE {
-                return Err(CacheError::TooLarge { size });
+            // Pre-check Content-Length to avoid downloading oversized files
+            if let Some(content_length) = resp.content_length() {
+                if content_length > MAX_FILE_SIZE {
+                    return Err(CacheError::TooLarge {
+                        size: content_length,
+                    });
+                }
             }
 
-            let filename = sanitize_filename(
-                attachment.filename.as_deref().unwrap_or(&attachment.id),
-            );
-            let path = dir.join(filename);
-            std::fs::write(&path, &bytes)?;
-            debug!(path = %path.display(), size, "downloaded attachment from URL");
+            let filename =
+                sanitize_filename(attachment.filename.as_deref().unwrap_or(&attachment.id));
+            let path = dir.join(&filename);
+
+            // Stream response body to file with incremental size check
+            // (guards against servers that lie about Content-Length or omit it)
+            let mut file = std::fs::File::create(&path)?;
+            let mut stream = resp.bytes_stream();
+            let mut total_size: u64 = 0;
+
+            while let Some(result) = stream.next().await {
+                let chunk = result.map_err(|e| CacheError::Download(e.to_string()))?;
+                total_size += chunk.len() as u64;
+                if total_size > MAX_FILE_SIZE {
+                    // Clean up partially-written file
+                    let _ = std::fs::remove_file(&path);
+                    return Err(CacheError::TooLarge { size: total_size });
+                }
+                use std::io::Write;
+                file.write_all(&chunk)?;
+            }
+
+            debug!(path = %path.display(), size = total_size, "downloaded attachment from URL");
             return Ok(CachedMedia {
                 local_path: path,
                 mime_type: attachment.mime_type.clone(),
-                size,
+                size: total_size,
             });
         }
 
@@ -230,7 +246,7 @@ impl MediaCache {
         );
 
         // Build a temporary Attachment to pass through resolve()
-        let temp_attachment = if item.url.starts_with("data:") {
+        let temp_attachment = if item.url.to_ascii_lowercase().starts_with("data:") {
             // Parse data URL: data:[<mediatype>][;base64],<data>
             match Self::decode_data_url(&item.url) {
                 Ok((decoded_mime, bytes)) => Attachment {
@@ -390,11 +406,15 @@ fn sanitize_filename(name: &str) -> String {
         .to_string()
 }
 
-/// Expand a leading `~/` into the user's home directory.
+/// Expand a leading `~/` (or bare `~`) into the user's home directory.
 fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest);
+        }
+    } else if path == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
         }
     }
     PathBuf::from(path)

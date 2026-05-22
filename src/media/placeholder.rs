@@ -57,9 +57,10 @@ impl MediaRegistry {
 
     pub fn register(&mut self, id: impl Into<String>, record: MediaRecord) -> MediaPlaceholder {
         let id = id.into();
-        let ty = if record.mime_type.starts_with("image/") {
+        let mime_lower = record.mime_type.to_ascii_lowercase();
+        let ty = if mime_lower.starts_with("image/") {
             MediaPlaceholderType::Image
-        } else if record.mime_type.starts_with("audio/") {
+        } else if mime_lower.starts_with("audio/") {
             MediaPlaceholderType::Audio
         } else {
             MediaPlaceholderType::File
