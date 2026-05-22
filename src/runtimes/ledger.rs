@@ -214,9 +214,17 @@ impl CapabilityLedger {
             }
         }
 
-        std::env::join_paths(&paths)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default()
+        match std::env::join_paths(&paths) {
+            Ok(paths) => paths.to_string_lossy().to_string(),
+            Err(e) => {
+                warn!("Failed to join PATH components: {}. Falling back to best-effort concatenation.", e);
+                paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join(if cfg!(target_os = "windows") { ";" } else { ":" })
+            }
+        }
     }
 
     /// Return all entries that are currently `Ready`.

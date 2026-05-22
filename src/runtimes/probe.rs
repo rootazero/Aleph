@@ -61,31 +61,58 @@ pub fn probe(name: &str) -> ProbeResult {
 }
 
 fn probe_system_path(spec: &RuntimeSpec) -> Option<ProbeResult> {
-    let locator = if cfg!(target_os = "windows") {
-        "where"
-    } else {
-        "which"
-    };
     for bin_name in spec.binaries {
-        trace!("looking for '{}' via {}", bin_name, locator);
-        let output = Command::new(locator).arg(bin_name).output().ok()?;
+        let bin_path = find_on_path(bin_name)?;
+        let version = get_version(&bin_path, spec.version_flag, spec.version_regex);
+        let version_warning = check_version_warning(spec, version.as_deref());
+        return Some(ProbeResult {
+            found: true,
+            bin_path: Some(bin_path),
+            version,
+            source: CapabilitySource::System,
+            version_warning,
+        });
+    }
+    None
+}
+
+/// Locate a binary on the system PATH.
+///
+/// First tries the platform-native locator (`which` on Unix, `where` on Windows).
+/// Falls back to a manual PATH walk for minimal environments (e.g. containers
+/// without the `which` binary).
+fn find_on_path(bin_name: &str) -> Option<PathBuf> {
+    // 1. Try the native locator first (more reliable, handles aliases, etc.)
+    let locator = if cfg!(target_os = "windows") { "where" } else { "which" };
+    trace!("looking for '{}' via {}", bin_name, locator);
+    if let Ok(output) = Command::new(locator).arg(bin_name).output() {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            // On Windows, `where` can return multiple lines; take the first.
-            let path_str = stdout.lines().next().unwrap_or("").trim().to_string();
-            if path_str.is_empty() {
-                continue;
+            let path_str = stdout.lines().next().unwrap_or("").trim();
+            if !path_str.is_empty() {
+                return Some(PathBuf::from(path_str));
             }
-            let bin_path = PathBuf::from(&path_str);
-            let version = get_version(&bin_path, spec.version_flag, spec.version_regex);
-            let version_warning = check_version_warning(spec, version.as_deref());
-            return Some(ProbeResult {
-                found: true,
-                bin_path: Some(bin_path),
-                version,
-                source: CapabilitySource::System,
-                version_warning,
-            });
+        }
+    }
+
+    // 2. Fallback: manual PATH traversal
+    trace!("falling back to manual PATH search for '{}'", bin_name);
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidates: Vec<PathBuf> = if cfg!(target_os = "windows") {
+            vec![
+                dir.join(format!("{}.exe", bin_name)),
+                dir.join(format!("{}.bat", bin_name)),
+                dir.join(format!("{}.cmd", bin_name)),
+                dir.join(bin_name),
+            ]
+        } else {
+            vec![dir.join(bin_name)]
+        };
+        for candidate in candidates {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
     None

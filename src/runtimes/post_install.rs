@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use tokio::process::Command;
+use tracing::warn;
 
 use super::specs::PostInstallAction;
 
@@ -66,7 +67,9 @@ async fn run_subcommand(
     if let Some(td) = target_dir {
         let expanded = expand_home(td)?;
         if let Some(parent) = PathBuf::from(&expanded).parent() {
-            tokio::fs::create_dir_all(parent).await.ok();
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                warn!("Failed to create target directory {}: {}", parent.display(), e);
+            }
         }
         cmd.arg(&expanded);
     }
@@ -127,6 +130,10 @@ async fn verify_or_repair(
         .output()
         .await?;
     if !output.status.success() {
+        return Err(PostInstallError::RepairFailed);
+    }
+    // A successful exit code does not guarantee the asset was created (e.g. no-op script)
+    if !expanded.exists() {
         return Err(PostInstallError::RepairFailed);
     }
     Ok(())
@@ -192,10 +199,9 @@ mod tests {
             .unwrap();
 
         // Probe a non-existent path so the repair fires.
-        // repair[0] is the script to run (bin_path), repair[1] is the output
-        // file path passed as $1 to touchit.sh.
+        // The repair command (touchit.sh) must create the probed path.
         let action = PostInstallAction::AssetProbe {
-            path: "$HOME/never/exists",
+            path: "$HOME/expected_output_file",
             repair: &["$HOME/expected_output_file"],
         };
 
