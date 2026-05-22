@@ -39,9 +39,12 @@ pub fn write_endpoint(data_dir: &Path, endpoint: &IpcEndpoint) -> std::io::Resul
     {
         use std::os::unix::fs::PermissionsExt;
         let perm = std::fs::Permissions::from_mode(0o600);
-        if let Err(e) = std::fs::set_permissions(&path, perm) {
-            warn!(path = %path.display(), error = %e, "failed to restrict endpoint file permissions");
-        }
+        std::fs::set_permissions(&path, perm).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("failed to restrict endpoint file permissions: {e}"),
+            )
+        })?;
     }
     Ok(())
 }
