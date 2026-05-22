@@ -41,9 +41,14 @@ pub fn stop_daemon() {
         return;
     };
     match std::process::Command::new(&bin).arg("stop").output() {
-        Ok(out) => tracing::info!(
+        Ok(out) if out.status.success() => tracing::info!(
             "aleph-server stop: {}",
             String::from_utf8_lossy(&out.stdout).trim()
+        ),
+        Ok(out) => tracing::warn!(
+            "aleph-server stop exited with status {}: stderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
         ),
         Err(e) => tracing::warn!("aleph-server stop failed: {e}"),
     }
@@ -114,13 +119,19 @@ fn remove_legacy_autostart() {
     }
     // `launchctl bootout` needs the GUI domain target; resolve the uid
     // without pulling in a libc dependency.
+    let mut bootout_ok = false;
     if let Ok(out) = Command::new("id").arg("-u").output() {
         let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !uid.is_empty() {
-            let _ = Command::new("launchctl")
+            bootout_ok = Command::new("launchctl")
                 .args(["bootout", &format!("gui/{uid}/com.aleph.server")])
-                .output();
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
         }
+    }
+    if !bootout_ok {
+        tracing::warn!("failed to unload legacy launchd service");
     }
     let _ = std::fs::remove_file(&plist);
     tracing::info!("removed legacy launchd autostart service");
@@ -131,9 +142,7 @@ fn remove_legacy_autostart() {
 fn remove_legacy_autostart() {
     use std::process::Command;
 
-    let Some(unit) =
-        dirs::home_dir().map(|h| h.join(".config/systemd/user/aleph.service"))
-    else {
+    let Some(unit) = dirs::home_dir().map(|h| h.join(".config/systemd/user/aleph.service")) else {
         return;
     };
     if !unit.exists() {
@@ -203,7 +212,12 @@ async fn port_open() -> bool {
 /// Minimal HTTP/1.0 GET that returns just the numeric status code. Avoids
 /// pulling a full HTTP client into the shell for a single localhost probe.
 async fn http_get_status(path: &str) -> Option<u16> {
-    let mut stream = TcpStream::connect((DAEMON_HOST, DAEMON_PORT)).await.ok()?;
+    let mut stream = tokio::time::timeout(
+        Duration::from_secs(2),
+        TcpStream::connect((DAEMON_HOST, DAEMON_PORT)),
+    )
+    .await
+    .ok()??;
     let request =
         format!("GET {path} HTTP/1.0\r\nHost: {DAEMON_HOST}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).await.ok()?;
@@ -269,7 +283,11 @@ fn spawn_detached(bin: &Path) -> Result<(), String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("failed to spawn {}: {e}", bin.display()))?;
-    let _ = launcher.wait();
+    match launcher.wait() {
+        Ok(status) if status.success() => {}
+        Ok(status) => tracing::warn!("aleph-server launcher exited with {status}"),
+        Err(e) => tracing::warn!("failed to wait for aleph-server launcher: {e}"),
+    }
     Ok(())
 }
 
