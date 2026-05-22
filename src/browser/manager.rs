@@ -193,7 +193,11 @@ impl ProfileManager {
             if let Some(BrowserDriver::ExistingSession) = self.get_driver(&name) {
                 self.chrome_mcp_driver.destroy_session(&name).await;
             }
-            self.set_state(&name, ProfileState::Idle);
+            if let Some(state) = self.get_state(&name) {
+                if state.is_running() {
+                    self.set_state(&name, ProfileState::Idle);
+                }
+            }
         }
         count
     }

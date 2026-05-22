@@ -193,13 +193,16 @@ impl BrowserBackend for PlaywrightCliBackend {
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let result = self.run(&arg_refs, Duration::from_secs(15)).await;
         let png_bytes = match result {
-            Ok(_) => tokio::fs::read(&path).await.map_err(BrowserError::Io)?,
+            Ok(_) => {
+                let bytes = tokio::fs::read(&path).await;
+                let _ = tokio::fs::remove_file(&path).await;
+                bytes.map_err(BrowserError::Io)?
+            }
             Err(e) => {
                 let _ = tokio::fs::remove_file(&path).await;
                 return Err(e);
             }
         };
-        let _ = tokio::fs::remove_file(&path).await;
         Ok(ScreenshotOutput { png_bytes })
     }
 

@@ -112,15 +112,27 @@ impl BrowserBackend for ChromeMcpBackend {
                 }
             })
             .next_back();
-        Ok(last_id.unwrap_or_else(|| {
-            text.lines()
-                .filter(|l| l.contains(url))
-                .filter_map(|l| l.split(':').next())
-                .next()
-                .unwrap_or("1")
-                .trim()
-                .to_string()
-        }))
+
+        match last_id {
+            Some(id) => Ok(id),
+            None => {
+                let id = text
+                    .lines()
+                    .filter(|l| l.contains(url))
+                    .filter_map(|l| l.split(':').next())
+                    .next()
+                    .map(|s| s.trim().to_string());
+
+                match id {
+                    Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) => {
+                        Ok(id)
+                    }
+                    _ => Err(BrowserError::TabNotFound(format!(
+                        "Could not determine tab ID after opening {url}"
+                    ))),
+                }
+            }
+        }
     }
 
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {

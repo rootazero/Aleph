@@ -132,11 +132,12 @@ impl ChromeMcpDriver {
                 );
                 Ok(ChromeMcpSession { client })
             }
-            Err(e) => {
-                tracing::info!(
-                    "Chrome DevTools MCP connection failed, attempting to launch Chrome: {e}"
-                );
-                self.ensure_chrome_running().await?;
+        Err(e) => {
+            tracing::info!(
+                "Chrome DevTools MCP connection failed, attempting to launch Chrome: {e}"
+            );
+            let _ = client.stop_all().await;
+            self.ensure_chrome_running().await?;
 
                 // Retry after Chrome launch
                 let retry_config = ExternalServerConfig {
@@ -170,7 +171,7 @@ impl ChromeMcpDriver {
     async fn ensure_chrome_running(&self) -> Result<(), BrowserError> {
         let _guard = self.chrome_launch_lock.lock().await;
 
-        if Self::is_chrome_running() {
+        if Self::is_chrome_running().await {
             return Err(BrowserError::AttachFailed(
                 "Chrome is running but remote debugging is not enabled. \
                  Please restart Chrome or enable debugging at chrome://inspect/#remote-debugging"
@@ -199,44 +200,48 @@ impl ChromeMcpDriver {
     }
 
     /// Check if a Chrome browser process is running on the system.
-    fn is_chrome_running() -> bool {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("pgrep")
-                .arg("-x")
-                .arg("Google Chrome")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        }
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            std::process::Command::new("pgrep")
-                .arg("-x")
-                .arg("chrome")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("tasklist")
-                .arg("/FI")
-                .arg("IMAGENAME eq chrome.exe")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        }
-        #[cfg(not(any(unix, target_os = "windows")))]
-        {
-            false
-        }
+    async fn is_chrome_running() -> bool {
+        tokio::task::spawn_blocking(|| {
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("pgrep")
+                    .arg("-x")
+                    .arg("Google Chrome")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                std::process::Command::new("pgrep")
+                    .arg("-x")
+                    .arg("chrome")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            }
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("tasklist")
+                    .arg("/FI")
+                    .arg("IMAGENAME eq chrome.exe")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            }
+            #[cfg(not(any(unix, target_os = "windows")))]
+            {
+                false
+            }
+        })
+        .await
+        .unwrap_or(false)
     }
 
     /// Destroy a session (for cleanup after transport errors).
