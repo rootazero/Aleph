@@ -3,6 +3,21 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+/// RAII guard that calls `end_turn` on drop so per-turn budget state is
+/// always released even when `act()` exits early via `?`.
+struct TurnBudgetGuard<'a> {
+    budget: Option<&'a crate::tools::turn_budget::TurnResultBudget>,
+    turn_id: &'a crate::tools::turn_budget::TurnId,
+}
+
+impl<'a> Drop for TurnBudgetGuard<'a> {
+    fn drop(&mut self) {
+        if let Some(budget) = self.budget {
+            budget.end_turn(self.turn_id);
+        }
+    }
+}
+
 use super::{AgentHarness, ToolCallGuardOutcome};
 use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnPhase};
@@ -50,12 +65,16 @@ impl AgentHarness {
 
         // Layer 3 turn-budget boundary. `begin_turn` is idempotent — re-entering
         // the same `TurnId` is a no-op, so this is safe even if the caller
-        // somehow loops on the same turn. `end_turn` runs at the bottom of
-        // this function (and at every early return) to clear per-turn state.
+        // somehow loops on the same turn. `end_turn` is always called via the
+        // RAII `TurnBudgetGuard` so per-turn state is released on every exit.
         let budget_turn_id = crate::tools::turn_budget::TurnId::new(turn_id);
         if let Some(budget) = self.deps.turn_budget.as_ref() {
             budget.begin_turn(budget_turn_id);
         }
+        let _budget_guard = TurnBudgetGuard {
+            budget: self.deps.turn_budget.as_ref().map(|v| v.as_ref()),
+            turn_id: &budget_turn_id,
+        };
 
         for mut call in tool_calls {
             callback.on_tool_call(&call.name);
@@ -176,12 +195,7 @@ impl AgentHarness {
             };
             let inner = match exec_result {
                 Ok(r) => r,
-                Err(stalled) => {
-                    if let Some(budget) = self.deps.turn_budget.as_ref() {
-                        budget.end_turn(&budget_turn_id);
-                    }
-                    return Err(stalled);
-                }
+                Err(stalled) => return Err(stalled),
             };
             match inner {
                 Ok(mut output) => {
@@ -347,13 +361,6 @@ impl AgentHarness {
             if let Some(ref tracker) = self.stall_tracker {
                 tracker.record_activity().await;
             }
-        }
-
-        // Layer 3 — release per-turn state. Failure here is impossible
-        // (`end_turn` is infallible) but the option-guard mirrors the
-        // begin-turn site for symmetry.
-        if let Some(budget) = self.deps.turn_budget.as_ref() {
-            budget.end_turn(&budget_turn_id);
         }
 
         Ok(executed_count)

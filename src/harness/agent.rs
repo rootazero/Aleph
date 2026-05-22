@@ -21,8 +21,8 @@
 //!   * `act.rs` — `act`
 //!   * `guardrails.rs` — `apply_input_guardrail`, `apply_tool_call_guardrail`
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use crate::sync_primitives::{AtomicBool, AtomicU64, Mutex, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -346,7 +346,7 @@ impl Harness for AgentHarness {
                 if tracker.is_stalled().await {
                     let elapsed = tracker.elapsed().await;
                     tracing::warn!(
-                        ?session_id,
+                        ?current_session,
                         ?elapsed,
                         "stall watchdog tripped; forcing Done with hit_limit",
                     );
@@ -371,7 +371,7 @@ impl Harness for AgentHarness {
             {
                 Err(HarnessError::StalledTurn { phase, elapsed }) => {
                     tracing::warn!(
-                        ?session_id,
+                        ?current_session,
                         ?phase,
                         ?elapsed,
                         "per-turn timeout tripped; forcing Done with hit_limit",
@@ -419,7 +419,7 @@ impl Harness for AgentHarness {
                             if let Some(cap) = self.deps.consecutive_failure_cap {
                                 if consecutive_failure_turns >= cap {
                                     tracing::warn!(
-                                        ?session_id,
+                                        ?current_session,
                                         cap,
                                         "consecutive total-failure cap reached; forcing Done",
                                     );
@@ -445,7 +445,7 @@ impl Harness for AgentHarness {
                         verifier_veto_count = verifier_veto_count.saturating_add(1);
                         if verifier_veto_count >= Self::MAX_VERIFIER_VETOS {
                             tracing::warn!(
-                                ?session_id,
+                                ?current_session,
                                 max_vetos = Self::MAX_VERIFIER_VETOS,
                                 "verifier veto limit reached; forcing Done to prevent infinite loop",
                             );
@@ -515,7 +515,7 @@ impl Harness for AgentHarness {
         *self
             .final_session_id
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(current_session);
+            .unwrap_or_else(|e| e.into_inner()) = Some(current_session.clone());
 
         let terminate_reason = Some(self.terminate_reason());
         let duration_ms = Some(self.duration_ms());
@@ -544,7 +544,7 @@ impl Harness for AgentHarness {
             Err(e) => {
                 let error_class = e.class();
                 tracing::warn!(
-                    ?session_id,
+                    ?current_session,
                     ?error_class,
                     error = %e,
                     "harness session ended in error",
@@ -768,7 +768,7 @@ mod tests {
             None
         }
 
-        fn dispatcher_schema(&self) -> Arc<[crate::dispatcher::ToolDefinition]> {
+        fn dispatcher_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
             Arc::from(vec![])
         }
     }
