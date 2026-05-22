@@ -57,6 +57,7 @@ impl EventProjector {
         }
 
         let mut fact: Option<MemoryFact> = None;
+        let mut access_count: u32 = 0;
 
         for envelope in events {
             match &envelope.event {
@@ -154,11 +155,9 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::NoteAccessed {
-                    new_access_count, ..
-                } => {
+                MemoryEvent::NoteAccessed { .. } => {
                     if let Some(ref mut f) = fact {
-                        f.access_count = *new_access_count;
+                        access_count += 1;
                         f.last_accessed_at = Some(envelope.timestamp);
                     }
                 }
@@ -195,6 +194,10 @@ impl EventProjector {
                     }
                 }
             }
+        }
+
+        if let Some(ref mut f) = fact {
+            f.access_count = access_count;
         }
 
         Ok(fact)

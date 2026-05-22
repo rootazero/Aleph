@@ -194,6 +194,10 @@ impl CompressionService {
                 hook.on_compression_complete(agent_id).await;
             }
         }
+
+        self.scheduler.reset_turns();
+        self.scheduler.record_activity();
+
         Ok(total)
     }
 

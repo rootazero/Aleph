@@ -92,7 +92,12 @@ impl<S: NoteStore> NoteRetrieval<S> {
         // 3. Read markdown, parse frontmatter, compute final re-rank score
         let mut scored: Vec<NoteContent> = Vec::new();
         for (path, cosine) in results {
-            let safe_path = path.replace("..", "").replace('\\', "/");
+            let safe_path = path
+                .replace('\\', "/")
+                .split('/')
+                .filter(|s| !s.is_empty() && *s != "..")
+                .collect::<Vec<_>>()
+                .join("/");
             let file_path = self
                 .memory_dir
                 .join(agent_id)

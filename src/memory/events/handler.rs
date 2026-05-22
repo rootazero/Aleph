@@ -108,26 +108,46 @@ impl MemoryCommandHandler {
                         return Ok(());
                     }
                 };
-                // We don't know the agent or category at delete time without re-reading the
-                // first event. Search the index by filename as a best-effort cleanup.
-                // This is intentionally fire-and-forget (errors are logged, not propagated).
-                let agents_to_try = [DEFAULT_AGENT_ID, "owner"]; // common agent IDs (owner is legacy; audit separately)
-                for agent_id in &agents_to_try {
-                    for cat in crate::memory::notes::CATEGORY_DIRS {
-                        let file = indexer
-                            .memory_dir()
-                            .join(agent_id)
-                            .join(cat)
-                            .join(format!("{title}.md"));
-                        if file.exists() {
-                            tokio::fs::remove_file(&file).await.ok();
-                            let note_path = format!("{cat}/{title}");
-                            if let Err(e) = indexer
-                                .store()
-                                .remove_note_index(&note_path, agent_id)
-                                .await
-                            {
-                                tracing::error!(fact_id, error = %e, "Notes dual-write: failed to remove note index");
+                let mut found = false;
+                for agent_id in [DEFAULT_AGENT_ID, "owner"] {
+                    match indexer.store().find_by_filename(&title, agent_id).await {
+                        Ok(paths) if !paths.is_empty() => {
+                            for note_path in paths {
+                                let file = indexer.memory_dir().join(agent_id).join(format!("{note_path}.md"));
+                                if file.exists() {
+                                    tokio::fs::remove_file(&file).await.ok();
+                                }
+                                if let Err(e) = indexer
+                                    .store()
+                                    .remove_note_index(&note_path, agent_id)
+                                    .await
+                                {
+                                    tracing::error!(fact_id, error = %e, "Notes dual-write: failed to remove note index");
+                                }
+                            }
+                            found = true;
+                        }
+                        _ => continue,
+                    }
+                }
+                if !found {
+                    for agent_id in [DEFAULT_AGENT_ID, "owner"] {
+                        for cat in crate::memory::notes::CATEGORY_DIRS {
+                            let file = indexer
+                                .memory_dir()
+                                .join(agent_id)
+                                .join(cat)
+                                .join(format!("{title}.md"));
+                            if file.exists() {
+                                tokio::fs::remove_file(&file).await.ok();
+                                let note_path = format!("{cat}/{title}");
+                                if let Err(e) = indexer
+                                    .store()
+                                    .remove_note_index(&note_path, agent_id)
+                                    .await
+                                {
+                                    tracing::error!(fact_id, error = %e, "Notes dual-write: failed to remove note index");
+                                }
                             }
                         }
                     }
