@@ -84,8 +84,6 @@ pub struct FileOpsOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<FileInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes_written: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items_affected: Option<usize>,

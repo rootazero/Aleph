@@ -5,12 +5,14 @@
 
 mod batch;
 pub(crate) mod edit;
+mod edit_match;
 mod ops;
 mod path_utils;
 pub(crate) mod read;
 mod search;
 mod state;
 mod stats;
+mod text;
 mod tool;
 mod types;
 pub(crate) mod write;
@@ -81,7 +83,14 @@ mod tests {
         };
         let result = AlephTool::call(&read_tool, read_args).await.unwrap();
         assert!(result.success);
-        assert_eq!(result.content, "Hello, World!");
+        // `file_read` renders `cat -n`-style line numbers; the file body is
+        // present within the numbered output.
+        assert!(
+            result.content.contains("Hello, World!"),
+            "content was: {:?}",
+            result.content
+        );
+        assert_eq!(result.total_lines, 1);
     }
 
     #[tokio::test]

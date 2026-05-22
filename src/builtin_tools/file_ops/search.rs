@@ -74,7 +74,6 @@ pub async fn execute_search(
             canonical.display()
         ),
         files: Some(files),
-        content: None,
         bytes_written: None,
         items_affected: Some(count),
         summary: None,

@@ -17,8 +17,6 @@ use crate::tools::AlephTool;
 
 /// File operations tool
 pub struct FileOpsTool {
-    /// Maximum file size for read operations (100MB default)
-    max_read_size: u64,
     /// Denied path patterns (security)
     denied_paths: Vec<String>,
     /// Optional ToolContext handle for workspace-scoped output path resolution
@@ -57,7 +55,6 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         );
 
         Self {
-            max_read_size: 100 * 1024 * 1024, // 100MB
             denied_paths,
             tool_context_handle: None,
         }
@@ -228,7 +225,6 @@ impl Default for FileOpsTool {
 impl Clone for FileOpsTool {
     fn clone(&self) -> Self {
         Self {
-            max_read_size: self.max_read_size,
             denied_paths: self.denied_paths.clone(),
             tool_context_handle: self.tool_context_handle.clone(),
         }

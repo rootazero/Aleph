@@ -70,20 +70,24 @@ pub async fn execute_list(
         operation: "list".to_string(),
         message: format!("Listed {} items in {}", count, canonical.display()),
         files: Some(files),
-        content: None,
         bytes_written: None,
         items_affected: Some(count),
         summary: None,
     })
 }
 
-/// Execute a read operation
-pub async fn execute_read(
+/// Validate and read a file's raw bytes.
+///
+/// Returns the canonicalized path, the file's byte size, and its raw contents.
+/// Higher-level concerns — binary detection, lossy UTF-8 decoding, and line
+/// windowing — are deliberately left to the caller (`file_read`), keeping this
+/// function a single, focused I/O boundary.
+pub(super) async fn read_file_bytes(
     path: &Path,
     denied_paths: &[String],
     max_read_size: u64,
     output_dir_override: Option<&std::path::Path>,
-) -> Result<FileOpsOutput, ToolError> {
+) -> Result<(PathBuf, u64, Vec<u8>), ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
     if !canonical.exists() {
@@ -102,40 +106,35 @@ pub async fn execute_read(
 
     let metadata = fs::metadata(&canonical)
         .map_err(|e| ToolError::Execution(format!("Failed to get metadata: {}", e)))?;
+    let size = metadata.len();
 
-    if metadata.len() > max_read_size {
+    if size > max_read_size {
         return Err(ToolError::InvalidArgs(format!(
             "File too large: {} bytes (max {})",
-            metadata.len(),
-            max_read_size
+            size, max_read_size
         )));
     }
 
-    let content = fs::read_to_string(&canonical)
+    let bytes = fs::read(&canonical)
         .map_err(|e| ToolError::Execution(format!("Failed to read file: {}", e)))?;
 
-    info!(path = %canonical.display(), size = metadata.len(), "Read file");
+    info!(path = %canonical.display(), size, "Read file");
 
-    Ok(FileOpsOutput {
-        success: true,
-        operation: "read".to_string(),
-        message: format!("Read {} bytes from {}", metadata.len(), canonical.display()),
-        files: None,
-        content: Some(content),
-        bytes_written: None,
-        items_affected: None,
-        summary: None,
-    })
+    Ok((canonical, size, bytes))
 }
 
-/// Execute a write operation
-pub async fn execute_write(
+/// Execute a write operation.
+///
+/// Returns the canonicalized path written and the number of bytes written, so
+/// callers can report the real resolved path rather than reverse-engineering it
+/// from a human-readable message string.
+pub(super) async fn execute_write(
     path: &Path,
     content: &str,
     create_parents: bool,
     denied_paths: &[String],
     output_dir_override: Option<&std::path::Path>,
-) -> Result<FileOpsOutput, ToolError> {
+) -> Result<(PathBuf, u64), ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
     // Create parent directories if needed
@@ -159,16 +158,7 @@ pub async fn execute_write(
     // Record the written file for attachment tracking
     record_written_file(canonical.clone(), bytes, "write");
 
-    Ok(FileOpsOutput {
-        success: true,
-        operation: "write".to_string(),
-        message: format!("Wrote {} bytes to {}", bytes, canonical.display()),
-        files: None,
-        content: None,
-        bytes_written: Some(bytes),
-        items_affected: None,
-        summary: None,
-    })
+    Ok((canonical, bytes))
 }
 
 /// Execute a move operation
@@ -214,7 +204,6 @@ pub async fn execute_move(
             to_canonical.display()
         ),
         files: None,
-        content: None,
         bytes_written: None,
         items_affected: Some(1),
         summary: None,
@@ -274,7 +263,6 @@ pub async fn execute_copy(
             bytes
         ),
         files: None,
-        content: None,
         bytes_written: Some(bytes),
         items_affected: Some(1),
         summary: None,
@@ -361,7 +349,6 @@ pub async fn execute_delete(
         operation: "delete".to_string(),
         message: format!("Deleted {} ({} items)", canonical.display(), items_deleted),
         files: None,
-        content: None,
         bytes_written: None,
         items_affected: Some(items_deleted),
         summary: None,
@@ -384,7 +371,6 @@ pub async fn execute_mkdir(
                 operation: "mkdir".to_string(),
                 message: format!("Directory already exists: {}", canonical.display()),
                 files: None,
-                content: None,
                 bytes_written: None,
                 items_affected: Some(0),
                 summary: None,
@@ -412,7 +398,6 @@ pub async fn execute_mkdir(
         operation: "mkdir".to_string(),
         message: format!("Created directory: {}", canonical.display()),
         files: None,
-        content: None,
         bytes_written: None,
         items_affected: Some(1),
         summary: None,

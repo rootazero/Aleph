@@ -1,6 +1,11 @@
 //! FileEditTool — string replacement editing tool
 //!
-//! Performs exact string replacements in files, aligned with claude-code's FileEditTool.
+//! Performs string replacements in files, aligned with claude-code's
+//! FileEditTool. Matching is exact first; on a miss it falls back to folding
+//! typographic punctuation (see [`super::edit_match`]) and, failing that,
+//! produces a diagnostic that tells the model exactly how to fix its input.
+//! Binary and non-UTF-8 files are refused outright — editing them would corrupt
+//! their non-text bytes on write-back.
 
 use std::path::Path;
 
@@ -9,10 +14,34 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use super::edit_match::{apply_ranges, locate, LocateResult};
 use super::path_utils::{check_and_resolve_path, get_denied_paths};
+use super::text::is_binary;
 use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
 use crate::tools::AlephTool;
+
+/// Read a file as UTF-8 text, refusing binary or non-UTF-8 content.
+///
+/// `file_edit` must round-trip the file faithfully, so — unlike `file_read` —
+/// it cannot use lossy decoding: a lossy decode followed by write-back would
+/// permanently replace every non-UTF-8 byte with U+FFFD.
+fn read_text_file(path: &Path) -> std::result::Result<String, ToolError> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| ToolError::Execution(format!("Failed to read {}: {}", path.display(), e)))?;
+    if is_binary(&bytes) {
+        return Err(ToolError::InvalidArgs(format!(
+            "Cannot edit {}: file appears to be binary.",
+            path.display()
+        )));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        ToolError::InvalidArgs(format!(
+            "Cannot edit {}: file is not valid UTF-8 text.",
+            path.display()
+        ))
+    })
+}
 
 // =============================================================================
 // Args & Output
@@ -98,7 +127,12 @@ impl FileEditTool {
         let summary = format!("edit: {}", &args.file_path);
         notify_tool_start("file_edit", &summary);
 
-        // Validate: old_string must differ from new_string
+        // Validate: old_string must be non-empty and differ from new_string.
+        if args.old_string.is_empty() {
+            let err = ToolError::InvalidArgs("old_string must not be empty".to_string());
+            notify_tool_result("file_edit", &err.to_string(), false);
+            return Err(err);
+        }
         if args.old_string == args.new_string {
             let err = ToolError::InvalidArgs(
                 "old_string and new_string are identical; nothing to change".to_string(),
@@ -118,39 +152,40 @@ impl FileEditTool {
 
         info!(path = %canonical.display(), "FileEditTool: reading file");
 
-        // Read current content
-        let content = std::fs::read_to_string(&canonical).map_err(|e| {
-            ToolError::Execution(format!("Failed to read {}: {}", canonical.display(), e))
+        // Read current content — binary / non-UTF-8 files are refused.
+        let content = read_text_file(&canonical).inspect_err(|e| {
+            notify_tool_result("file_edit", &e.to_string(), false);
         })?;
 
-        // Count matches
-        let match_count = content.matches(&args.old_string).count();
+        // Locate the edit target: exact match, then a typographic-folding
+        // fallback, then an actionable diagnostic.
+        let (ranges, fuzzy) = match locate(&content, &args.old_string) {
+            LocateResult::Exact(r) => (r, false),
+            LocateResult::Folded(r) => (r, true),
+            LocateResult::NotFound(diagnostic) => {
+                let err = ToolError::Execution(diagnostic);
+                notify_tool_result("file_edit", &err.to_string(), false);
+                return Err(err);
+            }
+        };
 
-        if match_count == 0 {
-            let err = ToolError::Execution(
-                "old_string not found in file, make sure it matches exactly".to_string(),
-            );
-            notify_tool_result("file_edit", &err.to_string(), false);
-            return Err(err);
-        }
-
-        if match_count > 1 && !args.replace_all {
+        if ranges.len() > 1 && !args.replace_all {
             let err = ToolError::Execution(format!(
                 "Found {} matches of old_string; provide more context to make it unique or set replace_all=true",
-                match_count
+                ranges.len()
             ));
             notify_tool_result("file_edit", &err.to_string(), false);
             return Err(err);
         }
 
-        // Perform replacement
-        let (new_content, replacements) = if args.replace_all {
-            let replaced = content.replace(&args.old_string, &args.new_string);
-            (replaced, match_count)
+        // `ranges` is non-empty here; apply all under `replace_all`, else the first.
+        let applied = if args.replace_all {
+            &ranges[..]
         } else {
-            let replaced = content.replacen(&args.old_string, &args.new_string, 1);
-            (replaced, 1)
+            &ranges[..1]
         };
+        let replacements = applied.len();
+        let new_content = apply_ranges(&content, applied, &args.new_string);
 
         // Write back
         std::fs::write(&canonical, &new_content).map_err(|e| {
@@ -159,13 +194,18 @@ impl FileEditTool {
 
         let path_str = canonical.to_string_lossy().to_string();
         let message = format!(
-            "Replaced {} occurrence{} in {}",
+            "Replaced {} occurrence{} in {}{}",
             replacements,
             if replacements == 1 { "" } else { "s" },
-            path_str
+            path_str,
+            if fuzzy {
+                " (matched after normalizing typographic punctuation)"
+            } else {
+                ""
+            },
         );
 
-        info!(replacements, path = %path_str, "FileEditTool: edit complete");
+        info!(replacements, fuzzy, path = %path_str, "FileEditTool: edit complete");
         notify_tool_result("file_edit", &message, true);
 
         Ok(FileEditOutput {
@@ -199,11 +239,13 @@ impl Clone for FileEditTool {
 #[async_trait]
 impl AlephTool for FileEditTool {
     const NAME: &'static str = "file_edit";
-    const DESCRIPTION: &'static str = r#"Perform exact string replacement in a file.
+    const DESCRIPTION: &'static str = r#"Perform a string replacement in a file.
 
 Finds `old_string` in the file and replaces it with `new_string`.
 - By default, `old_string` must match exactly once; if multiple matches exist the call fails.
 - Set `replace_all=true` to replace every occurrence.
+- `old_string` must be the raw file text — do NOT include the line-number prefixes shown by file_read.
+- Matching is exact; typographic punctuation (curly quotes, em-dashes) is tolerated, and on a miss the error explains how to fix your input.
 
 Use this tool for surgical edits — it only changes what you specify, leaving the rest of the file intact."#;
 
@@ -319,5 +361,114 @@ mod tests {
 
         let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn fuzzy_typographic_punctuation_match() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("t.txt");
+        // File has a curly apostrophe; the model types an ASCII one.
+        fs::write(&file, "it\u{2019}s here").unwrap();
+
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: "it's here".to_string(),
+                new_string: "it is here".to_string(),
+                replace_all: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(result.success);
+        assert!(
+            result.message.contains("normalizing"),
+            "msg: {}",
+            result.message
+        );
+        assert_eq!(fs::read_to_string(&file).unwrap(), "it is here");
+    }
+
+    #[tokio::test]
+    async fn binary_file_is_refused() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("blob.bin");
+        fs::write(&file, [0x00, 0x01, 0x02, 0x03]).unwrap();
+
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: "anything".to_string(),
+                new_string: "else".to_string(),
+                replace_all: false,
+            },
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("binary"));
+    }
+
+    #[tokio::test]
+    async fn non_utf8_file_is_refused() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("latin1.txt");
+        // 0xFF is invalid UTF-8 yet contains no NUL byte.
+        fs::write(&file, [b'h', b'i', 0xFF]).unwrap();
+
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: "hi".to_string(),
+                new_string: "yo".to_string(),
+                replace_all: false,
+            },
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("UTF-8"));
+    }
+
+    #[tokio::test]
+    async fn empty_old_string_rejected() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("t.txt");
+        fs::write(&file, "content").unwrap();
+
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: String::new(),
+                new_string: "x".to_string(),
+                replace_all: false,
+            },
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn whitespace_drift_produces_diagnostic() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("code.rs");
+        let original = "fn main() {\n    let x = 1;\n}\n";
+        fs::write(&file, original).unwrap();
+
+        // Over-indented old_string — not even a substring of the file.
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: "            let x = 1;".to_string(),
+                new_string: "    let x = 2;".to_string(),
+                replace_all: false,
+            },
+        )
+        .await;
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("whitespace"), "err was: {err}");
+        // The file must be untouched when the match fails.
+        assert_eq!(fs::read_to_string(&file).unwrap(), original);
     }
 }

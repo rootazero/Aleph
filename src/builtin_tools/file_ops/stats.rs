@@ -141,7 +141,6 @@ pub async fn execute_stats(
         operation: "stats".to_string(),
         message,
         files: Some(files),
-        content: None,
         bytes_written: None,
         items_affected: Some(total_files),
         summary: Some(summary),

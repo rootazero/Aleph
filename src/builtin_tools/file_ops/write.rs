@@ -153,14 +153,15 @@ impl AlephTool for FileWriteTool {
         .await;
 
         match result {
-            Ok(output) => {
+            Ok((canonical, bytes_written)) => {
+                let path = canonical.display().to_string();
                 let write_output = FileWriteOutput {
-                    success: output.success,
-                    path: output.message.clone(),
-                    bytes_written: output.bytes_written.unwrap_or(0),
-                    message: output.message,
+                    success: true,
+                    message: format!("Wrote {bytes_written} bytes to {path}"),
+                    path,
+                    bytes_written,
                 };
-                notify_tool_result(Self::NAME, &write_output.message, write_output.success);
+                notify_tool_result(Self::NAME, &write_output.message, true);
                 Ok(write_output)
             }
             Err(e) => {
