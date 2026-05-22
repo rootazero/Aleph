@@ -229,14 +229,21 @@ impl GoogleImagenProvider {
             if h == 0 {
                 return DEFAULT_ASPECT_RATIO.to_string();
             }
-            let ratio = w as f32 / h as f32;
-            return match ratio {
-                r if (r - 1.0).abs() < 0.1 => "1:1".to_string(),
-                r if (r - 0.75).abs() < 0.1 => "3:4".to_string(),
-                r if (r - 1.333).abs() < 0.1 => "4:3".to_string(),
-                r if (r - 0.5625).abs() < 0.1 => "9:16".to_string(),
-                r if (r - 1.778).abs() < 0.1 => "16:9".to_string(),
-                _ => DEFAULT_ASPECT_RATIO.to_string(),
+            // Use integer cross-multiplication to avoid f32 precision loss
+            let w = w as u64;
+            let h = h as u64;
+            return if w == h {
+                "1:1".to_string()
+            } else if w * 4 == h * 3 {
+                "3:4".to_string()
+            } else if w * 3 == h * 4 {
+                "4:3".to_string()
+            } else if w * 16 == h * 9 {
+                "9:16".to_string()
+            } else if w * 9 == h * 16 {
+                "16:9".to_string()
+            } else {
+                DEFAULT_ASPECT_RATIO.to_string()
             };
         }
 
