@@ -221,6 +221,14 @@ async fn handle_continue_with_targets(
     let mut session = session_handle.lock().await;
 
     if session.current_round >= max_rounds {
+        session.end();
+        drop(session);
+
+        {
+            let mut orch_guard = orch.lock().await;
+            orch_guard.end_session(&session_id);
+        }
+
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,

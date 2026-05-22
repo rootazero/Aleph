@@ -25,7 +25,9 @@ pub fn resolve_conflicts(candidates: Vec<PluginCandidate>) -> ResolvedPlugins {
 
     for (id, mut group) in by_id {
         if group.len() == 1 {
-            active.push(group.pop().unwrap());
+            if let Some(candidate) = group.pop() {
+                active.push(candidate);
+            }
         } else {
             // Sort by priority (highest first)
             group.sort_by(|a, b| b.origin.priority().cmp(&a.origin.priority()));

@@ -250,7 +250,7 @@ impl GroupChatExecutor {
             self.persist_turn(
                 &session.id,
                 round,
-                sequence + 1,
+                sequence,
                 &speaker,
                 &persona_response,
             );
@@ -284,10 +284,9 @@ mod tests {
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
     use crate::providers::AiProvider;
 
-    use crate::sync_primitives::Arc;
+    use crate::sync_primitives::{Arc, AtomicUsize, Ordering};
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::super::protocol::Persona;
     use super::super::session::GroupChatSession;

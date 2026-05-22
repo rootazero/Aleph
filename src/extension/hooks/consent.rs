@@ -11,11 +11,12 @@
 //! registry whenever the file changes on disk, so an approval made via the
 //! `aleph hooks` CLI is picked up by a running server without a restart.
 
+use crate::sync_primitives::{Arc, RwLock};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};

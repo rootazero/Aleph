@@ -153,8 +153,16 @@ impl ServiceManager {
         match result {
             Ok(value) => {
                 // Try to parse as ServiceResult for detailed info
-                let service_result: ServiceResult =
-                    serde_json::from_value(value.clone()).unwrap_or_else(|_| ServiceResult::ok());
+                let service_result: ServiceResult = match serde_json::from_value(value.clone()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(
+                            "Failed to parse service start result as ServiceResult: {}",
+                            e
+                        );
+                        ServiceResult::ok()
+                    }
+                };
 
                 if service_result.success {
                     info.state = ServiceState::Running;
@@ -243,8 +251,13 @@ impl ServiceManager {
         match result {
             Ok(value) => {
                 // Try to parse as ServiceResult for detailed info
-                let service_result: ServiceResult =
-                    serde_json::from_value(value.clone()).unwrap_or_else(|_| ServiceResult::ok());
+                let service_result: ServiceResult = match serde_json::from_value(value.clone()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!("Failed to parse service stop result as ServiceResult: {}", e);
+                        ServiceResult::ok()
+                    }
+                };
 
                 if service_result.success {
                     info.state = ServiceState::Stopped;

@@ -7,8 +7,8 @@ use crate::extension::capability::CapabilityDeclaration;
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registrar::api::CapabilityApi;
 use crate::extension::registry::PluginRegistry;
+use crate::sync_primitives::{PoisonError, RwLock, RwLockWriteGuard};
 use anyhow::Result;
-use std::sync::{PoisonError, RwLock, RwLockWriteGuard};
 
 /// Host function for WASM plugins to register capabilities.
 ///

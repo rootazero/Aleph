@@ -387,7 +387,13 @@ impl ExtensionManager {
 
         for dirs in all_dirs.into_iter().flatten() {
             for d in dirs {
-                let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
+                let canonical = match d.path.canonicalize() {
+                    Ok(path) => path,
+                    Err(e) => {
+                        tracing::debug!("Failed to canonicalize path {:?}: {}", d.path, e);
+                        d.path.clone()
+                    }
+                };
                 if seen.insert(canonical) {
                     result.push(d.path);
                 }

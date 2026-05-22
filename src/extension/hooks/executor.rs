@@ -6,10 +6,10 @@ use super::{
 };
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
 use crate::extension::ExtensionError;
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
