@@ -452,6 +452,12 @@ fn parse_sse_event_multi(
         StreamEvent::TextDelta { delta, .. } => {
             out.push_back(Ok(ProviderDelta::TextDelta(delta)));
         }
+        StreamEvent::TextDone { .. } => {
+            tracing::debug!(
+                target: "aleph::openai_responses_sse",
+                "response.output_text.done — content already accumulated via delta events"
+            );
+        }
 
         StreamEvent::OutputItemAdded {
             item: OutputItem::FunctionCall {
