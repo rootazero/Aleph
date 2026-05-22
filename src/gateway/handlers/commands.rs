@@ -12,7 +12,7 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use super::parse_params;
 use crate::command::{CommandContext, CommandNode, CommandParser, CommandType};
 use crate::sync_primitives::Arc;
-use crate::tool_metadata::{ToolRegistry, ToolSourceType, UnifiedTool};
+use crate::tool_metadata::{ToolCatalog, ToolSourceType, UnifiedTool};
 
 /// Command info for JSON serialization (backward compat for flat lists)
 #[derive(Debug, Clone, Serialize)]
@@ -209,7 +209,7 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-/// List all registered commands from ToolRegistry (tree structure)
+/// List all registered commands from ToolCatalog (tree structure)
 ///
 /// Returns a hierarchical command tree where dotted tool names
 /// are grouped under their namespace prefix.
@@ -238,7 +238,7 @@ fn capitalize(s: &str) -> String {
 /// ```
 pub async fn handle_list_from_registry(
     request: JsonRpcRequest,
-    tool_registry: &ToolRegistry,
+    tool_registry: &ToolCatalog,
 ) -> JsonRpcResponse {
     let tools: Vec<UnifiedTool> = tool_registry.list_root_commands().await;
     let tree = build_command_tree(tools);
@@ -365,7 +365,7 @@ impl From<CommandContext> for ResolvedCommandContext {
 
 /// Build children list for namespace interaction responses
 async fn build_namespace_children(
-    tool_registry: &ToolRegistry,
+    tool_registry: &ToolCatalog,
     namespace: &str,
 ) -> Vec<ChildCommandNode> {
     let children_tools = tool_registry.list_namespace_children(namespace).await;
@@ -413,7 +413,7 @@ async fn build_namespace_children(
 pub async fn handle_execute(
     request: JsonRpcRequest,
     command_parser: Arc<CommandParser>,
-    tool_registry: Arc<ToolRegistry>,
+    tool_registry: Arc<ToolCatalog>,
 ) -> JsonRpcResponse {
     let params: ExecuteParams = match parse_params(&request) {
         Ok(p) => p,
@@ -432,7 +432,7 @@ pub async fn handle_execute(
         format!("/{}", input)
     };
 
-    // Parse via CommandParser (async, queries ToolRegistry)
+    // Parse via CommandParser (async, queries ToolCatalog)
     match command_parser.parse_async(&slash_input).await {
         Some(parsed) => {
             // Successfully resolved — decompose the name into namespace + action
@@ -539,7 +539,7 @@ mod tests {
     async fn test_list_from_registry_flat_commands() {
         use crate::config::RoutingRuleConfig;
 
-        let registry = ToolRegistry::new();
+        let registry = ToolCatalog::new();
         let rules = vec![RoutingRuleConfig {
             regex: "^/search".to_string(),
             provider: Some("openai".to_string()),
@@ -564,7 +564,7 @@ mod tests {
     async fn test_list_from_registry_tree_structure() {
         use crate::tool_metadata::ToolSource;
 
-        let registry = ToolRegistry::new();
+        let registry = ToolCatalog::new();
 
         // Register namespaced tools directly
         for (id, name, desc) in [
@@ -632,7 +632,7 @@ mod tests {
     async fn test_execute_resolved() {
         use crate::config::RoutingRuleConfig;
 
-        let registry = Arc::new(ToolRegistry::new());
+        let registry = Arc::new(ToolCatalog::new());
         let rules = vec![RoutingRuleConfig {
             regex: "^/search".to_string(),
             provider: Some("openai".to_string()),
@@ -663,7 +663,7 @@ mod tests {
     async fn test_execute_namespace_only() {
         use crate::tool_metadata::ToolSource;
 
-        let registry = Arc::new(ToolRegistry::new());
+        let registry = Arc::new(ToolCatalog::new());
 
         // Register namespaced tools
         for (id, name, desc) in [
@@ -702,7 +702,7 @@ mod tests {
     async fn test_execute_bad_subcommand() {
         use crate::tool_metadata::ToolSource;
 
-        let registry = Arc::new(ToolRegistry::new());
+        let registry = Arc::new(ToolCatalog::new());
 
         for (id, name, desc) in [
             ("builtin:session_new", "session_new", "Start new session"),
@@ -740,7 +740,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_unknown_command() {
-        let registry = Arc::new(ToolRegistry::new());
+        let registry = Arc::new(ToolCatalog::new());
         let parser = Arc::new(CommandParser::new(registry.clone()));
         let request = JsonRpcRequest::with_id(
             "command.execute",
@@ -762,7 +762,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_empty_input() {
-        let registry = Arc::new(ToolRegistry::new());
+        let registry = Arc::new(ToolCatalog::new());
         let parser = Arc::new(CommandParser::new(registry.clone()));
         let request =
             JsonRpcRequest::with_id("command.execute", Some(json!({"input": ""})), json!(1));

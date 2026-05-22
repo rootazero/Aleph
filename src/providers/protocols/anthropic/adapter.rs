@@ -283,7 +283,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         // Convert tool definitions to Anthropic format. Tool names must satisfy
         // Anthropic's regex `^[a-zA-Z][a-zA-Z0-9_-]{0,127}$`; we sanitize on
         // outbound and remember the mapping so the streamed response can be
-        // mapped back to the dispatcher's original tool names.
+        // mapped back to the tool layer's original tool names.
         //
         // Two additional defenses convert hard 400s into warnings:
         // 1. Strip top-level `oneOf` / `allOf` / `anyOf` from the schema —

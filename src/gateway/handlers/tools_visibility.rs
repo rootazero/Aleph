@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::agents::AgentDef;
-use crate::tool_metadata::{ToolRegistry, ToolSource, UnifiedTool};
+use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 
@@ -131,7 +131,7 @@ fn extract_source_filter(req: &JsonRpcRequest) -> Option<String> {
 /// family-prefix wildcard (e.g. `"mcp:*"`).
 pub async fn handle_catalog(
     request: JsonRpcRequest,
-    tool_registry: &ToolRegistry,
+    tool_registry: &ToolCatalog,
 ) -> JsonRpcResponse {
     let source_filter = extract_source_filter(&request);
     let tools = tool_registry.list_all().await;
@@ -153,7 +153,7 @@ pub async fn handle_catalog(
 /// result is "tools allowed for this agent that also match the source".
 pub async fn handle_effective(
     request: JsonRpcRequest,
-    tool_registry: &ToolRegistry,
+    tool_registry: &ToolCatalog,
     agent: Option<&AgentDef>,
 ) -> JsonRpcResponse {
     let source_filter = extract_source_filter(&request);

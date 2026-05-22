@@ -1,9 +1,9 @@
 //! Unified Slash Command Parser
 //!
-//! Delegates all command resolution to ToolRegistry.
+//! Delegates all command resolution to ToolCatalog.
 
 use crate::sync_primitives::Arc;
-use crate::tool_metadata::{ToolRegistry, ToolSource, ToolSourceType, UnifiedTool};
+use crate::tool_metadata::{ToolCatalog, ToolSource, ToolSourceType, UnifiedTool};
 
 /// Parsed command result
 #[derive(Debug, Clone)]
@@ -59,15 +59,15 @@ pub enum CommandContext {
     None,
 }
 
-/// Unified command parser — delegates to ToolRegistry
+/// Unified command parser — delegates to ToolCatalog
 pub struct CommandParser {
     /// Tool registry for command resolution
-    tool_registry: Arc<ToolRegistry>,
+    tool_registry: Arc<ToolCatalog>,
 }
 
 impl CommandParser {
-    /// Create a new command parser backed by ToolRegistry
-    pub fn new(tool_registry: Arc<ToolRegistry>) -> Self {
+    /// Create a new command parser backed by ToolCatalog
+    pub fn new(tool_registry: Arc<ToolCatalog>) -> Self {
         Self { tool_registry }
     }
 
@@ -95,8 +95,8 @@ impl CommandParser {
         })
     }
 
-    /// Get a reference to the underlying ToolRegistry
-    pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
+    /// Get a reference to the underlying ToolCatalog
+    pub fn tool_registry(&self) -> &Arc<ToolCatalog> {
         &self.tool_registry
     }
 }
@@ -137,8 +137,8 @@ mod tests {
     use super::*;
     use crate::config::RoutingRuleConfig;
 
-    fn create_test_registry() -> Arc<ToolRegistry> {
-        Arc::new(ToolRegistry::new())
+    fn create_test_registry() -> Arc<ToolCatalog> {
+        Arc::new(ToolCatalog::new())
     }
 
     #[tokio::test]

@@ -6,7 +6,7 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 
 use crate::event::EventBus;
-use crate::tool_metadata::ToolRegistry;
+use crate::tool_metadata::ToolCatalog;
 
 use super::parts::SessionPart;
 use super::status::SessionStatus;
@@ -124,7 +124,7 @@ pub enum Decision {
 /// Component context - shared state for all event handlers
 pub struct ComponentContext {
     pub session: Arc<RwLock<ExecutionSession>>,
-    pub tools: Arc<ToolRegistry>,
+    pub tools: Arc<ToolCatalog>,
     pub bus: EventBus,
     pub abort_signal: Arc<AtomicBool>,
     pub session_id: String,
@@ -133,7 +133,7 @@ pub struct ComponentContext {
 impl ComponentContext {
     pub fn new(
         session: Arc<RwLock<ExecutionSession>>,
-        tools: Arc<ToolRegistry>,
+        tools: Arc<ToolCatalog>,
         bus: EventBus,
         abort_signal: Arc<AtomicBool>,
     ) -> Self {

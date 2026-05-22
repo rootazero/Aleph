@@ -14,13 +14,13 @@ fn agent_harness_runner_is_send_sync() {
 }
 
 #[test]
-fn compute_runtime_state_blocks_empty_when_no_dispatch_registry() {
+fn compute_runtime_state_blocks_empty_when_no_tool_catalog() {
     assert!(compute_runtime_state_blocks(None).is_empty());
 }
 
 #[test]
 fn compute_runtime_state_blocks_empty_when_no_probes_registered() {
-    let registry = Arc::new(crate::tool_metadata::ToolRegistry::new());
+    let registry = Arc::new(crate::tool_metadata::ToolCatalog::new());
     assert!(compute_runtime_state_blocks(Some(&registry)).is_empty());
 }
 
@@ -38,7 +38,7 @@ impl ToolHealthProbe for DeadProbe {
 
 #[tokio::test]
 async fn compute_runtime_state_blocks_surfaces_unhealthy_probes() {
-    let registry = Arc::new(crate::tool_metadata::ToolRegistry::new());
+    let registry = Arc::new(crate::tool_metadata::ToolCatalog::new());
     let cache = registry.health();
     cache.register_probe("alpha", Arc::new(DeadProbe("alpha offline")));
     cache.register_probe("beta", Arc::new(DeadProbe("beta offline")));

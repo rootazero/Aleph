@@ -1,4 +1,4 @@
-//! Dispatcher Layer - Tool Management
+//! Tool Metadata Layer
 //!
 //! This module manages tool registration, discovery, and risk evaluation:
 //!
@@ -22,7 +22,7 @@ pub mod tool_index;
 
 // === Re-exports: Tool Management ===
 pub use registry::ResolvedCommand;
-pub use registry::ToolRegistry;
+pub use registry::ToolCatalog;
 pub use registry::{HealthReason, HealthSnapshot, ProbeResult, ToolHealthCache, ToolHealthProbe};
 pub use types::{
     ChannelType, ConflictInfo, ConflictResolution, DispatchMode, RoutingLayer, StructuredToolMeta,

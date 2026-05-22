@@ -75,8 +75,8 @@ pub struct TelegramChannel {
     callback_rx: Option<mpsc::Receiver<CallbackQuery>>,
     /// Active bot instances (one per account)
     bot_instances: Vec<bot_instance::BotInstance>,
-    /// ToolRegistry for building slash commands at startup
-    tool_registry: Option<Arc<crate::tool_metadata::ToolRegistry>>,
+    /// ToolCatalog for building slash commands at startup
+    tool_registry: Option<Arc<crate::tool_metadata::ToolCatalog>>,
     /// Centralized access controller (pairing, allowlists, policies).
     access: Arc<AccessController>,
     /// Per-conversation error cooldown and typing circuit breaker.
@@ -157,9 +157,9 @@ impl TelegramChannel {
         }
     }
 
-    /// Set the ToolRegistry so this channel can query builtin tools at startup
+    /// Set the ToolCatalog so this channel can query builtin tools at startup
     /// and register them as Telegram slash commands.
-    pub fn set_tool_registry(&mut self, registry: Arc<crate::tool_metadata::ToolRegistry>) {
+    pub fn set_tool_registry(&mut self, registry: Arc<crate::tool_metadata::ToolCatalog>) {
         self.tool_registry = Some(registry);
     }
 
@@ -346,7 +346,7 @@ impl Channel for TelegramChannel {
                 }
             }
 
-            // Build slash commands from ToolRegistry (user-facing commands only)
+            // Build slash commands from ToolCatalog (user-facing commands only)
             if let Some(ref registry) = self.tool_registry {
                 use teloxide::types::BotCommand;
 

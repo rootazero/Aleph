@@ -177,7 +177,7 @@ impl SecurityContext {
     ///
     /// This is the prompt-level security posture surfaced to the LLM via
     /// [`SecurityContext::security_notes`]. Tool enforcement at runtime
-    /// happens in the tool dispatcher; this constructor only determines
+    /// happens in the tool execution layer; this constructor only determines
     /// *what the LLM is told* about its current envelope.
     ///
     /// - `CLI` / `WebRich` / `Background` / `Embedded` → [`permissive`] —

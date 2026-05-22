@@ -1,4 +1,4 @@
-//! Bridges `McpManagerEvent`s into the Phase-2 `ToolRegistry`.
+//! Bridges `McpManagerEvent`s into the Phase-2 `ToolHandlerRegistry`.
 //!
 //! The MCP manager actor owns server lifecycle; it only emits events and never
 //! imports the tool system (P1 low coupling). This bridge is the single place
@@ -19,11 +19,11 @@ use tokio::task::JoinHandle;
 use crate::builtin_tools::mcp_prompt::McpGetPromptTool;
 use crate::builtin_tools::mcp_resource::McpReadResourceTool;
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
-use crate::tool_metadata::ToolRegistry as DispatchRegistry;
+use crate::tool_metadata::ToolCatalog;
 use crate::tools::handlers::builtin::BuiltinHandler;
 use crate::tools::handlers::registration::{register_mcp_tools, unregister_mcp_tools};
 use crate::tools::handlers::ToolHandler;
-use crate::tools::registry::ToolRegistry;
+use crate::tools::registry::ToolHandlerRegistry;
 use crate::tools::AlephToolDyn;
 
 /// Registry name of the capability-gated resource-reading builtin.
@@ -31,7 +31,7 @@ const RESOURCE_TOOL: &str = "mcp_read_resource";
 /// Registry name of the capability-gated prompt-fetching builtin.
 const PROMPT_TOOL: &str = "mcp_get_prompt";
 
-/// Spawn the MCP → `ToolRegistry` bridge task.
+/// Spawn the MCP → `ToolHandlerRegistry` bridge task.
 ///
 /// The task subscribes to the manager's event broadcast and keeps `registry`
 /// in sync with every server's discovered tools. Returns the `JoinHandle` so
@@ -39,8 +39,8 @@ const PROMPT_TOOL: &str = "mcp_get_prompt";
 /// task, which exits on its own once the manager's event channel closes.
 pub fn spawn_tool_bridge(
     handle: McpManagerHandle,
-    registry: Arc<ToolRegistry>,
-    dispatch_registry: Option<Arc<DispatchRegistry>>,
+    registry: Arc<ToolHandlerRegistry>,
+    tool_catalog: Option<Arc<ToolCatalog>>,
 ) -> JoinHandle<()> {
     let mut events = handle.subscribe();
     tokio::spawn(async move {
@@ -48,11 +48,11 @@ pub fn spawn_tool_bridge(
         // Whether each capability builtin is currently in the registry.
         let mut resource_live = false;
         let mut prompt_live = false;
-        let disp_ref = dispatch_registry.as_ref();
+        let catalog = tool_catalog.as_ref();
         loop {
             match events.recv().await {
                 Ok(event) => {
-                    apply_event(&handle, &registry, disp_ref, event).await;
+                    apply_event(&handle, &registry, catalog, event).await;
                     reconcile_capability_tools(
                         &handle,
                         &registry,
@@ -66,7 +66,7 @@ pub fn spawn_tool_bridge(
                     // have missed a transition, so reconcile every server
                     // against the registry rather than guessing.
                     tracing::warn!(skipped, "MCP tool bridge lagged; resyncing all servers");
-                    resync_all(&handle, &registry, disp_ref).await;
+                    resync_all(&handle, &registry, catalog).await;
                     reconcile_capability_tools(
                         &handle,
                         &registry,
@@ -87,19 +87,19 @@ pub fn spawn_tool_bridge(
 /// Translate a single manager event into registry mutations.
 async fn apply_event(
     handle: &McpManagerHandle,
-    registry: &ToolRegistry,
-    dispatch_registry: Option<&Arc<DispatchRegistry>>,
+    registry: &ToolHandlerRegistry,
+    tool_catalog: Option<&Arc<ToolCatalog>>,
     event: McpManagerEvent,
 ) {
     match event {
         McpManagerEvent::ServerStarted { server_id, .. }
         | McpManagerEvent::ToolsChanged { server_id, .. } => {
-            sync_server(handle, registry, dispatch_registry, &server_id).await;
+            sync_server(handle, registry, tool_catalog, &server_id).await;
         }
         McpManagerEvent::ServerStopped { server_id, .. }
         | McpManagerEvent::ServerCrashed { server_id, .. }
         | McpManagerEvent::ServerRemoved { server_id, .. } => {
-            let removed = unregister_mcp_tools(registry, dispatch_registry, &server_id);
+            let removed = unregister_mcp_tools(registry, tool_catalog, &server_id);
             if !removed.is_empty() {
                 tracing::info!(
                     server_id = %server_id,
@@ -120,8 +120,8 @@ async fn apply_event(
 /// `tools/list`) does not leave a dangling registry handler behind.
 async fn sync_server(
     handle: &McpManagerHandle,
-    registry: &ToolRegistry,
-    dispatch_registry: Option<&Arc<DispatchRegistry>>,
+    registry: &ToolHandlerRegistry,
+    tool_catalog: Option<&Arc<ToolCatalog>>,
     server_id: &str,
 ) {
     let client = match handle.get_client(server_id).await {
@@ -139,8 +139,8 @@ async fn sync_server(
         }
     };
     let tools = client.list_tools().await;
-    unregister_mcp_tools(registry, dispatch_registry, server_id);
-    let registered = register_mcp_tools(registry, dispatch_registry, client, server_id, &tools);
+    unregister_mcp_tools(registry, tool_catalog, server_id);
+    let registered = register_mcp_tools(registry, tool_catalog, client, server_id, &tools);
     tracing::info!(
         server_id,
         count = registered.len(),
@@ -152,13 +152,13 @@ async fn sync_server(
 /// lag, where individual transitions may have been dropped.
 async fn resync_all(
     handle: &McpManagerHandle,
-    registry: &ToolRegistry,
-    dispatch_registry: Option<&Arc<DispatchRegistry>>,
+    registry: &ToolHandlerRegistry,
+    tool_catalog: Option<&Arc<ToolCatalog>>,
 ) {
     match handle.list_servers().await {
         Ok(servers) => {
             for info in servers {
-                sync_server(handle, registry, dispatch_registry, &info.id).await;
+                sync_server(handle, registry, tool_catalog, &info.id).await;
             }
         }
         Err(e) => {
@@ -171,7 +171,7 @@ async fn resync_all(
 /// while at least one connected server advertises that capability.
 async fn reconcile_capability_tools(
     handle: &McpManagerHandle,
-    registry: &ToolRegistry,
+    registry: &ToolHandlerRegistry,
     resource_live: &mut bool,
     prompt_live: &mut bool,
 ) {
@@ -198,7 +198,7 @@ async fn reconcile_capability_tools(
 /// Add or remove a single builtin from the registry; returns its resulting
 /// live state (`true` == registered).
 fn set_builtin(
-    registry: &ToolRegistry,
+    registry: &ToolHandlerRegistry,
     name: &str,
     want: bool,
     tool: Arc<dyn AlephToolDyn>,

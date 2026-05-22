@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::session::events::ToolOutput;
-use crate::tool_metadata::ToolDefinition as DispatcherToolDefinition;
+use crate::tool_metadata::ToolDefinition as MetadataToolDefinition;
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 
 /// Fail-closed `ToolService` used as the unreachable fallback in
@@ -54,8 +54,8 @@ impl ToolService for NullToolService {
         None
     }
 
-    fn dispatcher_schema(&self) -> Arc<[DispatcherToolDefinition]> {
-        Arc::from([] as [DispatcherToolDefinition; 0])
+    fn metadata_schema(&self) -> Arc<[MetadataToolDefinition]> {
+        Arc::from([] as [MetadataToolDefinition; 0])
     }
 }
 
@@ -86,8 +86,8 @@ mod tests {
     }
 
     #[test]
-    fn dispatcher_schema_is_empty() {
+    fn metadata_schema_is_empty() {
         let svc = NullToolService::new();
-        assert!(svc.dispatcher_schema().is_empty());
+        assert!(svc.metadata_schema().is_empty());
     }
 }

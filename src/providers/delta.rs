@@ -187,7 +187,7 @@ impl DeltaCollector {
     ///
     /// Malformed tool arguments are handled gracefully: if `serde_json::from_str` fails,
     /// a warning is logged (including the full raw payload for telemetry) and an
-    /// empty object `Value::Object({})` is returned. The dispatcher's schema
+    /// empty object `Value::Object({})` is returned. The tool schema
     /// validation then reports the missing fields, producing a structured
     /// ToolError that the model can react to on the next turn.
     pub fn finish(mut self) -> ProviderResponse {
@@ -214,7 +214,7 @@ impl DeltaCollector {
                                 tool_name = %name,
                                 error = %e,
                                 raw_args = %raw_args,
-                                "Malformed tool arguments — defaulting to empty object (dispatcher will report missing fields)"
+                                "Malformed tool arguments — defaulting to empty object ((the tool layer will report missing fields))"
                             );
                             Value::Object(serde_json::Map::new())
                         }
@@ -548,7 +548,7 @@ mod tests {
     fn malformed_tool_args_becomes_empty_object() {
         // Simulate a streaming tool_use whose partial_json was truncated mid-write.
         // The collector should not fail; it should fall back to an empty object {}
-        // (NOT a Value::String) so that the dispatcher's schema validation runs
+        // (NOT a Value::String) so that the tool schema validation runs
         // normally and emits a structured "missing field X" ToolError.
         let mut collector = DeltaCollector::new();
         collector.push(ProviderDelta::ToolCallStart {
@@ -575,7 +575,7 @@ mod tests {
         assert_eq!(call.name, "Read");
         assert!(
             matches!(call.arguments, Value::Object(_)),
-            "arguments must be Value::Object (the dispatcher invariant), got: {:?}",
+            "arguments must be Value::Object ((the tool-layer invariant)), got: {:?}",
             call.arguments
         );
         assert_eq!(

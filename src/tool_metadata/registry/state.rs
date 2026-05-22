@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use super::super::types::{ToolSourceType, UnifiedTool};
 use super::types::ToolStorage;
 
-/// State management functionality for ToolRegistry
+/// State management functionality for ToolCatalog
 pub struct ToolState {
     tools: ToolStorage,
 }

@@ -203,7 +203,7 @@ pub(in crate::commands::start) async fn initialize_channels(
     server: &mut GatewayServer,
     app_config: &alephcore::Config,
     app_config_arc: &Arc<tokio::sync::RwLock<alephcore::Config>>,
-    dispatch_registry: Option<Arc<alephcore::tool_metadata::ToolRegistry>>,
+    tool_catalog: Option<Arc<alephcore::tool_metadata::ToolCatalog>>,
     daemon: bool,
     vault: Arc<alephcore::gateway::security::SharedTokenManager>,
 ) -> Arc<ChannelRegistry> {
@@ -249,8 +249,8 @@ pub(in crate::commands::start) async fn initialize_channels(
     // Resolve all channel instances from app config
     let instances = app_config.resolved_channels();
 
-    // Cache ToolRegistry for Telegram channel recreation (channel.start RPC)
-    if let Some(ref reg) = dispatch_registry {
+    // Cache ToolCatalog for Telegram channel recreation (channel.start RPC)
+    if let Some(ref reg) = tool_catalog {
         alephcore::gateway::handlers::channel::set_telegram_tool_registry(reg.clone());
     }
 
@@ -292,11 +292,11 @@ pub(in crate::commands::start) async fn initialize_channels(
             create_channel_from_config(&inst.id, &inst.channel_type, config_with_secrets.clone())
                 .await
         {
-            // Pass ToolRegistry to telegram instances so they self-register slash commands
+            // Pass ToolCatalog to telegram instances so they self-register slash commands
             if inst.channel_type == "telegram" {
                 if let Ok(tg_config) = parse_telegram_channel_config(config_with_secrets.clone()) {
                     let mut tg_channel = TelegramChannel::new(&inst.id, tg_config);
-                    if let Some(ref reg) = dispatch_registry {
+                    if let Some(ref reg) = tool_catalog {
                         tg_channel.set_tool_registry(reg.clone());
                     }
                     if let Some(ref db) = state_db {
@@ -393,7 +393,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     group_chat_executor: Option<Arc<alephcore::group_chat::GroupChatExecutor>>,
     workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
-    dispatch_registry: Option<Arc<alephcore::tool_metadata::ToolRegistry>>,
+    tool_catalog: Option<Arc<alephcore::tool_metadata::ToolCatalog>>,
     session_store: Option<Arc<dyn alephcore::gateway::session_store::SessionStore>>,
     app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
     generation_registry: Option<Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>>,
@@ -481,7 +481,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     }
 
     // Wire command parser for unified slash command resolution
-    if let Some(reg) = dispatch_registry {
+    if let Some(reg) = tool_catalog {
         let command_parser = Arc::new(alephcore::command::CommandParser::new(reg));
         inbound_router = inbound_router.with_command_parser(command_parser);
         if !daemon {

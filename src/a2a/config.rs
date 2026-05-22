@@ -45,7 +45,7 @@ pub struct A2AServerConfig {
     #[serde(default)]
     pub security: A2ASecurityConfig,
 
-    /// Manually defined skills (auto-generated from ToolRegistry if empty)
+    /// Manually defined skills (auto-generated from ToolCatalog if empty)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<A2ASkillConfig>,
 }

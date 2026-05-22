@@ -56,10 +56,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // SQLite memory backend, threaded into the per-run `ContextCompactor` so it
     // can reuse hierarchical session summaries for zero-API-cost compaction.
     memory_backend: Option<alephcore::memory::store::MemoryBackend>,
-    // Dispatcher-side ToolRegistry — owns the `ToolHealthCache` whose snapshot
+    // Tool catalog — owns the `ToolHealthCache` whose snapshot
     // feeds `runtime_state_blocks`. Threaded so `build_system_prompt` can
     // populate `<tool_runtime_state>` fragments.
-    dispatch_registry: Option<Arc<alephcore::tool_metadata::ToolRegistry>>,
+    tool_catalog: Option<Arc<alephcore::tool_metadata::ToolCatalog>>,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     security_store: Arc<alephcore::gateway::security::SecurityStore>,
     // Gateway session-epoch registrar for compaction-driven session-split.
@@ -212,7 +212,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         power,
         memory_context_provider,
         memory_backend,
-        dispatch_registry,
+        tool_catalog,
         session_epoch_registrar,
     });
 

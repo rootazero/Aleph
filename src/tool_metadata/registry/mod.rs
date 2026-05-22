@@ -50,7 +50,7 @@ use types::ToolStorage;
 /// # Usage
 ///
 /// ```rust,ignore
-/// let registry = ToolRegistry::new();
+/// let registry = ToolCatalog::new();
 ///
 /// // Register tools from various sources
 /// registry.register_builtin_tools().await;
@@ -62,7 +62,7 @@ use types::ToolStorage;
 /// let mcp_only = registry.list_by_source_type("Mcp").await;
 /// let tool = registry.get_by_name("search").await;
 /// ```
-pub struct ToolRegistry {
+pub struct ToolCatalog {
     /// Registrar for tool registration
     registrar: ToolRegistrar,
     /// Conflict resolver for handling name conflicts
@@ -79,13 +79,13 @@ pub struct ToolRegistry {
     health: Arc<ToolHealthCache>,
 }
 
-impl Default for ToolRegistry {
+impl Default for ToolCatalog {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ToolRegistry {
+impl ToolCatalog {
     /// Create a new empty registry
     pub fn new() -> Self {
         let tools: ToolStorage = Arc::new(AsyncRwLock::new(HashMap::new()));

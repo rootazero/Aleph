@@ -8,15 +8,15 @@
 use std::sync::Arc;
 
 use crate::mcp::{McpClient, McpTool};
-use crate::tool_metadata::ToolRegistry as DispatchRegistry;
+use crate::tool_metadata::ToolCatalog;
 use crate::tools::handlers::mcp::McpHandler;
 use crate::tools::handlers::ToolHandler;
 use crate::tools::probes::mcp::McpServerProbe;
-use crate::tools::registry::ToolRegistry;
+use crate::tools::registry::ToolHandlerRegistry;
 use crate::tools::service::ToolSource;
 
-/// Register every tool from one MCP server into the shared executor `ToolRegistry`,
-/// and (when a dispatcher registry is supplied) attach a single
+/// Register every tool from one MCP server into the shared executor `ToolHandlerRegistry`,
+/// and (when a tool catalog is supplied) attach a single
 /// [`McpServerProbe`] per qualified name so the `<tool_runtime_state>` block
 /// can surface a "server transport down" hint to the LLM.
 ///
@@ -26,8 +26,8 @@ use crate::tools::service::ToolSource;
 /// qualified names that were newly registered so the caller can tear them down
 /// in a matching `unregister_mcp_tools` on disconnect.
 pub fn register_mcp_tools(
-    registry: &ToolRegistry,
-    dispatch_registry: Option<&Arc<DispatchRegistry>>,
+    registry: &ToolHandlerRegistry,
+    tool_catalog: Option<&Arc<ToolCatalog>>,
     client: Arc<McpClient>,
     server_id: &str,
     tools: &[McpTool],
@@ -44,7 +44,7 @@ pub fn register_mcp_tools(
         ));
         match registry.register(qualified.clone(), handler) {
             Ok(()) => {
-                if let Some(disp) = dispatch_registry {
+                if let Some(disp) = tool_catalog {
                     disp.register_health_probe(
                         qualified.clone(),
                         Arc::new(McpServerProbe::new(Arc::clone(&client), server_id)),
@@ -65,12 +65,12 @@ pub fn register_mcp_tools(
 /// Unregister every tool previously registered from the given MCP server.
 ///
 /// Walks the registry snapshot and removes every handler whose
-/// `ToolSource` matches `Mcp { server_id }`. When `dispatch_registry` is
+/// `ToolSource` matches `Mcp { server_id }`. When `tool_catalog` is
 /// supplied, also tears down the matching health probes. Returns the set of
 /// qualified names that were removed.
 pub fn unregister_mcp_tools(
-    registry: &ToolRegistry,
-    dispatch_registry: Option<&Arc<DispatchRegistry>>,
+    registry: &ToolHandlerRegistry,
+    tool_catalog: Option<&Arc<ToolCatalog>>,
     server_id: &str,
 ) -> Vec<String> {
     let snapshot = registry.snapshot();
@@ -84,7 +84,7 @@ pub fn unregister_mcp_tools(
     drop(snapshot);
     for name in &victims {
         registry.unregister(name);
-        if let Some(disp) = dispatch_registry {
+        if let Some(disp) = tool_catalog {
             disp.health().unregister_probe(name);
         }
     }
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn register_mcp_tools_applies_double_underscore_naming() {
-        let reg = ToolRegistry::new();
+        let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
         let tools = [tool("get_time", "a"), tool("set_tz", "b")];
         let names = register_mcp_tools(&reg, None, client, "clock", &tools);
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn unregister_mcp_tools_removes_only_matching_server() {
-        let reg = ToolRegistry::new();
+        let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
         register_mcp_tools(&reg, None, Arc::clone(&client), "alpha", &[tool("x", "d")]);
         register_mcp_tools(&reg, None, Arc::clone(&client), "beta", &[tool("y", "d")]);
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn register_mcp_tools_duplicate_is_skipped_with_warning() {
-        let reg = ToolRegistry::new();
+        let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
         let t = [tool("dup", "d")];
         let first = register_mcp_tools(&reg, None, Arc::clone(&client), "s", &t);
@@ -147,9 +147,9 @@ mod tests {
     }
 
     #[test]
-    fn register_with_dispatch_registry_attaches_probe() {
-        let reg = ToolRegistry::new();
-        let disp = Arc::new(DispatchRegistry::new());
+    fn register_with_tool_catalog_attaches_probe() {
+        let reg = ToolHandlerRegistry::new();
+        let disp = Arc::new(ToolCatalog::new());
         let client = Arc::new(McpClient::new());
         register_mcp_tools(
             &reg,
@@ -173,9 +173,9 @@ mod tests {
     }
 
     #[test]
-    fn unregister_with_dispatch_registry_drops_probe() {
-        let reg = ToolRegistry::new();
-        let disp = Arc::new(DispatchRegistry::new());
+    fn unregister_with_tool_catalog_drops_probe() {
+        let reg = ToolHandlerRegistry::new();
+        let disp = Arc::new(ToolCatalog::new());
         let client = Arc::new(McpClient::new());
         register_mcp_tools(&reg, Some(&disp), client, "srv", &[tool("a", "d")]);
         let removed = unregister_mcp_tools(&reg, Some(&disp), "srv");

@@ -69,3 +69,25 @@ cargo test -p alephcore --lib  # Must pass
 - No API changes (public types keep same names)
 - No test behavior changes
 - No feature flag changes
+
+## Follow-up: terminology cleanup (2026-05-22)
+
+The initial rename moved the directory but left the `dispatcher`
+terminology in place and broke integration tests. A follow-up commit
+completes it:
+
+- **Broken tests fixed.** The rename updated only 2 of ~13 `tests/`
+  files; the rest still imported `alephcore::dispatcher::`. Verification
+  used `cargo test --lib`, which skips integration tests, so the
+  breakage went unnoticed. 11 live integration tests are now fixed.
+- **API names updated** (this supersedes the "no API changes" note
+  above): `ToolService::dispatcher_schema()` → `metadata_schema()`,
+  `to_dispatcher_form()` → `to_metadata_form()`.
+- **`ToolRegistry` collision resolved.** There were three types named
+  `ToolRegistry`. The two structs are renamed —
+  `tool_metadata::ToolRegistry` → `ToolCatalog`,
+  `tools::registry::ToolRegistry` → `ToolHandlerRegistry` — leaving the
+  `executor::ToolRegistry` trait as the sole `ToolRegistry`. The
+  `as DispatchRegistry` / `as DispatcherToolRegistry` disambiguation
+  aliases are gone.
+- **Module doc header + ~40 stale comments** updated.

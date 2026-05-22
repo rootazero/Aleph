@@ -153,11 +153,11 @@ pub struct AgentHarnessRunner {
     /// without a memory backend) keeps the LLM summarization path.
     pub memory_backend: Option<MemoryBackend>,
 
-    /// Dispatcher-side `ToolRegistry` — owns the `ToolHealthCache` whose
+    /// Tool catalog — owns the `ToolHealthCache` whose
     /// snapshots drive the `<tool_runtime_state>` block emitted by
     /// `ToolRuntimeStateLayer` @502. `None` in test/early-boot paths keeps
     /// `runtime_state_blocks` empty (the layer then renders nothing).
-    pub dispatch_registry: Option<Arc<crate::tool_metadata::ToolRegistry>>,
+    pub tool_catalog: Option<Arc<crate::tool_metadata::ToolCatalog>>,
 
     /// Gateway session-epoch registrar for compaction-driven session-split.
     /// When `Some`, the harness can mint child sessions at the next epoch and
@@ -551,17 +551,17 @@ impl HarnessRunner for AgentHarnessRunner {
     }
 }
 
-/// Snapshot the dispatcher's `ToolHealthCache` and convert every
+/// Snapshot the tool catalog's `ToolHealthCache` and convert every
 /// currently-cached `Unhealthy` entry into a `RuntimeStateFragment` for
 /// `ToolRuntimeStateLayer` to render. Returns `vec![]` when
-/// `dispatch_registry` is `None` (test / early-boot).
+/// `tool_catalog` is `None` (test / early-boot).
 ///
 /// Free function so unit tests can exercise the conversion without
 /// constructing a full `AgentHarnessRunner`.
 pub fn compute_runtime_state_blocks(
-    dispatch_registry: Option<&Arc<crate::tool_metadata::ToolRegistry>>,
+    tool_catalog: Option<&Arc<crate::tool_metadata::ToolCatalog>>,
 ) -> Vec<crate::tools::runtime_state::RuntimeStateFragment> {
-    let Some(registry) = dispatch_registry else {
+    let Some(registry) = tool_catalog else {
         return Vec::new();
     };
     let snapshot = registry.health().snapshot();
@@ -732,7 +732,7 @@ impl AgentHarnessRunner {
         // a Standard sandbox + approval-required posture for elevated
         // operations, signalling the LLM to be cautious on public-channel
         // bots. Actual tool enforcement still happens in the tool
-        // dispatcher — this is a prompt-text signal, not a hard gate.
+        // execution layer — this is a prompt-text signal, not a hard gate.
         //
         // Tools list is empty because the harness wires actual tool
         // schemas via native tool_use rather than the prompt;
@@ -764,14 +764,14 @@ impl AgentHarnessRunner {
         resolved_context.runtime_context = Some(
             crate::thinker::runtime_context::RuntimeContext::collect(provider.name()),
         );
-        // Populate runtime-state fragments from the dispatcher's
+        // Populate runtime-state fragments from the tool catalog's
         // `ToolHealthCache`. Each currently-cached `Unhealthy` entry becomes
         // a `RuntimeStateFragment::unavailable(name, reason)` that
         // `ToolRuntimeStateLayer` @502 renders into `<tool_runtime_state>`.
-        // `None` dispatch_registry (test / early boot) → empty vec → the
+        // `None` tool_catalog (test / early boot) → empty vec → the
         // layer emits nothing.
         resolved_context.runtime_state_blocks =
-            compute_runtime_state_blocks(self.dispatch_registry.as_ref());
+            compute_runtime_state_blocks(self.tool_catalog.as_ref());
         // Codex-inspired: surface active sandbox posture (backend tag,
         // policy tier, writable roots, network state) to the LLM so it
         // can plan within its envelope instead of probing limits at runtime.

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use crate::extension::registry::ToolRegistration;
 use crate::session::events::ToolOutput;
 use crate::tools::service::{
-    to_dispatcher_form, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
+    to_metadata_form, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
 };
 
 pub struct McpScopedToolService {
@@ -68,18 +68,18 @@ impl ToolService for McpScopedToolService {
             })
     }
 
-    fn dispatcher_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
+    fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
         // For Stage I MVP, compute merged schema from list snapshot.
         // AllowlistToolService above us gates which tools the LLM actually sees,
         // so extras not in the allowlist are filtered out there.
-        let parent_schema = self.parent.dispatcher_schema();
+        let parent_schema = self.parent.metadata_schema();
         if self.extras.is_empty() {
             return parent_schema;
         }
         // Collect parent names so extras don't shadow existing tools.
         let parent_names: std::collections::HashSet<String> =
             parent_schema.iter().map(|t| t.name.clone()).collect();
-        // Build extras defs and convert to dispatcher form, then merge.
+        // Build extras defs and convert to metadata form, then merge.
         let extra_defs: Vec<ToolDefinition> = self
             .extras
             .iter()
@@ -97,7 +97,7 @@ impl ToolService for McpScopedToolService {
         if extra_defs.is_empty() {
             return parent_schema;
         }
-        let extra_schema = to_dispatcher_form(&extra_defs);
+        let extra_schema = to_metadata_form(&extra_defs);
         let mut merged: Vec<crate::tool_metadata::ToolDefinition> =
             parent_schema.iter().cloned().collect();
         merged.extend(extra_schema.iter().cloned());

@@ -32,7 +32,7 @@ fn infer_visible_channels(tool: &UnifiedTool) -> Vec<ChannelType> {
     }
 }
 
-/// Registration functionality for ToolRegistry
+/// Registration functionality for ToolCatalog
 pub struct ToolRegistrar {
     tools: ToolStorage,
 }

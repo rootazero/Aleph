@@ -36,7 +36,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
-    pub dispatch_registry: Option<Arc<alephcore::tool_metadata::ToolRegistry>>,
+    pub tool_catalog: Option<Arc<alephcore::tool_metadata::ToolCatalog>>,
     pub embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     pub compression_service:
         Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
@@ -119,7 +119,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
-    let dispatch_reg: Option<Arc<alephcore::tool_metadata::ToolRegistry>>;
+    let tool_catalog_out: Option<Arc<alephcore::tool_metadata::ToolCatalog>>;
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     let mut compression_out: Option<
         std::sync::Arc<alephcore::memory::compression::CompressionService>,
@@ -670,7 +670,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
     // Shared cell for deferred CommandParser injection into chat.send handler.
     // Created here (outer scope) so both the if-branch (chat.send registration)
-    // and the dispatch_registry block (parser creation) can access it.
+    // and the tool_catalog block (parser creation) can access it.
     let command_parser_cell: Arc<
         tokio::sync::RwLock<Option<Arc<alephcore::command::CommandParser>>>,
     > = Arc::new(tokio::sync::RwLock::new(None));
@@ -1769,12 +1769,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // This is independent of the AI provider — it only maps command names to metadata.
     {
         use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
-        use alephcore::tool_metadata::ToolRegistry as DispatchRegistry;
+        use alephcore::tool_metadata::ToolCatalog;
 
-        let dispatch_registry = Arc::new(DispatchRegistry::new());
+        let tool_catalog = Arc::new(ToolCatalog::new());
 
         // Register builtin tools (generate_image, generate_speech, read_skill, list_skills, snapshot)
-        dispatch_registry.register_builtin_tools().await;
+        tool_catalog.register_builtin_tools().await;
 
         // Also register executor builtin tools as commands (search, screenshot, ocr, etc.)
         for def in BUILTIN_TOOL_DEFINITIONS {
@@ -1787,14 +1787,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 def.description,
                 DToolSource::Builtin,
             );
-            dispatch_registry
+            tool_catalog
                 .register_with_conflict_resolution(tool)
                 .await;
         }
 
         // Register custom commands from config routing rules
         if !app_config.rules.is_empty() {
-            dispatch_registry
+            tool_catalog
                 .register_custom_commands(&app_config.rules)
                 .await;
         }
@@ -1823,7 +1823,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             ecosystem: "aleph".to_string(),
                         })
                         .collect();
-                    dispatch_registry.register_skills(&skill_infos).await;
+                    tool_catalog.register_skills(&skill_infos).await;
                     if !daemon {
                         println!(
                             "  Dispatch registry: {} skills registered",
@@ -1856,7 +1856,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         .collect();
 
                     if !command_skill_infos.is_empty() {
-                        dispatch_registry
+                        tool_catalog
                             .register_skills(&command_skill_infos)
                             .await;
                         if !daemon {
@@ -1897,7 +1897,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         .collect();
 
                     if !plugin_tools.is_empty() {
-                        dispatch_registry.register_plugin_tools(&plugin_tools).await;
+                        tool_catalog.register_plugin_tools(&plugin_tools).await;
                         if !daemon {
                             println!(
                                 "  Dispatch registry: {} plugin tools registered",
@@ -1915,7 +1915,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // Wire commands.list to use unified dispatch registry instead of hardcoded builtins
         {
-            let reg = dispatch_registry.clone();
+            let reg = tool_catalog.clone();
             server.handlers_mut().register("commands.list", move |req| {
                 let registry = reg.clone();
                 async move {
@@ -1932,7 +1932,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // Wire tools.catalog to return all active tools grouped by source
         {
-            let reg = dispatch_registry.clone();
+            let reg = tool_catalog.clone();
             server.handlers_mut().register("tools.catalog", move |req| {
                 let registry = reg.clone();
                 async move {
@@ -1992,7 +1992,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // AgentDefs from filesystem so the visibility surface matches what
         // the agent loop actually sees.
         {
-            let reg = dispatch_registry.clone();
+            let reg = tool_catalog.clone();
             let agent_def_registry = {
                 let r = std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
                 let aleph_home = alephcore::discovery::aleph_home_dir().ok();
@@ -2050,7 +2050,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Wire command.execute to resolve slash commands via CommandParser + ToolRegistry
         {
             let parser = Arc::new(alephcore::command::CommandParser::new(
-                dispatch_registry.clone(),
+                tool_catalog.clone(),
             ));
 
             // Inject parser into chat.send handler (created earlier, uses deferred cell)
@@ -2059,7 +2059,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 *cell = Some(parser.clone());
             }
 
-            let reg = dispatch_registry.clone();
+            let reg = tool_catalog.clone();
             server
                 .handlers_mut()
                 .register("command.execute", move |req| {
@@ -2074,7 +2074,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
-        dispatch_reg = Some(dispatch_registry);
+        tool_catalog_out = Some(tool_catalog);
 
         // ── Spec 4 Task 11: spawn MemoryProducerScheduler ────────────────────
         {
@@ -2219,7 +2219,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         execution_adapter: exec_adapter,
         agent_registry: agent_reg,
         default_provider: default_prov,
-        dispatch_registry: dispatch_reg,
+        tool_catalog: tool_catalog_out,
         embedder: embedder_out,
         compression_service: compression_out,
         multi_registry: multi_reg,

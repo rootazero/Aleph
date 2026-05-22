@@ -63,8 +63,8 @@ impl ToolService for NoopToolService {
         None
     }
 
-    fn dispatcher_schema(&self) -> Arc<[alephcore::dispatcher::ToolDefinition]> {
-        Arc::from(Vec::<alephcore::dispatcher::ToolDefinition>::new())
+    fn metadata_schema(&self) -> Arc<[alephcore::tool_metadata::ToolDefinition]> {
+        Arc::from(Vec::<alephcore::tool_metadata::ToolDefinition>::new())
     }
 }
 
@@ -200,7 +200,7 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         power: None,
         memory_context_provider: None,
         memory_backend: None,
-        dispatch_registry: None,
+        tool_catalog: None,
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,

@@ -1,7 +1,7 @@
 //! Stage 2 acceptance tests — Tools Surface Unification.
 //!
 //! Covers: ≥2 integration (tool invocation end-to-end through harness),
-//! ≥1 perf assertion (cache hit count), ≥1 property test (to_dispatcher_form
+//! ≥1 perf assertion (cache hit count), ≥1 property test (to_metadata_form
 //! consistency with field-by-field manual conversion).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,18 +12,18 @@ use proptest::prelude::*;
 use serde_json::{json, Value};
 
 use crate::session::events::{ToolOutput, ToolOutputMetadata};
-use crate::tool_metadata::{ToolCategory, ToolDefinition as DispatcherToolDefinition};
+use crate::tool_metadata::{ToolCategory, ToolDefinition as MetadataToolDefinition};
 use crate::tools::service::{
-    to_dispatcher_form, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
+    to_metadata_form, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
 };
 
 // ===== Test scaffolding ============================================================
 
-/// A `ToolService` impl that counts how many times `to_dispatcher_form`-equivalent
+/// A `ToolService` impl that counts how many times `to_metadata_form`-equivalent
 /// work was performed (i.e., cache misses), used by the perf assertion test.
 struct CountingToolService {
     defs: Vec<ToolDefinition>,
-    schema: arc_swap::ArcSwap<Option<Arc<[DispatcherToolDefinition]>>>,
+    schema: arc_swap::ArcSwap<Option<Arc<[MetadataToolDefinition]>>>,
     miss_count: AtomicUsize,
 }
 
@@ -68,12 +68,12 @@ impl ToolService for CountingToolService {
         self.defs.iter().find(|d| d.name == name).cloned()
     }
 
-    fn dispatcher_schema(&self) -> Arc<[DispatcherToolDefinition]> {
+    fn metadata_schema(&self) -> Arc<[MetadataToolDefinition]> {
         if let Some(ref cached) = **self.schema.load() {
             return Arc::clone(cached);
         }
         self.miss_count.fetch_add(1, Ordering::SeqCst);
-        let schema = to_dispatcher_form(&self.defs);
+        let schema = to_metadata_form(&self.defs);
         self.schema.store(Arc::new(Some(Arc::clone(&schema))));
         schema
     }
@@ -82,10 +82,10 @@ impl ToolService for CountingToolService {
 // ===== Test 1: integration — first call populates schema =============================
 
 #[test]
-fn tool_service_first_dispatcher_schema_call_populates_arc() {
+fn tool_service_first_metadata_schema_call_populates_arc() {
     let svc = CountingToolService::new(&["alpha", "beta"]);
     assert_eq!(svc.miss_count(), 0);
-    let schema = svc.dispatcher_schema();
+    let schema = svc.metadata_schema();
     assert_eq!(schema.len(), 2);
     assert_eq!(schema[0].name, "alpha");
     assert_eq!(svc.miss_count(), 1, "first call must be a cache miss");
@@ -94,11 +94,11 @@ fn tool_service_first_dispatcher_schema_call_populates_arc() {
 // ===== Test 2: integration — repeat calls hit cache ==================================
 
 #[test]
-fn tool_service_repeat_dispatcher_schema_calls_share_arc() {
+fn tool_service_repeat_metadata_schema_calls_share_arc() {
     let svc = CountingToolService::new(&["alpha", "beta"]);
-    let s1 = svc.dispatcher_schema();
-    let s2 = svc.dispatcher_schema();
-    let s3 = svc.dispatcher_schema();
+    let s1 = svc.metadata_schema();
+    let s2 = svc.metadata_schema();
+    let s3 = svc.metadata_schema();
     assert!(Arc::ptr_eq(&s1, &s2));
     assert!(Arc::ptr_eq(&s2, &s3));
     assert_eq!(svc.miss_count(), 1, "only the first call should miss");
@@ -109,9 +109,9 @@ fn tool_service_repeat_dispatcher_schema_calls_share_arc() {
 #[test]
 fn ten_turns_over_stable_registry_yield_exactly_one_cache_miss() {
     let svc = CountingToolService::new(&["a", "b", "c"]);
-    let mut clones: Vec<Arc<[DispatcherToolDefinition]>> = Vec::with_capacity(10);
+    let mut clones: Vec<Arc<[MetadataToolDefinition]>> = Vec::with_capacity(10);
     for _ in 0..10 {
-        clones.push(svc.dispatcher_schema());
+        clones.push(svc.metadata_schema());
     }
     assert_eq!(
         svc.miss_count(),
@@ -124,7 +124,7 @@ fn ten_turns_over_stable_registry_yield_exactly_one_cache_miss() {
     }
 }
 
-// ===== Test 4: property — to_dispatcher_form equals manual field-by-field map ========
+// ===== Test 4: property — to_metadata_form equals manual field-by-field map ========
 
 prop_compose! {
     fn arb_loop_def()(
@@ -144,13 +144,13 @@ prop_compose! {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
     #[test]
-    fn to_dispatcher_form_is_consistent_with_manual_conversion(
+    fn to_metadata_form_is_consistent_with_manual_conversion(
         defs in prop::collection::vec(arb_loop_def(), 0..8),
     ) {
-        let auto = to_dispatcher_form(&defs);
-        let manual: Vec<DispatcherToolDefinition> = defs
+        let auto = to_metadata_form(&defs);
+        let manual: Vec<MetadataToolDefinition> = defs
             .iter()
-            .map(|d| DispatcherToolDefinition {
+            .map(|d| MetadataToolDefinition {
                 name: d.name.clone(),
                 description: d.description.clone(),
                 parameters: d.input_schema.clone(),

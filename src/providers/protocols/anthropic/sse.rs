@@ -40,7 +40,7 @@ pub(crate) fn parse_anthropic_sse_event(
             if block_type == "tool_use" {
                 let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("");
                 let wire_name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                // Map sanitized → original so the dispatcher receives the
+                // Map sanitized → original so the tool layer receives the
                 // tool name as it was registered (round-trip from build_request).
                 let name = name_map
                     .and_then(|m| {

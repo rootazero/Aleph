@@ -53,8 +53,8 @@ impl ToolService for ParentToolsWithSubagent {
         self.list().await.into_iter().find(|d| d.name == name)
     }
 
-    fn dispatcher_schema(&self) -> std::sync::Arc<[alephcore::dispatcher::ToolDefinition]> {
-        std::sync::Arc::from(Vec::<alephcore::dispatcher::ToolDefinition>::new())
+    fn metadata_schema(&self) -> std::sync::Arc<[alephcore::tool_metadata::ToolDefinition]> {
+        std::sync::Arc::from(Vec::<alephcore::tool_metadata::ToolDefinition>::new())
     }
 }
 

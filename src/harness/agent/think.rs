@@ -210,10 +210,10 @@ impl AgentHarness {
             }
         }
 
-        // Fetch the cached dispatcher-form tool schema once. O(1) `Arc::clone`
+        // Fetch the cached metadata-form tool schema once. O(1) `Arc::clone`
         // on the steady-state path. Hoisted above the budget check so the
         // pressure sensor accounts for the real tool-schema overhead.
-        let dispatcher_tools = self.deps.tools.dispatcher_schema();
+        let metadata_tools = self.deps.tools.metadata_schema();
 
         // 2b. Task-10 budget check: evaluate context pressure before issuing
         // the LLM call. The sensor now sees the real system prompt and
@@ -223,7 +223,7 @@ impl AgentHarness {
             if let Some(budget) = self.deps.context_budget.as_ref() {
                 let mut guard = budget.lock().await;
                 let tool_tokens =
-                    estimate_tool_schema_tokens(&dispatcher_tools, guard.token_estimate_ratio());
+                    estimate_tool_schema_tokens(&metadata_tools, guard.token_estimate_ratio());
                 let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
                 let directive = guard.before_turn(&messages, system_prompt, tool_tokens);
                 (Some(directive), tool_tokens)
@@ -365,13 +365,13 @@ impl AgentHarness {
         }
 
         // 2d. Derive the optional tool-schema reference for the request payload
-        // from the dispatcher tools fetched above (Stage 2). Cache invalidation
-        // is owned by `ToolService` impls; see `to_dispatcher_form`.
+        // from the metadata tools fetched above (Stage 2). Cache invalidation
+        // is owned by `ToolService` impls; see `to_metadata_form`.
         let tools_ref: Option<&[crate::tool_metadata::ToolDefinition]> =
-            if dispatcher_tools.is_empty() {
+            if metadata_tools.is_empty() {
                 None
             } else {
-                Some(dispatcher_tools.as_ref())
+                Some(metadata_tools.as_ref())
             };
 
         // Build the request fresh on each call — H3's empty-response retry

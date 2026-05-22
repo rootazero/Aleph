@@ -12,7 +12,7 @@
 // Tool names below MUST match the names registered in
 // `src/builtin_tools/` (see each tool's `AlephTool::NAME`). Earlier values
 // referenced legacy stubs ("glob", "grep", "read_file") that never existed
-// in the dispatcher, leaving INVESTIGATION-mode agents with effectively
+// in the tool catalog, leaving INVESTIGATION-mode agents with effectively
 // 1–2 visible tools and forcing them to give up after one think turn.
 //
 // Current canonical builtin names in this category:
@@ -67,7 +67,7 @@ mod tests {
     }
 
     /// Regression: tool names referenced here drifted out of sync with the
-    /// actual dispatcher names ("glob"/"grep"/"read_file" were never
+    /// actual registered tool names ("glob"/"grep"/"read_file" were never
     /// registered; the real builtins are "file_read"/"file_ops"). This
     /// test pins the set membership to canonical builtin names so future
     /// renames either update both ends or fail loudly.

@@ -61,7 +61,7 @@ pub mod schema_strictify;
 // unreachable. `NullToolService` is the fail-closed default that fills the
 // harness fallback slot.
 //
-// `tools::registry::ToolRegistry` + `tools::handlers::*` survive — they are
+// `tools::registry::ToolHandlerRegistry` + `tools::handlers::*` survive — they are
 // the live target of `mcp::tool_bridge`, which mutates the registry as MCP
 // servers advertise / drop tools.
 pub mod handlers;
@@ -77,7 +77,7 @@ pub use scoped::ScopedToolService;
 
 pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
 pub use null::NullToolService;
-pub use registry::ToolRegistry;
+pub use registry::ToolHandlerRegistry;
 pub use server::{AlephToolServer, AlephToolServerHandle};
 pub use service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource};
 pub use traits::{AlephTool, AlephToolDyn};

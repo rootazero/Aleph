@@ -1,4 +1,4 @@
-//! Query Methods for ToolRegistry
+//! Query Methods for ToolCatalog
 //!
 //! Methods for querying and searching tools in the registry.
 
@@ -7,7 +7,7 @@ use crate::config::RoutingRuleConfig;
 use super::super::types::{ChannelType, ToolSource, UnifiedTool};
 use super::types::ToolStorage;
 
-/// Query functionality for ToolRegistry
+/// Query functionality for ToolCatalog
 pub struct ToolQuery {
     tools: ToolStorage,
 }

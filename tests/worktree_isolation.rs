@@ -91,8 +91,8 @@ impl ToolService for NoopTools {
         None
     }
 
-    fn dispatcher_schema(&self) -> Arc<[alephcore::dispatcher::ToolDefinition]> {
-        Arc::from(Vec::<alephcore::dispatcher::ToolDefinition>::new())
+    fn metadata_schema(&self) -> Arc<[alephcore::tool_metadata::ToolDefinition]> {
+        Arc::from(Vec::<alephcore::tool_metadata::ToolDefinition>::new())
     }
 }
 

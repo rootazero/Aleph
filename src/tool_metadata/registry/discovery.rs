@@ -8,7 +8,7 @@ use super::super::types::{ToolIndex, ToolIndexCategory, ToolIndexEntry, UnifiedT
 use super::health::{HealthSnapshot, ToolHealthCache};
 use super::types::ToolStorage;
 
-/// Smart discovery functionality for ToolRegistry
+/// Smart discovery functionality for ToolCatalog
 pub struct ToolDiscovery {
     tools: ToolStorage,
 }

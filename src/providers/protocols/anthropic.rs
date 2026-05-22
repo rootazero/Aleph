@@ -57,7 +57,7 @@ pub struct AnthropicProtocol {
     client: Client,
     /// Sanitized → original tool-name map. Populated when building requests
     /// (so Anthropic accepts the names) and consulted while parsing the
-    /// streamed response (so the dispatcher receives the original names).
+    /// streamed response (so the tool layer receives the original names).
     name_map: ToolNameMap,
     /// Per-event idle timeout (seconds) for streaming responses.
     /// Written by `build_request` from `ProviderConfig.stream_idle_timeout_secs`

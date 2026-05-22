@@ -1,6 +1,6 @@
-//! Dispatcher Type Definitions
+//! Tool Metadata Type Definitions
 //!
-//! Core data structures for the Dispatcher Layer.
+//! Core data structures for the tool metadata layer.
 //!
 //! This module contains all tool-related type definitions organized into submodules:
 //!

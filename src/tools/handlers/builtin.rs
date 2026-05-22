@@ -3,7 +3,7 @@
 //! Mapping from AlephToolDyn → ToolHandler:
 //!   name              → BuiltinHandler::name (stored at construction)
 //!   call(args)        → invoke(input), errors stringified into ToolError::Execution
-//!   definition()      → dispatcher::ToolDefinition; we re-project its
+//!   definition()      → tool_metadata::ToolDefinition; we re-project its
 //!                       name/description/parameters into the new
 //!                       service::ToolDefinition and pin source=Builtin,
 //!                       carrying requires_confirmation through metadata.

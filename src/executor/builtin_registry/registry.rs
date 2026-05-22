@@ -12,7 +12,7 @@ use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::error::{AlephError, Result};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::context::GatewayContext;
-use crate::tool_metadata::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
+use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
 use tokio::sync::RwLock;
 
@@ -150,8 +150,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) flag_user_correction_tool: Option<crate::builtin_tools::FlagUserCorrectionTool>,
     /// Shared workspace handle for memory tools — written by ExecutionEngine after workspace resolution
     pub(super) memory_workspace_handle: Option<Arc<RwLock<String>>>,
-    /// Dispatcher tool registry for meta tools (smart tool discovery)
-    pub(crate) dispatcher_registry: Option<Arc<RwLock<DispatcherToolRegistry>>>,
+    /// Tool catalog for meta tools (smart tool discovery)
+    pub(crate) tool_catalog: Option<Arc<RwLock<ToolCatalog>>>,
     /// Gateway context for sessions tools (session.list, session.send).
     /// Uses OnceCell for deferred injection: BuiltinToolRegistry is created before
     /// ExecutionAdapter exists, but GatewayContext needs ExecutionAdapter.
@@ -574,16 +574,16 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Meta tools for smart tool discovery - use call_json
             "list_tools" => Box::pin(async move {
-                let registry = self.dispatcher_registry.as_ref().ok_or_else(|| {
-                    AlephError::tool("list_tools not available: no dispatcher registry configured")
+                let registry = self.tool_catalog.as_ref().ok_or_else(|| {
+                    AlephError::tool("list_tools not available: no tool catalog configured")
                 })?;
                 let tool = ListToolsTool::new(Arc::clone(registry));
                 tool.call_json(arguments).await
             }),
             "get_tool_schema" => Box::pin(async move {
-                let registry = self.dispatcher_registry.as_ref().ok_or_else(|| {
+                let registry = self.tool_catalog.as_ref().ok_or_else(|| {
                     AlephError::tool(
-                        "get_tool_schema not available: no dispatcher registry configured",
+                        "get_tool_schema not available: no tool catalog configured",
                     )
                 })?;
                 let tool = GetToolSchemaTool::new(Arc::clone(registry));

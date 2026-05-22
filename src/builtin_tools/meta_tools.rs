@@ -25,7 +25,7 @@ use tracing::debug;
 
 use super::error::ToolError;
 use crate::error::Result;
-use crate::tool_metadata::{ToolIndexEntry, ToolRegistry};
+use crate::tool_metadata::{ToolIndexEntry, ToolCatalog};
 use crate::tools::AlephTool;
 
 // ============================================================================
@@ -70,7 +70,7 @@ pub struct ListToolsOutput {
 /// }
 /// ```
 pub struct ListToolsTool {
-    registry: Arc<RwLock<ToolRegistry>>,
+    registry: Arc<RwLock<ToolCatalog>>,
 }
 
 impl ListToolsTool {
@@ -81,7 +81,7 @@ impl ListToolsTool {
     pub const DESCRIPTION: &'static str = "List available tools by category. Use this to discover what tools are available before calling get_tool_schema for specific tools.";
 
     /// Create a new ListToolsTool with registry reference
-    pub fn new(registry: Arc<RwLock<ToolRegistry>>) -> Self {
+    pub fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
         Self { registry }
     }
 
@@ -205,7 +205,7 @@ pub struct GetToolSchemaOutput {
 /// }
 /// ```
 pub struct GetToolSchemaTool {
-    registry: Arc<RwLock<ToolRegistry>>,
+    registry: Arc<RwLock<ToolCatalog>>,
 }
 
 impl GetToolSchemaTool {
@@ -216,7 +216,7 @@ impl GetToolSchemaTool {
     pub const DESCRIPTION: &'static str = "Get the full JSON Schema definition for a specific tool. Use this before calling a tool that's not in your full-schema set.";
 
     /// Create a new GetToolSchemaTool with registry reference
-    pub fn new(registry: Arc<RwLock<ToolRegistry>>) -> Self {
+    pub fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
         Self { registry }
     }
 

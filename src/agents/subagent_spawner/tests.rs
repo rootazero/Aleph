@@ -205,7 +205,7 @@ mod tests {
         async fn describe(&self, name: &str) -> Option<ToolDefinition> {
             self.list().await.into_iter().find(|d| d.name == name)
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             std::sync::Arc::from([])
         }
     }

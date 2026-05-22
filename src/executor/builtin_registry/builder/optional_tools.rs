@@ -207,7 +207,7 @@ impl BuiltinToolRegistry {
         }
 
         // Meta tools for smart tool discovery
-        if config.dispatcher_registry.is_some() {
+        if config.tool_catalog.is_some() {
             reg(
                 tools,
                 "list_tools",

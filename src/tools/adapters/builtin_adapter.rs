@@ -78,7 +78,7 @@ impl LoopTool for BuiltinToolAdapter {
 mod tests {
     use super::*;
     use crate::error::{AlephError, Result};
-    use crate::tool_metadata::{ToolCategory, ToolDefinition as DispatcherToolDefinition};
+    use crate::tool_metadata::{ToolCategory, ToolDefinition as MetadataToolDefinition};
     use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;
@@ -103,8 +103,8 @@ mod tests {
             "fake_tool"
         }
 
-        fn definition(&self) -> DispatcherToolDefinition {
-            DispatcherToolDefinition::new(
+        fn definition(&self) -> MetadataToolDefinition {
+            MetadataToolDefinition::new(
                 "fake_tool",
                 "A fake tool for testing",
                 json!({

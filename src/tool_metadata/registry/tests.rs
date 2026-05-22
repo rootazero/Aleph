@@ -6,13 +6,13 @@ use crate::tool_metadata::types::ToolPriority;
 
 #[tokio::test]
 async fn test_registry_new() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     assert_eq!(registry.count().await, 0);
 }
 
 #[tokio::test]
 async fn test_register_builtin_tools() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     registry.register_builtin_tools().await;
 
     // Should register 11 builtin tools (2 generation + 2 skill + snapshot + switch + groupchat + session_new + new + cron + voice)
@@ -33,7 +33,7 @@ async fn test_register_builtin_tools() {
 
 #[tokio::test]
 async fn test_list_root_commands() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     registry.register_builtin_tools().await;
 
     let rules = vec![RoutingRuleConfig {
@@ -56,7 +56,7 @@ async fn test_list_root_commands() {
 
 #[tokio::test]
 async fn test_register_skills() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     let skills = vec![
         SkillInfo {
@@ -89,7 +89,7 @@ async fn test_register_skills() {
 
 #[tokio::test]
 async fn test_register_custom_commands() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     let rules = vec![
         RoutingRuleConfig {
@@ -126,7 +126,7 @@ async fn test_register_custom_commands() {
 
 #[tokio::test]
 async fn test_list_by_source_type() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     registry.register_builtin_tools().await;
 
     let skills = vec![SkillInfo {
@@ -152,7 +152,7 @@ async fn test_list_by_source_type() {
 
 #[tokio::test]
 async fn test_search() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register a custom command to test search
     let rules = vec![RoutingRuleConfig {
@@ -170,7 +170,7 @@ async fn test_search() {
 
 #[tokio::test]
 async fn test_set_tool_active() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register a custom command to test
     let rules = vec![RoutingRuleConfig {
@@ -196,7 +196,7 @@ async fn test_set_tool_active() {
 
 #[tokio::test]
 async fn test_to_prompt_block() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register custom commands to test prompt block
     let rules = vec![
@@ -226,7 +226,7 @@ async fn test_to_prompt_block() {
 
 #[tokio::test]
 async fn test_check_conflict_no_conflict() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register a custom command
     let rules = vec![RoutingRuleConfig {
@@ -244,7 +244,7 @@ async fn test_check_conflict_no_conflict() {
 
 #[tokio::test]
 async fn test_check_conflict_exists() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register a custom command
     let rules = vec![RoutingRuleConfig {
@@ -266,7 +266,7 @@ async fn test_check_conflict_exists() {
 
 #[tokio::test]
 async fn test_check_conflict_case_insensitive() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register a custom command
     let rules = vec![RoutingRuleConfig {
@@ -285,7 +285,7 @@ async fn test_check_conflict_case_insensitive() {
 
 #[test]
 fn test_resolve_conflict_new_wins() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // MCP tool exists, Builtin tries to register
     let conflict = ConflictInfo {
@@ -314,7 +314,7 @@ fn test_resolve_conflict_new_wins() {
 
 #[test]
 fn test_resolve_conflict_existing_wins() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Builtin exists, MCP tries to register
     let conflict = ConflictInfo {
@@ -347,7 +347,7 @@ fn test_resolve_conflict_existing_wins() {
 
 #[test]
 fn test_resolve_conflict_same_priority() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Two MCP tools with same priority
     let conflict = ConflictInfo {
@@ -382,7 +382,7 @@ fn test_resolve_conflict_same_priority() {
 
 #[tokio::test]
 async fn test_register_with_conflict_resolution_no_conflict() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     let tool = UnifiedTool::new(
         "mcp:server:git",
@@ -405,7 +405,7 @@ async fn test_register_with_conflict_resolution_no_conflict() {
 
 #[tokio::test]
 async fn test_register_with_conflict_resolution_new_renamed() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register Custom tool first (higher priority than MCP)
     let custom_tool = UnifiedTool::new(
@@ -446,7 +446,7 @@ async fn test_register_with_conflict_resolution_new_renamed() {
 
 #[tokio::test]
 async fn test_register_with_conflict_resolution_existing_renamed() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register MCP tool first
     let mcp_tool = UnifiedTool::new(
@@ -491,7 +491,7 @@ async fn test_register_with_conflict_resolution_existing_renamed() {
 
 #[tokio::test]
 async fn test_refresh_atomic_replaces_all_tools() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register some initial tools
     let rules = vec![RoutingRuleConfig {
@@ -536,7 +536,7 @@ async fn test_refresh_atomic_replaces_all_tools() {
 
 #[tokio::test]
 async fn test_refresh_atomic_empty_list() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register some tools first
     let rules = vec![RoutingRuleConfig {
@@ -557,7 +557,7 @@ async fn test_refresh_atomic_empty_list() {
 
 #[tokio::test]
 async fn test_refresh_atomic_preserves_tool_properties() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Create tool with all properties
     let tool = UnifiedTool::new(
@@ -588,7 +588,7 @@ async fn test_refresh_atomic_preserves_tool_properties() {
 
 #[tokio::test]
 async fn test_list_for_channel_all_visible() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     registry.register_builtin_tools().await;
 
     let panel_tools = registry.list_for_channel(ChannelType::Panel).await;
@@ -600,7 +600,7 @@ async fn test_list_for_channel_all_visible() {
 
 #[tokio::test]
 async fn test_list_for_channel_filtered() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     let tool = UnifiedTool::new(
         "custom:panel-only",
@@ -625,7 +625,7 @@ async fn test_list_for_channel_filtered() {
 
 #[tokio::test]
 async fn test_resolve_command_found() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     let rules = vec![RoutingRuleConfig {
         regex: "^/search".to_string(),
         provider: Some("openai".to_string()),
@@ -643,21 +643,21 @@ async fn test_resolve_command_found() {
 
 #[tokio::test]
 async fn test_resolve_command_not_found() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     let resolved = registry.resolve_command("/nonexistent").await;
     assert!(resolved.is_none());
 }
 
 #[tokio::test]
 async fn test_resolve_command_not_slash() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     let resolved = registry.resolve_command("hello world").await;
     assert!(resolved.is_none());
 }
 
 #[tokio::test]
 async fn test_resolve_command_case_insensitive() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     let rules = vec![RoutingRuleConfig {
         regex: "^/search".to_string(),
         provider: Some("openai".to_string()),
@@ -673,7 +673,7 @@ async fn test_resolve_command_case_insensitive() {
 
 #[tokio::test]
 async fn test_resolve_command_no_args() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     let rules = vec![RoutingRuleConfig {
         regex: "^/help".to_string(),
         provider: None,
@@ -689,7 +689,7 @@ async fn test_resolve_command_no_args() {
 
 #[tokio::test]
 async fn test_resolve_command_strips_bot_mention() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     let rules = vec![RoutingRuleConfig {
         regex: "^/search".to_string(),
         provider: Some("openai".to_string()),
@@ -722,7 +722,7 @@ async fn test_resolve_command_strips_bot_mention() {
 
 #[tokio::test]
 async fn test_filter_by_prefix() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     let rules = vec![
         RoutingRuleConfig {
             regex: "^/search".to_string(),
@@ -760,7 +760,7 @@ async fn test_filter_by_prefix() {
 
 #[tokio::test]
 async fn test_high_risk_tool_channel_restriction() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     let tool = UnifiedTool::new(
         "mcp:server:delete_all",
@@ -787,14 +787,14 @@ async fn test_high_risk_tool_channel_restriction() {
 // =========================================================================
 
 /// Helper: register a tool with a dotted name directly
-async fn register_tool(registry: &ToolRegistry, id: &str, name: &str) {
+async fn register_tool(registry: &ToolCatalog, id: &str, name: &str) {
     let tool = UnifiedTool::new(id, name, &format!("Tool {}", name), ToolSource::Builtin);
     registry.register_with_conflict_resolution(tool).await;
 }
 
 #[tokio::test]
 async fn test_resolve_command_hierarchical_two_level() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "builtin:session_new", "session_new").await;
 
     // "/session new my-topic" → session.new, args = "my-topic"
@@ -807,7 +807,7 @@ async fn test_resolve_command_hierarchical_two_level() {
 
 #[tokio::test]
 async fn test_resolve_command_hierarchical_no_args() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "builtin:session_new", "session_new").await;
 
     // "/session new" → session.new, no args
@@ -820,7 +820,7 @@ async fn test_resolve_command_hierarchical_no_args() {
 
 #[tokio::test]
 async fn test_resolve_command_flat_with_args() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "custom:search", "search").await;
 
     // "/search weather" → search, args = "weather"
@@ -833,7 +833,7 @@ async fn test_resolve_command_flat_with_args() {
 
 #[tokio::test]
 async fn test_resolve_command_new_alias() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "builtin:new", "new").await;
 
     // "/new" → resolves to the "new" alias tool
@@ -844,7 +844,7 @@ async fn test_resolve_command_new_alias() {
 
 #[tokio::test]
 async fn test_resolve_command_three_level() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(
         &registry,
         "builtin:plugin_marketplace_install",
@@ -864,7 +864,7 @@ async fn test_resolve_command_three_level() {
 
 #[tokio::test]
 async fn test_resolve_command_nonexistent() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "builtin:session_new", "session_new").await;
 
     let resolved = registry.resolve_command("/nonexistent").await;
@@ -873,7 +873,7 @@ async fn test_resolve_command_nonexistent() {
 
 #[tokio::test]
 async fn test_resolve_command_greedy_longest_match() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     // Register both a namespace parent and a child
     register_tool(&registry, "builtin:session", "session").await;
     register_tool(&registry, "builtin:session_new", "session_new").await;
@@ -895,7 +895,7 @@ async fn test_resolve_command_greedy_longest_match() {
 
 #[tokio::test]
 async fn test_resolve_command_bot_mention_hierarchical() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "builtin:session_new", "session_new").await;
 
     // Telegram: "/session@mybot new topic"
@@ -912,7 +912,7 @@ async fn test_resolve_command_bot_mention_hierarchical() {
 
 #[tokio::test]
 async fn test_is_namespace_true() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "builtin:session_new", "session_new").await;
     register_tool(&registry, "builtin:session_list", "session_list").await;
 
@@ -921,7 +921,7 @@ async fn test_is_namespace_true() {
 
 #[tokio::test]
 async fn test_is_namespace_false() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "custom:search", "search").await;
 
     assert!(!registry.is_namespace("search").await);
@@ -929,7 +929,7 @@ async fn test_is_namespace_false() {
 
 #[tokio::test]
 async fn test_is_namespace_case_insensitive() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "builtin:session_new", "session_new").await;
 
     assert!(registry.is_namespace("Session").await);
@@ -938,7 +938,7 @@ async fn test_is_namespace_case_insensitive() {
 
 #[tokio::test]
 async fn test_list_namespace_children() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "builtin:session_new", "session_new").await;
     register_tool(&registry, "builtin:session_list", "session_list").await;
     register_tool(&registry, "builtin:session.topic.set", "session.topic.set").await; // deeper, should be excluded
@@ -955,7 +955,7 @@ async fn test_list_namespace_children() {
 
 #[tokio::test]
 async fn test_list_namespace_children_empty() {
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
     register_tool(&registry, "custom:search", "search").await;
 
     let children = registry.list_namespace_children("search").await;

@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alephcore::dispatcher::{HealthReason, ProbeResult, ToolHealthCache, ToolHealthProbe};
+use alephcore::tool_metadata::{HealthReason, ProbeResult, ToolHealthCache, ToolHealthProbe};
 
 /// A probe that always reports the same canned result.
 struct CannedProbe(ProbeResult);
@@ -55,9 +55,9 @@ async fn dead_probe_makes_tool_unhealthy_until_invalidation() {
 
 #[tokio::test]
 async fn dispatcher_smart_prompt_filters_unhealthy_tools() {
-    use alephcore::dispatcher::{ToolRegistry, UnifiedTool};
+    use alephcore::tool_metadata::{ToolCatalog, UnifiedTool};
 
-    let registry = ToolRegistry::new();
+    let registry = ToolCatalog::new();
 
     // Register two builtin-shaped tools by way of the refresh path.
     let tools = vec![

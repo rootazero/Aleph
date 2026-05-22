@@ -130,7 +130,7 @@ impl ToolService for NoopTools {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }
@@ -820,7 +820,7 @@ impl ToolService for SleepyBudgetedTool {
             },
         })
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }
@@ -1230,7 +1230,7 @@ impl ToolService for CountingTools {
     async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
         None
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }

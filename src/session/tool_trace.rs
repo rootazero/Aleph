@@ -170,7 +170,7 @@ mod tests {
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             std::sync::Arc::from([])
         }
     }
@@ -191,7 +191,7 @@ mod tests {
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             std::sync::Arc::from([])
         }
     }
@@ -212,7 +212,7 @@ mod tests {
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             std::sync::Arc::from([])
         }
     }
@@ -370,7 +370,7 @@ mod tests {
         async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
             None
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             std::sync::Arc::from([])
         }
     }

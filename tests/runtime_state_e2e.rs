@@ -13,8 +13,8 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use alephcore::dispatcher::{
-    HealthReason, ProbeResult, ToolHealthProbe, ToolRegistry as DispatchRegistry,
+use alephcore::tool_metadata::{
+    HealthReason, ProbeResult, ToolHealthProbe, ToolCatalog,
 };
 use alephcore::orchestrator::harness_bridge::compute_runtime_state_blocks;
 use alephcore::thinker::context::{ContextAggregator, ResolvedContext};
@@ -47,7 +47,7 @@ fn empty_context() -> ResolvedContext {
 
 #[tokio::test]
 async fn unhealthy_probe_surfaces_in_runtime_state_layer_xml() {
-    let registry = Arc::new(DispatchRegistry::new());
+    let registry = Arc::new(ToolCatalog::new());
     let cache = registry.health();
     cache.register_probe("alpha_tool", Arc::new(CannedDead("alpha down")));
     // Snapshots only surface cached entries; force a refresh to populate.
@@ -79,7 +79,7 @@ async fn unhealthy_probe_surfaces_in_runtime_state_layer_xml() {
 }
 
 #[tokio::test]
-async fn no_dispatch_registry_emits_empty_block() {
+async fn no_tool_catalog_emits_empty_block() {
     let blocks = compute_runtime_state_blocks(None);
     assert!(blocks.is_empty());
 
@@ -102,7 +102,7 @@ async fn healthy_probe_does_not_produce_fragment() {
         }
     }
 
-    let registry = Arc::new(DispatchRegistry::new());
+    let registry = Arc::new(ToolCatalog::new());
     let cache = registry.health();
     cache.register_probe("healthy_tool", Arc::new(AlwaysHealthy));
     let _ = cache.refresh("healthy_tool").await;

@@ -158,8 +158,8 @@ impl ToolService for HangingTool {
         self.list().await.into_iter().find(|d| d.name == name)
     }
 
-    fn dispatcher_schema(&self) -> Arc<[alephcore::dispatcher::ToolDefinition]> {
-        Arc::from(Vec::<alephcore::dispatcher::ToolDefinition>::new())
+    fn metadata_schema(&self) -> Arc<[alephcore::tool_metadata::ToolDefinition]> {
+        Arc::from(Vec::<alephcore::tool_metadata::ToolDefinition>::new())
     }
 }
 

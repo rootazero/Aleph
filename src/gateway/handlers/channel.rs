@@ -101,19 +101,19 @@ pub fn store_and_strip_channel_secrets(
     count
 }
 
-/// Cached ToolRegistry for Telegram channel recreation.
+/// Cached ToolCatalog for Telegram channel recreation.
 ///
 /// When `channel.start` RPC recreates a Telegram channel from config,
-/// it needs to re-attach the ToolRegistry so slash commands are registered.
-static TELEGRAM_TOOL_REGISTRY: OnceLock<Arc<crate::tool_metadata::ToolRegistry>> = OnceLock::new();
+/// it needs to re-attach the ToolCatalog so slash commands are registered.
+static TELEGRAM_TOOL_REGISTRY: OnceLock<Arc<crate::tool_metadata::ToolCatalog>> = OnceLock::new();
 
-/// Store ToolRegistry for use when recreating Telegram channels.
-pub fn set_telegram_tool_registry(registry: Arc<crate::tool_metadata::ToolRegistry>) {
+/// Store ToolCatalog for use when recreating Telegram channels.
+pub fn set_telegram_tool_registry(registry: Arc<crate::tool_metadata::ToolCatalog>) {
     let _ = TELEGRAM_TOOL_REGISTRY.set(registry);
 }
 
-/// Get cached ToolRegistry for Telegram channel recreation.
-fn get_telegram_tool_registry() -> Option<Arc<crate::tool_metadata::ToolRegistry>> {
+/// Get cached ToolCatalog for Telegram channel recreation.
+fn get_telegram_tool_registry() -> Option<Arc<crate::tool_metadata::ToolCatalog>> {
     TELEGRAM_TOOL_REGISTRY.get().cloned()
 }
 
@@ -343,7 +343,7 @@ pub async fn handle_start(
             create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone())
                 .await
         {
-            // Re-attach ToolRegistry for telegram channels so slash commands are registered
+            // Re-attach ToolCatalog for telegram channels so slash commands are registered
             if channel_type == "telegram" {
                 use crate::gateway::interfaces::telegram::{
                     parse_telegram_channel_config, TelegramChannel,

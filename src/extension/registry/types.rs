@@ -197,7 +197,7 @@ impl SkillRegistration {
         self.content.replace("$ARGUMENTS", arguments)
     }
 
-    /// Convert to SkillInfo for compatibility with ToolRegistry
+    /// Convert to SkillInfo for compatibility with ToolCatalog
     pub fn to_skill_info(&self) -> crate::skill::SkillInfo {
         crate::skill::SkillInfo {
             id: self.qualified_name(),

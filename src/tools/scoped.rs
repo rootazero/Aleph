@@ -21,7 +21,7 @@ use crate::tool_metadata::ToolHealthCache;
 use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 use crate::tools::service::{
-    to_dispatcher_form, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
+    to_metadata_form, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
 };
 
 // =============================================================================
@@ -98,7 +98,7 @@ pub struct ScopedToolService {
     schema_cache: ArcSwap<Option<(u64, Arc<[crate::tool_metadata::ToolDefinition]>)>>,
     cache_generation: std::sync::atomic::AtomicU64,
     /// Optional runtime health cache. When set, `list()` and
-    /// `dispatcher_schema()` strip tools whose probe reports Unhealthy
+    /// `metadata_schema()` strip tools whose probe reports Unhealthy
     /// (and the entry hasn't expired) so the LLM never sees a tool whose
     /// dependencies are dead.
     health: Option<Arc<ToolHealthCache>>,
@@ -132,9 +132,9 @@ impl ScopedToolService {
         }
     }
 
-    /// Attach the dispatcher's runtime health cache.
+    /// Attach the tool catalog's runtime health cache.
     ///
-    /// When set, `list()` and `dispatcher_schema()` consult the cache and
+    /// When set, `list()` and `metadata_schema()` consult the cache and
     /// silently strip any tool whose registered probe reports a non-expired
     /// `Unhealthy`. Cache-key drift on the underlying health generation is
     /// detected on every read so a flip propagates within one turn.
@@ -231,7 +231,7 @@ impl ScopedToolService {
         // Attached SubagentTool always passes the allow filter. It is appended
         // to listings independently of `allowed` (which is derived from the
         // builtin tool registry — subagent isn't registered there), so without
-        // this exception `list()` / `dispatcher_schema()` / `execute()` would
+        // this exception `list()` / `metadata_schema()` / `execute()` would
         // hide subagent from the LLM whenever a non-empty allow set was
         // configured (i.e. every real gateway path).
         if self
@@ -401,7 +401,7 @@ impl ToolService for ScopedToolService {
         }
     }
 
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         use std::sync::atomic::Ordering;
 
         // Bump generation if the refresh source signals external changes.
@@ -414,7 +414,7 @@ impl ToolService for ScopedToolService {
 
         // Bump generation if the health cache rotated (a probe flipped
         // healthy↔unhealthy or `invalidate_all` fired). This keeps the
-        // dispatcher schema cache aligned with the same gating snapshot
+        // metadata schema cache aligned with the same gating snapshot
         // that `list()` sees.
         if let Some(health) = &self.health {
             let live_gen = health.generation();
@@ -462,7 +462,7 @@ impl ToolService for ScopedToolService {
         if let Some(snap) = &health_snap {
             defs.retain(|d| snap.is_healthy(&d.name));
         }
-        let schema = to_dispatcher_form(&defs);
+        let schema = to_metadata_form(&defs);
         self.schema_cache
             .store(Arc::new(Some((gen_now, Arc::clone(&schema)))));
         schema
@@ -884,7 +884,7 @@ mod tests {
         async fn describe(&self, _: &str) -> Option<ToolDefinition> {
             None
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             std::sync::Arc::from([])
         }
     }
@@ -1046,7 +1046,7 @@ mod tests {
     // Regression for the gateway run_loop wiring: `allowed_names` is built
     // from the builtin tool registry's tool definitions, which never contains
     // "subagent" (SubagentTool is attached on top of the registry). Before
-    // the is_allowed exemption, list / describe / execute / dispatcher_schema
+    // the is_allowed exemption, list / describe / execute / metadata_schema
     // all silently dropped subagent whenever the allow set was non-empty —
     // i.e. every real LLM-facing call.
     // -------------------------------------------------------------------------
@@ -1108,15 +1108,15 @@ mod tests {
             "describe(subagent) must return Some under non-empty allow set"
         );
 
-        // (3) dispatcher_schema (LLM-facing) includes subagent
+        // (3) metadata_schema (LLM-facing) includes subagent
         let schema_names: Vec<String> = svc
-            .dispatcher_schema()
+            .metadata_schema()
             .iter()
             .map(|t| t.name.clone())
             .collect();
         assert!(
             schema_names.iter().any(|n| n == "subagent"),
-            "dispatcher_schema must include subagent; got {:?}",
+            "metadata_schema must include subagent; got {:?}",
             schema_names
         );
 
@@ -1260,15 +1260,15 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 7: dispatcher_schema caches when no refresh signal
+    // Test 7: metadata_schema caches when no refresh signal
     // -------------------------------------------------------------------------
 
     #[test]
-    fn scoped_dispatcher_schema_caches_when_no_refresh_signal() {
+    fn scoped_metadata_schema_caches_when_no_refresh_signal() {
         let registry = make_registry(&["a", "b"]);
         let svc = ScopedToolService::new(registry, BTreeSet::new());
-        let s1 = svc.dispatcher_schema();
-        let s2 = svc.dispatcher_schema();
+        let s1 = svc.metadata_schema();
+        let s2 = svc.metadata_schema();
         assert!(
             std::sync::Arc::ptr_eq(&s1, &s2),
             "without refresh signal cache should hold across calls"
@@ -1277,16 +1277,16 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 8: dispatcher_schema respects allowed filter
+    // Test 8: metadata_schema respects allowed filter
     // -------------------------------------------------------------------------
 
     #[test]
-    fn scoped_dispatcher_schema_respects_allowed_filter() {
+    fn scoped_metadata_schema_respects_allowed_filter() {
         let registry = make_registry(&["a", "b"]);
         let mut allowed = BTreeSet::new();
         allowed.insert("a".to_string());
         let svc = ScopedToolService::new(registry, allowed);
-        let s = svc.dispatcher_schema();
+        let s = svc.metadata_schema();
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].name, "a");
     }
@@ -1533,7 +1533,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatcher_schema_strips_unhealthy_tools_and_invalidates_on_flip() {
+    fn metadata_schema_strips_unhealthy_tools_and_invalidates_on_flip() {
         // Driven sync from outside an async runtime — populate the cache via
         // a small block_on island.
         let registry = make_registry(&["alive", "dead"]);
@@ -1549,7 +1549,7 @@ mod tests {
         let svc =
             ScopedToolService::new(registry, BTreeSet::new()).with_health(Arc::clone(&health));
 
-        let s1 = svc.dispatcher_schema();
+        let s1 = svc.metadata_schema();
         let names: Vec<&str> = s1.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"alive"));
         assert!(!names.contains(&"dead"), "first call should strip dead");
@@ -1557,7 +1557,7 @@ mod tests {
         // Flip "dead" healthy via invalidation; the schema cache must
         // invalidate so the next call surfaces "dead" again.
         health.invalidate_all();
-        let s2 = svc.dispatcher_schema();
+        let s2 = svc.metadata_schema();
         assert!(
             !Arc::ptr_eq(&s1, &s2),
             "cache must rotate when health generation flips"

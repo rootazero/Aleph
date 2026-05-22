@@ -1,7 +1,7 @@
 //! AiProviderBridge — connects existing AiProvider implementations to the harness.
 //!
 //! The bridge converts between the harness's local `ToolDefinition` (3 fields)
-//! and the dispatcher's `ToolDefinition` (7 fields), and passes `UnifiedMessage`
+//! and the `tool_metadata` `ToolDefinition` (7 fields), and passes `UnifiedMessage`
 //! history through `transform_messages` before calling the provider.
 //!
 //! This module is the canonical home for the `LoopProvider` trait (Phase 7 T9).
@@ -15,7 +15,7 @@ use crate::providers::message::{transform_messages, UnifiedMessage};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use crate::tool_metadata::ToolCategory;
-use crate::tool_metadata::ToolDefinition as DispatcherToolDefinition;
+use crate::tool_metadata::ToolDefinition as MetadataToolDefinition;
 
 use crate::tools::runtime::ToolDefinition as LoopToolDefinition;
 
@@ -42,7 +42,7 @@ pub trait LoopProvider: Send + Sync {
 /// Bridge from `LoopProvider` to any `Arc<dyn AiProvider>`.
 ///
 /// Translates UnifiedMessage conversation history through transform_messages
-/// and converts minimal ToolDefinitions into dispatcher ToolDefinitions
+/// and converts minimal ToolDefinitions into `tool_metadata` ToolDefinitions
 /// for the underlying provider's `process` method.
 pub struct AiProviderBridge {
     provider: Arc<dyn AiProvider>,
@@ -64,9 +64,9 @@ impl AiProviderBridge {
         self
     }
 
-    /// Convert a loop ToolDefinition to the dispatcher's ToolDefinition.
-    fn convert_tool_def(def: &LoopToolDefinition) -> DispatcherToolDefinition {
-        DispatcherToolDefinition {
+    /// Convert a loop ToolDefinition to the `tool_metadata` ToolDefinition.
+    fn convert_tool_def(def: &LoopToolDefinition) -> MetadataToolDefinition {
+        MetadataToolDefinition {
             name: def.name.clone(),
             description: def.description.clone(),
             parameters: def.parameters.clone(),
@@ -93,17 +93,17 @@ impl LoopProvider for AiProviderBridge {
         // Pre-process: repair orphaned tool calls
         let cleaned = transform_messages(messages, Some(self.provider.name()));
 
-        // Convert loop ToolDefinitions to dispatcher ToolDefinitions
-        let dispatcher_tools: Vec<DispatcherToolDefinition> =
+        // Convert loop ToolDefinitions to `tool_metadata` ToolDefinitions
+        let metadata_tools: Vec<MetadataToolDefinition> =
             tools.iter().map(Self::convert_tool_def).collect();
 
         let payload = RequestPayload {
             messages: &cleaned,
             system_prompt: Some(system_prompt),
-            tools: if dispatcher_tools.is_empty() {
+            tools: if metadata_tools.is_empty() {
                 None
             } else {
-                Some(&dispatcher_tools)
+                Some(&metadata_tools)
             },
             model: self.model.clone(),
             ..Default::default()

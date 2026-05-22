@@ -759,7 +759,7 @@ mod tests {
             None
         }
 
-        fn dispatcher_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
+        fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
             Arc::from(vec![])
         }
     }

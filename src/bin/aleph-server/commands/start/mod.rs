@@ -458,7 +458,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     initialize_extension_manager(args.daemon).await;
 
-    // Shared MCP-target ToolRegistry. The Phase 2 facade chain
+    // Shared MCP-target ToolHandlerRegistry. The Phase 2 facade chain
     // (`build_tool_service`, `PermissionLayer`, `TimeoutLayer`, etc.) was
     // deleted in 2026-05-20 — gateway always overrides the harness's
     // `tool_service` slot with a per-request `ScopedToolService`, so the
@@ -466,9 +466,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // tool bridge below mutates it as external servers advertise / drop
     // tools, and `BuiltinToolRegistry` (the production tool stack) shares
     // its snapshot for `list_tools` introspection.
-    let tool_registry_phase2 = Arc::new(alephcore::tools::ToolRegistry::new());
+    let tool_registry_phase2 = Arc::new(alephcore::tools::ToolHandlerRegistry::new());
 
-    // First production consumer of `ToolRegistry::subscribe`. Logs every
+    // First production consumer of `ToolHandlerRegistry::subscribe`. Logs every
     // MCP-driven register/unregister so operators can see exactly when
     // remote tools enter or leave the LLM's surface. The channel has a
     // 256-slot ring buffer; slow logger backlog is dropped (Lagged), not
@@ -499,7 +499,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // MCP: spawn the manager actor here so dependent handlers can resolve
     // `mcp_handle` below. The tool bridge is spawned later — after
-    // `agent_result` materialises — so it can carry the dispatcher's
+    // `agent_result` materialises — so it can carry the tool catalog's
     // `ToolHealthCache` handle for `McpServerProbe` registration.
     // Warn-only on failure — a missing or malformed MCP config must never
     // abort boot.
@@ -991,8 +991,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
-    // MCP tool bridge — now that `agent_result.dispatch_registry` exists,
-    // spawn the bridge with the dispatcher handle so each registered MCP
+    // MCP tool bridge — now that `agent_result.tool_catalog` exists,
+    // spawn the bridge with the tool-catalog handle so each registered MCP
     // tool also gets an `McpServerProbe` attached to the shared
     // `ToolHealthCache`. The bridge subscribes to manager events; any
     // servers that connect from this point on flow through it.
@@ -1000,7 +1000,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         alephcore::mcp::spawn_tool_bridge(
             h.clone(),
             tool_registry_phase2.clone(),
-            agent_result.dispatch_registry.clone(),
+            agent_result.tool_catalog.clone(),
         );
         if !args.daemon {
             println!("MCP tool bridge wired");
@@ -1173,7 +1173,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             &stop_hook_configs,
             agent_result.memory_context_provider.clone(),
             agent_result.memory_backend.clone(),
-            agent_result.dispatch_registry.clone(),
+            agent_result.tool_catalog.clone(),
             auth_bundle.auth_ctx.shared_token_mgr.clone(),
             auth_bundle.auth_ctx.security_store.clone(),
             epoch_registrar_for_orchestrator,
@@ -1830,7 +1830,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &mut server,
         &app_config_snapshot,
         &app_config_for_channels,
-        agent_result.dispatch_registry.clone(),
+        agent_result.tool_catalog.clone(),
         args.daemon,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
     )
@@ -1949,7 +1949,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         gc_executor,
         workspace_manager,
         agent_result.default_provider,
-        agent_result.dispatch_registry,
+        agent_result.tool_catalog,
         Some(session_store.clone()),
         Some(app_config_for_channels.clone()),
         agent_result.generation_registry,

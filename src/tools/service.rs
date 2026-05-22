@@ -94,7 +94,7 @@ pub trait ToolService: Send + Sync + 'static {
 
     async fn describe(&self, name: &str) -> Option<ToolDefinition>;
 
-    /// Return the dispatcher-form tool schema the LLM expects, as an `Arc`
+    /// Return the metadata-form tool schema the LLM expects, as an `Arc`
     /// for O(1) per-turn cloning. Implementations cache internally and
     /// invalidate on their own mutation signal (e.g., registry snapshot
     /// change for `CoreDispatch`, MCP `poll_changes()` for `ScopedToolService`).
@@ -102,10 +102,10 @@ pub trait ToolService: Send + Sync + 'static {
     /// REQUIRED — no default impl. A default returning empty would silently
     /// hide the LLM's tool list on any forgotten override. Test mocks must
     /// also implement, typically returning `std::sync::Arc::from([])`.
-    fn dispatcher_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]>;
+    fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]>;
 }
 
-/// Convert a slice of loop-side `ToolDefinition`s into the dispatcher-side
+/// Convert a slice of loop-side `ToolDefinition`s into the `tool_metadata`
 /// `ToolDefinition` representation expected by LLM providers.
 ///
 /// This is the single source of truth for the conversion. Per Stage 2
@@ -116,7 +116,7 @@ pub trait ToolService: Send + Sync + 'static {
 /// Information loss (e.g., `ToolSource::Mcp` collapses to `category: Builtin`,
 /// `metadata.requires_approval` is dropped) is preserved as-is from the
 /// pre-Stage-2 behavior. Fixing the lossy mapping is out of Stage 2 scope.
-pub fn to_dispatcher_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]> {
+pub fn to_metadata_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]> {
     defs.iter()
         .map(|def| crate::tool_metadata::ToolDefinition {
             name: def.name.clone(),
@@ -132,9 +132,9 @@ pub fn to_dispatcher_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata:
 }
 
 #[cfg(test)]
-mod dispatcher_form_tests {
+mod metadata_form_tests {
     use super::*;
-    use crate::tool_metadata::{ToolCategory, ToolDefinition as DispatcherToolDefinition};
+    use crate::tool_metadata::{ToolCategory, ToolDefinition as MetadataToolDefinition};
     use serde_json::json;
 
     fn loop_def(name: &str) -> ToolDefinition {
@@ -149,16 +149,16 @@ mod dispatcher_form_tests {
 
     #[test]
     fn empty_input_yields_empty_arc() {
-        let out = to_dispatcher_form(&[]);
+        let out = to_metadata_form(&[]);
         assert!(out.is_empty());
     }
 
     #[test]
     fn single_def_converts_field_by_field() {
         let inputs = vec![loop_def("alpha")];
-        let out = to_dispatcher_form(&inputs);
+        let out = to_metadata_form(&inputs);
         assert_eq!(out.len(), 1);
-        let d: &DispatcherToolDefinition = &out[0];
+        let d: &MetadataToolDefinition = &out[0];
         assert_eq!(d.name, "alpha");
         assert_eq!(d.description, "desc alpha");
         assert_eq!(d.parameters, json!({"type": "object"}));
@@ -171,7 +171,7 @@ mod dispatcher_form_tests {
     #[test]
     fn preserves_order_for_multi_input() {
         let inputs = vec![loop_def("a"), loop_def("b"), loop_def("c")];
-        let out = to_dispatcher_form(&inputs);
+        let out = to_metadata_form(&inputs);
         let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b", "c"]);
     }

@@ -5,7 +5,7 @@
 //! - `handle_effective` respects the live agent registry's allowlist (D1).
 //! - `handle_effective` returns `agent_id` field for the resolved agent.
 //!
-//! Uses a real `dispatcher::ToolRegistry` seeded by hand so we don't depend
+//! Uses a real `tool_metadata::ToolCatalog` seeded by hand so we don't depend
 //! on the builtin-tools wiring (which has its own integration tests).
 //!
 //! `tools.invoke` is covered exhaustively by the unit tests at
@@ -13,16 +13,16 @@
 //! a duplicate integration here would only re-test the same code path.
 
 use alephcore::agents::{AgentDef, AgentMode, AgentRegistry};
-use alephcore::dispatcher::{ToolRegistry, ToolSource, UnifiedTool};
+use alephcore::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
 use alephcore::gateway::handlers::tools_visibility::{handle_catalog, handle_effective};
 use alephcore::gateway::protocol::JsonRpcRequest;
 use serde_json::json;
 
 /// Build a registry seeded with one tool per source family used by the
 /// `extract_source` mapping. Mirrors the unit-test fixture but goes through
-/// the real `ToolRegistry` so we exercise the public surface.
-async fn registry_with_mixed_sources() -> ToolRegistry {
-    let reg = ToolRegistry::new();
+/// the real `ToolCatalog` so we exercise the public surface.
+async fn registry_with_mixed_sources() -> ToolCatalog {
+    let reg = ToolCatalog::new();
     let tools = vec![
         UnifiedTool::new("native:search", "search", "Search", ToolSource::Native),
         UnifiedTool::new("builtin:help", "help", "Help", ToolSource::Builtin),

@@ -1,4 +1,4 @@
-//! ToolRegistry — ArcSwap-backed name → handler map.
+//! ToolHandlerRegistry — ArcSwap-backed name → handler map.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,12 +15,12 @@ pub enum RegistryChange {
     Unregistered { name: String, source: ToolSource },
 }
 
-pub struct ToolRegistry {
+pub struct ToolHandlerRegistry {
     inner: Arc<ArcSwap<HashMap<String, Arc<dyn ToolHandler>>>>,
     change_tx: broadcast::Sender<RegistryChange>,
 }
 
-impl ToolRegistry {
+impl ToolHandlerRegistry {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(256);
         Self {
@@ -67,7 +67,7 @@ impl ToolRegistry {
     /// Each receiver gets a 256-slot circular buffer (see channel allocation
     /// in `new()`). Slow consumers lose the oldest events rather than
     /// blocking publishers — this is the intended behavior for diagnostic
-    /// taps and dispatcher refresh hooks.
+    /// taps and tool-catalog refresh hooks.
     ///
     /// First production consumer: the boot-time RegistryChange logger in
     /// `aleph-server commands::start` records every MCP server connect /
@@ -78,7 +78,7 @@ impl ToolRegistry {
     }
 }
 
-impl Default for ToolRegistry {
+impl Default for ToolHandlerRegistry {
     fn default() -> Self {
         Self::new()
     }
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn register_and_snapshot() {
-        let reg = ToolRegistry::new();
+        let reg = ToolHandlerRegistry::new();
         reg.register("a".into(), fake("a")).unwrap();
         reg.register("b".into(), fake("b")).unwrap();
         let snap = reg.snapshot();
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn duplicate_register_returns_other() {
-        let reg = ToolRegistry::new();
+        let reg = ToolHandlerRegistry::new();
         reg.register("dup".into(), fake("dup")).unwrap();
         let err = reg.register("dup".into(), fake("dup")).unwrap_err();
         assert!(matches!(err, ToolError::Duplicate { name } if name == "dup"));
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn unregister_removes() {
-        let reg = ToolRegistry::new();
+        let reg = ToolHandlerRegistry::new();
         reg.register("z".into(), fake("z")).unwrap();
         let removed = reg.unregister("z").unwrap();
         assert_eq!(removed.definition().name, "z");
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn unregister_missing_returns_none() {
-        let reg = ToolRegistry::new();
+        let reg = ToolHandlerRegistry::new();
         assert!(reg.unregister("nope").is_none());
     }
 
@@ -161,7 +161,7 @@ mod tests {
     fn snapshot_stable_against_concurrent_register() {
         // Emit a snapshot, then register while holding the snapshot — snapshot's
         // contents must be unchanged (that's the ArcSwap guarantee).
-        let reg = ToolRegistry::new();
+        let reg = ToolHandlerRegistry::new();
         reg.register("x".into(), fake("x")).unwrap();
         let snap1 = reg.snapshot();
         reg.register("y".into(), fake("y")).unwrap();
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn change_events_are_sent() {
-        let reg = ToolRegistry::new();
+        let reg = ToolHandlerRegistry::new();
         let mut rx = reg.subscribe();
         reg.register("e".into(), fake("e")).unwrap();
         let evt = rx.try_recv().expect("event");

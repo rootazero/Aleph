@@ -39,7 +39,7 @@ pub struct HydratedTool {
     pub hydration_level: HydrationLevel,
     /// The underlying memory fact
     pub fact: MemoryFact,
-    /// Cached JSON schema for the tool (populated from ToolRegistry)
+    /// Cached JSON schema for the tool (populated from ToolCatalog)
     pub cached_schema: Option<String>,
 }
 
@@ -65,7 +65,7 @@ impl HydratedTool {
         }
     }
 
-    /// Set the cached schema (typically from ToolRegistry lookup)
+    /// Set the cached schema (typically from ToolCatalog lookup)
     pub fn with_schema(mut self, schema: String) -> Self {
         self.cached_schema = Some(schema);
         self

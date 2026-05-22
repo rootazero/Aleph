@@ -47,7 +47,7 @@ impl ContextPressure {
     /// `tool_schema_tokens` is the caller-precomputed token cost of the tool
     /// schema actually sent to the provider. Keeping it a plain `usize` (rather
     /// than a `&[ToolDefinition]`) decouples this module from any tool-def type
-    /// and lets the harness count the exact wire schema (`dispatcher::ToolDefinition`).
+    /// and lets the harness count the exact wire schema (`tool_metadata::ToolDefinition`).
     pub(crate) fn compute(
         messages: &[UnifiedMessage],
         system_prompt: &str,

@@ -52,14 +52,14 @@ impl ToolService for AllowlistToolService {
         self.inner.describe(name).await
     }
 
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
-        // Filter the parent's dispatcher schema down to what this child agent
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        // Filter the parent's metadata schema down to what this child agent
         // is allowed to see. Returning an empty slice here (the previous
         // behavior) silently hid every tool from the child LLM — `list()` /
         // `describe()` / `execute()` were properly filtered, but the LLM-facing
-        // schema served by Orchestrator goes through `dispatcher_schema()`,
+        // schema served by Orchestrator goes through `metadata_schema()`,
         // so subagents got an empty tool catalog and gave up after one turn.
-        let inner = self.inner.dispatcher_schema();
+        let inner = self.inner.metadata_schema();
         let filtered: Vec<crate::tool_metadata::ToolDefinition> = inner
             .iter()
             .filter(|d| self.agent_def.is_tool_allowed(&d.name))
@@ -105,9 +105,9 @@ mod tests {
         async fn describe(&self, name: &str) -> Option<ToolDefinition> {
             self.list().await.into_iter().find(|d| d.name == name)
         }
-        fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
             // Mirror list() so tests can verify the AllowlistToolService
-            // wrapper passes its own filter through dispatcher_schema().
+            // wrapper passes its own filter through metadata_schema().
             let defs: Vec<crate::tool_metadata::ToolDefinition> = ["read", "write", "exec"]
                 .iter()
                 .map(|n| {
@@ -183,29 +183,29 @@ mod tests {
         assert!(svc.describe("exec").await.is_none());
     }
 
-    /// Regression — `dispatcher_schema` previously returned an empty slice,
-    /// hiding every tool from the LLM-facing dispatcher pipeline. The wrapper
+    /// Regression — `metadata_schema` previously returned an empty slice,
+    /// hiding every tool from the LLM-facing tool pipeline. The wrapper
     /// must filter the inner schema using the same allowlist as `list()` /
     /// `describe()` / `execute()`.
     #[test]
-    fn dispatcher_schema_filters_to_allowed_subset() {
+    fn metadata_schema_filters_to_allowed_subset() {
         let def = agent_with_allowed(vec!["read", "write"]);
         let svc = AllowlistToolService::new(Arc::new(FakeTools), def);
-        let schema = svc.dispatcher_schema();
+        let schema = svc.metadata_schema();
         let names: Vec<&str> = schema.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(
             names,
             vec!["read", "write"],
-            "dispatcher_schema must surface the allowed subset, not the empty slice"
+            "metadata_schema must surface the allowed subset, not the empty slice"
         );
     }
 
-    /// Wildcard agent should see every parent tool through dispatcher_schema.
+    /// Wildcard agent should see every parent tool through metadata_schema.
     #[test]
-    fn dispatcher_schema_wildcard_passes_everything_through() {
+    fn metadata_schema_wildcard_passes_everything_through() {
         let def = agent_with_allowed(vec!["*"]);
         let svc = AllowlistToolService::new(Arc::new(FakeTools), def);
-        let schema = svc.dispatcher_schema();
+        let schema = svc.metadata_schema();
         assert_eq!(schema.len(), 3);
     }
 }

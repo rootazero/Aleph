@@ -13,7 +13,7 @@
 //!
 //! - Level 0: StateDatabase (resilience/database)
 //! - Level 1: MemoryStore (memory/)
-//! - Level 2: ToolRegistry, ChannelRegistry (dispatcher/, gateway/)
+//! - Level 2: ToolCatalog, ChannelRegistry ((tool_metadata/, gateway/))
 //! - Level 3: UI state, progress monitors
 
 // Arc is always std::sync::Arc — loom::sync::Arc is incompatible with

@@ -1154,7 +1154,7 @@ impl BuiltinToolRegistry {
             memory_timeline_tool: timeline_tool,
             memory_workspace_handle,
             memory_session_key_handle,
-            dispatcher_registry: config.dispatcher_registry.clone(),
+            tool_catalog: config.tool_catalog.clone(),
             gateway_context: {
                 let cell = Arc::new(tokio::sync::OnceCell::new());
                 if let Some(ref ctx) = config.gateway_context {

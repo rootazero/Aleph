@@ -35,7 +35,7 @@ mod tests {
 
     use tokio::sync::RwLock;
 
-    use crate::tool_metadata::{ToolRegistry as DispatcherToolRegistry, ToolSource};
+    use crate::tool_metadata::{ToolCatalog, ToolSource};
 
     use super::*;
 
@@ -93,8 +93,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_meta_tools_not_registered_without_dispatcher_registry() {
-        // Without dispatcher registry, meta tools should not be registered
+    async fn test_meta_tools_not_registered_without_tool_catalog() {
+        // Without tool catalog, meta tools should not be registered
         let registry = BuiltinToolRegistry::new().await;
 
         assert!(registry.get_tool("list_tools").is_none());
@@ -102,11 +102,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_meta_tools_registered_with_dispatcher_registry() {
-        // With dispatcher registry, meta tools should be registered
-        let dispatcher_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
+    async fn test_meta_tools_registered_with_tool_catalog() {
+        // With tool catalog, meta tools should be registered
+        let tool_catalog = Arc::new(RwLock::new(ToolCatalog::new()));
         let config = BuiltinToolConfig {
-            dispatcher_registry: Some(dispatcher_registry),
+            tool_catalog: Some(tool_catalog),
             ..Default::default()
         };
         let registry = BuiltinToolRegistry::with_config(config).await;

@@ -3,7 +3,7 @@
 //! Hermes-inspired `check_fn` TTL gate. Each tool may register a probe
 //! that reports whether its runtime dependencies are alive (Docker
 //! daemon, auth token, upstream MCP server, depth budget, etc.). The
-//! dispatcher's [`ToolRegistry`] consults the cache alongside the
+//! [`ToolCatalog`] consults the cache alongside the
 //! existing `is_active` flag when emitting native tool schemas via
 //! `generate_smart_prompt`, so the LLM never sees a tool it cannot use.
 //!
@@ -11,7 +11,7 @@
 //!
 //! * `ToolHealthCache` is the cross-registry rendezvous point. Probes
 //!   are registered by tool **name** (not via `ToolHandler`) so the
-//!   dispatcher's metadata registry and the executor's handler registry
+//!   `tool_metadata` catalog and the executor's handler registry
 //!   stay decoupled.
 //! * Probes run with a 200 ms hard deadline (`PROBE_DEADLINE`) under a
 //!   single-flight `tokio::sync::OnceCell` so concurrent triggers
@@ -21,7 +21,7 @@
 //!   tool for one more turn while a background refresh re-evaluates.
 //!   This matches hermes's "favour availability over latency" stance.
 //! * `invalidate_all()` clears the cache and bumps `generation`; the
-//!   dispatcher subscribes to [`crate::tools::registry::RegistryChange`]
+//!   catalog subscribes to [`crate::tools::registry::RegistryChange`]
 //!   and calls it on every tool registration / unregistration.
 
 use std::borrow::Cow;

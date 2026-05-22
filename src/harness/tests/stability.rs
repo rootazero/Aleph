@@ -152,7 +152,7 @@ impl crate::tools::service::ToolService for AlwaysFailTools {
     async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
         None
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }
@@ -185,7 +185,7 @@ impl crate::tools::service::ToolService for MixedTools {
     async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
         None
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }
@@ -208,7 +208,7 @@ impl crate::tools::service::ToolService for HangingTools {
     async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
         None
     }
-    fn dispatcher_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
     }
 }
