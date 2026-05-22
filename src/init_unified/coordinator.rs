@@ -76,6 +76,22 @@ impl InitializationCoordinator {
 
     /// Run the full initialization sequence
     pub async fn run(&self) -> InitializationResult {
+        static INITIALIZING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if INITIALIZING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return InitializationResult {
+                success: false,
+                completed_phases: Vec::new(),
+                error_phase: Some("setup".to_string()),
+                error_message: Some("Initialization already in progress".to_string()),
+            };
+        }
+
+        let result = self.run_internal().await;
+        INITIALIZING.store(false, std::sync::atomic::Ordering::SeqCst);
+        result
+    }
+
+    async fn run_internal(&self) -> InitializationResult {
         let phases = [
             InitPhase::Directories,
             InitPhase::Config,
@@ -188,7 +204,32 @@ impl InitializationCoordinator {
                     warn!("Skipping config rollback to avoid deleting pre-existing user configuration");
                 }
                 InitPhase::Directories => {
-                    // Don't remove entire config_dir to preserve user data
+                    for subdir in ["logs", "cache", "output", "skills", "models"] {
+                        let path = self.config_dir.join(subdir);
+                        if path.exists() {
+                            match tokio::fs::read_dir(&path).await {
+                                Ok(mut entries) => match entries.next_entry().await {
+                                    Ok(None) => {
+                                        if let Err(e) = tokio::fs::remove_dir(&path).await {
+                                            warn!(error = %e, dir = ?path, "Failed to remove empty directory during rollback");
+                                            errors.push(format!("dir {}: {}", subdir, e));
+                                        }
+                                    }
+                                    Ok(Some(_)) => {
+                                        warn!(dir = ?path, "Directory not empty, skipping rollback");
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, dir = ?path, "Failed to read directory during rollback");
+                                        errors.push(format!("dir {}: {}", subdir, e));
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!(error = %e, dir = ?path, "Failed to open directory during rollback");
+                                    errors.push(format!("dir {}: {}", subdir, e));
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -216,7 +257,6 @@ impl InitializationCoordinator {
             self.config_dir.join("output"),
             self.config_dir.join("skills"),
             self.config_dir.join("models"),
-            self.config_dir.join("runtimes"),
         ];
 
         for dir in &dirs {
@@ -265,9 +305,14 @@ impl InitializationCoordinator {
         let toml_str = toml::to_string_pretty(&default_config)
             .map_err(|e| InitError::new("config", format!("Failed to serialize config: {}", e)))?;
 
-        tokio::fs::write(&config_path, toml_str)
+        let temp_path = config_path.with_extension("tmp");
+        tokio::fs::write(&temp_path, toml_str)
             .await
-            .map_err(|e| InitError::new("config", format!("Failed to write config: {}", e)))?;
+            .map_err(|e| InitError::new("config", format!("Failed to write temporary config: {}", e)))?;
+
+        tokio::fs::rename(&temp_path, &config_path)
+            .await
+            .map_err(|e| InitError::new("config", format!("Failed to finalize config: {}", e)))?;
 
         info!(path = ?config_path, "Default config created");
         Ok(())
@@ -284,8 +329,9 @@ impl InitializationCoordinator {
 
         info!(path = ?db_path, "Initializing memory database (SQLite + sqlite-vec)");
 
-        let _db = SqliteMemoryBackend::new(&db_path)
+        let db = SqliteMemoryBackend::new(&db_path)
             .map_err(|e| InitError::new("database", format!("Failed to create database: {}", e)))?;
+        drop(db);
 
         info!("Memory database initialized");
         Ok(())
@@ -346,15 +392,6 @@ impl InitializationCoordinator {
         // Note: Built-in skills are copied from app bundle by the platform layer (Swift/C#)
         // The bundle_skills_dir path is not available from Rust core
         // Directory was created in phase 1; this phase validates the skills system
-
-        // Report progress
-        if let Some(h) = &self.handler {
-            h.on_phase_progress(
-                "skills".to_string(),
-                0.5,
-                "Validating skills system...".to_string(),
-            );
-        }
 
         // Initialize and validate skills system
         let system = SkillSystem::new();

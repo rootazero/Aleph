@@ -26,6 +26,7 @@ pub fn needs_initialization() -> Result<bool> {
     let has_config = config_dir.join("config.toml").exists();
     let has_manifest = config_dir.join("runtimes").join("manifest.json").exists()
         || config_dir.join("runtimes").join("ledger.json").exists();
+    let has_database = config_dir.join("memory.db").exists();
 
-    Ok(!has_config || !has_manifest)
+    Ok(!has_config || !has_manifest || !has_database)
 }
