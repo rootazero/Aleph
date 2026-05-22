@@ -95,7 +95,7 @@ impl AlephTool for LifecycleResolveShutdownTool {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| match label {
+            .unwrap_or(match label {
                 "approved" => "Shutdown approved.",
                 _ => "Shutdown rejected.",
             });

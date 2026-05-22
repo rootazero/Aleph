@@ -90,7 +90,7 @@ pub fn check_and_resolve_path(
     };
 
     // Expand ~ to home directory
-    let expanded = if expanded_str.starts_with("~") {
+    let expanded = if expanded_str.starts_with("~/") || expanded_str.as_os_str() == "~" {
         let home = dirs::home_dir()
             .ok_or_else(|| ToolError::InvalidArgs("Cannot determine home directory".to_string()))?;
         home.join(

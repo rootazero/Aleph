@@ -314,12 +314,12 @@ impl super::DesktopTool {
                 }
                 let (direction, amount) = if delta_y.abs() >= delta_x.abs() {
                     if delta_y < 0.0 {
-                        ("up", (-delta_y) as i32)
+                        ("up", delta_y.abs() as i32)
                     } else {
                         ("down", delta_y as i32)
                     }
                 } else if delta_x < 0.0 {
-                    ("left", (-delta_x) as i32)
+                    ("left", delta_x.abs() as i32)
                 } else {
                     ("right", delta_x as i32)
                 };

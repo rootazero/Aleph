@@ -1,7 +1,7 @@
 //! Core file operations: list, read, write, move, copy, delete, mkdir
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 use super::path_utils::check_and_resolve_path;
@@ -73,7 +73,7 @@ pub async fn execute_list(
         content: None,
         bytes_written: None,
         items_affected: Some(count),
-    summary: None,
+        summary: None,
     })
 }
 
@@ -124,7 +124,7 @@ pub async fn execute_read(
         content: Some(content),
         bytes_written: None,
         items_affected: None,
-    summary: None,
+        summary: None,
     })
 }
 
@@ -167,7 +167,7 @@ pub async fn execute_write(
         content: None,
         bytes_written: Some(bytes),
         items_affected: None,
-    summary: None,
+        summary: None,
     })
 }
 
@@ -217,7 +217,7 @@ pub async fn execute_move(
         content: None,
         bytes_written: None,
         items_affected: Some(1),
-    summary: None,
+        summary: None,
     })
 }
 
@@ -255,7 +255,8 @@ pub async fn execute_copy(
             .map_err(|e| ToolError::Execution(format!("Failed to copy: {}", e)))?
     } else {
         // Directory copy - recursive
-        copy_dir_recursive(&from_canonical, &to_canonical)?
+        let mut visited = std::collections::HashSet::new();
+        copy_dir_recursive(&from_canonical, &to_canonical, &mut visited)?
     };
 
     info!(from = %from_canonical.display(), to = %to_canonical.display(), bytes, "Copied");
@@ -276,12 +277,16 @@ pub async fn execute_copy(
         content: None,
         bytes_written: Some(bytes),
         items_affected: Some(1),
-    summary: None,
+        summary: None,
     })
 }
 
 /// Recursively copy a directory with symlink-cycle guard.
-fn copy_dir_recursive(from: &Path, to: &Path, visited: &mut std::collections::HashSet<PathBuf>) -> Result<u64, ToolError> {
+fn copy_dir_recursive(
+    from: &Path,
+    to: &Path,
+    visited: &mut std::collections::HashSet<PathBuf>,
+) -> Result<u64, ToolError> {
     fs::create_dir_all(to)
         .map_err(|e| ToolError::Execution(format!("Failed to create directory: {}", e)))?;
 
@@ -297,8 +302,9 @@ fn copy_dir_recursive(from: &Path, to: &Path, visited: &mut std::collections::Ha
         let to_path = to.join(entry.file_name());
 
         if from_path.is_symlink() {
-            let canonical = fs::canonicalize(&from_path)
-                .map_err(|e| ToolError::Execution(format!("Failed to canonicalize symlink: {}", e)))?;
+            let canonical = fs::canonicalize(&from_path).map_err(|e| {
+                ToolError::Execution(format!("Failed to canonicalize symlink: {}", e))
+            })?;
             if !visited.insert(canonical.clone()) {
                 return Err(ToolError::Execution(format!(
                     "Symlink cycle detected at {}",
@@ -358,7 +364,7 @@ pub async fn execute_delete(
         content: None,
         bytes_written: None,
         items_affected: Some(items_deleted),
-    summary: None,
+        summary: None,
     })
 }
 
@@ -381,7 +387,7 @@ pub async fn execute_mkdir(
                 content: None,
                 bytes_written: None,
                 items_affected: Some(0),
-            summary: None,
+                summary: None,
             });
         } else {
             return Err(ToolError::InvalidArgs(format!(
@@ -409,6 +415,6 @@ pub async fn execute_mkdir(
         content: None,
         bytes_written: None,
         items_affected: Some(1),
-    summary: None,
+        summary: None,
     })
 }

@@ -203,8 +203,12 @@ fn is_pid_alive(pid: u32) -> bool {
     // ESRCH  = process definitely does not exist → treat as dead.
     // EPERM  = process may exist but we lack permission → conservative: treat as alive.
     // EINVAL = invalid PID → treat as dead.
-    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-    errno != libc::ESRCH && errno != libc::EINVAL
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    match errno {
+        Some(libc::ESRCH) | Some(libc::EINVAL) => false,
+        Some(_) => true, // EPERM or other errors → conservative: treat as alive
+        None => false,   // errno unavailable → treat as dead (shouldn't happen)
+    }
 }
 
 /// Check whether a process with the given PID is alive.

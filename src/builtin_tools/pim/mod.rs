@@ -167,8 +167,8 @@ impl PimTool {
                     let event = NewCalendarEvent {
                         title: args.title.clone().unwrap_or_default(),
                         calendar_id: args.calendar_id.clone().unwrap_or_default(),
-                        start: args.start.unwrap_or_else(|| chrono::Utc::now()),
-                        end: args.end.unwrap_or_else(|| chrono::Utc::now()),
+                        start: args.start.unwrap_or_else(chrono::Utc::now),
+                        end: args.end.unwrap_or_else(chrono::Utc::now),
                         all_day: args.all_day.unwrap_or(false),
                         location: args.location.clone(),
                         notes: args.notes.clone(),
@@ -206,7 +206,7 @@ impl PimTool {
                     let reminder = NewReminder {
                         title: title.to_string(),
                         list_id: args.list_id.clone().unwrap_or_default(),
-                        due_date: args.due_date.clone(),
+                        due_date: args.due_date,
                         priority: args.priority.unwrap_or(0).clamp(0, 9) as u8,
                         notes: args.notes.clone(),
                     };
