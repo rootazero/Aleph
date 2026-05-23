@@ -88,6 +88,12 @@ pub fn GraphCanvas(
     /// When `None`, the rAF loop is a no-op (no flat-graph fallback).
     #[prop(optional)]
     nav: Option<Rc<RefCell<NavController>>>,
+    /// Reactive map of node id → pre-rendered excerpt HTML.
+    /// Populated lazily by the parent's detail-fetch Effect when a card
+    /// enters FULL mode (hover or select). Empty string until the fetch
+    /// resolves; the card re-renders automatically when a value arrives.
+    #[prop(optional)]
+    excerpt_by_id: Option<RwSignal<HashMap<String, String>>>,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
     let raf_handle: Rc<RefCell<Option<i32>>> = Rc::new(RefCell::new(None));
@@ -616,13 +622,19 @@ pub fn GraphCanvas(
                             selected_id_sig.set(Some(id_clone.clone()));
                         });
 
+                        let id_lookup = n.id.clone();
+                        let excerpt = excerpt_by_id
+                            .as_ref()
+                            .and_then(|sig| sig.with(|m| m.get(&id_lookup).cloned()))
+                            .unwrap_or_default();
+
                         view! {
                             <NodeCard
                                 id=n.id.clone()
                                 name=n.name.clone()
                                 category=n.category.clone()
                                 tags=vec![]
-                                excerpt_html=String::new()
+                                excerpt_html=excerpt
                                 hop=n.hop
                                 screen_xy=pos_sig.read_only()
                                 zoom=zoom_signal.read_only()

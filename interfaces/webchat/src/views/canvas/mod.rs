@@ -12,6 +12,7 @@ use crate::canvas_engine::mini_map::GlobalMiniMap;
 use minimap_view::MiniMapOverlay;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use leptos::prelude::*;
@@ -23,6 +24,7 @@ use crate::canvas_engine::adapter::{
     NoteDetailResponse, NoteNodeDto,
 };
 use crate::canvas_engine::interaction::CanvasEvent;
+use crate::canvas_engine::markdown_excerpt::render_excerpt;
 use crate::canvas_engine::navigation::{NavController, RETARGET_DURATION_MS};
 use crate::canvas_engine::prefetch::PrefetchCache;
 use crate::canvas_engine::types::BreadcrumbEntry;
@@ -153,6 +155,60 @@ fn RadialCanvasView() -> impl IntoView {
     let nav = Rc::new(RefCell::new(NavController::new()));
     let prefetch = Rc::new(RefCell::new(PrefetchCache::<GraphNeighborsResponse>::new()));
 
+    // Non-reactive detail-response cache; keyed by node id.
+    let detail_cache: Rc<RefCell<PrefetchCache<NoteDetailResponse>>> =
+        Rc::new(RefCell::new(PrefetchCache::<NoteDetailResponse>::new()));
+
+    // Reactive map of node id → pre-rendered excerpt HTML.
+    // Populated lazily when a card enters FULL mode (hover or select).
+    let excerpt_by_id: RwSignal<HashMap<String, String>> = RwSignal::new(HashMap::new());
+
+    // -----------------------------------------------------------------------
+    // Effect: lazy-fetch note detail when a card enters FULL mode
+    // (selected node wins; hovered node is the fallback via prefetch_request).
+    // Skips fetch if the excerpt is already cached or rendered.
+    // -----------------------------------------------------------------------
+    let detail_cache_eff = detail_cache.clone();
+    Effect::new(move || {
+        // selected_node wins; prefetch_request (hover) is fallback
+        let target = selected_node
+            .get()
+            .or_else(|| prefetch_request.get());
+        let Some(id) = target else { return };
+
+        let now = now_ms();
+        // Already in raw-response cache — skip if content is fresh
+        if detail_cache_eff.borrow().has(&id, now) {
+            return;
+        }
+        // Already rendered — nothing to do
+        if excerpt_by_id.with(|m| m.contains_key(&id)) {
+            return;
+        }
+
+        let detail_cache_spawn = detail_cache_eff.clone();
+        let agent = agent_id.get_untracked();
+        let id_spawn = id.clone();
+
+        spawn_local(async move {
+            match GraphApi::node_detail(&state, &agent, &id_spawn).await {
+                Ok(detail) => {
+                    let html = render_excerpt(&detail.content);
+                    excerpt_by_id.update(|m| {
+                        m.insert(id_spawn.clone(), html);
+                    });
+                    let now = now_ms();
+                    detail_cache_spawn.borrow_mut().put(id_spawn, detail, now);
+                }
+                Err(e) => {
+                    web_sys::console::warn_1(
+                        &format!("canvas: note_detail fetch failed for {id_spawn}: {e}").into(),
+                    );
+                }
+            }
+        });
+    });
+
     // Non-reactive 60fps canvas state
     let graph_state = Rc::new(RefCell::new(GraphState::new()));
 
@@ -180,6 +236,7 @@ fn RadialCanvasView() -> impl IntoView {
     let nav_reset = nav.clone();
     let gs_reset = graph_state.clone();
     let prefetch_reset = prefetch.clone();
+    let detail_cache_reset = detail_cache.clone();
     Effect::new(move |prev: Option<String>| {
         let current = agent_id.get();
         if let Some(p) = prev.as_ref() {
@@ -197,10 +254,12 @@ fn RadialCanvasView() -> impl IntoView {
                 last_response.set(None);
                 prefetch_request.set(None);
                 all_dtos.set(Vec::new());
+                excerpt_by_id.set(HashMap::new());
 
                 // Reset non-reactive state
                 *nav_reset.borrow_mut() = NavController::new();
                 *prefetch_reset.borrow_mut() = PrefetchCache::<GraphNeighborsResponse>::new();
+                *detail_cache_reset.borrow_mut() = PrefetchCache::<NoteDetailResponse>::new();
                 {
                     let mut gs = gs_reset.borrow_mut();
                     gs.nodes.clear();
@@ -608,6 +667,7 @@ fn RadialCanvasView() -> impl IntoView {
                         graph_state=graph_state.clone()
                         on_event=Callback::new(on_event)
                         nav=nav.clone()
+                        excerpt_by_id=excerpt_by_id
                     />
                     {
                         #[cfg(target_arch = "wasm32")]
