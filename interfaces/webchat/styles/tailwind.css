@@ -550,3 +550,75 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
   to   { opacity: 1; transform: translateY(0);    }
 }
 .aleph-rise { animation: aleph-rise 0.62s var(--ease-spring) both; }
+
+/* ── Memory canvas node tokens ─────────────────────────────────────── */
+:root {
+    --node-bg:           linear-gradient(135deg, #1a1a2e, #16162a);
+    --node-border:       rgba(255, 255, 255, 0.06);
+    --text-title:        #f1f5f9;
+    --text-body:         #94a3b8;
+    --text-meta:         #64748b;
+    --text-code:         #e2e8f0;
+
+    --cat-feedback:      #a78bfa;
+    --cat-project:       #34d399;
+    --cat-reference:     #60a5fa;
+    --cat-user:          #fbbf24;
+
+    --shadow-base:       0 8px 32px rgba(0, 0, 0, 0.6);
+    --glow-hover:        0 0 24px rgba(167, 139, 250, 0.27);
+    --glow-selected:     0 0 32px rgba(167, 139, 250, 0.53), 0 0 0 2px #a78bfa;
+    --glow-active:       0 0 32px rgba(252, 211, 77, 0.67);
+}
+
+@keyframes node-card-breath {
+    0%, 100% { filter: brightness(1.0); }
+    50%      { filter: brightness(1.15); }
+}
+
+.node-card-full {
+    position: absolute;
+    width: 280px;
+    background: var(--node-bg);
+    border: 1px solid var(--node-border);
+    border-radius: 10px;
+    box-shadow: var(--shadow-base);
+    overflow: hidden;
+    transition: box-shadow 120ms ease-out;
+    will-change: transform;
+    user-select: none;
+}
+.node-card-full:hover               { box-shadow: var(--shadow-base), var(--glow-hover); }
+.node-card-full[data-selected]      { box-shadow: var(--shadow-base), var(--glow-selected); }
+.node-card-full[data-active]        { box-shadow: var(--shadow-base), var(--glow-active); animation: node-card-breath 2.5s ease-in-out infinite; }
+
+.node-card-mini {
+    position: absolute;
+    width: 140px;
+    background: rgba(26, 26, 46, 0.93);
+    border: 1px solid var(--node-border);
+    border-radius: 7px;
+    padding: 6px 9px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    transition: box-shadow 120ms ease-out;
+    color: var(--text-title);
+    font-size: 11px;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    will-change: transform;
+}
+.node-card-mini:hover               { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-hover); }
+
+.node-card-dot {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    box-shadow: 0 0 12px currentColor;
+    transition: width 120ms ease-out, height 120ms ease-out, box-shadow 120ms ease-out;
+    cursor: pointer;
+    will-change: transform;
+}
+.node-card-dot:hover { width: 14px; height: 14px; box-shadow: 0 0 18px currentColor; }
