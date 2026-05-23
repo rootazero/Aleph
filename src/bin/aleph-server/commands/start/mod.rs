@@ -1713,6 +1713,49 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Spawn the PresenceReporter — periodic broadcast of this host's
+    // (hostname / username / idle) snapshot on the Gateway event bus.
+    // The "brain" lives in `alephcore::tasks::presence`; the "limb"
+    // (idle probe, system_info) stays behind `SystemCapability` in the
+    // platform-specific `desktop/*` crates. Falls back to a no-op when
+    // the platform has no `SystemCapability` (headless CI, etc.).
+    {
+        let presence_cfg = alephcore::tasks::presence::PresenceConfig::default();
+        if !presence_cfg.enabled {
+            if !args.daemon {
+                println!("Presence reporter: disabled");
+            }
+        } else {
+            let platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
+                #[cfg(target_os = "macos")]
+                {
+                    Arc::new(aleph_desktop_macos::MacOSPlatform::new())
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    Arc::new(aleph_desktop_linux::LinuxPlatform::new())
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    Arc::new(aleph_desktop_windows::WindowsPlatform::new())
+                }
+            };
+            if platform.system().is_some() {
+                let reporter = alephcore::tasks::presence::PresenceReporter::new(
+                    platform,
+                    event_bus.as_ref().clone(),
+                    presence_cfg,
+                );
+                let _ = reporter.spawn();
+                if !args.daemon {
+                    println!("Presence reporter: started");
+                }
+            } else if !args.daemon {
+                println!("Presence reporter: skipped (no SystemCapability on this platform)");
+            }
+        }
+    }
+
     // Spawn the boot-scan ResumeCoordinator (after cron + heartbeat, so the
     // execution subsystems exist). Detached — boot is NOT blocked on it.
     {
