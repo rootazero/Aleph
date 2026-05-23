@@ -47,8 +47,8 @@ pub struct PermissionOutput {
     pub message: Option<String>,
 }
 
-/// Parse a permission string into a TccPermission enum value.
-fn parse_permission(s: &str) -> Option<aleph_desktop::permission_types::TccPermission> {
+/// Parse a permission string into a PermissionKind enum value.
+fn parse_permission(s: &str) -> Option<aleph_desktop::permission_types::PermissionKind> {
     // serde rename_all = "snake_case", so we can deserialize from the snake_case string
     serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
 }

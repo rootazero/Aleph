@@ -1,70 +1,38 @@
-//! Types for TCC permission management.
+//! Permission identity + native-side authorization status types.
+//!
+//! Permission identity is centralized in [`aleph_protocol::desktop_bridge::methods::perm::PermissionKind`].
+//! This module re-exports `PermissionKind` and exposes:
+//! - [`PermissionStatus`] — authorization state (Granted/Denied/...).
+//! - [`PermissionInfo`] — `{ permission: PermissionKind, status, can_request }`.
+//! - [`TCC_MANAGED`] — the subset of kinds the native TCC path actually handles.
+//!
+//! Bridge-only kinds (Automation, FullDisk, Contacts, ...) are routed via the
+//! Swift helper's `perm.*` RPCs; the native trait methods return `Unknown` for
+//! those, so callers know to ask the bridge.
 
-use aleph_protocol::desktop_bridge::methods::perm::PermissionKind;
+pub use aleph_protocol::desktop_bridge::methods::perm::PermissionKind;
 use serde::{Deserialize, Serialize};
 
-/// A macOS TCC permission type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TccPermission {
-    ScreenRecording,
-    Camera,
-    Microphone,
-    SpeechRecognition,
-    Accessibility,
-    Notifications,
-}
-
-impl TccPermission {
-    /// All managed TCC permissions.
-    pub const ALL: &'static [TccPermission] = &[
-        TccPermission::ScreenRecording,
-        TccPermission::Camera,
-        TccPermission::Microphone,
-        TccPermission::SpeechRecognition,
-        TccPermission::Accessibility,
-        TccPermission::Notifications,
-    ];
-
-    /// Map this native TCC kind to its protocol counterpart, if any.
-    ///
-    /// Returns `None` for `SpeechRecognition` and `Notifications` — neither
-    /// is currently represented in `PermissionKind` (the bridge-side enum
-    /// covers UI-flow permissions only).
-    pub fn to_protocol_kind(self) -> Option<PermissionKind> {
-        match self {
-            TccPermission::ScreenRecording => Some(PermissionKind::ScreenRecording),
-            TccPermission::Camera => Some(PermissionKind::Camera),
-            TccPermission::Microphone => Some(PermissionKind::Microphone),
-            TccPermission::Accessibility => Some(PermissionKind::Accessibility),
-            TccPermission::SpeechRecognition | TccPermission::Notifications => None,
-        }
-    }
-}
-
-/// Map a protocol `PermissionKind` to its native TCC counterpart, if any.
+/// Subset of [`PermissionKind`] that the native macOS TCC path checks directly.
 ///
-/// Returns `None` for kinds that have no cheap native-side check — the
-/// bridge path is authoritative for those (FullDisk, InputMonitoring,
-/// Automation, Contacts, Calendars, Reminders, Photos, Location).
-pub fn permission_kind_to_tcc(kind: PermissionKind) -> Option<TccPermission> {
-    match kind {
-        PermissionKind::ScreenRecording => Some(TccPermission::ScreenRecording),
-        PermissionKind::Camera => Some(TccPermission::Camera),
-        PermissionKind::Microphone => Some(TccPermission::Microphone),
-        PermissionKind::Accessibility => Some(TccPermission::Accessibility),
-        PermissionKind::InputMonitoring
-        | PermissionKind::FullDisk
-        | PermissionKind::Automation
-        | PermissionKind::Contacts
-        | PermissionKind::Calendars
-        | PermissionKind::Reminders
-        | PermissionKind::Photos
-        | PermissionKind::Location => None,
-    }
+/// The remaining variants (`InputMonitoring`, `FullDisk`, `Automation`,
+/// `Contacts`, `Calendars`, `Reminders`, `Photos`, `Location`) are handled via
+/// the Swift helper's `perm.check` RPC.
+pub const TCC_MANAGED: &[PermissionKind] = &[
+    PermissionKind::ScreenRecording,
+    PermissionKind::Camera,
+    PermissionKind::Microphone,
+    PermissionKind::SpeechRecognition,
+    PermissionKind::Accessibility,
+    PermissionKind::Notifications,
+];
+
+/// `true` if `kind` is one of the [`TCC_MANAGED`] permissions.
+pub fn is_tcc_managed(kind: PermissionKind) -> bool {
+    TCC_MANAGED.contains(&kind)
 }
 
-/// Authorization status of a TCC permission.
+/// Authorization status of a permission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionStatus {
@@ -76,14 +44,15 @@ pub enum PermissionStatus {
     NotDetermined,
     /// Permission restricted by system policy (MDM, parental controls).
     Restricted,
-    /// Cannot determine status on this platform.
+    /// Cannot determine status on this platform — usually means this kind is
+    /// bridge-only and the caller should use the `perm.check` RPC instead.
     Unknown,
 }
 
-/// Information about a TCC permission's current state.
+/// Information about a permission's current state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionInfo {
-    pub permission: TccPermission,
+    pub permission: PermissionKind,
     pub status: PermissionStatus,
     /// Whether calling `request` will show a system prompt.
     pub can_request: bool,
@@ -94,28 +63,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tcc_round_trips_through_protocol_for_overlapping_kinds() {
-        let overlapping = [
-            TccPermission::ScreenRecording,
-            TccPermission::Camera,
-            TccPermission::Microphone,
-            TccPermission::Accessibility,
-        ];
-        for tcc in overlapping {
-            let kind = tcc.to_protocol_kind().expect("must map");
-            let back = permission_kind_to_tcc(kind).expect("must map back");
-            assert_eq!(back, tcc, "round-trip failed for {tcc:?}");
+    fn tcc_managed_covers_six_native_kinds() {
+        assert_eq!(TCC_MANAGED.len(), 6);
+        for &kind in TCC_MANAGED {
+            assert!(is_tcc_managed(kind));
         }
     }
 
     #[test]
-    fn tcc_only_kinds_return_none_on_protocol_map() {
-        assert!(TccPermission::SpeechRecognition.to_protocol_kind().is_none());
-        assert!(TccPermission::Notifications.to_protocol_kind().is_none());
-    }
-
-    #[test]
-    fn bridge_only_kinds_return_none_on_tcc_map() {
+    fn bridge_only_kinds_are_not_tcc_managed() {
         let bridge_only = [
             PermissionKind::InputMonitoring,
             PermissionKind::FullDisk,
@@ -128,20 +84,22 @@ mod tests {
         ];
         for kind in bridge_only {
             assert!(
-                permission_kind_to_tcc(kind).is_none(),
-                "expected None for bridge-only kind {kind:?}"
+                !is_tcc_managed(kind),
+                "expected bridge-only kind {kind:?} to not be TCC-managed",
             );
         }
     }
 
     #[test]
-    fn all_tcc_variants_handled_by_forward_map() {
-        // Drift guard — if a new TccPermission variant is added without
-        // updating `to_protocol_kind`, this test exercises every variant
-        // and the match in `to_protocol_kind` is non-exhaustive → compile
-        // fails before this assertion is even reached.
-        for &tcc in TccPermission::ALL {
-            let _ = tcc.to_protocol_kind();
-        }
+    fn permission_info_serializes_with_kind() {
+        let info = PermissionInfo {
+            permission: PermissionKind::Microphone,
+            status: PermissionStatus::Granted,
+            can_request: false,
+        };
+        let v = serde_json::to_value(&info).unwrap();
+        assert_eq!(v["permission"], "microphone");
+        assert_eq!(v["status"], "granted");
+        assert_eq!(v["can_request"], false);
     }
 }

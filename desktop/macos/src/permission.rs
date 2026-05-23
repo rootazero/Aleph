@@ -11,14 +11,13 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aleph_desktop::permission_types::{PermissionInfo, PermissionStatus, TccPermission};
+use aleph_desktop::permission_types::{PermissionInfo, PermissionKind, PermissionStatus, TCC_MANAGED};
 use aleph_desktop::traits::PermissionCapability;
 use aleph_desktop::Result;
 use aleph_desktop::SwiftBridge;
 use aleph_protocol::desktop_bridge::methods::perm::{
     CheckParams, GuideParams, OpenSettingsParams, OpenSettingsResult, PermissionGuide,
-    PermissionKind, PermissionStatus as ProtocolPermissionStatus, METHOD_CHECK, METHOD_GUIDE,
-    METHOD_OPEN_SETTINGS,
+    PermissionStatus as ProtocolPermissionStatus, METHOD_CHECK, METHOD_GUIDE, METHOD_OPEN_SETTINGS,
 };
 use async_trait::async_trait;
 use block2::RcBlock;
@@ -311,7 +310,7 @@ fn un_status_to_permission(status: UNAuthorizationStatus) -> PermissionStatus {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn build_info(permission: TccPermission, status: PermissionStatus) -> PermissionInfo {
+fn build_info(permission: PermissionKind, status: PermissionStatus) -> PermissionInfo {
     let can_request = matches!(status, PermissionStatus::NotDetermined);
     PermissionInfo {
         permission,
@@ -320,26 +319,46 @@ fn build_info(permission: TccPermission, status: PermissionStatus) -> Permission
     }
 }
 
-fn do_check(permission: TccPermission) -> PermissionInfo {
+/// Native TCC probe. Bridge-only kinds return `Unknown` — callers should use
+/// `check_permission()` (bridge RPC) for those instead.
+fn do_check(permission: PermissionKind) -> PermissionInfo {
     let status = match permission {
-        TccPermission::ScreenRecording => check_screen_recording(),
-        TccPermission::Camera => check_camera(),
-        TccPermission::Microphone => check_microphone(),
-        TccPermission::SpeechRecognition => check_speech_recognition(),
-        TccPermission::Accessibility => check_accessibility(),
-        TccPermission::Notifications => check_notifications(),
+        PermissionKind::ScreenRecording => check_screen_recording(),
+        PermissionKind::Camera => check_camera(),
+        PermissionKind::Microphone => check_microphone(),
+        PermissionKind::SpeechRecognition => check_speech_recognition(),
+        PermissionKind::Accessibility => check_accessibility(),
+        PermissionKind::Notifications => check_notifications(),
+        PermissionKind::InputMonitoring
+        | PermissionKind::FullDisk
+        | PermissionKind::Automation
+        | PermissionKind::Contacts
+        | PermissionKind::Calendars
+        | PermissionKind::Reminders
+        | PermissionKind::Photos
+        | PermissionKind::Location => PermissionStatus::Unknown,
     };
     build_info(permission, status)
 }
 
-fn do_request(permission: TccPermission) -> PermissionInfo {
+/// Native TCC request. Bridge-only kinds return `Unknown` — callers should
+/// invoke their bridge-side workflow instead.
+fn do_request(permission: PermissionKind) -> PermissionInfo {
     let status = match permission {
-        TccPermission::ScreenRecording => request_screen_recording(),
-        TccPermission::Camera => request_camera(),
-        TccPermission::Microphone => request_microphone(),
-        TccPermission::SpeechRecognition => request_speech_recognition(),
-        TccPermission::Accessibility => request_accessibility(),
-        TccPermission::Notifications => request_notifications(),
+        PermissionKind::ScreenRecording => request_screen_recording(),
+        PermissionKind::Camera => request_camera(),
+        PermissionKind::Microphone => request_microphone(),
+        PermissionKind::SpeechRecognition => request_speech_recognition(),
+        PermissionKind::Accessibility => request_accessibility(),
+        PermissionKind::Notifications => request_notifications(),
+        PermissionKind::InputMonitoring
+        | PermissionKind::FullDisk
+        | PermissionKind::Automation
+        | PermissionKind::Contacts
+        | PermissionKind::Calendars
+        | PermissionKind::Reminders
+        | PermissionKind::Photos
+        | PermissionKind::Location => PermissionStatus::Unknown,
     };
     build_info(permission, status)
 }
@@ -350,7 +369,7 @@ fn do_request(permission: TccPermission) -> PermissionInfo {
 
 #[async_trait]
 impl PermissionCapability for MacOSPermission {
-    async fn check(&self, permission: TccPermission) -> Result<PermissionInfo> {
+    async fn check(&self, permission: PermissionKind) -> Result<PermissionInfo> {
         let info = tokio::task::spawn_blocking(move || do_check(permission))
             .await
             .unwrap_or_else(|_| build_info(permission, PermissionStatus::Unknown));
@@ -359,14 +378,14 @@ impl PermissionCapability for MacOSPermission {
 
     async fn check_all(&self) -> Result<Vec<PermissionInfo>> {
         let results = tokio::task::spawn_blocking(|| {
-            TccPermission::ALL
+            TCC_MANAGED
                 .iter()
                 .map(|&p| do_check(p))
                 .collect::<Vec<_>>()
         })
         .await
         .unwrap_or_else(|_| {
-            TccPermission::ALL
+            TCC_MANAGED
                 .iter()
                 .map(|&p| build_info(p, PermissionStatus::Unknown))
                 .collect()
@@ -374,7 +393,7 @@ impl PermissionCapability for MacOSPermission {
         Ok(results)
     }
 
-    async fn request(&self, permission: TccPermission) -> Result<PermissionInfo> {
+    async fn request(&self, permission: PermissionKind) -> Result<PermissionInfo> {
         let info = tokio::task::spawn_blocking(move || do_request(permission))
             .await
             .unwrap_or_else(|_| build_info(permission, PermissionStatus::Unknown));
@@ -458,21 +477,49 @@ mod tests {
         let results = rt.block_on(async { perm.check_all().await.unwrap() });
         assert_eq!(results.len(), 6, "expected 6 permission results");
         // Verify each permission type is present.
-        let types: Vec<TccPermission> = results.iter().map(|r| r.permission).collect();
-        for p in TccPermission::ALL {
+        let types: Vec<PermissionKind> = results.iter().map(|r| r.permission).collect();
+        for p in TCC_MANAGED {
             assert!(types.contains(p), "missing permission: {:?}", p);
         }
     }
 
     #[test]
+    fn bridge_only_kind_check_returns_unknown_status() {
+        // Native probe can't read FullDisk / Automation / etc. directly —
+        // make sure `do_check` returns Unknown so callers know to use the
+        // bridge-backed `check_permission()` RPC instead of trusting a false
+        // "denied" result.
+        let bridge_only = [
+            PermissionKind::InputMonitoring,
+            PermissionKind::FullDisk,
+            PermissionKind::Automation,
+            PermissionKind::Contacts,
+            PermissionKind::Calendars,
+            PermissionKind::Reminders,
+            PermissionKind::Photos,
+            PermissionKind::Location,
+        ];
+        for kind in bridge_only {
+            let info = do_check(kind);
+            assert_eq!(
+                info.status,
+                PermissionStatus::Unknown,
+                "bridge-only kind {kind:?} must report Unknown from native probe",
+            );
+            assert!(!info.can_request);
+            assert_eq!(info.permission, kind);
+        }
+    }
+
+    #[test]
     fn test_build_info_can_request() {
-        let info = build_info(TccPermission::Camera, PermissionStatus::NotDetermined);
+        let info = build_info(PermissionKind::Camera, PermissionStatus::NotDetermined);
         assert!(info.can_request);
 
-        let info = build_info(TccPermission::Camera, PermissionStatus::Granted);
+        let info = build_info(PermissionKind::Camera, PermissionStatus::Granted);
         assert!(!info.can_request);
 
-        let info = build_info(TccPermission::Camera, PermissionStatus::Denied);
+        let info = build_info(PermissionKind::Camera, PermissionStatus::Denied);
         assert!(!info.can_request);
     }
 
@@ -488,7 +535,7 @@ mod tests {
 
         // Run check inside a/runtime to verify no panic path.
         // The spawn_blocking -> JoinError path is caught by unwrap_or_else.
-        let result = rt.block_on(perm.check(TccPermission::Camera));
+        let result = rt.block_on(perm.check(PermissionKind::Camera));
         assert!(result.is_ok()); // Returns Ok or propagates error, never panics
     }
 
@@ -539,8 +586,8 @@ mod tests {
     }
 
     #[test]
-    fn test_do_check_all_permissions_return_valid_info() {
-        for &perm in TccPermission::ALL {
+    fn test_do_check_all_tcc_managed_return_valid_info() {
+        for &perm in TCC_MANAGED {
             let info = do_check(perm);
             assert!(
                 matches!(
@@ -560,8 +607,8 @@ mod tests {
     }
 
     #[test]
-    fn test_do_request_all_permissions_return_valid_info() {
-        for &perm in TccPermission::ALL {
+    fn test_do_request_all_tcc_managed_return_valid_info() {
+        for &perm in TCC_MANAGED {
             let info = do_request(perm);
             assert!(
                 matches!(

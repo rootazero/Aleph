@@ -90,6 +90,7 @@ if CommandLine.arguments.count > 1 {
         await registerOcrHandlers(router)
         await registerAxHandlers(router)
         await registerPermHandlers(router)
+        await registerScreenCaptureHandlers(router)
         await ParentWatch().start()
         await Server(router: router).run()
         done.signal()

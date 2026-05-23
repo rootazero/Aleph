@@ -6,14 +6,19 @@ use aleph_protocol::desktop_bridge::methods::perm::{
     PermissionGuide, PermissionKind, PermissionStatus as ProtocolPermissionStatus,
 };
 
-use crate::permission_types::{PermissionInfo, TccPermission};
+use crate::permission_types::PermissionInfo;
 use crate::Result;
 
-/// TCC permission detection and request.
+/// Permission detection and request.
 ///
 /// Provides read-only status checks (`check`, `check_all`) and
 /// interactive permission requests (`request`) that may show
 /// system dialogs.
+///
+/// `check` / `request` cover the TCC-managed subset (see
+/// `permission_types::TCC_MANAGED`). For bridge-only kinds the implementation
+/// returns `PermissionStatus::Unknown` — callers should use the bridge-backed
+/// `check_permission` instead.
 ///
 /// Three additional methods (`check_permission`, `guide_permission`,
 /// `open_settings`) use the bridge-backed protocol types from
@@ -23,14 +28,14 @@ use crate::Result;
 #[async_trait]
 pub trait PermissionCapability: Send + Sync {
     /// Check status of one permission without prompting the user.
-    async fn check(&self, permission: TccPermission) -> Result<PermissionInfo>;
+    async fn check(&self, permission: PermissionKind) -> Result<PermissionInfo>;
 
-    /// Check status of all managed permissions.
+    /// Check status of all TCC-managed permissions (see `TCC_MANAGED`).
     async fn check_all(&self) -> Result<Vec<PermissionInfo>>;
 
     /// Request a permission, potentially showing a system prompt.
     /// Returns the updated status after the request attempt.
-    async fn request(&self, permission: TccPermission) -> Result<PermissionInfo>;
+    async fn request(&self, permission: PermissionKind) -> Result<PermissionInfo>;
 
     // -----------------------------------------------------------------------
     // Bridge-backed protocol methods (Stage 4).

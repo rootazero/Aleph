@@ -315,6 +315,22 @@ impl MediaCapability for MacOSPlatform {
             .collect())
     }
 
+    async fn mic_level(&self) -> Result<aleph_desktop::traits::media::MicMeterSample> {
+        use aleph_protocol::desktop_bridge::methods::media::{
+            MicMeterParams, MicMeterResult, METHOD_AUDIO_MIC_METER,
+        };
+        let rpc: MicMeterResult = self
+            .bridge
+            .call(METHOD_AUDIO_MIC_METER, MicMeterParams {})
+            .await
+            .map_err(|e| bridge_err(&format!("media.audio.mic_meter RPC: {e}")))?;
+        Ok(aleph_desktop::traits::media::MicMeterSample {
+            level: rpc.level,
+            active: rpc.active,
+            reason: rpc.reason,
+        })
+    }
+
     async fn speech_to_text(
         &self,
         audio_path: &str,

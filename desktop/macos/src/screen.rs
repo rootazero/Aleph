@@ -1,5 +1,10 @@
-//! macOS screen capability: delegates OCR to the Swift helper; all other
-//! methods forward to `NativeScreen`.
+//! macOS screen capability.
+//!
+//! Routes `ocr()` and `screenshot()` / `display_list()` through the Swift
+//! helper (`screen.*` RPCs — backed by Vision + ScreenCaptureKit); falls
+//! back to `NativeScreen` (xcap) for screenshots when the bridge call fails
+//! (e.g. macOS 13 lacks `SCScreenshotManager`). All other input automation
+//! methods forward directly to `NativeScreen`.
 
 use std::sync::Arc;
 
@@ -10,6 +15,7 @@ use aleph_desktop::{
 };
 use async_trait::async_trait;
 use base64::Engine as _;
+use tracing::warn;
 
 /// macOS-specific screen capability that routes `ocr()` through the Swift
 /// helper (`screen.ocr` RPC) while delegating everything else to `NativeScreen`.
@@ -30,7 +36,16 @@ impl MacOSScreen {
 #[async_trait]
 impl ScreenCapability for MacOSScreen {
     async fn screenshot(&self, region: Option<ScreenRegion>) -> Result<Screenshot> {
-        self.inner.screenshot(region).await
+        match self.screenshot_via_bridge(region.as_ref()).await {
+            Ok(shot) => Ok(shot),
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "screen.capture bridge call failed; falling back to xcap"
+                );
+                self.inner.screenshot(region).await
+            }
+        }
     }
 
     async fn ocr(&self, image_png: Option<&[u8]>) -> Result<OcrResult> {
@@ -184,7 +199,75 @@ impl ScreenCapability for MacOSScreen {
     }
 
     async fn display_list(&self) -> Result<Vec<DisplayInfo>> {
-        self.inner.display_list().await
+        match self.display_list_via_bridge().await {
+            Ok(list) => Ok(list),
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "screen.list_displays bridge call failed; falling back to xcap"
+                );
+                self.inner.display_list().await
+            }
+        }
+    }
+}
+
+// ── Bridge-backed helpers ────────────────────────────────────────────
+
+impl MacOSScreen {
+    /// SCK-backed screenshot via the Swift helper. Caller is expected to
+    /// fall back to `NativeScreen` when this returns `Err` (e.g. on macOS
+    /// 13 which lacks `SCScreenshotManager`).
+    async fn screenshot_via_bridge(&self, region: Option<&ScreenRegion>) -> Result<Screenshot> {
+        use aleph_protocol::desktop_bridge::methods::screen::{
+            CaptureParams, CaptureResult, Region, METHOD_CAPTURE,
+        };
+        let params = CaptureParams {
+            display_id: None,
+            region: region.map(|r| Region {
+                x: r.x as f64,
+                y: r.y as f64,
+                width: r.width as f64,
+                height: r.height as f64,
+            }),
+        };
+        let rpc: CaptureResult = self
+            .bridge
+            .call(METHOD_CAPTURE, params)
+            .await
+            .map_err(|e| DesktopError::ScreenCapture(format!("bridge screen.capture: {e}")))?;
+        Ok(Screenshot {
+            image_base64: rpc.png_base64,
+            width: rpc.width,
+            height: rpc.height,
+            format: "png".to_string(),
+        })
+    }
+
+    /// SCK-backed display enumeration via the Swift helper.
+    async fn display_list_via_bridge(&self) -> Result<Vec<DisplayInfo>> {
+        use aleph_protocol::desktop_bridge::methods::screen::{
+            ListDisplaysResult, METHOD_LIST_DISPLAYS,
+        };
+        let rpc: ListDisplaysResult = self
+            .bridge
+            .call(METHOD_LIST_DISPLAYS, serde_json::Value::Null)
+            .await
+            .map_err(|e| DesktopError::ScreenCapture(format!("bridge screen.list_displays: {e}")))?;
+        Ok(rpc
+            .displays
+            .into_iter()
+            .map(|d| DisplayInfo {
+                id: d.id,
+                name: String::new(),
+                width: d.bounds.width as u32,
+                height: d.bounds.height as u32,
+                scale_factor: d.scale,
+                is_primary: d.primary,
+                origin_x: d.bounds.x as i32,
+                origin_y: d.bounds.y as i32,
+            })
+            .collect())
     }
 }
 

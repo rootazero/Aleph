@@ -1756,6 +1756,47 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Spawn the MicLevelReporter — opt-in (default OFF, since the meter keeps
+    // the system "mic in use" indicator on continuously). When enabled, polls
+    // `MediaCapability::mic_level()` on a cadence and publishes a categorical
+    // (Active/Quiet/Unavailable) snapshot on the Gateway event bus.
+    {
+        let mic_cfg = alephcore::tasks::mic_level::MicLevelConfig::default();
+        if !mic_cfg.enabled {
+            if !args.daemon {
+                println!("Mic-level reporter: disabled (opt-in)");
+            }
+        } else {
+            let platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
+                #[cfg(target_os = "macos")]
+                {
+                    Arc::new(aleph_desktop_macos::MacOSPlatform::new())
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    Arc::new(aleph_desktop_linux::LinuxPlatform::new())
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    Arc::new(aleph_desktop_windows::WindowsPlatform::new())
+                }
+            };
+            if platform.media().is_some() {
+                let reporter = alephcore::tasks::mic_level::MicLevelReporter::new(
+                    platform,
+                    event_bus.as_ref().clone(),
+                    mic_cfg,
+                );
+                let _ = reporter.spawn();
+                if !args.daemon {
+                    println!("Mic-level reporter: started");
+                }
+            } else if !args.daemon {
+                println!("Mic-level reporter: skipped (no MediaCapability on this platform)");
+            }
+        }
+    }
+
     // Spawn the boot-scan ResumeCoordinator (after cron + heartbeat, so the
     // execution subsystems exist). Detached — boot is NOT blocked on it.
     {

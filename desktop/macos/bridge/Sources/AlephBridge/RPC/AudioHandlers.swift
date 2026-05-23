@@ -1,12 +1,15 @@
 import AVFoundation
 import Foundation
 
-/// Register media.audio.{list_devices,record} JSON-RPC handlers.
+/// Register media.audio.{list_devices,record,mic_meter} JSON-RPC handlers.
 ///
-/// Both delegate to a shared serial `AudioSession` actor so that concurrent
-/// RPC calls do not collide on the single microphone device.
+/// `list_devices` and `record` delegate to a shared serial `AudioSession`
+/// actor so that concurrent RPC calls do not collide on the single microphone
+/// device. `mic_meter` uses its own long-lived `MicMeterSession` since it
+/// keeps an `AVAudioEngine` tap installed across calls.
 func registerAudioHandlers(_ router: Router) async {
     let session = AudioSession()
+    let meter = MicMeterSession()
 
     await router.register("media.audio.list_devices") { _ in
         let devices = try await session.listDevices()
@@ -31,6 +34,18 @@ func registerAudioHandlers(_ router: Router) async {
             "duration_secs": .number(actualDuration),
             "format": .string(format),
         ])
+    }
+
+    await router.register("media.audio.mic_meter") { _ in
+        let result = await meter.poll()
+        var out: [String: JSONValue] = ["active": .bool(result.active)]
+        if let level = result.level {
+            out["level"] = .number(Double(level))
+        }
+        if let reason = result.reason {
+            out["reason"] = .string(reason)
+        }
+        return .object(out)
     }
 }
 

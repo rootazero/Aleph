@@ -15,7 +15,17 @@ pub const METHOD_OPEN_SETTINGS: &str = "perm.open_settings";
 pub const NOTIFY_STATUS_CHANGED: &str = "perm.status_changed";
 
 /// Every macOS TCC permission kind that Aleph manages or depends on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+///
+/// This is the single source of truth for permission identity across both the
+/// native (desktop/macos) probe path and the Swift-bridge `perm.*` RPC path.
+/// Variants split into:
+/// - "TCC-managed" — checkable natively via TCC framework APIs
+///   (Accessibility, ScreenRecording, Camera, Microphone, SpeechRecognition,
+///   Notifications). See `desktop/shared::permission_types::TCC_MANAGED`.
+/// - "Bridge-only" — handled via the Swift helper's `perm.check` RPC
+///   (InputMonitoring, FullDisk, Automation, Contacts, Calendars, Reminders,
+///   Photos, Location).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionKind {
     Accessibility,
@@ -24,6 +34,8 @@ pub enum PermissionKind {
     FullDisk,
     Camera,
     Microphone,
+    SpeechRecognition,
+    Notifications,
     Automation,
     Contacts,
     Calendars,
@@ -100,6 +112,8 @@ mod tests {
             PermissionKind::FullDisk,
             PermissionKind::Camera,
             PermissionKind::Microphone,
+            PermissionKind::SpeechRecognition,
+            PermissionKind::Notifications,
             PermissionKind::Automation,
             PermissionKind::Contacts,
             PermissionKind::Calendars,
@@ -112,6 +126,14 @@ mod tests {
             let back: PermissionKind = serde_json::from_str(&s).unwrap();
             assert_eq!(kind, back, "round-trip failed for {kind:?}");
         }
+    }
+
+    #[test]
+    fn newly_added_kinds_serialize_snake_case() {
+        let speech = serde_json::to_string(&PermissionKind::SpeechRecognition).unwrap();
+        assert_eq!(speech, "\"speech_recognition\"");
+        let notif = serde_json::to_string(&PermissionKind::Notifications).unwrap();
+        assert_eq!(notif, "\"notifications\"");
     }
 
     #[test]

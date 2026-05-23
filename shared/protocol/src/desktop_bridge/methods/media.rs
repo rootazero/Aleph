@@ -12,6 +12,7 @@ pub const METHOD_CAMERA_CLIP: &str = "media.camera.clip";
 
 pub const METHOD_AUDIO_LIST_DEVICES: &str = "media.audio.list_devices";
 pub const METHOD_AUDIO_RECORD: &str = "media.audio.record";
+pub const METHOD_AUDIO_MIC_METER: &str = "media.audio.mic_meter";
 
 pub const METHOD_SPEECH_TRANSCRIBE_FILE: &str = "media.speech.transcribe_file";
 
@@ -35,6 +36,11 @@ pub const RECORD_OVERHEAD_MS: u64 = 5_000;
 /// Speech recognition has a hard 60-second limit (Apple's on-device budget)
 /// plus model warm-up on first call. Callers should budget accordingly.
 pub const SUGGESTED_TIMEOUT_MS_TRANSCRIBE: u64 = 65_000;
+
+/// Mic-meter poll is a single atomic read of the running session's EMA — fast,
+/// but on first call the helper has to install an `AVAudioEngine` tap which
+/// takes a few hundred ms.
+pub const SUGGESTED_TIMEOUT_MS_MIC_METER: u64 = 2_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SnapParams {
@@ -104,6 +110,31 @@ pub struct RecordAudioResult {
     pub duration_secs: f64,
     /// Audio format (e.g., "m4a").
     pub format: String,
+}
+
+/// Mic meter poll request. No parameters; first call lazily starts a long-lived
+/// `AVAudioEngine` tap on the default input device. The helper auto-shuts the
+/// tap down after [`MIC_METER_IDLE_TIMEOUT_SECS`] of no polls.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct MicMeterParams {}
+
+/// Idle timeout after which the helper tears down the mic meter session.
+pub const MIC_METER_IDLE_TIMEOUT_SECS: u64 = 60;
+
+/// One mic-meter sample.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MicMeterResult {
+    /// EMA-smoothed RMS level, range 0.0..=1.0. `None` when the session
+    /// couldn't start (no input device or permission denied).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<f32>,
+    /// `true` once the underlying `AVAudioEngine` tap is running and
+    /// producing samples; `false` if the helper had to refuse (no perm /
+    /// no device).
+    pub active: bool,
+    /// Reason the helper couldn't start, when `active` is false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -268,9 +299,46 @@ mod tests {
         assert_eq!(METHOD_CAMERA_CLIP, "media.camera.clip");
         assert_eq!(METHOD_AUDIO_LIST_DEVICES, "media.audio.list_devices");
         assert_eq!(METHOD_AUDIO_RECORD, "media.audio.record");
+        assert_eq!(METHOD_AUDIO_MIC_METER, "media.audio.mic_meter");
         assert_eq!(
             METHOD_SPEECH_TRANSCRIBE_FILE,
             "media.speech.transcribe_file"
         );
+    }
+
+    #[test]
+    fn mic_meter_result_with_level_roundtrip() {
+        let r = MicMeterResult {
+            level: Some(0.42),
+            active: true,
+            reason: None,
+        };
+        let j = serde_json::to_string(&r).unwrap();
+        let back: MicMeterResult = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.level, Some(0.42));
+        assert!(back.active);
+        assert!(back.reason.is_none());
+    }
+
+    #[test]
+    fn mic_meter_result_without_level_skips_field() {
+        let r = MicMeterResult {
+            level: None,
+            active: false,
+            reason: Some("permission denied".into()),
+        };
+        let j = serde_json::to_string(&r).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        // level is `None` → skipped from the wire envelope
+        assert!(v.get("level").is_none());
+        assert_eq!(v["active"], false);
+        assert_eq!(v["reason"], "permission denied");
+    }
+
+    #[test]
+    fn mic_meter_params_serializes_as_empty_object() {
+        let p = MicMeterParams {};
+        let j = serde_json::to_string(&p).unwrap();
+        assert_eq!(j, "{}");
     }
 }
