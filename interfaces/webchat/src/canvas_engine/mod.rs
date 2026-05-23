@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod cluster;
 pub mod drag;
+pub mod edge_curve;
 pub mod fnv1a;
 pub mod interaction;
 pub mod layout;
