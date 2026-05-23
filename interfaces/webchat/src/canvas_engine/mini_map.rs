@@ -253,6 +253,8 @@ mod tests {
         NoteLinkDto {
             from: from.to_string(),
             to: to.to_string(),
+            label: None,
+            kind: None,
         }
     }
 

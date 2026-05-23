@@ -2,6 +2,9 @@ use super::types::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+#[cfg(test)]
+use serde_json;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct NoteNodeDto {
     pub id: String,
@@ -17,6 +20,10 @@ pub struct NoteNodeDto {
 pub struct NoteLinkDto {
     pub from: String,
     pub to: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -474,10 +481,14 @@ mod tests {
                 NoteLinkDto {
                     from: "a".to_string(),
                     to: "b".to_string(),
+                    label: None,
+                    kind: None,
                 },
                 NoteLinkDto {
                     from: "a".to_string(),
                     to: "c".to_string(),
+                    label: None,
+                    kind: None,
                 },
             ],
             hop_depth: [("b".to_string(), 1u8), ("c".to_string(), 2u8)]
@@ -632,5 +643,21 @@ mod tests {
         assert_eq!(parsed.nodes.len(), 29);
         assert_eq!(parsed.edges.len(), 45);
         assert_eq!(parsed.hop_depth.get("n01"), Some(&1));
+    }
+
+    #[test]
+    fn note_link_dto_round_trips_label_and_kind() {
+        let raw = r#"{"from":"a","to":"b","label":"refers to","kind":"refers"}"#;
+        let parsed: NoteLinkDto = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.label.as_deref(), Some("refers to"));
+        assert_eq!(parsed.kind.as_deref(), Some("refers"));
+    }
+
+    #[test]
+    fn note_link_dto_defaults_when_label_and_kind_absent() {
+        let raw = r#"{"from":"a","to":"b"}"#;
+        let parsed: NoteLinkDto = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.label, None);
+        assert_eq!(parsed.kind, None);
     }
 }
