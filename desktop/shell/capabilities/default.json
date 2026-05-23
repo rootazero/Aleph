@@ -1,7 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The shell hosts the Panel webview and exposes no IPC commands to it; only core window permissions are granted.",
+  "description": "The shell hosts the Panel webview and exposes no IPC commands to it; only core window permissions are granted. `start-dragging` is required so the Panel's `data-tauri-drag-region` strip (macOS overlay-titlebar workaround) can actually move the window. The `remote` block extends this capability to the Panel's loopback origin (the daemon serves it from http://127.0.0.1:18790), otherwise Tauri does NOT inject `__TAURI_INTERNALS__` on remote origins and the drag-region runtime fails silently.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "remote": {
+    "urls": ["http://127.0.0.1:18790/*"]
+  },
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
 }

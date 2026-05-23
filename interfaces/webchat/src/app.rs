@@ -94,13 +94,23 @@ fn AppContent() -> impl IntoView {
             class="aleph-shell flex h-screen text-text-primary font-sans selection:bg-primary/30"
             class:sidebar-collapsed=move || mem_for_shell.sidebar_collapsed.get()
         >
-            // Sidebar toggle — fixed at the top-left of the window. On macOS the
-            // CSS positions it on the same horizontal line as the overlay traffic
-            // lights (immediately to their right); on Windows/Linux it sits in the
-            // top-left corner. Always visible; click toggles `sidebar_collapsed`.
+            // Title-bar drag strip — macOS only (Win/Linux get a native
+            // titlebar). 32 px tall, full-width, transparent. `data-tauri-
+            // drag-region` makes Tauri start a window drag on mousedown.
+            // CSS hides this on non-macOS so the native titlebar isn't
+            // shadowed by a second drag zone.
+            <div class="aleph-titlebar-drag" data-tauri-drag-region=""></div>
+
+            // Sidebar toggle — fixed at the top-right of the window, on the
+            // same horizontal row as the macOS overlay traffic lights (mirroring
+            // them on the opposite side of the title bar). Always visible;
+            // click toggles `sidebar_collapsed`. `data-tauri-drag-region=
+            // "false"` explicitly opts out of the parent drag strip so
+            // clicks aren't swallowed by the window-drag handler.
             <button
                 type="button"
                 class="aleph-sidebar-toggle"
+                data-tauri-drag-region="false"
                 on:click={
                     let mem = mem_for_shell;
                     move |_| {

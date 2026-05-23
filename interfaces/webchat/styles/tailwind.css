@@ -484,9 +484,10 @@ html.translucent { --aleph-canvas-base: transparent; }
               inset  1px 0 0 var(--aleph-sheen);
 }
 
-/* Brand row — padded to clear the sidebar toggle (and on macOS the overlay
-   traffic lights, which sit on the same row as the toggle). */
-.aleph-sidebar-head { padding-top: 2.1rem; }
+/* Brand row — padded on macOS to clear the overlay traffic lights at the
+   top-left. The sidebar toggle now lives at the top-right of the window, so
+   no extra padding is needed for it on the sidebar's left edge. */
+.aleph-sidebar-head { padding-top: 0.85rem; }
 html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 
 /* The ℵ wordmark tile. */
@@ -679,14 +680,40 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     overflow: hidden;
 }
 
-/* macOS-style sidebar toggle — always visible, fixed at the top-left.
-   On macOS it sits on the same row as the overlay traffic lights, just to
-   their right (matches the Gemini / Finder placement). On Windows/Linux
-   there are no traffic lights to clear, so it sits in the corner. */
+/* Title-bar drag strip — macOS only. The window uses TitleBarStyle::Overlay
+   + hidden_title, so the OS draws traffic lights over the webview but gives
+   us no native drag surface. This 32 px strip across the top mimics a
+   borderless-Mac titlebar: drag anywhere along it to move the window.
+   Win/Linux still get a native title bar from the OS, so we hide the strip
+   there. The strip sits below the toggle button (z=50) and above general
+   content (z=40), so the toggle stays clickable.
+
+   The `data-tauri-drag-region` attribute on the element itself is what
+   tells Tauri 2 to start a window drag on mousedown; `-webkit-app-region`
+   is a defensive fallback. */
+.aleph-titlebar-drag {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 32px;
+    z-index: 40;
+    -webkit-app-region: drag;
+    cursor: default;
+}
+html[data-platform="macos"] .aleph-titlebar-drag {
+    display: block;
+}
+
+/* Sidebar toggle — always visible, fixed at the top-right of the window.
+   Sits on the same horizontal row as the macOS overlay traffic lights, but
+   right-aligned to the title-bar area (the traffic lights stay at the
+   left-edge — the toggle mirrors them on the opposite side). */
 .aleph-sidebar-toggle {
     position: fixed;
     top: 8px;
-    left: 10px;
+    right: 10px;
     z-index: 50;
     display: flex;
     align-items: center;
@@ -715,5 +742,44 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 }
 html[data-platform="macos"] .aleph-sidebar-toggle {
     top: 10px;
-    left: 82px;
+    right: 12px;
 }
+
+/* ── Accent-aware caret + scrollbar ──────────────────────────────────
+   Two near-invisible accent surfaces that follow the active palette,
+   broadening the perceived footprint of the accent color without
+   touching component code:
+
+   1. caret-color — the blinking text cursor in every input/textarea
+      tints to the accent, so typing anywhere shows the palette.
+
+   2. Scrollbar — a thin, idle-neutral / hover-accent thumb on every
+      scrollable region (chat history, session list, settings, etc.).
+      Idle thumb stays subdued (text-tertiary @ ~35%) so it doesn't
+      visually nag; on hover it lights up to the accent.
+
+   Firefox uses `scrollbar-width` + `scrollbar-color`; WebKit uses
+   `::-webkit-scrollbar*` pseudo-elements. Both are covered. */
+
+input, textarea, [contenteditable="true"], [contenteditable=""] {
+    caret-color: var(--color-primary);
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--color-text-tertiary) 35%, transparent) transparent;
+}
+*:hover {
+    scrollbar-color: color-mix(in oklch, var(--color-primary) 55%, transparent) transparent;
+}
+*::-webkit-scrollbar          { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track    { background: transparent; }
+*::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--color-text-tertiary) 35%, transparent);
+    border-radius: 4px;
+    transition: background-color 140ms ease-out;
+}
+*::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--color-primary) 55%, transparent);
+}
+*::-webkit-scrollbar-corner   { background: transparent; }

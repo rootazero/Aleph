@@ -317,9 +317,9 @@ pub fn ChatSidebar() -> impl IntoView {
             <div class="p-3 space-y-2">
                 <div class="flex items-center gap-2">
                     <select
-                        class="flex-1 px-3 py-1.5 rounded-lg bg-surface-sunken border border-border
+                        class="flex-1 min-w-0 px-3 py-1.5 rounded-lg bg-surface-sunken border border-border
                                text-sm text-text-primary focus:outline-none focus:ring-2
-                               focus:ring-primary/30 focus:border-primary"
+                               focus:ring-primary/30 focus:border-primary truncate"
                         on:change=on_agent_change
                     >
                         {move || {
