@@ -150,7 +150,9 @@ impl WizardFlow for PairingFlow {
     }
 }
 
+#[cfg(not(test))]
 const KEYRING_SERVICE: &str = "aleph-gateway";
+#[cfg(not(test))]
 const KEYRING_USER: &str = "desktop-shell";
 
 fn persist_token_to_keyring(token: &str) -> Result<(), String> {
