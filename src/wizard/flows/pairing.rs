@@ -154,11 +154,17 @@ const KEYRING_SERVICE: &str = "aleph-gateway";
 const KEYRING_USER: &str = "desktop-shell";
 
 fn persist_token_to_keyring(token: &str) -> Result<(), String> {
-    // In test builds, skip the keyring to avoid UI prompts or hangs.
+    // Skip the real keyring call in unit tests (cargo test --lib) — macOS
+    // Keychain can pop a UI prompt that would hang the test.  Note: this
+    // cfg gate does NOT apply to integration tests in `tests/`, where the
+    // library is compiled without cfg(test).  Integration tests rely on
+    // the best-effort error-swallow in PairingFlow::run so a keyring
+    // failure becomes a warn-log, not a test failure.
     #[cfg(test)]
-    let _ = token;
-    #[cfg(test)]
-    return Ok(());
+    {
+        let _ = token;
+        return Ok(());
+    }
 
     #[cfg(not(test))]
     {

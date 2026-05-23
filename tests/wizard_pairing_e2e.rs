@@ -131,15 +131,6 @@ async fn pairing_wizard_round_trip_returns_token() {
     );
     let approve_body: serde_json::Value = resp_approve.result.unwrap();
 
-    // Give the async flow a moment to complete token issuance before asserting done.
-    // (The flow issues the token asynchronously after receiving the answer.)
-    for _ in 0..20 {
-        if approve_body["done"].as_bool().unwrap_or(false) {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-
     // ── 4. If not yet done, call wizard.next once more ─────────────────────────
     let final_body = if approve_body["done"].as_bool().unwrap_or(false) {
         approve_body
