@@ -51,6 +51,17 @@ fn set_local_storage(_key: &str, _value: &str) {}
 #[cfg(not(target_arch = "wasm32"))]
 fn remove_local_storage(_key: &str) {}
 
+/// State carried by the PairingModal while the wizard handshake is in flight.
+#[derive(Debug, Clone, Default)]
+pub struct PairingPrompt {
+    /// wizard.start session_id (set after wizard.start returns)
+    pub session_id: Option<String>,
+    /// Pairing code extracted from the wizard confirm step message
+    pub pairing_code: Option<String>,
+    /// Non-fatal warning shown inside the modal
+    pub last_error: Option<String>,
+}
+
 // RPC request sent to the message loop
 struct RpcRequest {
     id: String,
@@ -96,6 +107,10 @@ pub struct DashboardState {
     /// Feature flag: enable radial (TheBrain-style) navigation in the Canvas view.
     /// Initialized from localStorage; mutated by the Settings panel toggle.
     pub canvas_radial_navigation: RwSignal<bool>,
+
+    /// Set to Some(_) when auth.connect returns pairing_required.
+    /// Cleared automatically after a successful reconnect.
+    pub pairing_required: RwSignal<Option<PairingPrompt>>,
 }
 
 /// Derive the Gateway WebSocket URL from the current page location.
@@ -141,6 +156,7 @@ impl DashboardState {
             canvas_radial_navigation: RwSignal::new(
                 crate::api::settings::load_canvas_radial_navigation(),
             ),
+            pairing_required: RwSignal::new(None),
         }
     }
 
@@ -360,11 +376,25 @@ impl DashboardState {
                 }
                 Ok(())
             }
+            Err(e) if e == "pairing_required" => {
+                // Gateway requires device pairing — trigger the PairingModal.
+                self.pairing_required.set(Some(PairingPrompt::default()));
+                Err(e)
+            }
             Err(_) => {
                 // Auth required but no token — redirect to login
                 Err("Authentication required".to_string())
             }
         }
+    }
+
+    /// Persist a device token and trigger reconnect after successful pairing.
+    ///
+    /// Called by PairingModal once `wizard.next` returns `done` with a token.
+    pub fn set_pairing_token(&self, token: String) {
+        set_local_storage("aleph_device_token", &token);
+        // Clear the modal
+        self.pairing_required.set(None);
     }
 
     /// Connect to the gateway
@@ -521,6 +551,11 @@ impl DashboardState {
                         });
 
                         Ok(())
+                    }
+                    Err(ref e) if e == "pairing_required" => {
+                        // Stay connected at WS level; PairingModal will drive the
+                        // wizard.* handshake and call reconnect() when done.
+                        Err(e.clone())
                     }
                     Err(e) => {
                         // Auth failed — redirect to login page

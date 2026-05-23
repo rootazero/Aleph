@@ -8,6 +8,7 @@ use leptos_router::hooks::use_location;
 // Views
 use crate::views::agent_trace::AgentTrace;
 use crate::views::canvas::CanvasView;
+use crate::views::pairing_modal::PairingModal;
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
 use crate::views::home::Home;
@@ -110,6 +111,9 @@ fn AppContent() -> impl IntoView {
                     <MainContent />
                 </main>
             </Router>
+
+            // Pairing modal overlays everything when pairing_required is triggered
+            <PairingModal />
         </div>
     }
 }
