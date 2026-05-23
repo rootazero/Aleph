@@ -1,4 +1,5 @@
 mod detail_panel;
+mod edge_label;
 mod graph_canvas;
 #[cfg(target_arch = "wasm32")]
 mod minimap_view;
