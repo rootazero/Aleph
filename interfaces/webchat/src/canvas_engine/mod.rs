@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod category_color;
 pub mod cluster;
 pub mod drag;
 pub mod edge_curve;
