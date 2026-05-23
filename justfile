@@ -84,13 +84,20 @@ shell-dev: build-debug
     version="$(tr -d '[:space:]' < VERSION)"
     cd {{shell_dir}} && cargo tauri dev --config "{\"version\":\"$version\"}"
 
-# Build the desktop app installers (.dmg/.msi/.deb/…), daemon bundled inside
+# Build the desktop app installers (.dmg/.msi/.deb/…), daemon bundled inside.
+#
+# CI=true is exported so tauri-bundler passes --skip-jenkins to bundle_dmg.sh,
+# which skips the osascript "tell Finder" step. That AppleScript call requires
+# a TCC Automation→Finder grant on the parent process and silently exits 64
+# from non-Terminal contexts (Claude Code, CI runners, ssh sessions), leaving
+# rw.PID.*.dmg orphans in bundle/macos/. Skipping it produces a working DMG
+# without the fancy icon layout — same as what CI ships.
 shell-build: build
     #!/usr/bin/env bash
     set -euo pipefail
     just _stage-shell-binaries release
     version="$(tr -d '[:space:]' < VERSION)"
-    cd {{shell_dir}} && cargo tauri build --config "{\"version\":\"$version\"}"
+    cd {{shell_dir}} && CI=true cargo tauri build --config "{\"version\":\"$version\"}"
     echo "✓ Installers: {{release_dir}}/bundle/"
 
 # ─── Single Stage ───
@@ -287,11 +294,16 @@ release version:
         exit 1
     fi
 
-    # Update VERSION file
+    # Update VERSION file (single source of truth) AND mirror it into
+    # [workspace.package].version so every workspace member (alephcore,
+    # aleph-cli, aleph-tui, aleph-desktop-*, etc.) inherits the same
+    # CalVer at compile time. ALEPH_VERSION (set by build.rs from VERSION)
+    # remains authoritative for any code that reads env!("ALEPH_VERSION").
     echo "$VERSION" > VERSION
+    sed -i '' -E "s/^version = \"[0-9.]+\"$/version = \"${VERSION}\"/" Cargo.toml
 
     # Stage, commit, push
-    git add -f VERSION CHANGELOG.md
+    git add -f VERSION Cargo.toml CHANGELOG.md
     git commit -m "release: v${VERSION}"
     git push origin main
 

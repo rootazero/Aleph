@@ -21,7 +21,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+# CalVer — keep in sync with the VERSION file (single source of truth).
+# build.rs re-exposes the VERSION file as env!("ALEPH_VERSION") at compile time.
+version = "26.5.23"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/rootazero/Aleph"
@@ -104,7 +106,7 @@ mdns-sd = "0.11"
 
 [package]
 name = "alephcore"
-version = "0.2.5"
+version.workspace = true
 edition = "2021"
 rust-version = "1.92"
 

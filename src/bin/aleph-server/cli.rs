@@ -13,7 +13,7 @@ pub const DEFAULT_LOG_FILE: &str = "~/.aleph/logs/gateway.log";
 /// Aleph Gateway - WebSocket control plane for AI agents
 #[derive(Parser, Debug)]
 #[command(name = "aleph")]
-#[command(version, about, long_about = None)]
+#[command(version = env!("ALEPH_VERSION"), about, long_about = None)]
 pub struct Args {
     /// Subcommand (start, stop, status)
     #[command(subcommand)]
