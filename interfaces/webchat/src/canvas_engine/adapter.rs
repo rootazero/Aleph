@@ -622,4 +622,15 @@ mod tests {
         populate_orphans(&mut nbhd, &all);
         assert!(nbhd.target_positions.contains_key("only"));
     }
+
+    #[test]
+    fn fixture_canvas_30nodes_parses() {
+        let json = include_str!("../../tests/fixtures/canvas_30nodes.json");
+        let parsed: GraphNeighborsResponse = serde_json::from_str(json)
+            .expect("fixture must parse against current DTOs");
+        assert_eq!(parsed.center.id, "n00");
+        assert_eq!(parsed.nodes.len(), 29);
+        assert_eq!(parsed.edges.len(), 45);
+        assert_eq!(parsed.hop_depth.get("n01"), Some(&1));
+    }
 }
