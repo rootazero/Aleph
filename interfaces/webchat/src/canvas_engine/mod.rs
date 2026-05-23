@@ -4,6 +4,7 @@ pub mod drag;
 pub mod fnv1a;
 pub mod interaction;
 pub mod layout;
+pub mod markdown_excerpt;
 pub mod mini_map;
 pub mod navigation;
 pub mod prefetch;
