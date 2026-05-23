@@ -24,6 +24,9 @@ pub enum WizardSessionError {
     #[error("Session already done")]
     AlreadyDone,
 
+    #[error("Session not found: {session_id}")]
+    SessionNotFound { session_id: String },
+
     #[error("Step not found: {0}")]
     StepNotFound(String),
 
@@ -142,7 +145,7 @@ impl WizardSession {
     }
 
     /// Build a Done result, carrying finish_data payload if set.
-    fn done_result(&self) -> WizardNextResult {
+    pub(crate) fn done_result(&self) -> WizardNextResult {
         match self.finish_data.read().unwrap_or_else(|e| e.into_inner()).clone() {
             Some(data) => WizardNextResult::done_with_data(data),
             None => WizardNextResult::done(),

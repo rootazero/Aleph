@@ -15,7 +15,9 @@ use std::pin::Pin;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::protocol::{
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
+};
 use crate::wizard::{
     WizardFlow, WizardNextResult, WizardSession, WizardSessionError, WizardStatus, WizardStep,
 };
@@ -134,13 +136,16 @@ impl WizardSessionManager {
             sessions.get(session_id).cloned()
         };
 
-        let session = session.ok_or_else(|| {
-            WizardSessionError::StepNotFound(format!("Session not found: {}", session_id))
+        let session = session.ok_or_else(|| WizardSessionError::SessionNotFound {
+            session_id: session_id.to_string(),
         })?;
 
-        // Check current status
+        // Check current status — return the terminal result and evict if already done.
         if session.is_done() {
-            return Ok(WizardNextResult::done());
+            let result = session.done_result();
+            let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+            sessions.remove(session_id);
+            return Ok(result);
         }
 
         // If there's an answer, submit it first
@@ -154,8 +159,11 @@ impl WizardSessionManager {
         // Get next step (outside the lock)
         let result = session.next().await;
 
-        // Clean up if done
-        if result.done {
+        // Clean up on any terminal status (Done, Error, or Cancelled).
+        if matches!(
+            result.status,
+            WizardStatus::Done | WizardStatus::Error | WizardStatus::Cancelled
+        ) {
             let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
             sessions.remove(session_id);
         }
@@ -176,8 +184,8 @@ impl WizardSessionManager {
             sessions.get(session_id).cloned()
         };
 
-        let session = session.ok_or_else(|| {
-            WizardSessionError::StepNotFound(format!("Session not found: {}", session_id))
+        let session = session.ok_or_else(|| WizardSessionError::SessionNotFound {
+            session_id: session_id.to_string(),
         })?;
 
         session.answer(step_id, value).await
@@ -275,7 +283,7 @@ pub async fn handle_answer(
         .answer(&params.session_id, &params.step_id, params.value)
         .await
     {
-        return JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string());
+        return JsonRpcResponse::error(req.id, wizard_error_code(&e), e.to_string());
     }
 
     // Get the next step
@@ -288,7 +296,7 @@ pub async fn handle_answer(
                 format!("Failed to serialize response: {}", e),
             ),
         },
-        Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string()),
+        Err(e) => JsonRpcResponse::error(req.id, wizard_error_code(&e), e.to_string()),
     }
 }
 
@@ -322,7 +330,7 @@ pub async fn handle_next(
                 format!("Failed to serialize response: {}", e),
             ),
         },
-        Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string()),
+        Err(e) => JsonRpcResponse::error(req.id, wizard_error_code(&e), e.to_string()),
     }
 }
 
@@ -389,9 +397,20 @@ pub async fn handle_status(
         Some(status) => JsonRpcResponse::success(req.id, json!({ "status": status })),
         None => JsonRpcResponse::error(
             req.id,
-            INVALID_PARAMS,
-            format!("Session not found: {}", params.session_id),
+            RESOURCE_NOT_FOUND,
+            WizardSessionError::SessionNotFound {
+                session_id: params.session_id,
+            }
+            .to_string(),
         ),
+    }
+}
+
+/// Map a `WizardSessionError` to the appropriate JSON-RPC error code.
+fn wizard_error_code(e: &WizardSessionError) -> i32 {
+    match e {
+        WizardSessionError::SessionNotFound { .. } => RESOURCE_NOT_FOUND,
+        _ => INTERNAL_ERROR,
     }
 }
 
@@ -518,6 +537,19 @@ mod tests {
 
         let resp = handle_start(req, manager).await;
         assert!(resp.is_success());
+
+        // Assert payload shape: session_id is a non-empty string and a step is present.
+        let result = resp.result.expect("expected result payload");
+        let session_id = result["session_id"]
+            .as_str()
+            .expect("session_id must be a string");
+        assert!(!session_id.is_empty(), "session_id must not be empty");
+        let step = result["step"].as_object().expect("step must be present");
+        assert_eq!(
+            step["id"].as_str().expect("step.id must be a string"),
+            "intro",
+            "first step id should be 'intro'"
+        );
     }
 
     #[tokio::test]
@@ -536,5 +568,13 @@ mod tests {
 
         let resp = handle_cancel(req, manager).await;
         assert!(resp.is_success());
+
+        // Assert payload shape: cancelled must be true.
+        let result = resp.result.expect("expected result payload");
+        assert_eq!(
+            result["cancelled"].as_bool().expect("cancelled must be a bool"),
+            true,
+            "cancelled must be true"
+        );
     }
 }
