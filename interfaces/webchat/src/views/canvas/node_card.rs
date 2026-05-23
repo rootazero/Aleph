@@ -10,14 +10,19 @@ pub enum CardMode {
 }
 
 /// Choose the render mode for a node given its hop / hover / select / zoom state.
-pub fn pick_mode(hop: u8, is_hovered: bool, is_selected: bool, zoom: f32) -> CardMode {
+///
+/// Only **hover** triggers Full mode (a transient on-canvas preview). The
+/// focused / selected center node stays Mini — its rich detail is rendered
+/// in the sidebar `NodeDetailPanel`, so the canvas stays readable
+/// (no large card occluding 1-hop neighbors and edges).
+pub fn pick_mode(hop: u8, is_hovered: bool, _is_selected: bool, zoom: f32) -> CardMode {
     if zoom < 0.5 {
         return CardMode::Dot;
     }
-    if hop == 0 || is_hovered || is_selected {
+    if is_hovered {
         return CardMode::Full;
     }
-    if hop == 1 {
+    if hop <= 1 {
         CardMode::Mini
     } else {
         CardMode::Dot
@@ -150,6 +155,11 @@ pub fn NodeCard(
             let name_v = name.clone();
             let click_id = id.clone();
             let data_id = id.clone();
+            let sel_id = id.clone();
+
+            // Reactive data-selected attribute — drives the golden halo CSS rule.
+            let is_selected_attr =
+                move || selected_id.with(|s| s.as_deref() == Some(sel_id.as_str())).to_string();
 
             let style_str = move || {
                 let (x, y) = screen_xy.get();
@@ -166,6 +176,8 @@ pub fn NodeCard(
                     class="node-card-mini"
                     style=style_str
                     data-id=data_id
+                    data-active=data_active.to_string()
+                    data-selected=is_selected_attr
                     on:click=move |_| on_click.run(click_id.clone())
                 >
                     <div style=stripe_sq_style />
@@ -217,15 +229,26 @@ mod tests {
     }
 
     #[test]
-    fn pick_mode_full_at_center() {
-        assert_eq!(pick_mode(0, false, false, 1.0), CardMode::Full);
+    fn pick_mode_center_stays_mini() {
+        // hop==0 (the focused center node) no longer promotes to Full —
+        // its content is rendered in the sidebar NodeDetailPanel instead,
+        // so the canvas stays readable.
+        assert_eq!(pick_mode(0, false, false, 1.0), CardMode::Mini);
     }
 
     #[test]
-    fn pick_mode_hover_promotes_one_step() {
+    fn pick_mode_selected_does_not_promote() {
+        // Selection alone no longer promotes to Full; the halo/breath
+        // animation on the Mini card itself signals the active focus.
+        assert_eq!(pick_mode(1, false, true, 1.0), CardMode::Mini);
+        assert_eq!(pick_mode(2, false, true, 1.0), CardMode::Dot);
+    }
+
+    #[test]
+    fn pick_mode_hover_is_only_full_trigger() {
         assert_eq!(pick_mode(2, false, false, 1.0), CardMode::Dot);
-        assert_eq!(pick_mode(2, true, false, 1.0), CardMode::Full); // promoted
+        assert_eq!(pick_mode(2, true, false, 1.0), CardMode::Full);
         assert_eq!(pick_mode(1, false, false, 1.0), CardMode::Mini);
-        assert_eq!(pick_mode(1, false, true, 1.0), CardMode::Full); // promoted
+        assert_eq!(pick_mode(1, true, false, 1.0), CardMode::Full);
     }
 }

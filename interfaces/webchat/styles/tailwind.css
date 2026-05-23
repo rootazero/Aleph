@@ -553,11 +553,11 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 
 /* ── Memory canvas node tokens ─────────────────────────────────────── */
 :root {
-    --node-bg:           linear-gradient(135deg, #1a1a2e, #16162a);
-    --node-border:       rgba(255, 255, 255, 0.06);
+    --node-bg:           linear-gradient(135deg, #252544, #1d1d38);
+    --node-border:       rgba(255, 255, 255, 0.12);
     --text-title:        #f1f5f9;
-    --text-body:         #94a3b8;
-    --text-meta:         #64748b;
+    --text-body:         #cbd5e1;
+    --text-meta:         #94a3b8;
     --text-code:         #e2e8f0;
 
     --cat-feedback:      #a78bfa;
@@ -610,6 +610,8 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     will-change: transform;
 }
 .node-card-mini:hover               { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-hover); }
+.node-card-mini[data-selected]      { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-selected); }
+.node-card-mini[data-active]        { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-active); animation: node-card-breath 2.5s ease-in-out infinite; }
 
 .node-card-dot {
     position: absolute;
