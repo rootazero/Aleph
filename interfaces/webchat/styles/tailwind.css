@@ -622,3 +622,49 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     will-change: transform;
 }
 .node-card-dot:hover { width: 14px; height: 14px; box-shadow: 0 0 18px currentColor; }
+
+/* ── Collapsible aleph-sidebar ───────────────────────────────────── */
+.aleph-sidebar {
+    transition: transform 200ms ease-out, width 200ms ease-out;
+}
+.aleph-shell.sidebar-collapsed .aleph-sidebar {
+    transform: translateX(-100%);
+    width: 0;
+    overflow: hidden;
+}
+
+/* 8 px hover strip on the left edge while collapsed */
+.aleph-shell.sidebar-collapsed::before {
+    content: "";
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 8px;
+    z-index: 50;
+    cursor: e-resize;
+}
+
+.aleph-shell.sidebar-collapsed .sidebar-peek-handle {
+    display: flex;
+}
+.sidebar-peek-handle {
+    display: none;
+    position: fixed;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.85);
+    color: #cbd5e1;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    cursor: pointer;
+    z-index: 50;
+    opacity: 0;
+    transition: opacity 120ms ease-out;
+}
+.aleph-shell.sidebar-collapsed:hover .sidebar-peek-handle {
+    opacity: 1;
+}
