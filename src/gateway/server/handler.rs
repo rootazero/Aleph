@@ -149,8 +149,24 @@ async fn handle_connection(
                                     )
                                 };
 
+                                // Pairing wizard bootstrap exception:
+                                // a same-machine panel that just got a
+                                // `pairing_required` error has no token yet,
+                                // but needs to drive `wizard.*` to obtain one.
+                                // Allow it ONLY on loopback so LAN clients
+                                // can't bypass auth. wizard.* never mutates
+                                // is_authenticated/first_message; panel will
+                                // reconnect() after wizard.answer issues a
+                                // token, going through the normal `connect`
+                                // path with the real credentials.
+                                let allow_unauth_wizard =
+                                    allow_unauth_loopback_wizard(&peer_addr, &req.method);
+
                                 // Auth gating logic
-                                if ctx.auth_mode.is_auth_required() && !is_authenticated {
+                                if ctx.auth_mode.is_auth_required()
+                                    && !is_authenticated
+                                    && !allow_unauth_wizard
+                                {
                                     // First message must be "connect"
                                     if is_first && req.method != "connect" {
                                         warn!(
@@ -714,4 +730,78 @@ pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareCha
     // Dispatch to middleware chain
     let response = middleware_chain.serve(request).await;
     serde_json::to_string(&response).unwrap_or_default()
+}
+
+/// Pairing-wizard bootstrap bypass for the WS auth gate.
+///
+/// Returns `true` when an unauthenticated request should be allowed to reach
+/// the handler pipeline because it is part of the same-machine pairing
+/// handshake. The bypass is intentionally narrow:
+///   * peer must be loopback (rejects all LAN/WAN callers)
+///   * method must be a `wizard.*` RPC (the only surface that can mint a token
+///     without prior auth, and only after `PairingFlow::confirm_pairing` runs)
+fn allow_unauth_loopback_wizard(peer: &SocketAddr, method: &str) -> bool {
+    peer.ip().is_loopback() && method.starts_with("wizard.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sa(ip: &str) -> SocketAddr {
+        format!("{ip}:0").parse().unwrap()
+    }
+
+    #[test]
+    fn bypass_allows_wizard_on_ipv4_loopback() {
+        assert!(allow_unauth_loopback_wizard(
+            &sa("127.0.0.1"),
+            "wizard.start"
+        ));
+        assert!(allow_unauth_loopback_wizard(
+            &sa("127.0.0.1"),
+            "wizard.answer"
+        ));
+        assert!(allow_unauth_loopback_wizard(
+            &sa("127.0.0.1"),
+            "wizard.cancel"
+        ));
+    }
+
+    #[test]
+    fn bypass_allows_wizard_on_ipv6_loopback() {
+        assert!(allow_unauth_loopback_wizard(&sa("[::1]"), "wizard.next"));
+    }
+
+    #[test]
+    fn bypass_rejects_wizard_on_lan_address() {
+        assert!(!allow_unauth_loopback_wizard(
+            &sa("192.168.1.5"),
+            "wizard.start"
+        ));
+        assert!(!allow_unauth_loopback_wizard(
+            &sa("10.0.0.7"),
+            "wizard.start"
+        ));
+    }
+
+    #[test]
+    fn bypass_rejects_non_wizard_methods_on_loopback() {
+        assert!(!allow_unauth_loopback_wizard(
+            &sa("127.0.0.1"),
+            "memory.search"
+        ));
+        assert!(!allow_unauth_loopback_wizard(&sa("127.0.0.1"), "connect"));
+        assert!(!allow_unauth_loopback_wizard(&sa("127.0.0.1"), "agents.list"));
+    }
+
+    #[test]
+    fn bypass_requires_dot_separator_in_method() {
+        // "wizardx.foo" must not match — guards against accidental prefix
+        // collisions if a future method were named "wizardry" etc.
+        assert!(!allow_unauth_loopback_wizard(
+            &sa("127.0.0.1"),
+            "wizardx.foo"
+        ));
+    }
 }
