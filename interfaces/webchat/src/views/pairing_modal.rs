@@ -276,17 +276,10 @@ fn PairingModalInner() -> impl IntoView {
 
                                 // Instructions
                                 <p class="text-sm text-text-secondary">
-                                    "Run the following command on the server to approve, then click "
+                                    "Confirm the code above matches the one shown here, then click "
                                     <strong class="text-text-primary">"Approve"</strong>
-                                    " below:"
+                                    " to authorise this device."
                                 </p>
-                                {move || {
-                                    pairing_code.get().map(|code| view! {
-                                        <div class="bg-surface-sunken rounded-lg p-3 font-mono text-xs text-text-secondary break-all">
-                                            {format!("aleph-server pairing approve {}", code)}
-                                        </div>
-                                    })
-                                }}
 
                                 // Error message
                                 {move || error_msg.get().map(|e| view! {
