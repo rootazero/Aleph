@@ -187,13 +187,14 @@ pub fn to_neighborhood(
 /// Populate `nbhd.orphans` with all nodes from `all_dtos` that are not already
 /// present in the neighborhood (centre, one_hop, two_hop, or cluster members).
 ///
-/// Orphans are grouped by `category` (kind), each group placed at a stable
-/// angular sector around an orphan ring radius (see `layout::r_orphan`), and
-/// laid out within their group via golden-angle spiral. They are tagged with
-/// `hop = ORPHAN_HOP_SENTINEL` and `z = ORPHAN_Z`, and they participate in
-/// idle drift.
+/// Orphan positions are determined by `scatter::place_scattered`, which avoids
+/// the central exclusion rect and maintains minimum pairwise distances.
+/// They are tagged with `hop = ORPHAN_HOP_SENTINEL` and `z = ORPHAN_Z`, and
+/// they participate in idle drift.
 pub fn populate_orphans(nbhd: &mut Neighborhood, all_dtos: &[NoteNodeDto]) {
-    use std::collections::{BTreeMap, HashSet};
+    use crate::canvas_engine::scatter::place_scattered;
+    use crate::canvas_engine::types::Vec2;
+    use std::collections::HashSet;
 
     let mut in_view: HashSet<&str> = HashSet::new();
     in_view.insert(nbhd.center.id.as_str());
@@ -219,48 +220,26 @@ pub fn populate_orphans(nbhd: &mut Neighborhood, all_dtos: &[NoteNodeDto]) {
         return;
     }
 
-    // Bucket by kind (== `category`). BTreeMap gives stable iteration order.
-    let mut by_kind: BTreeMap<String, Vec<&NoteNodeDto>> = BTreeMap::new();
-    for d in &orphan_dtos {
-        by_kind.entry(d.category.clone()).or_default().push(d);
-    }
+    // Scatter orphans over the full canvas area (nominal 800×600; viewport
+    // fit_to_content corrects the visible scale after seeding).
+    let viewport = (800.0_f64, 600.0_f64);
+    let orphan_ids: Vec<&str> = orphan_dtos.iter().map(|d| d.id.as_str()).collect();
+    let mut scattered: std::collections::HashMap<String, Vec2> =
+        std::collections::HashMap::new();
+    place_scattered(&orphan_ids, viewport, &std::collections::HashMap::new(), &mut scattered);
 
-    let kind_count = by_kind.len().max(1) as f64;
-    // Adaptive orphan ring radius (consistent with hop layout). The adapter has no
-    // viewport at this layer; pass nominal 800 — viewport::fit_to_content corrects
-    // the visible scale after seeding.
-    let orphan_count = orphan_dtos.len();
-    let r_ring = crate::canvas_engine::layout::r_orphan(orphan_count, 800.0) as f64;
-
-    let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt()); // ≈ 137.5°
-
-    let mut orphans = Vec::with_capacity(orphan_count);
-
-    for (i, (kind, members)) in by_kind.into_iter().enumerate() {
-        // Cluster-centre angle: even slots, slightly perturbed by hash so the
-        // pattern differs across kinds. Stable across sessions.
-        let h = crate::canvas_engine::layout::fnv1a_32(kind.as_bytes()) as f64 / u32::MAX as f64;
-        let center_angle = (i as f64 / kind_count) * std::f64::consts::TAU + h * 0.5;
-        let cx = r_ring * center_angle.cos();
-        let cy = r_ring * center_angle.sin();
-
-        for (j, dto) in members.into_iter().enumerate() {
-            let angle = j as f64 * golden;
-            // √(j+1)·16: golden-angle disc with denser centre.
-            let radius = (j as f64 + 1.0).sqrt() * 16.0;
-            let x = cx + radius * angle.cos();
-            let y = cy + radius * angle.sin();
-
-            let mut node = note_dto_to_canvas(dto, ORPHAN_HOP_SENTINEL);
-            node.position = Vec2::new(x, y);
-            node.z = ORPHAN_Z;
-            // Orphans drift like everyone else.
-            node.radius = 4.5;
-            orphans.push(node);
-
-            nbhd.target_positions
-                .insert(dto.id.clone(), Vec3::new(x as f32, y as f32, ORPHAN_Z));
-        }
+    let mut orphans = Vec::with_capacity(orphan_dtos.len());
+    for dto in orphan_dtos {
+        let pos = scattered.get(dto.id.as_str()).copied().unwrap_or(Vec2::zero());
+        let mut node = note_dto_to_canvas(dto, ORPHAN_HOP_SENTINEL);
+        node.position = pos;
+        node.z = ORPHAN_Z;
+        node.radius = 4.5;
+        orphans.push(node);
+        nbhd.target_positions.insert(
+            dto.id.clone(),
+            Vec3::new(pos.x as f32, pos.y as f32, ORPHAN_Z),
+        );
     }
 
     nbhd.orphans = orphans;
@@ -530,8 +509,8 @@ mod tests {
     }
 
     #[test]
-    fn populate_orphans_groups_by_kind() {
-        use crate::canvas_engine::types::Vec2;
+    fn populate_orphans_scatter_metadata() {
+        // Verifies: correct count, hop sentinel, radius, and z after Poisson scatter.
         let mut nbhd = Neighborhood {
             center: note_dto_to_canvas(&dto_kind("c", "centre"), 0),
             one_hop: vec![],
@@ -552,37 +531,19 @@ mod tests {
         ];
         populate_orphans(&mut nbhd, &all);
 
-        // All orphans returned with correct hop sentinel.
         assert_eq!(nbhd.orphans.len(), 6);
         for o in &nbhd.orphans {
             assert_eq!(o.hop, ORPHAN_HOP_SENTINEL, "orphan {} has wrong hop", o.id);
-        }
-
-        // Same-kind orphans are tightly grouped (within ~ √n·16 + ε).
-        let group = |kind: &str| -> Vec<Vec2> {
-            nbhd.orphans
-                .iter()
-                .filter(|o| o.category == kind)
-                .map(|o| o.position)
-                .collect()
-        };
-        let person = group("person");
-        assert_eq!(person.len(), 3);
-        let cx = person.iter().map(|p| p.x).sum::<f64>() / 3.0;
-        let cy = person.iter().map(|p| p.y).sum::<f64>() / 3.0;
-        for p in &person {
-            let d = ((p.x - cx).powi(2) + (p.y - cy).powi(2)).sqrt();
-            // Golden-angle disc with j∈{0,1,2}, radius = √(j+1)·16 → max ≈ √3·16 ≈ 27.7.
-            assert!(
-                d < 60.0,
-                "person orphan {} too far from cluster centre: d={d}",
-                p.x
-            );
+            assert_eq!(o.radius, 4.5, "orphan {} has wrong radius", o.id);
+            assert_eq!(o.z, ORPHAN_Z, "orphan {} has wrong z", o.id);
         }
     }
 
     #[test]
-    fn populate_orphans_distinct_kinds_separated() {
+    fn populate_orphans_scatter_avoids_centre() {
+        // Scattered orphans must lie outside the 60% central exclusion rect
+        // (scatter::CENTRAL_EXCLUSION) — same invariant as scatter::tests.
+        use crate::canvas_engine::scatter::CENTRAL_EXCLUSION;
         let mut nbhd = Neighborhood {
             center: note_dto_to_canvas(&dto_kind("c", "centre"), 0),
             one_hop: vec![],
@@ -600,19 +561,16 @@ mod tests {
         ];
         populate_orphans(&mut nbhd, &all);
 
-        // For 3 kinds the angular separation between consecutive cluster centres
-        // (sorted by angle) should be ≥ TAU/(2·K) = ~60°.
-        let mut angles: Vec<f64> = nbhd
-            .orphans
-            .iter()
-            .map(|o| o.position.y.atan2(o.position.x))
-            .collect();
-        angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        for w in angles.windows(2) {
-            let gap = (w[1] - w[0]).abs();
+        // Nominal viewport used by populate_orphans is 800×600.
+        let excl_w = 800.0 * CENTRAL_EXCLUSION * 0.5;
+        let excl_h = 600.0 * CENTRAL_EXCLUSION * 0.5;
+        for o in &nbhd.orphans {
             assert!(
-                gap > std::f64::consts::PI / 3.0 - 0.1,
-                "clusters too close: gap={gap}"
+                o.position.x.abs() >= excl_w || o.position.y.abs() >= excl_h,
+                "orphan {} at ({}, {}) inside central exclusion rect",
+                o.id,
+                o.position.x,
+                o.position.y
             );
         }
     }

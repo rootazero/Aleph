@@ -65,10 +65,6 @@ pub fn r_two_hop(n: usize, viewport_w_px: f32) -> f32 {
     r_for_hop(2.0, n, viewport_w_px)
 }
 
-pub fn r_orphan(n: usize, viewport_w_px: f32) -> f32 {
-    r_for_hop(2.4, n, viewport_w_px)
-}
-
 /// Place `ids` on a ring around `(0,0)` at base radius `base_r`,
 /// with deterministic per-id jitter in angle (±17°) and radius (±15%).
 ///
@@ -98,6 +94,14 @@ pub(crate) fn place_perturbed_ring(
 }
 
 /// Compute ideal (target) positions for active + neighbors using radial geometry.
+///
+/// Layout strategy (Task 2.3):
+/// - Active centre at world origin.
+/// - 1-hop nodes (including cluster representatives) on a perturbed ring at `r_one_hop`.
+/// - 2-hop nodes on a perturbed ring at `r_two_hop`.
+///
+/// Both rings use `place_perturbed_ring` for deterministic per-id jitter.
+/// Orphan positions are NOT computed here; call `adapter::populate_orphans` separately.
 pub fn compute_target_positions(
     active: &CanvasNode,
     one_hop: &[CanvasNode],
@@ -106,118 +110,43 @@ pub fn compute_target_positions(
     edges: &[CanvasEdge],
     viewport_w_px: f32,
 ) -> HashMap<String, Vec3> {
-    let mut out = HashMap::new();
+    // `edges` is retained in the signature for API stability; the perturbed-ring
+    // layout no longer uses edge relations for angular placement.
+    let _ = edges;
+
+    let mut xy: HashMap<String, super::types::Vec2> = HashMap::new();
+    let mut out: HashMap<String, Vec3> = HashMap::new();
+
+    // 1. Centre at origin.
     out.insert(active.id.clone(), Vec3::new(0.0, 0.0, Z_ACTIVE));
 
-    // Group 1-hop neighbors + clusters by their connecting relation.
-    // Canonical index ordering (T11 adapter): active=0, one_hop[i]=i+1.
-    let mut by_relation: HashMap<String, Vec<(String, f32)>> = HashMap::new();
-    for (i, n) in one_hop.iter().enumerate() {
-        let neighbor_idx = i + 1;
-        let rel = relation_to_active(neighbor_idx, edges).unwrap_or_else(|| "_default".to_string());
-        let w = n.decay_score * n.edge_count.max(1) as f32;
-        by_relation.entry(rel).or_default().push((n.id.clone(), w));
-    }
+    // 2. 1-hop + cluster representatives on the inner ring.
+    let one_hop_n = one_hop.len() + clusters.len();
+    let r1 = r_one_hop(one_hop_n, viewport_w_px) as f64;
+    let mut one_hop_ids: Vec<&str> = one_hop.iter().map(|n| n.id.as_str()).collect();
     for c in clusters {
-        by_relation
-            .entry(c.relation.clone())
-            .or_default()
-            .push((c.id.clone(), c.aggregated_weight));
+        one_hop_ids.push(c.id.as_str());
     }
-
-    // Cluster folding handles dense sectors via fold_threshold; r1/r2 now grow
-    // adaptively with neighborhood size and viewport width via r_one_hop/r_two_hop.
-    let total_visible = one_hop.len() + clusters.len() + two_hop.len();
-    let r1 = r_one_hop(total_visible, viewport_w_px);
-    let r2 = r_two_hop(total_visible, viewport_w_px);
-
-    // Assign sector center angles (evenly spaced, hash-ordered)
-    let relations: Vec<String> = by_relation.keys().cloned().collect();
-    let sector_centers = assign_sectors(&relations);
-
-    // Within each sector sort by weight descending; tiebreak by id for stability.
-    for members in by_relation.values_mut() {
-        members.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(&b.0))
-        });
-    }
-
-    let total_n = by_relation.values().map(|v| v.len()).sum::<usize>().max(1) as f32;
-
-    for (rel, members) in &by_relation {
-        let center_angle = sector_centers.get(rel).copied().unwrap_or(0.0);
-        let n_in_sector = members.len() as f32;
-        let sector_width = (std::f32::consts::TAU * (n_in_sector / total_n)).max(0.15);
-        let delta = sector_width / (n_in_sector + 1.0);
-        for (i, (id, _w)) in members.iter().enumerate() {
-            // Alternate offsets: 0, +1, -1, +2, -2, …
-            let offset_steps = ((i + 1) / 2) as f32 * if i % 2 == 0 { 1.0 } else { -1.0 };
-            let theta = center_angle + offset_steps * delta;
-            let x = r1 * theta.cos();
-            let y = r1 * theta.sin();
-            out.insert(id.clone(), Vec3::new(x, y, Z_ONE_HOP));
+    place_perturbed_ring(&one_hop_ids, r1, &mut xy);
+    for id in &one_hop_ids {
+        if let Some(p) = xy.remove(*id) {
+            out.insert((*id).to_string(), Vec3::new(p.x as f32, p.y as f32, Z_ONE_HOP));
         }
     }
 
-    // 2-hop nodes: orbit around their introducing 1-hop parent angle.
-    // Canonical index ordering: two_hop[j] = 1 + one_hop.len() + j.
-    for (j, n) in two_hop.iter().enumerate() {
-        let two_hop_idx = 1 + one_hop.len() + j;
-        let parent_id = find_one_hop_parent(two_hop_idx, one_hop, edges);
-        let parent_pos = parent_id.as_ref().and_then(|p| out.get(p)).copied();
-        let (px, py) = match parent_pos {
-            Some(p) => (p.x, p.y),
-            None => (r1, 0.0),
-        };
-        let parent_angle = py.atan2(px);
-        let jitter = (fnv1a_32(n.id.as_bytes()) as f32 / u32::MAX as f32 - 0.5) * 0.6;
-        let theta = parent_angle + jitter;
-        let x = r2 * theta.cos();
-        let y = r2 * theta.sin();
-        out.insert(n.id.clone(), Vec3::new(x, y, Z_TWO_HOP));
+    // 3. 2-hop nodes on the outer ring.
+    let r2 = r_two_hop(two_hop.len(), viewport_w_px) as f64;
+    let two_hop_ids: Vec<&str> = two_hop.iter().map(|n| n.id.as_str()).collect();
+    place_perturbed_ring(&two_hop_ids, r2, &mut xy);
+    for id in &two_hop_ids {
+        if let Some(p) = xy.remove(*id) {
+            out.insert((*id).to_string(), Vec3::new(p.x as f32, p.y as f32, Z_TWO_HOP));
+        }
     }
 
     out
 }
 
-/// Returns the relation label of the edge connecting the active node (index 0)
-/// to the neighbor at `neighbor_idx` (1..=one_hop.len()). Returns None if no
-/// such edge exists.
-fn relation_to_active(neighbor_idx: usize, edges: &[CanvasEdge]) -> Option<String> {
-    edges
-        .iter()
-        .find(|e| {
-            (e.from_idx == 0 && e.to_idx == neighbor_idx)
-                || (e.to_idx == 0 && e.from_idx == neighbor_idx)
-        })
-        .map(|e| e.relation.clone())
-}
-
-/// Find the 1-hop node that introduces the given 2-hop node by walking edges.
-/// Returns the 1-hop node's id if any edge connects them, else None.
-fn find_one_hop_parent(
-    two_hop_idx: usize,
-    one_hop: &[CanvasNode],
-    edges: &[CanvasEdge],
-) -> Option<String> {
-    edges.iter().find_map(|e| {
-        let other_idx = if e.from_idx == two_hop_idx {
-            Some(e.to_idx)
-        } else if e.to_idx == two_hop_idx {
-            Some(e.from_idx)
-        } else {
-            None
-        }?;
-        // Map other_idx back to a 1-hop position: 1..=one_hop.len()
-        if other_idx >= 1 && other_idx <= one_hop.len() {
-            Some(one_hop[other_idx - 1].id.clone())
-        } else {
-            None
-        }
-    })
-}
 
 #[cfg(test)]
 mod radial_tests {
@@ -269,11 +198,11 @@ mod radial_tests {
         let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges, 800.0);
         let pos_b = targets.get("b").unwrap();
         let r = (pos_b.x.powi(2) + pos_b.y.powi(2)).sqrt();
-        // total_visible = 1 (one_hop) + 0 (clusters) + 0 (two_hop) = 1.
-        let expected = r_one_hop(1, 800.0);
+        // perturbed ring places nodes at base_r ± 15% jitter: allow 20% tolerance.
+        let base = r_one_hop(1, 800.0);
         assert!(
-            (r - expected).abs() < 1.0,
-            "1-hop should be at radius {expected}, got {r}"
+            (r - base).abs() < base * 0.20,
+            "1-hop should be near radius {base} (±20%), got {r}"
         );
     }
 
@@ -286,11 +215,11 @@ mod radial_tests {
         let targets = compute_target_positions(&active, &one_hop, &two_hop, &[], &edges, 800.0);
         let pos_c = targets.get("c").unwrap();
         let r = (pos_c.x.powi(2) + pos_c.y.powi(2)).sqrt();
-        // total_visible = 1 (one_hop) + 0 (clusters) + 1 (two_hop) = 2.
-        let expected = r_two_hop(2, 800.0);
+        // 2-hop ring uses r_two_hop(two_hop.len()=1, 800); allow 20% for jitter.
+        let base = r_two_hop(1, 800.0);
         assert!(
-            (r - expected).abs() < 5.0,
-            "2-hop should be at radius {expected}, got {r}"
+            (r - base).abs() < base * 0.20,
+            "2-hop should be near radius {base} (±20%), got {r}"
         );
     }
 
@@ -359,24 +288,25 @@ mod radial_tests {
     }
 
     #[test]
-    fn compute_targets_groups_by_relation() {
-        // Active connected to b via "uses" and c via "part_of".
-        // Sectors should put b and c in DIFFERENT angular wedges.
+    fn compute_targets_one_hop_nodes_all_placed() {
+        // Perturbed-ring layout places every 1-hop node in the output map,
+        // regardless of edge relation labels.
         let active = n("a", "concept", 0);
         let one_hop = vec![n("b", "concept", 1), n("c", "concept", 1)];
         let edges = vec![e(0, 1, "uses"), e(0, 2, "part_of")];
         let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges, 800.0);
-        let pos_b = targets.get("b").unwrap();
-        let pos_c = targets.get("c").unwrap();
-        let angle_b = pos_b.y.atan2(pos_b.x);
-        let angle_c = pos_c.y.atan2(pos_c.x);
-        // With 2 distinct relations, sectors are TAU/2 = π apart.
-        let diff = (angle_b - angle_c).abs();
-        let diff = diff.min(std::f32::consts::TAU - diff); // wrap-around
-        assert!(
-            (diff - std::f32::consts::PI).abs() < 0.5,
-            "b and c should be in opposite sectors, got angular diff {diff}"
-        );
+        assert!(targets.contains_key("b"), "b should be in output");
+        assert!(targets.contains_key("c"), "c should be in output");
+        // Both should be on the 1-hop ring (near r1, allow ±20% jitter).
+        let base = r_one_hop(2, 800.0);
+        for id in &["b", "c"] {
+            let p = targets[*id];
+            let r = (p.x.powi(2) + p.y.powi(2)).sqrt();
+            assert!(
+                (r - base).abs() < base * 0.20,
+                "{id} radius {r} should be near {base} (±20%)"
+            );
+        }
     }
 
     #[test]
@@ -412,16 +342,6 @@ mod radial_tests {
         let one = r_one_hop(50, 800.0);
         let two = r_two_hop(50, 800.0);
         assert!(two > one, "R₂ must exceed R₁: one={one} two={two}");
-    }
-
-    #[test]
-    fn r_orphan_outside_two_hop() {
-        let two = r_two_hop(50, 800.0);
-        let orphan = r_orphan(50, 800.0);
-        assert!(
-            orphan > two,
-            "R_orphan must exceed R₂: two={two} orphan={orphan}"
-        );
     }
 
     #[test]
