@@ -24,6 +24,29 @@ pub struct MemoryState {
 
 impl MemoryState {
     pub fn new() -> Self {
+        // Read persisted collapsed state from localStorage (default: false).
+        let initial_collapsed = web_sys::window()
+            .and_then(|w| w.local_storage().ok().flatten())
+            .and_then(|s| s.get_item("aleph.sidebar.collapsed").ok().flatten())
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let sidebar_collapsed = RwSignal::new(initial_collapsed);
+
+        // Persist sidebar_collapsed to localStorage whenever it changes.
+        // This Effect runs inside a Leptos component (AppContent), so a
+        // reactive owner is always present.
+        Effect::new(move |_| {
+            let v = sidebar_collapsed.get();
+            if let Some(s) = web_sys::window()
+                .and_then(|w| w.local_storage().ok().flatten())
+            {
+                let _ = s.set_item(
+                    "aleph.sidebar.collapsed",
+                    if v { "1" } else { "0" },
+                );
+            }
+        });
+
         Self {
             agent_id:           RwSignal::new("main".into()),
             agents:             RwSignal::new(Vec::new()),
@@ -33,7 +56,7 @@ impl MemoryState {
             focus_id:           RwSignal::new(None),
             breadcrumb_entries: RwSignal::new(Vec::new()),
             recent_visited:     RwSignal::new(VecDeque::with_capacity(RECENT_VISITED_CAPACITY)),
-            sidebar_collapsed:  RwSignal::new(false),
+            sidebar_collapsed,
         }
     }
 

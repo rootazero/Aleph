@@ -1,4 +1,5 @@
 use crate::i18n::*;
+use crate::state::memory::MemoryState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::Router;
@@ -36,9 +37,24 @@ pub fn App() -> impl IntoView {
 fn AppContent() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
+    // MemoryState must be provided here (parent of MainContent) so the
+    // aleph-shell class binding and the Esc key listener can both read it.
+    provide_context(MemoryState::new());
+
     // Chat state lives above both the chat sidebar (left column) and the
     // chat view (main area) so they share one session / agent selection.
     provide_context(ChatState::new());
+
+    // Esc key: uncollapse sidebar when collapsed.
+    {
+        use leptos::ev::keydown;
+        let mem_for_key = expect_context::<MemoryState>();
+        window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
+            if ev.key() == "Escape" && mem_for_key.sidebar_collapsed.get() {
+                mem_for_key.sidebar_collapsed.set(false);
+            }
+        });
+    }
 
     // Setup WebSocket connection and alert subscriptions on mount
     Effect::new(move || {
@@ -69,9 +85,22 @@ fn AppContent() -> impl IntoView {
         });
     });
 
+    let mem_for_shell = expect_context::<MemoryState>();
+
     view! {
         // Two-column shell (Codex) floating on the drifting light-field.
-        <div class="aleph-shell flex h-screen text-text-primary font-sans selection:bg-primary/30">
+        <div
+            class="aleph-shell flex h-screen text-text-primary font-sans selection:bg-primary/30"
+            class:sidebar-collapsed=move || mem_for_shell.sidebar_collapsed.get()
+        >
+            // Peek handle — visible only when sidebar is collapsed (CSS-gated).
+            <button
+                class="sidebar-peek-handle"
+                on:click=move |_| { mem_for_shell.sidebar_collapsed.set(false); }
+                title="Expand sidebar (Esc)"
+            >
+                "\u{21e8}"
+            </button>
             <Router>
                 // Left column — context-aware sidebar, full window height
                 <ModeSidebar />
@@ -91,9 +120,6 @@ fn AppContent() -> impl IntoView {
 /// dedicated router components.
 #[component]
 fn MainContent() -> impl IntoView {
-    use crate::state::memory::MemoryState;
-    provide_context(MemoryState::new());
-
     let location = use_location();
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
 
