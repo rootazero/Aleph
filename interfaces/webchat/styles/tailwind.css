@@ -706,10 +706,15 @@ html[data-platform="macos"] .aleph-titlebar-drag {
     display: block;
 }
 
-/* Sidebar toggle — always visible, fixed at the top-right of the window.
-   Sits on the same horizontal row as the macOS overlay traffic lights, but
-   right-aligned to the title-bar area (the traffic lights stay at the
-   left-edge — the toggle mirrors them on the opposite side). */
+/* Sidebar toggle — always visible, fixed in the title-bar row. Position is
+   anchored to the window (not the sidebar), so collapsing or expanding the
+   sidebar leaves the button exactly where it is.
+
+   • macOS: sits just to the right of the overlay traffic lights (~8–60 px
+     from the left edge), so it always reads as a title-bar control next to
+     the OS chrome.
+   • Win/Linux: no traffic lights, so the button right-aligns to the title
+     bar — the conventional spot for window-level toggles. */
 .aleph-sidebar-toggle {
     position: fixed;
     top: 8px;
@@ -742,7 +747,11 @@ html[data-platform="macos"] .aleph-titlebar-drag {
 }
 html[data-platform="macos"] .aleph-sidebar-toggle {
     top: 10px;
-    right: 12px;
+    /* Right-of-traffic-lights anchor: lights end ~60 px from the left edge,
+       leave a small breathing gap before the button. `right` is unset so
+       the button does not also stretch to the right edge. */
+    left: 72px;
+    right: auto;
 }
 
 /* ── Accent-aware caret + scrollbar ──────────────────────────────────
