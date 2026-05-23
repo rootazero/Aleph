@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use leptos::prelude::*;
@@ -14,6 +15,7 @@ use crate::canvas_engine::renderer::draw_neighborhood;
 use crate::canvas_engine::tween::build_interpolated_neighborhood;
 use crate::canvas_engine::types::*;
 use crate::canvas_engine::viewport::Viewport;
+use crate::views::canvas::node_card::NodeCard;
 
 /// Shared mutable state for 60fps canvas rendering (not reactive).
 pub struct GraphState {
@@ -96,6 +98,19 @@ pub fn GraphCanvas(
     let drag_state: Rc<RefCell<DragState>> = Rc::new(RefCell::new(DragState::new()));
     let last_frame_ms: Rc<Cell<f64>> = Rc::new(Cell::new(0.0));
 
+    // DOM overlay signals (Task 4.5): published each rAF tick so NodeCard overlays stay in sync.
+    // node_screen_pos: maps node id → per-node screen position signal.
+    // overlay_nodes:   flat ordered list of all visible nodes (center + 1-hop + 2-hop + orphans).
+    // zoom_signal:     current viewport scale (f32) for NodeCard mode selection.
+    // hovered_id_sig:  which node is currently hovered (from GraphState.hovered_node).
+    // selected_id_sig: which node is currently selected (from GraphState.selected_node).
+    let node_screen_pos: RwSignal<HashMap<String, RwSignal<(f32, f32)>>> =
+        RwSignal::new(HashMap::new());
+    let overlay_nodes: RwSignal<Vec<CanvasNode>> = RwSignal::new(Vec::new());
+    let zoom_signal: RwSignal<f32> = RwSignal::new(1.0_f32);
+    let hovered_id_sig: RwSignal<Option<String>> = RwSignal::new(None);
+    let selected_id_sig: RwSignal<Option<String>> = RwSignal::new(None);
+
     // Clone handles once for each event closure that needs them, since `nav`,
     // `drag_state`, and `last_frame_ms` are all moved into the rAF Effect closure
     // below. (Effect::new takes `move ||`, which consumes its captures.)
@@ -158,6 +173,12 @@ pub fn GraphCanvas(
         let drag_state_inner = drag_state.clone();
         let last_frame_ms_inner = last_frame_ms.clone();
         let on_event_for_promote = on_event;
+        // Overlay signals captured for position publishing each frame.
+        let node_screen_pos_inner = node_screen_pos;
+        let overlay_nodes_inner = overlay_nodes;
+        let zoom_signal_inner = zoom_signal;
+        let hovered_id_sig_inner = hovered_id_sig;
+        let selected_id_sig_inner = selected_id_sig;
 
         let canvas_for_resize = canvas.clone();
         let closure: Closure<dyn FnMut()> = Closure::new(move || {
@@ -226,8 +247,65 @@ pub fn GraphCanvas(
                 let selected = state.selected_node.as_deref().map(str::to_string);
                 let hovered = state.hovered_node.as_deref().map(str::to_string);
                 let viewport = state.viewport.clone();
+                let current_zoom = viewport.scale as f32;
                 // Release the borrow before calling draw functions
                 drop(state);
+
+                // Publish zoom, hover, selected to overlay signals.
+                zoom_signal_inner.set(current_zoom);
+                if hovered_id_sig_inner.get_untracked().as_deref() != hovered.as_deref() {
+                    hovered_id_sig_inner.set(hovered.clone());
+                }
+                if selected_id_sig_inner.get_untracked().as_deref() != selected.as_deref() {
+                    selected_id_sig_inner.set(selected.clone());
+                }
+
+                // Flatten all visible nodes for the overlay list and publish screen positions.
+                // We do this for Active and Animating states (same neighborhood source).
+                let flat_nodes: Vec<CanvasNode> = match &nav_state {
+                    NavState::Active { neighborhood, .. } => {
+                        std::iter::once(neighborhood.center.clone())
+                            .chain(neighborhood.one_hop.iter().cloned())
+                            .chain(neighborhood.two_hop.iter().cloned())
+                            .chain(neighborhood.orphans.iter().cloned())
+                            .collect()
+                    }
+                    NavState::Animating { to_neighborhood, .. } => {
+                        std::iter::once(to_neighborhood.center.clone())
+                            .chain(to_neighborhood.one_hop.iter().cloned())
+                            .chain(to_neighborhood.two_hop.iter().cloned())
+                            .chain(to_neighborhood.orphans.iter().cloned())
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                };
+
+                // Publish per-node screen positions (get-or-create inner signal per node).
+                for n in &flat_nodes {
+                    let screen = viewport.world_to_screen(n.position);
+                    let sx = screen.x as f32;
+                    let sy = screen.y as f32;
+                    // Check if a signal already exists for this node id.
+                    let existing = node_screen_pos_inner.with(|m| m.get(&n.id).copied());
+                    if let Some(sig) = existing {
+                        sig.set((sx, sy));
+                    } else {
+                        let sig: RwSignal<(f32, f32)> = RwSignal::new((sx, sy));
+                        node_screen_pos_inner.update(|m| {
+                            m.insert(n.id.clone(), sig);
+                        });
+                    }
+                }
+
+                // Update overlay_nodes when the set of visible nodes changes.
+                // Compare by length+id to avoid spurious re-renders.
+                let needs_update = overlay_nodes_inner.with(|prev| {
+                    prev.len() != flat_nodes.len()
+                        || prev.iter().zip(flat_nodes.iter()).any(|(a, b)| a.id != b.id)
+                });
+                if needs_update {
+                    overlay_nodes_inner.set(flat_nodes);
+                }
 
                 match nav_state {
                     NavState::Active { neighborhood, .. } => {
@@ -510,15 +588,52 @@ pub fn GraphCanvas(
     };
 
     view! {
-        <canvas
-            node_ref=canvas_ref
-            class="w-full h-full block"
-            style="cursor: grab;"
-            on:mousedown=on_mousedown
-            on:mousemove=on_mousemove
-            on:mouseup=on_mouseup
-            on:mouseleave=on_mouseleave
-            on:wheel=on_wheel
-        />
+        <div class="relative w-full h-full">
+            <canvas
+                node_ref=canvas_ref
+                class="w-full h-full block"
+                style="cursor: grab;"
+                on:mousedown=on_mousedown
+                on:mousemove=on_mousemove
+                on:mouseup=on_mouseup
+                on:mouseleave=on_mouseleave
+                on:wheel=on_wheel
+            />
+            // DOM overlay: NodeCard components positioned over each visible node.
+            // pointer-events-none on the wrapper so mouse events fall through to the canvas;
+            // individual cards re-enable pointer events for click handling.
+            <div class="absolute inset-0 pointer-events-none overflow-hidden">
+                {move || {
+                    let nodes = overlay_nodes.get();
+                    nodes.into_iter().map(|n| {
+                        let id_clone = n.id.clone();
+                        // Get-or-create the per-node screen position signal.
+                        let pos_sig: RwSignal<(f32, f32)> =
+                            node_screen_pos.with(|m| m.get(&n.id).copied())
+                                .unwrap_or_else(|| RwSignal::new((0.0_f32, 0.0_f32)));
+
+                        let on_card_click = Callback::new(move |_id: String| {
+                            selected_id_sig.set(Some(id_clone.clone()));
+                        });
+
+                        view! {
+                            <NodeCard
+                                id=n.id.clone()
+                                name=n.name.clone()
+                                category=n.category.clone()
+                                tags=vec![]
+                                excerpt_html=String::new()
+                                hop=n.hop
+                                screen_xy=pos_sig.read_only()
+                                zoom=zoom_signal.read_only()
+                                hovered_id=hovered_id_sig.read_only()
+                                selected_id=selected_id_sig.read_only()
+                                on_click=on_card_click
+                            />
+                        }
+                    }).collect_view()
+                }}
+            </div>
+        </div>
     }
 }

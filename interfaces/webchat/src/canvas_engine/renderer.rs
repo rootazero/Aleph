@@ -110,26 +110,17 @@ pub fn draw_neighborhood(
     //    Click to re-center.
     draw_orphan_ring(ctx, &nbhd.orphans, drag, selected, hovered);
 
-    // 2. Layer A: 2-hop (back)
+    // 2. Layer A: 2-hop (back) — edges only; node circles are now DOM NodeCard overlays
     for n in &nbhd.two_hop {
         draw_edges_for_node(ctx, n, nbhd, drag, node_drag, selected, hovered);
     }
-    for n in &nbhd.two_hop {
-        draw_node(ctx, n, drag, selected, hovered);
-    }
 
-    // 3. Layer B: 1-hop + clusters
+    // 3. Layer B: 1-hop + clusters — edges only; node circles are DOM NodeCard overlays
     for c in &nbhd.clusters {
         draw_cluster(ctx, c, drag, selected, hovered);
     }
     for n in &nbhd.one_hop {
         draw_edges_for_node(ctx, n, nbhd, drag, node_drag, selected, hovered);
-    }
-    for n in &nbhd.one_hop {
-        if node_drag.map(|o| o.node_id == n.id).unwrap_or(false) {
-            continue;
-        }
-        draw_node(ctx, n, drag, selected, hovered);
     }
 
     // Draw the dragged node last (on top of clusters / other 1-hop nodes)
@@ -141,8 +132,7 @@ pub fn draw_neighborhood(
         }
     }
 
-    // 4. Layer C: Active (front)
-    draw_node(ctx, &nbhd.center, drag, selected, hovered);
+    // Layer C: Active center — edge connections drawn above; node body is a DOM NodeCard overlay
 
     ctx.restore();
 }
@@ -212,134 +202,6 @@ fn draw_orphan_ring(
             ctx.set_text_baseline("top");
             let _ = ctx.fill_text(&label, cx, cy + r + 4.0);
         }
-    }
-}
-
-fn draw_node(
-    ctx: &CanvasRenderingContext2d,
-    n: &CanvasNode,
-    drag: (f32, f32),
-    selected: Option<&str>,
-    hovered: Option<&str>,
-) {
-    use std::f64::consts::TAU;
-
-    let attrs = depth_attrs(n.z);
-    let off = crate::canvas_engine::viewport::parallax_offset(n.z, drag.0, drag.1);
-    let drift = drift_offset(
-        now_ms_in_seconds() * 1000.0,
-        &n.id,
-        DRIFT_AMPLITUDE_PX,
-        DRIFT_PERIOD_MS,
-    );
-    let cx = n.position.x as f32 + off.0 + drift.x as f32;
-    let cy = n.position.y as f32 + off.1 + drift.y as f32;
-    let r = (n.radius as f32 * attrs.scale) as f64;
-    let cx64 = cx as f64;
-    let cy64 = cy as f64;
-
-    let is_selected = selected.map(|s| s == n.id).unwrap_or(false);
-    let is_hovered = hovered.map(|h| h == n.id).unwrap_or(false);
-    let is_active = n.hop == 0;
-
-    // 1. Shadow ellipse (depth-attenuated, Y-offset varies with depth)
-    let shadow_y = cy64 + attrs.shadow_offset_y as f64;
-    let shadow_alpha = 0.3 * attrs.opacity as f64;
-    ctx.set_fill_style_str(&format!("rgba(0,0,0,{shadow_alpha:.3})"));
-    ctx.begin_path();
-    let _ = ctx.ellipse(cx64, shadow_y, r * 1.1, r * 0.4, 0.0, 0.0, TAU);
-    ctx.fill();
-
-    // 2. Glow ring
-    //    Active centre: breathing animation (sin-based pulse)
-    //    Hovered/selected: static bright glow
-    let glow_alpha = if is_active {
-        let t = now_ms_in_seconds();
-        let breath = 0.85 + 0.15 * (t * std::f64::consts::TAU / 2.5).sin();
-        (attrs.glow_alpha as f64 * breath).clamp(0.0, 1.0)
-    } else if is_hovered || is_selected {
-        (attrs.glow_alpha as f64 * 1.4).clamp(0.0, 1.0)
-    } else {
-        attrs.glow_alpha as f64
-    };
-
-    if glow_alpha > 0.01 {
-        let glow_r = r + if is_selected || is_hovered { 8.0 } else { 4.0 };
-        let grad = ctx.create_radial_gradient(cx64, cy64, r * 0.5, cx64, cy64, glow_r);
-        let glow_color_inner = format!(
-            "rgba({},{},{},{:.3})",
-            n.color.r, n.color.g, n.color.b, glow_alpha
-        );
-        let glow_color_outer = format!("rgba({},{},{},0.0)", n.color.r, n.color.g, n.color.b);
-        if let Ok(grad) = grad {
-            let _ = grad.add_color_stop(0.0, &glow_color_inner);
-            let _ = grad.add_color_stop(1.0, &glow_color_outer);
-            ctx.set_fill_style_canvas_gradient(&grad);
-            ctx.begin_path();
-            let _ = ctx.arc(cx64, cy64, glow_r, 0.0, TAU);
-            ctx.fill();
-        }
-    }
-
-    // 3. Blur filter for 2-hop nodes
-    if attrs.blur_px > 0.5 {
-        ctx.set_filter(&format!("blur({:.1}px)", attrs.blur_px));
-    }
-
-    // 4. Body fill — saturation-attenuated by depth
-    let body_color = scale_color_saturation(&n.color, attrs.sat_mul, attrs.opacity);
-    ctx.set_fill_style_str(&body_color);
-    ctx.begin_path();
-    let _ = ctx.arc(cx64, cy64, r, 0.0, TAU);
-    ctx.fill();
-
-    // 5. Border
-    ctx.set_stroke_style_str("#1a1a2a");
-    ctx.set_line_width(1.0);
-    ctx.stroke();
-
-    // 6. Reset blur filter
-    if attrs.blur_px > 0.5 {
-        ctx.set_filter("none");
-    }
-
-    // 7. Icon — skipped (CanvasNode has no icon field; future enhancement)
-
-    // 8. Wiki badge — skipped (CanvasNode has no has_wiki field; future enhancement)
-
-    // 9. Label — show by hop layer
-    //    hop=0 (active center): always show, larger font
-    //    hop=1 (one-hop neighbors): always show
-    //    hop=2 (two-hop): only when node is wide enough to read
-    let show_label = n.hop <= 1 || r >= 12.0 || is_selected || is_hovered;
-    if show_label {
-        let max_chars = if is_active { 28 } else { 20 };
-        let label = if n.name.chars().count() > max_chars {
-            let truncated: String = n.name.chars().take(max_chars - 1).collect();
-            format!("{truncated}\u{2026}")
-        } else {
-            n.name.clone()
-        };
-
-        let label_alpha = if is_selected || is_hovered || is_active {
-            (attrs.opacity as f64).clamp(0.0, 1.0)
-        } else {
-            (attrs.opacity as f64 * 0.9).clamp(0.0, 1.0)
-        };
-        let font_size = if is_active {
-            13.0
-        } else if is_selected || is_hovered {
-            12.0
-        } else if n.hop == 1 {
-            11.0
-        } else {
-            10.0
-        };
-        ctx.set_fill_style_str(&format!("rgba(226,232,240,{label_alpha:.3})"));
-        ctx.set_font(&format!("{font_size}px sans-serif"));
-        ctx.set_text_align("center");
-        ctx.set_text_baseline("top");
-        let _ = ctx.fill_text(&label, cx64, cy64 + r + 5.0);
     }
 }
 
@@ -567,17 +429,6 @@ fn now_ms_in_seconds() -> f64 {
         .and_then(|w| w.performance())
         .map(|p| p.now() / 1000.0)
         .unwrap_or(0.0)
-}
-
-/// Build a CSS rgba() string with saturation attenuated by `sat_mul` and given opacity.
-/// Approach: lerp each channel toward its luminance (desaturate) then apply opacity.
-fn scale_color_saturation(c: &Color, sat_mul: f32, opacity: f32) -> String {
-    // Perceived luminance weights (BT.601)
-    let lum = 0.299 * c.r as f32 + 0.587 * c.g as f32 + 0.114 * c.b as f32;
-    let r = (lum + (c.r as f32 - lum) * sat_mul).clamp(0.0, 255.0) as u8;
-    let g = (lum + (c.g as f32 - lum) * sat_mul).clamp(0.0, 255.0) as u8;
-    let b = (lum + (c.b as f32 - lum) * sat_mul).clamp(0.0, 255.0) as u8;
-    format!("rgba({r},{g},{b},{opacity:.3})")
 }
 
 /// Stroke a rounded rectangle path onto `ctx`.
