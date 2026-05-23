@@ -60,7 +60,11 @@ pub struct WizardSession {
     id: String,
     status: Arc<RwLock<WizardStatus>>,
     current_step: Arc<RwLock<Option<WizardStep>>>,
-    step_tx: mpsc::Sender<WizardStep>,
+    // step_tx is intentionally NOT stored here: only the prompter (inside the spawned
+    // flow task) holds a sender.  When the flow task completes the prompter is dropped,
+    // the last sender goes away, the channel closes, and `next()` receives None which
+    // lets it surface the Done/Error result.  Storing step_tx here would keep the
+    // channel alive indefinitely and cause `next()` to block forever.
     step_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<WizardStep>>>,
     answers: Arc<RwLock<HashMap<String, PendingAnswer>>>,
     error: Arc<RwLock<Option<String>>>,
@@ -79,24 +83,25 @@ impl WizardSession {
 
         let finish_data = Arc::new(RwLock::new(None));
 
+        let answers: Arc<RwLock<HashMap<String, PendingAnswer>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+
+        // Create prompter for the flow.
+        // step_tx is moved into the prompter; WizardSession does NOT keep a copy.
+        // This ensures the channel closes when the flow task ends (prompter drop),
+        // which lets session.next()'s rx.recv() return None and surface Done/Error.
+        let prompter = RpcPrompter::new(step_tx, answers.clone(), finish_data.clone());
+
         let session = Self {
             id: id.clone(),
             status: Arc::new(RwLock::new(WizardStatus::Running)),
             current_step: Arc::new(RwLock::new(None)),
-            step_tx,
             step_rx: Arc::new(tokio::sync::Mutex::new(step_rx)),
-            answers: Arc::new(RwLock::new(HashMap::new())),
+            answers,
             error: Arc::new(RwLock::new(None)),
             finish_data: finish_data.clone(),
             cancel_tx: Some(cancel_tx),
         };
-
-        // Create prompter for the flow
-        let prompter = RpcPrompter::new(
-            session.step_tx.clone(),
-            session.answers.clone(),
-            finish_data.clone(),
-        );
 
         // Spawn the flow runner
         let status = session.status.clone();

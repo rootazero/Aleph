@@ -681,6 +681,43 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     );
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
 
+    // Wizard session manager — constructs real PairingFlow + OnboardingFlow factory
+    // and replaces the phase-1 service_unavailable stubs installed in HandlerRegistry::new.
+    {
+        let device_name: String = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "Aleph Desktop".to_string());
+
+        let pairing_mgr = auth_bundle.pairing_manager.clone();
+        let security_store = auth_bundle.security_store.clone();
+        let device_store = auth_bundle.device_store.clone();
+        let token_manager = auth_bundle.token_manager.clone();
+
+        let flow_factory: alephcore::gateway::handlers::wizard::WizardFlowFactory =
+            Arc::new(move |wizard_type: &str, _initial: Option<serde_json::Value>| {
+                match wizard_type {
+                    "pairing" => Some(Box::new(alephcore::wizard::PairingFlow::new(
+                        device_name.clone(),
+                        pairing_mgr.clone(),
+                        security_store.clone(),
+                        device_store.clone(),
+                        token_manager.clone(),
+                    )) as Box<dyn alephcore::wizard::WizardFlow>),
+                    "onboarding" => Some(
+                        Box::new(alephcore::wizard::OnboardingFlow::new())
+                            as Box<dyn alephcore::wizard::WizardFlow>,
+                    ),
+                    _ => None,
+                }
+            });
+
+        let wizard_manager = Arc::new(
+            alephcore::gateway::handlers::wizard::WizardSessionManager::new(flow_factory),
+        );
+        server.handlers_mut().install_wizard_handlers(wizard_manager);
+    }
+
     // Safety net: detect plaintext secrets in config (manual edits or LLM writes)
     // and relocate them to the encrypted vault before runtime hydration runs.
     // Strips api_key from in-memory config and persists the cleaned config.

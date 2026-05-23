@@ -154,11 +154,20 @@ const KEYRING_SERVICE: &str = "aleph-gateway";
 const KEYRING_USER: &str = "desktop-shell";
 
 fn persist_token_to_keyring(token: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-        .map_err(|e| format!("entry: {e}"))?;
-    entry
-        .set_password(token)
-        .map_err(|e| format!("set_password: {e}"))
+    // In test builds, skip the keyring to avoid UI prompts or hangs.
+    #[cfg(test)]
+    let _ = token;
+    #[cfg(test)]
+    return Ok(());
+
+    #[cfg(not(test))]
+    {
+        let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+            .map_err(|e| format!("entry: {e}"))?;
+        entry
+            .set_password(token)
+            .map_err(|e| format!("set_password: {e}"))
+    }
 }
 
 #[cfg(test)]

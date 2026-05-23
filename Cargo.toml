@@ -215,6 +215,7 @@ dashmap = "5.5"
 reqwest-eventsource = "0.6"
 sysinfo = "0.33"
 semver = "1"
+hostname = { workspace = true }
 
 # Certificate parsing
 pem = "3.0"

@@ -33,6 +33,9 @@ use super::register_channel_handlers;
 /// Return type for initialize_auth: all security objects needed by the caller.
 pub(in crate::commands::start) struct AuthBundle {
     pub device_store: Arc<DeviceStore>,
+    pub security_store: Arc<alephcore::gateway::security::SecurityStore>,
+    pub pairing_manager: Arc<alephcore::gateway::security::PairingManager>,
+    pub token_manager: Arc<alephcore::gateway::security::TokenManager>,
     pub auth_ctx: Arc<auth_handlers::AuthContext>,
     pub mdns_broadcaster: Option<alephcore::gateway::MdnsBroadcaster>,
     pub invitation_manager: Arc<alephcore::gateway::security::InvitationManager>,
@@ -88,6 +91,11 @@ pub(in crate::commands::start) fn initialize_auth(
 
     let token_manager = Arc::new(TokenManager::new(security_store.clone()));
     let pairing_manager = Arc::new(PairingManager::new(security_store.clone()));
+
+    // Clone before moving into AuthContext so AuthBundle can expose them directly.
+    let security_store_out = security_store.clone();
+    let pairing_manager_out = pairing_manager.clone();
+    let token_manager_out = token_manager.clone();
     let invitation_manager = Arc::new(alephcore::gateway::security::InvitationManager::new());
     let guest_session_manager = Arc::new(alephcore::gateway::security::GuestSessionManager::new());
 
@@ -174,6 +182,9 @@ pub(in crate::commands::start) fn initialize_auth(
 
     AuthBundle {
         device_store,
+        security_store: security_store_out,
+        pairing_manager: pairing_manager_out,
+        token_manager: token_manager_out,
         auth_ctx,
         mdns_broadcaster,
         invitation_manager,
