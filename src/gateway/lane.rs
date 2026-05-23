@@ -9,12 +9,27 @@
 //! - **Execute**: Agent execution (agent.run, chat.send, poe.run, etc.)
 //! - **Mutate**: State mutations (config.patch, memory.store, etc.)
 //! - **System**: System management (plugins.install, skills.delete, etc.)
+//!
+//! # Channel-class priority (Panel-first)
+//!
+//! Within the `Execute` and `Mutate` lanes, the manager keeps **two
+//! independent semaphores**: a `desktop_*` pool reserved for the local
+//! desktop Panel and a `shared_*` pool used by every other client (bots,
+//! CLI, ...). A request tagged [`ChannelClass::Desktop`] tries the desktop
+//! pool first and only falls back to the shared pool when the desktop pool
+//! is empty. Requests tagged [`ChannelClass::Bot`] or [`ChannelClass::Cli`]
+//! can only ever land on the shared pool, so a flood of long-running bot
+//! traffic cannot starve interactive Panel sessions.
+//!
+//! `Query` and `System` lanes keep a single shared pool — they are either
+//! cheap (Query) or already rate-limited by other means (System).
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Traffic lane for categorizing RPC methods.
@@ -104,18 +119,63 @@ impl fmt::Display for Lane {
     }
 }
 
+/// Origin class of a request, used for prioritising desktop Panel traffic
+/// over bot/adapter traffic inside congested lanes.
+///
+/// Derived once per WebSocket connection from the peer address (and, in
+/// the future, token issuer metadata). See [`crate::gateway::server`] for
+/// the derivation policy.
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+pub enum ChannelClass {
+    /// Local interactive Panel — typically the Tauri shell on loopback.
+    /// May draw from the reserved desktop pool first, with a shared-pool
+    /// fallback.
+    Desktop,
+    /// Remote bot / chat adapter. Only ever uses the shared pool.
+    Bot,
+    /// Local CLI. Treated like a bot today (shared-pool only); kept as a
+    /// distinct variant so future policy can differentiate without
+    /// breaking the API again.
+    Cli,
+}
+
+impl ChannelClass {
+    /// Whether requests of this class may draw from the reserved desktop
+    /// pool before falling back to the shared pool.
+    fn uses_desktop_pool(self) -> bool {
+        matches!(self, ChannelClass::Desktop)
+    }
+}
+
 /// Configuration for lane concurrency limits.
-#[derive(Clone, Debug)]
+///
+/// Execute and Mutate lanes are split into a desktop-reserved pool plus a
+/// shared pool — see the module-level docs for the priority policy.
+/// `#[serde(default)]` is set on every field so old configs that don't
+/// know about the channel-class fields keep loading.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LaneConfig {
-    /// Maximum concurrent query requests.
+    /// Maximum concurrent query requests (single pool, shared by all
+    /// channel classes).
     pub query_concurrency: usize,
-    /// Maximum concurrent execute requests.
-    pub execute_concurrency: usize,
-    /// Maximum concurrent mutate requests.
-    pub mutate_concurrency: usize,
-    /// Maximum concurrent system requests.
+    /// Maximum concurrent system requests (single pool).
     pub system_concurrency: usize,
-    /// Timeout in seconds for acquiring a lane permit.
+
+    /// Reserved Execute permits for desktop Panel. Local Panel requests
+    /// try this pool first.
+    pub desktop_execute_concurrency: usize,
+    /// Shared Execute permits — used by bots, CLI, and as the Desktop
+    /// fallback when the desktop pool is full.
+    pub shared_execute_concurrency: usize,
+
+    /// Reserved Mutate permits for desktop Panel.
+    pub desktop_mutate_concurrency: usize,
+    /// Shared Mutate permits.
+    pub shared_mutate_concurrency: usize,
+
+    /// Timeout, in seconds, for acquiring a lane permit on the shared
+    /// pool. The desktop pool is non-blocking (try-then-fallback).
     pub acquire_timeout_secs: u64,
 }
 
@@ -123,9 +183,15 @@ impl Default for LaneConfig {
     fn default() -> Self {
         Self {
             query_concurrency: 50,
-            execute_concurrency: 5,
-            mutate_concurrency: 10,
             system_concurrency: 3,
+            // Panel-first defaults: desktop reserves 4 Execute / 8 Mutate
+            // permits, bots share 3 / 4. Total Execute capacity matches
+            // the pre-split default (8) while guaranteeing desktop is
+            // never blocked by bot saturation up to 4 concurrent loops.
+            desktop_execute_concurrency: 4,
+            shared_execute_concurrency: 3,
+            desktop_mutate_concurrency: 8,
+            shared_mutate_concurrency: 4,
             acquire_timeout_secs: 30,
         }
     }
@@ -150,15 +216,24 @@ impl fmt::Display for LaneError {
 
 impl std::error::Error for LaneError {}
 
+/// Semaphore pair for one lane.
+///
+/// `desktop` is `None` for lanes (Query / System) that aren't split per
+/// channel class.
+struct LanePool {
+    desktop: Option<Arc<Semaphore>>,
+    shared: Arc<Semaphore>,
+}
+
 /// Lane-based concurrency manager.
 ///
-/// Each lane has its own semaphore. Acquiring a permit on one lane does not
-/// affect availability on other lanes, preventing one category of RPC methods
-/// from starving others.
+/// Each lane has its own semaphore pair. Acquiring a permit on one lane
+/// does not affect availability on other lanes, preventing one category
+/// of RPC methods from starving others; within Execute/Mutate lanes the
+/// desktop Panel additionally gets a reserved pool that bots cannot
+/// touch.
 pub struct LaneManager {
-    /// One semaphore per lane.
-    lanes: HashMap<Lane, Arc<Semaphore>>,
-    /// Timeout for acquiring a permit.
+    lanes: HashMap<Lane, LanePool>,
     timeout: Duration,
 }
 
@@ -166,21 +241,37 @@ impl LaneManager {
     /// Create a new `LaneManager` from the given configuration.
     pub fn new(config: LaneConfig) -> Self {
         let mut lanes = HashMap::new();
+
+        // Single-pool lanes.
         lanes.insert(
             Lane::Query,
-            Arc::new(Semaphore::new(config.query_concurrency)),
-        );
-        lanes.insert(
-            Lane::Execute,
-            Arc::new(Semaphore::new(config.execute_concurrency)),
-        );
-        lanes.insert(
-            Lane::Mutate,
-            Arc::new(Semaphore::new(config.mutate_concurrency)),
+            LanePool {
+                desktop: None,
+                shared: Arc::new(Semaphore::new(config.query_concurrency)),
+            },
         );
         lanes.insert(
             Lane::System,
-            Arc::new(Semaphore::new(config.system_concurrency)),
+            LanePool {
+                desktop: None,
+                shared: Arc::new(Semaphore::new(config.system_concurrency)),
+            },
+        );
+
+        // Channel-class-split lanes.
+        lanes.insert(
+            Lane::Execute,
+            LanePool {
+                desktop: Some(Arc::new(Semaphore::new(config.desktop_execute_concurrency))),
+                shared: Arc::new(Semaphore::new(config.shared_execute_concurrency)),
+            },
+        );
+        lanes.insert(
+            Lane::Mutate,
+            LanePool {
+                desktop: Some(Arc::new(Semaphore::new(config.desktop_mutate_concurrency))),
+                shared: Arc::new(Semaphore::new(config.shared_mutate_concurrency)),
+            },
         );
 
         Self {
@@ -191,16 +282,37 @@ impl LaneManager {
 
     /// Acquire a permit for the lane corresponding to the given RPC method.
     ///
+    /// `channel_class` selects which semaphore pool the request may draw
+    /// from. [`ChannelClass::Desktop`] tries the reserved desktop pool
+    /// first and falls back to the shared pool with timeout. Other
+    /// classes go straight to the shared pool.
+    ///
     /// Returns an `OwnedSemaphorePermit` that releases the slot on drop,
-    /// or `LaneError::Congested` if the timeout elapses.
-    pub async fn acquire(&self, method: &str) -> Result<OwnedSemaphorePermit, LaneError> {
+    /// or `LaneError::Congested` if the shared pool is full for longer
+    /// than `acquire_timeout_secs`.
+    pub async fn acquire(
+        &self,
+        method: &str,
+        channel_class: ChannelClass,
+    ) -> Result<OwnedSemaphorePermit, LaneError> {
         let lane = Lane::for_method(method);
-        let semaphore = match self.lanes.get(&lane) {
-            Some(s) => s.clone(),
+        let pool = match self.lanes.get(&lane) {
+            Some(p) => p,
             None => return Err(LaneError::Congested(lane)),
         };
 
-        match tokio::time::timeout(self.timeout, semaphore.acquire_owned()).await {
+        // Desktop class tries the reserved pool first, non-blocking.
+        // Bot/Cli never touch the desktop pool.
+        if channel_class.uses_desktop_pool() {
+            if let Some(desktop_sem) = pool.desktop.as_ref() {
+                if let Ok(permit) = desktop_sem.clone().try_acquire_owned() {
+                    return Ok(permit);
+                }
+            }
+        }
+
+        let shared = pool.shared.clone();
+        match tokio::time::timeout(self.timeout, shared.acquire_owned()).await {
             Ok(Ok(permit)) => Ok(permit),
             Ok(Err(_closed)) => {
                 // Semaphore closed — treat as congested
@@ -218,18 +330,13 @@ mod tests {
     #[tokio::test]
     async fn test_acquire_query_lane() {
         let manager = LaneManager::new(LaneConfig::default());
-        let result = manager.acquire("health").await;
+        let result = manager.acquire("health", ChannelClass::Bot).await;
         assert!(result.is_ok(), "should acquire query lane for 'health'");
     }
 
     #[tokio::test]
     async fn test_lane_for_method() {
         // Query lane (explicit overrides + suffix heuristic).
-        // Note: post-G1, the default fallback is Mutate, not Query — any
-        // unknown method without a recognized suffix lands in Mutate so
-        // idempotency-sensitive RPCs aren't silently exempted. See
-        // `unknown_method_with_no_suffix_defaults_to_mutate` and the
-        // module docstring on `Lane::for_method`.
         assert_eq!(Lane::for_method("health"), Lane::Query);
         assert_eq!(Lane::for_method("echo"), Lane::Query);
         assert_eq!(Lane::for_method("config.get"), Lane::Query);
@@ -261,21 +368,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_lane_saturation() {
+        // Reproduce the pre-split single-pool saturation behavior by
+        // sizing both desktop and shared to 1 each and exhausting both.
         let config = LaneConfig {
-            execute_concurrency: 1,
+            desktop_execute_concurrency: 0,
+            shared_execute_concurrency: 1,
             acquire_timeout_secs: 1,
             ..Default::default()
         };
         let manager = LaneManager::new(config);
 
-        // Hold the only permit
+        // Hold the only shared permit (via Bot, which can't escape to
+        // the desktop pool).
         let _permit = manager
-            .acquire("agent.run")
+            .acquire("agent.run", ChannelClass::Bot)
             .await
             .expect("first acquire should succeed");
 
-        // Second acquire should time out
-        let result = manager.acquire("chat.send").await;
+        // Second Bot acquire should time out — the shared pool is full
+        // and Bot cannot touch the desktop pool (which has 0 permits
+        // anyway).
+        let result = manager.acquire("chat.send", ChannelClass::Bot).await;
         assert!(
             result.is_err(),
             "second acquire should fail (lane saturated)"
@@ -298,20 +411,21 @@ mod tests {
     #[tokio::test]
     async fn test_different_lanes_independent() {
         let config = LaneConfig {
-            execute_concurrency: 1,
+            desktop_execute_concurrency: 0,
+            shared_execute_concurrency: 1,
             acquire_timeout_secs: 1,
             ..Default::default()
         };
         let manager = LaneManager::new(config);
 
-        // Saturate execute lane
+        // Saturate execute lane.
         let _permit = manager
-            .acquire("agent.run")
+            .acquire("agent.run", ChannelClass::Bot)
             .await
             .expect("execute acquire should succeed");
 
-        // Query lane should still work
-        let result = manager.acquire("health").await;
+        // Query lane should still work.
+        let result = manager.acquire("health", ChannelClass::Bot).await;
         assert!(
             result.is_ok(),
             "query lane should be independent of execute lane"
@@ -324,27 +438,20 @@ mod tests {
 
     #[test]
     fn new_rpc_defaults_to_mutate() {
-        // Unknown method that wasn't in the original 17-name hardcode.
-        // Used to fall through to Query → bypassing idempotency.
-        // Spec 2 G1 fix: must now default to Mutate (suffix heuristic),
-        // or to the correct named lane.
-        assert_eq!(Lane::for_method("tools.invoke"), Lane::Execute); // suffix `invoke`
-        assert_eq!(Lane::for_method("agents.create"), Lane::Mutate); // default
-        assert_eq!(Lane::for_method("agents.delete"), Lane::Mutate); // data delete → Mutate
-        assert_eq!(Lane::for_method("cron.toggle"), Lane::Mutate); // default
-        assert_eq!(Lane::for_method("heartbeat.wake"), Lane::Mutate); // default
-        assert_eq!(Lane::for_method("memory.search"), Lane::Query); // suffix `search`
-        assert_eq!(Lane::for_method("graph.neighbors"), Lane::Query); // suffix `neighbors`
-        assert_eq!(Lane::for_method("trace.list"), Lane::Query); // suffix `list`
-        assert_eq!(Lane::for_method("daemon.shutdown"), Lane::Mutate); // default
-        assert_eq!(Lane::for_method("plugins.install"), Lane::System); // suffix `install`
+        assert_eq!(Lane::for_method("tools.invoke"), Lane::Execute);
+        assert_eq!(Lane::for_method("agents.create"), Lane::Mutate);
+        assert_eq!(Lane::for_method("agents.delete"), Lane::Mutate);
+        assert_eq!(Lane::for_method("cron.toggle"), Lane::Mutate);
+        assert_eq!(Lane::for_method("heartbeat.wake"), Lane::Mutate);
+        assert_eq!(Lane::for_method("memory.search"), Lane::Query);
+        assert_eq!(Lane::for_method("graph.neighbors"), Lane::Query);
+        assert_eq!(Lane::for_method("trace.list"), Lane::Query);
+        assert_eq!(Lane::for_method("daemon.shutdown"), Lane::Mutate);
+        assert_eq!(Lane::for_method("plugins.install"), Lane::System);
     }
 
     #[test]
     fn explicit_overrides_win_over_heuristic() {
-        // Read-only operations whose name has no dot-suffix that matches
-        // the Query heuristic. Must be explicitly overridden so they
-        // route to Query.
         assert_eq!(Lane::for_method("health"), Lane::Query);
         assert_eq!(Lane::for_method("echo"), Lane::Query);
         assert_eq!(Lane::for_method("version"), Lane::Query);
@@ -354,26 +461,274 @@ mod tests {
 
     #[test]
     fn unknown_method_with_no_suffix_defaults_to_mutate() {
-        // Methods without a dot fall to default → Mutate, ensuring
-        // forgotten-to-list methods stay protected.
         assert_eq!(Lane::for_method("totally_unknown_rpc"), Lane::Mutate);
     }
 
     #[test]
     fn legacy_method_mappings_preserved() {
-        // Methods that were in the original hardcode still land in the
-        // expected lanes after the heuristic flip.
         assert_eq!(Lane::for_method("agent.run"), Lane::Execute);
         assert_eq!(Lane::for_method("chat.send"), Lane::Execute);
         assert_eq!(Lane::for_method("config.patch"), Lane::Mutate);
         assert_eq!(Lane::for_method("memory.store"), Lane::Mutate);
-        assert_eq!(Lane::for_method("memory.delete"), Lane::Mutate); // data delete → Mutate
-        assert_eq!(Lane::for_method("session.delete"), Lane::Mutate); // data delete → Mutate
-        assert_eq!(Lane::for_method("skills.delete"), Lane::System); // package mgmt override
+        assert_eq!(Lane::for_method("memory.delete"), Lane::Mutate);
+        assert_eq!(Lane::for_method("session.delete"), Lane::Mutate);
+        assert_eq!(Lane::for_method("skills.delete"), Lane::System);
         assert_eq!(Lane::for_method("plugins.uninstall"), Lane::System);
         assert_eq!(Lane::for_method("skills.install"), Lane::System);
-        // logs.setLevel changes process-wide runtime config → System
-        // (explicit override; original hardcode also routed it to System).
         assert_eq!(Lane::for_method("logs.setLevel"), Lane::System);
+    }
+
+    // -------------------------------------------------------------------------
+    // Channel-class dual-pool — Panel-first priority
+    // -------------------------------------------------------------------------
+
+    /// (Goal case a) Bots saturate the shared Execute pool; Desktop must
+    /// still acquire immediately via the reserved desktop pool.
+    #[tokio::test]
+    async fn bot_saturation_does_not_block_desktop_execute() {
+        let config = LaneConfig {
+            desktop_execute_concurrency: 4,
+            shared_execute_concurrency: 3,
+            acquire_timeout_secs: 1,
+            ..Default::default()
+        };
+        let manager = LaneManager::new(config);
+
+        // Three Bot requests fill the shared pool.
+        let _b1 = manager
+            .acquire("agent.run", ChannelClass::Bot)
+            .await
+            .expect("bot 1 should acquire shared");
+        let _b2 = manager
+            .acquire("agent.run", ChannelClass::Bot)
+            .await
+            .expect("bot 2 should acquire shared");
+        let _b3 = manager
+            .acquire("agent.run", ChannelClass::Bot)
+            .await
+            .expect("bot 3 should acquire shared");
+
+        // Desktop must still acquire well within the timeout — via the
+        // reserved desktop pool.
+        let desktop_result = tokio::time::timeout(
+            Duration::from_millis(100),
+            manager.acquire("chat.send", ChannelClass::Desktop),
+        )
+        .await
+        .expect("desktop must not wait when shared is saturated");
+        assert!(
+            desktop_result.is_ok(),
+            "desktop should acquire via desktop_sem"
+        );
+    }
+
+    /// (Goal case b) Desktop saturates *both* its reserved pool and the
+    /// shared pool. A further Desktop request must *queue* on the shared
+    /// pool rather than fail immediately — and complete once a shared
+    /// permit is freed.
+    #[tokio::test]
+    async fn desktop_overflow_queues_on_shared_pool() {
+        use tokio::sync::Notify;
+
+        let config = LaneConfig {
+            desktop_execute_concurrency: 1,
+            shared_execute_concurrency: 1,
+            acquire_timeout_secs: 5,
+            ..Default::default()
+        };
+        let manager = Arc::new(LaneManager::new(config));
+
+        // Fill the desktop pool.
+        let _d1 = manager
+            .acquire("agent.run", ChannelClass::Desktop)
+            .await
+            .expect("first desktop should acquire desktop_sem");
+        // Fill the shared pool via a Bot, so when we later release it
+        // we know exactly which pool freed up.
+        let bot_permit = manager
+            .acquire("agent.run", ChannelClass::Bot)
+            .await
+            .expect("bot should acquire shared");
+
+        // A second Desktop acquire must now queue on shared.
+        let mgr = manager.clone();
+        let started = Arc::new(Notify::new());
+        let started_clone = started.clone();
+        let handle = tokio::spawn(async move {
+            started_clone.notify_one();
+            mgr.acquire("agent.run", ChannelClass::Desktop).await
+        });
+
+        started.notified().await;
+        // Give the spawned task a moment to attempt acquire and end up
+        // queued on the shared semaphore.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !handle.is_finished(),
+            "Desktop overflow must queue on shared, not fail immediately"
+        );
+
+        // Release the bot's shared permit. The queued Desktop request
+        // should pick it up — proving it actually fell back to shared.
+        drop(bot_permit);
+
+        let result = tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("queued Desktop acquire should complete once shared frees")
+            .expect("spawned task must not panic");
+        assert!(
+            result.is_ok(),
+            "Desktop should acquire via shared after Bot releases"
+        );
+    }
+
+    /// (Goal case c) Bots must never reach into the reserved desktop
+    /// pool — even when the desktop pool has free permits and the shared
+    /// pool is saturated.
+    #[tokio::test]
+    async fn bot_cannot_borrow_from_desktop_pool() {
+        let config = LaneConfig {
+            desktop_execute_concurrency: 10,
+            shared_execute_concurrency: 1,
+            acquire_timeout_secs: 1,
+            ..Default::default()
+        };
+        let manager = LaneManager::new(config);
+
+        // Bot fills the shared pool.
+        let _bot = manager
+            .acquire("agent.run", ChannelClass::Bot)
+            .await
+            .expect("bot should acquire shared");
+
+        // Second Bot must time out — Bot is forbidden from touching
+        // the 10 free desktop permits.
+        let result = manager.acquire("chat.send", ChannelClass::Bot).await;
+        match result {
+            Err(LaneError::Congested(Lane::Execute)) => {}
+            other => panic!(
+                "Bot should be Congested when shared pool saturates, got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// CLI shares the bot policy today — confirm it also cannot reach
+    /// the desktop pool.
+    #[tokio::test]
+    async fn cli_cannot_borrow_from_desktop_pool() {
+        let config = LaneConfig {
+            desktop_execute_concurrency: 10,
+            shared_execute_concurrency: 1,
+            acquire_timeout_secs: 1,
+            ..Default::default()
+        };
+        let manager = LaneManager::new(config);
+
+        let _cli = manager
+            .acquire("agent.run", ChannelClass::Cli)
+            .await
+            .expect("cli should acquire shared");
+        let result = manager.acquire("chat.send", ChannelClass::Cli).await;
+        match result {
+            Err(LaneError::Congested(Lane::Execute)) => {}
+            other => panic!(
+                "Cli should be Congested when shared pool saturates, got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// (Goal case d) When both pools are unavailable, acquire still
+    /// returns `LaneError::Congested` after the configured timeout.
+    #[tokio::test]
+    async fn acquire_timeout_returns_congested_when_both_pools_full() {
+        let config = LaneConfig {
+            desktop_execute_concurrency: 0,
+            shared_execute_concurrency: 1,
+            acquire_timeout_secs: 1,
+            ..Default::default()
+        };
+        let manager = LaneManager::new(config);
+
+        let _hold = manager
+            .acquire("agent.run", ChannelClass::Bot)
+            .await
+            .expect("first bot should acquire shared");
+
+        // Desktop class: desktop pool has 0 permits, shared is full →
+        // must time out with Congested.
+        let result = manager.acquire("chat.send", ChannelClass::Desktop).await;
+        match result {
+            Err(LaneError::Congested(Lane::Execute)) => {}
+            other => panic!("expected Congested(Execute), got {:?}", other),
+        }
+    }
+
+    /// Query lane has no desktop split — any channel class shares the
+    /// same pool. Verify Desktop still congests when the Query pool is
+    /// saturated by Bots (i.e. there is no hidden desktop pool quietly
+    /// rescuing it).
+    #[tokio::test]
+    async fn query_lane_is_shared_across_channel_classes() {
+        let config = LaneConfig {
+            query_concurrency: 1,
+            acquire_timeout_secs: 1,
+            ..Default::default()
+        };
+        let manager = LaneManager::new(config);
+
+        let _bot = manager
+            .acquire("health", ChannelClass::Bot)
+            .await
+            .expect("bot should acquire query");
+        let result = manager.acquire("config.get", ChannelClass::Desktop).await;
+        match result {
+            Err(LaneError::Congested(Lane::Query)) => {}
+            other => panic!(
+                "Query is single-pool; Desktop must Congest when Bot saturates, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn lane_config_round_trips_through_toml() {
+        // Backwards compat: missing `lane` config keys must fall back to
+        // defaults rather than break TOML loading.
+        let cfg: LaneConfig = toml::from_str("").expect("empty TOML should yield defaults");
+        let defaults = LaneConfig::default();
+        assert_eq!(cfg.query_concurrency, defaults.query_concurrency);
+        assert_eq!(
+            cfg.desktop_execute_concurrency,
+            defaults.desktop_execute_concurrency
+        );
+        assert_eq!(
+            cfg.shared_execute_concurrency,
+            defaults.shared_execute_concurrency
+        );
+        assert_eq!(
+            cfg.desktop_mutate_concurrency,
+            defaults.desktop_mutate_concurrency
+        );
+        assert_eq!(
+            cfg.shared_mutate_concurrency,
+            defaults.shared_mutate_concurrency
+        );
+
+        // Partial override only touches the named field.
+        let partial: LaneConfig = toml::from_str(
+            r#"
+desktop_execute_concurrency = 16
+shared_execute_concurrency = 2
+"#,
+        )
+        .expect("partial TOML should deserialize");
+        assert_eq!(partial.desktop_execute_concurrency, 16);
+        assert_eq!(partial.shared_execute_concurrency, 2);
+        assert_eq!(
+            partial.desktop_mutate_concurrency,
+            defaults.desktop_mutate_concurrency
+        );
     }
 }

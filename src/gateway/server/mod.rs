@@ -116,6 +116,9 @@ pub struct GatewayConfig {
     pub auth_mode: AuthMode,
     /// Connection timeout in seconds
     pub timeout_secs: u64,
+    /// Lane concurrency / channel-class priority config. Populated by
+    /// the binary from the TOML `[gateway.lane]` block (or defaults).
+    pub lane: LaneConfig,
 }
 
 impl Default for GatewayConfig {
@@ -124,6 +127,7 @@ impl Default for GatewayConfig {
             max_connections: 1000,
             auth_mode: AuthMode::default(),
             timeout_secs: 300,
+            lane: LaneConfig::default(),
         }
     }
 }
@@ -269,6 +273,8 @@ impl GatewayServer {
             }
         };
 
+        let lane_config = config.lane.clone();
+
         Self {
             addr,
             config,
@@ -281,7 +287,7 @@ impl GatewayServer {
             presence: Arc::new(PresenceTracker::new()),
             state_versions: Arc::new(StateVersionTracker::new()),
             rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
-            lane_manager: Arc::new(LaneManager::new(LaneConfig::default())),
+            lane_manager: Arc::new(LaneManager::new(lane_config)),
             idempotency_guard: Arc::new(crate::gateway::idempotency::IdempotencyGuard::new(
                 std::time::Duration::from_secs(300), // 5 minute TTL
             )),

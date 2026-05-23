@@ -24,7 +24,7 @@ use crate::gateway::handlers::events::{
     handle_list as handle_events_list, handle_subscribe, handle_unsubscribe, SubscriptionManager,
 };
 use crate::gateway::handlers::HandlerRegistry;
-use crate::gateway::lane::LaneManager;
+use crate::gateway::lane::{ChannelClass, LaneManager};
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
 use crate::gateway::protocol::{
@@ -52,6 +52,19 @@ struct ConnectionContext {
     lane_manager: Arc<LaneManager>,
     idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
     event_scope_guard: Arc<EventScopeGuard>,
+    /// Channel-class for lane priority. Derived once per connection from
+    /// the peer address: loopback peers are classed as
+    /// [`ChannelClass::Desktop`] so the local Panel can draw from the
+    /// reserved desktop semaphore pool; everyone else is
+    /// [`ChannelClass::Bot`].
+    ///
+    /// Known limitation: today there is no first-class "token issuer"
+    /// metadata, so local bot adapters (Telegram/Slack daemons running
+    /// on the same host as the gateway) also connect via loopback and
+    /// will inherit Desktop priority. This is acknowledged by the
+    /// Panel-first goal as an accepted trade-off until token issuance
+    /// carries an explicit issuer marker.
+    channel_class: ChannelClass,
 }
 
 /// axum handler: upgrade HTTP connection to WebSocket at `/ws`
@@ -71,6 +84,17 @@ pub(super) async fn ws_upgrade_handler(
             .into_response();
     }
 
+    // Derive the channel class for Lane priority. Loopback connections
+    // (Tauri Panel, local CLI…) are treated as Desktop and get first dibs
+    // on the reserved desktop semaphore pool; everyone else falls back to
+    // the shared pool. See `ConnectionContext::channel_class` for the
+    // accepted trade-off.
+    let channel_class = if peer_addr.ip().is_loopback() {
+        ChannelClass::Desktop
+    } else {
+        ChannelClass::Bot
+    };
+
     ws.on_upgrade(move |socket| async move {
         let ctx = ConnectionContext {
             handlers: state.handlers.clone(),
@@ -89,6 +113,7 @@ pub(super) async fn ws_upgrade_handler(
             lane_manager: state.lane_manager.clone(),
             idempotency_guard: state.idempotency_guard.clone(),
             event_scope_guard: state.event_scope_guard.clone(),
+            channel_class,
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -367,10 +392,10 @@ async fn handle_connection(
                                         let lane = crate::gateway::lane::Lane::for_method(&req.method);
 
                                         // Helper closure: standard lane dispatch (no idempotency)
-                                         let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>| async move {
-                                             let lane_result = lm.acquire(&method).await;
-                                             match lane_result {
-                                                 Ok(_permit) => process_request(&text, &mc).await,
+                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass| async move {
+                                            let lane_result = lm.acquire(&method, class).await;
+                                            match lane_result {
+                                                Ok(_permit) => process_request(&text, &mc).await,
                                                 Err(_) => serde_json::to_string(&JsonRpcResponse::error(
                                                     req_id,
                                                     INTERNAL_ERROR,
@@ -414,7 +439,7 @@ async fn handle_connection(
                                                     }
                                                     AcquireResult::Proceed(slot) => {
                                                         // First request — slot auto-discards on panic (RAII)
-                                                        let lane_result = ctx.lane_manager.acquire(&req.method).await;
+                                                        let lane_result = ctx.lane_manager.acquire(&req.method, ctx.channel_class).await;
                                                         match lane_result {
                                                             Ok(_permit) => {
                                                                 let resp = process_request(&text, &ctx.middleware_chain).await;
@@ -446,11 +471,11 @@ async fn handle_connection(
                                                 }
                                             } else {
                                                 // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone()).await
+                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class).await
                                             }
                                         } else {
                                             // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone()).await
+                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class).await
                                         };
                                         // --- End idempotency + lane block ---
 

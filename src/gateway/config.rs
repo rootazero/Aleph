@@ -32,6 +32,7 @@ where
 }
 
 use super::agent_instance::AgentInstanceConfig;
+use super::lane::LaneConfig;
 use crate::config::PrivacyConfig;
 
 /// Root Gateway configuration
@@ -105,6 +106,11 @@ pub struct GatewayServerConfig {
     /// Authentication configuration
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Lane concurrency & channel-class priority configuration. Missing
+    /// keys fall back to [`LaneConfig::default`], so old TOML files
+    /// without a `[gateway.lane]` block keep loading.
+    #[serde(default)]
+    pub lane: LaneConfig,
 }
 
 impl Default for GatewayServerConfig {
@@ -116,6 +122,7 @@ impl Default for GatewayServerConfig {
             require_auth: false,
             protocol_version: 1,
             auth: AuthConfig::default(),
+            lane: LaneConfig::default(),
         }
     }
 }

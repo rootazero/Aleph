@@ -448,6 +448,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         max_connections: final_max_connections,
         auth_mode: full_config.gateway.auth.mode.clone(),
         timeout_secs: 300,
+        lane: full_config.gateway.lane.clone(),
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 
