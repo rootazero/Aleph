@@ -27,9 +27,11 @@
 
 mod consent;
 mod executor;
+mod user_settings;
 
 pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
 pub use executor::HookExecutor;
+pub use user_settings::load_user_hooks;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -166,11 +168,15 @@ pub struct HookResult {
     pub blocked: bool,
     /// Block reason (if blocked)
     pub block_reason: Option<String>,
-    /// Modified arguments (if any hook modified them)
-    pub modified_arguments: Option<String>,
-    /// Messages to inject into the conversation
+    /// Plain stdout lines (no prefix). Currently surfaced only via
+    /// [`HookResult::outputs`] — `additional_contexts` is the field that
+    /// actually reaches the LLM next turn. Kept for back-compat with
+    /// external inspectors.
     pub messages: Vec<String>,
-    /// Agents to invoke
+    /// Names of agents requested by `agent`-type hooks. Currently
+    /// informational only — wiring this list to actually spawn the named
+    /// subagent is a future enhancement (the SubagentTool registry is the
+    /// natural seam).
     pub agents_to_invoke: Vec<String>,
     /// Individual action results
     pub action_results: Vec<ActionResult>,
@@ -529,6 +535,7 @@ mod tests {
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
+            timeout_secs: None,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -540,8 +547,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.hooks_executed, 1);
-        assert_eq!(result.messages.len(), 1);
-        assert_eq!(result.messages[0], "Checking Write operation");
+        // Prompt hook output now lands in additional_contexts so it actually
+        // reaches the LLM as a system reminder for the next turn.
+        assert_eq!(result.additional_contexts.len(), 1);
+        assert_eq!(result.additional_contexts[0], "Checking Write operation");
     }
 
     #[tokio::test]
@@ -557,6 +566,7 @@ mod tests {
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
+            timeout_secs: None,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -584,6 +594,7 @@ mod tests {
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
+            timeout_secs: None,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -626,6 +637,7 @@ mod tests {
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/plugin"),
             handler: None,
+            timeout_secs: None,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -751,6 +763,7 @@ mod tests {
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
+            timeout_secs: None,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -778,6 +791,7 @@ mod tests {
             plugin_name: "test-plugin".to_string(),
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
+            timeout_secs: None,
         }];
 
         let executor = HookExecutor::new(hooks);
@@ -864,6 +878,7 @@ mod tests {
             plugin_name: "consent-test".to_string(),
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
+            timeout_secs: None,
         }
     }
 
@@ -949,6 +964,7 @@ mod tests {
             plugin_name: "phase3-test".to_string(),
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
+            timeout_secs: None,
         }
     }
 

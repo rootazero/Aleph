@@ -24,6 +24,31 @@ use crate::tools::service::{
     to_metadata_form, ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
 };
 
+/// Wrap a tool result `Value` with `<system-reminder>` blocks for each
+/// `context:` line emitted by hooks. Strings are prefixed in-place; other
+/// values are stringified so the LLM-visible payload stays uniform.
+///
+/// This is the seam that makes Aleph's `context:` prefix protocol actually
+/// reach the model: the contexts are appended to the tool-result text the
+/// LLM consumes on its next turn. Without this wiring, `additional_contexts`
+/// would be a silent no-op (a historical bug).
+fn wrap_value_with_hook_contexts(value: Value, contexts: &[String]) -> Value {
+    if contexts.is_empty() {
+        return value;
+    }
+    let reminders = contexts
+        .iter()
+        .map(|c| format!("<system-reminder>\n{}\n</system-reminder>", c.trim()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = match value {
+        Value::String(s) => format!("{reminders}\n\n{s}"),
+        Value::Null => reminders,
+        other => format!("{reminders}\n\n{other}"),
+    };
+    Value::String(text)
+}
+
 // =============================================================================
 // ToolHookDecorator trait
 // =============================================================================
@@ -487,6 +512,29 @@ impl ScopedToolService {
             match &self.approval_requester {
                 Some(requester) => {
                     let reason = format!("Tool `{name}` requires your confirmation to run.");
+                    // Fire PermissionRequest + Notification (best-effort,
+                    // observer-only) so user-facing channels can pop a
+                    // toast / send an email / etc. without blocking the
+                    // approval path itself.
+                    crate::extension::hooks::fire_global_observer(
+                        crate::extension::HookEvent::PermissionRequest,
+                        &self.hook_session_id,
+                        vec![
+                            ("TOOL_NAME", name.to_string()),
+                            ("REASON", reason.clone()),
+                        ],
+                    )
+                    .await;
+                    crate::extension::hooks::fire_global_observer(
+                        crate::extension::HookEvent::Notification,
+                        &self.hook_session_id,
+                        vec![
+                            ("KIND", "permission_request".to_string()),
+                            ("TOOL_NAME", name.to_string()),
+                            ("MESSAGE", reason.clone()),
+                        ],
+                    )
+                    .await;
                     let outcome = requester.request_approval(name, &reason).await;
                     if outcome != ApprovalOutcome::Approved {
                         return Err(ToolError::Execution {
@@ -520,18 +568,20 @@ impl ScopedToolService {
         // is wired or when no hooks match the event. Runs BEFORE routing so a
         // blocked call never reaches the retry pipeline.
         let started = std::time::Instant::now();
-        let effective_input = match self.run_before_tool_hooks(name, input.clone()).await {
-            Ok(maybe_new_input) => maybe_new_input,
-            Err(err) => {
-                let duration_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-                let rejection: Result<ToolOutput, ToolError> = Err(err);
-                if let Some(ref hook) = self.hook_decorator {
-                    hook.after_execute(name, &rejection);
-                    hook.after_execute_with_duration(name, &rejection, duration_ms);
+        let (effective_input, pre_hook_contexts) =
+            match self.run_before_tool_hooks(name, input.clone()).await {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    let duration_ms: u64 =
+                        started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+                    let rejection: Result<ToolOutput, ToolError> = Err(err);
+                    if let Some(ref hook) = self.hook_decorator {
+                        hook.after_execute(name, &rejection);
+                        hook.after_execute_with_duration(name, &rejection, duration_ms);
+                    }
+                    return rejection;
                 }
-                return rejection;
-            }
-        };
+            };
 
         // Route to subagent tool if name matches; otherwise route into the
         // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize
@@ -597,7 +647,9 @@ impl ScopedToolService {
         // Extension `AfterToolCall` / `AfterToolCallFailure` hooks. Observers
         // fire in parallel; Interceptors run sequentially and may rewrite the
         // visible tool output via `update_output:` on the success path.
-        self.run_after_tool_hooks(name, &effective_input, &mut result)
+        // `pre_hook_contexts` from BeforeToolCall are merged in here so they
+        // ride along on the same tool result the LLM sees next turn.
+        self.run_after_tool_hooks(name, &effective_input, &mut result, pre_hook_contexts)
             .await;
 
         let duration_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
@@ -612,12 +664,17 @@ impl ScopedToolService {
     }
 
     /// Fire `BeforeToolCall` interceptors. Returns the (possibly rewritten)
-    /// input on allow, or a `ToolError` when a hook blocks / denies the call
-    /// or when an `Ask` decision is not approved by the user.
-    async fn run_before_tool_hooks(&self, name: &str, input: Value) -> Result<Value, ToolError> {
+    /// input + any `context:` lines the interceptors emitted (to be wrapped
+    /// into the tool result), or a `ToolError` when a hook blocks / denies
+    /// the call or when an `Ask` decision is not approved by the user.
+    async fn run_before_tool_hooks(
+        &self,
+        name: &str,
+        input: Value,
+    ) -> Result<(Value, Vec<String>), ToolError> {
         let executor = match self.hook_executor.as_ref() {
             Some(e) if e.hook_count() > 0 => e.clone(),
-            _ => return Ok(input),
+            _ => return Ok((input, Vec::new())),
         };
 
         let ctx = self.build_hook_context(name, &input, None, None);
@@ -654,6 +711,27 @@ impl ScopedToolService {
         if let Some(PermissionDecision::Ask { reason }) = hook_result.permission_decision {
             match &self.approval_requester {
                 Some(requester) => {
+                    // Mirror confirm_tools: fire PermissionRequest +
+                    // Notification observers for user-attention plumbing.
+                    crate::extension::hooks::fire_global_observer(
+                        crate::extension::HookEvent::PermissionRequest,
+                        &self.hook_session_id,
+                        vec![
+                            ("TOOL_NAME", name.to_string()),
+                            ("REASON", reason.clone()),
+                        ],
+                    )
+                    .await;
+                    crate::extension::hooks::fire_global_observer(
+                        crate::extension::HookEvent::Notification,
+                        &self.hook_session_id,
+                        vec![
+                            ("KIND", "permission_request".to_string()),
+                            ("TOOL_NAME", name.to_string()),
+                            ("MESSAGE", reason.clone()),
+                        ],
+                    )
+                    .await;
                     let outcome = requester.request_approval(name, &reason).await;
                     if outcome != ApprovalOutcome::Approved {
                         return Err(ToolError::Execution {
@@ -677,22 +755,40 @@ impl ScopedToolService {
             }
         }
 
-        // Last-writer-wins rewrite of the tool input.
-        Ok(hook_result.updated_input.unwrap_or(input))
+        // Last-writer-wins rewrite of the tool input; surface
+        // `context:` lines so they actually reach the LLM next turn.
+        Ok((
+            hook_result.updated_input.unwrap_or(input),
+            hook_result.additional_contexts,
+        ))
     }
 
     /// Fire `AfterToolCall` / `AfterToolCallFailure` hooks. Observers run in
     /// parallel; Interceptors run sequentially and may override the visible
-    /// tool output via `update_output:` on the success path.
+    /// tool output via `update_output:` on the success path. Any
+    /// `additional_contexts` from BeforeToolCall (`pre_contexts`) plus those
+    /// emitted here are wrapped into the tool output as
+    /// `<system-reminder>` blocks so the LLM actually sees them next turn.
     async fn run_after_tool_hooks(
         &self,
         name: &str,
         input: &Value,
         result: &mut Result<ToolOutput, ToolError>,
+        pre_contexts: Vec<String>,
     ) {
         let executor = match self.hook_executor.as_ref() {
             Some(e) if e.hook_count() > 0 => e.clone(),
-            _ => return,
+            _ => {
+                if !pre_contexts.is_empty() {
+                    if let Ok(output) = result {
+                        output.value = wrap_value_with_hook_contexts(
+                            std::mem::take(&mut output.value),
+                            &pre_contexts,
+                        );
+                    }
+                }
+                return;
+            }
         };
 
         match result {
@@ -706,6 +802,7 @@ impl ScopedToolService {
                 // Then run Interceptor-kind hooks to harvest `update_output:`
                 // — the only post-execution mutation we honor. block / deny
                 // semantics make no sense post-hoc and are ignored.
+                let mut all_contexts = pre_contexts;
                 if let Ok((_ctx, hr)) = executor
                     .execute_interceptors(HookEvent::AfterToolCall, ctx)
                     .await
@@ -713,6 +810,13 @@ impl ScopedToolService {
                     if let Some(text) = hr.updated_output {
                         output.value = Value::String(text);
                     }
+                    all_contexts.extend(hr.additional_contexts);
+                }
+                if !all_contexts.is_empty() {
+                    output.value = wrap_value_with_hook_contexts(
+                        std::mem::take(&mut output.value),
+                        &all_contexts,
+                    );
                 }
             }
             Err(err) => {
@@ -724,7 +828,9 @@ impl ScopedToolService {
                 // Symmetry with the success path: let Interceptor-kind hooks
                 // fire too (e.g., for structured logging), but the failure
                 // path is read-only — `update_output:` is ignored because
-                // there is no `ToolOutput` to mutate.
+                // there is no `ToolOutput` to mutate. Pre-hook contexts are
+                // intentionally dropped on failure; they referenced an input
+                // that never produced a result for the LLM to attach them to.
                 let _ = executor
                     .execute_interceptors(HookEvent::AfterToolCallFailure, ctx)
                     .await;
@@ -1358,6 +1464,7 @@ mod tests {
             plugin_name: "test".to_string(),
             plugin_root: PathBuf::from("/tmp"),
             handler: None,
+            timeout_secs: None,
         }
     }
 
@@ -1435,6 +1542,34 @@ mod tests {
         let parsed = parse_tool_output(&output.value);
         assert_eq!(parsed["path"], json!("/etc/hosts"));
         assert_eq!(parsed["force"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn before_tool_hook_context_wraps_tool_output_for_llm() {
+        // BeforeToolCall hook emits `context:` lines. Historically these
+        // landed in `HookResult.additional_contexts` but nothing consumed
+        // them — the LLM never saw them. This test guards the wiring fix
+        // (scoped.rs wraps them as `<system-reminder>` blocks on the tool
+        // output value so they reach the model next turn).
+        let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+            HookEvent::BeforeToolCall,
+            HookKind::Interceptor,
+            "echo 'context: file auto-formatted'\necho 'context: lint passed'",
+        )]));
+        let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+            .with_hook_executor(executor, "test-session");
+
+        let output = svc
+            .execute("echo", json!({ "path": "/tmp/x" }))
+            .await
+            .expect("execute should succeed");
+        let s = output
+            .value
+            .as_str()
+            .expect("hook contexts wrap result as a string");
+        assert!(s.contains("<system-reminder>"), "missing reminder wrapper: {s}");
+        assert!(s.contains("file auto-formatted"), "missing context line: {s}");
+        assert!(s.contains("lint passed"), "missing context line: {s}");
     }
 
     #[tokio::test]

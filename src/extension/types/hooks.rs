@@ -94,6 +94,11 @@ pub enum HookEvent {
     /// When a permission is requested
     #[serde(alias = "PermissionRequest")]
     PermissionRequest,
+    /// When a user prompt is about to be sent to the LLM (after history
+    /// build, before the first think call). Lets hooks inject context or
+    /// abort the run before any provider call.
+    #[serde(alias = "UserPromptSubmit")]
+    UserPromptSubmit,
 }
 
 /// Hook execution kind - determines how the hook is executed
@@ -225,12 +230,26 @@ impl std::str::FromStr for PromptScope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum HookAction {
-    /// Execute a shell command
+    /// Execute a shell command. Event JSON is piped to stdin in addition to
+    /// being exposed via env vars; stdout is parsed using the line-prefix
+    /// protocol (see [`crate::extension::hooks::parse_command_output`]).
     Command { command: String },
-    /// Provide a prompt for LLM evaluation
+    /// Provide a prompt template. The resolved prompt is injected as
+    /// `additional_context` for the next LLM turn (no separate LLM call).
     Prompt { prompt: String },
-    /// Invoke an agent
+    /// Invoke a named subagent. (Lookup at the call site; no inline run.)
     Agent { agent: String },
+    /// POST the event JSON to a URL. The response body is parsed using the
+    /// same line-prefix protocol as Command, so HTTP hooks can return
+    /// `block:` / `deny:` / `context:` directives.
+    Http {
+        url: String,
+        /// Optional HTTP headers. `${VAR}` placeholders are substituted from
+        /// the hook context env (no system-env interpolation — to prevent
+        /// secret exfiltration via misconfigured templates).
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        headers: HashMap<String, String>,
+    },
 }
 
 /// Hook configuration - defines when and how a hook executes
@@ -265,6 +284,11 @@ pub struct HookConfig {
     /// Handler function name (for runtime plugins)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handler: Option<String>,
+
+    /// Per-hook timeout in seconds. Overrides the executor's default
+    /// timeout when set. Applies to Command and Http actions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
 }
 
 // =============================================================================
