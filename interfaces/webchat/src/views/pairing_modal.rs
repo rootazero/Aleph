@@ -42,7 +42,23 @@ fn PairingModalInner() -> impl IntoView {
     let error_msg = RwSignal::new(Option::<String>::None);
     let loading = RwSignal::new(true);
     let approving = RwSignal::new(false);
-    let done = RwSignal::new(false);
+
+    // Fire wizard.cancel on hard-reload / navigation — backstop for session leaks.
+    // Cancel handler clears session_id first so this on_cleanup becomes a no-op on
+    // a normal Cancel click (avoids double-fire while WizardSessionManager::cancel
+    // is idempotent, being a no-op is cleaner).
+    let cleanup_session = session_id;
+    let cleanup_state = state;
+    on_cleanup(move || {
+        let sid_opt = cleanup_session.get();
+        if let Some(sid) = sid_opt.filter(|s| !s.is_empty()) {
+            spawn_local(async move {
+                let _ = cleanup_state
+                    .rpc_call("wizard.cancel", serde_json::json!({ "session_id": sid }))
+                    .await;
+            });
+        }
+    });
 
     // --- Start the wizard on mount ---
     spawn_local(async move {
@@ -104,6 +120,10 @@ fn PairingModalInner() -> impl IntoView {
                                     })
                                 });
                             pairing_code.set(code);
+                        } else {
+                            error_msg.set(Some(
+                                "Server did not return a step — please retry".to_string(),
+                            ));
                         }
                         loading.set(false);
                     }
@@ -155,19 +175,19 @@ fn PairingModalInner() -> impl IntoView {
                             .and_then(|d| d.get("token"))
                             .and_then(|t| t.as_str())
                         {
-                            // Persist token and clear modal
-                            state.set_pairing_token(token.to_string());
-                            done.set(true);
-
-                            // Reconnect with the new device token
-                            let state_clone = state;
+                            let token_owned = token.to_string();
+                            // Kick off reconnect BEFORE set_pairing_token unmounts the modal,
+                            // so the spawn_local future is not dropped with the component scope.
+                            let state_for_reconnect = state;
                             spawn_local(async move {
-                                if let Err(e) = state_clone.reconnect().await {
+                                if let Err(e) = state_for_reconnect.reconnect().await {
                                     web_sys::console::error_1(
                                         &format!("Reconnect after pairing failed: {e}").into(),
                                     );
                                 }
                             });
+                            // Persist token and clear modal (unmounts PairingModalInner)
+                            state.set_pairing_token(token_owned);
                         } else {
                             // Done but no token — show error
                             let err = resp
@@ -189,7 +209,10 @@ fn PairingModalInner() -> impl IntoView {
 
     // --- Cancel handler ---
     let on_cancel = move |_| {
+        // Clear session_id first so on_cleanup sees None and skips the backstop
+        // wizard.cancel call — prevents double-fire on normal Cancel.
         let sid = session_id.get();
+        session_id.set(None);
         if let Some(s) = sid.filter(|s| !s.is_empty()) {
             spawn_local(async move {
                 let _ = state
@@ -197,7 +220,7 @@ fn PairingModalInner() -> impl IntoView {
                     .await;
             });
         }
-        // Clear modal regardless of cancel RPC result
+        // Clear modal (unmounts PairingModalInner, triggering on_cleanup as no-op)
         state.pairing_required.set(None);
     };
 
@@ -222,23 +245,13 @@ fn PairingModalInner() -> impl IntoView {
                     </div>
                 </div>
 
-                // Body: loading / code display / done states
+                // Body: loading / code display states
                 {move || {
                     if loading.get() {
                         view! {
                             <div class="flex items-center gap-3 py-6 text-text-secondary">
                                 <div class="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                                 <span class="text-sm">"Starting pairing wizard…"</span>
-                            </div>
-                        }.into_any()
-                    } else if done.get() {
-                        view! {
-                            <div class="flex items-center gap-3 py-6 text-success">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-                                    stroke="currentColor" stroke-width="2.5">
-                                    <polyline points="20 6 9 17 4 12"/>
-                                </svg>
-                                <span class="text-sm font-medium">"Pairing approved! Reconnecting…"</span>
                             </div>
                         }.into_any()
                     } else {
@@ -294,7 +307,7 @@ fn PairingModalInner() -> impl IntoView {
                                     <button
                                         class="flex-1 py-2.5 px-4 rounded-lg bg-primary hover:bg-primary/90 text-white font-medium transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                                         on:click=on_approve
-                                        disabled=move || approving.get() || session_id.get().is_none()
+                                        disabled=move || approving.get() || session_id.get().is_none() || pairing_code.get().is_none()
                                     >
                                         {move || if approving.get() {
                                             view! {
