@@ -177,19 +177,6 @@ fn MemorySidebar() -> impl IntoView {
                 />
             </div>
             <NodeDetailPanel excerpts=excerpts />
-            <div class="border-t border-[#2a2a40] px-3 py-2 flex items-center justify-between">
-                <span style="font-size:10px;color:var(--text-meta)">
-                    "graph"
-                </span>
-                <button
-                    type="button"
-                    class="text-[#a78bfa] text-xs px-2 py-1 rounded hover:bg-[#a78bfa14]"
-                    on:click=move |_| { mem.sidebar_collapsed.set(true); }
-                    title="Collapse sidebar (Esc to restore)"
-                >
-                    "\u{21e7}"
-                </button>
-            </div>
         </div>
     }
 }

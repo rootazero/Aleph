@@ -94,13 +94,31 @@ fn AppContent() -> impl IntoView {
             class="aleph-shell flex h-screen text-text-primary font-sans selection:bg-primary/30"
             class:sidebar-collapsed=move || mem_for_shell.sidebar_collapsed.get()
         >
-            // Peek handle — visible only when sidebar is collapsed (CSS-gated).
+            // Sidebar toggle — fixed at the top-left of the window. On macOS the
+            // CSS positions it on the same horizontal line as the overlay traffic
+            // lights (immediately to their right); on Windows/Linux it sits in the
+            // top-left corner. Always visible; click toggles `sidebar_collapsed`.
             <button
-                class="sidebar-peek-handle"
-                on:click=move |_| { mem_for_shell.sidebar_collapsed.set(false); }
-                title="Expand sidebar (Esc)"
+                type="button"
+                class="aleph-sidebar-toggle"
+                on:click={
+                    let mem = mem_for_shell;
+                    move |_| {
+                        let s = &mem.sidebar_collapsed;
+                        s.set(!s.get());
+                    }
+                }
+                title="Toggle sidebar (Esc)"
+                aria-label="Toggle sidebar"
             >
-                "\u{21e8}"
+                <svg
+                    width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round"
+                >
+                    <rect x="3" y="5" width="18" height="14" rx="2.5" />
+                    <line x1="9" y1="5" x2="9" y2="19" />
+                </svg>
             </button>
             <Router>
                 // Left column — context-aware sidebar, full window height
