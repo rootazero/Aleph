@@ -159,6 +159,10 @@ fn RadialCanvasView() -> impl IntoView {
     let minimap: Rc<RefCell<GlobalMiniMap>> = Rc::new(RefCell::new(GlobalMiniMap::empty(200.0)));
     let (focus_id, set_focus_id) = signal(None::<String>);
     let (focus_neighbors, set_focus_neighbors) = signal(Vec::<String>::new());
+    // `view!` consumes these signals only when targeting WASM; silence the
+    // unused-variable warning on the native (cargo check) target.
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (focus_id, focus_neighbors);
     let (visible_counts, set_visible_counts) = signal((0usize, 0usize));
 
     // -----------------------------------------------------------------------

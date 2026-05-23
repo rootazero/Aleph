@@ -370,6 +370,9 @@ fn HarnessDetailPanel(
     selected_id: RwSignal<Option<String>>,
     preset_metas: RwSignal<Vec<AcpPresetMeta>>,
 ) -> impl IntoView {
+    // `preset_metas` is a builder-required prop reserved for an upcoming
+    // preset picker; silence the unused-variable warning until it's wired.
+    let _ = preset_metas;
     let i18n = use_i18n();
     let info = harnesses.get().into_iter().find(|h| h.id == harness_id);
     let Some(info) = info else {

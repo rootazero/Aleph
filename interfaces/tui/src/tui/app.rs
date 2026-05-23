@@ -1114,6 +1114,7 @@ mod tests {
             tool_calls: 2,
             loops: 1,
             final_response: None,
+            ..Default::default()
         };
         state.update_token_usage(&summary);
         assert_eq!(state.total_tokens, 100);
@@ -1247,6 +1248,10 @@ mod tests {
                 total_tokens: 321,
                 hit_limit: false,
                 final_text: Some("Replay loaded".into()),
+                terminate_reason: None,
+                duration_ms: None,
+                token_breakdown: None,
+                tool_timeline: Vec::new(),
             },
         });
 
@@ -1343,6 +1348,10 @@ mod tests {
                         total_tokens: 33,
                         hit_limit: false,
                         final_text: Some("done".into()),
+                        terminate_reason: None,
+                        duration_ms: None,
+                        token_breakdown: None,
+                        tool_timeline: Vec::new(),
                     },
                 },
             ],
@@ -1498,6 +1507,7 @@ mod tests {
                 tool_calls: 3,
                 loops: 2,
                 final_response: Some("Done".into()),
+                ..Default::default()
             },
             total_duration_ms: 5000,
         };
@@ -1533,6 +1543,10 @@ mod tests {
                 total_tokens: 321,
                 hit_limit: false,
                 final_text: Some("done".into()),
+                terminate_reason: None,
+                duration_ms: None,
+                token_breakdown: None,
+                tool_timeline: Vec::new(),
             },
         });
         state.handle_gateway_event(StreamEvent::RunComplete {
@@ -1543,6 +1557,7 @@ mod tests {
                 tool_calls: 0,
                 loops: 1,
                 final_response: Some("done".into()),
+                ..Default::default()
             },
             total_duration_ms: 1500,
         });

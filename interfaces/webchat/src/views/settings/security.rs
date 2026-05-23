@@ -11,8 +11,8 @@ use leptos::task::spawn_local;
 
 use crate::api::{
     CustomLeakPattern, CustomPiiRule, CustomPiiSeverity, CustomRiskPattern, DeviceInfo, PiiAction,
-    SandboxRateLimitConfigSchema, SearchConfig, SearchConfigApi, SecretsProtectionConfig,
-    SecurityConfig, SecurityConfigApi, ShellSecurityConfig, VirtualKeyEntry, WindowConfigSchema,
+    SearchConfig, SearchConfigApi, SecurityConfig, SecurityConfigApi, VirtualKeyEntry,
+    WindowConfigSchema,
 };
 use crate::context::DashboardState;
 use crate::i18n::*;

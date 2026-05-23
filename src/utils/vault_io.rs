@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use crate::utils::atomic_io::{with_file_lock, write_atomic};
 
 const VAULT_FILENAME: &str = "secrets.vault";
-const VAULT_LOCK_FILENAME: &str = "secrets.vault.lock";
 
 pub struct VaultIo {
     path: PathBuf,

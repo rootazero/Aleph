@@ -1,5 +1,5 @@
 use crate::canvas_engine::types::{Neighborhood, Vec2, Vec3};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 const SPRING_K: f64 = 220.0; // stiffness
 const SPRING_C: f64 = 2.0 * 14.832396974191326; // critical damping = 2*sqrt(K)
@@ -165,6 +165,8 @@ pub(crate) fn build_interpolated_neighborhood(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::canvas_engine::types::*;
 

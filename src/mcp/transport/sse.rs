@@ -18,7 +18,9 @@ use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::{mpsc, RwLock};
 
 use crate::error::{AlephError, Result};
-use crate::mcp::jsonrpc::{JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+#[cfg(test)]
+use crate::mcp::jsonrpc::JsonRpcError;
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
 use crate::security::ssrf::{validate_url, SsrfPolicy};
 
@@ -570,26 +572,6 @@ impl SseTransport {
         Ok(())
     }
 
-    /// Internal helper to send a JSON-RPC response via HTTP POST
-    async fn send_json_rpc_response(&self, response: &JsonRpcResponse) -> Result<()> {
-        let response_json = serde_json::to_string(response)
-            .map_err(|e| AlephError::IoError(format!("Failed to serialize response: {}", e)))?;
-
-        let http_response = self
-            .build_request(response_json)
-            .send()
-            .await
-            .map_err(|e| AlephError::IoError(format!("Failed to send response: {}", e)))?;
-
-        if !http_response.status().is_success() {
-            return Err(AlephError::IoError(format!(
-                "Server returned error status: {}",
-                http_response.status()
-            )));
-        }
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,6 @@ use super::*;
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult, GenerationType};
 use crate::sync_primitives::Arc;
-use tracing::warn;
 
 /// Create a generation provider from configuration
 ///

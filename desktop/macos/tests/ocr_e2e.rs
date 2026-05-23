@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use aleph_desktop::bridge::client::SwiftBridge;
 use aleph_protocol::desktop_bridge::methods::screen::{OcrParams, OcrResult, METHOD_OCR};
+use base64::Engine as _;
 
 fn helper_path() -> PathBuf {
     // CARGO_MANIFEST_DIR for this crate is `desktop/macos`.

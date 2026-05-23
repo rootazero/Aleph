@@ -10,6 +10,9 @@ pub enum DetailContent {
     /// A single graph node is selected — show its wiki content and backlinks.
     Node { detail: NoteDetailResponse },
     /// A cluster is selected — show member list with jump buttons.
+    /// Constructed by canvas cluster-selection (WIP) — keep the variant so
+    /// the match in `DetailPanel` stays exhaustive.
+    #[allow(dead_code)]
     Cluster {
         kind: String,
         members: Vec<(String, String)>, // (id, name)

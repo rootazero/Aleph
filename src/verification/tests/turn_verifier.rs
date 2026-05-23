@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::ErrorClass;
 use crate::verification::turn_verifier::{
-    hash_tool_args, ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierChain, VerifierVerdict,
+    hash_tool_args, TurnVerifier, TurnVerifyContext, VerifierChain, VerifierVerdict,
 };
 
 struct AlwaysContinue;

@@ -70,6 +70,7 @@ fn benchmark_risk_score(c: &mut Criterion) {
             fs_write: vec![],
             network: NetworkPolicy::None,
             spawn_subprocess: false,
+            ..Default::default()
         };
 
         bencher.iter(|| AuditQuery::calculate_risk_score(black_box(&caps), black_box(0)));
@@ -83,6 +84,7 @@ fn benchmark_risk_score(c: &mut Criterion) {
                 hosts: vec!["api.example.com".to_string(), "cdn.example.com".to_string()],
             },
             spawn_subprocess: false,
+            ..Default::default()
         };
 
         bencher.iter(|| AuditQuery::calculate_risk_score(black_box(&caps), black_box(2)));
@@ -94,6 +96,7 @@ fn benchmark_risk_score(c: &mut Criterion) {
             fs_write: vec![PathBuf::from("/tmp"), PathBuf::from("/home/user")],
             network: NetworkPolicy::AllowAll,
             spawn_subprocess: true,
+            ..Default::default()
         };
 
         bencher.iter(|| AuditQuery::calculate_risk_score(black_box(&caps), black_box(5)));
