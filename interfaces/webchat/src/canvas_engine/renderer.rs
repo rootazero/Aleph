@@ -112,7 +112,7 @@ pub fn draw_neighborhood(
 
     // 2. Layer A: 2-hop (back)
     for n in &nbhd.two_hop {
-        draw_edges_for_node(ctx, n, nbhd, drag, node_drag);
+        draw_edges_for_node(ctx, n, nbhd, drag, node_drag, selected, hovered);
     }
     for n in &nbhd.two_hop {
         draw_node(ctx, n, drag, selected, hovered);
@@ -123,7 +123,7 @@ pub fn draw_neighborhood(
         draw_cluster(ctx, c, drag, selected, hovered);
     }
     for n in &nbhd.one_hop {
-        draw_edges_for_node(ctx, n, nbhd, drag, node_drag);
+        draw_edges_for_node(ctx, n, nbhd, drag, node_drag, selected, hovered);
     }
     for n in &nbhd.one_hop {
         if node_drag.map(|o| o.node_id == n.id).unwrap_or(false) {
@@ -431,81 +431,133 @@ fn draw_edges_for_node(
     nbhd: &Neighborhood,
     drag: (f32, f32),
     node_drag: Option<&DragOverlay>,
+    selected: Option<&str>,
+    hovered: Option<&str>,
 ) {
-    for e in &nbhd.edges {
-        let endpoints = endpoints_world_pos(e, nbhd, drag, node_drag, now_ms_in_seconds() * 1000.0);
-        let (from_pos, to_pos, _from_z, _to_z) = match endpoints {
-            Some(t) => t,
-            None => continue,
-        };
-        // Draw each edge only once — from_idx < to_idx convention
-        if e.from_idx >= e.to_idx {
-            continue;
-        }
-        // Only draw edges that involve this node (by index in the neighborhood)
-        let n_idx = nbhd
-            .one_hop
-            .iter()
-            .position(|x| x.id == n.id)
-            .map(|i| i + 1)
-            .or_else(|| {
-                nbhd.two_hop
-                    .iter()
-                    .position(|x| x.id == n.id)
-                    .map(|i| i + 1 + nbhd.one_hop.len())
-            })
-            .unwrap_or(0);
-        if e.from_idx != n_idx && e.to_idx != n_idx {
-            continue;
-        }
-
-        // Hop layer: if either endpoint is in two_hop (idx > one_hop.len()), it's Two.
-        let layer = if e.from_idx > nbhd.one_hop.len() || e.to_idx > nbhd.one_hop.len() {
-            HopLayer::Two
+    // Resolve a neighborhood index to the node's string ID.
+    let idx_to_id = |idx: usize| -> Option<&str> {
+        if idx == 0 {
+            Some(nbhd.center.id.as_str())
+        } else if idx <= nbhd.one_hop.len() {
+            Some(nbhd.one_hop[idx - 1].id.as_str())
         } else {
-            HopLayer::One
-        };
-        let (max_alpha, line_width) = hop_style(layer);
-
-        if e.is_wikilink {
-            let dashes = js_sys::Array::new();
-            dashes.push(&JsValue::from_f64(5.0));
-            dashes.push(&JsValue::from_f64(4.0));
-            let _ = ctx.set_line_dash(&dashes);
-        } else {
-            let solid = js_sys::Array::new();
-            let _ = ctx.set_line_dash(&solid);
+            let off = idx - 1 - nbhd.one_hop.len();
+            nbhd.two_hop.get(off).map(|x| x.id.as_str())
         }
+    };
 
-        let cp = edge_control_point(
-            Vec2 { x: from_pos.0 as f64, y: from_pos.1 as f64 },
-            Vec2 { x: to_pos.0 as f64,   y: to_pos.1 as f64 },
-            DEFAULT_SAG,
-        );
+    // Highlight anchor: selected takes priority over hovered.
+    let highlight_anchor: Option<&str> = selected.or(hovered);
 
-        // α-gradient stroke: invisible at endpoints, max at the chord interior.
-        let grad = ctx.create_linear_gradient(
-            from_pos.0 as f64,
-            from_pos.1 as f64,
-            to_pos.0 as f64,
-            to_pos.1 as f64,
-        );
-        let _ = grad.add_color_stop(0.00, "rgba(167,139,250,0.000)");
-        let _ = grad.add_color_stop(0.15, &format!("rgba(167,139,250,{:.3})", max_alpha));
-        let _ = grad.add_color_stop(0.85, &format!("rgba(167,139,250,{:.3})", max_alpha));
-        let _ = grad.add_color_stop(1.00, "rgba(167,139,250,0.000)");
-        ctx.set_stroke_style_canvas_gradient(&grad);
-        ctx.set_line_width(line_width);
+    // This node's index in the neighborhood (used to filter edges belonging to it).
+    let n_idx = nbhd
+        .one_hop
+        .iter()
+        .position(|x| x.id == n.id)
+        .map(|i| i + 1)
+        .or_else(|| {
+            nbhd.two_hop
+                .iter()
+                .position(|x| x.id == n.id)
+                .map(|i| i + 1 + nbhd.one_hop.len())
+        })
+        .unwrap_or(0);
 
-        ctx.begin_path();
-        ctx.move_to(from_pos.0 as f64, from_pos.1 as f64);
-        // Quadratic Bézier via degenerate cubic: both control points coincide.
-        ctx.bezier_curve_to(
-            cp.x, cp.y,
-            cp.x, cp.y,
-            to_pos.0 as f64, to_pos.1 as f64,
-        );
-        ctx.stroke();
+    let t_ms = now_ms_in_seconds() * 1000.0;
+
+    // Two-pass render: dim (non-adjacent) first, bright (adjacent) on top.
+    for pass_bright in [false, true] {
+        for e in &nbhd.edges {
+            // Draw each edge only once — from_idx < to_idx convention.
+            if e.from_idx >= e.to_idx {
+                continue;
+            }
+            // Only draw edges that involve this node.
+            if e.from_idx != n_idx && e.to_idx != n_idx {
+                continue;
+            }
+
+            // Determine adjacency to the highlight anchor.
+            let is_adjacent = highlight_anchor
+                .map(|h| {
+                    idx_to_id(e.from_idx).map_or(false, |id| id == h)
+                        || idx_to_id(e.to_idx).map_or(false, |id| id == h)
+                })
+                .unwrap_or(false);
+
+            // Skip this edge in the wrong pass.
+            if is_adjacent != pass_bright {
+                continue;
+            }
+
+            let endpoints = endpoints_world_pos(e, nbhd, drag, node_drag, t_ms);
+            let (from_pos, to_pos, _from_z, _to_z) = match endpoints {
+                Some(t) => t,
+                None => continue,
+            };
+
+            // Hop layer: if either endpoint is in two_hop (idx > one_hop.len()), it's Two.
+            let layer = if e.from_idx > nbhd.one_hop.len() || e.to_idx > nbhd.one_hop.len() {
+                HopLayer::Two
+            } else {
+                HopLayer::One
+            };
+            let (max_alpha, line_width) = hop_style(layer);
+
+            // Compute effective color, alpha, and width based on highlight state.
+            let (color_rgb, effective_alpha, effective_width) = if highlight_anchor.is_some() {
+                if is_adjacent {
+                    // Gold, full brightness, wider stroke.
+                    ("252,211,77", max_alpha, line_width * 1.5)
+                } else {
+                    // Existing purple, dimmed to 40%.
+                    ("167,139,250", max_alpha * 0.4, line_width)
+                }
+            } else {
+                // No anchor active: standard purple at full alpha.
+                ("167,139,250", max_alpha, line_width)
+            };
+
+            if e.is_wikilink {
+                let dashes = js_sys::Array::new();
+                dashes.push(&JsValue::from_f64(5.0));
+                dashes.push(&JsValue::from_f64(4.0));
+                let _ = ctx.set_line_dash(&dashes);
+            } else {
+                let solid = js_sys::Array::new();
+                let _ = ctx.set_line_dash(&solid);
+            }
+
+            let cp = edge_control_point(
+                Vec2 { x: from_pos.0 as f64, y: from_pos.1 as f64 },
+                Vec2 { x: to_pos.0 as f64,   y: to_pos.1 as f64 },
+                DEFAULT_SAG,
+            );
+
+            // α-gradient stroke: invisible at endpoints, max at the chord interior.
+            let grad = ctx.create_linear_gradient(
+                from_pos.0 as f64,
+                from_pos.1 as f64,
+                to_pos.0 as f64,
+                to_pos.1 as f64,
+            );
+            let _ = grad.add_color_stop(0.00, &format!("rgba({color_rgb},0.000)"));
+            let _ = grad.add_color_stop(0.15, &format!("rgba({color_rgb},{effective_alpha:.3})"));
+            let _ = grad.add_color_stop(0.85, &format!("rgba({color_rgb},{effective_alpha:.3})"));
+            let _ = grad.add_color_stop(1.00, &format!("rgba({color_rgb},0.000)"));
+            ctx.set_stroke_style_canvas_gradient(&grad);
+            ctx.set_line_width(effective_width);
+
+            ctx.begin_path();
+            ctx.move_to(from_pos.0 as f64, from_pos.1 as f64);
+            // Quadratic Bézier via degenerate cubic: both control points coincide.
+            ctx.bezier_curve_to(
+                cp.x, cp.y,
+                cp.x, cp.y,
+                to_pos.0 as f64, to_pos.1 as f64,
+            );
+            ctx.stroke();
+        }
     }
 }
 
