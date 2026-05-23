@@ -216,6 +216,7 @@ mod tests {
             plugin_name: "compaction-test".to_string(),
             plugin_root: std::env::temp_dir(),
             handler: None,
+            timeout_secs: None,
         }
     }
 

@@ -257,6 +257,52 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
+        // UserPromptSubmit — fires once per run, before the first provider
+        // call. Interceptors may abort the run (block/deny) or inject
+        // `context:` lines which we wrap into the user's prompt as
+        // `<system-reminder>` blocks. This is Claude Code's seam for
+        // project-scoped prompt augmentation (sprint context, env reminders,
+        // policy nudges) without touching the agent loop's logic.
+        let mut effective_user_input: String = request.input.clone();
+        if let Some(executor) = hook_executor.as_ref() {
+            let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
+            ctx = ctx.with_tool_input(request.input.clone());
+            match executor
+                .execute_interceptors(HookEvent::UserPromptSubmit, ctx)
+                .await
+            {
+                Ok((_ctx, hr)) if hr.denied || hr.blocked => {
+                    let reason = hr
+                        .deny_reason
+                        .or(hr.block_reason)
+                        .unwrap_or_else(|| "user prompt blocked by hook".to_string());
+                    warn!(
+                        run_id = run_id,
+                        reason = %reason,
+                        "UserPromptSubmit hook aborted the run"
+                    );
+                    return Err(ExecutionError::Failed(format!(
+                        "UserPromptSubmit hook aborted the run: {reason}"
+                    )));
+                }
+                Ok((_ctx, hr)) => {
+                    if !hr.additional_contexts.is_empty() {
+                        let reminders = hr
+                            .additional_contexts
+                            .iter()
+                            .map(|c| {
+                                format!("<system-reminder>\n{}\n</system-reminder>", c.trim())
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        effective_user_input =
+                            format!("{reminders}\n\n{}", effective_user_input);
+                    }
+                }
+                Err(e) => warn!(run_id = run_id, error = %e, "UserPromptSubmit hook failed"),
+            }
+        }
+
         // Pre-process multimodal attachments (constant across retries)
         let multimodal_messages: Option<Vec<crate::providers::message::UnifiedMessage>> =
             if let (false, Some(media_processor)) = (
@@ -274,7 +320,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .await;
 
                 let mut content = vec![crate::providers::message::ContentBlock::Text {
-                    text: request.input.clone(),
+                    text: effective_user_input.clone(),
                     cache_control: None,
                 }];
                 content.extend(media_blocks);
@@ -552,7 +598,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let flow_input = if request.metadata.get("resume").map(String::as_str) == Some("true") {
                 crate::orchestrator::FlowInput::Resume
             } else {
-                super::helpers::history_to_flow_input(history.clone(), request.input.clone())
+                super::helpers::history_to_flow_input(
+                    history.clone(),
+                    effective_user_input.clone(),
+                )
             };
 
             // Phase 4 (F4): derive the channel's InteractionManifest from

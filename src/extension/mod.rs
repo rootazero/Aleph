@@ -301,6 +301,11 @@ impl ExtensionManager {
         // Sync hooks from registry to HookExecutor
         self.sync_hooks_from_registry().await;
 
+        // Layer in user-level hooks from ~/.aleph/hooks.json and the
+        // project's .aleph/hooks.{json,local.json}. Claude Code parity:
+        // users edit these files directly; no plugin packaging required.
+        self.sync_user_hooks().await;
+
         // Initialize SkillSystem with discovered skill directories
         let mut skill_dirs: Vec<PathBuf> = Vec::new();
         // Skill dirs from discovery (includes ~/.aleph/skills/ where bundled + user skills live)
@@ -402,6 +407,25 @@ impl ExtensionManager {
         Ok(result)
     }
 
+    /// Layer user-level hook configs (`~/.aleph/hooks.json`, project files)
+    /// on top of the plugin-registered hooks. Runs after
+    /// [`Self::sync_hooks_from_registry`] so user entries are evaluated in
+    /// the same executor pass — priority + matcher determine ordering, not
+    /// load order.
+    async fn sync_user_hooks(&self) {
+        let cwd = std::env::current_dir().ok();
+        let user_hooks = crate::extension::hooks::load_user_hooks(cwd.as_deref());
+        if user_hooks.is_empty() {
+            return;
+        }
+        let count = user_hooks.len();
+        let mut executor = self.hook_executor.write().await;
+        for h in user_hooks {
+            executor.add_hook(h);
+        }
+        tracing::info!(count, "Loaded user-level hook configs");
+    }
+
     /// Sync hooks from PluginRegistry to HookExecutor.
     ///
     /// Reads HookRegistration entries from the registry and converts them
@@ -428,6 +452,7 @@ impl ExtensionManager {
                 plugin_name: hr.plugin_id.clone(),
                 plugin_root: PathBuf::new(),
                 handler: Some(hr.handler.clone()),
+                timeout_secs: None,
             };
             executor.add_hook(hook_config);
         }

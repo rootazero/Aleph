@@ -93,6 +93,31 @@ impl ApprovalHandler {
             );
         }
 
+        // Fire PermissionRequest + Notification observers (best-effort,
+        // no-op when no hooks are registered). Lets the user route MCP
+        // approval requests through any external channel (desktop toast,
+        // Telegram nudge, audit log) without touching this hot path.
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::PermissionRequest,
+            &request_id,
+            vec![
+                ("KIND", "mcp_approval".to_string()),
+                ("SERVER_NAME", request.server_name.clone()),
+                ("ACTION", request.action.clone()),
+            ],
+        )
+        .await;
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::Notification,
+            &request_id,
+            vec![
+                ("KIND", "mcp_approval".to_string()),
+                ("SERVER_NAME", request.server_name.clone()),
+                ("MESSAGE", format!("MCP approval needed: {}", request.action)),
+            ],
+        )
+        .await;
+
         // Clone callback ref under lock, then release before awaiting UI interaction
         let cb = {
             let callback = self.present_callback.read().await;

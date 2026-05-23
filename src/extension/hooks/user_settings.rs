@@ -1,0 +1,350 @@
+//! User-level hook configuration loader.
+//!
+//! Reads Claude Code-compatible hook definitions from three layers (in
+//! ascending precedence):
+//!
+//! 1. `~/.aleph/hooks.json` — applies to every Aleph session on this host
+//! 2. `<cwd>/.aleph/hooks.json` — project-scoped, intended to be checked in
+//! 3. `<cwd>/.aleph/hooks.local.json` — project-scoped, gitignored
+//!
+//! The format mirrors Claude Code's `settings.json` `hooks` block so users
+//! can copy a working config across both tools without translation:
+//!
+//! ```json
+//! {
+//!   "hooks": {
+//!     "PreToolUse": [
+//!       {
+//!         "matcher": "Edit|Write",
+//!         "hooks": [
+//!           { "type": "command", "command": "echo hi", "timeout_secs": 30 }
+//!         ]
+//!       }
+//!     ]
+//!   }
+//! }
+//! ```
+//!
+//! Each `(event, matcher, [actions])` triple flattens to one
+//! [`HookConfig`]. Unknown event names are skipped with a warning so a
+//! stale config never crashes the server boot.
+//!
+//! The loader is intentionally fail-soft: a missing file is a no-op, a
+//! malformed file produces a warning and an empty result. The user-config
+//! layer must never wedge plugin hooks.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use serde::Deserialize;
+use tracing::warn;
+
+use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
+
+/// One contiguous group from a `hooks.json` file.
+#[derive(Debug, Clone, Deserialize)]
+struct UserHookGroup {
+    /// Optional regex matched against `tool_name` for tool-related events.
+    /// Empty / missing = match all.
+    #[serde(default)]
+    matcher: Option<String>,
+
+    /// Optional explicit kind override (`observer` | `interceptor` | `resolver`).
+    /// When absent, defaults are derived from the event (interceptor for
+    /// events that can block, observer otherwise).
+    #[serde(default)]
+    kind: Option<String>,
+
+    /// Optional priority bucket (`system` | `high` | `normal` | `low`).
+    #[serde(default)]
+    priority: Option<String>,
+
+    /// Per-group default timeout (seconds). Each action inherits this if it
+    /// doesn't carry its own.
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+
+    /// One or more action specs to run when the matcher fires.
+    #[serde(default, alias = "actions")]
+    hooks: Vec<UserHookAction>,
+}
+
+/// A single action inside a hook group.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum UserHookAction {
+    Command {
+        command: String,
+        #[serde(default)]
+        timeout_secs: Option<u64>,
+    },
+    Prompt {
+        prompt: String,
+    },
+    Agent {
+        agent: String,
+    },
+    Http {
+        url: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
+        #[serde(default)]
+        timeout_secs: Option<u64>,
+    },
+}
+
+/// Top-level wire format of a `hooks.json` file.
+#[derive(Debug, Clone, Deserialize, Default)]
+struct UserHooksFile {
+    #[serde(default)]
+    hooks: HashMap<String, Vec<UserHookGroup>>,
+}
+
+/// Load and merge user-level hook configs from the three layers documented
+/// above. Layer order is irrelevant for semantics — every hook is added to
+/// the executor independently — but it determines the `plugin_name` label
+/// surfaced in logs / consent flows.
+pub fn load_user_hooks(cwd: Option<&Path>) -> Vec<HookConfig> {
+    let mut out = Vec::new();
+
+    if let Some(home) = dirs::home_dir() {
+        let p = home.join(".aleph/hooks.json");
+        load_into(&p, "user:global", &mut out);
+    }
+
+    if let Some(cwd) = cwd {
+        load_into(&cwd.join(".aleph/hooks.json"), "user:project", &mut out);
+        load_into(
+            &cwd.join(".aleph/hooks.local.json"),
+            "user:project-local",
+            &mut out,
+        );
+    }
+
+    out
+}
+
+fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            warn!(path = %path.display(), error = %e, "Failed to read user hook config");
+            return;
+        }
+    };
+    let parsed: UserHooksFile = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(path = %path.display(), error = %e, "Skipping malformed user hook config");
+            return;
+        }
+    };
+
+    let plugin_root = path.parent().map(PathBuf::from).unwrap_or_default();
+
+    for (event_str, groups) in parsed.hooks {
+        let event = match parse_event(&event_str) {
+            Some(e) => e,
+            None => {
+                warn!(path = %path.display(), event = %event_str, "Unknown hook event; skipping");
+                continue;
+            }
+        };
+        for g in groups {
+            let actions: Vec<HookAction> = g
+                .hooks
+                .iter()
+                .map(|a| match a {
+                    UserHookAction::Command { command, .. } => HookAction::Command {
+                        command: command.clone(),
+                    },
+                    UserHookAction::Prompt { prompt } => HookAction::Prompt {
+                        prompt: prompt.clone(),
+                    },
+                    UserHookAction::Agent { agent } => HookAction::Agent {
+                        agent: agent.clone(),
+                    },
+                    UserHookAction::Http { url, headers, .. } => HookAction::Http {
+                        url: url.clone(),
+                        headers: headers.clone(),
+                    },
+                })
+                .collect();
+            if actions.is_empty() {
+                continue;
+            }
+
+            // First action's per-action timeout (or group default) wins for
+            // the whole HookConfig — multiple actions in a group already
+            // share state via the group; mixing per-action timeouts inside
+            // a single group is rare and easy to express by splitting.
+            let timeout_secs = a_or_group_timeout(&g);
+
+            let kind = g
+                .kind
+                .as_deref()
+                .map(HookKind::from_str_or_default)
+                .unwrap_or_else(|| default_kind_for_event(event));
+            let priority = g
+                .priority
+                .as_deref()
+                .map(HookPriority::from_str_or_default)
+                .unwrap_or_default();
+
+            out.push(HookConfig {
+                event,
+                kind,
+                priority,
+                matcher: g.matcher.clone().filter(|s| !s.is_empty()),
+                actions,
+                plugin_name: source_label.to_string(),
+                plugin_root: plugin_root.clone(),
+                handler: None,
+                timeout_secs,
+            });
+        }
+    }
+}
+
+fn a_or_group_timeout(g: &UserHookGroup) -> Option<u64> {
+    g.hooks
+        .iter()
+        .find_map(|a| match a {
+            UserHookAction::Command { timeout_secs, .. } => *timeout_secs,
+            UserHookAction::Http { timeout_secs, .. } => *timeout_secs,
+            _ => None,
+        })
+        .or(g.timeout_secs)
+}
+
+/// Map both Claude Code-style (`PreToolUse`) and Aleph-style
+/// (`before_tool_call`) event names to [`HookEvent`].
+fn parse_event(name: &str) -> Option<HookEvent> {
+    // Re-uses the serde aliases on HookEvent. snake_case → primary; PascalCase
+    // → alias. Falls back to `from_str` via JSON deserialization.
+    let attempts = [
+        name.to_string(),
+        name.to_lowercase().replace('-', "_"),
+        format!("\"{name}\""),
+    ];
+    for s in &attempts {
+        if let Ok(ev) = serde_json::from_str::<HookEvent>(s) {
+            return Some(ev);
+        }
+        if let Ok(ev) = serde_json::from_str::<HookEvent>(&format!("\"{s}\"")) {
+            return Some(ev);
+        }
+    }
+    None
+}
+
+/// Pick a sensible default `HookKind` based on the event semantics:
+/// blocking-capable events default to Interceptor so a `block:` line in
+/// the hook output actually stops the relevant flow; passive lifecycle
+/// events default to Observer so they don't accidentally short-circuit
+/// when the user just wants logging.
+fn default_kind_for_event(event: HookEvent) -> HookKind {
+    use HookEvent::*;
+    match event {
+        BeforeToolCall | BeforeAgentStart | UserPromptSubmit => HookKind::Interceptor,
+        _ => HookKind::Observer,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn write(path: &Path, contents: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn loads_pre_tool_use_with_matcher() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".aleph/hooks.json");
+        write(
+            &cfg,
+            r#"{
+                "hooks": {
+                    "PreToolUse": [
+                        { "matcher": "Edit|Write",
+                          "hooks": [
+                            { "type": "command", "command": "echo hi", "timeout_secs": 30 }
+                          ]
+                        }
+                    ]
+                }
+            }"#,
+        );
+        let mut out = Vec::new();
+        load_into(&cfg, "user:project", &mut out);
+        assert_eq!(out.len(), 1);
+        let h = &out[0];
+        assert_eq!(h.event, HookEvent::BeforeToolCall);
+        assert_eq!(h.kind, HookKind::Interceptor);
+        assert_eq!(h.matcher.as_deref(), Some("Edit|Write"));
+        assert_eq!(h.timeout_secs, Some(30));
+        assert!(matches!(h.actions[0], HookAction::Command { .. }));
+    }
+
+    #[test]
+    fn loads_http_hook() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".aleph/hooks.json");
+        write(
+            &cfg,
+            r#"{
+                "hooks": {
+                    "PostToolUse": [
+                        { "hooks": [
+                            { "type": "http", "url": "https://audit.example/log",
+                              "headers": { "x-token": "secret-redacted" } }
+                          ]
+                        }
+                    ]
+                }
+            }"#,
+        );
+        let mut out = Vec::new();
+        load_into(&cfg, "user:project", &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].event, HookEvent::AfterToolCall);
+        assert_eq!(out[0].kind, HookKind::Observer);
+        match &out[0].actions[0] {
+            HookAction::Http { url, headers } => {
+                assert_eq!(url, "https://audit.example/log");
+                assert_eq!(headers.get("x-token").map(String::as_str), Some("secret-redacted"));
+            }
+            _ => panic!("expected http action"),
+        }
+    }
+
+    #[test]
+    fn malformed_file_is_skipped() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".aleph/hooks.json");
+        write(&cfg, "not json");
+        let mut out = Vec::new();
+        load_into(&cfg, "user:project", &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn unknown_event_is_skipped() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".aleph/hooks.json");
+        write(
+            &cfg,
+            r#"{ "hooks": { "BogusEvent": [
+                { "hooks": [{ "type": "command", "command": "x" }] }
+            ] } }"#,
+        );
+        let mut out = Vec::new();
+        load_into(&cfg, "user:project", &mut out);
+        assert!(out.is_empty());
+    }
+}

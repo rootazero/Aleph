@@ -11,9 +11,49 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
+
+/// Build a Claude Code-style event payload JSON for stdin / HTTP body.
+///
+/// Schema (keyed `snake_case` to match the rest of the hook surface):
+/// `{ hook_event_name, session_id, tool_name?, tool_input?, tool_output?, tool_error?, cwd?, env }`
+fn build_event_payload(event: HookEvent, context: &HookContext) -> String {
+    use serde_json::{json, Map, Value};
+    let event_str = match serde_json::to_value(event) {
+        Ok(Value::String(s)) => s,
+        _ => format!("{event:?}").to_lowercase(),
+    };
+    let mut payload: Map<String, Value> = Map::new();
+    payload.insert("hook_event_name".into(), Value::String(event_str));
+    payload.insert(
+        "session_id".into(),
+        Value::String(context.session_id.clone()),
+    );
+    if let Some(t) = &context.tool_name {
+        payload.insert("tool_name".into(), Value::String(t.clone()));
+    }
+    if let Some(t) = &context.tool_input {
+        // Prefer parsed JSON; fall back to string when the tool_input is plain text.
+        let parsed: Value = serde_json::from_str(t).unwrap_or_else(|_| Value::String(t.clone()));
+        payload.insert("tool_input".into(), parsed);
+    }
+    if let Some(o) = &context.tool_output {
+        payload.insert("tool_output".into(), Value::String(o.clone()));
+    }
+    if let Some(e) = context.tool_error {
+        payload.insert("tool_error".into(), Value::Bool(e));
+    }
+    if let Some(c) = &context.working_dir {
+        payload.insert("cwd".into(), Value::String(c.to_string_lossy().to_string()));
+    }
+    if !context.env.is_empty() {
+        payload.insert("env".into(), json!(context.env));
+    }
+    serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string())
+}
 
 /// Hook executor - runs hook actions based on events
 #[derive(Clone)]
@@ -138,7 +178,14 @@ impl HookExecutor {
             // Execute all actions for this hook
             for action in &hook.actions {
                 let action_result = self
-                    .execute_action(action, context, &hook.plugin_root, &hook.plugin_name, event)
+                    .execute_action(
+                        action,
+                        context,
+                        &hook.plugin_root,
+                        &hook.plugin_name,
+                        event,
+                        hook.timeout_secs.map(Duration::from_secs),
+                    )
                     .await;
 
                 match action_result {
@@ -146,14 +193,21 @@ impl HookExecutor {
                         // Handle special action results
                         match action {
                             HookAction::Prompt { .. } => {
+                                // The resolved prompt template is injected
+                                // as additional context for the next LLM
+                                // turn. (Out-of-band LLM judgment that
+                                // returns {ok,reason} is a future enhancement
+                                // — when missing, the prompt itself goes to
+                                // the calling LLM, which is the next-best
+                                // semantic.)
                                 if let Some(ref output) = ar.output {
-                                    result.messages.push(output.clone());
+                                    result.additional_contexts.push(output.clone());
                                 }
                             }
                             HookAction::Agent { agent } => {
                                 result.agents_to_invoke.push(agent.clone());
                             }
-                            HookAction::Command { .. } => {
+                            HookAction::Command { .. } | HookAction::Http { .. } => {
                                 if let Some(ref output) = ar.output {
                                     super::parse_command_output(output, &mut result);
                                 }
@@ -214,7 +268,10 @@ impl HookExecutor {
         }
     }
 
-    /// Execute a single action
+    /// Execute a single action.
+    ///
+    /// `timeout_override` lets the per-hook `timeout_secs` setting take
+    /// precedence over the executor's default. Applies to Command/Http.
     async fn execute_action(
         &self,
         action: &HookAction,
@@ -222,17 +279,37 @@ impl HookExecutor {
         plugin_root: &std::path::PathBuf,
         plugin_name: &str,
         event: HookEvent,
+        timeout_override: Option<Duration>,
     ) -> Result<ActionResult, ExtensionError> {
         match action {
             HookAction::Command { command } => {
-                self.execute_command(command, context, plugin_root, plugin_name, event)
-                    .await
+                self.execute_command(
+                    command,
+                    context,
+                    plugin_root,
+                    plugin_name,
+                    event,
+                    timeout_override,
+                )
+                .await
             }
             HookAction::Prompt { prompt } => {
                 self.execute_prompt(prompt, context, plugin_root).await
             }
             HookAction::Agent { agent } => self.execute_agent(agent).await,
+            HookAction::Http { url, headers } => {
+                self.execute_http(url, headers, context, plugin_root, event, timeout_override)
+                    .await
+            }
         }
+    }
+
+    /// Effective timeout for a single hook execution (per-hook override or
+    /// the executor default).
+    fn effective_timeout(&self, override_secs: Option<u64>) -> Duration {
+        override_secs
+            .map(Duration::from_secs)
+            .unwrap_or(self.command_timeout)
     }
 
     /// Execute a shell command
@@ -243,6 +320,7 @@ impl HookExecutor {
         plugin_root: &std::path::PathBuf,
         plugin_name: &str,
         event: HookEvent,
+        timeout_override: Option<Duration>,
     ) -> Result<ActionResult, ExtensionError> {
         // Shell-hook consent gate: an un-approved command must not run. It is
         // recorded as `pending` (so `aleph hooks list` surfaces it) and the
@@ -313,20 +391,36 @@ impl HookExecutor {
             cmd.env(key, value);
         }
 
-        // Configure stdio
-        cmd.stdin(Stdio::null());
+        // Configure stdio. The event JSON payload is piped to stdin so
+        // hook scripts can `jq -r '.tool_input.file_path'` (Claude Code
+        // convention). Env vars stay set for back-compat.
+        let payload = build_event_payload(event, context);
+        cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        // Execute with timeout
-        let output = match timeout(self.command_timeout, cmd.output()).await {
-            Ok(result) => result.map_err(|e| {
-                ExtensionError::HookExecution(format!("Failed to execute command: {}", e))
-            })?,
+        // Execute with timeout (per-hook override > executor default)
+        let effective = self.effective_timeout(timeout_override.map(|d| d.as_secs()));
+        let output = match timeout(effective, async {
+            let mut child = cmd.spawn().map_err(|e| {
+                ExtensionError::HookExecution(format!("Failed to spawn command: {}", e))
+            })?;
+            if let Some(mut stdin) = child.stdin.take() {
+                // Best-effort: if stdin write fails (hook ignored stdin), keep going.
+                let _ = stdin.write_all(payload.as_bytes()).await;
+                let _ = stdin.shutdown().await;
+            }
+            child.wait_with_output().await.map_err(|e| {
+                ExtensionError::HookExecution(format!("Failed to await command: {}", e))
+            })
+        })
+        .await
+        {
+            Ok(result) => result?,
             Err(_) => {
                 return Err(ExtensionError::HookExecution(format!(
                     "Command timed out after {:?}",
-                    self.command_timeout
+                    effective
                 )));
             }
         };
@@ -385,6 +479,68 @@ impl HookExecutor {
         })
     }
 
+    /// Execute an HTTP hook — POST the event JSON payload to `url` and
+    /// parse the response body using the same line-prefix protocol as
+    /// command hooks. Useful for team audit logs, webhooks, and
+    /// LLM-judge gateways without spawning a shell.
+    async fn execute_http(
+        &self,
+        url: &str,
+        headers: &HashMap<String, String>,
+        context: &HookContext,
+        plugin_root: &Path,
+        event: HookEvent,
+        timeout_override: Option<Duration>,
+    ) -> Result<ActionResult, ExtensionError> {
+        let resolved_url = substitute_variables(url, context, plugin_root);
+        let payload = build_event_payload(event, context);
+        let effective = self.effective_timeout(timeout_override.map(|d| d.as_secs()));
+
+        let client = reqwest::Client::builder()
+            .timeout(effective)
+            .build()
+            .map_err(|e| {
+                ExtensionError::HookExecution(format!("Failed to build HTTP client: {}", e))
+            })?;
+
+        let mut req = client
+            .post(&resolved_url)
+            .header("content-type", "application/json")
+            .body(payload);
+        for (k, v) in headers {
+            // Only context-env substitution — no process env — so a misconfigured
+            // template can't leak `$AWS_SECRET_ACCESS_KEY` etc.
+            let resolved_v = substitute_variables(v, context, plugin_root);
+            req = req.header(k.as_str(), resolved_v);
+        }
+
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                if !status.is_success() {
+                    warn!("Hook HTTP {} -> {}: {}", resolved_url, status, body);
+                }
+                Ok(ActionResult {
+                    success: status.is_success(),
+                    output: if body.is_empty() { None } else { Some(body) },
+                    error: if status.is_success() {
+                        None
+                    } else {
+                        Some(format!("HTTP {}", status.as_u16()))
+                    },
+                    exit_code: Some(status.as_u16() as i32),
+                })
+            }
+            Err(e) => Ok(ActionResult {
+                success: false,
+                output: None,
+                error: Some(format!("HTTP request failed: {}", e)),
+                exit_code: None,
+            }),
+        }
+    }
+
     /// Execute interceptor hooks for an event.
     ///
     /// Interceptors run sequentially in priority order and can:
@@ -436,17 +592,28 @@ impl HookExecutor {
                         &hook.plugin_root,
                         &hook.plugin_name,
                         event,
+                        hook.timeout_secs.map(Duration::from_secs),
                     )
                     .await;
 
                 match action_result {
                     Ok(ar) => {
-                        if let HookAction::Command { .. } = action {
-                            if let Some(ref output) = ar.output {
-                                super::parse_command_output(output, &mut accumulated);
-                                if accumulated.blocked {
-                                    return Ok((current_context, accumulated));
+                        match action {
+                            HookAction::Command { .. } | HookAction::Http { .. } => {
+                                if let Some(ref output) = ar.output {
+                                    super::parse_command_output(output, &mut accumulated);
+                                    if accumulated.blocked || accumulated.denied {
+                                        return Ok((current_context, accumulated));
+                                    }
                                 }
+                            }
+                            HookAction::Prompt { .. } => {
+                                if let Some(ref output) = ar.output {
+                                    accumulated.additional_contexts.push(output.clone());
+                                }
+                            }
+                            HookAction::Agent { agent } => {
+                                accumulated.agents_to_invoke.push(agent.clone());
                             }
                         }
                         accumulated.action_results.push(ar);
@@ -493,6 +660,7 @@ impl HookExecutor {
         let futures: Vec<_> = observers
             .into_iter()
             .map(|hook| async move {
+                let timeout_override = hook.timeout_secs.map(Duration::from_secs);
                 for action in &hook.actions {
                     if let Err(e) = self
                         .execute_action(
@@ -501,6 +669,7 @@ impl HookExecutor {
                             &hook.plugin_root,
                             &hook.plugin_name,
                             event,
+                            timeout_override,
                         )
                         .await
                     {
@@ -558,7 +727,14 @@ impl HookExecutor {
             let mut action_results = Vec::new();
             for action in &hook.actions {
                 match self
-                    .execute_action(action, context, &hook.plugin_root, &hook.plugin_name, event)
+                    .execute_action(
+                        action,
+                        context,
+                        &hook.plugin_root,
+                        &hook.plugin_name,
+                        event,
+                        hook.timeout_secs.map(Duration::from_secs),
+                    )
                     .await
                 {
                     Ok(ar) => action_results.push(ar),
