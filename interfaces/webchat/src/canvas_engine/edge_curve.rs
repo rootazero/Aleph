@@ -9,6 +9,7 @@ pub(crate) const DEFAULT_SAG: f64 = 0.12;
 /// Edge kinds that are *directional* and therefore render an arrow head.
 /// Everything else (including `None`, `"related"`, any unknown string) is
 /// drawn as a plain stroke.
+#[allow(dead_code)] // reserved for future arrow-head rendering (spec §7 phase 2)
 pub(crate) const DIRECTIONAL_KINDS: &[&str] = &["refers", "derives", "follows"];
 
 /// Quadratic-Bézier control point: midpoint, shoved perpendicular to
@@ -64,6 +65,7 @@ pub(crate) fn hop_style(layer: HopLayer) -> (f64, f64) {
 }
 
 /// Does this edge get an arrow head?
+#[allow(dead_code)] // paired with DIRECTIONAL_KINDS — reserved for arrow-head feature
 pub(crate) fn is_directional(kind: Option<&str>) -> bool {
     kind.is_some_and(|k| DIRECTIONAL_KINDS.contains(&k))
 }

@@ -16,6 +16,7 @@ use crate::canvas_engine::types::Vec2;
 use std::collections::HashMap;
 
 /// Default minimum distance between two orphan centres (in world px).
+#[allow(dead_code)] // referenced by unit tests; exposed for callers needing the invariant
 pub(crate) const MIN_DISTANCE: f64 = 56.0; // ≈ 2 × dot radius + 20
 /// Candidate attempts per orphan before we accept the best-so-far.
 pub(crate) const CANDIDATES_PER_ORPHAN: u32 = 20;
@@ -46,6 +47,7 @@ pub(crate) fn place_scattered(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // internal helper; struct-wrapping the 9 args adds noise
 fn best_candidate(
     id: &str,
     index: usize,
