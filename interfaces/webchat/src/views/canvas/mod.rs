@@ -4,6 +4,7 @@ mod detail_panel;
 mod graph_canvas;
 #[cfg(target_arch = "wasm32")]
 mod minimap_view;
+pub mod node_card;
 mod toolbar;
 
 use crate::canvas_engine::mini_map::GlobalMiniMap;
