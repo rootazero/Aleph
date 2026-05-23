@@ -484,10 +484,11 @@ html.translucent { --aleph-canvas-base: transparent; }
               inset  1px 0 0 var(--aleph-sheen);
 }
 
-/* Brand row — uniform small padding on every platform. The shell now uses
-   a native (non-overlay) titlebar on macOS too, so the webview starts BELOW
-   the traffic-lights area — no extra macOS clearance is needed here. */
+/* Brand row — padded on macOS to clear the overlay traffic lights at the
+   top-left. The sidebar toggle now lives at the top-right of the window, so
+   no extra padding is needed for it on the sidebar's left edge. */
 .aleph-sidebar-head { padding-top: 0.85rem; }
+html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 
 /* The ℵ wordmark tile. */
 .aleph-mark {
@@ -679,6 +680,32 @@ html.translucent { --aleph-canvas-base: transparent; }
     overflow: hidden;
 }
 
+/* Title-bar drag strip — macOS only. The window uses TitleBarStyle::Overlay
+   + hidden_title, so the OS draws traffic lights over the webview but gives
+   us no native drag surface. This 32 px strip across the top mimics a
+   borderless-Mac titlebar: drag anywhere along it to move the window.
+   Win/Linux still get a native title bar from the OS, so we hide the strip
+   there. The strip sits below the toggle button (z=50) and above general
+   content (z=40), so the toggle stays clickable.
+
+   The `data-tauri-drag-region` attribute on the element itself is what
+   tells Tauri 2 to start a window drag on mousedown; `-webkit-app-region`
+   is a defensive fallback. */
+.aleph-titlebar-drag {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 32px;
+    z-index: 40;
+    -webkit-app-region: drag;
+    cursor: default;
+}
+html[data-platform="macos"] .aleph-titlebar-drag {
+    display: block;
+}
+
 /* Sidebar toggle — always visible, fixed at the top-right of the window.
    Sits on the same horizontal row as the macOS overlay traffic lights, but
    right-aligned to the title-bar area (the traffic lights stay at the
@@ -712,6 +739,10 @@ html.translucent { --aleph-canvas-base: transparent; }
 .aleph-sidebar-toggle:focus-visible {
     outline: 2px solid var(--color-primary);
     outline-offset: 1px;
+}
+html[data-platform="macos"] .aleph-sidebar-toggle {
+    top: 10px;
+    right: 12px;
 }
 
 /* ── Accent-aware caret + scrollbar ──────────────────────────────────

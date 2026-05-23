@@ -174,21 +174,12 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .visible(false)
         .initialization_script(SHELL_MARKER_JS);
 
-    // Visible titlebar with the title text hidden: the OS owns a ~28 px
-    // standard Mac titlebar (traffic lights + chrome background, no title),
-    // and the webview starts BELOW it. This is the only mode in Wry where
-    // `fullSizeContentView` is OFF — meaning the webview's NSView does NOT
-    // cover the titlebar, so mousedown there is handled by NSWindow
-    // synchronously. Zero-latency native drag, no `data-tauri-drag-region`
-    // workaround needed, no transparent gap.
-    //
-    // (`Transparent` and `Overlay` in Wry both flip on `fullSizeContentView`,
-    // which lets the webview swallow titlebar mousedown and forces the slow
-    // IPC drag path — a trap we already hit twice.)
+    // Overlay traffic lights over the content for a native-mac feel; the
+    // Panel's CSS (Phase 2) leaves room for them.
     #[cfg(target_os = "macos")]
     {
         builder = builder
-            .title_bar_style(tauri::TitleBarStyle::Visible)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
     }
     let window = builder.build()?;
