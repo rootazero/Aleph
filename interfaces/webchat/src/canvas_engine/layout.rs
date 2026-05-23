@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::f32::consts::TAU;
 
-use super::types::{CanvasEdge, CanvasNode, ClusterNode, Vec3};
+use super::fnv1a::hash_jitter;
+use super::types::{CanvasEdge, CanvasNode, ClusterNode, Vec2, Vec3};
 
 /// FNV-1a 32-bit hash, deterministic across runs and platforms.
 pub(crate) fn fnv1a_32(bytes: &[u8]) -> u32 {
@@ -65,6 +67,34 @@ pub fn r_two_hop(n: usize, viewport_w_px: f32) -> f32 {
 
 pub fn r_orphan(n: usize, viewport_w_px: f32) -> f32 {
     r_for_hop(2.4, n, viewport_w_px)
+}
+
+/// Place `ids` on a ring around `(0,0)` at base radius `base_r`,
+/// with deterministic per-id jitter in angle (±17°) and radius (±15%).
+///
+/// Writes positions into `out`. Skips ids already present.
+pub(crate) fn place_perturbed_ring(
+    ids: &[&str],
+    base_r: f64,
+    out: &mut HashMap<String, Vec2>,
+) {
+    if ids.is_empty() {
+        return;
+    }
+    let n = ids.len() as f32;
+    for (i, id) in ids.iter().enumerate() {
+        if out.contains_key(*id) {
+            continue;
+        }
+        let j_angle = 0.30 * hash_jitter(id);              // ±17.2°
+        let j_radius = 0.15 * hash_jitter(&format!("r:{id}")); // ±15%, decorrelated
+        let angle = ((i as f32 / n) * TAU + j_angle) as f64;
+        let radius = base_r * (1.0 + j_radius as f64);
+        out.insert((*id).into(), Vec2 {
+            x: radius * angle.cos(),
+            y: radius * angle.sin(),
+        });
+    }
 }
 
 /// Compute ideal (target) positions for active + neighbors using radial geometry.
@@ -392,5 +422,52 @@ mod radial_tests {
             orphan > two,
             "R_orphan must exceed R₂: two={two} orphan={orphan}"
         );
+    }
+
+    #[test]
+    fn perturbed_ring_is_deterministic() {
+        let ids = vec!["a", "b", "c", "d"];
+        let mut m1 = HashMap::new();
+        let mut m2 = HashMap::new();
+        place_perturbed_ring(&ids, 200.0, &mut m1);
+        place_perturbed_ring(&ids, 200.0, &mut m2);
+        assert_eq!(m1, m2);
+    }
+
+    #[test]
+    fn perturbed_ring_avoids_collision() {
+        let ids: Vec<&str> = (0..8)
+            .map(|i| Box::leak(format!("n{i}").into_boxed_str()) as &str)
+            .collect();
+        let mut m = HashMap::new();
+        place_perturbed_ring(&ids, 200.0, &mut m);
+        let n = ids.len() as f64;
+        let min_sep = (std::f64::consts::TAU / n) * 0.4; // 40% of even spacing
+        let mut angles: Vec<f64> = ids
+            .iter()
+            .map(|id| {
+                let p = m[*id];
+                p.y.atan2(p.x).rem_euclid(std::f64::consts::TAU)
+            })
+            .collect();
+        angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for w in angles.windows(2) {
+            assert!(
+                (w[1] - w[0]) >= min_sep,
+                "adjacent angles {} and {} too close (min_sep={})",
+                w[0],
+                w[1],
+                min_sep
+            );
+        }
+    }
+
+    #[test]
+    fn perturbed_ring_skips_existing_ids() {
+        let mut m = HashMap::new();
+        m.insert("a".into(), Vec2 { x: 999.0, y: 999.0 });
+        place_perturbed_ring(&["a", "b"], 200.0, &mut m);
+        assert_eq!(m["a"], Vec2 { x: 999.0, y: 999.0 });
+        assert!(m.contains_key("b"));
     }
 }
