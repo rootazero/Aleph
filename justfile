@@ -50,15 +50,22 @@ build-debug: wasm
 
 # Stage the daemon (+ macOS Swift bridge) as Tauri externalBin inputs.
 # `profile` is the target/ subdir to copy the daemon from (debug | release).
+#
+# Uses `install -m 0755` instead of `cp` so the staged file is guaranteed
+# executable. cargo can drop +x on the friendly-name binary (target/<profile>/
+# aleph-server) when its hardlink fast-path falls back to copy on certain
+# filesystems — without this, the Tauri bundler ships a non-executable
+# aleph-server in Aleph.app/Contents/MacOS/ and the shell fails to spawn
+# the daemon with EACCES.
 _stage-shell-binaries profile:
     #!/usr/bin/env bash
     set -euo pipefail
     triple="$(rustc -vV | sed -n 's/host: //p')"
     ext=""; [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]] && ext=".exe"
     mkdir -p {{shell_dir}}/binaries
-    cp "target/{{profile}}/{{server_bin}}$ext" "{{shell_dir}}/binaries/aleph-server-$triple$ext"
+    install -m 0755 "target/{{profile}}/{{server_bin}}$ext" "{{shell_dir}}/binaries/aleph-server-$triple$ext"
     if [[ "$OSTYPE" == darwin* ]]; then
-        cp "{{release_dir}}/aleph-bridge" "{{shell_dir}}/binaries/AlephBridge-$triple"
+        install -m 0755 "{{release_dir}}/aleph-bridge" "{{shell_dir}}/binaries/AlephBridge-$triple"
     fi
 
 # Create empty externalBin placeholders so `cargo check` / `clippy` of the
