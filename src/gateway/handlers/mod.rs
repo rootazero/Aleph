@@ -112,6 +112,7 @@ pub mod tools_invoke;
 pub mod tools_visibility;
 pub mod trace_replay;
 pub mod version;
+pub mod wizard;
 pub mod workspace;
 
 pub use config::{handle_get_full_config, handle_patch_config};
@@ -763,7 +764,31 @@ impl HandlerRegistry {
             )
         });
 
+        // Wizard — phase-1 stubs; boot path replaces with real handlers via install_wizard_handlers
+        for method in [
+            "wizard.start",
+            "wizard.next",
+            "wizard.answer",
+            "wizard.cancel",
+            "wizard.status",
+        ] {
+            registry.register(method, |req| async move {
+                service_unavailable(req, "wizard manager not yet initialised")
+            });
+        }
+
         registry
+    }
+
+    /// Overlay real wizard handlers — call from the boot path once the
+    /// session manager exists.
+    pub fn install_wizard_handlers(
+        &mut self,
+        manager: Arc<crate::gateway::handlers::wizard::WizardSessionManager>,
+    ) {
+        for (name, handler) in crate::gateway::handlers::wizard::handlers(manager) {
+            self.handlers.insert(name.to_string(), handler);
+        }
     }
 
     /// Create an empty handler registry
@@ -1013,5 +1038,15 @@ mod tests {
         assert!(registry.has_method("workspace.archive"));
         assert!(registry.has_method("channels.set_agent"));
         assert!(registry.has_method("agents.bindings"));
+    }
+
+    #[test]
+    fn test_wizard_stub_handlers_registered() {
+        let registry = HandlerRegistry::new();
+        assert!(registry.has_method("wizard.start"));
+        assert!(registry.has_method("wizard.next"));
+        assert!(registry.has_method("wizard.answer"));
+        assert!(registry.has_method("wizard.cancel"));
+        assert!(registry.has_method("wizard.status"));
     }
 }
