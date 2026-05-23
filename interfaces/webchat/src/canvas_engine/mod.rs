@@ -8,6 +8,7 @@ pub mod markdown_excerpt;
 pub mod mini_map;
 pub mod navigation;
 pub mod prefetch;
+pub mod scatter;
 pub mod renderer;
 pub mod tween;
 pub mod types;
