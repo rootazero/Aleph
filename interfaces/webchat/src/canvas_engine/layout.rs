@@ -390,4 +390,65 @@ mod radial_tests {
         assert_eq!(m["a"], Vec2 { x: 999.0, y: 999.0 });
         assert!(m.contains_key("b"));
     }
+
+    #[test]
+    fn known_seed_layout_matches_baseline() {
+        use crate::canvas_engine::adapter::{populate_orphans, to_neighborhood, GraphNeighborsResponse};
+        use std::collections::HashMap;
+
+        let json = include_str!("../../tests/fixtures/canvas_30nodes.json");
+        let resp: GraphNeighborsResponse = serde_json::from_str(json).unwrap();
+
+        // fold_threshold high enough that no top-K folding kicks in (29 nodes < 99)
+        let mut nbhd = to_neighborhood(&resp, 0.0, 99);
+        populate_orphans(&mut nbhd, &resp.nodes);
+
+        let baseline_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/layout_baseline_30nodes.json"
+        );
+
+        // Bless mode: dump current positions to baseline file
+        if std::env::var("BLESS_LAYOUT_SNAPSHOTS").is_ok() {
+            let snapshot: HashMap<String, (f32, f32)> = nbhd
+                .target_positions
+                .iter()
+                .map(|(k, v)| (k.clone(), (v.x, v.y)))
+                .collect();
+            let serialized = serde_json::to_string_pretty(&snapshot).unwrap();
+            std::fs::write(baseline_path, serialized).expect("baseline write");
+            return;
+        }
+
+        // Compare mode: load baseline and assert every position is within tolerance
+        let baseline_raw = std::fs::read_to_string(baseline_path)
+            .expect("run with BLESS_LAYOUT_SNAPSHOTS=1 to create baseline");
+        let baseline: HashMap<String, (f32, f32)> = serde_json::from_str(&baseline_raw).unwrap();
+
+        for (id, expected) in &baseline {
+            let actual = nbhd
+                .target_positions
+                .get(id)
+                .unwrap_or_else(|| panic!("layout missing id {id}"));
+            assert!(
+                (actual.x - expected.0).abs() < 0.01,
+                "id={} x drift: actual={} expected={}",
+                id, actual.x, expected.0
+            );
+            assert!(
+                (actual.y - expected.1).abs() < 0.01,
+                "id={} y drift: actual={} expected={}",
+                id, actual.y, expected.1
+            );
+        }
+
+        // Also assert no UNEXPECTED ids (catches additions)
+        assert_eq!(
+            nbhd.target_positions.len(),
+            baseline.len(),
+            "position count drift: expected {}, got {}",
+            baseline.len(),
+            nbhd.target_positions.len()
+        );
+    }
 }
