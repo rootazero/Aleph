@@ -94,19 +94,76 @@ fn SidebarBrand() -> impl IntoView {
     }
 }
 
-/// Memory mode has no sub-navigation — the knowledge graph is a single
-/// canvas. Show a minimal header so the column stays consistent.
+/// Memory mode sidebar — agent selector, search, fold threshold slider,
+/// node detail panel, and a footer with a collapse button.
 #[component]
 fn MemorySidebar() -> impl IntoView {
-    let i18n = use_i18n();
+    use crate::state::memory::MemoryState;
+    use crate::views::canvas::{NodeDetailPanel, NodeExcerpt};
+    use std::collections::HashMap;
+
+    let mem = expect_context::<MemoryState>();
+    let excerpts: RwSignal<HashMap<String, NodeExcerpt>> = RwSignal::new(Default::default());
+
     view! {
-        <div class="flex flex-col h-full p-4">
-            <h2 class="text-xs font-medium text-text-tertiary uppercase tracking-wider">
-                {move || t_string!(i18n, nav.memory).to_string()}
-            </h2>
-            <p class="mt-2 text-xs text-text-tertiary leading-relaxed">
-                "知识图谱 — 在右侧画布中拖拽、缩放并探索记忆节点。"
-            </p>
+        <div class="flex flex-col h-full">
+            <div class="px-3 pt-3 pb-1.5">
+                <label style="font-size:9.5px;color:var(--text-meta);text-transform:uppercase;letter-spacing:0.05em">
+                    "Agent"
+                </label>
+                <select
+                    class="w-full mt-1 bg-[#1a1a2e] border border-[#2a2a40] rounded text-xs text-[#e2e8f0] px-2 py-1.5"
+                    prop:value=move || mem.agent_id.get()
+                    on:change=move |ev| {
+                        mem.agent_id.set(event_target_value(&ev));
+                    }
+                >
+                    <option value=move || mem.agent_id.get()>{move || mem.agent_id.get()}</option>
+                </select>
+            </div>
+            <div class="px-3 pb-1.5">
+                <label style="font-size:9.5px;color:var(--text-meta);text-transform:uppercase;letter-spacing:0.05em">
+                    "Search"
+                </label>
+                <input
+                    type="search"
+                    placeholder="keyword…"
+                    class="w-full mt-1 bg-[#1a1a2e] border border-[#2a2a40] rounded text-xs text-[#e2e8f0] px-2 py-1.5 placeholder-[#64748b]"
+                    prop:value=move || mem.search_query.get()
+                    on:input=move |ev| {
+                        mem.search_query.set(event_target_value(&ev));
+                    }
+                />
+            </div>
+            <div class="px-3 pb-2">
+                <label style="font-size:9.5px;color:var(--text-meta);text-transform:uppercase;letter-spacing:0.05em">
+                    "Fold"
+                </label>
+                <input
+                    type="range" min="0" max="10" step="1"
+                    class="w-full mt-1 accent-[#a78bfa]"
+                    prop:value=move || mem.fold_threshold.get() as i32
+                    on:input=move |ev| {
+                        if let Ok(v) = event_target_value(&ev).parse::<usize>() {
+                            mem.fold_threshold.set(v);
+                        }
+                    }
+                />
+            </div>
+            <NodeDetailPanel excerpts=excerpts />
+            <div class="border-t border-[#2a2a40] px-3 py-2 flex items-center justify-between">
+                <span style="font-size:10px;color:var(--text-meta)">
+                    "graph"
+                </span>
+                <button
+                    type="button"
+                    class="text-[#a78bfa] text-xs px-2 py-1 rounded hover:bg-[#a78bfa14]"
+                    on:click=move |_| { mem.sidebar_collapsed.set(true); }
+                    title="Collapse sidebar (Esc to restore)"
+                >
+                    "\u{21e7}"
+                </button>
+            </div>
         </div>
     }
 }

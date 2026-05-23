@@ -8,7 +8,7 @@ pub mod node_card;
 mod node_detail_panel;
 mod toolbar;
 
-pub use node_detail_panel::NodeDetailPanel;
+pub use node_detail_panel::{NodeDetailPanel, NodeExcerpt};
 
 use crate::canvas_engine::mini_map::GlobalMiniMap;
 #[cfg(target_arch = "wasm32")]
