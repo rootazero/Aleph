@@ -4,6 +4,7 @@ use web_sys::CanvasRenderingContext2d;
 use super::types::*;
 use super::viewport::Viewport;
 use crate::canvas_engine::drag::DragOverlay;
+use crate::canvas_engine::edge_curve::{edge_control_point, hop_style, HopLayer, DEFAULT_SAG};
 
 /// Idle drift amplitude (pixels). Each node oscillates within this radius around its
 /// resolved (target) position. Spec §6.1, Q4 = "B / breathing" feel.
@@ -433,7 +434,7 @@ fn draw_edges_for_node(
 ) {
     for e in &nbhd.edges {
         let endpoints = endpoints_world_pos(e, nbhd, drag, node_drag, now_ms_in_seconds() * 1000.0);
-        let (from_pos, to_pos, from_z, to_z) = match endpoints {
+        let (from_pos, to_pos, _from_z, _to_z) = match endpoints {
             Some(t) => t,
             None => continue,
         };
@@ -458,9 +459,13 @@ fn draw_edges_for_node(
             continue;
         }
 
-        let attrs_from = depth_attrs(from_z);
-        let attrs_to = depth_attrs(to_z);
-        let stroke_alpha = if e.is_active_link { 0.85_f32 } else { 0.25_f32 };
+        // Hop layer: if either endpoint is in two_hop (idx > one_hop.len()), it's Two.
+        let layer = if e.from_idx > nbhd.one_hop.len() || e.to_idx > nbhd.one_hop.len() {
+            HopLayer::Two
+        } else {
+            HopLayer::One
+        };
+        let (max_alpha, line_width) = hop_style(layer);
 
         if e.is_wikilink {
             let dashes = js_sys::Array::new();
@@ -472,43 +477,34 @@ fn draw_edges_for_node(
             let _ = ctx.set_line_dash(&solid);
         }
 
+        let cp = edge_control_point(
+            Vec2 { x: from_pos.0 as f64, y: from_pos.1 as f64 },
+            Vec2 { x: to_pos.0 as f64,   y: to_pos.1 as f64 },
+            DEFAULT_SAG,
+        );
+
+        // α-gradient stroke: invisible at endpoints, max at the chord interior.
         let grad = ctx.create_linear_gradient(
             from_pos.0 as f64,
             from_pos.1 as f64,
             to_pos.0 as f64,
             to_pos.1 as f64,
         );
-        if e.is_active_link {
-            let _ = grad.add_color_stop(
-                0.0,
-                &format!("rgba(167,139,250,{:.3})", stroke_alpha * attrs_from.opacity),
-            );
-            let _ = grad.add_color_stop(
-                1.0,
-                &format!("rgba(76,29,149,{:.3})", stroke_alpha * attrs_to.opacity),
-            );
-        } else {
-            let _ = grad.add_color_stop(
-                0.0,
-                &format!("rgba(107,107,138,{:.3})", stroke_alpha * attrs_from.opacity),
-            );
-            let _ = grad.add_color_stop(
-                1.0,
-                &format!("rgba(42,42,58,{:.3})", stroke_alpha * attrs_to.opacity),
-            );
-        }
-
-        let avg_w = if e.is_active_link {
-            (2.5 + 1.0) * 0.5
-        } else {
-            (1.5 + 0.8) * 0.5
-        };
-
+        let _ = grad.add_color_stop(0.00, "rgba(167,139,250,0.000)");
+        let _ = grad.add_color_stop(0.15, &format!("rgba(167,139,250,{:.3})", max_alpha));
+        let _ = grad.add_color_stop(0.85, &format!("rgba(167,139,250,{:.3})", max_alpha));
+        let _ = grad.add_color_stop(1.00, "rgba(167,139,250,0.000)");
         ctx.set_stroke_style_canvas_gradient(&grad);
-        ctx.set_line_width(avg_w as f64);
+        ctx.set_line_width(line_width);
+
         ctx.begin_path();
         ctx.move_to(from_pos.0 as f64, from_pos.1 as f64);
-        ctx.line_to(to_pos.0 as f64, to_pos.1 as f64);
+        // Quadratic Bézier via degenerate cubic: both control points coincide.
+        ctx.bezier_curve_to(
+            cp.x, cp.y,
+            cp.x, cp.y,
+            to_pos.0 as f64, to_pos.1 as f64,
+        );
         ctx.stroke();
     }
 }
