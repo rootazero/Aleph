@@ -2,6 +2,7 @@
 //! sidebar (search / fold / detail panel) and the canvas itself can
 //! both read and mutate it.
 
+use crate::api::agents::AgentSummary;
 use leptos::prelude::*;
 use std::collections::VecDeque;
 
@@ -11,6 +12,7 @@ const RECENT_VISITED_CAPACITY: usize = 8;
 #[derive(Clone, Copy)]
 pub struct MemoryState {
     pub agent_id:           RwSignal<String>,
+    pub agents:             RwSignal<Vec<AgentSummary>>,
     pub search_query:       RwSignal<String>,
     pub fold_threshold:     RwSignal<usize>,
     pub selected_node:      RwSignal<Option<String>>,
@@ -24,6 +26,7 @@ impl MemoryState {
     pub fn new() -> Self {
         Self {
             agent_id:           RwSignal::new("main".into()),
+            agents:             RwSignal::new(Vec::new()),
             search_query:       RwSignal::new(String::new()),
             fold_threshold:     RwSignal::new(3),
             selected_node:      RwSignal::new(None),

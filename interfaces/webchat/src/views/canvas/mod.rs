@@ -31,18 +31,14 @@ use crate::canvas_engine::markdown_excerpt::render_excerpt;
 use crate::canvas_engine::navigation::{NavController, RETARGET_DURATION_MS};
 use crate::canvas_engine::prefetch::PrefetchCache;
 use crate::canvas_engine::types::BreadcrumbEntry;
-use detail_panel::DetailContent;
 use leptos::callback::Callback;
 
 use crate::context::DashboardState;
+use crate::state::memory::MemoryState;
 
-use breadcrumb::Breadcrumb;
-use detail_panel::DetailPanel;
 use graph_canvas::{GraphCanvas, GraphState};
-use toolbar::CanvasToolbar;
 
-use crate::api::agents::{AgentSummary, AgentsApi};
-use agent_selector::AgentSelectorBar;
+use crate::api::agents::AgentsApi;
 
 #[component]
 pub fn CanvasView() -> impl IntoView {
@@ -59,23 +55,16 @@ pub fn CanvasView() -> impl IntoView {
 #[component]
 fn RadialCanvasView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let mem = expect_context::<MemoryState>();
 
-    // -----------------------------------------------------------------------
-    // Agent selection signals
-    // -----------------------------------------------------------------------
-    // Placeholder is the literal "main" — must match server's DEFAULT_AGENT_ID.
-    // If they ever diverge, the worst case is one extra graph fetch on mount,
-    // because AgentsApi::list().default_id overrides this once it resolves.
-    let agent_id = RwSignal::new("main".to_string());
-    let agents = RwSignal::new(Vec::<AgentSummary>::new());
-    let default_agent_id = RwSignal::new("main".to_string());
-    let agents_loading = RwSignal::new(false);
-    let agents_error = RwSignal::new(None::<String>);
+    // Derive agent_id from MemoryState so the sidebar's agent selector drives
+    // the canvas. Local alias for readability in the Effects below.
+    let agent_id = mem.agent_id;
 
-    // Fetch the agent list once on mount, plus a reusable refresh callback.
+    // Fetch the agent list once on mount, writing results into MemoryState so
+    // MemorySidebar's <select> can render them. Uses a reusable closure for
+    // retry-safe reconnect behaviour.
     let fetch_agents = move || {
-        agents_loading.set(true);
-        agents_error.set(None);
         let state = state;
         spawn_local(async move {
             // Retry up to 3 times with 500ms delay to handle transient "Not connected"
@@ -87,14 +76,12 @@ fn RadialCanvasView() -> impl IntoView {
             loop {
                 match AgentsApi::list(&state).await {
                     Ok(resp) => {
-                        agents.set(resp.agents);
+                        mem.agents.set(resp.agents);
                         let new_default = resp.default_id;
-                        default_agent_id.set(new_default.clone());
                         // Only override agent_id if it would actually change.
-                        if agent_id.get_untracked() != new_default {
-                            agent_id.set(new_default);
+                        if mem.agent_id.get_untracked() != new_default {
+                            mem.agent_id.set(new_default);
                         }
-                        agents_loading.set(false);
                         break;
                     }
                     Err(e) => {
@@ -110,8 +97,9 @@ fn RadialCanvasView() -> impl IntoView {
                             gloo_timers::future::TimeoutFuture::new(RETRY_DELAY_MS).await;
                             continue;
                         }
-                        agents_error.set(Some(e));
-                        agents_loading.set(false);
+                        web_sys::console::error_1(
+                            &format!("Agents list failed: {e}").into(),
+                        );
                         break;
                     }
                 }
@@ -130,12 +118,14 @@ fn RadialCanvasView() -> impl IntoView {
     });
 
     // Reactive signals (all Copy — safe to capture in Callback::new closures)
-    let (selected_node, set_selected_node) = signal(None::<String>);
-    let (node_detail, set_node_detail) = signal(None::<NoteDetailResponse>);
-    let (detail_content, set_detail_content) = signal(DetailContent::Closed);
-    let (breadcrumb_entries, set_breadcrumb) = signal(Vec::<BreadcrumbEntry>::new());
-    let search_query = RwSignal::new(String::new());
-    let (fold_threshold, set_fold_threshold) = signal(12usize);
+    // selected_node, search_query, fold_threshold are sourced from MemoryState so
+    // the sidebar and canvas share the same values.
+    let selected_node = mem.selected_node;
+    let set_selected_node = mem.selected_node;
+    let search_query = mem.search_query;
+    let fold_threshold = mem.fold_threshold;
+    let set_fold_threshold = mem.fold_threshold;
+    let (_breadcrumb_entries, set_breadcrumb) = signal(Vec::<BreadcrumbEntry>::new());
 
     // Raw-response snapshot for the current center. Set after a successful Effect-fetch
     // (or prefetch hit), cleared at the start of every Effect-fetch invocation.
@@ -223,7 +213,7 @@ fn RadialCanvasView() -> impl IntoView {
     // unused-variable warning on the native (cargo check) target.
     #[cfg(not(target_arch = "wasm32"))]
     let _ = (focus_id, focus_neighbors);
-    let (visible_counts, set_visible_counts) = signal((0usize, 0usize));
+    let (_visible_counts, set_visible_counts) = signal((0usize, 0usize));
 
     // -----------------------------------------------------------------------
     // Agent-switch reset Effect.
@@ -246,8 +236,6 @@ fn RadialCanvasView() -> impl IntoView {
             if *p != current {
                 // Reset reactive signals
                 set_selected_node.set(None);
-                set_node_detail.set(None);
-                set_detail_content.set(DetailContent::Closed);
                 set_breadcrumb.set(Vec::new());
                 search_query.set(String::new());
                 set_fold_threshold.set(12);
@@ -452,35 +440,25 @@ fn RadialCanvasView() -> impl IntoView {
     });
 
     // -----------------------------------------------------------------------
-    // Effect 3: node detail — fetch wiki/backlinks when selected_node changes
+    // Effect 3: node detail — kept for side-effects (prefetch cache warm-up)
+    // when selected_node changes. DetailPanel has been removed; the sidebar's
+    // NodeDetailPanel reads from the excerpt cache populated by the lazy-fetch
+    // Effect above.
     // -----------------------------------------------------------------------
     Effect::new(move || {
         let node_id = selected_node.get();
-        match node_id {
-            Some(id) => {
-                let agent = agent_id.get();
-                spawn_local(async move {
-                    match GraphApi::node_detail(&state, &agent, &id).await {
-                        Ok(detail) => {
-                            set_detail_content.set(DetailContent::Node {
-                                detail: detail.clone(),
-                            });
-                            set_node_detail.set(Some(detail));
-                        }
-                        Err(e) => {
-                            web_sys::console::error_1(
-                                &format!("Failed to load node detail: {e}").into(),
-                            );
-                            set_node_detail.set(None);
-                            set_detail_content.set(DetailContent::Closed);
-                        }
+        if let Some(id) = node_id {
+            let agent = agent_id.get();
+            spawn_local(async move {
+                match GraphApi::node_detail(&state, &agent, &id).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        web_sys::console::error_1(
+                            &format!("Failed to load node detail: {e}").into(),
+                        );
                     }
-                });
-            }
-            None => {
-                set_node_detail.set(None);
-                set_detail_content.set(DetailContent::Closed);
-            }
+                }
+            });
         }
     });
 
@@ -592,7 +570,10 @@ fn RadialCanvasView() -> impl IntoView {
         _ => {}
     };
 
-    let on_search = move |query: String| {
+    // Search: on_search is driven by the sidebar's search field via mem.search_query.
+    // Subscribe to search_query changes and trigger a graph navigation when non-empty.
+    Effect::new(move || {
+        let query = search_query.get();
         if query.is_empty() {
             return;
         }
@@ -607,7 +588,6 @@ fn RadialCanvasView() -> impl IntoView {
                             node_id: id.clone(),
                             node_name: name,
                         }]);
-                        // Trigger neighborhood fetch via the intent channel.
                         active_request.set(Some(id));
                     }
                 }
@@ -616,91 +596,34 @@ fn RadialCanvasView() -> impl IntoView {
                 }
             }
         });
-    };
-
-    let on_breadcrumb_navigate = move |target: Option<String>| match target {
-        None => {
-            set_breadcrumb.set(vec![]);
-            set_selected_node.set(None);
-        }
-        Some(id) => {
-            set_breadcrumb.update(|entries| {
-                if let Some(pos) = entries.iter().position(|e| e.node_id == id) {
-                    entries.truncate(pos + 1);
-                }
-            });
-            set_selected_node.set(None);
-            // Re-center the radial neighborhood on the breadcrumb target.
-            active_request.set(Some(id));
-        }
-    };
-
-    let has_breadcrumb = move || !breadcrumb_entries.get().is_empty();
-    let has_detail = move || node_detail.get().is_some();
+    });
 
     view! {
-        <div class="flex flex-col h-full">
-            <AgentSelectorBar
-                agent_id=agent_id
-                agents=agents
-                default_agent_id=default_agent_id
-                loading=agents_loading
-                error=agents_error
-                on_refresh=fetch_agents
+        <div class="relative w-full h-full bg-[#080818]">
+            <GraphCanvas
+                graph_state=graph_state.clone()
+                on_event=Callback::new(on_event)
+                nav=nav.clone()
+                excerpt_by_id=excerpt_by_id
             />
-
-            <CanvasToolbar
-                search_query=search_query
-                on_search=on_search
-                fold_threshold=fold_threshold
-                set_fold_threshold=set_fold_threshold
-                visible_counts=visible_counts
-            />
-
-            {move || has_breadcrumb().then(|| view! {
-                <Breadcrumb
-                    entries=breadcrumb_entries
-                    on_navigate=on_breadcrumb_navigate
-                />
-            })}
-
-            <div class="flex flex-1 overflow-hidden">
-                <div class="flex-1 relative bg-[#0a0a0f]">
-                    <GraphCanvas
-                        graph_state=graph_state.clone()
-                        on_event=Callback::new(on_event)
-                        nav=nav.clone()
-                        excerpt_by_id=excerpt_by_id
-                    />
-                    {
-                        #[cfg(target_arch = "wasm32")]
-                        {
-                            view! {
-                                <MiniMapOverlay
-                                    minimap=minimap.clone()
-                                    focus_id=focus_id
-                                    focus_neighbor_ids=focus_neighbors
-                                    on_pick=move |id: String| {
-                                        set_selected_node.set(Some(id.clone()));
-                                        active_request.set(Some(id));
-                                    }
-                                />
+            {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    view! {
+                        <MiniMapOverlay
+                            minimap=minimap.clone()
+                            focus_id=focus_id
+                            focus_neighbor_ids=focus_neighbors
+                            on_pick=move |id: String| {
+                                set_selected_node.set(Some(id.clone()));
+                                active_request.set(Some(id));
                             }
-                        }
-                        #[cfg(not(target_arch = "wasm32"))]
-                        { () }
+                        />
                     }
-                </div>
-
-                {move || has_detail().then(|| view! {
-                    <DetailPanel
-                        content=detail_content
-                        on_jump_to=Callback::new(move |id: String| {
-                            set_selected_node.set(Some(id));
-                        })
-                    />
-                })}
-            </div>
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                { () }
+            }
         </div>
     }
 }

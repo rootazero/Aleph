@@ -118,7 +118,33 @@ fn MemorySidebar() -> impl IntoView {
                         mem.agent_id.set(event_target_value(&ev));
                     }
                 >
-                    <option value=move || mem.agent_id.get()>{move || mem.agent_id.get()}</option>
+                    {move || {
+                        let current = mem.agent_id.get();
+                        let agents = mem.agents.get();
+                        if agents.is_empty() {
+                            // Fallback while the list is loading
+                            view! {
+                                <option value=current.clone()>{current.clone()}</option>
+                            }.into_any()
+                        } else {
+                            agents.into_iter().map(|a| {
+                                let id = a.id.clone();
+                                let label = a.name.as_deref()
+                                    .map(|n| {
+                                        if let Some(e) = a.emoji.as_deref() {
+                                            format!("{e} {n}")
+                                        } else {
+                                            n.to_string()
+                                        }
+                                    })
+                                    .unwrap_or_else(|| a.id.clone());
+                                let selected = id == mem.agent_id.get_untracked();
+                                view! {
+                                    <option value=id prop:selected=selected>{label}</option>
+                                }
+                            }).collect_view().into_any()
+                        }
+                    }}
                 </select>
             </div>
             <div class="px-3 pb-1.5">
