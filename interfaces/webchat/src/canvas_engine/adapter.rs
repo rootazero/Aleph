@@ -104,7 +104,10 @@ pub fn to_neighborhood(
             CanvasEdge {
                 from_idx,
                 to_idx,
+                from_id: e.from.clone(),
+                to_id: e.to.clone(),
                 relation: String::new(),
+                label: e.label.clone(),
                 is_wikilink: true,
                 is_active_link,
             }
@@ -319,7 +322,10 @@ pub fn adapt_graph_response(response: &GraphQueryResponse) -> (Vec<CanvasNode>, 
             Some(CanvasEdge {
                 from_idx,
                 to_idx,
+                from_id: dto.from.clone(),
+                to_id: dto.to.clone(),
                 relation: String::new(),
+                label: dto.label.clone(),
                 is_wikilink: true,
                 is_active_link: false,
             })

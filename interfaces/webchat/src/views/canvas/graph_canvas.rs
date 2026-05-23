@@ -9,13 +9,28 @@ use wasm_bindgen::JsCast;
 use leptos::callback::Callback;
 
 use crate::canvas_engine::drag::{DragState, ReleaseOutcome};
+use crate::canvas_engine::edge_curve::{bezier_point, bezier_tangent, edge_control_point,
+    DEFAULT_SAG};
 use crate::canvas_engine::interaction::{CanvasEvent, InteractionState};
 use crate::canvas_engine::navigation::NavController;
 use crate::canvas_engine::renderer::draw_neighborhood;
 use crate::canvas_engine::tween::build_interpolated_neighborhood;
 use crate::canvas_engine::types::*;
 use crate::canvas_engine::viewport::Viewport;
+use crate::views::canvas::edge_label::EdgeLabel;
 use crate::views::canvas::node_card::NodeCard;
+
+/// Per-edge label state kept in the overlay signal map.
+struct EdgeLabelEntry {
+    /// The label text to display (never None — entries only exist when label.is_some()).
+    label: String,
+    /// Screen-space midpoint of the Bézier curve, updated each rAF frame.
+    pos_sig: RwSignal<(f32, f32)>,
+    /// Tangent angle in radians at t=0.5, clamped to [-π/4, π/4].
+    tangent_sig: RwSignal<f32>,
+    /// True iff zoom ≥ 0.7 AND the edge is adjacent to the hovered/selected node.
+    visible_sig: RwSignal<bool>,
+}
 
 /// Shared mutable state for 60fps canvas rendering (not reactive).
 pub struct GraphState {
@@ -117,6 +132,12 @@ pub fn GraphCanvas(
     let hovered_id_sig: RwSignal<Option<String>> = RwSignal::new(None);
     let selected_id_sig: RwSignal<Option<String>> = RwSignal::new(None);
 
+    // Edge-label overlay signals (Task 7.2): maps (from_id, to_id) → EdgeLabelEntry.
+    // Only edges with label.is_some() get an entry. Entries are get-or-created lazily
+    // in the rAF loop, mirroring the node_screen_pos pattern from Task 4.5.
+    let edge_label_state: RwSignal<HashMap<(String, String), EdgeLabelEntry>> =
+        RwSignal::new(HashMap::new());
+
     // Clone handles once for each event closure that needs them, since `nav`,
     // `drag_state`, and `last_frame_ms` are all moved into the rAF Effect closure
     // below. (Effect::new takes `move ||`, which consumes its captures.)
@@ -185,6 +206,7 @@ pub fn GraphCanvas(
         let zoom_signal_inner = zoom_signal;
         let hovered_id_sig_inner = hovered_id_sig;
         let selected_id_sig_inner = selected_id_sig;
+        let edge_label_state_inner = edge_label_state;
 
         let canvas_for_resize = canvas.clone();
         let closure: Closure<dyn FnMut()> = Closure::new(move || {
@@ -311,6 +333,97 @@ pub fn GraphCanvas(
                 });
                 if needs_update {
                     overlay_nodes_inner.set(flat_nodes);
+                }
+
+                // ---------------------------------------------------------------
+                // Publish per-edge label screen positions (Task 7.2).
+                // Only processes edges that carry a label (label.is_some()).
+                // Node positions are read from the nav state to keep them in sync
+                // with the same neighborhood that drives the canvas draw.
+                // ---------------------------------------------------------------
+                {
+                    // Build a quick id→world_pos map from the current neighborhood
+                    // (active or animating). We borrow only what we need.
+                    let node_world: HashMap<&str, Vec2> = match &nav_state {
+                        NavState::Active { neighborhood, .. } => {
+                            std::iter::once(&neighborhood.center)
+                                .chain(neighborhood.one_hop.iter())
+                                .chain(neighborhood.two_hop.iter())
+                                .map(|n| (n.id.as_str(), n.position))
+                                .collect()
+                        }
+                        NavState::Animating { to_neighborhood, .. } => {
+                            std::iter::once(&to_neighborhood.center)
+                                .chain(to_neighborhood.one_hop.iter())
+                                .chain(to_neighborhood.two_hop.iter())
+                                .map(|n| (n.id.as_str(), n.position))
+                                .collect()
+                        }
+                        _ => HashMap::new(),
+                    };
+
+                    // Highlight source: selected node wins, hovered is fallback.
+                    let highlight: Option<&str> = selected.as_deref().or(hovered.as_deref());
+
+                    // Iterate the GraphState edges snapshot (set by seed_graph_state).
+                    // We need the edges vector — re-borrow state briefly for edges only.
+                    // state was already dropped above; use gs_render for a fresh borrow.
+                    let edges_snapshot: Vec<(String, String, String)> = gs_render
+                        .borrow()
+                        .edges
+                        .iter()
+                        .filter_map(|e| {
+                            e.label.as_ref().map(|lbl| {
+                                (e.from_id.clone(), e.to_id.clone(), lbl.clone())
+                            })
+                        })
+                        .collect();
+
+                    for (from_id, to_id, label_text) in edges_snapshot {
+                        let Some(&from_world) = node_world.get(from_id.as_str()) else {
+                            continue;
+                        };
+                        let Some(&to_world) = node_world.get(to_id.as_str()) else {
+                            continue;
+                        };
+
+                        let cp = edge_control_point(from_world, to_world, DEFAULT_SAG);
+                        let mid_world = bezier_point(from_world, cp, to_world, 0.5);
+                        let mid_screen = viewport.world_to_screen(mid_world);
+
+                        let tangent_clamped = bezier_tangent(from_world, cp, to_world, 0.5)
+                            .clamp(
+                                -(std::f64::consts::FRAC_PI_4),
+                                std::f64::consts::FRAC_PI_4,
+                            ) as f32;
+
+                        let is_visible = current_zoom >= 0.7
+                            && highlight
+                                .map(|h| h == from_id || h == to_id)
+                                .unwrap_or(false);
+
+                        let key = (from_id.clone(), to_id.clone());
+                        let existing = edge_label_state_inner
+                            .with(|m| m.get(&key).map(|e| (e.pos_sig, e.tangent_sig, e.visible_sig)));
+
+                        if let Some((pos_sig, tan_sig, vis_sig)) = existing {
+                            pos_sig.set((mid_screen.x as f32, mid_screen.y as f32));
+                            tan_sig.set(tangent_clamped);
+                            vis_sig.set(is_visible);
+                        } else {
+                            let pos_sig = RwSignal::new((mid_screen.x as f32, mid_screen.y as f32));
+                            let tangent_sig = RwSignal::new(tangent_clamped);
+                            let visible_sig = RwSignal::new(is_visible);
+                            edge_label_state_inner.update(|m| {
+                                m.insert(key, EdgeLabelEntry {
+                                    label: label_text,
+                                    pos_sig,
+                                    tangent_sig,
+                                    visible_sig,
+                                });
+                            });
+                        }
+                    }
                 }
 
                 match nav_state {
@@ -644,6 +757,28 @@ pub fn GraphCanvas(
                             />
                         }
                     }).collect_view()
+                }}
+            </div>
+            // Edge label overlay: EdgeLabel components positioned at Bézier midpoints.
+            // All labels are pointer-events-none (set inside EdgeLabel's style).
+            <div class="absolute inset-0 pointer-events-none overflow-hidden">
+                {move || {
+                    edge_label_state.with(|m| {
+                        m.values().map(|el| {
+                            let text = el.label.clone();
+                            let pos = el.pos_sig.read_only();
+                            let tan = el.tangent_sig.read_only();
+                            let vis = el.visible_sig.read_only();
+                            view! {
+                                <EdgeLabel
+                                    text=text
+                                    screen_xy=pos
+                                    tangent_rad=tan
+                                    visible=vis
+                                />
+                            }
+                        }).collect_view()
+                    })
                 }}
             </div>
         </div>

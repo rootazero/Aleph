@@ -173,7 +173,10 @@ mod radial_tests {
         CanvasEdge {
             from_idx: from,
             to_idx: to,
+            from_id: String::new(),
+            to_id: String::new(),
             relation: relation.to_string(),
+            label: None,
             is_wikilink: false,
             is_active_link: true,
         }
