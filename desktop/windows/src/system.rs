@@ -288,10 +288,12 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
         #[cfg(windows)]
         {
             tokio::task::spawn_blocking(|| {
-                use windows::Win32::System::SystemInformation::GetTickCount;
+                use windows::Win32::System::SystemInformation::GetTickCount64;
                 use windows::Win32::UI::Input::KeyboardAndMouse::GetLastInputInfo;
 
                 #[repr(C)]
+                #[allow(non_snake_case, clippy::upper_case_acronyms)]
+                // Win32 ABI struct — name & field casing must match the Win32 header.
                 struct LASTINPUTINFO {
                     cbSize: u32,
                     dwTime: u32,
@@ -302,15 +304,30 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
                     dwTime: 0,
                 };
 
-                // SAFETY: GetLastInputInfo fills the struct; GetTickCount returns millis since boot.
-                let idle_millis = unsafe {
-                    if GetLastInputInfo(&mut info as *mut _ as *mut _).as_bool() {
-                        let now = GetTickCount();
-                        now - info.dwTime
-                    } else {
-                        0
-                    }
+                // SAFETY: GetLastInputInfo writes into the struct on success;
+                // GetTickCount64 returns u64 millis since boot (no 49.7-day wrap).
+                let (ok, now_ms, last_ms) = unsafe {
+                    let ok = GetLastInputInfo(&mut info as *mut _ as *mut _).as_bool();
+                    (ok, GetTickCount64(), info.dwTime)
                 };
+
+                if !ok {
+                    return Err(DesktopError::PlatformError(
+                        "GetLastInputInfo failed".into(),
+                    ));
+                }
+
+                // dwTime is the low 32 bits of the boot tick counter at the moment
+                // of the last input event. GetTickCount64 advances past 2^32 ms
+                // after ~49.7 days; reconstruct the full 64-bit timestamp by
+                // combining the high 32 bits of `now_ms` with `last_ms`, then
+                // rolling back one wrap if the result is in the future.
+                let high = now_ms & 0xFFFF_FFFF_0000_0000;
+                let mut last_full = high | (last_ms as u64);
+                if last_full > now_ms {
+                    last_full = last_full.wrapping_sub(1u64 << 32);
+                }
+                let idle_millis = now_ms.saturating_sub(last_full);
 
                 Ok((idle_millis as f64) / 1000.0)
             })

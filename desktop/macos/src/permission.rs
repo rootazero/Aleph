@@ -28,7 +28,8 @@ use objc2_av_foundation::{
 };
 use objc2_speech::{SFSpeechRecognizer, SFSpeechRecognizerAuthorizationStatus};
 use objc2_user_notifications::{
-    UNAuthorizationStatus, UNNotificationSettings, UNUserNotificationCenter,
+    UNAuthorizationOptions, UNAuthorizationStatus, UNNotificationSettings,
+    UNUserNotificationCenter,
 };
 
 // ---------------------------------------------------------------------------
@@ -242,10 +243,33 @@ fn request_accessibility() -> PermissionStatus {
 }
 
 fn request_notifications() -> PermissionStatus {
-    // For notifications, checking is the same as what we can do —
-    // the actual request requires requestAuthorizationWithOptions which
-    // needs specific options. We re-check status after a brief check.
-    check_notifications()
+    // A non-bundled binary cannot prompt; report Unknown — same gate as
+    // `check_notifications`.
+    let bundle = objc2_foundation::NSBundle::mainBundle();
+    if bundle.bundleIdentifier().is_none() {
+        return PermissionStatus::Unknown;
+    }
+
+    let center = UNUserNotificationCenter::currentNotificationCenter();
+    let options = UNAuthorizationOptions::Alert
+        | UNAuthorizationOptions::Sound
+        | UNAuthorizationOptions::Badge;
+
+    let (tx, rx) = mpsc::channel();
+    let block = RcBlock::new(move |granted: Bool, _err: *mut objc2_foundation::NSError| {
+        let _ = tx.send(granted.as_bool());
+    });
+
+    center.requestAuthorizationWithOptions_completionHandler(options, &block);
+
+    // The completion handler is invoked after the user dismisses the system
+    // prompt. After it returns we re-poll `check_notifications` so the reported
+    // status reflects "authorized / provisional / ephemeral" (granted), even
+    // when the OS upgrades a provisional grant on first request.
+    match rx.recv_timeout(CALLBACK_TIMEOUT) {
+        Ok(_) => check_notifications(),
+        Err(_) => PermissionStatus::Unknown,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -554,5 +578,20 @@ mod tests {
             );
             assert_eq!(info.permission, perm);
         }
+    }
+
+    #[test]
+    fn request_notifications_returns_unknown_when_unbundled() {
+        // `cargo test` runs as a plain executable with no CFBundleIdentifier,
+        // so the bundle-ID gate must short-circuit to Unknown rather than
+        // blocking on a system prompt that will never arrive.
+        let bundle = objc2_foundation::NSBundle::mainBundle();
+        if bundle.bundleIdentifier().is_some() {
+            // If a future test harness ever sets a bundle ID, skip this case
+            // to avoid hanging on a UN authorization prompt.
+            return;
+        }
+        let status = request_notifications();
+        assert_eq!(status, PermissionStatus::Unknown);
     }
 }

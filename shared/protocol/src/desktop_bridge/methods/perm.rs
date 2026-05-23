@@ -29,6 +29,7 @@ pub enum PermissionKind {
     Calendars,
     Reminders,
     Photos,
+    Location,
 }
 
 /// Current TCC status for one permission kind.
@@ -104,12 +105,19 @@ mod tests {
             PermissionKind::Calendars,
             PermissionKind::Reminders,
             PermissionKind::Photos,
+            PermissionKind::Location,
         ];
         for kind in kinds {
             let s = serde_json::to_string(&kind).unwrap();
             let back: PermissionKind = serde_json::from_str(&s).unwrap();
             assert_eq!(kind, back, "round-trip failed for {kind:?}");
         }
+    }
+
+    #[test]
+    fn location_serializes_as_snake_case() {
+        let j = serde_json::to_string(&PermissionKind::Location).unwrap();
+        assert_eq!(j, "\"location\"");
     }
 
     #[test]

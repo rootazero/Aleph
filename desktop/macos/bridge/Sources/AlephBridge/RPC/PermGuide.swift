@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import AVFoundation
 import Contacts
+import CoreLocation
 import EventKit
 import Photos
 import Foundation
@@ -36,6 +37,7 @@ enum PermissionKind: String, Codable {
     case calendars
     case reminders
     case photos
+    case location
 }
 
 // MARK: - Swift params types (for handler decoding)
@@ -44,6 +46,35 @@ struct CheckParams: Codable { let kind: PermissionKind }
 struct GuideParams: Codable { let kind: PermissionKind }
 struct OpenSettingsParams: Codable { let kind: PermissionKind }
 struct OpenSettingsResult: Codable { let ok: Bool }
+
+// MARK: - Automation probe (NSAppleScript)
+
+/// errAEEventWouldRequireUserConsent — sent by AppleScript when an Apple Event
+/// would have prompted for Automation TCC consent but the prompt is suppressed
+/// (e.g. background context) or the user has previously denied it.
+private let errAEEventWouldRequireUserConsent = -1743
+
+/// Probe Automation TCC by running a benign AppleScript against Finder.
+/// Returns `true` when the event dispatched successfully (Automation is
+/// granted) or returned a non-permission error (prompt has been answered
+/// in some prior session); returns `false` only when the system reports
+/// the explicit -1743 consent error.
+private func probeAutomationGranted() -> Bool {
+    // Finder is present on every macOS install and is cheap to address.
+    let source = """
+    tell application "Finder" to return name
+    """
+    var error: NSDictionary?
+    let script = NSAppleScript(source: source)
+    let result = script?.executeAndReturnError(&error)
+
+    if let info = error,
+       let code = info["NSAppleScriptErrorNumber"] as? Int,
+       code == errAEEventWouldRequireUserConsent {
+        return false
+    }
+    return result != nil
+}
 
 // MARK: - C imports for InputMonitoring (IOKit HID)
 
@@ -188,11 +219,52 @@ enum Perm {
             }
 
         case .automation:
-            // No public API to query Automation TCC status.
-            // Attempting to use AppleScript/JXA triggers a system dialog.
-            // We conservatively report unknown (not granted).
-            return PermissionStatus(kind: kind, granted: false,
+            // No public API queries Automation TCC directly. Probe by running
+            // a benign AppleScript against Finder (present on every macOS
+            // install). If the system returns errAEEventWouldRequireUserConsent
+            // (-1743) we are NOT authorized; any other outcome (success, or a
+            // non-permission error such as a Finder timeout) means the prompt
+            // has been answered and we either have access or have not yet
+            // triggered the dialog at all. Mirrors openclaw's
+            // AppleScriptPermission.isAuthorized probe.
+            let granted = probeAutomationGranted()
+            return PermissionStatus(kind: kind, granted: granted,
                                     can_request_programmatically: true, restricted: false)
+
+        case .location:
+            guard CLLocationManager.locationServicesEnabled() else {
+                return PermissionStatus(kind: kind, granted: false,
+                                        can_request_programmatically: false, restricted: false)
+            }
+            let status = CLLocationManager().authorizationStatus
+            let granted: Bool
+            let canRequest: Bool
+            let restricted: Bool
+            switch status {
+            case .authorizedAlways, .authorizedWhenInUse:
+                granted = true
+                canRequest = false
+                restricted = false
+            case .notDetermined:
+                granted = false
+                canRequest = true
+                restricted = false
+            case .denied:
+                granted = false
+                canRequest = false
+                restricted = false
+            case .restricted:
+                granted = false
+                canRequest = false
+                restricted = true
+            @unknown default:
+                granted = false
+                canRequest = false
+                restricted = false
+            }
+            return PermissionStatus(kind: kind, granted: granted,
+                                    can_request_programmatically: canRequest,
+                                    restricted: restricted)
         }
     }
 
@@ -213,6 +285,7 @@ enum Perm {
         case .calendars:         anchor = "?Privacy_Calendars"
         case .reminders:         anchor = "?Privacy_Reminders"
         case .photos:            anchor = "?Privacy_Photos"
+        case .location:          anchor = "?Privacy_LocationServices"
         }
         return base + anchor
     }
@@ -293,6 +366,13 @@ enum Perm {
                 "在列表中找到 aleph-server 或 AlephBridge",
                 "从下拉菜单选择「完全访问」（而非「受限访问」）",
             ]
+        case .location:
+            return [
+                "打开「系统设置」→「隐私与安全性」→「定位服务」",
+                "确保顶部「定位服务」总开关处于开启状态",
+                "在列表中找到 aleph-server 或 AlephBridge，拨动开关至开启状态",
+                "如未见条目，请先运行一次需要定位的操作，系统会弹出对话框",
+            ]
         }
     }
 
@@ -322,6 +402,8 @@ enum Perm {
             return "Aleph 需要提醒事项权限以创建和查看提醒，协助你跟踪待办任务"
         case .photos:
             return "Aleph 需要照片权限以访问你的图库，从而对照片内容进行分析或搜索"
+        case .location:
+            return "Aleph 需要定位权限以提供基于位置的提醒、天气、附近信息等场景化服务"
         }
     }
 
