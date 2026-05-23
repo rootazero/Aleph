@@ -91,6 +91,9 @@ fn AppContent() -> impl IntoView {
 /// dedicated router components.
 #[component]
 fn MainContent() -> impl IntoView {
+    use crate::state::memory::MemoryState;
+    provide_context(MemoryState::new());
+
     let location = use_location();
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
 

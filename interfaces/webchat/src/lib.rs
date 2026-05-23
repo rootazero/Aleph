@@ -8,6 +8,7 @@ pub mod i18n;
 pub mod models;
 pub mod preset_data;
 pub mod preset_providers;
+pub mod state;
 pub mod views;
 
 use wasm_bindgen::prelude::*;
