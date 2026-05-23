@@ -264,7 +264,21 @@ impl SystemCapability for LinuxSystem {
 
     async fn user_idle_seconds(&self) -> Result<f64> {
         tokio::task::spawn_blocking(|| {
-            // Try xprintidle first (X11 / XWayland).
+            let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+            let is_wayland = session_type.eq_ignore_ascii_case("wayland");
+
+            // Wayland: prefer GNOME Mutter D-Bus IdleMonitor, which works for any
+            // logged-in user on a modern GNOME-on-Wayland session and does not
+            // depend on running an X server. xprintidle reports 0 forever on a
+            // pure Wayland compositor.
+            if is_wayland {
+                if let Some(secs) = query_mutter_idle_seconds() {
+                    return Ok(secs);
+                }
+            }
+
+            // X11 / XWayland: xprintidle is the standard tool. Some distros ship
+            // it by default; others require `apt install xprintidle`.
             if let Ok(output) = std::process::Command::new("xprintidle").output() {
                 if output.status.success() {
                     let ms = String::from_utf8_lossy(&output.stdout)
@@ -275,13 +289,69 @@ impl SystemCapability for LinuxSystem {
                 }
             }
 
-            Err(DesktopError::NotImplemented(
-                "Idle detection requires xprintidle (install: sudo apt install xprintidle)".into(),
-            ))
+            // Last-chance Wayland fallback even if XDG_SESSION_TYPE was unset.
+            if !is_wayland {
+                if let Some(secs) = query_mutter_idle_seconds() {
+                    return Ok(secs);
+                }
+            }
+
+            let hint = if is_wayland {
+                "Idle detection on this Wayland session needs GNOME's Mutter \
+                 IdleMonitor (gdbus / dbus-send + a running GNOME shell)"
+            } else {
+                "Idle detection requires xprintidle on X11 \
+                 (install: sudo apt install xprintidle) \
+                 or GNOME Mutter IdleMonitor on Wayland"
+            };
+            Err(DesktopError::NotImplemented(hint.into()))
         })
         .await
         .map_err(|e| DesktopError::PlatformError(format!("task join error: {e}")))?
     }
+}
+
+/// Query GNOME Mutter's IdleMonitor over the session bus via `gdbus`.
+///
+/// Returns the idle time in seconds, or `None` if `gdbus` is unavailable,
+/// the IdleMonitor object is not present (no GNOME shell), or the reply
+/// cannot be parsed. The reply format is `(uint64 N,)` where N is millis.
+///
+/// Shells out instead of taking a `zbus` dependency: idle detection is a
+/// rare query and `gdbus` is part of every GNOME install (it lives in
+/// `glib2-tools` / `libglib2.0-bin`).
+fn query_mutter_idle_seconds() -> Option<f64> {
+    let output = std::process::Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.Mutter.IdleMonitor",
+            "--object-path",
+            "/org/gnome/Mutter/IdleMonitor/Core",
+            "--method",
+            "org.gnome.Mutter.IdleMonitor.GetIdletime",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_mutter_idle_reply(&stdout)
+}
+
+/// Parse `gdbus`'s textual reply `(uint64 12345,)` into seconds.
+fn parse_mutter_idle_reply(reply: &str) -> Option<f64> {
+    let trimmed = reply.trim();
+    let inner = trimmed.strip_prefix('(')?.strip_suffix(",)")?;
+    let inner = inner.trim();
+    // Accept the typed form ("uint64 12345") and the bare numeric form ("12345").
+    let digits = inner.strip_prefix("uint64").unwrap_or(inner).trim();
+    let ms: u64 = digits.parse().ok()?;
+    Some(ms as f64 / 1000.0)
 }
 
 fn read_os_version() -> Option<String> {
@@ -342,5 +412,32 @@ mod tests {
         assert_eq!(info.os_name, "Linux");
         assert!(!info.hostname.is_empty());
         assert!(!info.arch.is_empty());
+    }
+
+    #[test]
+    fn parses_mutter_idle_typed_reply() {
+        // gdbus typically prints the type tag.
+        let out = parse_mutter_idle_reply("(uint64 12345,)\n").unwrap();
+        assert!((out - 12.345).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parses_mutter_idle_bare_numeric_reply() {
+        // Some glib versions omit the tag.
+        let out = parse_mutter_idle_reply("(2500,)").unwrap();
+        assert!((out - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parses_mutter_idle_zero() {
+        let out = parse_mutter_idle_reply("(uint64 0,)").unwrap();
+        assert_eq!(out, 0.0);
+    }
+
+    #[test]
+    fn rejects_malformed_mutter_idle_reply() {
+        assert!(parse_mutter_idle_reply("garbage").is_none());
+        assert!(parse_mutter_idle_reply("(uint64 not_a_number,)").is_none());
+        assert!(parse_mutter_idle_reply("()").is_none());
     }
 }
