@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Memory canvas: rich Markdown node cards (FULL / MINI / DOT modes)** rendered as a Leptos DOM overlay over Canvas2D edges. The center node renders as a 280px FULL card with stripe + title + lazy-fetched Markdown excerpt + tag chips; 1-hop nodes render as 140px MINI pills; 2-hop and orphan nodes render as 10px colored DOTs. Hovering or selecting a node promotes it one tier (DOT→MINI→FULL); zoom < 0.5 force-collapses everything to DOTs.
+- **Memory sidebar: filled the shared left column** with agent picker, search input, fold-threshold slider, and a `<NodeDetailPanel>` that lists recently visited memories when nothing is selected. The four right-side widgets (agent selector, toolbar, breadcrumb, detail panel) were stripped; their state lives in a new `MemoryState` Leptos context provided at the `App` root.
+- **Sidebar collapse**: ⇧ button at the sidebar footer + Esc key + 8px right-edge hover strip + peek-handle button + localStorage persistence (`aleph.sidebar.collapsed`). The whole sidebar slides out via CSS transform animation, giving the canvas full-width when in focus.
+- **Edge labels**: free-form `label` and `kind` fields on graph edges (Obsidian JSON Canvas-compatible naming); labels fade in for edges adjacent to the hovered/selected node when zoom ≥ 0.7. Position pinned to Bézier midpoint, rotation clamped to `[-π/4, π/4]` so labels never read upside-down.
+
+### Changed
+- **Memory canvas layout**: replaced the strict concentric "religious totem" rings with deterministic-jitter perturbed rings (±17° angular jitter, ±15% radial jitter via FNV-1a hash) plus Poisson-disk-scattered orphans (20 candidates per orphan, 60% central exclusion rect, spill into outer band beyond 20 orphans). No force engine, no new crates. Snapshot-locked via `tests/fixtures/layout_baseline_30nodes.json`.
+- **Memory canvas edges**: replaced straight strokes with α-gradient quadratic-Bézier curves (sag 0.12, both control points coincide), layered by hop (1-hop α 0.85 / width 1.8; 2-hop α 0.55 / width 1.2). Adjacent edges to a hovered/selected node highlight in gold (`#fcd34d`) at 1.5× width via a two-pass render that dims non-adjacent first then draws bright adjacent on top.
+- **Phase 0 perf gate (soft pass)**: 300 DOM-overlay cards over Canvas2D, measured via Chrome DevTools — median 60 fps, p25 56 fps, p5 30 fps under synthetic stress (every frame mutates 300 transforms). Production load is much lighter (cards static 95% of the time, transform changes only on drag / selection / hop transition). Phase 8 final perf validation deferred to user manual verification.
+
+### Removed
+- `interfaces/webchat/src/views/canvas/agent_selector.rs`, `toolbar.rs`, `breadcrumb.rs` — their UI is now in the shared sidebar. Net −342 lines from this cleanup alone.
+- Per-node `draw_node` circle rendering in `renderer.rs` (replaced by DOM-overlay `<NodeCard>` components). Old `r_orphan` ring helper + the sector/golden-angle orphan layout in `populate_orphans` deleted.
+
 ### Fixed
 - **Extension hooks — production wiring closure (hermes-inspired)**: the
   `HookExecutor` snapshot that the gateway request loop already builds was
