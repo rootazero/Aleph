@@ -1,12 +1,9 @@
-mod agent_selector;
-mod breadcrumb;
 mod detail_panel;
 mod graph_canvas;
 #[cfg(target_arch = "wasm32")]
 mod minimap_view;
 pub mod node_card;
 mod node_detail_panel;
-mod toolbar;
 
 pub use node_detail_panel::{NodeDetailPanel, NodeExcerpt};
 
@@ -30,7 +27,6 @@ use crate::canvas_engine::interaction::CanvasEvent;
 use crate::canvas_engine::markdown_excerpt::render_excerpt;
 use crate::canvas_engine::navigation::{NavController, RETARGET_DURATION_MS};
 use crate::canvas_engine::prefetch::PrefetchCache;
-use crate::canvas_engine::types::BreadcrumbEntry;
 use leptos::callback::Callback;
 
 use crate::context::DashboardState;
@@ -125,8 +121,6 @@ fn RadialCanvasView() -> impl IntoView {
     let search_query = mem.search_query;
     let fold_threshold = mem.fold_threshold;
     let set_fold_threshold = mem.fold_threshold;
-    let (_breadcrumb_entries, set_breadcrumb) = signal(Vec::<BreadcrumbEntry>::new());
-
     // Raw-response snapshot for the current center. Set after a successful Effect-fetch
     // (or prefetch hit), cleared at the start of every Effect-fetch invocation.
     // Effect-refold reads this to perform local re-fold without a network round-trip.
@@ -236,7 +230,6 @@ fn RadialCanvasView() -> impl IntoView {
             if *p != current {
                 // Reset reactive signals
                 set_selected_node.set(None);
-                set_breadcrumb.set(Vec::new());
                 search_query.set(String::new());
                 set_fold_threshold.set(12);
                 set_focus_id.set(None);
@@ -544,12 +537,6 @@ fn RadialCanvasView() -> impl IntoView {
             set_selected_node.set(None);
         }
         CanvasEvent::EnterLocalView(id) => {
-            set_breadcrumb.update(|entries| {
-                entries.push(BreadcrumbEntry {
-                    node_id: id.clone(),
-                    node_name: id.clone(),
-                });
-            });
             // Drive the same fetch path via the intent signal
             active_request.set(Some(id));
         }
@@ -583,11 +570,6 @@ fn RadialCanvasView() -> impl IntoView {
                 Ok(response) => {
                     if let Some(first) = response.results.first() {
                         let id = first.id.clone();
-                        let name = first.name.clone();
-                        set_breadcrumb.set(vec![BreadcrumbEntry {
-                            node_id: id.clone(),
-                            node_name: name,
-                        }]);
                         active_request.set(Some(id));
                     }
                 }
