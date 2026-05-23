@@ -11,19 +11,19 @@ use serde_json::json;
 
 use crate::gateway::device_store::{ApprovedDevice, DeviceStore};
 use crate::gateway::security::{
-    store::DeviceUpsertData, DeviceRole, PairingManager, PairingRequest, SecurityStore,
-    TokenManager,
+    store::DeviceUpsertData, DeviceFingerprint, DeviceRole, PairingManager, PairingRequest,
+    SecurityStore, TokenManager,
 };
-use crate::wizard::{RpcPrompter, WizardFlow, WizardSessionError, WizardStep};
+use crate::wizard::{RpcPrompter, WizardFlow, WizardPrompter, WizardSessionError, WizardStep};
 
 /// Same-machine pairing flow: requests a code, asks the user to confirm,
 /// approves the device, and returns the issued token via `finish`.
 pub struct PairingFlow {
-    pub device_name: String,
-    pub pairing_manager: Arc<PairingManager>,
-    pub security_store: Arc<SecurityStore>,
-    pub device_store: Arc<DeviceStore>,
-    pub token_manager: Arc<TokenManager>,
+    device_name: String,
+    pairing_manager: Arc<PairingManager>,
+    security_store: Arc<SecurityStore>,
+    device_store: Arc<DeviceStore>,
+    token_manager: Arc<TokenManager>,
 }
 
 impl PairingFlow {
@@ -44,19 +44,13 @@ impl PairingFlow {
         }
     }
 
-    /// Synthesise a stable 32-byte public-key placeholder from the device_id.
-    /// Mirrors the same trick used by the CLI `approve_locked` until real
-    /// keypair generation is wired.
+    /// Synthesise a deterministic 32-byte public-key placeholder from the device_id.
+    /// Uses SHA-256 so the output is stable across restarts (unlike DefaultHasher).
     fn placeholder_pubkey(device_id: &str) -> [u8; 32] {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut h = DefaultHasher::new();
-        device_id.hash(&mut h);
-        let hash = h.finish();
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(device_id.as_bytes());
         let mut buf = [0u8; 32];
-        buf[..8].copy_from_slice(&hash.to_le_bytes());
-        buf[8..16].copy_from_slice(&(hash.wrapping_mul(0x9e3779b97f4a7c15)).to_le_bytes());
+        buf.copy_from_slice(&hash);
         buf
     }
 }
@@ -64,12 +58,9 @@ impl PairingFlow {
 #[async_trait]
 impl WizardFlow for PairingFlow {
     async fn run(&self, prompter: &RpcPrompter) -> Result<(), WizardSessionError> {
-        // 1. user-visible greeting
+        // 1. user-visible greeting — note() uses prompt_no_wait; no answer expected
         prompter
-            .prompt(WizardStep::note(
-                "pairing-welcome",
-                "为本机桌面配对 Aleph 守护进程",
-            ))
+            .note("为本机桌面配对 Aleph 守护进程", None)
             .await?;
 
         // 2. internal: request a pairing code (uses a placeholder pubkey;
@@ -119,13 +110,14 @@ impl WizardFlow for PairingFlow {
             .map_err(|e| WizardSessionError::FlowError(format!("approve_device: {e}")))?;
 
         let pk = Self::placeholder_pubkey(&device_id);
+        let fingerprint = DeviceFingerprint::from_public_key(&pk);
         self.security_store
             .upsert_device(&DeviceUpsertData {
                 device_id: &device_id,
                 device_name: &device_name,
                 device_type: None,
                 public_key: &pk,
-                fingerprint: &device_id[..device_id.len().min(16)],
+                fingerprint: &fingerprint.0,
                 role: "operator",
                 scopes: &["*".to_string()],
             })
@@ -192,39 +184,32 @@ mod tests {
     #[tokio::test]
     async fn pairing_flow_emits_two_steps_then_returns_token() {
         let (pairing, security, devices, tokens) = test_bundle();
-        let flow = PairingFlow::new(
-            "Test Mac",
-            pairing,
-            security,
-            devices,
-            tokens,
-        );
+        let flow = PairingFlow::new("Test Mac", pairing, security, devices, tokens);
         let session = WizardSession::new(Box::new(flow));
 
-        // Step 1: welcome
+        // Step 1: welcome note — uses prompt_no_wait, so no answer needed.
+        // The flow advances on its own after emitting the note.
         let r = session.next().await;
         assert!(!r.done);
         let step = r.step.expect("welcome step");
-        assert_eq!(step.id, "pairing-welcome");
+        assert!(
+            step.message.as_deref().unwrap_or("").contains("配对"),
+            "welcome step should contain 配对"
+        );
 
-        // Answer the welcome (note has no required answer; client convention
-        // is to send `null` via wizard.next which only blocks notes through
-        // the manager — direct session.answer for the step id keeps the
-        // unit test simple).
-        session.answer("pairing-welcome", serde_json::Value::Null).await.unwrap();
-
-        // Step 2: confirm
+        // Step 2: confirm — blocks waiting for user approval
         let r = session.next().await;
         assert!(!r.done);
         let step = r.step.expect("confirm step");
         assert_eq!(step.id, "pairing-approve");
         assert!(step.message.as_deref().unwrap().contains("配对码"));
 
-        session.answer("pairing-approve", serde_json::Value::Bool(true)).await.unwrap();
+        session
+            .answer("pairing-approve", serde_json::Value::Bool(true))
+            .await
+            .unwrap();
 
         // Give the flow a beat to run the internal approve+token block.
-        // 200ms is generous for an in-memory store; the test will retry the
-        // next() drain below.
         for _ in 0..10 {
             tokio::time::sleep(Duration::from_millis(20)).await;
             if session.is_done() {
@@ -238,30 +223,35 @@ mod tests {
         let token = data.get("token").and_then(|v| v.as_str()).unwrap();
         assert!(token.contains(':'), "token format: <body>:<sig>");
         assert!(data.get("device_id").is_some());
-        assert_eq!(data.get("device_name").and_then(|v| v.as_str()), Some("Test Mac"));
+        assert_eq!(
+            data.get("device_name").and_then(|v| v.as_str()),
+            Some("Test Mac")
+        );
     }
 
     #[tokio::test]
-    async fn pairing_flow_propagates_request_failure() {
-        // Drive the flow with a 0ms-expiry manager so the pairing code
-        // produced in step 2 has effectively expired by the time step 4
-        // tries to confirm it. We assert that the session reaches some
-        // terminal state cleanly (Done or Error) without panicking — the
-        // exact terminal depends on timing race between request and
-        // confirm; either is acceptable for the smoke-fail path.
+    async fn pairing_flow_propagates_confirm_failure() {
+        // Use a 1ms-expiry PairingManager. After the flow emits the confirm
+        // step we sleep 50ms before sending the answer, guaranteeing the code
+        // has expired. confirm_pairing then errors → flow errors → WizardStatus::Error.
         let security = Arc::new(SecurityStore::in_memory().unwrap());
         let devices = Arc::new(DeviceStore::in_memory().unwrap());
-        let pairing = Arc::new(PairingManager::with_expiry(security.clone(), 0)); // 0ms expiry → instant timeout
+        let pairing = Arc::new(PairingManager::with_expiry(security.clone(), 1)); // 1ms expiry
         let tokens = Arc::new(TokenManager::new(security.clone()));
         let flow = PairingFlow::new("Test", pairing, security, devices, tokens);
         let session = WizardSession::new(Box::new(flow));
 
-        // welcome
+        // welcome note — auto-advances, no answer needed
         let _ = session.next().await;
-        session.answer("pairing-welcome", serde_json::Value::Null).await.unwrap();
-        // confirm
+        // confirm step — wait for it to be emitted
         let _ = session.next().await;
-        session.answer("pairing-approve", serde_json::Value::Bool(true)).await.unwrap();
+
+        // Sleep long enough to guarantee 1ms expiry has elapsed before answering
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        session
+            .answer("pairing-approve", serde_json::Value::Bool(true))
+            .await
+            .unwrap();
 
         for _ in 0..20 {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -271,12 +261,10 @@ mod tests {
         }
         let r = session.next().await;
         assert!(r.done);
-        // Either error status (if instant expiry kicked in) OR success; both
-        // are acceptable terminal states. Verify the session reached SOME
-        // terminal state cleanly without panicking.
-        assert!(matches!(
-            r.status,
-            crate::wizard::WizardStatus::Done | crate::wizard::WizardStatus::Error
-        ));
+        assert!(
+            matches!(r.status, crate::wizard::WizardStatus::Error),
+            "expected Error from expired confirm_pairing, got {:?}",
+            r.status
+        );
     }
 }
