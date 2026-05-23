@@ -11,6 +11,10 @@ pub mod session;
 pub mod types;
 
 pub use flows::pairing::PairingFlow;
+pub use flows::{
+    onboarding::{OnboardingData, ProviderSetupFlow, QuickSetupFlow},
+    OnboardingFlow,
+};
 pub use prompter::{ProgressHandle, RpcPrompter, WizardPrompter};
 pub use session::{WizardFlow, WizardSession, WizardSessionError};
 pub use types::{
