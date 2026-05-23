@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Aleph icon — Pyramid + א variant.
+    Source design: aleph_brand_identity.tsx (Hero logo SVG, lines 39-83).
+    Adapted for app-icon use: squircle background, simplified for small-size legibility
+    (ALEPH wordmark + divider line dropped — unreadable below 96px).
+    Colors: Void Black #050508, Emergent Cyan #22d3ee, Ether Silver #d1d5db.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0e0e1c"/>
+      <stop offset="100%" stop-color="#050508"/>
+    </linearGradient>
+
+    <radialGradient id="halo" cx="50%" cy="58%" r="48%">
+      <stop offset="0%"   stop-color="#22d3ee" stop-opacity="0.34"/>
+      <stop offset="55%"  stop-color="#22d3ee" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="edge" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0%"   stop-color="#f1f3fb"/>
+      <stop offset="55%"  stop-color="#c9cee0"/>
+      <stop offset="100%" stop-color="#5d6884"/>
+    </linearGradient>
+
+    <radialGradient id="alephGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.40"/>
+      <stop offset="60%"  stop-color="#22d3ee" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+  </defs>
+
+  <!-- Squircle plate (macOS app-icon style, ~22% corner radius) -->
+  <rect width="1024" height="1024" rx="228" ry="228" fill="url(#bg)"/>
+
+  <!-- Hairline inner edge for depth -->
+  <rect x="4" y="4" width="1016" height="1016" rx="226" ry="226"
+        fill="none" stroke="#22d3ee" stroke-opacity="0.10" stroke-width="2"/>
+
+  <!-- Ambient cyan halo behind the mark -->
+  <circle cx="512" cy="568" r="420" fill="url(#halo)"/>
+
+  <!-- Soft halo around the aleph glyph -->
+  <circle cx="512" cy="600" r="220" fill="url(#alephGlow)"/>
+
+  <!-- Pyramid: apex (512,160), base (124,860)→(900,860). 776×700 -->
+  <polygon points="512,160 900,860 124,860"
+           fill="none"
+           stroke="url(#edge)"
+           stroke-width="11"
+           stroke-linejoin="round"
+           stroke-linecap="round"/>
+
+  <!-- Hebrew aleph — glow copy first (under), crisp copy on top -->
+  <text x="512" y="740"
+        font-size="420"
+        font-family="'Frank Ruhl Libre','David Libre','Times New Roman','Times','Arial Hebrew',serif"
+        text-anchor="middle"
+        fill="#ffffff"
+        opacity="0.25"
+        filter="url(#softGlow)">א</text>
+
+  <text x="512" y="740"
+        font-size="420"
+        font-family="'Frank Ruhl Libre','David Libre','Times New Roman','Times','Arial Hebrew',serif"
+        text-anchor="middle"
+        fill="#ffffff">א</text>
+</svg>
