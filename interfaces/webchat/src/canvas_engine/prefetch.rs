@@ -1,20 +1,19 @@
-use crate::canvas_engine::adapter::GraphNeighborsResponse;
 use std::collections::VecDeque;
 
 pub const HOVER_DEBOUNCE_MS: f64 = 150.0;
 pub const CACHE_TTL_MS: f64 = 60_000.0;
 pub const CACHE_CAPACITY: usize = 20;
 
-/// Bounded LRU cache of raw `GraphNeighborsResponse` payloads, keyed by center id.
+/// Bounded LRU cache of payloads keyed by `String` id, with TTL.
 /// Each entry carries its own fetched-at timestamp because the raw payload has no
 /// such field (unlike `Neighborhood`).
-pub struct PrefetchCache {
-    entries: VecDeque<(String, GraphNeighborsResponse, f64)>,
+pub struct PrefetchCache<T> {
+    entries: VecDeque<(String, T, f64)>,
     capacity: usize,
     ttl_ms: f64,
 }
 
-impl PrefetchCache {
+impl<T> PrefetchCache<T> {
     pub fn new() -> Self {
         Self {
             entries: VecDeque::new(),
@@ -23,15 +22,15 @@ impl PrefetchCache {
         }
     }
 
-    pub fn put(&mut self, id: String, raw: GraphNeighborsResponse, now_ms: f64) {
+    pub fn put(&mut self, id: String, value: T, now_ms: f64) {
         self.entries.retain(|(k, _, _)| k != &id);
-        self.entries.push_back((id, raw, now_ms));
+        self.entries.push_back((id, value, now_ms));
         while self.entries.len() > self.capacity {
             self.entries.pop_front();
         }
     }
 
-    pub fn get(&self, id: &str, now_ms: f64) -> Option<&GraphNeighborsResponse> {
+    pub fn get(&self, id: &str, now_ms: f64) -> Option<&T> {
         self.entries.iter().rev().find_map(|(k, v, fetched)| {
             if k == id && now_ms - fetched <= self.ttl_ms {
                 Some(v)
@@ -47,6 +46,12 @@ impl PrefetchCache {
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+}
+
+impl<T> Default for PrefetchCache<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -159,5 +164,21 @@ mod tests {
         d.note_hover(Some("x"), 0.0);
         assert_eq!(d.note_hover(Some("y"), 100.0), None);
         assert_eq!(d.note_hover(Some("y"), 251.0), Some("y".to_string()));
+    }
+
+    #[test]
+    fn cache_works_for_string_payloads() {
+        let mut c: PrefetchCache<String> = PrefetchCache::new();
+        c.put("a".into(), "hello".into(), 0.0);
+        assert_eq!(c.get("a", 100.0).map(String::as_str), Some("hello"));
+        assert!(c.has("a", 100.0));
+    }
+
+    #[test]
+    fn cache_expires_by_ttl() {
+        let mut c: PrefetchCache<u32> = PrefetchCache::new();
+        c.put("k".into(), 42, 0.0);
+        assert_eq!(c.get("k", CACHE_TTL_MS - 1.0), Some(&42));
+        assert_eq!(c.get("k", CACHE_TTL_MS + 1.0), None);
     }
 }

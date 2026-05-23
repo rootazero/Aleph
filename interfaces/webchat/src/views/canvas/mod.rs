@@ -150,7 +150,7 @@ fn RadialCanvasView() -> impl IntoView {
 
     // Non-reactive radial navigation state (Rc<RefCell<_>> — WASM single-thread safe)
     let nav = Rc::new(RefCell::new(NavController::new()));
-    let prefetch = Rc::new(RefCell::new(PrefetchCache::new()));
+    let prefetch = Rc::new(RefCell::new(PrefetchCache::<GraphNeighborsResponse>::new()));
 
     // Non-reactive 60fps canvas state
     let graph_state = Rc::new(RefCell::new(GraphState::new()));
@@ -199,7 +199,7 @@ fn RadialCanvasView() -> impl IntoView {
 
                 // Reset non-reactive state
                 *nav_reset.borrow_mut() = NavController::new();
-                *prefetch_reset.borrow_mut() = PrefetchCache::new();
+                *prefetch_reset.borrow_mut() = PrefetchCache::<GraphNeighborsResponse>::new();
                 {
                     let mut gs = gs_reset.borrow_mut();
                     gs.nodes.clear();
