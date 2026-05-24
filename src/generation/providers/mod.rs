@@ -33,6 +33,7 @@
 //! let provider = create_provider("dalle", &config, alephcore::generation::GenerationType::Image)?;
 //! ```
 
+pub mod deepgram_stt;
 pub mod elevenlabs;
 pub mod fal;
 mod factory;
@@ -42,6 +43,7 @@ pub mod midjourney;
 pub mod openai_compat;
 pub mod openai_image;
 pub mod openai_tts;
+pub mod openai_whisper;
 pub mod replicate;
 pub mod stability;
 pub mod url_normalize;
@@ -49,6 +51,7 @@ pub mod url_normalize;
 #[cfg(test)]
 mod tests;
 
+pub use deepgram_stt::DeepgramSttProvider;
 pub use elevenlabs::ElevenLabsProvider;
 pub use fal::{FalProvider, FalProviderBuilder};
 pub use factory::create_provider;
@@ -58,5 +61,6 @@ pub use midjourney::{MidjourneyMode, MidjourneyProvider, MidjourneyProviderBuild
 pub use openai_compat::{OpenAiCompatProvider, OpenAiCompatProviderBuilder};
 pub use openai_image::OpenAiImageProvider;
 pub use openai_tts::OpenAiTtsProvider;
+pub use openai_whisper::OpenAiWhisperProvider;
 pub use replicate::{ReplicateProvider, ReplicateProviderBuilder};
 pub use stability::StabilityImageProvider;

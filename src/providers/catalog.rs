@@ -256,4 +256,56 @@ mod tests {
         assert!(e.supports(Modality::Chat));
         assert!(!e.supports(Modality::Image));
     }
+
+    #[test]
+    fn presets_for_modality_transcription_includes_round2_stt() {
+        // Round-2 closes the previously empty Transcription modality.
+        let stt = presets_for_modality(Modality::Transcription);
+        assert!(
+            stt.iter().any(|e| e.name == "openai-whisper"),
+            "Transcription modality should expose openai-whisper, got {:?}",
+            stt.iter().map(|e| e.name).collect::<Vec<_>>()
+        );
+        assert!(
+            stt.iter().any(|e| e.name == "deepgram-stt"),
+            "Transcription modality should expose deepgram-stt, got {:?}",
+            stt.iter().map(|e| e.name).collect::<Vec<_>>()
+        );
+        // Pure STT presets — no chat side leaks through.
+        assert!(stt.iter().all(|e| e.kind == CatalogKind::Generation));
+    }
+
+    #[test]
+    fn presets_for_modality_image_includes_round2_vendors() {
+        let imgs = presets_for_modality(Modality::Image);
+        for needed in ["ideogram", "recraft", "bytedance-seedream", "xai-image"] {
+            assert!(
+                imgs.iter().any(|e| e.name == needed),
+                "Image modality should include {needed}, got {:?}",
+                imgs.iter().map(|e| e.name).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn presets_for_modality_chat_includes_round2_vendors() {
+        let chats = presets_for_modality(Modality::Chat);
+        for needed in [
+            "amazon-bedrock",
+            "cloudflare-ai",
+            "deepinfra",
+            "github-copilot",
+            "lmstudio",
+            "litellm",
+            "nvidia-nim",
+            "inflection",
+            "novita",
+            "chutes",
+        ] {
+            assert!(
+                chats.iter().any(|e| e.name == needed),
+                "Chat modality should include {needed}",
+            );
+        }
+    }
 }

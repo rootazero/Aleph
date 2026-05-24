@@ -95,6 +95,17 @@ pub fn create_provider(
             config.defaults.voice.clone(),
             resolved_url,
         )?),
+        "openai_whisper" | "whisper" => Arc::new(OpenAiWhisperProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.default_model().map(|s| s.to_string()),
+            resolved_url,
+        )?),
+        "deepgram_stt" | "deepgram" => Arc::new(DeepgramSttProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.default_model().map(|s| s.to_string()),
+        )?),
         "openai_compat" => {
             let base_url = config.base_url.clone().ok_or_else(|| {
                 GenerationError::invalid_parameters(
@@ -219,7 +230,7 @@ pub fn create_provider(
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal",
+                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal",
                     other
                 ),
                 Some("provider_type".to_string()),

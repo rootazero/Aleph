@@ -460,6 +460,161 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // =========================================================================
+    // Phase R2 chat additions — extend coverage to cloud LLM gateways, local
+    // OpenAI-compatible servers, and remaining commercial vendors. Most are
+    // straight OpenAI-protocol entries; Bedrock defaults to anthropic-on-AWS.
+    // =========================================================================
+
+    // Amazon Bedrock — Anthropic protocol via AWS sign-v4 proxy. Override
+    // `base_url` per region (e.g. `https://bedrock-runtime.us-east-1.amazonaws.com`).
+    m.insert(
+        "amazon-bedrock",
+        ProviderPreset {
+            base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            protocol: "anthropic",
+            color: "#ff9900",
+            default_model: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        },
+    );
+    m.insert(
+        "bedrock",
+        ProviderPreset {
+            base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            protocol: "anthropic",
+            color: "#ff9900",
+            default_model: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        },
+    );
+
+    // Cloudflare Workers AI — OpenAI-compatible gateway. Override base_url with
+    // your account id: `https://api.cloudflare.com/client/v4/accounts/{id}/ai/v1`.
+    m.insert(
+        "cloudflare-ai",
+        ProviderPreset {
+            base_url: "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1",
+            protocol: "openai",
+            color: "#f6821f",
+            default_model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        },
+    );
+    m.insert(
+        "workers-ai",
+        ProviderPreset {
+            base_url: "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1",
+            protocol: "openai",
+            color: "#f6821f",
+            default_model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        },
+    );
+
+    // DeepInfra — open-model inference, OpenAI-compatible.
+    m.insert(
+        "deepinfra",
+        ProviderPreset {
+            base_url: "https://api.deepinfra.com/v1/openai",
+            protocol: "openai",
+            color: "#5b8def",
+            default_model: "meta-llama/Llama-3.3-70B-Instruct",
+        },
+    );
+
+    // GitHub Copilot Chat — OpenAI-compatible via Copilot API proxy.
+    m.insert(
+        "github-copilot",
+        ProviderPreset {
+            base_url: "https://api.githubcopilot.com",
+            protocol: "openai",
+            color: "#24292f",
+            default_model: "gpt-4o-2025-04-09",
+        },
+    );
+    m.insert(
+        "copilot",
+        ProviderPreset {
+            base_url: "https://api.githubcopilot.com",
+            protocol: "openai",
+            color: "#24292f",
+            default_model: "gpt-4o-2025-04-09",
+        },
+    );
+
+    // LM Studio — local OpenAI-compatible server (default port 1234).
+    m.insert(
+        "lmstudio",
+        ProviderPreset {
+            base_url: "http://localhost:1234/v1",
+            protocol: "openai",
+            color: "#7c3aed",
+            default_model: "local-model",
+        },
+    );
+
+    // LiteLLM proxy — drop-in OpenAI-compatible router for any backend
+    // (Bedrock, Vertex, Azure, etc.). Default assumes localhost:4000.
+    m.insert(
+        "litellm",
+        ProviderPreset {
+            base_url: "http://localhost:4000",
+            protocol: "openai",
+            color: "#22c55e",
+            default_model: "gpt-4o",
+        },
+    );
+
+    // NVIDIA NIM — OpenAI-compatible inference catalog (NGC API key).
+    m.insert(
+        "nvidia-nim",
+        ProviderPreset {
+            base_url: "https://integrate.api.nvidia.com/v1",
+            protocol: "openai",
+            color: "#76b900",
+            default_model: "meta/llama-3.3-70b-instruct",
+        },
+    );
+    m.insert(
+        "nvidia",
+        ProviderPreset {
+            base_url: "https://integrate.api.nvidia.com/v1",
+            protocol: "openai",
+            color: "#76b900",
+            default_model: "meta/llama-3.3-70b-instruct",
+        },
+    );
+
+    // Inflection AI — Pi-3.5+, OpenAI-compatible.
+    m.insert(
+        "inflection",
+        ProviderPreset {
+            base_url: "https://api.inflection.ai/external/api/inference/openai/v1",
+            protocol: "openai",
+            color: "#f59e0b",
+            default_model: "inflection_3_pi",
+        },
+    );
+
+    // Novita AI — open-model serverless inference, OpenAI-compatible.
+    m.insert(
+        "novita",
+        ProviderPreset {
+            base_url: "https://api.novita.ai/v3/openai",
+            protocol: "openai",
+            color: "#0ea5e9",
+            default_model: "meta-llama/llama-3.3-70b-instruct",
+        },
+    );
+
+    // Chutes — Bittensor-backed open inference, OpenAI-compatible.
+    m.insert(
+        "chutes",
+        ProviderPreset {
+            base_url: "https://llm.chutes.ai/v1",
+            protocol: "openai",
+            color: "#a855f7",
+            default_model: "deepseek-ai/DeepSeek-V3-0324",
+        },
+    );
+
     m
 });
 
@@ -780,6 +935,98 @@ pub static PRESET_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = Lazy
             modalities: CHAT_ONLY,
             homepage: Some("https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html"),
             notes: Some("V3.5+ OpenAI-compatible endpoint"),
+        },
+    );
+
+    // Phase R2 metadata
+    m.insert(
+        "amazon-bedrock",
+        ProviderMetadata {
+            display_name: "Amazon Bedrock",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://docs.aws.amazon.com/bedrock"),
+            notes: Some("Anthropic protocol; override base_url per region"),
+        },
+    );
+    m.insert(
+        "cloudflare-ai",
+        ProviderMetadata {
+            display_name: "Cloudflare Workers AI",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://developers.cloudflare.com/workers-ai"),
+            notes: Some("Set account id in base_url"),
+        },
+    );
+    m.insert(
+        "deepinfra",
+        ProviderMetadata {
+            display_name: "DeepInfra",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://deepinfra.com/docs"),
+            notes: Some("Open-model inference, OpenAI-compatible"),
+        },
+    );
+    m.insert(
+        "github-copilot",
+        ProviderMetadata {
+            display_name: "GitHub Copilot",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://docs.github.com/copilot"),
+            notes: Some("Requires Copilot subscription token"),
+        },
+    );
+    m.insert(
+        "lmstudio",
+        ProviderMetadata {
+            display_name: "LM Studio (Local)",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://lmstudio.ai"),
+            notes: Some("Local OpenAI-compatible server (default :1234)"),
+        },
+    );
+    m.insert(
+        "litellm",
+        ProviderMetadata {
+            display_name: "LiteLLM Proxy",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://docs.litellm.ai"),
+            notes: Some("Drop-in proxy for any LLM backend"),
+        },
+    );
+    m.insert(
+        "nvidia-nim",
+        ProviderMetadata {
+            display_name: "NVIDIA NIM",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://docs.nvidia.com/nim"),
+            notes: Some("NGC-hosted inference catalog"),
+        },
+    );
+    m.insert(
+        "inflection",
+        ProviderMetadata {
+            display_name: "Inflection AI (Pi)",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://developers.inflection.ai"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "novita",
+        ProviderMetadata {
+            display_name: "Novita AI",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://novita.ai/docs"),
+            notes: Some("Serverless open-model inference"),
+        },
+    );
+    m.insert(
+        "chutes",
+        ProviderMetadata {
+            display_name: "Chutes",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://chutes.ai"),
+            notes: Some("Bittensor-backed open inference"),
         },
     );
 

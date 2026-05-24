@@ -182,6 +182,143 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
         },
     );
 
+    // -------------------------------------------------------------------------
+    // Phase R2 — additional generation presets. Each entry pins:
+    // 1. provider_type pointing to an existing factory branch (openai_compat
+    //    for OpenAI-shape APIs, fal for fal.ai-hosted models, etc.)
+    // 2. default_model — the upstream model identifier
+    // 3. base_url — fully-formed endpoint URL (path included for openai_compat)
+    //
+    // No new provider modules are added here — these presets re-use the
+    // existing openai_compat and fal aggregator infrastructure (R3 core
+    // minimalism). New vendors that don't fit either pattern (Azure Speech,
+    // Cartesia, Deepgram TTS, etc.) need dedicated provider modules and
+    // are out of scope for round-2 presets.
+    // -------------------------------------------------------------------------
+
+    // Image — OpenAI-compatible vendors
+    m.insert(
+        "ideogram",
+        GenerationPreset {
+            provider_type: "openai_compat",
+            default_model: "ideogram-v2-turbo",
+            base_url: Some("https://api.ideogram.ai/openai/v1/images/generations"),
+        },
+    );
+    m.insert(
+        "recraft",
+        GenerationPreset {
+            provider_type: "openai_compat",
+            default_model: "recraftv3",
+            base_url: Some("https://external.api.recraft.ai/v1/images/generations"),
+        },
+    );
+    m.insert(
+        "bytedance-seedream",
+        GenerationPreset {
+            provider_type: "openai_compat",
+            default_model: "doubao-seedream-3-0-t2i-250415",
+            base_url: Some("https://ark.cn-beijing.volces.com/api/v3/images/generations"),
+        },
+    );
+    m.insert(
+        "xai-image",
+        GenerationPreset {
+            provider_type: "openai_compat",
+            default_model: "grok-2-image-1212",
+            base_url: Some("https://api.x.ai/v1/images/generations"),
+        },
+    );
+    // Note: OpenAI's `gpt-image-1` is reachable via the existing `openai-dalle`
+    // preset by overriding `model = "gpt-image-1"` at the user config layer —
+    // no separate preset is needed and adding one would break
+    // `get_preset_by_type("openai")`'s single-canonical-preset contract.
+
+    // Image — Fal-hosted alternates (some vendors are available both direct
+    // and via Fal; the fal-* alias is for users who want unified billing).
+    m.insert(
+        "fal-recraft",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/recraft-v3",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-ideogram",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/ideogram/v2",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+
+    // Video — Fal-hosted extras
+    m.insert(
+        "fal-veo",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/veo3",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-wan",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/wan-pro/text-to-video",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+
+    // Music — Fal hosts Stable Audio + other music models
+    m.insert(
+        "fal-stable-audio",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/stable-audio",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-cassette",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "cassetteai/music-generator",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+
+    // Speech — MiniMax T2A (OpenAI-style speech endpoint). Cartesia / Azure
+    // need dedicated providers and are deferred.
+    m.insert(
+        "minimax-tts",
+        GenerationPreset {
+            provider_type: "openai_compat",
+            default_model: "speech-01-turbo",
+            base_url: Some("https://api.minimax.chat/v1/t2a_v2"),
+        },
+    );
+
+    // Transcription — endpoints filled in by the new whisper / deepgram-stt
+    // providers (Phase R2-B).
+    m.insert(
+        "openai-whisper",
+        GenerationPreset {
+            provider_type: "openai_whisper",
+            default_model: "whisper-1",
+            base_url: Some("https://api.openai.com"),
+        },
+    );
+    m.insert(
+        "deepgram-stt",
+        GenerationPreset {
+            provider_type: "deepgram_stt",
+            default_model: "nova-3",
+            base_url: Some("https://api.deepgram.com"),
+        },
+    );
+
     m
 });
 
@@ -361,6 +498,138 @@ pub static GENERATION_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = 
             modalities: &[Modality::Music],
             homepage: Some("https://fal.ai/models/fal-ai/musicgen"),
             notes: None,
+        },
+    );
+
+    // -------------------------------------------------------------------------
+    // Phase R2 metadata for the new presets above.
+    // -------------------------------------------------------------------------
+
+    // Image — direct vendors
+    m.insert(
+        "ideogram",
+        ProviderMetadata {
+            display_name: "Ideogram",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://developer.ideogram.ai"),
+            notes: Some("Strong on text-in-image"),
+        },
+    );
+    m.insert(
+        "recraft",
+        ProviderMetadata {
+            display_name: "Recraft v3",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://www.recraft.ai/docs"),
+            notes: Some("Vector + raster, brand-aware"),
+        },
+    );
+    m.insert(
+        "bytedance-seedream",
+        ProviderMetadata {
+            display_name: "ByteDance Seedream / 即梦图像",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://www.volcengine.com/docs/82379"),
+            notes: Some("Volcengine Ark image endpoint"),
+        },
+    );
+    m.insert(
+        "xai-image",
+        ProviderMetadata {
+            display_name: "xAI Grok Image",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://docs.x.ai/docs/guides/image-generation"),
+            notes: None,
+        },
+    );
+    // Image — fal-hosted alternates
+    m.insert(
+        "fal-recraft",
+        ProviderMetadata {
+            display_name: "Recraft v3 (via Fal)",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/recraft-v3"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "fal-ideogram",
+        ProviderMetadata {
+            display_name: "Ideogram v2 (via Fal)",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/ideogram/v2"),
+            notes: None,
+        },
+    );
+
+    // Video extras
+    m.insert(
+        "fal-veo",
+        ProviderMetadata {
+            display_name: "Google Veo 3 (via Fal)",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/veo3"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "fal-wan",
+        ProviderMetadata {
+            display_name: "Wan 2 (via Fal) / 通义万相",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/wan-pro"),
+            notes: Some("Alibaba Wan-Pro text-to-video"),
+        },
+    );
+
+    // Music
+    m.insert(
+        "fal-stable-audio",
+        ProviderMetadata {
+            display_name: "Stable Audio (via Fal)",
+            modalities: &[Modality::Music],
+            homepage: Some("https://fal.ai/models/fal-ai/stable-audio"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "fal-cassette",
+        ProviderMetadata {
+            display_name: "CassetteAI Music (via Fal)",
+            modalities: &[Modality::Music],
+            homepage: Some("https://fal.ai/models/cassetteai/music-generator"),
+            notes: None,
+        },
+    );
+
+    // Speech (TTS)
+    m.insert(
+        "minimax-tts",
+        ProviderMetadata {
+            display_name: "MiniMax T2A",
+            modalities: SPEECH_ONLY,
+            homepage: Some("https://platform.minimaxi.com"),
+            notes: Some("Chinese + multilingual TTS"),
+        },
+    );
+
+    // Transcription (STT) — closes the empty Transcription modality
+    m.insert(
+        "openai-whisper",
+        ProviderMetadata {
+            display_name: "OpenAI Whisper",
+            modalities: &[Modality::Transcription],
+            homepage: Some("https://platform.openai.com/docs/guides/speech-to-text"),
+            notes: Some("whisper-1 multilingual STT"),
+        },
+    );
+    m.insert(
+        "deepgram-stt",
+        ProviderMetadata {
+            display_name: "Deepgram Nova",
+            modalities: &[Modality::Transcription],
+            homepage: Some("https://developers.deepgram.com"),
+            notes: Some("Nova-3 streaming STT"),
         },
     );
 

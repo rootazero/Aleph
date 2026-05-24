@@ -426,6 +426,7 @@ impl MockGenerationProvider {
                 GenerationType::Video,
                 GenerationType::Audio,
                 GenerationType::Speech,
+                GenerationType::Transcription,
             ],
             should_fail: false,
             error_message: None,
