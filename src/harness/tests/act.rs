@@ -834,7 +834,8 @@ impl ToolService for LowercaseOnlyTools {
         vec![ToolDefinition {
             name: self.known.to_string(),
             description: String::new(),
-            parameters: serde_json::json!({}),
+            input_schema: serde_json::json!({}),
+            source: crate::tools::service::ToolSource::Builtin,
             metadata: Default::default(),
         }]
     }
@@ -844,7 +845,8 @@ impl ToolService for LowercaseOnlyTools {
             Some(ToolDefinition {
                 name: self.known.to_string(),
                 description: String::new(),
-                parameters: serde_json::json!({}),
+                input_schema: serde_json::json!({}),
+                source: crate::tools::service::ToolSource::Builtin,
                 metadata: Default::default(),
             })
         } else {
