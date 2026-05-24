@@ -51,6 +51,7 @@ pub trait LoopCallback: Send {
     fn on_safety_block(&mut self, _error: &SafetyError) {}
     fn on_model_fallback(&mut self, _reason: &str, _fallback_model: &str) {}
     fn on_stop_hook_block(&mut self, _reason: &str) {}
+    fn on_stop_hook_halt(&mut self, _reason: &str) {}
     fn on_stop_hook_error(&mut self, _hook_name: &str, _error: &str) {}
     fn on_tool_summary(&mut self, _summary: &str) {}
 

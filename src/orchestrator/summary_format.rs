@@ -242,6 +242,8 @@ fn humanize_terminate(r: &TerminateReason) -> String {
             format!("Verifier veto cap ({vetos})")
         }
         TerminateReason::EmptyResponseExhausted => "Empty response from provider".into(),
+        TerminateReason::StopHookHalt { reason } => format!("Stop hook halt: {reason}"),
+        TerminateReason::MaxOutputTokensExhausted => "Max output tokens exhausted".into(),
         TerminateReason::Cancelled => "Cancelled".into(),
     }
 }

@@ -144,7 +144,7 @@ async fn concurrent_verify_vs_disable_all_is_consistent() {
                     VerifierVerdict::Continue => {
                         allows.fetch_add(1, Ordering::Relaxed);
                     }
-                    VerifierVerdict::Veto { .. } => {
+                    VerifierVerdict::Veto { .. } | VerifierVerdict::Halt { .. } => {
                         blocks.fetch_add(1, Ordering::Relaxed);
                     }
                 }

@@ -75,6 +75,15 @@ impl TurnVerifier for StopHookVerifier {
             stop_reason: stop_reason.to_string(),
         };
         let result = execute_stop_hooks(&boxed, &hctx, cancel).await;
+        // Halt outranks Block — when both fire, the loop must exit
+        // (claude-code's preventContinuation semantics). A Halt verdict
+        // is permanent; a Block verdict triggers a Continue+retry.
+        if let Some(reason) = result.halt_reason() {
+            return VerifierVerdict::Halt {
+                reason: reason.to_string(),
+                class: ErrorClass::Recoverable,
+            };
+        }
         match result.blocking_reason() {
             Some(reason) => VerifierVerdict::Veto {
                 reason: reason.to_string(),

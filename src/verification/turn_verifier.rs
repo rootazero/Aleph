@@ -60,6 +60,12 @@ pub enum VerifierVerdict {
     /// inject `reason` as a `[verifier veto]` user message and force
     /// the loop to Continue (no Act, no Done) for one iteration.
     Veto { reason: String, class: ErrorClass },
+    /// Verifier halts the loop permanently. The harness MUST exit
+    /// immediately with `TerminateReason::StopHookHalt { reason }`.
+    /// Mirrors claude-code's `preventContinuation: true` semantics:
+    /// distinct from `Veto` which retries, `Halt` is a final stop signal.
+    /// Class is metadata only (the harness never retries on Halt).
+    Halt { reason: String, class: ErrorClass },
 }
 
 impl VerifierVerdict {
@@ -68,6 +74,9 @@ impl VerifierVerdict {
     }
     pub fn is_veto(&self) -> bool {
         matches!(self, VerifierVerdict::Veto { .. })
+    }
+    pub fn is_halt(&self) -> bool {
+        matches!(self, VerifierVerdict::Halt { .. })
     }
 }
 
@@ -137,7 +146,7 @@ impl VerifierChain {
         for v in &self.verifiers {
             match v.verify(ctx, cancel).await {
                 VerifierVerdict::Continue => continue,
-                veto @ VerifierVerdict::Veto { .. } => return veto,
+                non_continue => return non_continue,
             }
         }
         VerifierVerdict::Continue

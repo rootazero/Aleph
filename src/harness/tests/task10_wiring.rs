@@ -1574,3 +1574,271 @@ async fn grace_turn_keeps_token_breakdown_in_lockstep() {
         "grace turn breakdown.total() must stay in lockstep with total_tokens()",
     );
 }
+
+// =============================================================================
+// Claude-Code harness parity G1 — Stop hook `Halt` verdict terminates the loop
+// immediately (claude-code `preventContinuation: true` semantics). Distinct
+// from `Block` (which forces Continue + retry).
+// =============================================================================
+struct AlwaysHaltHook {
+    reason: String,
+}
+
+#[async_trait]
+impl StopHookHandler for AlwaysHaltHook {
+    fn name(&self) -> &str {
+        "always-halt"
+    }
+    async fn evaluate(
+        &self,
+        _ctx: &StopHookContext,
+        _cancel: &CancellationToken,
+    ) -> StopHookVerdict {
+        StopHookVerdict::Halt {
+            reason: self.reason.clone(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn stop_hook_halt_terminates_loop_with_dedicated_reason() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("done?")]);
+    let provider = CountingProvider::new("all done");
+
+    let hooks: Arc<Vec<Arc<dyn StopHookHandler>>> = Arc::new(vec![Arc::new(AlwaysHaltHook {
+        reason: "policy violation: halt".to_string(),
+    })]);
+    let chain = Arc::new(
+        VerifierChain::builder()
+            .with(Arc::new(StopHookVerifier::new(hooks)))
+            .build(),
+    );
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: Some(chain),
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+
+    assert_eq!(
+        state,
+        TurnState::Done,
+        "Halt must terminate the loop (Done) — distinct from Block (Continue)"
+    );
+
+    let reason = harness.terminate_reason();
+    assert!(
+        matches!(
+            &reason,
+            crate::orchestrator::dispatch::TerminateReason::StopHookHalt { reason: r }
+                if r == "policy violation: halt"
+        ),
+        "Halt must set TerminateReason::StopHookHalt with hook's reason; got {:?}",
+        reason
+    );
+    assert!(
+        harness.hit_limit(),
+        "Halt must flag hit_limit=true (intentional cap-style exit)",
+    );
+
+    // The halt reason is persisted as a UserMessage so transcript consumers
+    // see it — same pattern as the Veto path, with a different prefix.
+    let events = session.snapshot().await;
+    let halt_injected = events.iter().any(|r| match &r.event {
+        SessionEvent::UserMessage { content, .. } => {
+            content.text.contains("[stop hook halt]")
+                && content.text.contains("policy violation: halt")
+        }
+        _ => false,
+    });
+    assert!(
+        halt_injected,
+        "halt reason must be persisted as a UserMessage; got events: {:#?}",
+        events
+    );
+}
+
+// =============================================================================
+// Claude-Code harness parity G2 — `max_output_tokens` recovery loop. Provider
+// returns `StopReason::MaxTokens` with partial text for N turns, then EndTurn
+// with final text. The harness must retry up to MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
+// times and surface the final clean response.
+// =============================================================================
+struct MaxTokensThenTextProvider {
+    calls: AtomicUsize,
+    max_tokens_calls: usize,
+}
+
+impl MaxTokensThenTextProvider {
+    fn new(max_tokens_calls: usize) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            max_tokens_calls,
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for MaxTokensThenTextProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < self.max_tokens_calls {
+                // Partial text + MaxTokens stop reason — mirrors a provider
+                // hitting its output-token cap mid-stream.
+                Ok(ProviderResponse {
+                    stop_reason: StopReason::MaxTokens,
+                    ..ProviderResponse::text_only(format!("partial-{n}"))
+                })
+            } else {
+                Ok(ProviderResponse::text_only("final clean response".to_string()))
+            }
+        })
+    }
+    fn name(&self) -> &str {
+        "max-tokens-then-text"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+#[tokio::test]
+async fn max_output_tokens_recovery_eventually_returns_clean_text() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("write a long answer")]);
+    // 2 MaxTokens responses, then clean text — recovery should succeed
+    // (RECOVERY_LIMIT=3 allows up to 3 retries).
+    let provider = MaxTokensThenTextProvider::new(2);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+
+    assert_eq!(
+        state,
+        TurnState::Done,
+        "after recovery, the clean text response stops the loop"
+    );
+    assert_eq!(
+        provider.call_count(),
+        3,
+        "expected 1 initial + 2 retries; final call returned clean text",
+    );
+    let reason = harness.terminate_reason();
+    assert!(
+        matches!(reason, crate::orchestrator::dispatch::TerminateReason::Completed),
+        "recovery success must report Completed, not MaxOutputTokensExhausted; got {:?}",
+        reason
+    );
+}
+
+#[tokio::test]
+async fn max_output_tokens_recovery_exhausted_sets_dedicated_terminate_reason() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("write forever")]);
+    // 4 MaxTokens responses — exceeds RECOVERY_LIMIT=3, so the harness
+    // gives up and reports MaxOutputTokensExhausted.
+    let provider = MaxTokensThenTextProvider::new(10);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let _ = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+
+    // MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3 in think.rs, so 1 initial call + 3 retries = 4.
+    assert_eq!(
+        provider.call_count(),
+        4,
+        "expected 1 initial + RECOVERY_LIMIT(=3) retries before giveup",
+    );
+    let reason = harness.terminate_reason();
+    assert!(
+        matches!(
+            reason,
+            crate::orchestrator::dispatch::TerminateReason::MaxOutputTokensExhausted
+        ),
+        "after exhausting recovery, terminate_reason must be MaxOutputTokensExhausted; got {:?}",
+        reason
+    );
+}

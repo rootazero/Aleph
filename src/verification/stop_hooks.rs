@@ -112,6 +112,11 @@ pub struct StopHookContext {
 pub enum StopHookVerdict {
     Allow,
     Block { reason: String },
+    /// Permanent stop signal — the harness exits the loop immediately and
+    /// surfaces `reason` to the user. Mirrors claude-code's
+    /// `preventContinuation: true` exit-protocol. Shell hooks emit this
+    /// via exit code 3 (exit 2 still maps to the retry-style `Block`).
+    Halt { reason: String },
     Error { hook_name: String, message: String },
 }
 
@@ -126,6 +131,16 @@ impl StopHookAggregateResult {
     pub fn blocking_reason(&self) -> Option<&str> {
         self.verdicts.iter().find_map(|v| match v {
             StopHookVerdict::Block { reason } => Some(reason.as_str()),
+            _ => None,
+        })
+    }
+
+    /// Returns the first halt reason, if any. Halt outranks Block — when
+    /// both are present in the same aggregate the harness must honour
+    /// Halt (claude-code's `preventContinuation` semantics).
+    pub fn halt_reason(&self) -> Option<&str> {
+        self.verdicts.iter().find_map(|v| match v {
+            StopHookVerdict::Halt { reason } => Some(reason.as_str()),
             _ => None,
         })
     }
@@ -234,6 +249,21 @@ async fn execute_shell_hook(
                             StopHookVerdict::Block {
                                 reason: if reason.is_empty() {
                                     format!("hook '{}' blocked stop", hook.hook_name)
+                                } else {
+                                    reason
+                                },
+                            }
+                        }
+                        Some(3) => {
+                            // Exit 3 = Halt — claude-code `preventContinuation`
+                            // semantics. Loop exits immediately; the reason
+                            // is surfaced via TerminateReason::StopHookHalt.
+                            let reason = String::from_utf8_lossy(&stdout_buf)
+                                .trim()
+                                .to_string();
+                            StopHookVerdict::Halt {
+                                reason: if reason.is_empty() {
+                                    format!("hook '{}' halted loop", hook.hook_name)
                                 } else {
                                     reason
                                 },

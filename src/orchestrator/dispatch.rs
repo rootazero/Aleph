@@ -142,6 +142,18 @@ pub enum TerminateReason {
     /// thinking on every attempt, including bounded retries. The user
     /// received no answer — distinct from a clean `Completed`.
     EmptyResponseExhausted,
+    /// A Stop hook returned `Halt` (exit code 3 from `ShellStopHook`).
+    /// Mirrors claude-code's `preventContinuation: true` exit-protocol:
+    /// the loop ends immediately with the hook's reason surfaced to the
+    /// user. Distinct from `VerifierVeto` (which forces one Continue +
+    /// retry) — Halt is a permanent stop signal from policy.
+    StopHookHalt { reason: String },
+    /// The provider returned `stop_reason=MaxTokens` on every attempt
+    /// including the bounded `max_output_tokens` recovery retries. The
+    /// model could not finish its response within the allowed budget;
+    /// distinct from `Completed` (clean exit) and `EmptyResponseExhausted`
+    /// (no content at all).
+    MaxOutputTokensExhausted,
     /// `CancellationToken` fired before the loop reached `Done`.
     Cancelled,
 }
@@ -165,6 +177,8 @@ impl TerminateReason {
             Self::ConsecutiveFailureCap { .. } => "consecutive_failure_cap",
             Self::VerifierVeto { .. } => "verifier_veto",
             Self::EmptyResponseExhausted => "empty_response_exhausted",
+            Self::StopHookHalt { .. } => "stop_hook_halt",
+            Self::MaxOutputTokensExhausted => "max_output_tokens_exhausted",
             Self::Cancelled => "cancelled",
         }
     }

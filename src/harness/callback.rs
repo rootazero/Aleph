@@ -65,6 +65,12 @@ pub trait HarnessCallback: Send {
     /// Invoked when a stop hook blocks the current turn and forces another model turn.
     fn on_stop_hook_block(&mut self, _reason: &str) {}
 
+    /// Invoked when a stop hook halts the loop permanently
+    /// (claude-code `preventContinuation` parity). The harness exits with
+    /// [`TerminateReason::StopHookHalt`](crate::orchestrator::dispatch::TerminateReason::StopHookHalt)
+    /// after firing this callback.
+    fn on_stop_hook_halt(&mut self, _reason: &str) {}
+
     /// Invoked when the primary model is unavailable and a fallback is used.
     fn on_model_fallback(&mut self, _reason: &str, _fallback_model: &str) {}
 

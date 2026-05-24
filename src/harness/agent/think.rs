@@ -65,6 +65,23 @@ Your response should include:\n\
 - A recommendation for what should be done next\n\
 </system-reminder>";
 
+/// Maximum re-issues of the LLM call when the provider hits
+/// `max_output_tokens` mid-stream. Mirrors claude-code's
+/// `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` (query.ts:164). The retry appends
+/// the partial assistant output and a "resume directly" nudge so the
+/// model continues mid-thought rather than restarting.
+const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT: u32 = 3;
+
+/// Meta user message appended on each `max_output_tokens` recovery
+/// retry. Text mirrors claude-code's wording (query.ts:1226) so model
+/// behaviour transfers across harnesses. The model is expected to pick
+/// up mid-thought; "no apology, no recap" prevents wasted output tokens
+/// on regenerating context the model already produced.
+const MAX_OUTPUT_TOKENS_RESUME_NUDGE: &str =
+    "Output token limit hit. Resume directly — no apology, no recap of \
+     what you were doing. Pick up mid-thought if that is where the cut \
+     happened. Break remaining work into smaller pieces.";
+
 /// Why a grace turn is being fired. Selects the nudge text; otherwise
 /// the call path is identical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -480,6 +497,62 @@ impl AgentHarness {
             );
         }
 
+        // 3b. max_output_tokens recovery (claude-code parity, query.ts:1188).
+        // When the provider hits its output-token cap mid-stream we get
+        // `stop_reason == MaxTokens` plus whatever partial text it managed
+        // to emit. A clean reissue with the same messages would re-prompt
+        // from scratch (model re-doing work). Instead append the partial
+        // assistant text + a meta "resume directly" user nudge to the
+        // local message vec and retry up to MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
+        // times. The nudge text mirrors claude-code's wording so model
+        // behaviour transfers across harnesses. R10-safe: pure round
+        // scheduling around a specific provider failure mode, no policy.
+        // The retry pushes onto `messages` (local, never persisted to the
+        // session log). The closure `build_payload` would hold an immutable
+        // borrow that conflicts with the push; the retry inlines payload
+        // construction so the borrow is scoped to each LLM call.
+        let mut max_tokens_retries = 0u32;
+        while matches!(
+            response.stop_reason,
+            crate::providers::adapter::StopReason::MaxTokens
+        ) && max_tokens_retries < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
+        {
+            max_tokens_retries += 1;
+            tracing::warn!(
+                ?session_id,
+                max_tokens_retries,
+                "provider hit max_output_tokens; retrying with resume nudge",
+            );
+            let partial = response.text_content();
+            if !partial.trim().is_empty() {
+                messages.push(UnifiedMessage::assistant(partial));
+            }
+            messages.push(UnifiedMessage::user(MAX_OUTPUT_TOKENS_RESUME_NUDGE));
+            // Inline payload construction — see comment above for why this
+            // doesn't reuse `build_payload`.
+            let payload = match self.deps.system_prompt.as_deref() {
+                Some(sp) => RequestPayload::new(&messages)
+                    .with_system(Some(sp))
+                    .with_tools(tools_ref),
+                None => RequestPayload::new(&messages).with_tools(tools_ref),
+            };
+            response = match self
+                .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
+                .await?
+            {
+                Ok(r) => r,
+                Err(primary_err) => return Err(HarnessError::Llm(primary_err)),
+            };
+        }
+        if matches!(
+            response.stop_reason,
+            crate::providers::adapter::StopReason::MaxTokens
+        ) {
+            self.set_terminate_reason(
+                crate::orchestrator::dispatch::TerminateReason::MaxOutputTokensExhausted,
+            );
+        }
+
         // Accumulate this turn's provider-reported token usage. Counted here
         // — right after the LLM call — so a turn whose output is later
         // blocked by a guardrail still reflects the tokens the provider
@@ -594,7 +667,43 @@ impl AgentHarness {
         let outcome_for_trace;
         let metrics_for_trace;
         let result;
-        if let VerifierVerdict::Veto { reason, .. } = verdict {
+        if let VerifierVerdict::Halt { reason, .. } = verdict {
+            tracing::info!(?session_id, reason = %reason, "verifier halted loop");
+            // Persist the halt reason as a UserMessage event so transcript
+            // consumers see the same termination message claude-code's
+            // `preventContinuation` surfaces. Mirror the Veto pattern; the
+            // difference is we set TerminateReason::StopHookHalt and exit
+            // immediately (no further turns).
+            let new_turn = uuid::Uuid::new_v4();
+            let halt_event = SessionEvent::UserMessage {
+                turn_id: new_turn,
+                content: MessageContent {
+                    text: format!("[stop hook halt] {reason}"),
+                    blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: crate::session::events::now_ms(),
+                synthetic: true,
+            };
+            self.deps
+                .session
+                .emit_event(session_id, halt_event)
+                .await?;
+            callback.on_stop_hook_halt(&reason);
+            self.set_terminate_reason(
+                crate::orchestrator::dispatch::TerminateReason::StopHookHalt {
+                    reason: reason.clone(),
+                },
+            );
+            self.hit_limit.store(true, Ordering::Relaxed);
+            self.emit(|| crate::harness::trace::LoopTraceEvent::TurnCompleted {
+                iteration: iterations,
+                outcome: crate::harness::trace::LoopTraceTurnOutcome::Stop,
+                metrics: zero_metrics,
+            });
+            return Ok((TurnState::Done, 0, false, None));
+        } else if let VerifierVerdict::Veto { reason, .. } = verdict {
             tracing::info!(?session_id, reason = %reason, "verifier vetoed; forcing continue");
             let new_turn = uuid::Uuid::new_v4();
             let block_event = SessionEvent::UserMessage {
