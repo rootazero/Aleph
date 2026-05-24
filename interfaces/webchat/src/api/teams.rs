@@ -84,6 +84,62 @@ impl TeamsApi {
         let teams_value = result.get("teams").cloned().unwrap_or(Value::Array(vec![]));
         serde_json::from_value(teams_value).map_err(|e| e.to_string())
     }
+
+    /// Discover available team templates (builtin + user-dir overrides).
+    pub async fn list_templates(state: &DashboardState) -> Result<Vec<TemplateMeta>, String> {
+        let result = state.rpc_call("teams.list_templates", Value::Null).await?;
+        let value = result
+            .get("templates")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+        serde_json::from_value(value).map_err(|e| e.to_string())
+    }
+
+    /// Materialize a team from a template via the `team_from_template` builtin
+    /// tool. Returns the freshly-created team id so the caller can refresh and
+    /// open the team detail.
+    pub async fn create_from_template(
+        state: &DashboardState,
+        template: &str,
+        team_name: &str,
+        goal: Option<&str>,
+    ) -> Result<String, String> {
+        let mut args = json!({
+            "template": template,
+            "team_name": team_name,
+        });
+        if let Some(g) = goal.filter(|s| !s.is_empty()) {
+            args["goal"] = Value::String(g.to_string());
+        }
+        let result = state
+            .rpc_call(
+                "tools.invoke",
+                json!({
+                    "tool_name": "team_from_template",
+                    "arguments": args,
+                }),
+            )
+            .await?;
+        // `tools.invoke` returns the tool's raw JSON output; for
+        // `team_from_template` that's TeamFromTemplateOutput { team_id, ... }.
+        result
+            .get("team_id")
+            .and_then(|v| v.as_str().map(String::from))
+            .ok_or_else(|| "team_from_template did not return team_id".to_string())
+    }
+}
+
+/// Light view of a team template returned by `teams.list_templates`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TemplateMeta {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub default_goal: Option<String>,
+    pub leader_id: String,
+    pub leader_role: String,
+    pub member_count: usize,
+    pub task_count: usize,
 }
 
 // =============================================================================

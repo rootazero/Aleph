@@ -4,12 +4,13 @@
 //! Each card shows summary info when collapsed and full detail when expanded.
 //! Migrated from the former /dashboard/teams route into the new /teams tab.
 
-use crate::api::teams::{TeamDetail, TeamSummary, TeamsApi};
+use crate::api::teams::{TeamDetail, TeamSummary, TeamsApi, TemplateMeta};
 use crate::components::ui::*;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use wasm_bindgen::JsCast;
 
 // ============================================================================
 // OverviewView — Teams tab "Overview" sub-view
@@ -25,6 +26,16 @@ pub fn OverviewView() -> impl IntoView {
     let expanded_detail: RwSignal<Option<TeamDetail>> = RwSignal::new(None);
     let is_loading = RwSignal::new(false);
     let error_msg: RwSignal<Option<String>> = RwSignal::new(None);
+
+    // ---- From-Template modal state ----
+    let from_template_open: RwSignal<bool> = RwSignal::new(false);
+    let templates: RwSignal<Vec<TemplateMeta>> = RwSignal::new(Vec::new());
+    let templates_loading: RwSignal<bool> = RwSignal::new(false);
+    let ft_selected: RwSignal<String> = RwSignal::new(String::new());
+    let ft_team_name: RwSignal<String> = RwSignal::new(String::new());
+    let ft_goal: RwSignal<String> = RwSignal::new(String::new());
+    let ft_submitting: RwSignal<bool> = RwSignal::new(false);
+    let ft_error: RwSignal<Option<String>> = RwSignal::new(None);
 
     // --- reload ---
     let reload = move || {
@@ -117,6 +128,71 @@ pub fn OverviewView() -> impl IntoView {
         });
     };
 
+    // ---- From-template handlers ----
+    let open_from_template = move || {
+        ft_selected.set(String::new());
+        ft_team_name.set(String::new());
+        ft_goal.set(String::new());
+        ft_error.set(None);
+        from_template_open.set(true);
+        let state = state;
+        spawn_local(async move {
+            templates_loading.set(true);
+            match TeamsApi::list_templates(&state).await {
+                Ok(list) => {
+                    if let Some(first) = list.first() {
+                        ft_selected.set(first.name.clone());
+                    }
+                    templates.set(list);
+                }
+                Err(e) => ft_error.set(Some(e)),
+            }
+            templates_loading.set(false);
+        });
+    };
+
+    let close_from_template = move || {
+        from_template_open.set(false);
+    };
+
+    let submit_from_template = move || {
+        let template = ft_selected.get_untracked();
+        let team_name = ft_team_name.get_untracked();
+        let goal_raw = ft_goal.get_untracked();
+        if template.is_empty() || team_name.trim().is_empty() {
+            ft_error.set(Some(t_string!(i18n, teams.from_template.required_fields).to_string()));
+            return;
+        }
+        let goal = if goal_raw.trim().is_empty() {
+            None
+        } else {
+            Some(goal_raw.trim().to_string())
+        };
+        let state = state;
+        spawn_local(async move {
+            ft_submitting.set(true);
+            ft_error.set(None);
+            let result =
+                TeamsApi::create_from_template(&state, &template, team_name.trim(), goal.as_deref())
+                    .await;
+            ft_submitting.set(false);
+            match result {
+                Ok(_team_id) => {
+                    from_template_open.set(false);
+                    // Reload the list so the new team appears immediately.
+                    is_loading.set(true);
+                    error_msg.set(None);
+                    match TeamsApi::list(&state).await {
+                        Ok(list) => teams.set(list),
+                        Err(e) => error_msg.set(Some(e)),
+                    }
+                    is_loading.set(false);
+                }
+                Err(e) => ft_error.set(Some(e)),
+            }
+        });
+    };
+
     view! {
         <div class="p-8 max-w-5xl mx-auto space-y-6">
             // ---- Header ----
@@ -146,17 +222,26 @@ pub fn OverviewView() -> impl IntoView {
                         }}
                     </p>
                 </div>
-                <Button
-                    on:click=move |_| reload()
-                    variant=ButtonVariant::Secondary
-                    disabled=Signal::derive(move || is_loading.get() || !state.is_connected.get())
-                >
-                    {move || if is_loading.get() {
-                        t_string!(i18n, common.loading).to_string()
-                    } else {
-                        t_string!(i18n, teams.refresh).to_string()
-                    }}
-                </Button>
+                <div class="flex items-center gap-2">
+                    <Button
+                        on:click=move |_| open_from_template()
+                        variant=ButtonVariant::Primary
+                        disabled=Signal::derive(move || !state.is_connected.get())
+                    >
+                        {t!(i18n, teams.from_template.button)}
+                    </Button>
+                    <Button
+                        on:click=move |_| reload()
+                        variant=ButtonVariant::Secondary
+                        disabled=Signal::derive(move || is_loading.get() || !state.is_connected.get())
+                    >
+                        {move || if is_loading.get() {
+                            t_string!(i18n, common.loading).to_string()
+                        } else {
+                            t_string!(i18n, teams.refresh).to_string()
+                        }}
+                    </Button>
+                </div>
             </header>
 
             // ---- Error banner ----
@@ -281,6 +366,153 @@ pub fn OverviewView() -> impl IntoView {
                         </div>
                     }.into_any()
                 }
+            }}
+
+            // ---- From-Template modal ----
+            {move || {
+                if !from_template_open.get() {
+                    return ().into_any();
+                }
+                view! {
+                    <div
+                        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+                        on:click=move |_| close_from_template()
+                    >
+                        <div
+                            class="bg-surface-raised border border-border rounded-2xl shadow-xl w-full max-w-lg p-6 space-y-4"
+                            on:click=|ev| ev.stop_propagation()
+                        >
+                            <h3 class="text-lg font-semibold text-text-primary">
+                                {t!(i18n, teams.from_template.title)}
+                            </h3>
+                            <p class="text-sm text-text-secondary">
+                                {t!(i18n, teams.from_template.subtitle)}
+                            </p>
+
+                            // Template dropdown
+                            <div class="space-y-1.5">
+                                <label class="text-xs font-medium text-text-tertiary uppercase tracking-wider">
+                                    {t!(i18n, teams.from_template.template_label)}
+                                </label>
+                                {move || {
+                                    if templates_loading.get() {
+                                        view! {
+                                            <p class="text-sm text-text-tertiary">{t!(i18n, common.loading)}</p>
+                                        }.into_any()
+                                    } else {
+                                        let list = templates.get();
+                                        if list.is_empty() {
+                                            view! {
+                                                <p class="text-sm text-text-tertiary">
+                                                    {t!(i18n, teams.from_template.no_templates)}
+                                                </p>
+                                            }.into_any()
+                                        } else {
+                                            view! {
+                                                <select
+                                                    class="w-full bg-surface-sunken border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                                    on:change=move |ev| {
+                                                        let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok());
+                                                        if let Some(sel) = target {
+                                                            ft_selected.set(sel.value());
+                                                        }
+                                                    }
+                                                >
+                                                    {list.into_iter().map(|tpl| {
+                                                        let value = tpl.name.clone();
+                                                        let label = format!(
+                                                            "{} — {} ({} members, {} tasks)",
+                                                            tpl.name,
+                                                            tpl.description,
+                                                            tpl.member_count,
+                                                            tpl.task_count,
+                                                        );
+                                                        let selected = ft_selected.get_untracked() == value;
+                                                        view! {
+                                                            <option value=value selected=selected>{label}</option>
+                                                        }
+                                                    }).collect_view()}
+                                                </select>
+                                            }.into_any()
+                                        }
+                                    }
+                                }}
+                            </div>
+
+                            // Team name input (required)
+                            <div class="space-y-1.5">
+                                <label class="text-xs font-medium text-text-tertiary uppercase tracking-wider">
+                                    {t!(i18n, teams.from_template.team_name_label)}
+                                    <span class="text-danger ml-1">{"*"}</span>
+                                </label>
+                                <input
+                                    type="text"
+                                    class="w-full bg-surface-sunken border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                    placeholder=move || t_string!(i18n, teams.from_template.team_name_placeholder).to_string()
+                                    prop:value=move || ft_team_name.get()
+                                    on:input=move |ev| {
+                                        let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+                                        if let Some(input) = target {
+                                            ft_team_name.set(input.value());
+                                        }
+                                    }
+                                />
+                            </div>
+
+                            // Goal textarea (optional)
+                            <div class="space-y-1.5">
+                                <label class="text-xs font-medium text-text-tertiary uppercase tracking-wider">
+                                    {t!(i18n, teams.from_template.goal_label)}
+                                </label>
+                                <textarea
+                                    rows="3"
+                                    class="w-full bg-surface-sunken border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary resize-y"
+                                    placeholder=move || t_string!(i18n, teams.from_template.goal_placeholder).to_string()
+                                    prop:value=move || ft_goal.get()
+                                    on:input=move |ev| {
+                                        let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
+                                        if let Some(input) = target {
+                                            ft_goal.set(input.value());
+                                        }
+                                    }
+                                />
+                            </div>
+
+                            // Error banner
+                            {move || ft_error.get().map(|e| view! {
+                                <div class="bg-danger-subtle border border-danger/20 rounded-lg p-3 text-sm text-danger">
+                                    {e}
+                                </div>
+                            })}
+
+                            // Footer buttons
+                            <div class="flex items-center justify-end gap-2 pt-2">
+                                <Button
+                                    on:click=move |_| close_from_template()
+                                    variant=ButtonVariant::Secondary
+                                    disabled=Signal::derive(move || ft_submitting.get())
+                                >
+                                    {t!(i18n, common.cancel)}
+                                </Button>
+                                <Button
+                                    on:click=move |_| submit_from_template()
+                                    variant=ButtonVariant::Primary
+                                    disabled=Signal::derive(move ||
+                                        ft_submitting.get()
+                                        || templates_loading.get()
+                                        || templates.get().is_empty()
+                                    )
+                                >
+                                    {move || if ft_submitting.get() {
+                                        t_string!(i18n, common.saving).to_string()
+                                    } else {
+                                        t_string!(i18n, teams.from_template.submit).to_string()
+                                    }}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+                }.into_any()
             }}
         </div>
     }
