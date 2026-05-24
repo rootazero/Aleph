@@ -40,6 +40,16 @@ pub struct DispatcherConfig {
     pub task_timeout_secs: u64,
     /// Fallback wake interval (seconds) — catches any missed signal.
     pub fallback_tick_secs: u64,
+    /// A task that has been `InProgress` for longer than this (seconds) and is
+    /// not running in this process is declared a **zombie** and force-failed.
+    /// Acts as a safety net for the rare window where a worker process dies
+    /// after the run_task spawn but before the outcome-recording code runs —
+    /// in that case `reclaim_orphaned` would loop it back to Pending forever.
+    ///
+    /// Inspired by ClawTeam's `list_zombie_agents(max_hours=2.0)`. Default
+    /// is generous (2 hours) — set lower for short-task workloads, but never
+    /// below `task_timeout_secs` or healthy long-running tasks get clobbered.
+    pub zombie_ttl_secs: u64,
 }
 
 impl Default for DispatcherConfig {
@@ -49,6 +59,7 @@ impl Default for DispatcherConfig {
             lock_ttl_secs: 900,
             task_timeout_secs: 600,
             fallback_tick_secs: 60,
+            zombie_ttl_secs: 7200, // 2 hours — same threshold ClawTeam uses
         }
     }
 }

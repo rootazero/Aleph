@@ -37,6 +37,39 @@ pub fn is_dispatcher_managed(task: &CoordTask) -> bool {
         .unwrap_or(false)
 }
 
+/// Pure predicate: should `task` be reaped as a zombie given the current
+/// running set, wall-clock, and TTL? Extracted from [`TeamDispatcher::reclaim_zombies`]
+/// so the decision logic can be exercised without spinning up a full
+/// dispatcher.
+///
+/// Returns `true` only for `InProgress` dispatcher-managed tasks that this
+/// process isn't running, have a recorded `started_at`, and whose elapsed
+/// time exceeds `zombie_ttl_secs`. A `zombie_ttl_secs` of 0 disables
+/// detection (matches the runtime fast-path in [`TeamDispatcher::reclaim_zombies`]).
+pub fn is_zombie(
+    task: &CoordTask,
+    running: &HashSet<String>,
+    now_epoch: u64,
+    zombie_ttl_secs: u64,
+) -> bool {
+    if zombie_ttl_secs == 0 {
+        return false;
+    }
+    if task.status != CoordTaskStatus::InProgress {
+        return false;
+    }
+    if !is_dispatcher_managed(task) {
+        return false;
+    }
+    if running.contains(&task.id) {
+        return false;
+    }
+    let Some(started) = task.started_at else {
+        return false;
+    };
+    now_epoch.saturating_sub(started) > zombie_ttl_secs
+}
+
 /// Pure scheduling filter: from `tasks`, pick those ready to run right now.
 ///
 /// A task is schedulable when it is dispatcher-managed, has a derived status
@@ -82,7 +115,13 @@ impl TeamDispatcher {
             tracing::warn!(error = %e, "dispatcher: release_stale_locks failed");
         }
 
-        // 2. Reclaim orphaned in-progress tasks (restart reconciliation).
+        // 2a. Force-fail zombie tasks first — they've already exhausted their
+        //     budget and would otherwise be looped back to Pending below.
+        //     Order matters: zombie detection inspects `started_at` directly,
+        //     so it must run before reclaim_orphaned resets it.
+        self.reclaim_zombies().await;
+
+        // 2b. Reclaim orphaned in-progress tasks (restart reconciliation).
         self.reclaim_orphaned().await;
 
         // 3. List schedulable pending tasks. `derive_status` already excludes
@@ -161,10 +200,84 @@ impl TeamDispatcher {
         }
     }
 
+    /// Wall-clock helper — extracted so tests can substitute a fixed value
+    /// instead of `chrono::Utc::now()` if ever needed.
+    fn now_epoch() -> u64 {
+        chrono::Utc::now().timestamp().max(0) as u64
+    }
+
+    /// Force-fail tasks that have been `InProgress` for longer than
+    /// `zombie_ttl_secs` and are not running in this process.
+    ///
+    /// Distinct from [`reclaim_orphaned`], which loops orphans back to
+    /// Pending — zombies have already exhausted their reasonable runtime, so
+    /// retrying would just re-zombify. The dispatcher will broadcast
+    /// `TeamTaskFailed` with a descriptive reason so the panel surfaces the
+    /// state instead of leaving the task perpetually "in progress".
+    ///
+    /// Inspired by ClawTeam's `list_zombie_agents(max_hours=2.0)`; threshold
+    /// configurable via [`DispatcherConfig::zombie_ttl_secs`].
+    async fn reclaim_zombies(self: &Arc<Self>) {
+        let zombie_ttl = self.config.zombie_ttl_secs;
+        if zombie_ttl == 0 {
+            return; // 0 = feature disabled
+        }
+
+        let in_progress = match self
+            .coord_store
+            .list_tasks(CoordTaskFilter {
+                status: Some(CoordTaskStatus::InProgress),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        let running: HashSet<String> = self.running.lock().await.clone();
+        let now = Self::now_epoch();
+
+        for task in in_progress {
+            if !is_dispatcher_managed(&task) {
+                continue;
+            }
+            if running.contains(&task.id) {
+                continue; // owned by this process — let normal flow handle it
+            }
+            let Some(started) = task.started_at else {
+                continue; // no clock to compare against
+            };
+            let elapsed = now.saturating_sub(started);
+            if elapsed <= zombie_ttl {
+                continue; // still within grace window
+            }
+            tracing::warn!(
+                task_id = %task.id,
+                age_secs = elapsed,
+                zombie_ttl_secs = zombie_ttl,
+                "dispatcher: declaring task a zombie (no progress beyond zombie_ttl)"
+            );
+            if let Some(holder) = &task.locked_by {
+                let _ = self.coord_store.release_lock(&task.id, holder).await;
+            }
+            self.fail_task(
+                &task,
+                &format!(
+                    "zombie timeout: no progress for {elapsed}s (limit {zombie_ttl}s)"
+                ),
+            )
+            .await;
+        }
+    }
+
     /// Reset in-progress tasks this process is not running back to `Pending`.
     ///
     /// On a fresh start nothing is in the `running` set, so every leftover
     /// `InProgress` task from a previous process is reclaimed and rescheduled.
+    ///
+    /// Pairs with [`Self::reclaim_zombies`] — that one runs first and catches
+    /// the subset that has been `InProgress` past `zombie_ttl_secs` (those go
+    /// straight to `Failed` instead of bouncing back to `Pending`).
     async fn reclaim_orphaned(self: &Arc<Self>) {
         let in_progress = match self
             .coord_store
@@ -523,5 +636,78 @@ mod tests {
             .collect();
         let picked = select_schedulable(&tasks, &running, 3);
         assert_eq!(picked.len(), 3);
+    }
+
+    // ---- Zombie reclamation ------------------------------------------------
+
+    /// Build an InProgress dispatcher-managed task with `started_at` set.
+    fn in_progress_task(id: &str, started_at: u64, managed: bool) -> CoordTask {
+        let mut t = task(
+            id,
+            CoordTaskStatus::InProgress,
+            Some("a"),
+            managed,
+            Priority::Normal,
+            0,
+        );
+        t.started_at = Some(started_at);
+        t
+    }
+
+    #[test]
+    fn zombie_detection_disabled_when_ttl_zero() {
+        let t = in_progress_task("zombie", 1000, true);
+        let running: HashSet<String> = HashSet::new();
+        assert!(!is_zombie(&t, &running, 1_000_000, 0));
+    }
+
+    #[test]
+    fn zombie_detection_ignores_currently_running_task() {
+        let t = in_progress_task("active", 1000, true);
+        let mut running = HashSet::new();
+        running.insert("active".to_string());
+        assert!(!is_zombie(&t, &running, 1_000_000, 60));
+    }
+
+    #[test]
+    fn zombie_detection_ignores_unmanaged_task() {
+        // team_delegate-owned tasks are caller's responsibility, not ours.
+        let t = in_progress_task("delegated", 1000, false);
+        let running = HashSet::new();
+        assert!(!is_zombie(&t, &running, 1_000_000, 60));
+    }
+
+    #[test]
+    fn zombie_detection_ignores_task_without_started_at() {
+        let mut t = in_progress_task("no_clock", 1000, true);
+        t.started_at = None;
+        let running = HashSet::new();
+        assert!(!is_zombie(&t, &running, 1_000_000, 60));
+    }
+
+    #[test]
+    fn zombie_detection_respects_grace_window() {
+        let t = in_progress_task("young", 1_000_000, true);
+        let running = HashSet::new();
+        // started 30s ago, ttl 60s → not yet a zombie
+        assert!(!is_zombie(&t, &running, 1_000_030, 60));
+    }
+
+    #[test]
+    fn zombie_detection_fires_past_grace_window() {
+        let t = in_progress_task("old", 1_000_000, true);
+        let running = HashSet::new();
+        // started 7201s ago, ttl 7200s → zombie
+        assert!(is_zombie(&t, &running, 1_007_201, 7200));
+    }
+
+    #[test]
+    fn zombie_detection_ignores_pending_tasks() {
+        // A Pending task is never a zombie even if status is somehow stale —
+        // only InProgress qualifies (Pending should never even have started_at).
+        let mut t = in_progress_task("pending", 0, true);
+        t.status = CoordTaskStatus::Pending;
+        let running = HashSet::new();
+        assert!(!is_zombie(&t, &running, 1_000_000, 60));
     }
 }
