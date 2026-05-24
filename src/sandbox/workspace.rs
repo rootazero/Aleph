@@ -649,12 +649,9 @@ mod tests {
         ) -> Result<SandboxOutput, SandboxError> {
             *self.captured_env.lock().unwrap() = env.clone();
             Ok(SandboxOutput {
-                stdout: Vec::new(),
-                stderr: Vec::new(),
                 exit_code: Some(0),
-                signal: None,
-                truncated: false,
                 duration_ms: 1,
+                ..Default::default()
             })
         }
     }
