@@ -57,6 +57,9 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub team_store: Option<Arc<dyn alephcore::teams::TeamStore>>,
     /// Coord task store for team RPC handlers (unified task system)
     pub coord_task_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
+    /// Snapshot store for `teams.snapshot.*` RPC handlers. Shares the coord
+    /// connection — None if coord init failed.
+    pub snapshot_store: Option<Arc<alephcore::teams::SqliteSnapshotStore>>,
     /// Event-sourced memory command handler (used by Phase 2/3 consumers)
     #[allow(dead_code)]
     pub command_handler:
@@ -2252,6 +2255,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         tool_registry: tool_reg_out,
         team_store,
         coord_task_store: coord_store,
+        snapshot_store,
         command_handler: command_handler_out,
         event_store: event_store.clone(),
         message_router: message_router.clone(),

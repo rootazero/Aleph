@@ -1428,7 +1428,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Team management (team store created inside register_agent_handlers)
     if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store, &agent_result.coord_task_store)
     {
-        register_teams_handlers(&mut server, ts, cs, agent_result.event_store.as_ref());
+        register_teams_handlers(
+            &mut server,
+            ts,
+            cs,
+            agent_result.event_store.as_ref(),
+            agent_result.snapshot_store.as_ref(),
+        );
     }
 
     // Graph visualization handlers (wired with MemoryBackend + default agent)

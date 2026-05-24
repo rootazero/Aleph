@@ -166,6 +166,7 @@ pub(in crate::commands::start) fn register_teams_handlers(
     store: &Arc<dyn alephcore::teams::TeamStore>,
     coord_store: &Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>,
     event_store: Option<&Arc<dyn alephcore::teams::events::EventLogStore>>,
+    snapshot_store: Option<&Arc<alephcore::teams::SqliteSnapshotStore>>,
 ) {
     use alephcore::gateway::handlers::teams;
 
@@ -227,6 +228,32 @@ pub(in crate::commands::start) fn register_teams_handlers(
             coord_store,
             es
         );
+    }
+
+    // Snapshot lifecycle RPCs — only wired when the SnapshotStore was
+    // constructed at boot (it shares the coord.db connection). Callers can
+    // still drive snapshots through the `team_snapshot` builtin tool when
+    // these handlers are absent.
+    if let Some(snap) = snapshot_store {
+        register_handler!(
+            server,
+            "teams.snapshot.create",
+            teams::handle_snapshot_create,
+            store,
+            coord_store,
+            snap
+        );
+        register_handler!(server, "teams.snapshot.list", teams::handle_snapshot_list, snap);
+        register_handler!(server, "teams.snapshot.get", teams::handle_snapshot_get, snap);
+        register_handler!(
+            server,
+            "teams.snapshot.restore",
+            teams::handle_snapshot_restore,
+            store,
+            coord_store,
+            snap
+        );
+        register_handler!(server, "teams.snapshot.delete", teams::handle_snapshot_delete, snap);
     }
 }
 

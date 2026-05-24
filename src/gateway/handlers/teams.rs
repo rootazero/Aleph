@@ -8,6 +8,8 @@
 //! - agents.teams: List all teams an agent belongs to
 //! - teams.list_tasks / teams.create_task / teams.update_task: kanban-facing
 //!   CoordTask operations
+//! - teams.snapshot.{create,list,get,restore,delete}: snapshot lifecycle —
+//!   thin direct surface in addition to the `team_snapshot` builtin tool
 
 use serde::Deserialize;
 use serde_json::json;
@@ -15,6 +17,7 @@ use tracing::debug;
 
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStore};
 use crate::sync_primitives::Arc;
+use crate::teams::snapshots::{capture_snapshot, restore_snapshot, SqliteSnapshotStore};
 use crate::teams::TeamStore;
 
 use super::super::protocol::{
@@ -738,6 +741,351 @@ pub async fn handle_list_templates(request: JsonRpcRequest) -> JsonRpcResponse {
         .collect();
 
     JsonRpcResponse::success(request.id, json!({ "templates": entries }))
+}
+
+// =============================================================================
+// teams.snapshot.* — snapshot lifecycle as direct RPC
+//
+// Mirrors the `team_snapshot` builtin tool so panels and external callers can
+// hit the snapshot store without going through tool-invoke. Same backing
+// functions (capture_snapshot / restore_snapshot + SnapshotStore methods) so
+// behaviour, dry-run defaults, and edge-restoration semantics are identical.
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct SnapshotCreateParams {
+    pub team_id: String,
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct SnapshotListParams {
+    #[serde(default)]
+    pub team_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SnapshotIdParams {
+    pub snapshot_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SnapshotRestoreParams {
+    pub snapshot_id: String,
+    /// `false` (default) → dry-run, returns the diff without mutation.
+    /// `true` → applies the snapshot, including dependency-edge restoration.
+    #[serde(default)]
+    pub apply: bool,
+}
+
+/// teams.snapshot.create — capture a new snapshot of `team_id`'s current state.
+pub async fn handle_snapshot_create(
+    request: JsonRpcRequest,
+    team_store: Arc<dyn TeamStore>,
+    coord_store: Arc<dyn CoordTaskStore>,
+    snapshot_store: Arc<SqliteSnapshotStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.snapshot.create request");
+    let params: SnapshotCreateParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let tag = params.tag.unwrap_or_default();
+    let note = params.note.unwrap_or_default();
+    match capture_snapshot(
+        snapshot_store.as_ref(),
+        team_store.as_ref(),
+        coord_store.as_ref(),
+        &params.team_id,
+        &tag,
+        &note,
+    )
+    .await
+    {
+        Ok(out) => JsonRpcResponse::success(request.id, json!(out)),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("snapshot create failed: {e}"),
+        ),
+    }
+}
+
+/// teams.snapshot.list — newest-first metadata listing, optionally filtered.
+pub async fn handle_snapshot_list(
+    request: JsonRpcRequest,
+    snapshot_store: Arc<SqliteSnapshotStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.snapshot.list request");
+    // List is the only snapshot RPC that allows missing params (no filter).
+    let params: SnapshotListParams = match request.params.as_ref() {
+        Some(p) => match serde_json::from_value(p.clone()) {
+            Ok(v) => v,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("invalid params: {e}"),
+                )
+            }
+        },
+        None => SnapshotListParams::default(),
+    };
+    match snapshot_store.list(params.team_id.as_deref()).await {
+        Ok(metas) => JsonRpcResponse::success(request.id, json!({ "snapshots": metas })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("snapshot list failed: {e}"),
+        ),
+    }
+}
+
+/// teams.snapshot.get — load the full payload by id.
+pub async fn handle_snapshot_get(
+    request: JsonRpcRequest,
+    snapshot_store: Arc<SqliteSnapshotStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.snapshot.get request");
+    let params: SnapshotIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match snapshot_store.get(&params.snapshot_id).await {
+        Ok(Some((meta, payload))) => {
+            JsonRpcResponse::success(request.id, json!({ "meta": meta, "payload": payload }))
+        }
+        Ok(None) => JsonRpcResponse::error(
+            request.id,
+            RESOURCE_NOT_FOUND,
+            format!("snapshot '{}' not found", params.snapshot_id),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("snapshot get failed: {e}"),
+        ),
+    }
+}
+
+/// teams.snapshot.restore — apply or dry-run; returns the diff either way.
+pub async fn handle_snapshot_restore(
+    request: JsonRpcRequest,
+    team_store: Arc<dyn TeamStore>,
+    coord_store: Arc<dyn CoordTaskStore>,
+    snapshot_store: Arc<SqliteSnapshotStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.snapshot.restore request");
+    let params: SnapshotRestoreParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match restore_snapshot(
+        snapshot_store.as_ref(),
+        team_store.as_ref(),
+        coord_store.as_ref(),
+        &params.snapshot_id,
+        !params.apply,
+    )
+    .await
+    {
+        Ok(diff) => JsonRpcResponse::success(request.id, json!(diff)),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("snapshot restore failed: {e}"),
+        ),
+    }
+}
+
+/// teams.snapshot.delete — idempotent removal. Returns `existed: bool`.
+pub async fn handle_snapshot_delete(
+    request: JsonRpcRequest,
+    snapshot_store: Arc<SqliteSnapshotStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.snapshot.delete request");
+    let params: SnapshotIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match snapshot_store.delete(&params.snapshot_id).await {
+        Ok(existed) => JsonRpcResponse::success(
+            request.id,
+            json!({ "snapshot_id": params.snapshot_id, "existed": existed }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("snapshot delete failed: {e}"),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod snapshot_handler_tests {
+    use super::*;
+    use crate::agents::swarm::tasks::store::SqliteCoordTaskStore;
+    use crate::teams::{NewTeam, NewTeamMember, SqliteTeamStore};
+    use rusqlite::Connection;
+
+    async fn setup() -> (
+        Arc<dyn TeamStore>,
+        Arc<dyn CoordTaskStore>,
+        Arc<SqliteSnapshotStore>,
+        String,
+    ) {
+        let coord_conn = Connection::open_in_memory().unwrap();
+        let coord = Arc::new(SqliteCoordTaskStore::new(coord_conn));
+        coord.migrate().await.unwrap();
+        let snap = Arc::new(SqliteSnapshotStore::new_from_shared(coord.connection_handle()));
+
+        let teams_conn = Connection::open_in_memory().unwrap();
+        let teams = Arc::new(SqliteTeamStore::new(teams_conn));
+        teams.migrate().await.unwrap();
+        let team = teams
+            .create_team(NewTeam {
+                name: "Alpha".into(),
+                description: "rpc test".into(),
+                leader_id: "leader".into(),
+            })
+            .await
+            .unwrap();
+        teams
+            .add_member(NewTeamMember {
+                team_id: team.id.clone(),
+                agent_id: "leader".into(),
+                role: "leader".into(),
+            })
+            .await
+            .unwrap();
+
+        let teams_arc: Arc<dyn TeamStore> = teams;
+        let coord_arc: Arc<dyn CoordTaskStore> = coord;
+        (teams_arc, coord_arc, snap, team.id)
+    }
+
+    fn req(method: &str, params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: method.into(),
+            params: Some(params),
+            id: Some(serde_json::Value::Number(1.into())),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_list_get_restore_delete_full_lifecycle() {
+        let (teams, coord, snap, team_id) = setup().await;
+
+        // create
+        let resp = handle_snapshot_create(
+            req(
+                "teams.snapshot.create",
+                json!({ "team_id": team_id, "tag": "v1", "note": "first" }),
+            ),
+            teams.clone(),
+            coord.clone(),
+            snap.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none(), "create error: {:?}", resp.error);
+        let sid = resp.result.as_ref().unwrap()["snapshot_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // list
+        let resp = handle_snapshot_list(
+            req("teams.snapshot.list", json!({ "team_id": team_id })),
+            snap.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none());
+        let arr = resp.result.as_ref().unwrap()["snapshots"]
+            .as_array()
+            .unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"].as_str().unwrap(), sid);
+
+        // get
+        let resp =
+            handle_snapshot_get(req("teams.snapshot.get", json!({ "snapshot_id": sid })), snap.clone())
+                .await;
+        assert!(resp.error.is_none());
+        let payload = resp.result.as_ref().unwrap()["payload"].clone();
+        assert_eq!(payload["team"]["id"].as_str().unwrap(), team_id);
+
+        // restore — dry-run (apply omitted ⇒ default false)
+        let resp = handle_snapshot_restore(
+            req("teams.snapshot.restore", json!({ "snapshot_id": sid })),
+            teams.clone(),
+            coord.clone(),
+            snap.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none());
+        assert_eq!(
+            resp.result.as_ref().unwrap()["dry_run"].as_bool().unwrap(),
+            true,
+            "default apply must be false → dry_run true"
+        );
+
+        // delete
+        let resp = handle_snapshot_delete(
+            req("teams.snapshot.delete", json!({ "snapshot_id": sid })),
+            snap.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none());
+        assert_eq!(
+            resp.result.as_ref().unwrap()["existed"].as_bool().unwrap(),
+            true
+        );
+
+        // delete again → existed:false (idempotent)
+        let resp = handle_snapshot_delete(
+            req("teams.snapshot.delete", json!({ "snapshot_id": sid })),
+            snap.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none());
+        assert_eq!(
+            resp.result.as_ref().unwrap()["existed"].as_bool().unwrap(),
+            false
+        );
+
+        // get after delete → not found
+        let resp =
+            handle_snapshot_get(req("teams.snapshot.get", json!({ "snapshot_id": sid })), snap.clone())
+                .await;
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.as_ref().unwrap().code, RESOURCE_NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn list_works_without_params() {
+        let (_teams, _coord, snap, _team_id) = setup().await;
+        let resp = handle_snapshot_list(
+            JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "teams.snapshot.list".into(),
+                params: None,
+                id: Some(serde_json::Value::Number(1.into())),
+            },
+            snap.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none());
+        assert!(
+            resp.result.as_ref().unwrap()["snapshots"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 #[cfg(test)]
