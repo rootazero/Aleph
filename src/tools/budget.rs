@@ -30,6 +30,14 @@ pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
     ("search", 20_000),
     ("web_fetch", 30_000),
     ("markdown_skill", 60_000),
+    // Shell / code execution — these have user-supplied `timeout` in
+    // args but absent a per-tool budget they fall through to the
+    // harness-wide turn_timeout (often much longer). A 3-minute ceiling
+    // here keeps a runaway `cargo build` / `pip install` from blocking
+    // the entire turn while still leaving room for legit long jobs the
+    // caller explicitly opts into via the `timeout` arg.
+    ("bash", 180_000),
+    ("code_exec", 180_000),
 ];
 
 /// Returns the configured wall-clock budget for a builtin tool, or
@@ -68,9 +76,19 @@ mod tests {
 
     #[test]
     fn table_size_matches_expected_count() {
-        // Locked at 16 entries (13 fast + 3 slow). Bumping this requires
-        // updating the table AND adjusting this constant in the same commit —
-        // the assertion is a code-review signal, not a value check.
-        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 16);
+        // Locked at 18 entries (13 fast + 3 slow + 2 exec). Bumping this
+        // requires updating the table AND adjusting this constant in the
+        // same commit — the assertion is a code-review signal, not a
+        // value check.
+        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 18);
+    }
+
+    #[test]
+    fn bash_and_code_exec_have_budgets() {
+        // Regression: prior to round-4 codex parity these two tools
+        // were absent from the table and silently fell back to the
+        // harness-wide turn_timeout.
+        assert_eq!(builtin_tool_budget_ms("bash"), Some(180_000));
+        assert_eq!(builtin_tool_budget_ms("code_exec"), Some(180_000));
     }
 }

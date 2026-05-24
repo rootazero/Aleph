@@ -38,6 +38,7 @@ pub mod browser_tools;
 pub mod channel_manage;
 pub mod clawhub;
 pub mod code_exec;
+pub mod command_canonicalize;
 pub mod config_guide;
 pub mod cron_manage;
 pub mod desktop;

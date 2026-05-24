@@ -33,6 +33,14 @@ use crate::sandbox::{current_session, Sandbox};
 use crate::tool_metadata::DEFAULT_CODE_EXEC_TIMEOUT;
 use crate::tools::AlephTool;
 
+use super::command_canonicalize::canonicalize_shell_cmd;
+
+/// Threshold above which a shell script switches from `bash -c <script>`
+/// to `bash -s` reading the script from stdin. Linux's `ARG_MAX` for a
+/// single argv element (`MAX_ARG_STRLEN`) is typically 128 KiB; we keep a
+/// 4× margin to leave room for the rest of the argv vector plus env.
+const SHELL_STDIN_PIPE_THRESHOLD: usize = 32 * 1024;
+
 /// Supported programming languages
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -227,9 +235,7 @@ Examples:
 
         // Build SandboxCommand. `env` is the additive overrides; the sandbox
         // itself decides what base environment the child sees.
-        let program = args.language.runtime().to_string();
-        let code_flag = args.language.code_flag().to_string();
-        let code = args.code.clone();
+        let invocation = build_exec_invocation(&args.language, &args.code);
         let cwd = validate_working_dir(args.working_dir.as_deref());
 
         let mut env = HashMap::new();
@@ -247,10 +253,10 @@ Examples:
 
         let cmd = SandboxCommand {
             session_id,
-            program,
-            args: vec![code_flag, code],
+            program: invocation.program,
+            args: invocation.args,
             env,
-            stdin: None,
+            stdin: invocation.stdin,
             cwd,
             capabilities: args.as_capabilities(),
             timeout: Some(Duration::from_secs(timeout_secs)),
@@ -272,6 +278,67 @@ Examples:
 /// the tool never bypasses sandbox policy with a raw host path.
 fn validate_working_dir(raw: Option<&str>) -> Option<std::path::PathBuf> {
     raw.filter(|s| !s.is_empty()).map(std::path::PathBuf::from)
+}
+
+/// Shape of the runtime invocation derived from `(language, code)`.
+/// Threaded into `SandboxCommand` so the sandbox sees the final argv +
+/// stdin without the tool layer knowing about platform mechanics.
+#[derive(Debug, Clone)]
+struct ExecInvocation {
+    program: String,
+    args: Vec<String>,
+    stdin: Option<Vec<u8>>,
+}
+
+/// Build the (`program`, `args`, `stdin`) triple for the runtime that
+/// matches `language`. For `Shell`, applies command canonicalization
+/// (peel any outer `bash -lc '...'` wrapper) and switches to a stdin
+/// pipe (`bash -s`) when the script is large enough to risk hitting
+/// `ARG_MAX`. Python/JavaScript paths are unchanged.
+fn build_exec_invocation(language: &Language, code: &str) -> ExecInvocation {
+    match language {
+        Language::Shell => build_shell_invocation(code),
+        Language::Python => ExecInvocation {
+            program: language.runtime().to_string(),
+            args: vec![language.code_flag().to_string(), code.to_string()],
+            stdin: None,
+        },
+        Language::JavaScript => ExecInvocation {
+            program: language.runtime().to_string(),
+            args: vec![language.code_flag().to_string(), code.to_string()],
+            stdin: None,
+        },
+    }
+}
+
+fn build_shell_invocation(code: &str) -> ExecInvocation {
+    let canonical = canonicalize_shell_cmd(code);
+    if let Some(wrapper) = canonical.unwrapped_from {
+        debug!(
+            wrapper = wrapper,
+            "code_exec: peeled outer shell wrapper before exec"
+        );
+    }
+    let script = canonical.script.into_owned();
+
+    if script.len() > SHELL_STDIN_PIPE_THRESHOLD {
+        debug!(
+            script_bytes = script.len(),
+            threshold = SHELL_STDIN_PIPE_THRESHOLD,
+            "code_exec: shell script exceeds threshold — piping via bash -s + stdin"
+        );
+        ExecInvocation {
+            program: "bash".to_string(),
+            args: vec!["-s".to_string()],
+            stdin: Some(script.into_bytes()),
+        }
+    } else {
+        ExecInvocation {
+            program: "bash".to_string(),
+            args: vec!["-c".to_string(), script],
+            stdin: None,
+        }
+    }
 }
 
 fn default_pass_env() -> Vec<String> {
@@ -539,6 +606,146 @@ mod tests {
         assert_eq!(
             cmd.capabilities.fs_write,
             vec![std::path::PathBuf::from("/tmp/out")]
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_wrapper_is_canonicalized_before_exec() {
+        // LLM emits `bash -lc 'cargo test'` as a single cmd string. With
+        // canonicalization the sandbox sees `["-c", "cargo test"]`, not
+        // the doubly-wrapped `["-c", "bash -lc 'cargo test'"]`.
+        let mock = MockSandbox::new(ok_output(""));
+        let sandbox: Arc<dyn Sandbox> = mock.clone();
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+
+        SESSION_ID
+            .scope(sid(), async {
+                tool.call(CodeExecArgs {
+                    language: Language::Shell,
+                    code: "bash -lc 'cargo test'".to_string(),
+                    working_dir: None,
+                    timeout: Some(3),
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+
+        let calls = mock.calls.lock().await;
+        let cmd = &calls[0];
+        assert_eq!(cmd.program, "bash");
+        assert_eq!(cmd.args, vec!["-c".to_string(), "cargo test".to_string()]);
+        assert!(cmd.stdin.is_none());
+    }
+
+    #[tokio::test]
+    async fn unrecognized_wrapper_passes_through_unchanged() {
+        // `bash -c "echo $(date)"` has a double-quoted script with command
+        // substitution — too risky to peel. We pass through, so the
+        // sandbox sees the literal wrapper string.
+        let mock = MockSandbox::new(ok_output(""));
+        let sandbox: Arc<dyn Sandbox> = mock.clone();
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+
+        SESSION_ID
+            .scope(sid(), async {
+                tool.call(CodeExecArgs {
+                    language: Language::Shell,
+                    code: "bash -c \"echo $(date)\"".to_string(),
+                    working_dir: None,
+                    timeout: None,
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+
+        let calls = mock.calls.lock().await;
+        let cmd = &calls[0];
+        assert_eq!(
+            cmd.args,
+            vec![
+                "-c".to_string(),
+                "bash -c \"echo $(date)\"".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn large_shell_script_pipes_via_stdin() {
+        // ~40 KiB script. Below this we use `bash -c <script>`; above, we
+        // switch to `bash -s` and feed the script via stdin to dodge
+        // ARG_MAX limits on Linux (`MAX_ARG_STRLEN = 128 KiB`).
+        let big_script = format!("# header\n{}\n", "echo hi\n".repeat(5_000));
+        assert!(big_script.len() > super::SHELL_STDIN_PIPE_THRESHOLD);
+
+        let mock = MockSandbox::new(ok_output(""));
+        let sandbox: Arc<dyn Sandbox> = mock.clone();
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+
+        SESSION_ID
+            .scope(sid(), async {
+                tool.call(CodeExecArgs {
+                    language: Language::Shell,
+                    code: big_script.clone(),
+                    working_dir: None,
+                    timeout: Some(10),
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+
+        let calls = mock.calls.lock().await;
+        let cmd = &calls[0];
+        assert_eq!(cmd.program, "bash");
+        assert_eq!(cmd.args, vec!["-s".to_string()]);
+        assert_eq!(
+            cmd.stdin.as_deref(),
+            Some(big_script.as_bytes()),
+            "large script should arrive on stdin, not argv"
+        );
+    }
+
+    #[tokio::test]
+    async fn python_path_is_unaffected_by_shell_canonicalize() {
+        // Regression: only Language::Shell takes the new path.
+        let mock = MockSandbox::new(ok_output(""));
+        let sandbox: Arc<dyn Sandbox> = mock.clone();
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+
+        SESSION_ID
+            .scope(sid(), async {
+                tool.call(CodeExecArgs {
+                    language: Language::Python,
+                    code: "bash -lc 'print(1)'".to_string(),
+                    working_dir: None,
+                    timeout: None,
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+
+        let calls = mock.calls.lock().await;
+        let cmd = &calls[0];
+        assert_eq!(cmd.program, "python3");
+        // Python literally receives the string — no canonicalization.
+        assert_eq!(
+            cmd.args,
+            vec!["-c".to_string(), "bash -lc 'print(1)'".to_string()]
         );
     }
 
