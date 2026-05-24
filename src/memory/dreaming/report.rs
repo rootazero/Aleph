@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::memory::dreaming::distill_action::DistillActionRecord;
+
 /// Status of a completed dream pipeline run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -31,6 +33,15 @@ pub struct DreamReport {
     pub notes_archived: u32,
     pub notes_protected: u32,
     pub errors: Option<String>,
+    /// Per-action provenance produced by the `SkillDistill` and
+    /// `FeedbackDistill` stages. Preserves which `DistillAction` variant
+    /// fired, against which candidate, and the apply outcome — the layer
+    /// previously collapsed into a single `*_distill_count` counter.
+    ///
+    /// `#[serde(default)]` keeps the existing `dream_events.jsonl` (which
+    /// pre-dates this field) deserializable without a migration.
+    #[serde(default)]
+    pub distill_actions: Vec<DistillActionRecord>,
     /// Stages that were executed during this run.
     #[serde(skip)]
     pub stages_executed: Vec<String>,

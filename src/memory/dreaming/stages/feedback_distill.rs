@@ -18,7 +18,9 @@ use async_trait::async_trait;
 
 use crate::error::AlephError;
 use crate::memory::dreaming::distill_action::referenced_path;
-use crate::memory::dreaming::{DistillAction, DreamContext};
+use crate::memory::dreaming::{
+    DistillAction, DistillActionRecord, DistillOutcome, DreamContext,
+};
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::providers::adapter::RequestPayload;
@@ -143,32 +145,48 @@ impl DreamStage for FeedbackDistillStage {
         let candidate_set: std::collections::HashSet<&str> =
             candidate_paths.iter().map(String::as_str).collect();
         let mut applied = 0usize;
-        for action in actions
-            .into_iter()
-            .take(self.max_per_cycle)
-            .map(clamp_action)
-            .filter(|a| {
-                if let Some(p) = referenced_path(a) {
-                    if !candidate_set.contains(p) {
-                        tracing::warn!(
-                            path = p,
-                            "FeedbackDistill: action references non-candidate path; \
-                             dropping to prevent cross-category mutation"
-                        );
-                        return false;
-                    }
+        for action in actions.into_iter().take(self.max_per_cycle).map(clamp_action) {
+            // Anti-hallucination guard mirrored from SkillDistill: drop
+            // actions whose target is not in the candidate set, but still
+            // log them in the audit trail.
+            if let Some(p) = referenced_path(&action) {
+                if !candidate_set.contains(p) {
+                    tracing::warn!(
+                        path = p,
+                        "FeedbackDistill: action references non-candidate path; \
+                         dropping to prevent cross-category mutation"
+                    );
+                    ctx.report.distill_actions.push(DistillActionRecord::from_action(
+                        "feedback_distill",
+                        &action,
+                        DistillOutcome::FilteredNonCandidate,
+                        None,
+                    ));
+                    continue;
                 }
-                true
-            })
-        {
+            }
             match ctx
                 .indexer
                 .apply_distill_action(&ctx.agent_id, "feedback", &action)
                 .await
             {
-                Ok(_) => applied += 1,
+                Ok(_) => {
+                    applied += 1;
+                    ctx.report.distill_actions.push(DistillActionRecord::from_action(
+                        "feedback_distill",
+                        &action,
+                        DistillOutcome::Applied,
+                        None,
+                    ));
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "FeedbackDistill apply_distill_action failed");
+                    ctx.report.distill_actions.push(DistillActionRecord::from_action(
+                        "feedback_distill",
+                        &action,
+                        DistillOutcome::Error,
+                        Some(e.to_string()),
+                    ));
                 }
             }
         }

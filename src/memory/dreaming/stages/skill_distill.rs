@@ -13,7 +13,9 @@ use async_trait::async_trait;
 
 use crate::error::AlephError;
 use crate::memory::dreaming::distill_action::referenced_path;
-use crate::memory::dreaming::{DistillAction, DreamContext};
+use crate::memory::dreaming::{
+    DistillAction, DistillActionRecord, DistillOutcome, DreamContext,
+};
 use crate::memory::notes::find_similar_notes;
 use crate::memory::notes::store::NoteStore;
 use crate::providers::adapter::RequestPayload;
@@ -111,32 +113,49 @@ impl DreamStage for SkillDistillStage {
             let actions = parse_distill_response(&response.text_content());
             let candidate_set: std::collections::HashSet<&str> =
                 candidates.iter().map(|(p, _)| p.as_str()).collect();
-            for action in actions
-                .into_iter()
-                .take(self.max_per_cycle)
-                .map(clamp_action)
-                .filter(|a| {
-                    if let Some(p) = referenced_path(a) {
-                        if !candidate_set.contains(p) {
-                            tracing::warn!(
-                                path = p,
-                                "SkillDistill: action references non-candidate path; \
-                                 dropping to prevent cross-category mutation"
-                            );
-                            return false;
-                        }
+            for action in actions.into_iter().take(self.max_per_cycle).map(clamp_action) {
+                // Anti-hallucination guard: actions referencing a path that
+                // was NOT in the candidate set the LLM was shown are dropped
+                // BEFORE apply. Record them with FilteredNonCandidate so the
+                // provenance trail still shows the attempted mutation.
+                if let Some(p) = referenced_path(&action) {
+                    if !candidate_set.contains(p) {
+                        tracing::warn!(
+                            path = p,
+                            "SkillDistill: action references non-candidate path; \
+                             dropping to prevent cross-category mutation"
+                        );
+                        ctx.report.distill_actions.push(DistillActionRecord::from_action(
+                            "skill_distill",
+                            &action,
+                            DistillOutcome::FilteredNonCandidate,
+                            None,
+                        ));
+                        continue;
                     }
-                    true
-                })
-            {
+                }
                 match ctx
                     .indexer
                     .apply_distill_action(&ctx.agent_id, "skill", &action)
                     .await
                 {
-                    Ok(_) => applied += 1,
+                    Ok(_) => {
+                        applied += 1;
+                        ctx.report.distill_actions.push(DistillActionRecord::from_action(
+                            "skill_distill",
+                            &action,
+                            DistillOutcome::Applied,
+                            None,
+                        ));
+                    }
                     Err(e) => {
                         tracing::warn!(path, error = %e, "apply_distill_action failed");
+                        ctx.report.distill_actions.push(DistillActionRecord::from_action(
+                            "skill_distill",
+                            &action,
+                            DistillOutcome::Error,
+                            Some(e.to_string()),
+                        ));
                     }
                 }
             }

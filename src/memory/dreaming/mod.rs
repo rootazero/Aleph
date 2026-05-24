@@ -36,7 +36,7 @@ use tokio::time::interval;
 use tracing::{info, warn};
 
 // Re-export distill action enum (Phase 2 Task 14)
-pub use distill_action::DistillAction;
+pub use distill_action::{DistillAction, DistillActionRecord, DistillOutcome};
 
 // Re-export gate types
 pub use gate::{BlockReason, DreamGate, DreamGateConfig, GateResult};

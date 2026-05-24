@@ -10,7 +10,7 @@
 //!      no judgment.
 
 use crate::memory::notes::Severity;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -60,6 +60,137 @@ pub fn referenced_path(action: &DistillAction) -> Option<&str> {
         } => Some(existing_note_path),
         DistillAction::Supersede { old_note_path, .. } => Some(old_note_path),
         DistillAction::New { .. } | DistillAction::Skip { .. } => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DistillActionRecord — per-action audit row written into DreamReport so that
+// the existing dream_events.jsonl carries enough provenance to replay or
+// debug a specific skill mutation back to its triggering candidate set.
+//
+// Inspired by evolver's per-EvolutionEvent log (one row per genetic action,
+// not per cycle). Aleph's outer `DreamEvent` already records per-cycle
+// metadata; this struct fills in the inner per-action layer that was
+// previously collapsed into a single counter (`skill_distill_count` /
+// `feedback_distill_count`).
+// ---------------------------------------------------------------------------
+
+/// Outcome of attempting to apply a single [`DistillAction`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DistillOutcome {
+    /// Action was applied (note created / strengthened / superseded, or skip
+    /// recorded). Includes `skip` because the LLM still made a decision.
+    Applied,
+    /// Dropped before apply because the referenced path was not in the
+    /// candidate set the LLM was shown (anti-hallucination guard).
+    FilteredNonCandidate,
+    /// `apply_distill_action` returned an error.
+    Error,
+}
+
+/// Per-action provenance row persisted via `DreamReport.distill_actions`.
+///
+/// All fields are flat strings/scalars so the JSONL stays human-greppable.
+/// The struct is intentionally self-contained (no embedded `Severity` enum)
+/// to keep the on-disk log forward-compatible if `Severity` ever evolves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DistillActionRecord {
+    /// Stage that emitted the action ("skill_distill" or "feedback_distill").
+    pub stage: String,
+    /// Action variant ("new" | "strengthen" | "supersede" | "skip").
+    pub action_kind: String,
+    /// Existing note path for strengthen/supersede; None otherwise.
+    pub target_path: Option<String>,
+    /// kebab-case title for new/supersede; None for strengthen/skip.
+    pub title: Option<String>,
+    /// LLM-emitted confidence for new/supersede.
+    pub confidence: Option<f32>,
+    /// Severity (serialized as lowercase string) for new/supersede.
+    pub severity: Option<String>,
+    /// Apply outcome.
+    pub outcome: DistillOutcome,
+    /// Error message when `outcome == Error`; LLM-emitted reason when
+    /// `action_kind == "skip"`.
+    pub error: Option<String>,
+}
+
+impl DistillActionRecord {
+    /// Build a record from a `DistillAction` and an apply outcome.
+    ///
+    /// `stage` should be either `"skill_distill"` or `"feedback_distill"`.
+    pub fn from_action(
+        stage: &str,
+        action: &DistillAction,
+        outcome: DistillOutcome,
+        error: Option<String>,
+    ) -> Self {
+        let severity_str = |s: Severity| -> String {
+            // Use serde's lowercase serialization to stay aligned with the
+            // on-disk note frontmatter spelling.
+            serde_json::to_value(s)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| "low".to_string())
+        };
+
+        match action {
+            DistillAction::New {
+                title,
+                confidence,
+                severity,
+                ..
+            } => Self {
+                stage: stage.to_string(),
+                action_kind: "new".to_string(),
+                target_path: None,
+                title: Some(title.clone()),
+                confidence: Some(*confidence),
+                severity: Some(severity_str(*severity)),
+                outcome,
+                error,
+            },
+            DistillAction::Strengthen {
+                existing_note_path, ..
+            } => Self {
+                stage: stage.to_string(),
+                action_kind: "strengthen".to_string(),
+                target_path: Some(existing_note_path.clone()),
+                title: None,
+                confidence: None,
+                severity: None,
+                outcome,
+                error,
+            },
+            DistillAction::Supersede {
+                old_note_path,
+                title,
+                confidence,
+                severity,
+                ..
+            } => Self {
+                stage: stage.to_string(),
+                action_kind: "supersede".to_string(),
+                target_path: Some(old_note_path.clone()),
+                title: Some(title.clone()),
+                confidence: Some(*confidence),
+                severity: Some(severity_str(*severity)),
+                outcome,
+                error,
+            },
+            DistillAction::Skip { reason, .. } => Self {
+                stage: stage.to_string(),
+                action_kind: "skip".to_string(),
+                target_path: None,
+                title: None,
+                confidence: None,
+                severity: None,
+                outcome,
+                // Carry the LLM-emitted skip reason in the error slot so the
+                // on-disk row preserves *why* the LLM rejected the signal.
+                error: error.or_else(|| Some(reason.clone())),
+            },
+        }
     }
 }
 
@@ -143,5 +274,86 @@ mod tests {
         };
         assert_eq!(referenced_path(&n), None);
         assert_eq!(referenced_path(&s), None);
+    }
+
+    #[test]
+    fn record_from_new_action_captures_title_and_confidence() {
+        let action = DistillAction::New {
+            title: "async-error".into(),
+            rule: "always use ?".into(),
+            confidence: 0.92,
+            severity: Severity::High,
+            source_facts: vec!["F1".into()],
+        };
+        let r = DistillActionRecord::from_action(
+            "skill_distill",
+            &action,
+            DistillOutcome::Applied,
+            None,
+        );
+        assert_eq!(r.action_kind, "new");
+        assert_eq!(r.title.as_deref(), Some("async-error"));
+        assert_eq!(r.confidence, Some(0.92));
+        assert_eq!(r.severity.as_deref(), Some("high"));
+        assert!(r.target_path.is_none());
+        assert!(matches!(r.outcome, DistillOutcome::Applied));
+    }
+
+    #[test]
+    fn record_from_strengthen_action_captures_target_path() {
+        let action = DistillAction::Strengthen {
+            existing_note_path: "skill/async-error".into(),
+            source_facts: vec!["F2".into()],
+        };
+        let r = DistillActionRecord::from_action(
+            "skill_distill",
+            &action,
+            DistillOutcome::FilteredNonCandidate,
+            None,
+        );
+        assert_eq!(r.action_kind, "strengthen");
+        assert_eq!(r.target_path.as_deref(), Some("skill/async-error"));
+        assert!(r.title.is_none());
+        assert!(r.confidence.is_none());
+        assert!(matches!(r.outcome, DistillOutcome::FilteredNonCandidate));
+    }
+
+    #[test]
+    fn record_from_skip_action_preserves_reason_as_error() {
+        let action = DistillAction::Skip {
+            source_fact: "F3".into(),
+            reason: "transient noise".into(),
+        };
+        let r = DistillActionRecord::from_action(
+            "feedback_distill",
+            &action,
+            DistillOutcome::Applied,
+            None,
+        );
+        assert_eq!(r.action_kind, "skip");
+        assert_eq!(r.error.as_deref(), Some("transient noise"));
+    }
+
+    #[test]
+    fn record_serializes_to_flat_json() {
+        let action = DistillAction::New {
+            title: "x".into(),
+            rule: "y".into(),
+            confidence: 0.5,
+            severity: Severity::Med,
+            source_facts: vec![],
+        };
+        let r = DistillActionRecord::from_action(
+            "skill_distill",
+            &action,
+            DistillOutcome::Error,
+            Some("backend offline".into()),
+        );
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["stage"], "skill_distill");
+        assert_eq!(v["action_kind"], "new");
+        assert_eq!(v["severity"], "med");
+        assert_eq!(v["outcome"], "error");
+        assert_eq!(v["error"], "backend offline");
     }
 }

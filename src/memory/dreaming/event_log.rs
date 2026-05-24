@@ -192,4 +192,100 @@ mod tests {
         assert_eq!(back.cycle, 42);
         assert_eq!(back.id, "dream_test_42");
     }
+
+    #[tokio::test]
+    async fn distill_actions_survive_round_trip() {
+        use crate::memory::dreaming::distill_action::{
+            DistillActionRecord, DistillOutcome,
+        };
+
+        let dir = tempdir().unwrap();
+        let log = EventLog::new(dir.path().join("test_agent"));
+
+        // Synthesize a cycle that exercises all three outcomes so the
+        // on-disk format covers every variant the evolver-parity path
+        // can produce.
+        let mut event = make_event(7);
+        event.report.distill_actions = vec![
+            DistillActionRecord {
+                stage: "skill_distill".into(),
+                action_kind: "new".into(),
+                target_path: None,
+                title: Some("async-error".into()),
+                confidence: Some(0.85),
+                severity: Some("high".into()),
+                outcome: DistillOutcome::Applied,
+                error: None,
+            },
+            DistillActionRecord {
+                stage: "skill_distill".into(),
+                action_kind: "strengthen".into(),
+                target_path: Some("skill/async-error".into()),
+                title: None,
+                confidence: None,
+                severity: None,
+                outcome: DistillOutcome::FilteredNonCandidate,
+                error: None,
+            },
+            DistillActionRecord {
+                stage: "feedback_distill".into(),
+                action_kind: "supersede".into(),
+                target_path: Some("feedback/typo".into()),
+                title: Some("fix-typo".into()),
+                confidence: Some(0.6),
+                severity: Some("med".into()),
+                outcome: DistillOutcome::Error,
+                error: Some("indexer offline".into()),
+            },
+        ];
+
+        log.append(&event).await.unwrap();
+        let read_back = log.read_last(1).await.unwrap();
+        assert_eq!(read_back.len(), 1);
+        let actions = &read_back[0].report.distill_actions;
+        assert_eq!(actions.len(), 3);
+        assert_eq!(actions[0].action_kind, "new");
+        assert_eq!(actions[1].outcome, DistillOutcome::FilteredNonCandidate);
+        assert_eq!(actions[2].error.as_deref(), Some("indexer offline"));
+    }
+
+    #[test]
+    fn pre_existing_event_log_lines_deserialize_without_distill_actions() {
+        // Backward-compat: events written before `distill_actions` existed
+        // must deserialize cleanly (#[serde(default)] empties the vec).
+        let legacy_json = r#"{
+            "id": "dream_legacy_1",
+            "cycle": 1,
+            "strategy": "consolidate",
+            "selection": {"strategy": "consolidate", "rationale": "ok", "personality_adjustment": 0.0},
+            "gate_decision": {"type": "allow"},
+            "report": {
+                "pipeline_type": "consolidate",
+                "started_at": 0,
+                "finished_at": 0,
+                "duration_ms": 0,
+                "notes_consolidated": 0,
+                "contradictions_found": 0,
+                "notes_marked_stale": 0,
+                "synthesis_count": 0,
+                "format_fixed": 0,
+                "broken_links_found": 0,
+                "links_repaired": 0,
+                "links_purged": 0,
+                "notes_archived": 0,
+                "notes_protected": 0,
+                "errors": null
+            },
+            "validation": {
+                "l1_format": {"passed": true, "checks_run": 0, "checks_passed": 0, "issues": []},
+                "l2_consistency": {"passed": true, "checks_run": 0, "checks_passed": 0, "issues": []},
+                "l3_semantic": null,
+                "l4_retrospective": null
+            },
+            "duration_ms": 0,
+            "created_at": 0
+        }"#;
+        let parsed: DreamEvent = serde_json::from_str(legacy_json).unwrap();
+        assert!(parsed.report.distill_actions.is_empty());
+    }
 }
