@@ -12,7 +12,6 @@ use crate::context::budget::preflight::PreflightPipeline;
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
 use crate::harness::chain_context::ChainContext;
-use crate::harness::prompt::PromptBuilder;
 use crate::harness::trace_sink::TraceSink;
 use crate::providers::AiProvider;
 use crate::sandbox::Sandbox;
@@ -62,10 +61,6 @@ pub struct HarnessDeps {
     /// System prompt injected into every RequestPayload. Subagent path builds
     /// this via PromptBuilder at spawn time; Gateway passes None for now.
     pub system_prompt: Option<String>,
-    /// Per-turn message assembler. Stage 3 seam (#5). Defaults to
-    /// `DefaultPromptBuilder` (byte-equivalent to legacy build_prompt).
-    /// Subagent (#11) and JudgeAgent (#10) inject custom builders.
-    pub prompt_builder: Arc<dyn PromptBuilder>,
     /// Position of this harness instance in the subagent call chain.
     /// Stage 4 seam (#11). Defaults to a fresh root chain (depth=0). The
     /// subagent spawner overrides this with `parent.chain.child()` so each
@@ -86,8 +81,8 @@ pub struct HarnessDeps {
     /// don't get cut off by macOS putting the host to sleep.
     pub power: Option<Arc<dyn aleph_desktop::traits::PowerCapability>>,
     /// Stall detection configuration. When set, the harness monitors for
-    /// inactivity and returns `HarnessError::Stalled` if no activity
-    /// is detected within the configured timeout.
+    /// inactivity and, on timeout, sets `TerminateReason::StallTimeout` +
+    /// `hit_limit=true` and exits cleanly (not via `HarnessError`).
     pub stall_config: Option<StallConfig>,
     /// Hard cap on consecutive turns where every tool call failed. When
     /// reached, the harness forces `TurnState::Done` with `hit_limit=true`

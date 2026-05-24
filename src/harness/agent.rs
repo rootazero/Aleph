@@ -5,9 +5,9 @@
 //!     ToolError events).
 //!   * Preservation of assistant `tool_use` intent inside `AssistantMessage`
 //!     events so later Think cycles can reconstruct the conversation.
-//!   * Full-history prompt assembly (now in `prompt.rs`) that re-emits the
-//!     preceding assistant tool_use turn and resolves real tool names for
-//!     `ToolResult` messages.
+//!   * Full-history prompt assembly (now in `agent/prompt.rs`) that re-emits
+//!     the preceding assistant tool_use turn and resolves real tool names
+//!     for `ToolResult` messages.
 //!
 //! Task 10 (Phase 6b) additionally consumes the optional triad on
 //! `HarnessDeps`:
@@ -20,6 +20,7 @@
 //!   * `think.rs` — `run_turn_internal`, `race_llm_call`, `run_verifiers`
 //!   * `act.rs` — `act`
 //!   * `guardrails.rs` — `apply_input_guardrail`, `apply_tool_call_guardrail`
+//!   * `prompt.rs` — `build_prompt` (sync per-turn message assembler)
 
 use crate::sync_primitives::{AtomicBool, AtomicU64, Mutex, Ordering};
 use std::sync::OnceLock;
@@ -41,6 +42,7 @@ use crate::verification::ToolCallSummary;
 
 mod act;
 mod guardrails;
+pub(crate) mod prompt;
 mod think;
 
 /// Outcome of `AgentHarness::apply_input_guardrail`. The two non-block
@@ -123,15 +125,9 @@ impl AgentHarness {
     }
 
     /// `true` if a budget directive forced an early exit during this run.
-    /// Cleared by [`AgentHarness::reset_hit_limit`] before a fresh run.
+    /// A harness instance serves exactly one run, so this flag is never reset.
     pub fn hit_limit(&self) -> bool {
         self.hit_limit.load(Ordering::Relaxed)
-    }
-
-    /// Reset the hit_limit flag. Called before a fresh session drive so a
-    /// previous run's budget trip does not leak into the next outcome.
-    pub fn reset_hit_limit(&self) {
-        self.hit_limit.store(false, Ordering::Relaxed);
     }
 
     /// The session id at the end of the most recent `run()`. `None` when
@@ -265,12 +261,6 @@ impl AgentHarness {
         &self.deps.chain_context
     }
 
-    /// Convenience: wrap this harness as an `Arc<dyn SessionDriver>` so it
-    /// can be stored in containers that don't depend on the concrete type.
-    pub fn into_session_driver(self) -> std::sync::Arc<dyn crate::session::SessionDriver> {
-        std::sync::Arc::new(self)
-    }
-
     /// Max consecutive verifier vetos before the harness gives up and
     /// forces Done. Prevents infinite loops when a hook permanently blocks.
     const MAX_VERIFIER_VETOS: usize = 10;
@@ -302,9 +292,6 @@ impl crate::session::SessionDriver for AgentHarness {
                 }
                 HarnessError::Session(sess_err) => {
                     crate::error::AlephError::provider(format!("harness session error: {sess_err}"))
-                }
-                HarnessError::Stalled { elapsed } => {
-                    crate::error::AlephError::provider(format!("agent stalled after {:?}", elapsed))
                 }
                 HarnessError::StalledTurn { phase, elapsed } => crate::error::AlephError::provider(
                     format!("agent turn stalled in {phase} after {elapsed:?}"),
@@ -969,7 +956,6 @@ mod tests {
             preflight_pipeline: None,
             trace_sink: None,
             system_prompt: None,
-            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: None,
             max_iterations: Some(3),
@@ -1041,7 +1027,6 @@ mod tests {
             preflight_pipeline: None,
             trace_sink: None,
             system_prompt: None,
-            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: None,
             max_iterations: Some(3),
@@ -1107,7 +1092,6 @@ mod tests {
             preflight_pipeline: None,
             trace_sink: None,
             system_prompt: None,
-            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: None,
             max_iterations: None,

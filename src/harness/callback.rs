@@ -1,11 +1,10 @@
 //! Lifecycle callback for `AgentHarness` turn execution.
 //!
-//! Mirrors the `LoopCallback` surface from the retiring
-//! `agent_loop/loop_core.rs` on a narrower contract. The Phase 6a runtime flip
+//! The Phase 6a runtime flip
 //! (see `docs/superpowers/plans/2026-04-20-managed-agents-phase-6a-runtime-flip.md`)
 //! threads implementations of this trait from the Gateway stream sink through
 //! the Orchestrator bridge down to the harness, so user-visible delta
-//! streaming survives the `AgentLoop → AgentHarness` swap.
+//! streaming survives the legacy AgentLoop → AgentHarness swap.
 //!
 //! Today the LLM layer is non-streaming at this seam, so [`HarnessCallback::on_delta`]
 //! fires once per assistant turn with the complete text. The trait shape is

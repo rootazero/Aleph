@@ -852,8 +852,8 @@ fn test_convert_tool_call_without_signature_omits_key() {
 /// `convert_messages` → request Part. Guards every hop of B6 at once.
 #[test]
 fn test_gemini_thought_signature_full_round_trip() {
+    use crate::harness::agent::prompt::parse_tool_use_block;
     use crate::harness::agent::tool_use_blocks;
-    use crate::harness::prompt::parse_tool_use_block;
     use crate::providers::delta::DeltaCollector;
     use crate::providers::message::{ContentBlock, UnifiedMessage};
 

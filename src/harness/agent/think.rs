@@ -211,11 +211,10 @@ impl AgentHarness {
                 events
             };
 
-        // 2. Build the LLM request. `prompt_builder` has access to the full log
+        // 2. Build the LLM request. `build_prompt` has access to the full log
         //    so it can reconstruct the preceding assistant tool_use turn and
         //    resolve tool names for tool_result messages.
-        let ctx = crate::harness::prompt::TurnContext::new(&events, tail_start);
-        let mut messages = self.deps.prompt_builder.assemble(&ctx).await?;
+        let mut messages = super::prompt::build_prompt(&events, tail_start);
 
         // 2a. Preflight cheap passes (hermes-inspired). Run BEFORE the budget
         // check so token-saving transforms — tool_result pruning + historical
@@ -953,18 +952,7 @@ impl AgentHarness {
             return; // user already has terminal text; skip.
         }
         let tail_start = super::tail_start_index(&events);
-        let ctx = crate::harness::prompt::TurnContext::new(&events, tail_start);
-        let messages = match self.deps.prompt_builder.assemble(&ctx).await {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(
-                    ?session_id,
-                    ?e,
-                    "max-iter grace turn: prompt assembly failed"
-                );
-                return;
-            }
-        };
+        let messages = super::prompt::build_prompt(&events, tail_start);
         self.fire_grace_turn(
             session_id,
             &events,

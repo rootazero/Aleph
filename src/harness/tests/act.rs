@@ -319,7 +319,6 @@ async fn act_executes_tools_sequentially() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -396,7 +395,6 @@ async fn act_tool_failure_returns_harness_tool_error() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -503,7 +501,6 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -679,7 +676,6 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -712,8 +708,8 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
 /// on only one side would break the tool_use continuity across turns.
 #[test]
 fn tool_use_blocks_round_trip_through_parse_tool_use_block() {
+    use crate::harness::agent::prompt::parse_tool_use_block;
     use crate::harness::agent::tool_use_blocks;
-    use crate::harness::prompt::parse_tool_use_block;
 
     let calls = vec![
         NativeToolCall {
@@ -797,7 +793,6 @@ async fn tool_error_trace_carries_retryable_flag() {
         preflight_pipeline: None,
         trace_sink: Some(sink as Arc<dyn crate::harness::TraceSink>),
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -928,7 +923,6 @@ async fn g3_repairs_case_mismatched_tool_name() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -997,7 +991,6 @@ async fn g3_does_not_repair_when_lowercase_is_also_unknown() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -1055,7 +1048,6 @@ async fn g1_last_step_injects_max_steps_hint() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         // cap=1, fresh session → iterations passed = 1, 1+1 >= 1 → hint injects.
@@ -1114,7 +1106,6 @@ async fn g1_does_not_inject_when_not_last_step() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         // cap=10, fresh session → iterations=1, 1+1=2 < 10 → no hint.
@@ -1210,7 +1201,6 @@ async fn act_parallel_overlaps_concurrent_safe_calls_and_preserves_order() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -1325,7 +1315,6 @@ async fn act_falls_back_to_serial_when_any_call_is_unsafe() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,

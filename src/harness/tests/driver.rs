@@ -112,7 +112,6 @@ async fn session_driver_delegates_to_harness_run() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -132,7 +131,7 @@ async fn session_driver_delegates_to_harness_run() {
 
     // Cast through the trait so we're exercising the trait dispatch path,
     // not the inherent `Harness::run`.
-    let driver: Arc<dyn SessionDriver> = harness.into_session_driver();
+    let driver: Arc<dyn SessionDriver> = Arc::new(harness);
     driver.drive(&sid).await.expect("drive should succeed");
 
     let events = session
@@ -187,7 +186,6 @@ async fn session_driver_preserves_cancelled_semantics() {
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
-        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,
@@ -204,7 +202,7 @@ async fn session_driver_preserves_cancelled_semantics() {
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-cancelled");
-    let driver: Arc<dyn SessionDriver> = harness.into_session_driver();
+    let driver: Arc<dyn SessionDriver> = Arc::new(harness);
 
     let err = driver
         .drive(&sid)

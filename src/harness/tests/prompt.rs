@@ -1,9 +1,9 @@
-//! Shape tests for `DefaultPromptBuilder` — verify the assembler produces
+//! Shape tests for `build_prompt` — verify the assembler produces
 //! the expected message structure for common session event patterns.
 //! (UnifiedMessage and SessionEvent both lack PartialEq, so structural
 //! pattern matching is the comparison vehicle.)
 
-use crate::harness::prompt::{DefaultPromptBuilder, PromptBuilder, TurnContext};
+use crate::harness::agent::prompt::build_prompt;
 use crate::providers::message::UnifiedMessage;
 use crate::session::events::{
     now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, ToolOutputMetadata,
@@ -73,19 +73,17 @@ fn tool_result(call_id: &str, value: serde_json::Value) -> SessionEventRecord {
     })
 }
 
-#[tokio::test]
-async fn empty_log_yields_empty_messages() {
+#[test]
+fn empty_log_yields_empty_messages() {
     let events: Vec<SessionEventRecord> = Vec::new();
-    let ctx = TurnContext::new(&events, 0);
-    let out = DefaultPromptBuilder.assemble(&ctx).await.expect("ok");
+    let out = build_prompt(&events, 0);
     assert!(out.is_empty());
 }
 
-#[tokio::test]
-async fn single_user_message_passes_through() {
+#[test]
+fn single_user_message_passes_through() {
     let events = vec![user_msg("hello")];
-    let ctx = TurnContext::new(&events, 0);
-    let out = DefaultPromptBuilder.assemble(&ctx).await.expect("ok");
+    let out = build_prompt(&events, 0);
     assert_eq!(out.len(), 1);
     match &out[0] {
         UnifiedMessage::User { content } => {
@@ -101,8 +99,8 @@ async fn single_user_message_passes_through() {
     }
 }
 
-#[tokio::test]
-async fn assistant_then_tool_result_reconstructs_prior_turn() {
+#[test]
+fn assistant_then_tool_result_reconstructs_prior_turn() {
     // 4-event fixture: user → tool_call_requested → assistant(tool_use) → tool_result
     let events = vec![
         user_msg("fetch the weather"),
@@ -120,8 +118,7 @@ async fn assistant_then_tool_result_reconstructs_prior_turn() {
         .map(|i| i + 1)
         .unwrap_or(0);
 
-    let ctx = TurnContext::new(&events, tail_start);
-    let new_output = DefaultPromptBuilder.assemble(&ctx).await.expect("ok");
+    let new_output = build_prompt(&events, tail_start);
 
     // Shape: 1 reconstructed Assistant + 1 ToolResult
     assert_eq!(new_output.len(), 2);
@@ -163,33 +160,24 @@ mod prop {
     use proptest::prelude::*;
 
     // Property: regardless of the order/content of UserMessage events
-    // before the tail boundary, `DefaultPromptBuilder` never panics
-    // and always produces a `Vec<UnifiedMessage>` whose length is
-    // `<= events.len() + 1` (the +1 accounts for the optionally
-    // reconstructed assistant turn — irrelevant here since this case
-    // has no AssistantMessage events, but kept as the upper bound
-    // invariant of the assemble function).
+    // before the tail boundary, `build_prompt` never panics and always
+    // produces a `Vec<UnifiedMessage>` whose length is `<= events.len() + 1`
+    // (the +1 accounts for the optionally reconstructed assistant turn —
+    // irrelevant here since this case has no AssistantMessage events,
+    // but kept as the upper bound invariant of the assemble function).
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
         #[test]
         fn assemble_is_total_for_user_only_logs(
             texts in proptest::collection::vec("[a-z ]{0,40}", 0..16),
         ) {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-
             let events: Vec<SessionEventRecord> = texts
                 .iter()
                 .map(|t| user_msg(t))
                 .collect();
 
             // tail_start = 0 for user-only logs (no assistant message).
-            let ctx = TurnContext::new(&events, 0);
-            let out = rt
-                .block_on(DefaultPromptBuilder.assemble(&ctx))
-                .expect("assemble must not error on user-only logs");
+            let out = build_prompt(&events, 0);
 
             prop_assert!(out.len() <= events.len() + 1);
             // Every output for user-only logs must itself be a User msg
@@ -204,20 +192,17 @@ mod prop {
 
 /// Sanity benchmark — not an assertion; run with
 /// `cargo test -p alephcore --lib harness::tests::prompt::perf_dispatch_overhead_documented -- --ignored --nocapture`
-/// to print timings. We document this rather than assert because trait
-/// dispatch is one vtable jump and any measurable regression would show
-/// up in the broader gateway-level perf suite.
-#[tokio::test]
+/// to print timings.
+#[test]
 #[ignore]
-async fn perf_dispatch_overhead_documented() {
+fn perf_dispatch_overhead_documented() {
     use std::time::Instant;
     let events: Vec<SessionEventRecord> = (0..1000).map(|i| user_msg(&format!("m{i}"))).collect();
-    let ctx = TurnContext::new(&events, 0);
 
     let start = Instant::now();
     for _ in 0..1000 {
-        let _ = DefaultPromptBuilder.assemble(&ctx).await;
+        let _ = build_prompt(&events, 0);
     }
     let elapsed = start.elapsed();
-    eprintln!("1000 × assemble(1000 events) = {elapsed:?}");
+    eprintln!("1000 × build_prompt(1000 events) = {elapsed:?}");
 }

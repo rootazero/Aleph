@@ -1,202 +1,169 @@
-//! Prompt Assembly Seam — Stage 3 of the 12-module harness roadmap.
+//! Per-turn prompt assembly — sync helper for `think.rs`.
 //!
-//! `PromptBuilder` is the single seam through which `AgentHarness` produces
-//! the per-turn `Vec<UnifiedMessage>` handed to the provider. Default
-//! behavior matches the legacy private `build_prompt` byte-for-byte;
-//! downstream stages (#11 Subagent, #10 Verification) inject custom
-//! builders that compose memory hints, chain context, or judge prompts
-//! without patching `agent.rs`.
+//! Round-2 inlining of the former `PromptBuilder` trait + `DefaultPromptBuilder`
+//! struct (deleted from `src/harness/prompt.rs`). The trait had exactly one
+//! impl with one production consumer (`subagent_spawner`); per R10 撤回模式
+//! a zero-real-consumer abstraction is deleted, not preserved.
+//!
+//! The body never returned an error (the old `Result<_, HarnessError>` was
+//! always `Ok`), so this is now an infallible sync fn.
 
-use async_trait::async_trait;
+use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::session::events::{SessionEvent, SessionEventRecord};
 
-use crate::providers::message::UnifiedMessage;
-use crate::session::events::SessionEventRecord;
+/// Build the per-turn message vector handed to the provider. Walks the
+/// session log slice and:
+///   * Reconstructs the preceding assistant turn (including signed thinking)
+///     when `tail_start > 0`, dropping orphan `tool_use` blocks whose
+///     matching `ToolResult` / `ToolError` is missing — Anthropic-compatible
+///     backends reject orphans with HTTP 400.
+///   * Walks the tail emitting `UserMessage` / `ToolResult` / `ToolError`.
+///
+/// G2 (opencode parity): wraps real mid-loop user messages in
+/// `<system-reminder>` so the model recognises them as genuine user
+/// interjections rather than synthetic harness chatter. Synthetic user
+/// messages (verifier vetoes, MAX_STEPS hints) pass through unwrapped, and
+/// the conversation-opening user message (`tail_start == 0`) is never
+/// wrapped.
+pub(crate) fn build_prompt(
+    events: &[SessionEventRecord],
+    tail_start: usize,
+) -> Vec<UnifiedMessage> {
+    let mut messages = Vec::new();
 
-/// Input to `PromptBuilder::assemble`. Carries the slice of session events
-/// and the tail boundary computed by `tail_start_index`. Future stages may
-/// extend this struct with memory hints, skill suggestions, or chain
-/// context — additions must be additive (existing builders keep working).
-#[derive(Debug)]
-pub struct TurnContext<'a> {
-    pub events: &'a [SessionEventRecord],
-    pub tail_start: usize,
-}
+    // Reconstruct the preceding assistant turn (if any) so the model sees
+    // its own tool_use request in context.
+    if tail_start > 0 {
+        if let SessionEvent::AssistantMessage { content, .. } = &events[tail_start - 1].event {
+            // Pre-compute the set of call_ids that have a matching
+            // ToolResult or ToolError in the tail. Tool_use blocks without
+            // one are "orphans" — typically caused by the previous turn
+            // being interrupted (turn timeout, cancel, crash) before
+            // `act()` could persist a result. Drop them so the next turn
+            // can proceed cleanly.
+            let resolved: std::collections::HashSet<&str> = events[tail_start..]
+                .iter()
+                .filter_map(|r| match &r.event {
+                    SessionEvent::ToolResult { call_id, .. }
+                    | SessionEvent::ToolError { call_id, .. } => Some(call_id.as_str()),
+                    _ => None,
+                })
+                .collect();
 
-impl<'a> TurnContext<'a> {
-    pub fn new(events: &'a [SessionEventRecord], tail_start: usize) -> Self {
-        Self { events, tail_start }
-    }
-}
-
-/// Pluggable per-turn message assembler. Implementations must be
-/// `Send + Sync` so `Arc<dyn PromptBuilder>` lives in `HarnessDeps`.
-#[async_trait]
-pub trait PromptBuilder: Send + Sync {
-    /// Produce the `Vec<UnifiedMessage>` for the next provider call.
-    /// Errors propagate as `HarnessError::Session` (or future variants).
-    async fn assemble(
-        &self,
-        ctx: &TurnContext<'_>,
-    ) -> Result<Vec<UnifiedMessage>, crate::harness::trait_def::HarnessError>;
-}
-
-/// Default builder — byte-equivalent to the pre-Stage-3 private
-/// `build_prompt` function (former `agent.rs:846`).
-#[derive(Debug, Default, Clone)]
-pub struct DefaultPromptBuilder;
-
-#[async_trait]
-impl PromptBuilder for DefaultPromptBuilder {
-    async fn assemble(
-        &self,
-        ctx: &TurnContext<'_>,
-    ) -> Result<Vec<UnifiedMessage>, crate::harness::trait_def::HarnessError> {
-        use crate::providers::message::{ContentBlock, UnifiedMessage};
-        use crate::session::events::SessionEvent;
-
-        let events = ctx.events;
-        let tail_start = ctx.tail_start;
-        let mut messages = Vec::new();
-
-        // Reconstruct the preceding assistant turn (if any) so the model sees
-        // its own tool_use request in context.
-        if tail_start > 0 {
-            if let SessionEvent::AssistantMessage { content, .. } = &events[tail_start - 1].event {
-                // Pre-compute the set of call_ids that have a matching
-                // ToolResult or ToolError in the tail. Tool_use blocks
-                // without one are "orphans" — typically caused by the
-                // previous turn being interrupted (turn timeout, cancel,
-                // crash) before `act()` could persist a result. Anthropic
-                // and Anthropic-compatible backends reject orphans with
-                // HTTP 400 ("tool_call_ids did not have response messages"),
-                // and every subsequent turn replays the same broken state.
-                // Drop orphans so the next turn can proceed cleanly.
-                let resolved: std::collections::HashSet<&str> = events[tail_start..]
-                    .iter()
-                    .filter_map(|r| match &r.event {
-                        SessionEvent::ToolResult { call_id, .. }
-                        | SessionEvent::ToolError { call_id, .. } => Some(call_id.as_str()),
-                        _ => None,
-                    })
-                    .collect();
-
-                // Partition tool_use blocks into kept vs. orphan first, so
-                // we can decide whether the paired thinking block should be
-                // included (signed thinking only makes sense alongside a
-                // surviving tool_use intent).
-                let mut tool_blocks: Vec<ContentBlock> = Vec::new();
-                let mut dropped_orphans: Vec<String> = Vec::new();
-                for raw in &content.blocks {
-                    if let Some(tc) = parse_tool_use_block(raw) {
-                        if let ContentBlock::ToolCall { id, .. } = &tc {
-                            if !resolved.contains(id.as_str()) {
-                                dropped_orphans.push(id.clone());
-                                continue;
-                            }
+            // Partition tool_use blocks into kept vs. orphan first, so we
+            // can decide whether the paired thinking block should be
+            // included (signed thinking only makes sense alongside a
+            // surviving tool_use intent).
+            let mut tool_blocks: Vec<ContentBlock> = Vec::new();
+            let mut dropped_orphans: Vec<String> = Vec::new();
+            for raw in &content.blocks {
+                if let Some(tc) = parse_tool_use_block(raw) {
+                    if let ContentBlock::ToolCall { id, .. } = &tc {
+                        if !resolved.contains(id.as_str()) {
+                            dropped_orphans.push(id.clone());
+                            continue;
                         }
-                        tool_blocks.push(tc);
+                    }
+                    tool_blocks.push(tc);
+                }
+            }
+            if !dropped_orphans.is_empty() {
+                tracing::warn!(
+                    orphans = ?dropped_orphans,
+                    "dropping orphan tool_use blocks from replayed assistant message \
+                     (no matching tool_result/tool_error in session log)",
+                );
+            }
+
+            let mut blocks: Vec<ContentBlock> = Vec::new();
+            // Reconstruct signed thinking block first so tool_use blocks
+            // that follow it receive reasoning_content in convert_messages.
+            // Skip when no tool_use survived: a lone signed thinking block
+            // (without any subsequent action) is rejected by Anthropic.
+            if !tool_blocks.is_empty() {
+                if let (Some(ref thinking), Some(ref sig)) =
+                    (&content.thinking, &content.thinking_signature)
+                {
+                    if !thinking.is_empty() {
+                        blocks.push(ContentBlock::Thinking {
+                            thinking: thinking.clone(),
+                            signature: Some(sig.clone()),
+                        });
                     }
                 }
-                if !dropped_orphans.is_empty() {
-                    tracing::warn!(
-                        orphans = ?dropped_orphans,
-                        "dropping orphan tool_use blocks from replayed assistant message \
-                         (no matching tool_result/tool_error in session log)",
+            }
+            if !content.text.is_empty() {
+                blocks.push(ContentBlock::Text {
+                    text: content.text.clone(),
+                    cache_control: None,
+                });
+            }
+            blocks.extend(tool_blocks);
+            if !blocks.is_empty() {
+                messages.push(UnifiedMessage::Assistant { content: blocks });
+            }
+        }
+    }
+
+    // Walk the tail and emit UserMessage / ToolResult entries.
+    for (offset, record) in events[tail_start..].iter().enumerate() {
+        match &record.event {
+            SessionEvent::UserMessage {
+                content, synthetic, ..
+            } => {
+                // G2 (opencode parity): wrap real mid-loop user messages
+                // in `<system-reminder>` so the model recognises them as
+                // genuine user interjections rather than synthetic harness
+                // chatter. Only fires when an assistant turn already
+                // exists (`tail_start > 0`).
+                let wrapped;
+                let text: &str = if !*synthetic && tail_start > 0 {
+                    wrapped = format!(
+                        "<system-reminder>\n\
+                         The user sent the following message:\n\
+                         {}\n\n\
+                         Please address this message and continue with your tasks.\n\
+                         </system-reminder>",
+                        content.text,
                     );
-                }
-
-                let mut blocks: Vec<ContentBlock> = Vec::new();
-                // Reconstruct signed thinking block first so tool_use blocks
-                // that follow it receive reasoning_content in convert_messages.
-                // Skip when no tool_use survived: a lone signed thinking block
-                // (without any subsequent action) is rejected by Anthropic.
-                if !tool_blocks.is_empty() {
-                    if let (Some(ref thinking), Some(ref sig)) =
-                        (&content.thinking, &content.thinking_signature)
-                    {
-                        if !thinking.is_empty() {
-                            blocks.push(ContentBlock::Thinking {
-                                thinking: thinking.clone(),
-                                signature: Some(sig.clone()),
-                            });
-                        }
-                    }
-                }
-                if !content.text.is_empty() {
-                    blocks.push(ContentBlock::Text {
-                        text: content.text.clone(),
+                    &wrapped
+                } else {
+                    content.text.as_str()
+                };
+                messages.push(UnifiedMessage::user(text));
+            }
+            SessionEvent::ToolResult {
+                call_id, output, ..
+            } => {
+                let tool_result_idx = tail_start + offset;
+                let tool_name =
+                    resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
+                messages.push(UnifiedMessage::tool_result_json(
+                    call_id.clone(),
+                    tool_name.to_string(),
+                    output.value.clone(),
+                    false,
+                ));
+            }
+            SessionEvent::ToolError { call_id, error, .. } => {
+                let tool_result_idx = tail_start + offset;
+                let tool_name =
+                    resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
+                messages.push(UnifiedMessage::ToolResult {
+                    tool_call_id: call_id.clone(),
+                    tool_name: tool_name.to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: error.clone(),
                         cache_control: None,
-                    });
-                }
-                blocks.extend(tool_blocks);
-                if !blocks.is_empty() {
-                    messages.push(UnifiedMessage::Assistant { content: blocks });
-                }
+                    }],
+                    is_error: true,
+                });
             }
+            _ => {}
         }
-
-        // Walk the tail and emit UserMessage / ToolResult entries.
-        for (offset, record) in events[tail_start..].iter().enumerate() {
-            match &record.event {
-                SessionEvent::UserMessage {
-                    content, synthetic, ..
-                } => {
-                    // G2 (opencode parity): wrap real mid-loop user messages
-                    // in `<system-reminder>` so the model recognises them as
-                    // genuine user interjections rather than synthetic harness
-                    // chatter (verifier vetoes, MAX_STEPS hints). The wrap
-                    // only fires when an assistant turn already exists
-                    // (`tail_start > 0`) — the conversation-opening user
-                    // message is never wrapped.
-                    let wrapped;
-                    let text: &str = if !*synthetic && tail_start > 0 {
-                        wrapped = format!(
-                            "<system-reminder>\n\
-                             The user sent the following message:\n\
-                             {}\n\n\
-                             Please address this message and continue with your tasks.\n\
-                             </system-reminder>",
-                            content.text,
-                        );
-                        &wrapped
-                    } else {
-                        content.text.as_str()
-                    };
-                    messages.push(UnifiedMessage::user(text));
-                }
-                SessionEvent::ToolResult {
-                    call_id, output, ..
-                } => {
-                    let tool_result_idx = tail_start + offset;
-                    let tool_name =
-                        resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
-                    messages.push(UnifiedMessage::tool_result_json(
-                        call_id.clone(),
-                        tool_name.to_string(),
-                        output.value.clone(),
-                        false,
-                    ));
-                }
-                SessionEvent::ToolError { call_id, error, .. } => {
-                    let tool_result_idx = tail_start + offset;
-                    let tool_name =
-                        resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
-                    messages.push(UnifiedMessage::ToolResult {
-                        tool_call_id: call_id.clone(),
-                        tool_name: tool_name.to_string(),
-                        content: vec![ContentBlock::Text {
-                            text: error.clone(),
-                            cache_control: None,
-                        }],
-                        is_error: true,
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        Ok(messages)
     }
+
+    messages
 }
 
 /// Parse a previously persisted `tool_use` JSON block back into a
@@ -204,11 +171,10 @@ impl PromptBuilder for DefaultPromptBuilder {
 /// the shape written by `tool_use_blocks`.
 ///
 /// `pub(crate)` so the round-trip test in `harness::tests::act` can exercise
-/// the writer/reader pair without re-exporting through `harness::agent`.
+/// the writer/reader pair through `crate::harness::agent::prompt::parse_tool_use_block`.
 pub(crate) fn parse_tool_use_block(
     block: &serde_json::Value,
 ) -> Option<crate::providers::message::ContentBlock> {
-    use crate::providers::message::ContentBlock;
     let obj = block.as_object()?;
     if obj.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
         return None;
@@ -239,11 +205,10 @@ pub(crate) fn parse_tool_use_block(
 /// Find the `ToolCallRequested.name` whose `call_id` matches, searching
 /// strictly BEFORE `before_idx` (i.e. within `events[..before_idx]`).
 fn resolve_tool_name<'a>(
-    events: &'a [crate::session::events::SessionEventRecord],
+    events: &'a [SessionEventRecord],
     before_idx: usize,
     call_id: &str,
 ) -> Option<&'a str> {
-    use crate::session::events::SessionEvent;
     let upper = before_idx.min(events.len());
     events[..upper].iter().rev().find_map(|r| match &r.event {
         SessionEvent::ToolCallRequested {
@@ -275,24 +240,22 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn default_builder_compiles_and_runs() {
+    #[test]
+    fn build_prompt_compiles_and_runs() {
         let events: Vec<SessionEventRecord> = Vec::new();
-        let ctx = TurnContext::new(&events, 0);
-        let builder = DefaultPromptBuilder;
-        let out = builder.assemble(&ctx).await.expect("assemble ok");
+        let out = build_prompt(&events, 0);
         assert!(out.is_empty(), "empty events → empty output");
     }
 
     /// Regression: when the previous assistant turn emitted tool_use blocks
     /// but `act()` was interrupted before persisting a ToolResult/ToolError
-    /// for one of them, the prompt builder must drop the orphan. Anthropic
+    /// for one of them, `build_prompt` must drop the orphan. Anthropic
     /// (and Anthropic-compatible) APIs reject orphan tool_use blocks with
     /// HTTP 400 ("tool_call_ids did not have response messages"), and the
     /// orphan is otherwise replayed on every subsequent turn — bricking the
     /// session.
-    #[tokio::test]
-    async fn drops_orphan_tool_use_blocks_from_replayed_assistant() {
+    #[test]
+    fn drops_orphan_tool_use_blocks_from_replayed_assistant() {
         let turn = uuid::Uuid::new_v4();
         let events: Vec<SessionEventRecord> = vec![
             mk_record(SessionEvent::TurnStarted {
@@ -355,16 +318,12 @@ mod tests {
         ];
 
         // Tail starts after the AssistantMessage (index 2 → tail_start = 3).
-        let ctx = TurnContext::new(&events, 3);
-        let messages = DefaultPromptBuilder
-            .assemble(&ctx)
-            .await
-            .expect("assemble ok");
+        let messages = build_prompt(&events, 3);
 
         let assistant_blocks = messages
             .iter()
             .find_map(|m| match m {
-                UnifiedMessage::Assistant { content } => Some(content),
+                crate::providers::message::UnifiedMessage::Assistant { content } => Some(content),
                 _ => None,
             })
             .expect("assistant message present");
@@ -392,8 +351,8 @@ mod tests {
     /// thinking block, if any, is also dropped because it would otherwise
     /// stand alone — Anthropic rejects a thinking block without a paired
     /// action.
-    #[tokio::test]
-    async fn drops_entire_assistant_when_only_orphans_remain() {
+    #[test]
+    fn drops_entire_assistant_when_only_orphans_remain() {
         let turn = uuid::Uuid::new_v4();
         let events: Vec<SessionEventRecord> = vec![
             mk_record(SessionEvent::AssistantMessage {
@@ -421,15 +380,11 @@ mod tests {
             }),
         ];
 
-        let ctx = TurnContext::new(&events, 1);
-        let messages = DefaultPromptBuilder
-            .assemble(&ctx)
-            .await
-            .expect("assemble ok");
+        let messages = build_prompt(&events, 1);
         assert!(
             !messages
                 .iter()
-                .any(|m| matches!(m, UnifiedMessage::Assistant { .. })),
+                .any(|m| matches!(m, crate::providers::message::UnifiedMessage::Assistant { .. })),
             "no assistant message should be emitted when only orphans + thinking remain",
         );
         assert_eq!(messages.len(), 1, "expected only the new user message");
@@ -439,8 +394,8 @@ mod tests {
     /// AND tail_start > 0 — must be wrapped in `<system-reminder>` so the
     /// model recognises it as a user interjection. The conversation-opening
     /// user message (tail_start == 0) is never wrapped.
-    #[tokio::test]
-    async fn g2_wraps_real_midloop_user_message_in_system_reminder() {
+    #[test]
+    fn g2_wraps_real_midloop_user_message_in_system_reminder() {
         let turn = uuid::Uuid::new_v4();
         let events: Vec<SessionEventRecord> = vec![
             mk_record(SessionEvent::AssistantMessage {
@@ -465,18 +420,16 @@ mod tests {
                 synthetic: false,
             }),
         ];
-        let ctx = TurnContext::new(&events, 1);
-        let messages = DefaultPromptBuilder
-            .assemble(&ctx)
-            .await
-            .expect("assemble ok");
+        let messages = build_prompt(&events, 1);
         let user_text = messages
             .iter()
             .find_map(|m| match m {
-                UnifiedMessage::User { content } => content.first().and_then(|b| match b {
-                    ContentBlock::Text { text, .. } => Some(text.clone()),
-                    _ => None,
-                }),
+                crate::providers::message::UnifiedMessage::User { content } => {
+                    content.first().and_then(|b| match b {
+                        ContentBlock::Text { text, .. } => Some(text.clone()),
+                        _ => None,
+                    })
+                }
                 _ => None,
             })
             .expect("user message present");
@@ -494,8 +447,8 @@ mod tests {
     /// pass through unwrapped — the model has already been trained on the
     /// `<system-reminder>` shape; wrapping a synthetic reminder inside
     /// another reminder muddles the signal.
-    #[tokio::test]
-    async fn g2_does_not_wrap_synthetic_user_message() {
+    #[test]
+    fn g2_does_not_wrap_synthetic_user_message() {
         let turn = uuid::Uuid::new_v4();
         let events: Vec<SessionEventRecord> = vec![
             mk_record(SessionEvent::AssistantMessage {
@@ -520,18 +473,16 @@ mod tests {
                 synthetic: true,
             }),
         ];
-        let ctx = TurnContext::new(&events, 1);
-        let messages = DefaultPromptBuilder
-            .assemble(&ctx)
-            .await
-            .expect("assemble ok");
+        let messages = build_prompt(&events, 1);
         let user_text = messages
             .iter()
             .find_map(|m| match m {
-                UnifiedMessage::User { content } => content.first().and_then(|b| match b {
-                    ContentBlock::Text { text, .. } => Some(text.clone()),
-                    _ => None,
-                }),
+                crate::providers::message::UnifiedMessage::User { content } => {
+                    content.first().and_then(|b| match b {
+                        ContentBlock::Text { text, .. } => Some(text.clone()),
+                        _ => None,
+                    })
+                }
                 _ => None,
             })
             .expect("user message present");
@@ -545,8 +496,8 @@ mod tests {
     /// G2: the conversation-opening user message (tail_start == 0) is the
     /// genuine first prompt and must NOT be wrapped — wrapping would
     /// confuse the model on turn 1.
-    #[tokio::test]
-    async fn g2_does_not_wrap_opening_user_message() {
+    #[test]
+    fn g2_does_not_wrap_opening_user_message() {
         let turn = uuid::Uuid::new_v4();
         let events: Vec<SessionEventRecord> = vec![mk_record(SessionEvent::UserMessage {
             turn_id: turn,
@@ -559,18 +510,16 @@ mod tests {
             at: now_ms(),
             synthetic: false,
         })];
-        let ctx = TurnContext::new(&events, 0);
-        let messages = DefaultPromptBuilder
-            .assemble(&ctx)
-            .await
-            .expect("assemble ok");
+        let messages = build_prompt(&events, 0);
         let user_text = messages
             .iter()
             .find_map(|m| match m {
-                UnifiedMessage::User { content } => content.first().and_then(|b| match b {
-                    ContentBlock::Text { text, .. } => Some(text.clone()),
-                    _ => None,
-                }),
+                crate::providers::message::UnifiedMessage::User { content } => {
+                    content.first().and_then(|b| match b {
+                        ContentBlock::Text { text, .. } => Some(text.clone()),
+                        _ => None,
+                    })
+                }
                 _ => None,
             })
             .expect("user message present");

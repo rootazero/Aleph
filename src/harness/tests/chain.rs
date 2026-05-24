@@ -88,7 +88,6 @@ mod stubs {
             preflight_pipeline: None,
             trace_sink: None,
             system_prompt: None,
-            prompt_builder: Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: chain,
             guardrails: None,
             max_iterations: None,

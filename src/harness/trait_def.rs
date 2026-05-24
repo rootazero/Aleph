@@ -9,7 +9,6 @@
 //! ```
 
 use async_trait::async_trait;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::harness::callback::HarnessCallback;
@@ -111,12 +110,9 @@ pub enum HarnessError {
     /// The run loop was externally cancelled.
     #[error("cancelled")]
     Cancelled,
-    /// Agent stalled — no activity detected within stall timeout.
-    #[error("stalled for {elapsed:?}")]
-    Stalled { elapsed: Duration },
-    /// A single Think or Act phase exceeded `turn_timeout`. Distinct from
-    /// `Stalled` (which captures cross-turn idle): `StalledTurn` fires when
-    /// an `await` itself does not return.
+    /// A single Think or Act phase exceeded `turn_timeout`. The cross-turn
+    /// stall watchdog (`StallTracker`) does not raise an error — it sets
+    /// `TerminateReason::StallTimeout` and exits with `hit_limit=true`.
     #[error("turn stalled in {phase} after {elapsed:?}")]
     StalledTurn {
         phase: TurnPhase,
@@ -153,9 +149,7 @@ impl HarnessError {
             HarnessError::Tool(_) => ErrorClass::Fixable,
             HarnessError::Session(_) => ErrorClass::Unexpected,
             HarnessError::Cancelled => ErrorClass::Recoverable,
-            HarnessError::Stalled { .. } | HarnessError::StalledTurn { .. } => {
-                ErrorClass::Transient
-            }
+            HarnessError::StalledTurn { .. } => ErrorClass::Transient,
         }
     }
 }
@@ -168,14 +162,6 @@ mod harness_error_class_tests {
     #[test]
     fn cancelled_is_recoverable() {
         assert_eq!(HarnessError::Cancelled.class(), ErrorClass::Recoverable);
-    }
-
-    #[test]
-    fn stalled_is_transient() {
-        let e = HarnessError::Stalled {
-            elapsed: std::time::Duration::from_secs(60),
-        };
-        assert_eq!(e.class(), ErrorClass::Transient);
     }
 
     #[test]

@@ -315,7 +315,6 @@ impl HarnessRunner for AgentHarnessRunner {
             preflight_pipeline,
             trace_sink: trace_sink.clone(),
             system_prompt,
-            prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: self.guardrails.clone(),
             // H1: the Think→Act loop is always capped. Per-flow override wins;
