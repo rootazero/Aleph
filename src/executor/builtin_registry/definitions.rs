@@ -482,6 +482,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Materialize a team from a TOML blueprint in one shot — leader + workers + initial task DAG. Use `teams.list_templates` RPC to discover available templates.",
         requires_config: true,
     },
+    BuiltinToolDefinition {
+        name: "team_snapshot",
+        description: "Manage team snapshots — create / list / get / restore (dry-run by default) / delete. Restore is conservative: InProgress tasks are never clobbered.",
+        requires_config: true,
+    },
     // Team messaging tools — require MessageRouter / Inbox
     BuiltinToolDefinition {
         name: "message_send",
@@ -765,6 +770,7 @@ pub fn create_tool_boxed(
         | "team_member_remove"
         | "team_digest"
         | "team_from_template"
+        | "team_snapshot"
         | "message_send"
         | "inbox_read"
         | "plan_submit"

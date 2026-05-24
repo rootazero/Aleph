@@ -714,6 +714,39 @@ impl BuiltinToolRegistry {
             (None, None, None, None, None, None)
         };
 
+        // Build team_snapshot when TeamStore + CoordTaskStore + SqliteSnapshotStore
+        // are all present. The snapshot store is constructed alongside coord
+        // in the boot path so they share one Connection (see config.rs comment).
+        let team_snapshot_tool = if let (Some(ref team_store), Some(ref coord_store), Some(ref snap_store)) = (
+            &config.team_store,
+            &config.coord_task_store,
+            &config.snapshot_store,
+        ) {
+            use crate::builtin_tools::team::TeamSnapshotTool;
+            let tool = TeamSnapshotTool::new(
+                Arc::clone(team_store),
+                Arc::clone(coord_store),
+                Arc::clone(snap_store),
+                current_agent_id.clone(),
+            );
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered team_snapshot tool");
+            Some(tool)
+        } else {
+            None
+        };
+
         // Add team_digest tool (if EventLogStore + TeamStore are available)
         let team_digest_tool = if let (Some(ref event_store), Some(ref team_store)) =
             (&config.event_store, &config.team_store)
@@ -1324,6 +1357,7 @@ impl BuiltinToolRegistry {
             team_member_remove_tool,
             team_digest_tool,
             team_from_template_tool,
+            team_snapshot_tool,
             message_send_tool,
             inbox_read_tool,
             plan_submit_tool,

@@ -12,6 +12,7 @@ pub mod messages;
 pub mod notifier;
 pub mod plans;
 pub mod sessions;
+pub mod snapshots;
 pub mod store;
 pub mod templates;
 pub mod types;
@@ -23,5 +24,9 @@ pub use artifacts::{ArtifactType, TaskArtifact, TaskStatus};
 pub use dispatcher::{DispatcherConfig, TeamDispatcher};
 pub use events::{EventLogStore, SqliteEventLogStore, TeamEventLogger};
 pub use notifier::TeamNotifier;
+pub use snapshots::{
+    capture_snapshot, restore_snapshot, CreateSnapshotOutput, RestoreDiff, SnapshotMeta,
+    SqliteSnapshotStore, TeamSnapshotPayload,
+};
 pub use store::{SqliteTeamStore, TeamStore};
 pub use types::{NewTeam, NewTeamMember, Team, TeamId, TeamMember, TeamStatus, TeamSummary};

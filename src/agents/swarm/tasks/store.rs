@@ -180,6 +180,15 @@ impl SqliteCoordTaskStore {
         self
     }
 
+    /// Hand out a clone of the inner connection handle so a sibling store
+    /// living in the same database file (currently
+    /// [`crate::teams::snapshots::SqliteSnapshotStore`]) can share the lock
+    /// and avoid the SQLite "database is locked" hazard that would arise
+    /// from two independent connections to the same file.
+    pub fn connection_handle(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.conn)
+    }
+
     /// Publish a `team.<team_id>.task.<verb>` topic AND broadcast the matching
     /// [`AlephEvent`] on [`GlobalBus`] so [`TeamEventLogger`] persists it in
     /// `team_events`. Centralising both emissions here means the panel/RPC
@@ -441,6 +450,32 @@ impl SqliteCoordTaskStore {
 
             CREATE INDEX IF NOT EXISTS idx_coord_task_comments_task
                 ON coord_task_comments(task_id, created_at);
+            "#,
+        )
+        .map_err(db_err)?;
+
+        // --- Team snapshots (additive) ---
+        // Point-in-time JSON bundles of a team's config + members + tasks +
+        // recent events. Stored here (not teams.db) so the snapshot read path
+        // shares one DB lock with the bulk content (tasks). Restore is
+        // dry-run by default in the tool layer.
+        //
+        // Inspired by ClawTeam's SnapshotManager. No FK to coord_tasks —
+        // snapshots are deliberately decoupled from current task lifecycle
+        // (deleting a task must not delete historical snapshots referencing it).
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS coord_team_snapshots (
+                id         TEXT PRIMARY KEY,
+                team_id    TEXT NOT NULL,
+                tag        TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                payload    TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_coord_team_snapshots_team
+                ON coord_team_snapshots(team_id, created_at DESC);
             "#,
         )
         .map_err(db_err)?;

@@ -68,6 +68,10 @@ pub struct BuiltinToolConfig {
     pub memory_similarity_threshold: Option<f32>,
     /// Coordination task store for task/team management tools
     pub coord_task_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
+    /// Team snapshot store (sibling to coord_task_store; shares its connection).
+    /// Populated alongside `coord_task_store` in the boot path so the
+    /// `team_snapshot` builtin tool can capture/restore state bundles.
+    pub snapshot_store: Option<Arc<crate::teams::SqliteSnapshotStore>>,
     /// Wake handle for the autonomous team dispatcher loop.
     /// Shared with `task_create` so a newly created task is dispatched without
     /// polling latency.

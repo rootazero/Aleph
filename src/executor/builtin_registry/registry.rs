@@ -253,6 +253,10 @@ pub struct BuiltinToolRegistry {
     /// TeamStore + CoordTaskStore + AgentRegistry + SessionStore).
     pub(crate) team_from_template_tool:
         Option<crate::builtin_tools::team::TeamFromTemplateTool>,
+    /// Unified team-snapshot tool (optional — requires TeamStore + CoordTaskStore
+    /// + SqliteSnapshotStore; the snapshot store is constructed alongside
+    /// coord_task_store in the boot path so they share a connection).
+    pub(crate) team_snapshot_tool: Option<crate::builtin_tools::team::TeamSnapshotTool>,
     /// Team messaging tools (optional — require MessageRouter / Inbox)
     pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
     pub(crate) inbox_read_tool: Option<crate::builtin_tools::team::InboxReadTool>,
@@ -1076,6 +1080,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let tool = self.team_from_template_tool.as_ref().ok_or_else(|| {
                     AlephError::tool(
                         "team_from_template not available: TeamStore + CoordTaskStore required",
+                    )
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "team_snapshot" => Box::pin(async move {
+                let tool = self.team_snapshot_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "team_snapshot not available: TeamStore + CoordTaskStore + SqliteSnapshotStore required",
                     )
                 })?;
                 tool.call_json(arguments).await

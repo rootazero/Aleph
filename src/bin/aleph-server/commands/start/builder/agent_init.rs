@@ -145,8 +145,17 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
     // Create coord task store (SQLite-backed task/team coordination for swarm tools).
     // Created unconditionally so it is available regardless of AI provider availability.
-    let coord_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>> = {
+    //
+    // Also constructs the sibling `SqliteSnapshotStore` from the same
+    // connection handle — it operates on `coord_team_snapshots` in the same
+    // DB file and must share the tokio Mutex<Connection> to avoid the SQLite
+    // "database is locked" hazard that two independent connections would hit.
+    let (coord_store, snapshot_store): (
+        Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
+        Option<Arc<alephcore::teams::SqliteSnapshotStore>>,
+    ) = {
         use alephcore::agents::swarm::tasks::store::SqliteCoordTaskStore;
+        use alephcore::teams::SqliteSnapshotStore;
         use alephcore::utils::paths::get_data_dir;
 
         match get_data_dir() {
@@ -154,25 +163,27 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let db_path = dir.join("coord.db");
                 match alephcore::utils::sqlite_open::open_sqlite_safe(&db_path) {
                     Ok(conn) => {
-                        let store = Arc::new(
+                        let concrete = Arc::new(
                             SqliteCoordTaskStore::new(conn).with_event_bus(event_bus.clone()),
                         );
                         // Run schema migration inline (already inside async context)
-                        match store.migrate().await {
+                        match concrete.migrate().await {
                             Ok(()) => {
                                 if !daemon {
                                     println!("  Coord task store initialized (SQLite)");
                                 }
-                                Some(
-                                    store
-                                        as Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>,
-                                )
+                                let snap = Arc::new(SqliteSnapshotStore::new_from_shared(
+                                    concrete.connection_handle(),
+                                ));
+                                let trait_obj = Arc::clone(&concrete)
+                                    as Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>;
+                                (Some(trait_obj), Some(snap))
                             }
                             Err(e) => {
                                 if !daemon {
                                     eprintln!("Warning: Coord task store migration failed: {}. Task coordination tools disabled.", e);
                                 }
-                                None
+                                (None, None)
                             }
                         }
                     }
@@ -183,7 +194,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 e
                             );
                         }
-                        None
+                        (None, None)
                     }
                 }
             }
@@ -195,7 +206,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     );
                 }
                 tracing::warn!(error = %e, "Failed to resolve data directory; task coordination tools disabled");
-                None
+                (None, None)
             }
         }
     };
@@ -802,6 +813,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             memory_similarity_threshold: Some(app_config.memory.similarity_threshold),
             injection_mode: app_config.memory.injection_mode,
             coord_task_store: coord_store.clone(),
+            snapshot_store: snapshot_store.clone(),
             dispatch_signal: Some(dispatch_signal.clone()),
             agent_message_bus: agent_message_bus.clone(),
             team_store: team_store.clone(),
