@@ -4,6 +4,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Aleph Dashboard</title>
+    <!-- Inter (UI sans) + JetBrains Mono (code) — modern variable web fonts.
+         preconnect warms the TLS handshake; display=swap lets the system
+         fallback paint immediately so first paint stays sub-100ms even on
+         slow networks. Fallback chain in --font-sans keeps offline safe. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
     <link data-trunk rel="rust" data-wasm-opt="z" data-target-name="aleph-dashboard" />
     <link data-trunk rel="css" href="styles/tailwind.css" />
   </head>

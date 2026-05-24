@@ -62,16 +62,40 @@
   --color-chart-3:          oklch(0.60 0.080 70);
   --color-chart-4:          oklch(0.50 0.030 220);
 
-  /* === Typography — deliberate SF / system stack === */
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
-    system-ui, "Helvetica Neue", Arial, sans-serif;
+  /* === Typography — Inter (modern variable web sans) leading,
+         SF / system stack as graceful fallback. JetBrains Mono for code.
+         Loaded via <link> in index.html; fallbacks keep zero-network safe. === */
+  --font-sans: "Inter", "Inter Variable", -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "JetBrains Mono Variable", ui-monospace,
+    SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
 
-  /* === Motion — one converged ease-out curve, calm by default === */
+  /* === Motion — one converged ease-out curve, calm by default ===
+         Aliased into a duration scale so components can pick a tempo
+         without hard-coding magic numbers. === */
   --default-transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
   --default-transition-duration:         180ms;
   --ease-spring:                         cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out:                            cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast:                       120ms;
+  --duration-normal:                     200ms;
+  --duration-slow:                       320ms;
 
-  /* === Depth — soft, layered shadows in place of heavy borders === */
+  /* === Radii — explicit scale, slightly larger than Tailwind v4 defaults
+         to produce the modern "soft" web-app feel. The whole panel inherits
+         these via the existing `rounded-*` utilities — zero component edits
+         needed (`rounded-lg`: 8→12, `rounded-xl`: 12→16, `rounded-2xl`: 16→20). === */
+  --radius-xs:   0.1875rem;  /*  3px */
+  --radius-sm:   0.375rem;   /*  6px */
+  --radius-md:   0.5rem;     /*  8px */
+  --radius-lg:   0.75rem;    /* 12px */
+  --radius-xl:   1rem;       /* 16px */
+  --radius-2xl:  1.25rem;    /* 20px */
+  --radius-3xl:  1.75rem;    /* 28px */
+  --radius-full: 9999px;
+
+  /* === Depth — soft, layered shadows in place of heavy borders.
+         `--shadow-glow` is accent-tinted so it follows the active palette. === */
   --shadow-xs: 0 1px 2px oklch(0.20 0.02 310 / 0.05);
   --shadow-sm: 0 1px 2px oklch(0.20 0.02 310 / 0.05),
                0 1px 3px oklch(0.20 0.02 310 / 0.06);
@@ -81,6 +105,96 @@
                0 16px 36px oklch(0.20 0.02 310 / 0.13);
   --shadow-xl: 0 8px 16px oklch(0.20 0.02 310 / 0.08),
                0 28px 60px oklch(0.20 0.02 310 / 0.18);
+  --shadow-glow: 0 0 0 1px color-mix(in oklch, var(--color-primary) 28%, transparent),
+                 0 0 20px color-mix(in oklch, var(--color-primary) 22%, transparent);
+
+  /* === Focus — single source of truth, accent-aware, two-layer ring.
+         Use via `box-shadow: var(--focus-ring)` on `:focus-visible`. === */
+  --focus-ring: 0 0 0 2px var(--color-surface),
+                0 0 0 4px color-mix(in oklch, var(--color-primary) 55%, transparent);
+  --focus-glow: 0 0 0 2px var(--color-surface),
+                0 0 0 4px var(--color-primary),
+                0 0 16px color-mix(in oklch, var(--color-primary) 32%, transparent);
+
+  /* === Selection — accent-tinted text selection (subdued, not jarring). === */
+  --selection-bg: color-mix(in oklch, var(--color-primary) 38%, transparent);
+  --selection-fg: var(--color-text-primary);
+}
+
+/* ============================================================
+   Base Layer — typography tuning, a11y scale, safe-area, selection.
+   This is the single global tweak point that makes the panel feel
+   "modern + airy" rather than "system-native + heavy":
+     • Inter as primary, calmed tracking, OpenType ligatures
+     • Tabular numerals on number-flavoured spots (metrics, counters)
+     • `--control-ui-text-scale` accessibility hook (1.0 default; UI can
+       bump for low-vision without recompile)
+     • iPhone / iPad / Tauri full-screen safe-area insets
+   ============================================================ */
+
+:root {
+  /* Accessibility scale — every text rule keys off Tailwind utilities
+     so we only need a single global font-size knob. Components stay
+     ignorant of the value. */
+  --control-ui-text-scale: 1;
+
+  /* OS safe-area pass-through for PWA / full-screen Tauri shells. */
+  --safe-area-top:    env(safe-area-inset-top, 0px);
+  --safe-area-right:  env(safe-area-inset-right, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left:   env(safe-area-inset-left, 0px);
+}
+
+html {
+  /* Apply the a11y scale via the root font-size knob — every `rem` in the
+     panel (utilities, tokens, components) recalculates from this. */
+  font-size: calc(16px * var(--control-ui-text-scale));
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 0.875rem;        /* 14px @ scale=1 */
+  line-height: 1.55;
+  letter-spacing: -0.005em;   /* sub-pixel calm; Inter ships slightly loose */
+  font-feature-settings: "cv11", "ss01", "ss03";  /* Inter alternate forms */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Numeric surfaces (metrics, counters, timestamps) — opt-in via the
+   `.tabular-nums` utility Tailwind already ships; we just guarantee the
+   feature is available even when the user is on the system stack. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Large-viewport step-up — at desktop widths the base ticks up one notch
+   so the panel breathes in 27" monitors without distorting smaller screens. */
+@media (min-width: 1600px) {
+  body { font-size: 0.9375rem; }   /* 15px */
+}
+
+/* Headings get a slightly tighter tracking — Inter renders crisper at -0.02em. */
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.02em;
+}
+
+/* Accent-tinted text selection — calibrated low so highlights don't shout.
+   Caret-color + scrollbar tinting live further down in their own block so the
+   accent-aware comment there remains a single source of truth. */
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+/* :focus-visible — single, accent-aware ring for every interactive element
+   that doesn't opt into a stricter ring of its own. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 /* ============================================================
@@ -370,6 +484,40 @@ html.translucent .glass-surface {
   }
 }
 
+/* ============================================================
+   Skeleton primitives — token-driven, accent-neutral.
+   Use any of the four utilities to mark a loading placeholder. The
+   shimmer animation respects `prefers-reduced-motion` automatically
+   (the global rule above already caps animation-duration to 0.01ms).
+   Token-driven so accent / theme changes auto-propagate — no hardcoded colors.
+   ============================================================ */
+
+@keyframes aleph-skeleton-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.skeleton {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-surface-sunken)  25%,
+    var(--color-surface-overlay) 50%,
+    var(--color-surface-sunken)  75%
+  );
+  background-size: 200% 100%;
+  animation: aleph-skeleton-shimmer 1.6s ease-in-out infinite;
+  border-radius: var(--radius-md);
+  /* Block out semantic colour for screen-readers; they see the aria-busy
+     on the parent instead. */
+  color: transparent;
+  user-select: none;
+}
+
+.skeleton-line   { height: 0.875rem; border-radius: var(--radius-sm); }
+.skeleton-line-sm { height: 0.625rem; border-radius: var(--radius-sm); }
+.skeleton-block  { height: 3rem;     border-radius: var(--radius-md); }
+.skeleton-avatar { height: 2.25rem; width: 2.25rem; border-radius: var(--radius-full); }
+
 /* ── Markdown prose ────────────────────────────────────── */
 
 .markdown-body h1 { font-size: 1.125rem; font-weight: 700; margin-top: 1rem; margin-bottom: 0.5rem; }
@@ -399,10 +547,11 @@ html.translucent .glass-surface {
 .markdown-body td { border: 1px solid var(--color-border); padding: 0.375rem 0.75rem; }
 .markdown-body code:not(pre code) {
   padding: 0.125rem 0.375rem;
-  border-radius: 0.25rem;
+  border-radius: var(--radius-sm);
   background: var(--color-surface-sunken);
-  font-size: 0.75rem;
-  font-family: ui-monospace, monospace;
+  font-size: 0.8125rem;
+  font-family: var(--font-mono);
+  font-feature-settings: "calt", "zero";
 }
 .markdown-body hr { border-color: var(--color-border); margin: 0.75rem 0; }
 .markdown-body img { border-radius: 0.5rem; max-width: 100%; margin: 0.5rem 0; }
@@ -506,10 +655,10 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
   background-color: var(--color-surface-raised);
   background-image: linear-gradient(to bottom, var(--aleph-sheen), transparent 52%);
   border: 1px solid var(--color-border);
-  border-radius: 1.35rem;
+  border-radius: var(--radius-2xl);
   box-shadow: var(--shadow-md), inset 0 1px 0 var(--aleph-sheen);
-  transition: box-shadow 0.22s var(--ease-spring),
-              border-color 0.22s var(--ease-spring);
+  transition: box-shadow var(--duration-normal) var(--ease-spring),
+              border-color var(--duration-normal) var(--ease-spring);
 }
 .aleph-composer:focus-within {
   border-color: var(--color-primary);
@@ -733,9 +882,10 @@ html[data-platform="macos"] .aleph-titlebar-drag {
     background: transparent;
     color: var(--color-text-secondary);
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: background-color 120ms ease-out, color 120ms ease-out;
+    transition: background-color var(--duration-fast) var(--ease-out),
+                color var(--duration-fast) var(--ease-out);
     -webkit-app-region: no-drag;
 }
 .aleph-sidebar-toggle:hover {
@@ -777,9 +927,10 @@ html[data-platform="macos"] .aleph-shell .aleph-sidebar-toggle {
     background: transparent;
     color: var(--color-text-secondary);
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: background-color 120ms ease-out, color 120ms ease-out;
+    transition: background-color var(--duration-fast) var(--ease-out),
+                color var(--duration-fast) var(--ease-out);
 }
 .aleph-sidebar-inline-toggle:hover {
     background-color: color-mix(in oklch, var(--color-text-primary) 12%, transparent);
@@ -838,12 +989,12 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
 *:hover {
     scrollbar-color: color-mix(in oklch, var(--color-primary) 55%, transparent) transparent;
 }
-*::-webkit-scrollbar          { width: 8px; height: 8px; }
+*::-webkit-scrollbar          { width: 6px; height: 6px; }
 *::-webkit-scrollbar-track    { background: transparent; }
 *::-webkit-scrollbar-thumb {
     background: color-mix(in oklch, var(--color-text-tertiary) 35%, transparent);
-    border-radius: 4px;
-    transition: background-color 140ms ease-out;
+    border-radius: var(--radius-full);
+    transition: background-color var(--duration-fast) var(--ease-out);
 }
 *::-webkit-scrollbar-thumb:hover {
     background: color-mix(in oklch, var(--color-primary) 55%, transparent);
