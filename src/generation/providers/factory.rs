@@ -162,6 +162,29 @@ pub fn create_provider(
             config.default_model().map(|s| s.to_string()),
             config.defaults.voice.clone(),
         )?),
+        "fal" => {
+            // Fal serves image/video/music behind a single queue API.
+            // `capabilities` from config determines which modalities this
+            // preset will accept (factory rejects mismatches via supports()).
+            let mut builder = FalProvider::builder(name, &api_key);
+            if let Some(base_url) = &config.base_url {
+                builder = builder.endpoint(base_url);
+            }
+            if let Some(model) = config.default_model() {
+                builder = builder.model(model);
+            }
+            if !config.color.is_empty() {
+                builder = builder.color(&config.color);
+            }
+            if !config.capabilities.is_empty() {
+                builder = builder.supported_types(config.capabilities.clone());
+            } else {
+                // Default Fal preset is image-only; video/music presets must
+                // opt in via config.capabilities.
+                builder = builder.supported_types(vec![GenerationType::Image]);
+            }
+            Arc::new(builder.build()?)
+        }
         "midjourney" | "mj" => {
             let mut builder = MidjourneyProvider::builder(&api_key);
 
@@ -196,7 +219,7 @@ pub fn create_provider(
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj",
+                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal",
                     other
                 ),
                 Some("provider_type".to_string()),

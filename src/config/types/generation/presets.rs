@@ -81,6 +81,86 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
         },
     );
 
+    // -------------------------------------------------------------------------
+    // Phase C — Fal.ai aggregator. One provider, many model endpoints. Each
+    // preset below points at a Fal-hosted model and enables the right
+    // modality. `capabilities` on the GenerationProviderConfig (set via
+    // user config.toml or the factory default) controls which generation
+    // type the preset will accept.
+    // -------------------------------------------------------------------------
+    m.insert(
+        "fal",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/flux/dev",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-flux",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/flux/dev",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-kling-video",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/kling-video/v1/pro/text-to-video",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-luma",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/luma-dream-machine",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-runway",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/runway-gen3/turbo/image-to-video",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-pika",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/pika/v2.2/text-to-video",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-hailuo",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/minimax/video-01",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-jimeng",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/bytedance/seedance-1-pro",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+    m.insert(
+        "fal-musicgen",
+        GenerationPreset {
+            provider_type: "fal",
+            default_model: "fal-ai/musicgen",
+            base_url: Some("https://queue.fal.run"),
+        },
+    );
+
     // Audio/Speech providers
     m.insert(
         "openai-tts",
@@ -198,6 +278,89 @@ pub static GENERATION_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = 
         },
     );
 
+    // Phase C — Fal.ai aggregator family
+    m.insert(
+        "fal",
+        ProviderMetadata {
+            display_name: "Fal.ai",
+            modalities: &[Modality::Image, Modality::Video, Modality::Music],
+            homepage: Some("https://fal.ai"),
+            notes: Some("Aggregator — image/video/music via queue API"),
+        },
+    );
+    m.insert(
+        "fal-flux",
+        ProviderMetadata {
+            display_name: "Flux (via Fal)",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/flux/dev"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "fal-kling-video",
+        ProviderMetadata {
+            display_name: "Kling Video (via Fal) / 可灵",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/kling-video"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "fal-luma",
+        ProviderMetadata {
+            display_name: "Luma Dream Machine (via Fal)",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/luma-dream-machine"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "fal-runway",
+        ProviderMetadata {
+            display_name: "Runway Gen-3 (via Fal)",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/runway-gen3"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "fal-pika",
+        ProviderMetadata {
+            display_name: "Pika (via Fal)",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/pika"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "fal-hailuo",
+        ProviderMetadata {
+            display_name: "Hailuo (via Fal) / 海螺",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/minimax/video-01"),
+            notes: Some("MiniMax video model"),
+        },
+    );
+    m.insert(
+        "fal-jimeng",
+        ProviderMetadata {
+            display_name: "Jimeng / Seedance (via Fal) / 即梦",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://fal.ai/models/fal-ai/bytedance/seedance-1-pro"),
+            notes: Some("ByteDance Seedance"),
+        },
+    );
+    m.insert(
+        "fal-musicgen",
+        ProviderMetadata {
+            display_name: "MusicGen (via Fal)",
+            modalities: &[Modality::Music],
+            homepage: Some("https://fal.ai/models/fal-ai/musicgen"),
+            notes: None,
+        },
+    );
+
     m
 });
 
@@ -296,6 +459,54 @@ mod tests {
         assert!(PRESETS.contains_key("google-veo"));
         assert!(PRESETS.contains_key("openai-tts"));
         assert!(PRESETS.contains_key("elevenlabs"));
+
+        // Phase C — Fal.ai family
+        assert!(PRESETS.contains_key("fal"));
+        assert!(PRESETS.contains_key("fal-flux"));
+        assert!(PRESETS.contains_key("fal-kling-video"));
+        assert!(PRESETS.contains_key("fal-luma"));
+        assert!(PRESETS.contains_key("fal-runway"));
+        assert!(PRESETS.contains_key("fal-pika"));
+        assert!(PRESETS.contains_key("fal-hailuo"));
+        assert!(PRESETS.contains_key("fal-jimeng"));
+        assert!(PRESETS.contains_key("fal-musicgen"));
+    }
+
+    #[test]
+    fn test_fal_presets_share_provider_type_and_endpoint() {
+        for name in [
+            "fal",
+            "fal-flux",
+            "fal-kling-video",
+            "fal-luma",
+            "fal-runway",
+            "fal-pika",
+            "fal-hailuo",
+            "fal-jimeng",
+            "fal-musicgen",
+        ] {
+            let p = get_preset(name).unwrap_or_else(|| panic!("missing fal preset {name}"));
+            assert_eq!(p.provider_type, "fal");
+            assert_eq!(p.base_url, Some("https://queue.fal.run"));
+        }
+    }
+
+    #[test]
+    fn test_fal_video_presets_advertise_video_modality() {
+        let video_names = ["fal-kling-video", "fal-luma", "fal-runway", "fal-pika", "fal-hailuo", "fal-jimeng"];
+        for name in video_names {
+            let meta = generation_metadata(name).expect(name);
+            assert!(meta.supports(Modality::Video), "{name} should support Video");
+            assert!(!meta.supports(Modality::Image), "{name} should not advertise Image");
+        }
+    }
+
+    #[test]
+    fn test_fal_musicgen_advertises_music_only() {
+        let m = generation_metadata("fal-musicgen").unwrap();
+        assert!(m.supports(Modality::Music));
+        assert!(!m.supports(Modality::Video));
+        assert!(!m.supports(Modality::Image));
     }
 
     #[test]
