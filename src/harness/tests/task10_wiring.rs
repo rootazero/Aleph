@@ -1561,7 +1561,9 @@ async fn grace_turn_keeps_token_breakdown_in_lockstep() {
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
-    harness
+    // TurnState is must_use; this test inspects accumulated token usage
+    // after the grace turn fires, not the returned loop-control signal.
+    let _ = harness
         .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect("run_turn should succeed");

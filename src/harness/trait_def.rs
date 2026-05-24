@@ -67,6 +67,10 @@ pub trait Harness: Send + Sync {
     }
 }
 
+/// `#[must_use]` because dropping a `TurnState` silently loses the
+/// loop-control signal — Continue and Done are not interchangeable;
+/// every Think→Act caller must observe the result.
+#[must_use = "TurnState carries loop-control signal; dropping it silently loses Continue/Done"]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnState {
     Continue,
@@ -96,6 +100,12 @@ impl std::fmt::Display for TurnPhase {
 /// `ToolError` has named-field struct variants so `#[from]` is not usable;
 /// `AlephError` is the crate-wide error (covering LLM + provider failures).
 /// Both are wrapped via explicit `From` impls below.
+///
+/// `#[must_use]` (inherited from `std::error::Error` via thiserror is not
+/// automatic — declare explicitly): a dropped harness error silently
+/// loses both the failure cause and the `ErrorClass` classification,
+/// which downstream `SessionDriver::drive` consumers need to branch on.
+#[must_use = "HarnessError carries the failure cause + ErrorClass; dropping silently loses both"]
 #[derive(Debug, thiserror::Error)]
 pub enum HarnessError {
     /// LLM / provider failure (wraps `AlephError`).

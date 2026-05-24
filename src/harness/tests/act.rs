@@ -808,7 +808,9 @@ async fn tool_error_trace_carries_retryable_flag() {
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
-    harness
+    // TurnState is must_use; this test drives the loop once and inspects
+    // trace events rather than the returned loop-control signal.
+    let _ = harness
         .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect("run_turn should succeed");
@@ -1332,7 +1334,9 @@ async fn act_falls_back_to_serial_when_any_call_is_unsafe() {
     let harness = AgentHarness::new(deps);
 
     let started = std::time::Instant::now();
-    harness
+    // TurnState is must_use; this test measures wall-clock fallback timing,
+    // not the returned loop-control signal.
+    let _ = harness
         .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect("run_turn should succeed");

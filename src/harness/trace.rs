@@ -6,9 +6,21 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Event emitted during agent loop execution
+/// Event emitted during agent loop execution.
+///
+/// `#[non_exhaustive]`: trace events grow over time as new observability
+/// hooks are added (e.g. round 2 didn't add any but historically the enum
+/// has grown from 6 → 14 variants). Downstream trace-sink consumers in
+/// other crates must therefore include a wildcard arm; this annotation
+/// makes that requirement compile-time enforced.
+///
+/// Rust 优势 over TypeScript: claude-code's equivalent event shapes are
+/// open-ended structural records that silently accept new fields. The
+/// `#[non_exhaustive]` annotation gives Aleph compile-time forward-compat
+/// on the trace ABI without paying any runtime cost.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum LoopTraceEvent {
     /// Text was emitted by the model
     TextEmitted {
@@ -105,9 +117,14 @@ pub enum LoopTraceTextKind {
     Intermediate,
 }
 
-/// State entered during turn execution
+/// State entered during turn execution.
+///
+/// `#[non_exhaustive]`: pre-emptive forward-compat for new turn states
+/// (e.g. future `Compact`, `Verify`, `Recover` sub-phases). External
+/// trace consumers must add wildcard arms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum LoopTraceState {
     Prepare,
     Think,
@@ -116,9 +133,12 @@ pub enum LoopTraceState {
     Finalize,
 }
 
-/// Outcome of a turn
+/// Outcome of a turn.
+///
+/// `#[non_exhaustive]`: see [`LoopTraceState`] for rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum LoopTraceTurnOutcome {
     Continue,
     Stop,
@@ -126,9 +146,12 @@ pub enum LoopTraceTurnOutcome {
     Cancelled,
 }
 
-/// Outcome of a session
+/// Outcome of a session.
+///
+/// `#[non_exhaustive]`: see [`LoopTraceState`] for rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum LoopTraceSessionOutcome {
     Completed,
     HitLimit,
