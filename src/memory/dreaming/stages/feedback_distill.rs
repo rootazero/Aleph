@@ -145,7 +145,29 @@ impl DreamStage for FeedbackDistillStage {
         let candidate_set: std::collections::HashSet<&str> =
             candidate_paths.iter().map(String::as_str).collect();
         let mut applied = 0usize;
-        for action in actions.into_iter().take(self.max_per_cycle).map(clamp_action) {
+        for raw_action in actions.into_iter().take(self.max_per_cycle).map(clamp_action) {
+            // Spec 5 validation gate. Same wiring as SkillDistill so both
+            // stages share one source of truth for what a legitimate
+            // LLM-emitted action looks like.
+            use crate::memory::dreaming::skill_gate::{
+                validate_skill_action, SkillGateDecision,
+            };
+            let action = match validate_skill_action(raw_action.clone()) {
+                SkillGateDecision::Allow(a) => a,
+                SkillGateDecision::Reject(reason) => {
+                    tracing::warn!(
+                        reason = %reason,
+                        "FeedbackDistill: skill_gate rejected action; dropping"
+                    );
+                    ctx.report.distill_actions.push(DistillActionRecord::from_action(
+                        "feedback_distill",
+                        &raw_action,
+                        DistillOutcome::FilteredInvalid,
+                        Some(reason),
+                    ));
+                    continue;
+                }
+            };
             // Anti-hallucination guard mirrored from SkillDistill: drop
             // actions whose target is not in the candidate set, but still
             // log them in the audit trail.

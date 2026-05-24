@@ -32,6 +32,9 @@ pub fn prompt_for(source: &RawMemorySource) -> Option<&'static str> {
         // not by CompressionService. If one ever reaches this path defensively
         // fall back to the generic prompt rather than synthesizing a bogus one.
         RawMemorySource::Correction { .. } => None,
+        // Tool-invocation signals are pure metrics consumed by Dream's
+        // signal collector; the FactExtractor never sees them.
+        RawMemorySource::ToolInvocation { .. } => None,
     }
 }
 

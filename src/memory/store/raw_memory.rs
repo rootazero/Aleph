@@ -29,6 +29,17 @@ pub enum RawMemorySource {
         severity: String,
         suggested_rule: Option<String>,
     },
+
+    // Spec 3 (Dream signals) — one row per tool invocation. The `content`
+    // field carries a short human-readable summary; structured stats live
+    // in `source_detail` so SQL aggregations can extract them cheaply.
+    // Fields are flat strings/primitives for on-disk format stability —
+    // higher layers reconstruct any richer structure.
+    ToolInvocation {
+        tool_name: String,
+        success: bool,
+        duration_ms: u64,
+    },
 }
 
 /// Sub-reason for `RawMemorySource::SessionEnd`.
@@ -68,6 +79,21 @@ impl RawMemorySource {
                     serde_json::json!({
                         "severity": severity,
                         "suggested_rule": suggested_rule,
+                    })
+                    .to_string(),
+                ),
+            ),
+            Self::ToolInvocation {
+                tool_name,
+                success,
+                duration_ms,
+            } => (
+                "tool_invocation",
+                Some(
+                    serde_json::json!({
+                        "tool_name": tool_name,
+                        "success": success,
+                        "duration_ms": duration_ms,
                     })
                     .to_string(),
                 ),
@@ -122,6 +148,29 @@ impl RawMemorySource {
                 Self::Correction {
                     severity,
                     suggested_rule,
+                }
+            }
+            "tool_invocation" => {
+                let parsed = detail
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let tool_name = parsed
+                    .get("tool_name")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_default();
+                let success = parsed
+                    .get("success")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
+                let duration_ms = parsed
+                    .get("duration_ms")
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0);
+                Self::ToolInvocation {
+                    tool_name,
+                    success,
+                    duration_ms,
                 }
             }
             _ => Self::ToolOutput,
@@ -382,6 +431,47 @@ mod tests {
         let (token, detail) = src.to_persisted();
         let back = RawMemorySource::from_persisted(token, detail.as_deref());
         assert_eq!(back, src);
+    }
+
+    #[test]
+    fn round_trip_tool_invocation_success() {
+        let src = RawMemorySource::ToolInvocation {
+            tool_name: "read_file".into(),
+            success: true,
+            duration_ms: 42,
+        };
+        let (token, detail) = src.to_persisted();
+        assert_eq!(token, "tool_invocation");
+        let detail = detail.expect("tool_invocation carries detail JSON");
+        let back = RawMemorySource::from_persisted(token, Some(&detail));
+        assert_eq!(back, src);
+    }
+
+    #[test]
+    fn round_trip_tool_invocation_failure() {
+        let src = RawMemorySource::ToolInvocation {
+            tool_name: "shell".into(),
+            success: false,
+            duration_ms: 0,
+        };
+        let (token, detail) = src.to_persisted();
+        let back = RawMemorySource::from_persisted(token, detail.as_deref());
+        assert_eq!(back, src);
+    }
+
+    #[test]
+    fn tool_invocation_missing_detail_falls_back_to_zero() {
+        // Defensive: if a buggy writer ever emitted "tool_invocation" with no
+        // detail, parse to a zero-stat default rather than panic.
+        let back = RawMemorySource::from_persisted("tool_invocation", None);
+        assert_eq!(
+            back,
+            RawMemorySource::ToolInvocation {
+                tool_name: String::new(),
+                success: false,
+                duration_ms: 0,
+            }
+        );
     }
 
     #[test]

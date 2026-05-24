@@ -340,6 +340,24 @@ impl HarnessRunner for AgentHarnessRunner {
                 .clone()
                 .or_else(crate::tools::result_store::global_tool_result_store),
             session_epoch_registrar: self.session_epoch_registrar.clone(),
+            // Spec 3 — per-tool-invocation signal capture. When a
+            // RawMemoryStore is wired (production gateway path), every
+            // tool call completion flows into `raw_memories` for the
+            // Dream cycle's metric aggregator to read. No store → no-op.
+            tool_signal_sink: match self.memory_backend.clone() {
+                Some(store) => std::sync::Arc::new(
+                    crate::memory::tool_signal_sink::RawMemoryToolSink::new(
+                        store as std::sync::Arc<
+                            dyn crate::memory::store::raw_memory::RawMemoryStore,
+                        >,
+                        spec.agent.clone(),
+                        session_id.to_key_string(),
+                    ),
+                ) as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
+                None => std::sync::Arc::new(
+                    crate::memory::tool_signal_sink::NoopToolSignalSink,
+                ) as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
+            },
         };
         // Stage 7 (#12): emit init-seam visibility before the harness
         // starts its Think→Act loop. Order mirrors HarnessDeps field

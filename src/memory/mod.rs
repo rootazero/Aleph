@@ -41,6 +41,7 @@ pub mod session_compactor;
 pub mod session_resume;
 pub mod session_search_summary;
 pub mod store;
+pub mod tool_signal_sink;
 pub mod transcript_indexer;
 // workspace has been moved to gateway::agent_env (AgentEnvStore, SQLite-backed)
 

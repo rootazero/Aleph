@@ -339,6 +339,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             turn_budget: None,
             result_store: None,
             session_epoch_registrar: None,
+            tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
         };
         let harness = Arc::new(AgentHarness::new(deps));
 

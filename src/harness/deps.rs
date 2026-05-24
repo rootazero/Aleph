@@ -114,6 +114,12 @@ pub struct HarnessDeps {
     /// to `FinalReply` when the budget asks for a split.
     pub session_epoch_registrar:
         Option<std::sync::Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>>,
+    /// Spec 3 — fire-and-forget sink for per-tool-invocation signals. Each
+    /// completed tool call (success or failure) is forwarded here so the
+    /// Dream cycle's signal collector can read cross-session statistics
+    /// from `raw_memories`. Defaults to `NoopToolSignalSink` (zero cost)
+    /// when no `RawMemoryStore` is wired (tests, simple-engine fixtures).
+    pub tool_signal_sink: Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
 }
 
 // ---------------------------------------------------------------------------

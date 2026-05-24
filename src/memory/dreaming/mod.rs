@@ -11,6 +11,7 @@ pub mod mutation_gate;
 pub mod report;
 pub mod selector;
 pub mod signals;
+pub mod skill_gate;
 pub mod stages;
 pub mod strategy;
 pub mod validation;
@@ -744,7 +745,8 @@ impl DreamDaemon {
             .unwrap_or_default();
 
         // --- Phase 1: Collect signals ---
-        let raw_metrics = compute_raw_metrics(&note_index);
+        let raw_metrics =
+            compute_raw_metrics(&note_index, self.database.as_ref(), DEFAULT_AGENT_ID).await;
         let signal_snapshot = SignalSnapshot::from_metrics(&raw_metrics);
 
         // --- Phase 2: Mutation gate evaluation ---
@@ -886,18 +888,49 @@ impl DreamDaemon {
     }
 }
 
-/// Compute a cheap `RawMetrics` snapshot from the note index.
+/// Compute a `RawMetrics` snapshot for the Dream cycle.
 ///
-/// Only `total_notes` and `notes_added_24h` are populated — enough to drive a
-/// meaningful `note_growth_rate` signal for strategy selection. Quality and
-/// recall rates require dedicated aggregate queries and are left at zero; a
-/// follow-up can fold in the `dream_report` / `recall_signals` tables.
-fn compute_raw_metrics(notes: &[NoteIndexEntry]) -> RawMetrics {
+/// Pulls notes (count + 24h growth) from the in-memory note index, then
+/// folds in 24h tool-invocation aggregates from `raw_memories` so the
+/// signal collector can surface `tool_failure_rate` / `tool_call_volume` /
+/// `tool_latency_score` (Spec 3). A backend failure on the tool query is
+/// downgraded to a warning — strategy selection runs on the note signals
+/// alone rather than aborting the whole cycle.
+///
+/// Quality and recall rates still require dedicated aggregate queries and
+/// remain at zero; a follow-up can fold in the `dream_report` /
+/// `recall_signals` tables.
+async fn compute_raw_metrics(
+    notes: &[NoteIndexEntry],
+    store: &dyn crate::memory::store::raw_memory::RawMemoryStore,
+    agent_id: &str,
+) -> RawMetrics {
     let day_ago = now_timestamp() - 86_400;
     let notes_added_24h = notes.iter().filter(|n| n.created_at >= day_ago).count() as u32;
+
+    let (tool_total, tool_failed, tool_avg_ms) =
+        match crate::memory::tool_signal_sink::aggregate_tool_stats(
+            store, agent_id, day_ago, 5_000,
+        )
+        .await
+        {
+            Ok(stats) => (stats.total, stats.failed, stats.avg_duration_ms),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    agent = agent_id,
+                    "tool-invocation aggregation failed; tool signals will read zero",
+                );
+                (0, 0, 0)
+            }
+        };
+
     RawMetrics {
         total_notes: notes.len() as u32,
         notes_added_24h,
+        tool_calls_total_24h: tool_total,
+        tool_calls_failed_24h: tool_failed,
+        tool_avg_duration_ms_24h: tool_avg_ms,
         ..Default::default()
     }
 }
@@ -1037,8 +1070,8 @@ mod tests {
             .with_note_memory_dir(dir)
     }
 
-    #[test]
-    fn compute_raw_metrics_counts_notes_and_recency() {
+    #[tokio::test]
+    async fn compute_raw_metrics_counts_notes_and_recency() {
         let now = now_timestamp();
         let entry = |created: i64| NoteIndexEntry {
             path: "p".into(),
@@ -1053,9 +1086,45 @@ mod tests {
         };
         // One fresh, one ~25h old (excluded), one fresh.
         let notes = vec![entry(now), entry(now - 90_000), entry(now - 100)];
-        let m = compute_raw_metrics(&notes);
+        let temp = std::env::temp_dir().join(format!("aleph_metrics_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID).await;
         assert_eq!(m.total_notes, 3);
         assert_eq!(m.notes_added_24h, 2);
+        // With no tool invocations recorded yet, the new fields stay zero.
+        assert_eq!(m.tool_calls_total_24h, 0);
+        assert_eq!(m.tool_calls_failed_24h, 0);
+        assert_eq!(m.tool_avg_duration_ms_24h, 0);
+    }
+
+    #[tokio::test]
+    async fn compute_raw_metrics_folds_in_tool_invocation_stats() {
+        use crate::memory::store::raw_memory::{
+            RawMemory, RawMemorySource, RawMemoryStore,
+        };
+        let temp = std::env::temp_dir().join(format!("aleph_metrics_tool_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+
+        // Synthesize three fresh tool invocations: 2 ok (10 + 30 ms) + 1 fail.
+        for (name, ok, ms) in [("read_file", true, 10u64), ("shell", true, 30), ("grep", false, 0)]
+        {
+            let raw = RawMemory::new(
+                format!("tool {name}"),
+                RawMemorySource::ToolInvocation {
+                    tool_name: name.into(),
+                    success: ok,
+                    duration_ms: ms,
+                },
+            )
+            .with_agent(DEFAULT_AGENT_ID);
+            store.insert_raw_memory(&raw).await.unwrap();
+        }
+
+        let m = compute_raw_metrics(&[], store.as_ref(), DEFAULT_AGENT_ID).await;
+        assert_eq!(m.tool_calls_total_24h, 3);
+        assert_eq!(m.tool_calls_failed_24h, 1);
+        // (10 + 30 + 0) / 3 = 13
+        assert_eq!(m.tool_avg_duration_ms_24h, 40 / 3);
     }
 
     #[tokio::test]

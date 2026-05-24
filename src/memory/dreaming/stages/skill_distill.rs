@@ -113,7 +113,29 @@ impl DreamStage for SkillDistillStage {
             let actions = parse_distill_response(&response.text_content());
             let candidate_set: std::collections::HashSet<&str> =
                 candidates.iter().map(|(p, _)| p.as_str()).collect();
-            for action in actions.into_iter().take(self.max_per_cycle).map(clamp_action) {
+            for raw_action in actions.into_iter().take(self.max_per_cycle).map(clamp_action) {
+                // Spec 5 validation gate: format / semantic / safety checks.
+                // Rejections never reach the indexer; downgrades (severity
+                // softening on low confidence) pass through silently.
+                use crate::memory::dreaming::skill_gate::{
+                    validate_skill_action, SkillGateDecision,
+                };
+                let action = match validate_skill_action(raw_action.clone()) {
+                    SkillGateDecision::Allow(a) => a,
+                    SkillGateDecision::Reject(reason) => {
+                        tracing::warn!(
+                            reason = %reason,
+                            "SkillDistill: skill_gate rejected action; dropping"
+                        );
+                        ctx.report.distill_actions.push(DistillActionRecord::from_action(
+                            "skill_distill",
+                            &raw_action,
+                            DistillOutcome::FilteredInvalid,
+                            Some(reason),
+                        ));
+                        continue;
+                    }
+                };
                 // Anti-hallucination guard: actions referencing a path that
                 // was NOT in the candidate set the LLM was shown are dropped
                 // BEFORE apply. Record them with FilteredNonCandidate so the

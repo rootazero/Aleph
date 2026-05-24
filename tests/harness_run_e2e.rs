@@ -161,6 +161,7 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(alephcore::memory::tool_signal_sink::NoopToolSignalSink),
     })
 }
 

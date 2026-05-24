@@ -298,6 +298,7 @@ async fn act_executes_tools_sequentially() {
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
     };
     let harness = AgentHarness::new(deps);
 
@@ -372,6 +373,7 @@ async fn act_tool_failure_returns_harness_tool_error() {
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
     };
     let harness = AgentHarness::new(deps);
 
@@ -475,6 +477,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
     };
     let harness = AgentHarness::new(deps);
 
@@ -648,6 +651,7 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
     };
     let harness = AgentHarness::new(deps);
 
@@ -763,6 +767,7 @@ async fn tool_error_trace_carries_retryable_flag() {
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
     };
     let harness = AgentHarness::new(deps);
     harness

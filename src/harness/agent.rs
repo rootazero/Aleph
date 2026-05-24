@@ -194,6 +194,12 @@ impl AgentHarness {
 
     /// Helper for `act.rs` — append one tool invocation to the timeline.
     /// `error` is `Some` iff `success == false`.
+    ///
+    /// Also fires a best-effort, fire-and-forget call to
+    /// `deps.tool_signal_sink` so Dream-cycle metrics can read cross-session
+    /// tool statistics from `raw_memories`. The sink lives in `tokio::spawn`
+    /// so a slow store cannot back-pressure the harness loop. Production
+    /// wiring sets `RawMemoryToolSink`; tests get `NoopToolSignalSink`.
     pub(crate) fn push_tool_invocation(
         &self,
         id: String,
@@ -205,10 +211,17 @@ impl AgentHarness {
         let mut guard = self.tool_timeline.lock().unwrap_or_else(|e| e.into_inner());
         guard.push(ToolInvocation {
             id,
-            name,
+            name: name.clone(),
             duration_ms,
             success,
-            error,
+            error: error.clone(),
+        });
+        drop(guard);
+
+        let sink = self.deps.tool_signal_sink.clone();
+        tokio::spawn(async move {
+            sink.record_tool_call(&name, success, duration_ms, error.as_deref())
+                .await;
         });
     }
 
@@ -966,6 +979,9 @@ mod tests {
             turn_budget: None,
             result_store: None,
             session_epoch_registrar: None,
+            tool_signal_sink: std::sync::Arc::new(
+                crate::memory::tool_signal_sink::NoopToolSignalSink,
+            ),
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1033,6 +1049,9 @@ mod tests {
             turn_budget: None,
             result_store: None,
             session_epoch_registrar: None,
+            tool_signal_sink: std::sync::Arc::new(
+                crate::memory::tool_signal_sink::NoopToolSignalSink,
+            ),
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1094,6 +1113,9 @@ mod tests {
             turn_budget: None,
             result_store: None,
             session_epoch_registrar: None,
+            tool_signal_sink: std::sync::Arc::new(
+                crate::memory::tool_signal_sink::NoopToolSignalSink,
+            ),
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
