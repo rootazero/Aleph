@@ -211,4 +211,98 @@ impl TeamsApi {
         let task_value = result.get("task").cloned().unwrap_or(Value::Null);
         serde_json::from_value(task_value).map_err(|e| e.to_string())
     }
+
+    // --- Per-task drawer subviews (runs / comments / events) -----------------
+
+    pub async fn list_task_runs(
+        state: &DashboardState,
+        task_id: &str,
+    ) -> Result<Vec<TaskRunDto>, String> {
+        let result = state
+            .rpc_call("teams.list_task_runs", json!({ "task_id": task_id }))
+            .await?;
+        let runs_value = result.get("runs").cloned().unwrap_or(Value::Array(vec![]));
+        serde_json::from_value(runs_value).map_err(|e| e.to_string())
+    }
+
+    pub async fn list_task_comments(
+        state: &DashboardState,
+        task_id: &str,
+    ) -> Result<Vec<TaskCommentDto>, String> {
+        let result = state
+            .rpc_call("teams.list_task_comments", json!({ "task_id": task_id }))
+            .await?;
+        let v = result
+            .get("comments")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+        serde_json::from_value(v).map_err(|e| e.to_string())
+    }
+
+    pub async fn add_task_comment(
+        state: &DashboardState,
+        task_id: &str,
+        author: &str,
+        body: &str,
+    ) -> Result<TaskCommentDto, String> {
+        let result = state
+            .rpc_call(
+                "teams.add_task_comment",
+                json!({ "task_id": task_id, "author": author, "body": body }),
+            )
+            .await?;
+        let v = result.get("comment").cloned().unwrap_or(Value::Null);
+        serde_json::from_value(v).map_err(|e| e.to_string())
+    }
+
+    pub async fn list_task_events(
+        state: &DashboardState,
+        task_id: &str,
+    ) -> Result<Vec<TaskEventDto>, String> {
+        let result = state
+            .rpc_call("teams.list_task_events", json!({ "task_id": task_id }))
+            .await?;
+        let v = result.get("events").cloned().unwrap_or(Value::Array(vec![]));
+        serde_json::from_value(v).map_err(|e| e.to_string())
+    }
+}
+
+// --- DTOs for the 3 new drawer sections ---------------------------------------
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TaskRunDto {
+    pub id: String,
+    pub task_id: String,
+    pub agent_id: String,
+    pub started_at: u64,
+    #[serde(default)]
+    pub ended_at: Option<u64>,
+    /// "running" | "completed" | "failed" | "timeout"
+    pub status: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TaskCommentDto {
+    pub id: String,
+    pub task_id: String,
+    pub author: String,
+    pub body: String,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TaskEventDto {
+    pub id: String,
+    pub team_id: String,
+    /// Snake-case (e.g. "task_created", "task_completed").
+    pub event_type: String,
+    pub agent_id: String,
+    #[serde(default)]
+    pub payload: Value,
+    /// RFC3339 timestamp.
+    pub timestamp: String,
 }

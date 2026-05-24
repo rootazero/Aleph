@@ -235,6 +235,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) task_update_tool: Option<crate::builtin_tools::task_manage::TaskUpdateTool>,
     pub(crate) task_list_tool: Option<crate::builtin_tools::task_manage::TaskListTool>,
     pub(crate) task_wait_tool: Option<crate::builtin_tools::task_manage::TaskWaitTool>,
+    /// Per-task handoff comments (optional — requires CoordTaskStore).
+    pub(crate) task_comment_tool: Option<crate::builtin_tools::team::TaskCommentTool>,
     /// Task artifact tools (optional — require ArtifactStore)
     pub(crate) task_submit_tool: Option<crate::builtin_tools::team::TaskSubmitTool>,
     pub(crate) task_read_artifact_tool: Option<crate::builtin_tools::team::TaskReadArtifactTool>,
@@ -1014,6 +1016,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                     tool.call_json(arguments).await
                 })
             }
+            "task_comment" => Box::pin(async move {
+                let tool = self.task_comment_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("task_comment not available: no CoordTaskStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
 
             // Team management tools
             "team_create" => Box::pin(async move {

@@ -165,6 +165,7 @@ pub(in crate::commands::start) fn register_teams_handlers(
     server: &mut GatewayServer,
     store: &Arc<dyn alephcore::teams::TeamStore>,
     coord_store: &Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>,
+    event_store: Option<&Arc<dyn alephcore::teams::events::EventLogStore>>,
 ) {
     use alephcore::gateway::handlers::teams;
 
@@ -191,6 +192,37 @@ pub(in crate::commands::start) fn register_teams_handlers(
         teams::handle_update_task,
         coord_store
     );
+    register_handler!(
+        server,
+        "teams.list_task_runs",
+        teams::handle_list_task_runs,
+        coord_store
+    );
+    register_handler!(
+        server,
+        "teams.add_task_comment",
+        teams::handle_add_task_comment,
+        coord_store
+    );
+    register_handler!(
+        server,
+        "teams.list_task_comments",
+        teams::handle_list_task_comments,
+        coord_store
+    );
+
+    // Event timeline RPC is best-effort: only wired when event_store was
+    // constructed at boot. Without it, the placeholder in handlers/mod.rs
+    // surfaces a clear "store unavailable" error.
+    if let Some(es) = event_store {
+        register_handler!(
+            server,
+            "teams.list_task_events",
+            teams::handle_list_task_events,
+            coord_store,
+            es
+        );
+    }
 }
 
 // ─── register_graph_handlers ──────────────────────────────────────────────────

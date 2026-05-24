@@ -524,14 +524,24 @@ impl BuiltinToolRegistry {
         };
 
         // Add task coordination tools (if CoordTaskStore is available)
-        let (task_create_tool, task_update_tool, task_list_tool, task_wait_tool) =
+        let (task_create_tool, task_update_tool, task_list_tool, task_wait_tool, task_comment_tool) =
             if let Some(ref store) = config.coord_task_store {
                 use crate::builtin_tools::task_manage::{
                     TaskCreateTool, TaskListTool, TaskUpdateTool, TaskWaitTool,
                 };
+                use crate::builtin_tools::team::TaskCommentTool;
 
                 let create = TaskCreateTool::new(Arc::clone(store), config.dispatch_signal.clone());
                 let list = TaskListTool::new(Arc::clone(store));
+                // task_comment is unconditional once the coord store exists —
+                // it doesn't depend on the agent message bus.
+                let comment = TaskCommentTool::new(
+                    Arc::clone(store),
+                    config
+                        .current_agent_id
+                        .clone()
+                        .unwrap_or_else(|| "main".to_string()),
+                );
 
                 // TaskUpdateTool and TaskWaitTool need the event bus
                 let (update, wait) = if let Some(ref bus) = config.agent_message_bus {
@@ -547,7 +557,7 @@ impl BuiltinToolRegistry {
                 {
                     use crate::tools::AlephTool;
                     let mut defs: Vec<crate::tool_metadata::ToolDefinition> =
-                        vec![create.definition(), list.definition()];
+                        vec![create.definition(), list.definition(), comment.definition()];
                     if let Some(ref u) = update {
                         defs.push(u.definition());
                     }
@@ -566,10 +576,10 @@ impl BuiltinToolRegistry {
                     }
                 }
 
-                info!("Registered task coordination tools");
-                (Some(create), update, Some(list), wait)
+                info!("Registered task coordination tools (incl. task_comment)");
+                (Some(create), update, Some(list), wait, Some(comment))
             } else {
-                (None, None, None, None)
+                (None, None, None, None, None)
             };
 
         // Pre-compute current agent ID — used by team, messaging, and session tools
@@ -1264,6 +1274,7 @@ impl BuiltinToolRegistry {
             task_update_tool,
             task_list_tool,
             task_wait_tool,
+            task_comment_tool,
             task_submit_tool,
             task_read_artifact_tool,
             team_create_tool,

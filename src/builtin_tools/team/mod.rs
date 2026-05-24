@@ -15,6 +15,7 @@ pub mod session_collaborate;
 pub mod session_read;
 pub mod session_turn;
 mod status;
+pub mod task_comment;
 pub mod task_read_artifact;
 pub mod task_submit;
 mod team_digest;
@@ -43,6 +44,7 @@ pub use session_collaborate::{
 pub use session_read::{SessionReadArgs, SessionReadOutput, SessionReadTool};
 pub use session_turn::{SessionTurnArgs, SessionTurnOutput, SessionTurnTool};
 pub use status::{MemberInfo, TaskInfo, TeamStatusArgs, TeamStatusOutput, TeamStatusTool};
+pub use task_comment::{TaskCommentArgs, TaskCommentOutput, TaskCommentTool};
 pub use task_read_artifact::{TaskReadArtifactArgs, TaskReadArtifactOutput, TaskReadArtifactTool};
 pub use task_submit::{TaskSubmitArgs, TaskSubmitOutput, TaskSubmitTool};
 pub use team_digest::{TeamDigestArgs, TeamDigestOutput, TeamDigestTool};

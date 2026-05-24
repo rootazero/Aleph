@@ -353,16 +353,31 @@ pub async fn handle_create_task(
         },
     };
 
+    let owner = params.owner.filter(|s| !s.trim().is_empty());
+
+    // Panel-created tasks should run on the autonomous dispatcher when an
+    // owner is present — otherwise `select_schedulable` filters them out
+    // (`is_dispatcher_managed` looks for `metadata.managed_by ==
+    // "dispatcher"`) and the kanban silently never advances. Inject the
+    // marker unless the caller already supplied one of their own.
+    let mut metadata = params
+        .metadata
+        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+    if owner.is_some() {
+        if let Some(obj) = metadata.as_object_mut() {
+            obj.entry("managed_by".to_string())
+                .or_insert_with(|| serde_json::Value::String("dispatcher".to_string()));
+        }
+    }
+
     let new_task = NewCoordTask {
         team_id: Some(params.team_id.clone()),
         subject: subject.to_string(),
         description: params.description.unwrap_or_default(),
-        owner: params.owner.filter(|s| !s.trim().is_empty()),
+        owner,
         priority,
         blocked_by: params.blocked_by.unwrap_or_default(),
-        metadata: params
-            .metadata
-            .unwrap_or_else(|| serde_json::Value::Object(Default::default())),
+        metadata,
     };
 
     match coord_store.create_task(new_task).await {
@@ -373,6 +388,194 @@ pub async fn handle_create_task(
             format!("Failed to create task for team '{}': {}", params.team_id, e),
         ),
     }
+}
+
+// =============================================================================
+// teams.list_task_runs — per-attempt execution history for a task
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct TaskIdParams {
+    pub task_id: String,
+}
+
+/// Handle teams.list_task_runs — return all run records for a task, oldest
+/// first. The drawer renders this as the "Runs" timeline.
+pub async fn handle_list_task_runs(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.list_task_runs request");
+
+    let params: TaskIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    match coord_store.list_task_runs(&params.task_id).await {
+        Ok(runs) => JsonRpcResponse::success(request.id, json!({ "runs": runs })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to list runs for task '{}': {}", params.task_id, e),
+        ),
+    }
+}
+
+// =============================================================================
+// teams.add_task_comment / list_task_comments — per-task handoff notes
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct AddTaskCommentParams {
+    pub task_id: String,
+    pub author: String,
+    pub body: String,
+}
+
+/// Handle teams.add_task_comment — append a free-text note to a task. Used
+/// by workers to leave handoff context and by panel users to annotate state.
+pub async fn handle_add_task_comment(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.add_task_comment request");
+
+    let params: AddTaskCommentParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    let author = params.author.trim();
+    let body = params.body.trim();
+    if author.is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "author must not be empty".to_string(),
+        );
+    }
+    if body.is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "body must not be empty".to_string(),
+        );
+    }
+
+    match coord_store
+        .add_task_comment(&params.task_id, author, body)
+        .await
+    {
+        Ok(comment) => JsonRpcResponse::success(request.id, json!({ "comment": comment })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!(
+                "Failed to add comment to task '{}': {}",
+                params.task_id, e
+            ),
+        ),
+    }
+}
+
+/// Handle teams.list_task_comments — return all comments for a task,
+/// oldest first.
+pub async fn handle_list_task_comments(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.list_task_comments request");
+
+    let params: TaskIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    match coord_store.list_task_comments(&params.task_id).await {
+        Ok(comments) => JsonRpcResponse::success(request.id, json!({ "comments": comments })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!(
+                "Failed to list comments for task '{}': {}",
+                params.task_id, e
+            ),
+        ),
+    }
+}
+
+// =============================================================================
+// teams.list_task_events — read team_events filtered to one task_id
+// =============================================================================
+
+/// Handle teams.list_task_events — return team events whose payload references
+/// `task_id`. Walks the team's event log and filters in-memory; cheap for the
+/// kanban-scale event volumes in practice (Aleph's logger isn't a firehose).
+///
+/// Order: oldest first, matching the drawer's "timeline reads top-to-bottom"
+/// convention.
+pub async fn handle_list_task_events(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+    event_store: Arc<dyn crate::teams::events::EventLogStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.list_task_events request");
+
+    let params: TaskIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    // Look up the task to discover its team_id; without one, no team_events
+    // can reference it (team_events.team_id is NOT NULL).
+    let task = match coord_store.get_task(&params.task_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                RESOURCE_NOT_FOUND,
+                format!("Task '{}' not found", params.task_id),
+            )
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to load task '{}': {}", params.task_id, e),
+            )
+        }
+    };
+    let Some(team_id) = task.team_id else {
+        return JsonRpcResponse::success(request.id, json!({ "events": [] }));
+    };
+
+    let events = match event_store.get_events(&team_id, None, None).await {
+        Ok(e) => e,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to load events for team '{}': {}", team_id, e),
+            )
+        }
+    };
+
+    // Filter to events whose payload mentions this task_id. Use string equality
+    // to avoid pulling in JSON-pointer machinery — every existing producer
+    // emits payload.task_id as a string.
+    let filtered: Vec<_> = events
+        .into_iter()
+        .filter(|e| {
+            e.payload
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(|tid| tid == params.task_id)
+                .unwrap_or(false)
+        })
+        .collect();
+
+    JsonRpcResponse::success(request.id, json!({ "events": filtered }))
 }
 
 // =============================================================================
@@ -439,5 +642,67 @@ mod tests {
 
         let err = resp.error.expect("expected an error");
         assert_eq!(err.code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn create_task_with_owner_auto_injects_managed_by_dispatcher() {
+        let store = coord_store().await;
+        let resp = handle_create_task(
+            create_req(json!({
+                "team_id": "T",
+                "subject": "auto-dispatch",
+                "owner": "worker-a",
+            })),
+            store,
+        )
+        .await;
+
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let task = resp.result.expect("result")["task"].clone();
+        assert_eq!(
+            task["metadata"]["managed_by"], "dispatcher",
+            "owner-bearing tasks must be flagged for the dispatcher loop or they silently never run; metadata={:?}",
+            task["metadata"]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_task_without_owner_skips_managed_by_marker() {
+        // Orphan tasks (no owner yet) shouldn't auto-claim the dispatcher
+        // namespace — they're parked until a leader assigns them.
+        let store = coord_store().await;
+        let resp = handle_create_task(
+            create_req(json!({ "team_id": "T", "subject": "orphan" })),
+            store,
+        )
+        .await;
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let task = resp.result.expect("result")["task"].clone();
+        assert!(
+            task["metadata"].get("managed_by").is_none(),
+            "tasks without an owner must NOT carry the dispatcher marker; got {:?}",
+            task["metadata"]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_task_respects_caller_supplied_managed_by_override() {
+        let store = coord_store().await;
+        let resp = handle_create_task(
+            create_req(json!({
+                "team_id": "T",
+                "subject": "manual",
+                "owner": "worker-x",
+                "metadata": {"managed_by": "team_delegate"},
+            })),
+            store,
+        )
+        .await;
+        assert!(resp.error.is_none());
+        let task = resp.result.expect("result")["task"].clone();
+        assert_eq!(
+            task["metadata"]["managed_by"], "team_delegate",
+            "caller-supplied managed_by must win over auto-injection"
+        );
     }
 }

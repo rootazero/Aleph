@@ -12,8 +12,9 @@ use tokio::sync::OwnedSemaphorePermit;
 use super::handoff::build_handoff_context;
 use super::runner::{execute_member_task, MemberRunStatus};
 use super::TeamDispatcher;
-use crate::agents::swarm::tasks::{CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate};
-use crate::event::{AlephEvent, GlobalBus};
+use crate::agents::swarm::tasks::{
+    CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate, TaskRunStatus,
+};
 use crate::sync_primitives::Arc;
 use crate::teams::artifacts::{ArtifactType, NewArtifact, TaskStatus};
 use crate::teams::context::InboxContextProvider;
@@ -67,15 +68,6 @@ pub fn select_schedulable(
         .take(available_slots)
         .cloned()
         .collect()
-}
-
-/// Truncate a string to `max` chars on a char boundary (for event summaries).
-fn summarize(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let truncated: String = s.chars().take(max).collect();
-    format!("{truncated}…")
 }
 
 impl TeamDispatcher {
@@ -228,6 +220,18 @@ impl TeamDispatcher {
             .map(|p| p as &dyn InboxContextProvider);
         let input = build_handoff_context(&self.coord_store, &self.team_store, inbox, &task).await;
 
+        // Start a per-attempt run record so the drawer can show this
+        // execution alongside any prior retries. Failure to record is
+        // non-fatal — the task itself still runs and finalises normally.
+        let run_id = self
+            .coord_store
+            .start_task_run(&task_id, &owner)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(task_id = %task_id, error = %e, "dispatcher: start_task_run failed; run history will be incomplete");
+                String::new()
+            });
+
         // G2 — autonomous dispatch runs members in parallel. Wrap each task
         // in its own git worktree to keep their indices from colliding.
         // Best-effort: non-git environments and any provision failure fall
@@ -242,6 +246,26 @@ impl TeamDispatcher {
             true,
         )
         .await;
+
+        // Capture run outcome BEFORE we mutate the outer task — this row
+        // survives any future retries and is the source of truth for the
+        // attempt-by-attempt UI.
+        let (run_status, run_summary, run_error) = match &outcome.status {
+            MemberRunStatus::Completed => (
+                TaskRunStatus::Completed,
+                outcome.reply.clone(),
+                None,
+            ),
+            MemberRunStatus::Failed => (TaskRunStatus::Failed, None, outcome.error.clone()),
+            MemberRunStatus::Timeout => (TaskRunStatus::Timeout, None, outcome.error.clone()),
+        };
+        if let Err(e) = self
+            .coord_store
+            .finish_task_run(&run_id, run_status, run_summary, run_error)
+            .await
+        {
+            tracing::warn!(task_id = %task_id, run_id = %run_id, error = %e, "dispatcher: finish_task_run failed");
+        }
 
         match outcome.status {
             MemberRunStatus::Completed => {
@@ -258,21 +282,14 @@ impl TeamDispatcher {
                     )
                     .await
                 {
-                    tracing::warn!(task_id = %task_id, error = %e, "dispatcher: failed to persist task completion state; skipping artifact and event broadcast");
+                    tracing::warn!(task_id = %task_id, error = %e, "dispatcher: failed to persist task completion state; skipping artifact persistence");
                 } else {
                     self.persist_artifact(&task_id, &owner, &task.subject, &reply)
                         .await;
-                    GlobalBus::global()
-                        .broadcast(
-                            "team_dispatcher",
-                            &task_id,
-                            AlephEvent::TeamTaskCompleted {
-                                team_id: team_id.clone(),
-                                task_id: task_id.clone(),
-                                result_summary: Some(summarize(&reply, 500)),
-                            },
-                        )
-                        .await;
+                    // AlephEvent::TeamTaskCompleted broadcast happens inside
+                    // CoordTaskStore::emit_task_topic — the panel-driven
+                    // completion path gets the same downstream wiring without
+                    // any caller-side fan-out.
                     tracing::info!(task_id = %task_id, "dispatcher: task completed");
                 }
             }
@@ -289,8 +306,10 @@ impl TeamDispatcher {
         self.signal();
     }
 
-    /// Mark a task `Failed` and broadcast a `TeamTaskFailed` event.
-    /// Only broadcasts the event when the database update succeeds.
+    /// Mark a task `Failed`. The `AlephEvent::TeamTaskFailed` broadcast is
+    /// emitted by [`CoordTaskStore::emit_task_topic`] inside `update_task`,
+    /// so panel-driven failure (drawer "Fail" button) gets the same listener
+    /// fan-out without per-caller wiring.
     async fn fail_task(&self, task: &CoordTask, error: &str) {
         if let Err(e) = self
             .coord_store
@@ -304,20 +323,8 @@ impl TeamDispatcher {
             )
             .await
         {
-            tracing::warn!(task_id = %task.id, error = %e, "dispatcher: failed to persist task failure state; skipping event broadcast");
-            return;
+            tracing::warn!(task_id = %task.id, error = %e, "dispatcher: failed to persist task failure state");
         }
-        GlobalBus::global()
-            .broadcast(
-                "team_dispatcher",
-                &task.id,
-                AlephEvent::TeamTaskFailed {
-                    team_id: task.team_id.clone().unwrap_or_default(),
-                    task_id: task.id.clone(),
-                    error: error.to_string(),
-                },
-            )
-            .await;
     }
 
     /// Persist the task result as a report artifact (best-effort).

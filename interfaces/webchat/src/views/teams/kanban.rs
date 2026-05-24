@@ -126,6 +126,7 @@ pub fn KanbanView() -> impl IntoView {
                                     {move || t_string!(i18n, teams.kanban.actions.new_task).to_string()}
                                 </button>
                             </div>
+                            <StatsChips tasks=tasks />
                             <KanbanBoard tasks=filtered on_card_click=card_click />
                         </div>
                     }.into_any()
@@ -133,6 +134,55 @@ pub fn KanbanView() -> impl IntoView {
             }}
             <TaskDetailDrawer open_for=drawer on_changed=on_changed />
             <KanbanCreateForm open=show_create on_created=on_changed />
+        </div>
+    }
+}
+
+// ---------------------------------------------------------------------------
+// StatsChips — per-status count bar above the board (hermes-web-ui pattern,
+// adapted to Aleph's Tailwind + i18n model).
+// ---------------------------------------------------------------------------
+
+#[component]
+fn StatsChips(tasks: RwSignal<Vec<CoordTaskDto>>) -> impl IntoView {
+    // The fixed column order matches `KanbanBoard::tasks_with_status`.
+    const COLUMNS: &[(&str, &str)] = &[
+        ("pending", "bg-surface-sunken text-text-secondary"),
+        ("blocked", "bg-warning/10 text-warning"),
+        ("in_progress", "bg-info/10 text-info"),
+        ("completed", "bg-success/10 text-success"),
+        ("failed", "bg-danger/10 text-danger"),
+        ("cancelled", "bg-surface-sunken text-text-tertiary"),
+    ];
+
+    view! {
+        <div class="flex gap-2 px-3 py-2 overflow-x-auto text-xs">
+            {move || {
+                let snapshot = tasks.get();
+                let total = snapshot.len();
+                let mut nodes: Vec<_> = COLUMNS.iter().map(|(status, badge)| {
+                    let count = snapshot.iter().filter(|t| t.status == *status).count();
+                    let label = status.replace('_', " ");
+                    let badge = badge.to_string();
+                    let status_owned = status.to_string();
+                    view! {
+                        <div
+                            class=format!("px-2 py-1 rounded flex items-center gap-1.5 flex-shrink-0 {badge}")
+                            title=status_owned
+                        >
+                            <span class="font-semibold tabular-nums">{count}</span>
+                            <span class="opacity-75 capitalize">{label}</span>
+                        </div>
+                    }.into_any()
+                }).collect();
+                nodes.push(view! {
+                    <div class="px-2 py-1 rounded flex items-center gap-1.5 flex-shrink-0 bg-primary/10 text-primary ml-auto">
+                        <span class="font-semibold tabular-nums">{total}</span>
+                        <span class="opacity-75">"total"</span>
+                    </div>
+                }.into_any());
+                nodes
+            }}
         </div>
     }
 }

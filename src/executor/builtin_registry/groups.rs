@@ -153,6 +153,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "task_update",
             "task_list",
             "task_wait",
+            "task_comment",
             "task_submit",
             "task_read_artifact",
             "session_collaborate",

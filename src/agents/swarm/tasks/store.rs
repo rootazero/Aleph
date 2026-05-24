@@ -11,8 +11,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
 use super::{
-    CoordTask, CoordTaskFilter, CoordTaskId, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate,
-    NewCoordTask, Priority,
+    CoordTask, CoordTaskComment, CoordTaskFilter, CoordTaskId, CoordTaskRun, CoordTaskStatus,
+    CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority, TaskRunStatus,
 };
 use crate::error::AlephError;
 
@@ -32,6 +32,16 @@ fn db_err(e: impl std::fmt::Display) -> AlephError {
         message: format!("CoordTaskStore: {e}"),
         suggestion: None,
     }
+}
+
+/// Truncate `s` on a char boundary to at most `max` chars, appending `…` when
+/// truncated. Used to bound the size of result summaries embedded in events.
+fn summarize(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(max).collect();
+    format!("{truncated}…")
 }
 
 /// Read a task row from a rusqlite Row. Caller must ensure column order matches.
@@ -170,28 +180,110 @@ impl SqliteCoordTaskStore {
         self
     }
 
-    /// Publish a `team.<team_id>.task.<verb>` topic for a single task.
-    /// No-op when no bus is attached or the task has no team_id.
-    fn emit_task_topic(&self, task: &CoordTask, verb: &str) {
-        let Some(bus) = &self.bus else {
+    /// Publish a `team.<team_id>.task.<verb>` topic AND broadcast the matching
+    /// [`AlephEvent`] on [`GlobalBus`] so [`TeamEventLogger`] persists it in
+    /// `team_events`. Centralising both emissions here means the panel/RPC
+    /// paths get audit-logged the same way the dispatcher path does — no
+    /// caller-side responsibility, no drift.
+    ///
+    /// No-op when the task has no team_id (CoordTasks can be orphan-scoped).
+    async fn emit_task_topic(&self, task: &CoordTask, verb: &str) {
+        // --- 1. Gateway WS topic (existing path, fire-and-forget) ----------
+        if let Some(bus) = &self.bus {
+            if let Some(team_id) = task.team_id.as_deref() {
+                let topic = format!("team.{team_id}.task.{verb}");
+                let payload = serde_json::json!({
+                    "topic": topic,
+                    "data": {
+                        "task_id": task.id,
+                        "team_id": team_id,
+                        "status": task.status.as_str(),
+                        "owner": task.owner,
+                        "priority": task.priority.as_str(),
+                        "timestamp": now_epoch(),
+                    },
+                });
+                let _ = bus.publish_json(&payload);
+            }
+        }
+
+        // --- 2. AlephEvent broadcast for downstream listeners --------------
+        // TeamEventLogger persists these into `team_events` so the kanban
+        // drawer can render a full timeline. GlobalBus is a singleton; no
+        // injection required, and broadcast is safe with zero subscribers.
+        let Some(team_id) = task.team_id.clone() else {
             return;
         };
-        let Some(team_id) = task.team_id.as_deref() else {
-            return;
-        };
-        let topic = format!("team.{team_id}.task.{verb}");
-        let payload = serde_json::json!({
-            "topic": topic,
-            "data": {
-                "task_id": task.id,
-                "team_id": team_id,
-                "status": task.status.as_str(),
-                "owner": task.owner,
-                "priority": task.priority.as_str(),
-                "timestamp": now_epoch(),
-            },
-        });
-        let _ = bus.publish_json(&payload);
+        let task_id = task.id.clone();
+        let bus = crate::event::GlobalBus::global();
+
+        match verb {
+            "created" => {
+                if let Some(owner) = &task.owner {
+                    bus.broadcast(
+                        "coord_task_store",
+                        &task_id,
+                        crate::event::AlephEvent::TeamTaskAssigned {
+                            team_id: team_id.clone(),
+                            task_id: task_id.clone(),
+                            assignee_id: owner.clone(),
+                        },
+                    )
+                    .await;
+                }
+                bus.broadcast(
+                    "coord_task_store",
+                    &task_id,
+                    crate::event::AlephEvent::TeamTaskUpdated {
+                        team_id: team_id.clone(),
+                        task_id: task_id.clone(),
+                        status: task.status.as_str().to_string(),
+                        progress: None,
+                    },
+                )
+                .await;
+            }
+            "completed" => {
+                bus.broadcast(
+                    "coord_task_store",
+                    &task_id,
+                    crate::event::AlephEvent::TeamTaskCompleted {
+                        team_id: team_id.clone(),
+                        task_id: task_id.clone(),
+                        result_summary: task.result.as_ref().map(|r| summarize(r, 500)),
+                    },
+                )
+                .await;
+            }
+            "failed" => {
+                bus.broadcast(
+                    "coord_task_store",
+                    &task_id,
+                    crate::event::AlephEvent::TeamTaskFailed {
+                        team_id: team_id.clone(),
+                        task_id: task_id.clone(),
+                        error: task.result.clone().unwrap_or_default(),
+                    },
+                )
+                .await;
+            }
+            // "updated" (incl. InProgress) and "cancelled" — emit a generic
+            // TeamTaskUpdated carrying the new status string. There is no
+            // dedicated TeamTaskCancelled variant; the status field disambiguates.
+            _ => {
+                bus.broadcast(
+                    "coord_task_store",
+                    &task_id,
+                    crate::event::AlephEvent::TeamTaskUpdated {
+                        team_id: team_id.clone(),
+                        task_id: task_id.clone(),
+                        status: task.status.as_str().to_string(),
+                        progress: None,
+                    },
+                )
+                .await;
+            }
+        }
     }
 
     /// Run schema migration (creates tables + indexes).
@@ -308,6 +400,51 @@ impl SqliteCoordTaskStore {
             .map_err(db_err)?;
         }
 
+        // --- Per-attempt run history (additive) ---
+        // Captures each dispatcher claim so the panel drawer can show what
+        // each attempt did, even after the task itself reaches a terminal
+        // state. Older databases get the table at first migration.
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS coord_task_runs (
+                id         TEXT PRIMARY KEY,
+                task_id    TEXT NOT NULL,
+                agent_id   TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                ended_at   INTEGER,
+                status     TEXT NOT NULL,
+                summary    TEXT,
+                error      TEXT,
+                FOREIGN KEY (task_id) REFERENCES coord_tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_coord_task_runs_task
+                ON coord_task_runs(task_id, started_at);
+            "#,
+        )
+        .map_err(db_err)?;
+
+        // --- Per-task comments (additive) ---
+        // Free-text handoff notes; permanent (no TTL) so they survive across
+        // retries. MessageStore is intentionally not reused — it carries
+        // inbox/TTL semantics that don't fit a comment thread.
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS coord_task_comments (
+                id         TEXT PRIMARY KEY,
+                task_id    TEXT NOT NULL,
+                author     TEXT NOT NULL,
+                body       TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES coord_tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_coord_task_comments_task
+                ON coord_task_comments(task_id, created_at);
+            "#,
+        )
+        .map_err(db_err)?;
+
         Ok(())
     }
 }
@@ -384,7 +521,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             .map_err(db_err)?
             .ok_or_else(|| db_err("task disappeared after insert"))?;
         drop(conn); // release lock before emit so subscribers aren't blocked
-        self.emit_task_topic(&task, "created");
+        self.emit_task_topic(&task, "created").await;
         Ok(task)
     }
 
@@ -398,80 +535,85 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         id: &str,
         update: CoordTaskUpdate,
     ) -> crate::error::Result<CoordTask> {
-        let conn = self.conn.lock().await;
-        let now = now_epoch();
+        // All synchronous SQL work happens inside this block so the non-`Send`
+        // `Vec<Box<dyn ToSql>>` scratch state (and the rusqlite connection
+        // guard) cannot escape into the `.await` below — the outer trait impl
+        // demands a `Send` future.
+        let task_opt: Option<CoordTask> = {
+            let conn = self.conn.lock().await;
+            let now = now_epoch();
 
-        // Build dynamic SET clauses
-        let mut sets: Vec<String> = Vec::new();
-        let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let mut idx = 1usize;
+            // Build dynamic SET clauses
+            let mut sets: Vec<String> = Vec::new();
+            let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            let mut idx = 1usize;
 
-        if let Some(ref status) = update.status {
-            // Never store 'blocked' — map to pending
-            let store_status = if *status == CoordTaskStatus::Blocked {
-                "pending"
-            } else {
-                status.as_str()
-            };
-            sets.push(format!("status = ?{idx}"));
-            values.push(Box::new(store_status.to_string()));
-            idx += 1;
+            if let Some(ref status) = update.status {
+                // Never store 'blocked' — map to pending
+                let store_status = if *status == CoordTaskStatus::Blocked {
+                    "pending"
+                } else {
+                    status.as_str()
+                };
+                sets.push(format!("status = ?{idx}"));
+                values.push(Box::new(store_status.to_string()));
+                idx += 1;
 
-            if *status == CoordTaskStatus::InProgress {
-                sets.push(format!("started_at = ?{idx}"));
-                values.push(Box::new(now));
+                if *status == CoordTaskStatus::InProgress {
+                    sets.push(format!("started_at = ?{idx}"));
+                    values.push(Box::new(now));
+                    idx += 1;
+                }
+                if *status == CoordTaskStatus::Completed {
+                    sets.push(format!("completed_at = ?{idx}"));
+                    values.push(Box::new(now));
+                    idx += 1;
+                }
+            }
+
+            if let Some(ref owner) = update.owner {
+                sets.push(format!("owner = ?{idx}"));
+                values.push(Box::new(owner.clone()));
                 idx += 1;
             }
-            if *status == CoordTaskStatus::Completed {
-                sets.push(format!("completed_at = ?{idx}"));
-                values.push(Box::new(now));
+
+            if let Some(ref result) = update.result {
+                sets.push(format!("result = ?{idx}"));
+                values.push(Box::new(result.clone()));
                 idx += 1;
             }
-        }
 
-        if let Some(ref owner) = update.owner {
-            sets.push(format!("owner = ?{idx}"));
-            values.push(Box::new(owner.clone()));
-            idx += 1;
-        }
+            if let Some(ref metadata) = update.metadata {
+                let json = serde_json::to_string(metadata)
+                    .map_err(|e| db_err(format!("failed to serialize metadata: {e}")))?;
+                sets.push(format!("metadata = ?{idx}"));
+                values.push(Box::new(json));
+                idx += 1;
+            }
 
-        if let Some(ref result) = update.result {
-            sets.push(format!("result = ?{idx}"));
-            values.push(Box::new(result.clone()));
-            idx += 1;
-        }
+            if sets.is_empty() {
+                // Nothing to update — load current state, no emit, no await.
+                let t = load_task(&conn, id)
+                    .map_err(db_err)?
+                    .ok_or_else(|| db_err(format!("task not found: {id}")))?;
+                return Ok(t);
+            }
 
-        if let Some(ref metadata) = update.metadata {
-            let json = serde_json::to_string(metadata)
-                .map_err(|e| db_err(format!("failed to serialize metadata: {e}")))?;
-            sets.push(format!("metadata = ?{idx}"));
-            values.push(Box::new(json));
-            idx += 1;
-        }
+            let sql = format!(
+                "UPDATE coord_tasks SET {} WHERE id = ?{idx}",
+                sets.join(", ")
+            );
+            values.push(Box::new(id.to_string()));
+            let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+                values.iter().map(|v| v.as_ref()).collect();
+            let affected = conn.execute(&sql, params_ref.as_slice()).map_err(db_err)?;
+            if affected == 0 {
+                return Err(db_err(format!("task not found: {id}")));
+            }
+            load_task(&conn, id).map_err(db_err)?
+        };
 
-        if sets.is_empty() {
-            // Nothing to update — just return the current task
-            return load_task(&conn, id)
-                .map_err(db_err)?
-                .ok_or_else(|| db_err(format!("task not found: {id}")));
-        }
-
-        let sql = format!(
-            "UPDATE coord_tasks SET {} WHERE id = ?{idx}",
-            sets.join(", ")
-        );
-        values.push(Box::new(id.to_string()));
-
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-            values.iter().map(|v| v.as_ref()).collect();
-        let affected = conn.execute(&sql, params_ref.as_slice()).map_err(db_err)?;
-
-        if affected == 0 {
-            return Err(db_err(format!("task not found: {id}")));
-        }
-
-        let task = load_task(&conn, id)
-            .map_err(db_err)?
+        let task = task_opt
             .ok_or_else(|| db_err(format!("task not found after update: {id}")))?;
         let verb = match task.status {
             CoordTaskStatus::Completed => "completed",
@@ -479,8 +621,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             CoordTaskStatus::Cancelled => "cancelled",
             _ => "updated",
         };
-        drop(conn);
-        self.emit_task_topic(&task, verb);
+        self.emit_task_topic(&task, verb).await;
         Ok(task)
     }
 
@@ -733,6 +874,146 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             .map_err(db_err)?;
 
         Ok(affected)
+    }
+
+    // --- Run history -------------------------------------------------------
+
+    async fn start_task_run(
+        &self,
+        task_id: &str,
+        agent_id: &str,
+    ) -> crate::error::Result<String> {
+        let conn = self.conn.lock().await;
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = now_epoch();
+        conn.execute(
+            "INSERT INTO coord_task_runs (id, task_id, agent_id, started_at, status) \
+             VALUES (?1, ?2, ?3, ?4, 'running')",
+            params![id, task_id, agent_id, now],
+        )
+        .map_err(db_err)?;
+        Ok(id)
+    }
+
+    async fn finish_task_run(
+        &self,
+        run_id: &str,
+        status: TaskRunStatus,
+        summary: Option<String>,
+        error: Option<String>,
+    ) -> crate::error::Result<()> {
+        if run_id.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().await;
+        let now = now_epoch();
+        let affected = conn
+            .execute(
+                "UPDATE coord_task_runs \
+                 SET ended_at = ?1, status = ?2, summary = ?3, error = ?4 \
+                 WHERE id = ?5",
+                params![now, status.as_str(), summary, error, run_id],
+            )
+            .map_err(db_err)?;
+        if affected == 0 {
+            return Err(db_err(format!("task run not found: {run_id}")));
+        }
+        Ok(())
+    }
+
+    async fn list_task_runs(&self, task_id: &str) -> crate::error::Result<Vec<CoordTaskRun>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT id, task_id, agent_id, started_at, ended_at, status, summary, error \
+                 FROM coord_task_runs WHERE task_id = ?1 ORDER BY started_at ASC",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![task_id], |row| {
+                let status_str: String = row.get(5)?;
+                let status = TaskRunStatus::from_stored(&status_str).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("unknown task run status: {status_str}"),
+                        )),
+                    )
+                })?;
+                Ok(CoordTaskRun {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    agent_id: row.get(2)?,
+                    started_at: row.get(3)?,
+                    ended_at: row.get(4)?,
+                    status,
+                    summary: row.get(6)?,
+                    error: row.get(7)?,
+                })
+            })
+            .map_err(db_err)?;
+        let mut runs = Vec::new();
+        for r in rows {
+            runs.push(r.map_err(db_err)?);
+        }
+        Ok(runs)
+    }
+
+    // --- Comments ----------------------------------------------------------
+
+    async fn add_task_comment(
+        &self,
+        task_id: &str,
+        author: &str,
+        body: &str,
+    ) -> crate::error::Result<CoordTaskComment> {
+        let conn = self.conn.lock().await;
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = now_epoch();
+        conn.execute(
+            "INSERT INTO coord_task_comments (id, task_id, author, body, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, task_id, author, body, now],
+        )
+        .map_err(db_err)?;
+        Ok(CoordTaskComment {
+            id,
+            task_id: task_id.to_string(),
+            author: author.to_string(),
+            body: body.to_string(),
+            created_at: now,
+        })
+    }
+
+    async fn list_task_comments(
+        &self,
+        task_id: &str,
+    ) -> crate::error::Result<Vec<CoordTaskComment>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT id, task_id, author, body, created_at FROM coord_task_comments \
+                 WHERE task_id = ?1 ORDER BY created_at ASC",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![task_id], |row| {
+                Ok(CoordTaskComment {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    author: row.get(2)?,
+                    body: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })
+            .map_err(db_err)?;
+        let mut comments = Vec::new();
+        for r in rows {
+            comments.push(r.map_err(db_err)?);
+        }
+        Ok(comments)
     }
 }
 
@@ -1206,6 +1487,118 @@ mod tests {
         assert_eq!(by_id[&a.id].status, CoordTaskStatus::Pending);
         assert_eq!(by_id[&b.id].status, CoordTaskStatus::Blocked);
         assert_eq!(by_id[&c.id].status, CoordTaskStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn create_task_broadcasts_team_task_assigned_and_updated() {
+        // GlobalBus is a singleton; filter by the unique team_id this test owns
+        // so we don't collide with sibling tests in the same binary.
+        let team_id = format!("team-broadcast-{}", uuid::Uuid::new_v4());
+        let store = setup_store().await;
+        let mut rx = crate::event::GlobalBus::global().subscribe_broadcast();
+
+        let task = store
+            .create_task(NewCoordTask {
+                team_id: Some(team_id.clone()),
+                subject: "wired".into(),
+                description: "".into(),
+                owner: Some("agent-x".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Drain receiver looking for our 2 expected events. Cap by elapsed
+        // time so the test exits even if GlobalBus is heavily contested.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        let mut saw_assigned = false;
+        let mut saw_updated = false;
+        while std::time::Instant::now() < deadline && !(saw_assigned && saw_updated) {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(global_evt)) => match &global_evt.event {
+                    crate::event::AlephEvent::TeamTaskAssigned {
+                        team_id: tid,
+                        task_id,
+                        assignee_id,
+                    } if tid == &team_id && task_id == &task.id => {
+                        assert_eq!(assignee_id, "agent-x");
+                        saw_assigned = true;
+                    }
+                    crate::event::AlephEvent::TeamTaskUpdated {
+                        team_id: tid,
+                        task_id,
+                        status,
+                        ..
+                    } if tid == &team_id && task_id == &task.id => {
+                        assert_eq!(status, "pending");
+                        saw_updated = true;
+                    }
+                    _ => {}
+                },
+                _ => break,
+            }
+        }
+        assert!(saw_assigned, "TeamTaskAssigned not broadcast");
+        assert!(saw_updated, "TeamTaskUpdated not broadcast");
+    }
+
+    #[tokio::test]
+    async fn update_task_completed_broadcasts_team_task_completed_with_summary() {
+        let team_id = format!("team-complete-{}", uuid::Uuid::new_v4());
+        let store = setup_store().await;
+        let task = store
+            .create_task(NewCoordTask {
+                team_id: Some(team_id.clone()),
+                subject: "wire-complete".into(),
+                description: "".into(),
+                owner: Some("agent-y".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+
+        let mut rx = crate::event::GlobalBus::global().subscribe_broadcast();
+        let summary_text = "the agent's last reply";
+        store
+            .update_task(
+                &task.id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Completed),
+                    result: Some(summary_text.to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        let mut got = false;
+        while std::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(global_evt)) => {
+                    if let crate::event::AlephEvent::TeamTaskCompleted {
+                        team_id: tid,
+                        task_id,
+                        result_summary,
+                    } = &global_evt.event
+                    {
+                        if tid == &team_id && task_id == &task.id {
+                            assert_eq!(result_summary.as_deref(), Some(summary_text));
+                            got = true;
+                            break;
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
+        assert!(got, "TeamTaskCompleted not broadcast");
     }
 
     #[tokio::test]

@@ -1,7 +1,12 @@
-//! TaskDetailDrawer — slide-out detail panel with status-transition actions.
+//! TaskDetailDrawer — slide-out detail panel with status-transition actions
+//! and 3 collapsible read-only sections (Runs / Comments / Events) that
+//! surface the audit history wired in `coord_task_runs`, `coord_task_comments`,
+//! and `team_events`.
 
 use super::format_relative_time;
-use crate::api::teams::{CoordTaskDto, TaskPatch, TeamsApi};
+use crate::api::teams::{
+    CoordTaskDto, TaskCommentDto, TaskEventDto, TaskPatch, TaskRunDto, TeamsApi,
+};
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
@@ -19,15 +24,88 @@ pub fn TaskDetailDrawer(
     let error: RwSignal<Option<String>> = RwSignal::new(None);
     let busy = RwSignal::new(false);
 
+    // History subview state — fetched lazily when the task changes.
+    let runs: RwSignal<Vec<TaskRunDto>> = RwSignal::new(Vec::new());
+    let comments: RwSignal<Vec<TaskCommentDto>> = RwSignal::new(Vec::new());
+    let events: RwSignal<Vec<TaskEventDto>> = RwSignal::new(Vec::new());
+    let new_comment: RwSignal<String> = RwSignal::new(String::new());
+    let comment_busy = RwSignal::new(false);
+
     // Reset transient action state whenever the drawer target changes so a
     // stale error from a previous task never bleeds into the next one.
     Effect::new(move |_| {
-        let _ = open_for.get();
+        let task_opt = open_for.get();
         error.set(None);
         busy.set(false);
+        comment_busy.set(false);
+        new_comment.set(String::new());
+        // Clear the previous task's history immediately so the user doesn't
+        // see stale rows from another card while the fetch is in flight.
+        runs.set(Vec::new());
+        comments.set(Vec::new());
+        events.set(Vec::new());
+        if let Some(task) = task_opt {
+            let id = task.id.clone();
+            let dash_runs = dash.clone();
+            let dash_comments = dash.clone();
+            let dash_events = dash.clone();
+            let id_runs = id.clone();
+            let id_comments = id.clone();
+            let id_events = id;
+            spawn_local(async move {
+                if let Ok(rs) = TeamsApi::list_task_runs(&dash_runs, &id_runs).await {
+                    runs.set(rs);
+                }
+            });
+            spawn_local(async move {
+                if let Ok(cs) = TeamsApi::list_task_comments(&dash_comments, &id_comments).await {
+                    comments.set(cs);
+                }
+            });
+            spawn_local(async move {
+                if let Ok(es) = TeamsApi::list_task_events(&dash_events, &id_events).await {
+                    events.set(es);
+                }
+            });
+        }
     });
 
     let close = move |_| open_for.set(None);
+
+    let submit_comment = move |_ev: web_sys::MouseEvent| {
+        if comment_busy.get_untracked() {
+            return;
+        }
+        let Some(task) = open_for.get_untracked() else {
+            return;
+        };
+        let body = new_comment.get_untracked().trim().to_string();
+        if body.is_empty() {
+            return;
+        }
+        let id = task.id.clone();
+        // Panel doesn't track a per-user identity yet; comments authored from
+        // the drawer are attributed to a synthetic "panel" actor. Worker-
+        // initiated comments (via the dedicated builtin tool) carry the real
+        // agent id.
+        let author = "panel".to_string();
+        comment_busy.set(true);
+        spawn_local(async move {
+            match TeamsApi::add_task_comment(&dash, &id, &author, &body).await {
+                Ok(c) => {
+                    let mut cur = comments.get_untracked();
+                    cur.push(c);
+                    comments.set(cur);
+                    new_comment.set(String::new());
+                    comment_busy.set(false);
+                }
+                Err(e) => {
+                    error.set(Some(e));
+                    comment_busy.set(false);
+                }
+            }
+        });
+    };
 
     let patch_status = move |new_status: &'static str| {
         if busy.get_untracked() {
@@ -152,6 +230,16 @@ pub fn TaskDetailDrawer(
                                         ().into_any()
                                     }
                                 }
+
+                                // --- Audit history sections (Runs / Comments / Events) ---
+                                <RunsSection runs=runs />
+                                <CommentsSection
+                                    comments=comments
+                                    new_comment=new_comment
+                                    busy=comment_busy
+                                    submit=Callback::new(submit_comment)
+                                />
+                                <EventsSection events=events />
                             </div>
                             {move || error.get().map(|e| view! {
                                 <div class="mx-4 mb-2 px-3 py-2 rounded bg-danger/10 border border-danger/20 text-xs text-danger">
@@ -215,5 +303,146 @@ fn ActionButton(
         <button class=class on:click=on_click disabled=move || disabled.get()>
             {label}
         </button>
+    }
+}
+
+// =============================================================================
+// Audit-history subviews
+// =============================================================================
+
+/// Status pill colour for a run record. Mirrors the kanban-column palette so
+/// the eye matches "in_progress"/"completed"/"failed" hues across the panel.
+fn run_status_class(status: &str) -> &'static str {
+    match status {
+        "running" => "bg-info/10 text-info",
+        "completed" => "bg-success/10 text-success",
+        "failed" => "bg-danger/10 text-danger",
+        "timeout" => "bg-warning/10 text-warning",
+        _ => "bg-surface-sunken text-text-tertiary",
+    }
+}
+
+#[component]
+fn RunsSection(runs: RwSignal<Vec<TaskRunDto>>) -> impl IntoView {
+    view! {
+        <div>
+            <div class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-1">
+                "Runs (" {move || runs.get().len()} ")"
+            </div>
+            {move || {
+                let rs = runs.get();
+                if rs.is_empty() {
+                    view! {
+                        <div class="text-text-tertiary text-xs italic">"No execution attempts recorded yet."</div>
+                    }.into_any()
+                } else {
+                    let items = rs.into_iter().map(|r| {
+                        let badge = run_status_class(&r.status);
+                        let duration = r.ended_at
+                            .map(|e| format!("{}s", e.saturating_sub(r.started_at)))
+                            .unwrap_or_else(|| "—".to_string());
+                        let detail = r.error.clone()
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| r.summary.clone().filter(|s| !s.is_empty()));
+                        view! {
+                            <li class="border border-border rounded p-2 text-xs space-y-1">
+                                <div class="flex items-center gap-2">
+                                    <span class=format!("px-1.5 py-0.5 rounded text-[10px] {badge}")>{r.status}</span>
+                                    <span class="text-text-tertiary">{format_relative_time(r.started_at)}</span>
+                                    <span class="ml-auto text-text-tertiary">{duration}</span>
+                                </div>
+                                <div class="text-text-tertiary text-[10px]">{r.agent_id}</div>
+                                {detail.map(|d| view! {
+                                    <div class="text-text-secondary whitespace-pre-wrap break-words">{d}</div>
+                                })}
+                            </li>
+                        }
+                    }).collect_view();
+                    view! { <ul class="space-y-1.5">{items}</ul> }.into_any()
+                }
+            }}
+        </div>
+    }
+}
+
+#[component]
+fn CommentsSection(
+    comments: RwSignal<Vec<TaskCommentDto>>,
+    new_comment: RwSignal<String>,
+    busy: RwSignal<bool>,
+    submit: Callback<web_sys::MouseEvent>,
+) -> impl IntoView {
+    view! {
+        <div>
+            <div class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-1">
+                "Comments (" {move || comments.get().len()} ")"
+            </div>
+            {move || {
+                let cs = comments.get();
+                if cs.is_empty() {
+                    view! {
+                        <div class="text-text-tertiary text-xs italic">"No comments yet."</div>
+                    }.into_any()
+                } else {
+                    let items = cs.into_iter().map(|c| view! {
+                        <li class="border border-border rounded p-2 text-xs space-y-1">
+                            <div class="flex items-center gap-2">
+                                <span class="font-medium text-text-primary">{c.author}</span>
+                                <span class="text-text-tertiary text-[10px] ml-auto">{format_relative_time(c.created_at)}</span>
+                            </div>
+                            <div class="text-text-secondary whitespace-pre-wrap break-words">{c.body}</div>
+                        </li>
+                    }).collect_view();
+                    view! { <ul class="space-y-1.5">{items}</ul> }.into_any()
+                }
+            }}
+            <div class="mt-2 flex gap-1.5 items-start">
+                <textarea
+                    class="flex-1 text-xs p-1.5 rounded border border-border bg-surface-sunken resize-y min-h-[2.5rem]"
+                    placeholder="Add a comment…"
+                    prop:value=move || new_comment.get()
+                    on:input=move |ev| new_comment.set(event_target_value(&ev))
+                />
+                <button
+                    class=move || if busy.get() || new_comment.get().trim().is_empty() {
+                        "px-2 py-1 text-xs rounded bg-surface-sunken text-text-tertiary cursor-not-allowed"
+                    } else {
+                        "px-2 py-1 text-xs rounded bg-primary/10 text-primary hover:bg-primary/20 cursor-pointer"
+                    }
+                    disabled=move || busy.get() || new_comment.get().trim().is_empty()
+                    on:click=move |ev| submit.run(ev)
+                >
+                    "Post"
+                </button>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn EventsSection(events: RwSignal<Vec<TaskEventDto>>) -> impl IntoView {
+    view! {
+        <div>
+            <div class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-1">
+                "Event timeline (" {move || events.get().len()} ")"
+            </div>
+            {move || {
+                let es = events.get();
+                if es.is_empty() {
+                    view! {
+                        <div class="text-text-tertiary text-xs italic">"No events yet."</div>
+                    }.into_any()
+                } else {
+                    let items = es.into_iter().rev().take(20).collect::<Vec<_>>().into_iter().map(|e| view! {
+                        <li class="flex items-baseline gap-2 text-xs">
+                            <span class="text-text-tertiary text-[10px] w-28 flex-shrink-0">{e.timestamp}</span>
+                            <span class="font-mono text-primary">{e.event_type}</span>
+                            <span class="text-text-tertiary text-[10px]">{e.agent_id}</span>
+                        </li>
+                    }).collect_view();
+                    view! { <ul class="space-y-0.5">{items}</ul> }.into_any()
+                }
+            }}
+        </div>
     }
 }

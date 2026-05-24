@@ -166,6 +166,76 @@ pub struct CoordTaskFilter {
 }
 
 // ---------------------------------------------------------------------------
+// CoordTaskRun — per-attempt execution record
+// ---------------------------------------------------------------------------
+
+/// Terminal status of a single task execution attempt. A task can have many
+/// runs (one per dispatcher claim); this captures what each individually
+/// produced so the drawer can show retry history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskRunStatus {
+    /// Run is still in flight — `ended_at` will be null.
+    Running,
+    /// Run finished cleanly.
+    Completed,
+    /// Run errored out (worker process or adapter failure).
+    Failed,
+    /// Run exceeded its timeout and was aborted.
+    Timeout,
+}
+
+impl TaskRunStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Timeout => "timeout",
+        }
+    }
+
+    pub fn from_stored(s: &str) -> Option<Self> {
+        match s {
+            "running" => Some(Self::Running),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "timeout" => Some(Self::Timeout),
+            _ => None,
+        }
+    }
+}
+
+/// One execution attempt of a [`CoordTask`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoordTaskRun {
+    pub id: String,
+    pub task_id: CoordTaskId,
+    pub agent_id: AgentId,
+    pub started_at: u64,
+    pub ended_at: Option<u64>,
+    pub status: TaskRunStatus,
+    pub summary: Option<String>,
+    pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// CoordTaskComment — per-task handoff note
+// ---------------------------------------------------------------------------
+
+/// A free-text comment attached to a [`CoordTask`]. Used by workers to leave
+/// handoff context for downstream attempts (analogous to hermes-agent's
+/// `task_comments` table), and by humans to annotate state via the panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoordTaskComment {
+    pub id: String,
+    pub task_id: CoordTaskId,
+    pub author: String,
+    pub body: String,
+    pub created_at: u64,
+}
+
+// ---------------------------------------------------------------------------
 // CoordTaskStore trait
 // ---------------------------------------------------------------------------
 
@@ -199,4 +269,57 @@ pub trait CoordTaskStore: Send + Sync {
     async fn release_lock(&self, task_id: &str, agent_id: &str) -> crate::error::Result<()>;
     /// Release all locks older than `max_age_secs`. Returns number of locks released.
     async fn release_stale_locks(&self, max_age_secs: u64) -> crate::error::Result<usize>;
+
+    // --- Run history ---
+    // Per-attempt records let the panel drawer surface retry history rather
+    // than only the final state. Default impls return empty so stores wired
+    // before this trait extension keep compiling.
+
+    /// Record the start of a new execution attempt. Returns the assigned run id.
+    async fn start_task_run(
+        &self,
+        _task_id: &str,
+        _agent_id: &str,
+    ) -> crate::error::Result<String> {
+        Ok(String::new())
+    }
+
+    /// Finish a run started via [`start_task_run`]. No-op when `run_id` is empty.
+    async fn finish_task_run(
+        &self,
+        _run_id: &str,
+        _status: TaskRunStatus,
+        _summary: Option<String>,
+        _error: Option<String>,
+    ) -> crate::error::Result<()> {
+        Ok(())
+    }
+
+    /// List all runs for a task, oldest first.
+    async fn list_task_runs(&self, _task_id: &str) -> crate::error::Result<Vec<CoordTaskRun>> {
+        Ok(Vec::new())
+    }
+
+    // --- Comments ---
+    // Free-text handoff notes attached to a task. Stored permanently (no
+    // TTL) so they survive across retries and panel sessions.
+
+    async fn add_task_comment(
+        &self,
+        _task_id: &str,
+        _author: &str,
+        _body: &str,
+    ) -> crate::error::Result<CoordTaskComment> {
+        Err(crate::error::AlephError::ConfigError {
+            message: "CoordTaskStore: add_task_comment not implemented".into(),
+            suggestion: None,
+        })
+    }
+
+    async fn list_task_comments(
+        &self,
+        _task_id: &str,
+    ) -> crate::error::Result<Vec<CoordTaskComment>> {
+        Ok(Vec::new())
+    }
 }
