@@ -1,6 +1,7 @@
 //! Main Chat view — message list + input area.
 
 use super::events::subscribe_run_events;
+use super::project_menu::ProjectMenu;
 use super::state::{ChatMessage, ChatPhase, ChatState};
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
@@ -405,11 +406,13 @@ fn InputArea() -> impl IntoView {
 
         let session_key = chat.session_key.get();
         let agent_id = chat.agent_id.get();
+        let project_root = chat.active_project_root.get();
         let dash = dashboard;
         spawn_local(async move {
             let sk = session_key.as_deref();
             let aid = agent_id.as_deref();
-            match ChatApi::send(&dash, &text, sk, api_attachments, aid).await {
+            let pr = project_root.as_deref();
+            match ChatApi::send(&dash, &text, sk, api_attachments, aid, pr).await {
                 Ok(resp) => {
                     chat.session_key.set(Some(resp.session_key));
                 }
@@ -965,6 +968,13 @@ fn InputArea() -> impl IntoView {
                         </svg>
                     </button>
                 </Show>
+            </div>
+
+            // Project picker (mirrors the Codex "进入项目工作" affordance).
+            // Lives below the composer row so it never crowds the textarea
+            // and stays visible even while the user types.
+            <div class="aleph-project-row px-3 pb-2">
+                <ProjectMenu />
             </div>
             </div>
         </div>

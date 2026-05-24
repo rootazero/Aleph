@@ -330,6 +330,7 @@ impl ResumeCoordinator {
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sandbox_override: None,
+            workspace_override: None,
         };
 
         let collector = Arc::new(CollectingEventEmitter::new());

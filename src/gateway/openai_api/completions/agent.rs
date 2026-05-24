@@ -324,6 +324,7 @@ pub async fn handle(
         attachments: Vec::new(),
         pending_media,
         sandbox_override: None,
+        workspace_override: None,
     };
 
     let is_streaming = req.stream.unwrap_or(false);

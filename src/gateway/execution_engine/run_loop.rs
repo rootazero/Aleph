@@ -139,10 +139,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
-        // Write workspace-scoped output paths to tool context handle
+        // Effective workspace: if the request carries a per-run `workspace_override`
+        // (project mode), use it; otherwise fall back to the agent's stable
+        // `~/.aleph/workspaces/{agent_id}` directory. The override path is already
+        // validated as an existing absolute directory by the gateway handler that
+        // constructed the RunRequest, so we can chdir into it directly.
+        let effective_workspace: std::path::PathBuf = request
+            .workspace_override
+            .clone()
+            .unwrap_or_else(|| agent.workspace().to_path_buf());
+
+        // Write workspace-scoped output paths to tool context handle. With a
+        // project override active, tool artifacts land under `<project>/output/`
+        // — same convention used for agent workspaces, just rooted at the
+        // user-picked project.
         if let Some(tc_handle) = self.tool_registry.tool_context_handle() {
-            let workspace_path = agent.workspace();
-            match crate::tools::ToolContext::from_workspace(workspace_path) {
+            match crate::tools::ToolContext::from_workspace(&effective_workspace) {
                 Ok(ctx) => {
                     let mut tc = tc_handle.write().await;
                     *tc = ctx;
@@ -150,7 +162,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Err(e) => {
                     tracing::warn!(
                         "Failed to create ToolContext from workspace {}: {}",
-                        workspace_path.display(),
+                        effective_workspace.display(),
                         e
                     );
                 }
@@ -159,7 +171,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // === Pre-compute values reusable across retry attempts ===
 
-        let default_working_dir = Some(agent.workspace().to_string_lossy().to_string());
+        let default_working_dir = Some(effective_workspace.to_string_lossy().to_string());
 
         // Resolve soul for prompt building (constant across retries).
         let _ = agent.agent_dir();
@@ -300,6 +312,26 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     }
                 }
                 Err(e) => warn!(run_id = run_id, error = %e, "UserPromptSubmit hook failed"),
+            }
+        }
+
+        // Project-mode context: when the run is scoped to a user-picked
+        // project folder, surface its `AGENTS.md` and `CLAUDE.md` (Claude
+        // Code parity) to the model the same way UserPromptSubmit hooks do
+        // — as `<system-reminder>` blocks prefixed to the user's prompt.
+        // This is intentionally a one-shot inline read rather than a new
+        // PromptLayer: project files vary per run, so they cannot live in
+        // the cached stable prefix anyway, and the read cost is dwarfed by
+        // the LLM call that follows.
+        if request.workspace_override.is_some() {
+            let blocks = collect_project_context_blocks(&effective_workspace);
+            if !blocks.is_empty() {
+                let joined = blocks
+                    .into_iter()
+                    .map(|b| format!("<system-reminder>\n{}\n</system-reminder>", b.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                effective_user_input = format!("{joined}\n\n{}", effective_user_input);
             }
         }
 
@@ -761,4 +793,115 @@ fn lifecycle_hook_context(session_id: &str, run_id: &str, agent: &AgentInstance)
     HookContext::new(session_id)
         .with_env("RUN_ID", run_id)
         .with_env("AGENT_ID", agent.id())
+}
+
+/// Project context filename list. `AGENTS.md` is Aleph's native operating
+/// manual, `CLAUDE.md` is recognised for Claude Code project parity so
+/// users can drop an existing CC project folder in without renaming.
+const PROJECT_CONTEXT_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
+
+/// Per-file byte cap for project context injection. Project READMEs and
+/// long contributor guides can be huge — bound the prompt impact so a
+/// 200 KB CLAUDE.md cannot crowd out the rest of the system prompt.
+const PROJECT_CONTEXT_MAX_BYTES: usize = 32 * 1024;
+
+/// Read project context files (`AGENTS.md`, `CLAUDE.md`) from the active
+/// workspace root and return one labelled prompt block per non-empty file.
+/// Missing or unreadable files are silently skipped — Claude Code treats
+/// a missing `CLAUDE.md` as the common case, not an error.
+fn collect_project_context_blocks(workspace: &std::path::Path) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let header = format!(
+        "Active project: `{}`. The following project files describe \
+        local conventions, scope, and constraints — treat them as \
+        durable context for this conversation.",
+        workspace.display()
+    );
+    let mut any_file_loaded = false;
+    let mut body = String::new();
+    for name in PROJECT_CONTEXT_FILES {
+        let candidate = workspace.join(name);
+        let content = match std::fs::read_to_string(&candidate) {
+            Ok(s) if !s.trim().is_empty() => s,
+            _ => continue,
+        };
+        let truncated = if content.len() > PROJECT_CONTEXT_MAX_BYTES {
+            let mut end = PROJECT_CONTEXT_MAX_BYTES;
+            // Find a char boundary at-or-before end to avoid splitting a
+            // UTF-8 codepoint; falling back to end if we cannot.
+            while end > 0 && !content.is_char_boundary(end) {
+                end -= 1;
+            }
+            let mut shortened = content[..end].to_string();
+            shortened.push_str("\n\n... [project file truncated for prompt budget]");
+            shortened
+        } else {
+            content
+        };
+        if !any_file_loaded {
+            body.push_str(&header);
+            body.push_str("\n\n");
+            any_file_loaded = true;
+        }
+        body.push_str(&format!("### {name}\n\n"));
+        body.push_str(truncated.trim_end());
+        body.push_str("\n\n");
+    }
+    if any_file_loaded {
+        blocks.push(body);
+    }
+    blocks
+}
+
+#[cfg(test)]
+mod project_context_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn returns_nothing_when_no_project_files() {
+        let dir = tempdir().unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn reads_agents_md_when_present() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "# Project rules\nNo force push.\n").unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].contains("Active project"));
+        assert!(blocks[0].contains("### AGENTS.md"));
+        assert!(blocks[0].contains("No force push"));
+    }
+
+    #[test]
+    fn includes_both_agents_and_claude_md_when_both_present() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "# Aleph rules").unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "# CC rules").unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].contains("### AGENTS.md"));
+        assert!(blocks[0].contains("### CLAUDE.md"));
+    }
+
+    #[test]
+    fn ignores_whitespace_only_files() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "   \n\n\t\n").unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn truncates_oversized_files() {
+        let dir = tempdir().unwrap();
+        let big = "x".repeat(PROJECT_CONTEXT_MAX_BYTES + 4096);
+        std::fs::write(dir.path().join("AGENTS.md"), &big).unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert!(blocks[0].contains("[project file truncated for prompt budget]"));
+        assert!(blocks[0].len() < big.len() + 4096);
+    }
 }

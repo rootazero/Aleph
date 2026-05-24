@@ -47,6 +47,13 @@ pub struct SendParams {
     /// Explicit target agent ID (bypasses channel binding resolution)
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Optional absolute project root. When set, the agent's tool calls
+    /// run inside this directory instead of `~/.aleph/workspaces/{agent_id}`.
+    /// Used by the desktop Panel's "进入项目工作" flow to scope a chat to
+    /// a user-picked folder. Must be an absolute path; relative paths and
+    /// non-existent directories are rejected by the gateway handler.
+    #[serde(default)]
+    pub project_root: Option<String>,
 }
 
 fn default_stream() -> bool {
@@ -146,6 +153,7 @@ pub async fn handle_send(
         thinking: params.thinking,
         attachments: params.attachments,
         agent_id: params.agent_id,
+        project_root: params.project_root,
     };
 
     // Start the run

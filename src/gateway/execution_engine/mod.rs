@@ -41,6 +41,7 @@ pub(crate) use trace_sink_adapter::GatewayTraceSink;
 use crate::gateway::media::PendingMedia;
 use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use tokio::sync::mpsc;
 
@@ -89,6 +90,18 @@ pub struct RunRequest {
     /// the factory and is used by the team dispatcher to wrap each member
     /// task in an isolated git worktree.
     pub sandbox_override: Option<std::sync::Arc<dyn crate::sandbox::Sandbox>>,
+    /// Per-run workspace override (project mode). When `Some`, this path
+    /// replaces `agent.workspace()` as the effective working directory
+    /// for the run — used for `ToolContext`, the default cwd of shell
+    /// tools, and project-local file/skill discovery
+    /// (`<root>/AGENTS.md`, `<root>/CLAUDE.md`, `<root>/.claude/skills`,
+    /// `<root>/.aleph/skills`).
+    ///
+    /// `None` keeps the legacy behaviour of running inside
+    /// `~/.aleph/workspaces/{agent_id}/`. The path is **not** validated by
+    /// the engine; the gateway handler that constructs `RunRequest` is
+    /// responsible for trust + existence checks.
+    pub workspace_override: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for RunRequest {
@@ -104,6 +117,7 @@ impl std::fmt::Debug for RunRequest {
                 "sandbox_override",
                 &self.sandbox_override.as_ref().map(|_| "<dyn Sandbox>"),
             )
+            .field("workspace_override", &self.workspace_override)
             .finish()
     }
 }

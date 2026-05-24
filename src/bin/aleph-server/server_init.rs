@@ -103,6 +103,9 @@ where
         pub peer_id: Option<String>,
         #[serde(default = "default_stream")]
         pub stream: bool,
+        /// Optional absolute project root for per-run `workspace_override`.
+        #[serde(default)]
+        pub project_root: Option<String>,
     }
 
     fn default_stream() -> bool {
@@ -202,6 +205,29 @@ where
     metadata.insert("channel_id".to_string(), channel_id.to_string());
     metadata.insert("sender_id".to_string(), peer_id.to_string());
 
+    let workspace_override = match params.project_root.as_deref() {
+        Some(raw) => {
+            let path = std::path::PathBuf::from(raw);
+            if !path.is_absolute() {
+                return alephcore::gateway::JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("project_root must be absolute: {raw}"),
+                );
+            }
+            if !path.is_dir() {
+                return alephcore::gateway::JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("project_root is not a directory: {raw}"),
+                );
+            }
+            metadata.insert("project_root".to_string(), path.display().to_string());
+            Some(path)
+        }
+        None => None,
+    };
+
     let run_request = RunRequest {
         run_id: run_id.clone(),
         input: params.input.clone(),
@@ -211,6 +237,7 @@ where
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
+        workspace_override,
     };
 
     // Spawn execution task
@@ -377,6 +404,32 @@ where
         metadata.insert("locale".to_string(), lang.to_string());
     }
 
+    // Resolve optional project_root → workspace_override. Rejected if the
+    // path is not absolute or not an existing directory so downstream code
+    // can trust the override.
+    let project_root_for_run = match params.project_root.as_deref() {
+        Some(raw) => {
+            let path = std::path::PathBuf::from(raw);
+            if !path.is_absolute() {
+                return alephcore::gateway::JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("project_root must be absolute: {raw}"),
+                );
+            }
+            if !path.is_dir() {
+                return alephcore::gateway::JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("project_root is not a directory: {raw}"),
+                );
+            }
+            metadata.insert("project_root".to_string(), path.display().to_string());
+            Some(path)
+        }
+        None => None,
+    };
+
     // Slash command detection: resolve via CommandParser and emit the
     // source-aware mode JSON (preserves Skill instructions / Custom system
     // prompt / MCP server name so the fast path can act on them).
@@ -410,6 +463,7 @@ where
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
+        workspace_override: project_root_for_run.clone(),
     };
 
     // Spawn execution task

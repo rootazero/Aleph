@@ -68,6 +68,16 @@ pub struct ChatState {
     pub reasoning_text: RwSignal<String>,
     /// Error message (set when run_error arrives).
     pub error_message: RwSignal<Option<String>>,
+    /// Active project workspace root (absolute path). When `Some`, the
+    /// chat composer attaches it to `chat.send` as `project_root`, and the
+    /// daemon swaps the agent's working directory for the duration of the
+    /// run. Switching project clears the session per the "切换即开新
+    /// session" convention agreed for the desktop App.
+    pub active_project_root: RwSignal<Option<String>>,
+    /// Human-friendly display name for the active project. Surfaced in the
+    /// composer's "进入项目工作 ▾" chip so the user always sees which
+    /// folder they're operating against.
+    pub active_project_name: RwSignal<Option<String>>,
     /// Monotonic counter for generating unique user message IDs.
     next_msg_id: RwSignal<u64>,
 }
@@ -88,7 +98,21 @@ impl ChatState {
             agent_id: RwSignal::new(None),
             reasoning_text: RwSignal::new(String::new()),
             error_message: RwSignal::new(None),
+            active_project_root: RwSignal::new(None),
+            active_project_name: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),
+        }
+    }
+
+    /// Set the active project and reset the session (1:1 project↔session
+    /// binding per the agreed UX model). Passing `None` exits project mode
+    /// and the chat reverts to running inside `~/.aleph/workspaces/{agent_id}`.
+    pub fn set_active_project(&self, root: Option<String>, name: Option<String>) {
+        let switching = self.active_project_root.get_untracked() != root;
+        self.active_project_root.set(root);
+        self.active_project_name.set(name);
+        if switching {
+            self.clear_session();
         }
     }
 

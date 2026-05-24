@@ -1,4 +1,5 @@
 pub mod events;
+pub mod project_menu;
 pub mod state;
 pub mod view;
 

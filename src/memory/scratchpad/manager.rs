@@ -2,12 +2,18 @@
 
 //! Scratchpad Manager
 //!
-//! Manages the lifecycle of project scratchpad files stored under
-//! `~/.aleph/projects/<project_id>/`.
+//! Manages the lifecycle of agent scratchpad files stored under
+//! `~/.aleph/workspaces/<agent_id>/` — see
+//! [`default_workspace_root`] for the resolution rule. The first arg to
+//! [`Self::new`] is the on-disk subdirectory name (historically called
+//! `project_id`); in the unified agent model this is the agent id.
 //!
-//! Aleph is conversation-driven — projects are generated artifacts managed
-//! by Aleph, not user-created directories entered via CLI. All project
-//! working memory lives in the unified `~/.aleph/` workspace.
+//! Per-run project overrides (the desktop App's "进入项目工作" flow,
+//! see [`crate::projects`]) do NOT relocate the scratchpad — runtime
+//! working memory stays bound to the agent, so a single agent's
+//! scratchpad survives a user toggling between project folders.
+//!
+//! [`default_workspace_root`]: crate::config::agent_resolver::default_workspace_root
 
 use crate::error::AlephError;
 use std::path::PathBuf;
@@ -36,7 +42,7 @@ impl Default for ScratchpadConfig {
     }
 }
 
-/// Manages project scratchpad files under `~/.aleph/workspaces/<project_id>/`
+/// Manages agent scratchpad files under `~/.aleph/workspaces/<agent_id>/`.
 pub struct ScratchpadManager {
     /// Base directory for this project's scratchpad files
     project_dir: PathBuf,

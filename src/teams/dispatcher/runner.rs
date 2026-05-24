@@ -119,6 +119,7 @@ pub async fn execute_member_task(
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override,
+        workspace_override: None,
     };
 
     let execution_adapter = Arc::clone(context.execution_adapter());

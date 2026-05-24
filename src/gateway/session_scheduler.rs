@@ -254,6 +254,7 @@ impl SessionScheduler {
             attachments: ctx.message.attachments.clone(),
             pending_media: pending_media.clone(),
             sandbox_override: None,
+            workspace_override: None,
         };
 
         info!(
@@ -530,6 +531,7 @@ async fn execute_next(
         attachments: ctx.message.attachments.clone(),
         pending_media: pending_media.clone(),
         sandbox_override: None,
+        workspace_override: None,
     };
 
     info!(
