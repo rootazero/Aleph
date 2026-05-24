@@ -100,11 +100,16 @@ jobs:
           fi
           version="$(tr -d '[:space:]' < VERSION)"
           config="{\"version\":\"$version\"}"
-          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            echo "Signing key present — enabling auto-update artifacts."
+          # Both the key AND its password must be configured. If the key has a
+          # password but the password secret is missing / wrong, tauri-cli
+          # exits 1 at the signing step and the installers we already built
+          # never get uploaded. Require both so installers always ship; the
+          # updater is silently skipped when the password is unavailable.
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+            echo "Signing key + password present — enabling auto-update artifacts."
             config="{\"version\":\"$version\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
           else
-            echo "No signing key — building installers only (no auto-update artifacts)."
+            echo "Signing key or password missing — building installers only (no auto-update artifacts)."
           fi
           cd desktop/shell && cargo tauri build --verbose --config "$config"
 
