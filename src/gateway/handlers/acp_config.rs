@@ -640,13 +640,13 @@ pub async fn handle_sessions_shutdown(
             )
         }
     };
-    // Best-effort: cancel first to give the agent a chance to flush, then
-    // we leave eviction to the next prompt's liveness check. Hard-kill is
-    // also fine if needed via shutdown_all — but that's all-or-nothing.
-    let _ = manager
-        .cancel_named(&params.harness, &params.cwd, params.session_name.as_deref())
-        .await;
-    JsonRpcResponse::success(request.id, json!({ "success": true }))
+    match manager
+        .shutdown_named(&params.harness, &params.cwd, params.session_name.as_deref())
+        .await
+    {
+        Ok(()) => JsonRpcResponse::success(request.id, json!({ "success": true })),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+    }
 }
 
 /// Handle acp.presets_meta — return lightweight metadata for all presets.

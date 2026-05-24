@@ -893,6 +893,23 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
             let manager = Arc::new(AcpAdapterManager::from_entries(entries));
             alephcore::acp::manager::wire_persistence(&manager).await;
+
+            // Wire the gateway broadcast hook so panels subscribed to
+            // `acp.sessions.changed` get live re-fetch signals on every
+            // pool mutation (create / respawn / shutdown / die).
+            {
+                let bus = event_bus.clone();
+                manager
+                    .set_gateway_change_hook(std::sync::Arc::new(move || {
+                        let frame =
+                            alephcore::gateway::events::GatewayEventFrame::AcpSessionsChanged;
+                        if let Err(e) = bus.publish_frame(&frame) {
+                            tracing::warn!(error = %e, "Failed to publish acp.sessions.changed");
+                        }
+                    }))
+                    .await;
+            }
+
             if !args.daemon {
                 println!("ACP harness manager initialized");
             }

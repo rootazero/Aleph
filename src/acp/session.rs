@@ -46,6 +46,10 @@ impl Default for AdapterConfig {
 // =============================================================================
 
 /// Minimal state for restoring an ACP session after restart.
+///
+/// `session_name` is `None` (or absent on legacy disk) for the default
+/// unnamed session and `Some(name)` for acpx-style `-s backend` parallel
+/// sessions. `#[serde(default)]` keeps old snapshot files loadable.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistedAcpSession {
     pub harness_id: String,
@@ -53,6 +57,8 @@ pub struct PersistedAcpSession {
     pub cwd: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_used_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
 }
 
 // =============================================================================

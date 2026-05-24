@@ -76,14 +76,22 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
                         ref harness_id,
                         ref acp_session_id,
                         ref cwd,
+                        ref session_name,
                     } => {
-                        store.retain(|s| !(s.harness_id == *harness_id && s.cwd == *cwd));
+                        // Match the full triple so a `backend` name doesn't
+                        // displace the unnamed/default entry under the same cwd.
+                        store.retain(|s| {
+                            !(s.harness_id == *harness_id
+                                && s.cwd == *cwd
+                                && s.session_name == *session_name)
+                        });
                         store.push(crate::acp::session::PersistedAcpSession {
                             harness_id: harness_id.clone(),
                             acp_session_id: acp_session_id.clone(),
                             cwd: cwd.clone(),
                             created_at: chrono::Utc::now(),
                             last_used_at: chrono::Utc::now(),
+                            session_name: session_name.clone(),
                         });
                     }
                     super::AcpSessionEvent::Updated {
@@ -99,8 +107,13 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
                     super::AcpSessionEvent::Removed {
                         ref harness_id,
                         ref cwd,
+                        ref session_name,
                     } => {
-                        store.retain(|s| !(s.harness_id == *harness_id && s.cwd == *cwd));
+                        store.retain(|s| {
+                            !(s.harness_id == *harness_id
+                                && s.cwd == *cwd
+                                && s.session_name == *session_name)
+                        });
                     }
                 }
                 store.clone()
@@ -257,6 +270,11 @@ pub struct AcpAdapterManager {
     sessions: RwLock<HashMap<SessionKey, SessionEntry>>,
     /// Optional persistence callback for session state changes.
     persistence_hook: RwLock<Option<super::PersistenceHook>>,
+    /// Optional broadcast hook so the gateway can push
+    /// `acp.sessions.changed` whenever the pool mutates. Kept separate from
+    /// `persistence_hook` so disk-persistence and live-broadcast wire up
+    /// independently (one consumer can exist without the other).
+    gateway_change_hook: RwLock<Option<super::GatewayChangeHook>>,
 }
 
 impl Default for AcpAdapterManager {
@@ -297,6 +315,7 @@ impl AcpAdapterManager {
             configs: RwLock::new(configs),
             sessions: RwLock::new(HashMap::new()),
             persistence_hook: RwLock::new(None),
+            gateway_change_hook: RwLock::new(None),
         }
     }
 
@@ -550,8 +569,25 @@ impl AcpAdapterManager {
         *h = Some(hook);
     }
 
-    /// Emit a persistence event (no-op if no hook set).
+    /// Set the gateway broadcast hook fired on every pool mutation. Used to
+    /// publish `acp.sessions.changed` so panels can re-fetch live.
+    pub async fn set_gateway_change_hook(&self, hook: super::GatewayChangeHook) {
+        let mut h = self.gateway_change_hook.write().await;
+        *h = Some(hook);
+    }
+
+    /// Emit a persistence event AND fan out to the gateway broadcast hook.
+    /// Both consumers are independent — either may be unset.
     async fn emit_persistence_event(&self, event: super::AcpSessionEvent) {
+        // Notify the gateway first; it's payload-free so re-fetches don't
+        // race the disk write. The gateway hook is cheap (broadcast send).
+        let notify = {
+            let gh = self.gateway_change_hook.read().await;
+            gh.clone()
+        };
+        if let Some(n) = notify {
+            n();
+        }
         let hook = self.persistence_hook.read().await;
         if let Some(ref h) = *hook {
             h(event);
@@ -565,7 +601,8 @@ impl AcpAdapterManager {
     ) -> Vec<String> {
         let mut restored = Vec::new();
         for entry in persisted {
-            let key = SessionKey::new(&entry.harness_id, &entry.cwd);
+            let key =
+                SessionKey::with_name(&entry.harness_id, &entry.cwd, entry.session_name.as_deref());
 
             // Clone Arc ref under brief read lock, then spawn without holding it.
             // spawn_session may take seconds (process startup + initialize handshake).
@@ -681,6 +718,7 @@ impl AcpAdapterManager {
             self.emit_persistence_event(super::AcpSessionEvent::Removed {
                 harness_id: harness_id.to_string(),
                 cwd: cwd.to_string(),
+                session_name: session_name.map(str::to_string),
             })
             .await;
             self.sessions.write().await.remove(&key);
@@ -822,6 +860,7 @@ impl AcpAdapterManager {
                                     harness_id: harness_id.to_string(),
                                     acp_session_id: sid,
                                     cwd: cwd.to_string(),
+                                    session_name: session_name.map(str::to_string),
                                 })
                                 .await;
                             }
@@ -833,6 +872,7 @@ impl AcpAdapterManager {
                             self.emit_persistence_event(super::AcpSessionEvent::Removed {
                                 harness_id: harness_id.to_string(),
                                 cwd: cwd.to_string(),
+                                session_name: session_name.map(str::to_string),
                             })
                             .await;
                             warn!(harness_id, "ACP session died after prompt, evicted");
@@ -848,6 +888,7 @@ impl AcpAdapterManager {
                         self.emit_persistence_event(super::AcpSessionEvent::Removed {
                             harness_id: harness_id.to_string(),
                             cwd: cwd.to_string(),
+                            session_name: session_name.map(str::to_string),
                         })
                         .await;
                         Err(e)
@@ -1039,6 +1080,47 @@ impl AcpAdapterManager {
                 .then(a.session_name.cmp(&b.session_name))
         });
         out
+    }
+
+    /// Shut down a single named session. Cancels any in-flight prompt,
+    /// removes the entry from the pool, kills the subprocess, then emits
+    /// `Removed` so panels and persistence stay in sync. Idempotent — no
+    /// error when the session is already gone.
+    pub async fn shutdown_named(
+        &self,
+        harness_id: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+    ) -> Result<()> {
+        let key = SessionKey::with_name(harness_id, cwd, session_name);
+
+        // Fire cancel first so the agent gets a chance to flush partial
+        // output before we evict. Best-effort — a missing session is fine.
+        let cancel_handle = self
+            .sessions
+            .read()
+            .await
+            .get(&key)
+            .map(|entry| entry.cancel.clone());
+        if let Some(handle) = cancel_handle {
+            let _ = handle.send_cancel().await;
+        }
+
+        // Now evict + kill. Drop the write lock before locking the inner
+        // session mutex to avoid holding both at once.
+        let entry = self.sessions.write().await.remove(&key);
+        if let Some(entry) = entry {
+            let mut s = entry.session.lock().await;
+            s.kill().await;
+            drop(s);
+            self.emit_persistence_event(super::AcpSessionEvent::Removed {
+                harness_id: harness_id.to_string(),
+                cwd: cwd.to_string(),
+                session_name: session_name.map(str::to_string),
+            })
+            .await;
+        }
+        Ok(())
     }
 
     /// Kill all active sessions.
@@ -1414,5 +1496,58 @@ mod tests {
         let manager = AcpAdapterManager::new();
         let snaps = manager.list_sessions().await;
         assert!(snaps.is_empty(), "no sessions yet → empty snapshot list");
+    }
+
+    // ── Phase 3 follow-ups: persistence + gateway broadcast ──────────────
+
+    /// `PersistedAcpSession` deserializes legacy snapshots that lack the
+    /// `session_name` field (treats them as the default unnamed session).
+    #[test]
+    fn test_persisted_session_legacy_compat() {
+        let legacy = r#"{
+            "harness_id": "claude-code",
+            "acp_session_id": "abc123",
+            "cwd": "/tmp/repo",
+            "created_at": "2026-05-24T00:00:00Z",
+            "last_used_at": "2026-05-24T00:00:00Z"
+        }"#;
+        let parsed: crate::acp::session::PersistedAcpSession =
+            serde_json::from_str(legacy).expect("legacy snapshot must parse");
+        assert_eq!(parsed.session_name, None);
+    }
+
+    /// `set_gateway_change_hook` fires every time `emit_persistence_event`
+    /// fans out — confirms the broadcast wiring used by `acp.sessions.changed`.
+    #[tokio::test]
+    async fn test_gateway_change_hook_fires_on_emit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let manager = AcpAdapterManager::new();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let c2 = counter.clone();
+        manager
+            .set_gateway_change_hook(Arc::new(move || {
+                c2.fetch_add(1, Ordering::SeqCst);
+            }))
+            .await;
+
+        // Two direct emits — fan-out should fire the hook each time even
+        // without a persistence_hook installed.
+        manager
+            .emit_persistence_event(crate::acp::AcpSessionEvent::Created {
+                harness_id: "claude-code".to_string(),
+                acp_session_id: "s1".to_string(),
+                cwd: "/tmp/a".to_string(),
+                session_name: None,
+            })
+            .await;
+        manager
+            .emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
+                harness_id: "claude-code".to_string(),
+                cwd: "/tmp/a".to_string(),
+                session_name: Some("backend".to_string()),
+            })
+            .await;
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 }

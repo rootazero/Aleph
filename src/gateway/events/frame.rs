@@ -158,6 +158,10 @@ pub enum GatewayEventFrame {
         new_state: String,
         reason: Option<String>,
     },
+    /// Fired whenever the ACP session pool changes (created / removed /
+    /// respawned). Payload-free on purpose: panels re-fetch via
+    /// `acp.sessions.list` so the truth source stays single.
+    AcpSessionsChanged,
 }
 
 impl From<StreamEvent> for GatewayEventFrame {
@@ -341,6 +345,7 @@ impl GatewayEventFrame {
             GatewayEventFrame::ApprovalResolved { .. } => "approval.resolved",
             GatewayEventFrame::ApprovalExpired { .. } => "approval.expired",
             GatewayEventFrame::SessionLifecycleChanged { .. } => "session.lifecycle.changed",
+            GatewayEventFrame::AcpSessionsChanged => "acp.sessions.changed",
         }
         .to_string()
     }

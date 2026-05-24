@@ -4,14 +4,14 @@
 //! as a card with: harness, cwd, optional session name, liveness, state
 //! (idle/busy/error), and per-session actions (cancel / shutdown).
 //!
-//! Refreshes every 5s and reacts to `acp.sessions.*` topic events when the
-//! gateway pushes them (best-effort; falls back to polling).
+//! Subscribes to the gateway topic `acp.sessions.changed` and re-fetches
+//! `acp.sessions.list` on every signal — no polling. A manual refresh button
+//! handles the rare case where the broadcast is missed (reconnect window).
 
 use crate::api::acp::{AcpApi, AcpSessionSnapshot};
 use crate::context::DashboardState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use std::time::Duration;
 
 #[component]
 pub fn WorkersView() -> impl IntoView {
@@ -46,24 +46,25 @@ pub fn WorkersView() -> impl IntoView {
         }
     });
 
-    // One deferred re-poll 5s after first load so freshly-spawned sessions
-    // become visible without requiring a manual refresh. Further updates
-    // come from user actions (Cancel/Shutdown re-fetch implicitly via the
-    // card-level callbacks).
-    let cancelled = RwSignal::new(false);
-    on_cleanup(move || cancelled.set(true));
-    set_timeout(
-        move || {
-            if !cancelled.get_untracked() && dash.is_connected.get_untracked() {
-                spawn_local(async move {
-                    if let Ok(list) = AcpApi::list_sessions(&dash).await {
-                        sessions.set(list);
-                    }
-                });
-            }
-        },
-        Duration::from_secs(5),
-    );
+    // Ask the gateway to push `acp.sessions.changed` on every pool mutation.
+    Effect::new(move |_| {
+        if !dash.is_connected.get() {
+            return;
+        }
+        let dash2 = dash;
+        spawn_local(async move {
+            let _ = dash2.subscribe_topic("acp.sessions.changed").await;
+        });
+    });
+
+    // Re-fetch on push. Frame is payload-free on purpose; the list RPC is
+    // the single source of truth so we never reconcile partial state.
+    let sub_id = dash.subscribe_events(move |evt| {
+        if evt.topic == "acp.sessions.changed" {
+            refresh();
+        }
+    });
+    on_cleanup(move || dash.unsubscribe_events(sub_id));
 
     view! {
         <div class="flex-1 flex flex-col h-full overflow-hidden">
