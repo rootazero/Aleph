@@ -89,6 +89,8 @@ mod tests {
             ready: Arc::new(AtomicBool::new(ready)),
             instance_id: "test-instance".to_string(),
             started_at_unix: chrono::Utc::now().timestamp(),
+            ping_interval_secs: 30,
+            idle_timeout_secs: 90,
         })
     }
 

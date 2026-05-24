@@ -95,6 +95,7 @@ pub mod run_event_bus;
 pub mod session_scheduler;
 pub mod state_version;
 pub mod streaming;
+pub mod tools_invalidation;
 pub mod streaming_sink;
 pub mod tailscale;
 pub mod voice;
@@ -158,6 +159,7 @@ pub use provider_factory::{
 pub use reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
 pub use routing_config::{DmScope, RoutingConfig};
 pub use state_version::{StateVersion, StateVersionTracker};
+pub use tools_invalidation::ToolsChangedSink;
 
 pub use agent_env::{
     ActiveAgentEnv, AgentEnv, AgentEnvContext, AgentEnvError, AgentEnvFilter, AgentEnvStore,

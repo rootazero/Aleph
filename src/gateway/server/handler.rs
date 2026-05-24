@@ -6,7 +6,7 @@
 use crate::sync_primitives::Arc;
 use axum::{
     extract::{
-        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
+        ws::{CloseFrame, Message as WsMessage, WebSocket, WebSocketUpgrade},
         ConnectInfo, State,
     },
     response::IntoResponse,
@@ -14,7 +14,9 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, RwLock};
+use tokio::time::{interval_at, Instant as TokioInstant, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
 
 use crate::gateway::config::AuthMode;
@@ -65,6 +67,11 @@ struct ConnectionContext {
     /// Panel-first goal as an accepted trade-off until token issuance
     /// carries an explicit issuer marker.
     channel_class: ChannelClass,
+    /// How often to send a WS-level Ping frame. See `GatewayConfig`.
+    ping_interval_secs: u64,
+    /// Close the connection if no inbound frame arrives within this many
+    /// seconds. See `GatewayConfig`.
+    idle_timeout_secs: u64,
 }
 
 /// axum handler: upgrade HTTP connection to WebSocket at `/ws`
@@ -114,6 +121,8 @@ pub(super) async fn ws_upgrade_handler(
             idempotency_guard: state.idempotency_guard.clone(),
             event_scope_guard: state.event_scope_guard.clone(),
             channel_class,
+            ping_interval_secs: state.ping_interval_secs,
+            idle_timeout_secs: state.idle_timeout_secs,
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -150,10 +159,27 @@ async fn handle_connection(
         conns.insert(conn_id.clone(), ConnectionState::new());
     }
 
+    // Transport keep-alive: periodic Ping + inbound idle watchdog.
+    // The browser/`tokio-tungstenite` peer auto-Pongs, so any live socket
+    // updates `last_activity_at` at least once per `ping_interval`. A dead
+    // socket (closed peer that the OS hasn't detected yet, common when a
+    // laptop sleeps with the lid closed) silently stops replying — after
+    // `idle_timeout` we tear the connection down with WS code 1008 so the
+    // panel/notification-bridge can reconnect promptly instead of waiting on
+    // OS-level TCP keepalive (default ≥2h on macOS/Linux).
+    let ping_period = Duration::from_secs(ctx.ping_interval_secs.max(1));
+    let idle_timeout = Duration::from_secs(ctx.idle_timeout_secs.max(ctx.ping_interval_secs));
+    let mut ping_timer = interval_at(TokioInstant::now() + ping_period, ping_period);
+    ping_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut last_activity_at = Instant::now();
+
     loop {
         tokio::select! {
             // Handle incoming messages
             msg = read.next() => {
+                if matches!(msg, Some(Ok(_))) {
+                    last_activity_at = Instant::now();
+                }
                 match msg {
                     Some(Ok(WsMessage::Text(text))) => {
                         let preview_end = text.char_indices().take_while(|(i, _)| *i < 200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(text.len());
@@ -663,13 +689,65 @@ async fn handle_connection(
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         buffer_metrics.add_overflow(n);
-                        debug!("Event forwarder lagged for {}, dropped {} events, total overflow={}", conn_id, n, buffer_metrics.overflow());
+                        warn!(
+                            "Event forwarder lagged for {}, dropped {} events, total overflow={}",
+                            conn_id,
+                            n,
+                            buffer_metrics.overflow()
+                        );
+                        // Tell the client why before tearing the socket down.
+                        // The panel/notification-bridge can surface the warning
+                        // and reconnect, instead of seeing a random drop.
+                        // Best-effort: the connection is already in trouble.
+                        let diag = serde_json::json!({
+                            "method": "event",
+                            "params": {
+                                "topic": "connection.warning",
+                                "data": {
+                                    "reason": "events_overflow",
+                                    "dropped": n,
+                                    "total_overflow": buffer_metrics.overflow(),
+                                    "advice": "reconnect"
+                                }
+                            }
+                        })
+                        .to_string();
+                        let _ = write.send(WsMessage::Text(diag.into())).await;
+                        let _ = write
+                            .send(WsMessage::Close(Some(CloseFrame {
+                                code: 1008,
+                                reason: "slow consumer".into(),
+                            })))
+                            .await;
                         break;
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         debug!("Event forwarder closed for {}", conn_id);
                         break;
                     }
+                }
+            }
+            // Server-initiated WS Ping + inbound idle watchdog
+            _ = ping_timer.tick() => {
+                let idle_for = last_activity_at.elapsed();
+                if idle_for > idle_timeout {
+                    warn!(
+                        "Idle timeout for {} (no inbound for {}s, threshold {}s); closing",
+                        conn_id,
+                        idle_for.as_secs(),
+                        idle_timeout.as_secs(),
+                    );
+                    let _ = write
+                        .send(WsMessage::Close(Some(CloseFrame {
+                            code: 1008,
+                            reason: "idle timeout".into(),
+                        })))
+                        .await;
+                    break;
+                }
+                if let Err(e) = write.send(WsMessage::Ping(Default::default())).await {
+                    debug!("Ping send failed for {} ({}); closing", conn_id, e);
+                    break;
                 }
             }
         }

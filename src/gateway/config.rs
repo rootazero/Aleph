@@ -111,6 +111,24 @@ pub struct GatewayServerConfig {
     /// without a `[gateway.lane]` block keep loading.
     #[serde(default)]
     pub lane: LaneConfig,
+    /// How often the server sends a WS-level Ping frame per connection.
+    /// Detects half-open TCP sockets that the OS hasn't reaped (e.g. after
+    /// a laptop sleeps). Default 30s.
+    #[serde(default = "default_ping_interval_secs")]
+    pub ping_interval_secs: u64,
+    /// Close the connection if no inbound frame (including the auto-Pong
+    /// reply) arrives within this many seconds. Must be ≥ ping_interval_secs.
+    /// Default 90s.
+    #[serde(default = "default_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
+}
+
+fn default_ping_interval_secs() -> u64 {
+    30
+}
+
+fn default_idle_timeout_secs() -> u64 {
+    90
 }
 
 impl Default for GatewayServerConfig {
@@ -123,6 +141,8 @@ impl Default for GatewayServerConfig {
             protocol_version: 1,
             auth: AuthConfig::default(),
             lane: LaneConfig::default(),
+            ping_interval_secs: default_ping_interval_secs(),
+            idle_timeout_secs: default_idle_timeout_secs(),
         }
     }
 }

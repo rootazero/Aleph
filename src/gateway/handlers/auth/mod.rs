@@ -49,6 +49,34 @@ pub struct ConnectParams {
     pub device_id: Option<String>,
 }
 
+/// Transport-layer policy advertised to the client at handshake time so it
+/// can self-tune timers (keep-alive, reconnect deadlines) instead of guessing.
+///
+/// Mirrors the `policy` block in the openclaw `hello-ok` envelope. Clients
+/// that ignore it keep working with their own defaults; clients that honour
+/// it converge with the server config without an extra round-trip.
+#[derive(Debug, Clone, Serialize)]
+pub struct TransportPolicy {
+    /// How often the server sends a WS Ping frame to each peer. Clients
+    /// should expect at least one inbound frame per `ping_interval_secs`
+    /// when the socket is healthy.
+    pub ping_interval_secs: u64,
+    /// Server-side inbound-idle threshold. Once exceeded, the server closes
+    /// the connection with WS code 1008 — clients planning their own
+    /// liveness probe should fire before this point.
+    pub idle_timeout_secs: u64,
+}
+
+impl TransportPolicy {
+    /// Static defaults that mirror [`super::super::server::GatewayConfig`].
+    pub fn defaults() -> Self {
+        Self {
+            ping_interval_secs: 30,
+            idle_timeout_secs: 90,
+        }
+    }
+}
+
 /// Result of a successful connection
 #[derive(Debug, Clone, Serialize)]
 pub struct ConnectResult {
@@ -64,6 +92,10 @@ pub struct ConnectResult {
     /// handshake time. Clients capture this baseline to later detect
     /// server-side state bumps and skip redundant refreshes.
     pub state_version: crate::gateway::state_version::StateVersion,
+    /// Transport keep-alive policy the server will enforce on this socket.
+    /// Lets the client align its own reconnect/probe cadence with the
+    /// server's ping/idle timers.
+    pub transport: TransportPolicy,
 }
 
 /// Pairing required notification
@@ -92,6 +124,10 @@ pub struct AuthContext {
     /// Surfaced in the `connect` success response so clients capture a
     /// baseline snapshot at handshake time.
     pub state_versions: Arc<crate::gateway::state_version::StateVersionTracker>,
+    /// Transport keep-alive policy returned to clients at handshake time.
+    /// Sourced from `GatewayConfig::{ping_interval_secs, idle_timeout_secs}`
+    /// so client and server agree on the live cadence.
+    pub transport_policy: TransportPolicy,
 }
 
 /// Create a "hello" notification to send to newly connected clients
@@ -145,6 +181,7 @@ pub(crate) mod tests {
             auth_mode: AuthMode::Token,
             shared_token_mgr,
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
+            transport_policy: TransportPolicy::defaults(),
         })
     }
 }

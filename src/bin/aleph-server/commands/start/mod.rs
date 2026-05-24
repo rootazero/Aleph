@@ -448,6 +448,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         max_connections: final_max_connections,
         auth_mode: full_config.gateway.auth.mode.clone(),
         timeout_secs: 300,
+        ping_interval_secs: full_config.gateway.ping_interval_secs,
+        idle_timeout_secs: full_config.gateway.idle_timeout_secs,
         lane: full_config.gateway.lane.clone(),
     };
     let mut server = GatewayServer::with_config(addr, server_config);
@@ -613,6 +615,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let event_bus = server.event_bus().clone();
 
+    // Shared sink that bumps the `config` state-version + broadcasts a
+    // `tools.changed` topic event whenever the tool catalog mutates. Boot
+    // wires the extension hot-reload watcher and the MCP tool bridge into
+    // it so panel/web clients see catalog changes via push instead of
+    // re-polling `tools.catalog` on a timer.
+    let tools_changed_sink = Arc::new(alephcore::gateway::ToolsChangedSink::new(
+        server.state_versions.clone(),
+        event_bus.clone(),
+    ));
+
     let (session_store, sqlite_sm) = initialize_session_store(
         args.daemon,
         &loaded_app_config.general.session_store_backend,
@@ -671,6 +683,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         event_bus.clone(),
         full_config.gateway.auth.mode.clone(),
         server.state_versions.clone(),
+        alephcore::gateway::handlers::auth::TransportPolicy {
+            ping_interval_secs: full_config.gateway.ping_interval_secs,
+            idle_timeout_secs: full_config.gateway.idle_timeout_secs,
+        },
         args.daemon,
     );
     register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
@@ -1040,6 +1056,61 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             tool_registry_phase2.clone(),
             agent_result.tool_catalog.clone(),
         );
+        // Sibling publisher: subscribe to the same manager event stream and
+        // emit `tools.changed` whenever an MCP server announces a catalog
+        // mutation (start / stop / crash / list_changed). Lives next to the
+        // tool bridge instead of inside it so `mcp/` stays free of any
+        // gateway dependency.
+        {
+            use alephcore::mcp::manager::McpManagerEvent;
+            use tokio::sync::broadcast::error::RecvError;
+            let mut events = h.subscribe();
+            let sink = tools_changed_sink.clone();
+            tokio::spawn(async move {
+                loop {
+                    match events.recv().await {
+                        Ok(event) => {
+                            let (scope_detail, should_emit) = match event {
+                                McpManagerEvent::ToolsChanged {
+                                    server_id,
+                                    tool_count,
+                                } => (
+                                    serde_json::json!({
+                                        "server_id": server_id,
+                                        "tool_count": tool_count,
+                                        "change": "list_changed",
+                                    }),
+                                    true,
+                                ),
+                                McpManagerEvent::ServerStarted { server_id, .. } => (
+                                    serde_json::json!({
+                                        "server_id": server_id,
+                                        "change": "started",
+                                    }),
+                                    true,
+                                ),
+                                McpManagerEvent::ServerStopped { server_id, .. }
+                                | McpManagerEvent::ServerCrashed { server_id, .. }
+                                | McpManagerEvent::ServerRemoved { server_id, .. } => (
+                                    serde_json::json!({
+                                        "server_id": server_id,
+                                        "change": "removed",
+                                    }),
+                                    true,
+                                ),
+                                _ => (serde_json::Value::Null, false),
+                            };
+                            if should_emit {
+                                sink.publish("mcp", scope_detail);
+                            }
+                        }
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => break,
+                    }
+                }
+                tracing::debug!("MCP tools.changed publisher exiting");
+            });
+        }
         if !args.daemon {
             println!("MCP tool bridge wired");
         }
@@ -1549,6 +1620,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if let Some(em) = alephcore::extension::try_extension_manager() {
         use alephcore::extension::watcher::{ExtensionChangeEvent, ExtensionChangeType};
         let bus = event_bus.clone();
+        let sink = tools_changed_sink.clone();
         let cb: Box<dyn Fn(ExtensionChangeEvent) + Send + Sync> = Box::new(
             move |ev: ExtensionChangeEvent| {
                 let kind = match ev.change_type {
@@ -1568,12 +1640,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     "extension.reloaded",
                     serde_json::json!({
                         "kind": kind,
-                        "paths": paths,
+                        "paths": paths.clone(),
                         "timestamp": chrono::Utc::now().to_rfc3339(),
                     }),
                 );
                 if let Err(e) = bus.publish_json(&topic) {
                     tracing::warn!(error = %e, "Failed to publish extension.reloaded event");
+                }
+                // Plugin/skill/agent/command edits also reshape the tool
+                // catalog. Hooks-only edits don't, but the watcher routes
+                // those through a separate path and never lands here.
+                if !matches!(ev.change_type, ExtensionChangeType::HooksConfig) {
+                    sink.publish(
+                        "extension",
+                        serde_json::json!({"kind": kind, "paths": paths}),
+                    );
                 }
             },
         );

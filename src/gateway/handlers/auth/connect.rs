@@ -11,6 +11,8 @@ use crate::gateway::security::store::DeviceUpsertData;
 use crate::gateway::security::DeviceRole;
 
 use super::{AuthContext, ConnectParams, ConnectResult, PairingRequiredParams};
+#[cfg(test)]
+use super::TransportPolicy;
 
 /// Handle "connect" request
 ///
@@ -117,6 +119,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                                 (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                             }),
                         state_version: ctx.state_versions.snapshot(),
+                        transport: ctx.transport_policy.clone(),
                     }),
                 );
             }
@@ -193,6 +196,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                             || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                         ),
                         state_version: ctx.state_versions.snapshot(),
+                        transport: ctx.transport_policy.clone(),
                     }),
                 );
             }
@@ -267,6 +271,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                         || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                     ),
                 state_version: ctx.state_versions.snapshot(),
+                transport: ctx.transport_policy.clone(),
             }),
         );
     }
@@ -318,6 +323,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                                 || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                             ),
                             state_version: ctx.state_versions.snapshot(),
+                            transport: ctx.transport_policy.clone(),
                         }),
                     );
                 }
@@ -377,6 +383,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                             || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
                         ),
                     state_version: ctx.state_versions.snapshot(),
+                    transport: ctx.transport_policy.clone(),
                 }),
             );
         }
@@ -522,6 +529,7 @@ mod tests {
             auth_mode: AuthMode::None, // Auth not required
             shared_token_mgr,
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
+            transport_policy: TransportPolicy::defaults(),
         });
 
         let request = JsonRpcRequest::new(
@@ -598,6 +606,7 @@ mod tests {
             event_bus,
             auth_mode: AuthMode::Token,
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
+            transport_policy: TransportPolicy::defaults(),
         });
 
         let request = JsonRpcRequest::new(
@@ -655,6 +664,7 @@ mod tests {
             auth_mode: AuthMode::None, // no-auth path → success ConnectResult
             shared_token_mgr,
             state_versions,
+            transport_policy: TransportPolicy::defaults(),
         });
 
         let request = JsonRpcRequest::new(
@@ -673,5 +683,63 @@ mod tests {
         assert_eq!(sv["config"], 1);
         assert_eq!(sv["presence"], 0);
         assert_eq!(sv["health"], 0);
+    }
+
+    #[tokio::test]
+    async fn connect_response_advertises_transport_policy() {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id: "test-dev",
+                device_name: "Test",
+                device_type: None,
+                public_key: &[1u8; 32],
+                fingerprint: "fp",
+                role: "operator",
+                scopes: &[],
+            })
+            .unwrap();
+
+        let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
+        let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
+        let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_test.vault",
+        ));
+        let state_versions = Arc::new(crate::gateway::state_version::StateVersionTracker::new());
+
+        let ctx = Arc::new(AuthContext {
+            token_manager: Arc::new(TokenManager::new(store.clone())),
+            pairing_manager: Arc::new(PairingManager::new(store.clone())),
+            device_store: Arc::new(DeviceStore::in_memory().unwrap()),
+            security_store: store,
+            invitation_manager,
+            guest_session_manager,
+            event_bus,
+            auth_mode: AuthMode::None,
+            shared_token_mgr,
+            state_versions,
+            transport_policy: TransportPolicy {
+                ping_interval_secs: 17,
+                idle_timeout_secs: 53,
+            },
+        });
+
+        let request = JsonRpcRequest::new(
+            "connect",
+            Some(json!({"device_name": "Test Device"})),
+            Some(json!(1)),
+        );
+
+        let response = handle_connect(request, ctx).await;
+        assert!(response.is_success());
+
+        let result = response.result.unwrap();
+        let transport = result
+            .get("transport")
+            .expect("connect response must carry transport policy");
+        assert_eq!(transport["ping_interval_secs"], 17);
+        assert_eq!(transport["idle_timeout_secs"], 53);
     }
 }

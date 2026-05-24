@@ -105,6 +105,11 @@ pub struct GatewaySharedState {
     /// and `gateway.identity.get` so clients can compute uptime without
     /// trusting their local clock.
     pub started_at_unix: i64,
+    /// Server-initiated WS Ping cadence. See `GatewayConfig::ping_interval_secs`.
+    pub ping_interval_secs: u64,
+    /// Inbound idle threshold before the connection is closed. See
+    /// `GatewayConfig::idle_timeout_secs`.
+    pub idle_timeout_secs: u64,
 }
 
 /// Configuration for the Gateway server
@@ -116,6 +121,16 @@ pub struct GatewayConfig {
     pub auth_mode: AuthMode,
     /// Connection timeout in seconds
     pub timeout_secs: u64,
+    /// How often the server sends a WebSocket Ping frame to each authenticated
+    /// peer. Browsers and `tokio-tungstenite` clients auto-reply with Pong, so
+    /// this also proves the socket is still alive even when no application
+    /// traffic flows.
+    pub ping_interval_secs: u64,
+    /// If no inbound frame (including the auto-Pong reply) arrives within this
+    /// many seconds, the server closes the connection with WS code 1008. Half-
+    /// open TCP sockets are otherwise invisible until the next failed write,
+    /// which on macOS/Linux can take 2 hours due to default TCP keepalive.
+    pub idle_timeout_secs: u64,
     /// Lane concurrency / channel-class priority config. Populated by
     /// the binary from the TOML `[gateway.lane]` block (or defaults).
     pub lane: LaneConfig,
@@ -127,6 +142,8 @@ impl Default for GatewayConfig {
             max_connections: 1000,
             auth_mode: AuthMode::default(),
             timeout_secs: 300,
+            ping_interval_secs: 30,
+            idle_timeout_secs: 90,
             lane: LaneConfig::default(),
         }
     }
@@ -376,6 +393,8 @@ impl GatewayServer {
             ready: self.ready.clone(),
             instance_id: self.instance_id.clone(),
             started_at_unix: self.started_at_unix,
+            ping_interval_secs: self.config.ping_interval_secs,
+            idle_timeout_secs: self.config.idle_timeout_secs,
         });
 
         let control_plane = create_control_plane_router();
