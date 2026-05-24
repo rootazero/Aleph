@@ -324,6 +324,142 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // -------------------------------------------------------------------------
+    // Phase B (openclaw parity) — additional chat presets. All map onto an
+    // existing protocol adapter; no new protocol code required.
+    // -------------------------------------------------------------------------
+
+    // Cerebras — ultra-fast Llama inference, OpenAI-compatible
+    m.insert(
+        "cerebras",
+        ProviderPreset {
+            base_url: "https://api.cerebras.ai/v1",
+            protocol: "openai",
+            color: "#f97316",
+            default_model: "llama-3.3-70b",
+        },
+    );
+
+    // Stepfun — Chinese multimodal LLM, OpenAI-compatible
+    m.insert(
+        "stepfun",
+        ProviderPreset {
+            base_url: "https://api.stepfun.com/v1",
+            protocol: "openai",
+            color: "#0ea5e9",
+            default_model: "step-1-8k",
+        },
+    );
+
+    // HuggingFace Router — OpenAI-compatible front for HF Inference API
+    m.insert(
+        "huggingface",
+        ProviderPreset {
+            base_url: "https://router.huggingface.co/v1",
+            protocol: "openai",
+            color: "#ffd21e",
+            default_model: "meta-llama/Llama-3.3-70B-Instruct",
+        },
+    );
+
+    // Vertex AI (Anthropic on GCP) — uses Anthropic protocol, region-specific URL
+    // Default region is us-east5; users can override via base_url for other regions.
+    m.insert(
+        "vertex-anthropic",
+        ProviderPreset {
+            base_url: "https://us-east5-aiplatform.googleapis.com/v1",
+            protocol: "anthropic",
+            color: "#4285f4",
+            default_model: "claude-sonnet-4@20250514",
+        },
+    );
+
+    // Azure OpenAI — OpenAI-compatible, but users must override base_url with
+    // their resource endpoint (https://<resource>.openai.azure.com). The
+    // placeholder is intentional so misconfiguration is obvious.
+    m.insert(
+        "azure-openai",
+        ProviderPreset {
+            base_url: "https://YOUR-RESOURCE.openai.azure.com",
+            protocol: "openai",
+            color: "#0078d4",
+            default_model: "gpt-4o",
+        },
+    );
+
+    // xAI Grok — OpenAI-compatible
+    m.insert(
+        "xai",
+        ProviderPreset {
+            base_url: "https://api.x.ai/v1",
+            protocol: "openai",
+            color: "#000000",
+            default_model: "grok-4-0709",
+        },
+    );
+    m.insert(
+        "grok",
+        ProviderPreset {
+            base_url: "https://api.x.ai/v1",
+            protocol: "openai",
+            color: "#000000",
+            default_model: "grok-4-0709",
+        },
+    );
+
+    // Qwen / DashScope — Alibaba 通义, OpenAI-compatible endpoint
+    m.insert(
+        "qwen",
+        ProviderPreset {
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            protocol: "openai",
+            color: "#615ced",
+            default_model: "qwen-max-2025-01-25",
+        },
+    );
+    m.insert(
+        "dashscope",
+        ProviderPreset {
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            protocol: "openai",
+            color: "#615ced",
+            default_model: "qwen-max-2025-01-25",
+        },
+    );
+
+    // Baichuan 百川 — OpenAI-compatible
+    m.insert(
+        "baichuan",
+        ProviderPreset {
+            base_url: "https://api.baichuan-ai.com/v1",
+            protocol: "openai",
+            color: "#e11d48",
+            default_model: "Baichuan4",
+        },
+    );
+
+    // Hunyuan 腾讯混元 — OpenAI-compatible
+    m.insert(
+        "hunyuan",
+        ProviderPreset {
+            base_url: "https://api.hunyuan.cloud.tencent.com/v1",
+            protocol: "openai",
+            color: "#1e40af",
+            default_model: "hunyuan-pro",
+        },
+    );
+
+    // Spark 讯飞星火 — V4 Ultra OpenAI-compatible endpoint
+    m.insert(
+        "spark",
+        ProviderPreset {
+            base_url: "https://spark-api-open.xf-yun.com/v1",
+            protocol: "openai",
+            color: "#ff4d4f",
+            default_model: "4.0Ultra",
+        },
+    );
+
     m
 });
 
@@ -553,6 +689,100 @@ pub static PRESET_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = Lazy
         },
     );
 
+    // Phase B chat additions
+    m.insert(
+        "cerebras",
+        ProviderMetadata {
+            display_name: "Cerebras",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://cerebras.ai"),
+            notes: Some("Ultra-fast Llama inference"),
+        },
+    );
+    m.insert(
+        "stepfun",
+        ProviderMetadata {
+            display_name: "Stepfun",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://stepfun.com"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "huggingface",
+        ProviderMetadata {
+            display_name: "HuggingFace Inference",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://huggingface.co/docs/api-inference"),
+            notes: Some("Routes to community-hosted open models"),
+        },
+    );
+    m.insert(
+        "vertex-anthropic",
+        ProviderMetadata {
+            display_name: "Vertex AI — Anthropic",
+            modalities: CHAT_ONLY,
+            homepage: Some(
+                "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude",
+            ),
+            notes: Some("Claude via GCP Vertex; region-specific base URL"),
+        },
+    );
+    m.insert(
+        "azure-openai",
+        ProviderMetadata {
+            display_name: "Azure OpenAI",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://learn.microsoft.com/azure/ai-services/openai"),
+            notes: Some("Override base_url with your Azure resource"),
+        },
+    );
+    m.insert(
+        "xai",
+        ProviderMetadata {
+            display_name: "xAI Grok",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://docs.x.ai"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "qwen",
+        ProviderMetadata {
+            display_name: "Qwen / 通义",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://help.aliyun.com/zh/dashscope"),
+            notes: Some("Alibaba DashScope compatible endpoint"),
+        },
+    );
+    m.insert(
+        "baichuan",
+        ProviderMetadata {
+            display_name: "Baichuan / 百川",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://platform.baichuan-ai.com"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "hunyuan",
+        ProviderMetadata {
+            display_name: "Hunyuan / 腾讯混元",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://cloud.tencent.com/document/product/1729"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "spark",
+        ProviderMetadata {
+            display_name: "Spark / 讯飞星火",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html"),
+            notes: Some("V3.5+ OpenAI-compatible endpoint"),
+        },
+    );
+
     m
 });
 
@@ -685,6 +915,40 @@ mod tests {
         assert!(PRESETS.contains_key("openrouter"));
         assert!(PRESETS.contains_key("lepton"));
         assert!(PRESETS.contains_key("hyperbolic"));
+
+        // Phase B (openclaw parity)
+        assert!(PRESETS.contains_key("cerebras"));
+        assert!(PRESETS.contains_key("stepfun"));
+        assert!(PRESETS.contains_key("huggingface"));
+        assert!(PRESETS.contains_key("vertex-anthropic"));
+        assert!(PRESETS.contains_key("azure-openai"));
+        assert!(PRESETS.contains_key("xai"));
+        assert!(PRESETS.contains_key("grok"));
+        assert!(PRESETS.contains_key("qwen"));
+        assert!(PRESETS.contains_key("dashscope"));
+        assert!(PRESETS.contains_key("baichuan"));
+        assert!(PRESETS.contains_key("hunyuan"));
+        assert!(PRESETS.contains_key("spark"));
+    }
+
+    #[test]
+    fn test_phase_b_aliases_share_target() {
+        // xai / grok point to the same endpoint
+        let xai = get_preset("xai").unwrap();
+        let grok = get_preset("grok").unwrap();
+        assert_eq!(xai.base_url, grok.base_url);
+
+        // qwen / dashscope point to the same endpoint
+        let qwen = get_preset("qwen").unwrap();
+        let dashscope = get_preset("dashscope").unwrap();
+        assert_eq!(qwen.base_url, dashscope.base_url);
+    }
+
+    #[test]
+    fn test_vertex_anthropic_uses_anthropic_protocol() {
+        let p = get_preset("vertex-anthropic").unwrap();
+        assert_eq!(p.protocol, "anthropic");
+        assert!(p.base_url.contains("aiplatform.googleapis.com"));
     }
 
     #[test]
