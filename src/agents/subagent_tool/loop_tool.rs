@@ -115,14 +115,16 @@ impl LoopTool for SubagentTool {
         })
     }
 
-    async fn execute(&self, input: Value, _cancel: CancellationToken) -> ToolResult {
-        // SubagentTool has its own per-request CancellationToken plumbed
-        // through `BackgroundTracker`. The harness's per-call token only
-        // matters for tools that don't already manage their own cancel; for
-        // foreground sub-agents we rely on drop-cancellation of the runtime
-        // future, and for background ones the LLM uses the `cancel` action
-        // with a request_id. Wiring the harness token into the runtime's
-        // CancelTree is a follow-up.
+    async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
+        // Gap B follow-up — the harness Act phase forks a per-call child of
+        // the run cancel and threads it here. `cancel_for_child_with(&cancel)`
+        // merges it with the run-level `parent_cancel` so a spawned subagent
+        // runtime stops on EITHER the run being cancelled OR this specific
+        // tool call being cancelled (via the upcoming per-tool cancel RPC).
+        //
+        // `SubagentAction::Cancel` (the LLM-level cancel-by-request_id path)
+        // continues to operate on the `BackgroundTracker`'s per-request
+        // cancellation token — it does NOT consume the harness `cancel`.
         // 1. Parse arguments
         let action = match parse_args(&input) {
             Ok(a) => a,
@@ -437,6 +439,7 @@ impl LoopTool for SubagentTool {
                             model,
                             timeout,
                             child_chain.clone(),
+                            &cancel,
                         );
                         request_ids.push(rid);
                     }
@@ -468,7 +471,8 @@ impl LoopTool for SubagentTool {
                         timeout_secs: timeout,
                     };
 
-                    let runtime = self.build_runtime(child_chain.clone(), self.cancel_for_child());
+                    let runtime =
+                        self.build_runtime(child_chain.clone(), self.cancel_for_child_with(&cancel));
                     handles.push(tokio::spawn(async move {
                         let outcome = AssertUnwindSafe(runtime.run(runtime_config))
                             .catch_unwind()
@@ -603,6 +607,7 @@ impl LoopTool for SubagentTool {
                 args.model,
                 args.timeout_secs,
                 child_chain,
+                &cancel,
             );
 
             ToolResult::Success {
@@ -622,7 +627,7 @@ impl LoopTool for SubagentTool {
                 timeout_secs: args.timeout_secs,
             };
 
-            let runtime = self.build_runtime(child_chain, self.cancel_for_child());
+            let runtime = self.build_runtime(child_chain, self.cancel_for_child_with(&cancel));
 
             match runtime.run(runtime_config).await {
                 Ok(result) => {

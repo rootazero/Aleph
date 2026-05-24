@@ -293,6 +293,33 @@ impl SubagentTool {
             .unwrap_or_default()
     }
 
+    /// Gap B follow-up — derive a subagent cancel token that ALSO honours the
+    /// harness's per-call cancel signal. Returns a token that fires when EITHER:
+    ///
+    ///   1. The run-level `parent_cancel` fires (auto-cancel via `child_token`).
+    ///   2. The per-call `harness` cancel fires (propagated via a watcher task).
+    ///
+    /// In production both descend from the same run cancel root, but the
+    /// per-call token is more specific: the per-tool cancel RPC will only
+    /// trigger `harness`, leaving the rest of the run untouched. The watcher
+    /// task self-terminates as soon as `harness` cancels; if neither side ever
+    /// fires it stays parked on `harness.cancelled()` until the process exits,
+    /// which is acceptable for the rare-event subagent spawn path.
+    fn cancel_for_child_with(&self, harness: &CancellationToken) -> CancellationToken {
+        let token = self.cancel_for_child();
+        if harness.is_cancelled() {
+            token.cancel();
+            return token;
+        }
+        let token_clone = token.clone();
+        let harness_clone = harness.clone();
+        tokio::spawn(async move {
+            harness_clone.cancelled().await;
+            token_clone.cancel();
+        });
+        token
+    }
+
     fn spawn_background(
         &self,
         agent_def: AgentDef,
@@ -301,9 +328,10 @@ impl SubagentTool {
         model: Option<String>,
         timeout_secs: u64,
         child_chain: crate::harness::chain_context::ChainContext,
+        harness_cancel: &CancellationToken,
     ) -> String {
         let request_id = uuid::Uuid::new_v4().to_string();
-        let cancel_token = self.cancel_for_child();
+        let cancel_token = self.cancel_for_child_with(harness_cancel);
 
         self.background_tracker
             .register(request_id.clone(), cancel_token.clone(), task.clone());
@@ -1217,6 +1245,51 @@ mod tests {
             matches!(result, ToolResult::Error { .. }),
             "cancelled subagent must surface an error"
         );
+    }
+
+    /// Gap B follow-up — `execute()`'s per-call `cancel` arg should stop a
+    /// running subagent even when the run-level `parent_cancel` is still
+    /// alive. Proves the harness→subagent token bridge actually fires.
+    #[tokio::test]
+    async fn foreground_subagent_cancels_on_harness_per_call_token() {
+        let parent = CancellationToken::new(); // run-level cancel — stays unfired
+        let harness_call = CancellationToken::new(); // per-call cancel — fired below
+        let provider: Arc<dyn AiProvider> = Arc::new(PendingProvider);
+        let chain = crate::harness::chain_context::ChainContext::new();
+        let tool = SubagentTool::new(
+            provider,
+            chain,
+            make_registry(),
+            make_tracker(),
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
+        )
+        .with_cancel_token(parent.clone());
+
+        let cancel_for_task = harness_call.clone();
+        let handle = tokio::spawn(async move {
+            tool.execute(
+                serde_json::json!({ "task": "hang", "timeout_secs": 30 }),
+                cancel_for_task,
+            )
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        // Cancel ONLY the per-call token. Run-level token stays alive.
+        harness_call.cancel();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+            .await
+            .expect("subagent did not honour per-call harness cancel within 3s")
+            .expect("task join");
+        assert!(
+            matches!(result, ToolResult::Error { .. }),
+            "harness-cancelled subagent must surface an error"
+        );
+        // parent stays unfired — proves the cancellation came from the
+        // per-call bridge, not from a transitive run-level fire.
+        assert!(!parent.is_cancelled());
     }
 
     struct UsageMockProvider;
