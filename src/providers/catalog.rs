@@ -258,6 +258,21 @@ mod tests {
     }
 
     #[test]
+    fn presets_for_modality_speech_includes_round3_tts() {
+        // Round-3 (Phase B1) adds dedicated Deepgram Aura TTS + Azure Speech.
+        let tts = presets_for_modality(Modality::Speech);
+        for needed in ["deepgram-tts", "azure-speech"] {
+            assert!(
+                tts.iter().any(|e| e.name == needed),
+                "Speech modality should include {needed}, got {:?}",
+                tts.iter().map(|e| e.name).collect::<Vec<_>>()
+            );
+        }
+        // All Speech presets live on the generation side.
+        assert!(tts.iter().all(|e| e.kind == CatalogKind::Generation));
+    }
+
+    #[test]
     fn presets_for_modality_transcription_includes_round2_stt() {
         // Round-2 closes the previously empty Transcription modality.
         let stt = presets_for_modality(Modality::Transcription);

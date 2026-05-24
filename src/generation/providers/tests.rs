@@ -589,3 +589,61 @@ fn test_create_midjourney_provider_with_color() {
     assert_eq!(provider.name(), "midjourney");
     assert_eq!(provider.color(), "#FF0000");
 }
+
+// === Round-3 Phase B1: dedicated voice providers ===
+
+#[test]
+fn test_create_deepgram_tts_provider() {
+    let config = GenerationProviderConfig {
+        provider_type: "deepgram_tts".to_string(),
+        api_key: Some("dg-test".to_string()),
+        models: vec!["aura-asteria-en".to_string()],
+        ..Default::default()
+    };
+    let provider = create_provider("deepgram-tts", &config, GenerationType::Speech).unwrap();
+    assert_eq!(provider.name(), "deepgram-tts");
+    assert!(provider.supports(GenerationType::Speech));
+    assert_eq!(provider.default_model(), Some("aura-asteria-en"));
+}
+
+#[test]
+fn test_create_azure_speech_provider_with_region() {
+    let config = GenerationProviderConfig {
+        provider_type: "azure_speech".to_string(),
+        api_key: Some("azure-test".to_string()),
+        base_url: Some("eastus".to_string()),
+        models: vec!["en-US-JennyNeural".to_string()],
+        ..Default::default()
+    };
+    let provider = create_provider("azure-speech", &config, GenerationType::Speech).unwrap();
+    assert_eq!(provider.name(), "azure-speech");
+    assert!(provider.supports(GenerationType::Speech));
+}
+
+#[test]
+fn test_create_azure_speech_provider_alias_azure_tts() {
+    let config = GenerationProviderConfig {
+        provider_type: "azure_tts".to_string(),
+        api_key: Some("azure-test".to_string()),
+        base_url: Some("eastus".to_string()),
+        ..Default::default()
+    };
+    let provider = create_provider("azure-speech", &config, GenerationType::Speech).unwrap();
+    assert_eq!(provider.name(), "azure-speech");
+}
+
+#[test]
+fn test_create_azure_speech_rejects_missing_region() {
+    let config = GenerationProviderConfig {
+        provider_type: "azure_speech".to_string(),
+        api_key: Some("azure-test".to_string()),
+        base_url: None,
+        ..Default::default()
+    };
+    // `Arc<dyn GenerationProvider>` does not implement Debug, so `.unwrap_err()`
+    // does not compile here — assert via `is_err` + `.err().unwrap()`.
+    let result = create_provider("azure-speech", &config, GenerationType::Speech);
+    assert!(result.is_err());
+    let err = result.err().expect("error variant");
+    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+}

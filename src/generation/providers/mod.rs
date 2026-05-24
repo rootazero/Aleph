@@ -33,7 +33,9 @@
 //! let provider = create_provider("dalle", &config, alephcore::generation::GenerationType::Image)?;
 //! ```
 
+pub mod azure_speech;
 pub mod deepgram_stt;
+pub mod deepgram_tts;
 pub mod elevenlabs;
 pub mod fal;
 mod factory;
@@ -51,7 +53,9 @@ pub mod url_normalize;
 #[cfg(test)]
 mod tests;
 
+pub use azure_speech::AzureSpeechProvider;
 pub use deepgram_stt::DeepgramSttProvider;
+pub use deepgram_tts::DeepgramTtsProvider;
 pub use elevenlabs::ElevenLabsProvider;
 pub use fal::{FalProvider, FalProviderBuilder};
 pub use factory::create_provider;

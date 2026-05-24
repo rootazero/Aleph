@@ -289,14 +289,33 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
         },
     );
 
-    // Speech — MiniMax T2A (OpenAI-style speech endpoint). Cartesia / Azure
-    // need dedicated providers and are deferred.
+    // Speech — MiniMax T2A (OpenAI-style speech endpoint).
     m.insert(
         "minimax-tts",
         GenerationPreset {
             provider_type: "openai_compat",
             default_model: "speech-01-turbo",
             base_url: Some("https://api.minimax.chat/v1/t2a_v2"),
+        },
+    );
+    // Speech — Deepgram Aura TTS (Phase R3-B1, dedicated provider).
+    m.insert(
+        "deepgram-tts",
+        GenerationPreset {
+            provider_type: "deepgram_tts",
+            default_model: "aura-asteria-en",
+            base_url: Some("https://api.deepgram.com"),
+        },
+    );
+    // Speech — Azure Cognitive Services (Phase R3-B1, dedicated provider).
+    // `base_url` is intentionally None — Azure has no global endpoint; the
+    // user must supply a region (e.g. `eastus`) or a full regional URL.
+    m.insert(
+        "azure-speech",
+        GenerationPreset {
+            provider_type: "azure_speech",
+            default_model: "en-US-JennyNeural",
+            base_url: None,
         },
     );
 
@@ -610,6 +629,24 @@ pub static GENERATION_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = 
             modalities: SPEECH_ONLY,
             homepage: Some("https://platform.minimaxi.com"),
             notes: Some("Chinese + multilingual TTS"),
+        },
+    );
+    m.insert(
+        "deepgram-tts",
+        ProviderMetadata {
+            display_name: "Deepgram Aura",
+            modalities: SPEECH_ONLY,
+            homepage: Some("https://developers.deepgram.com/docs/tts-rest"),
+            notes: Some("Aura voice family (English; voice = model name)"),
+        },
+    );
+    m.insert(
+        "azure-speech",
+        ProviderMetadata {
+            display_name: "Azure Speech",
+            modalities: SPEECH_ONLY,
+            homepage: Some("https://learn.microsoft.com/azure/ai-services/speech-service/"),
+            notes: Some("400+ Neural voices, SSML; region required (e.g. eastus)"),
         },
     );
 
