@@ -110,6 +110,7 @@ pub mod skills;
 pub mod supervisor;
 pub mod system_info;
 pub mod teams;
+pub mod tools_cancel;
 pub mod tools_invoke;
 pub mod tools_visibility;
 pub mod trace_replay;

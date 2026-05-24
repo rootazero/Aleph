@@ -35,6 +35,7 @@ pub mod adapters;
 pub mod budget;
 pub mod context;
 pub mod execution_context;
+pub mod in_flight;
 pub mod info;
 pub mod refresh;
 pub mod result_processing;

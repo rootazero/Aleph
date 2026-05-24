@@ -321,6 +321,7 @@ fn make_deps(
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     }
 }
@@ -611,6 +612,7 @@ fn make_deps_with_tools(
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     }
 }

@@ -983,6 +983,7 @@ mod tests {
             tool_signal_sink: std::sync::Arc::new(
                 crate::memory::tool_signal_sink::NoopToolSignalSink,
             ),
+            in_flight_tool_calls: None,
             parallel_tool_concurrency: None,
         };
         let harness = super::AgentHarness::new(deps);
@@ -1054,6 +1055,7 @@ mod tests {
             tool_signal_sink: std::sync::Arc::new(
                 crate::memory::tool_signal_sink::NoopToolSignalSink,
             ),
+            in_flight_tool_calls: None,
             parallel_tool_concurrency: None,
         };
         let harness = super::AgentHarness::new(deps);
@@ -1119,6 +1121,7 @@ mod tests {
             tool_signal_sink: std::sync::Arc::new(
                 crate::memory::tool_signal_sink::NoopToolSignalSink,
             ),
+            in_flight_tool_calls: None,
             parallel_tool_concurrency: None,
         };
         let harness = super::AgentHarness::new(deps);

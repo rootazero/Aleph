@@ -124,6 +124,7 @@ async fn session_driver_delegates_to_harness_run() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     });
 
@@ -198,6 +199,7 @@ async fn session_driver_preserves_cancelled_semantics() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     });
 

@@ -1,6 +1,7 @@
 //! Command handlers
 
 pub mod ask;
+pub mod calls;
 pub mod channels_cmd;
 pub mod chat;
 pub mod chat_cmd;

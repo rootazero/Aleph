@@ -238,6 +238,15 @@ impl AgentHarness {
             // selective tool-level abort (or run-wide cancel) drops THIS
             // call's future without affecting earlier completed events.
             let call_cancel = run_cancel.child_token();
+            // Gap B follow-up — surface this call's per-call token to the
+            // gateway via the in-flight registry so `tools.cancel_call` can
+            // fire it by `tool_call_id`. The guard removes the entry on drop
+            // (normal completion, `?` early-return, or panic alike).
+            let _in_flight_guard = self
+                .deps
+                .in_flight_tool_calls
+                .as_ref()
+                .map(|reg| reg.register(&call.id, &call.name, call_cancel.clone()));
             let exec_fut = self.deps.tools.execute_with_cancel(
                 &call.name,
                 call.arguments.clone(),
@@ -566,6 +575,11 @@ impl AgentHarness {
             Result<Result<ToolOutput, crate::tools::service::ToolError>, std::time::Duration>;
         let mut boxed_futs: Vec<BoxFuture<'static, ExecOutcome>> =
             Vec::with_capacity(tool_calls.len());
+        // Gap B follow-up — keep one InFlightGuard per call alive for the
+        // duration of the whole parallel dispatch. Each guard drops when this
+        // Vec goes out of scope after PASS 2 finishes, which is strictly
+        // later than every future in `boxed_futs` resolves.
+        let mut in_flight_guards: Vec<crate::tools::in_flight::InFlightGuard> = Vec::new();
         for (idx, call) in tool_calls.iter().enumerate() {
             let tools = self.deps.tools.clone();
             let name = call.name.clone();
@@ -577,6 +591,9 @@ impl AgentHarness {
             // in-flight call short-circuits without waiting for the entire
             // batch to drain.
             let call_cancel = run_cancel.child_token();
+            if let Some(reg) = self.deps.in_flight_tool_calls.as_ref() {
+                in_flight_guards.push(reg.register(&call.id, &call.name, call_cancel.clone()));
+            }
             boxed_futs.push(Box::pin(async move {
                 let exec_fut = tools.execute_with_cancel(&name, args, call_cancel);
                 match budget {
@@ -592,6 +609,13 @@ impl AgentHarness {
             .buffered(parallelism)
             .collect()
             .await;
+        // PASS 1 complete — every future has resolved, so the in-flight
+        // registry entries are no longer cancellable in any meaningful sense.
+        // Drop the guards now (vs end-of-function) so `tools.cancel_call`
+        // doesn't quietly target a token attached to a future that's already
+        // returned. PASS 2 below only emits events; it never touches the
+        // tokens or the registry.
+        drop(in_flight_guards);
 
         // PASS 2 — serial in input order: apply Layer 3 budget, emit
         // ToolResult/ToolError, trace, push timeline entry. The first

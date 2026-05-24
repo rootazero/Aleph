@@ -2058,6 +2058,37 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
+        // Wire tools.cancel_call + tools.in_flight against the process-wide
+        // in-flight registry installed in `start/mod.rs` Gap-B-follow-up boot
+        // path. `tools.cancel_call` fires the harness-issued per-call
+        // CancellationToken keyed by `tool_call_id`; `tools.in_flight` lists
+        // every live registration for CLI / panel diagnostics.
+        if let Some(reg) =
+            alephcore::tools::in_flight::global_in_flight_tool_calls()
+        {
+            let reg_cancel = reg.clone();
+            server
+                .handlers_mut()
+                .register("tools.cancel_call", move |req| {
+                    let r = reg_cancel.clone();
+                    async move {
+                        alephcore::gateway::handlers::tools_cancel::handle_cancel(req, r).await
+                    }
+                });
+            let reg_list = reg.clone();
+            server
+                .handlers_mut()
+                .register("tools.in_flight", move |req| {
+                    let r = reg_list.clone();
+                    async move {
+                        alephcore::gateway::handlers::tools_cancel::handle_in_flight(req, r).await
+                    }
+                });
+            if !daemon {
+                println!("  tools.cancel_call + tools.in_flight: wired to in-flight registry");
+            }
+        }
+
         // Wire command.execute to resolve slash commands via CommandParser + ToolRegistry
         {
             let parser = Arc::new(alephcore::command::CommandParser::new(tool_catalog.clone()));

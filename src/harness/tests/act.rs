@@ -331,6 +331,7 @@ async fn act_executes_tools_sequentially() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -407,6 +408,7 @@ async fn act_tool_failure_returns_harness_tool_error() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -513,6 +515,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -688,6 +691,7 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -805,6 +809,7 @@ async fn tool_error_trace_carries_retryable_flag() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -935,6 +940,7 @@ async fn g3_repairs_case_mismatched_tool_name() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -1003,6 +1009,7 @@ async fn g3_does_not_repair_when_lowercase_is_also_unknown() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -1061,6 +1068,7 @@ async fn g1_last_step_injects_max_steps_hint() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -1119,6 +1127,7 @@ async fn g1_does_not_inject_when_not_last_step() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -1213,6 +1222,7 @@ async fn act_parallel_overlaps_concurrent_safe_calls_and_preserves_order() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: Some(8),
     };
     let harness = AgentHarness::new(deps);
@@ -1327,6 +1337,7 @@ async fn act_falls_back_to_serial_when_any_call_is_unsafe() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: Some(8),
     };
     let harness = AgentHarness::new(deps);

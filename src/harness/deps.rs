@@ -120,6 +120,13 @@ pub struct HarnessDeps {
     /// from `raw_memories`. Defaults to `NoopToolSignalSink` (zero cost)
     /// when no `RawMemoryStore` is wired (tests, simple-engine fixtures).
     pub tool_signal_sink: Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
+    /// Gap B follow-up — in-flight tool-call registry. When wired, the Act
+    /// phase registers each call's per-call CancellationToken under its
+    /// `tool_call_id` so the gateway's `tools.cancel_call` RPC can fire a
+    /// single call's cooperative cancel without aborting the whole run.
+    /// `None` disables the wiring; everything still works because the harness
+    /// just doesn't expose the in-flight tokens externally.
+    pub in_flight_tool_calls: Option<Arc<crate::tools::in_flight::InFlightToolCalls>>,
     /// Maximum number of concurrent-safe tool calls dispatched in parallel
     /// inside a single Act batch.
     ///

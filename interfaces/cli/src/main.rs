@@ -93,6 +93,12 @@ enum Commands {
         category: Option<String>,
     },
 
+    /// Inspect or cancel in-flight tool calls (per-tool AbortSignal RPC)
+    Calls {
+        #[command(subcommand)]
+        action: CallsAction,
+    },
+
     /// Manage sessions
     Session {
         #[command(subcommand)]
@@ -299,6 +305,17 @@ enum ChannelsAction {
     Status {
         /// Channel name (shows all if not specified)
         name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum CallsAction {
+    /// List every currently-in-flight tool call (tools.in_flight)
+    List,
+    /// Cancel a specific in-flight tool call by tool_call_id
+    Cancel {
+        /// LLM-issued tool_call_id (see `aleph calls list`)
+        call_id: String,
     },
 }
 
@@ -865,6 +882,12 @@ async fn main() -> CliResult<()> {
         Some(Commands::Tools { category }) => {
             commands::tools::run(&server_url, category.as_deref(), cli.json).await?;
         }
+        Some(Commands::Calls { action }) => match action {
+            CallsAction::List => commands::calls::list(&server_url, cli.json).await?,
+            CallsAction::Cancel { call_id } => {
+                commands::calls::cancel(&server_url, &call_id, cli.json).await?
+            }
+        },
         Some(Commands::Connect { device }) => {
             commands::connect::run(&server_url, &device, &config, cli.json).await?;
         }

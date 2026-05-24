@@ -364,6 +364,8 @@ impl HarnessRunner for AgentHarnessRunner {
             // harness's Act phase only takes the fast path when every call in
             // the batch is concurrent-safe, so unsafe tools (write/exec/send)
             // still serialize even when this is enabled.
+            in_flight_tool_calls: crate::tools::in_flight::global_in_flight_tool_calls()
+                .map(std::sync::Arc::new),
             parallel_tool_concurrency: Some(8),
         };
         // Stage 7 (#12): emit init-seam visibility before the harness
