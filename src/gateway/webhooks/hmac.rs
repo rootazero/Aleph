@@ -5,7 +5,6 @@
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use subtle::ConstantTimeEq;
 use tracing::{debug, warn};
 
 use super::config::SignatureFormat;
@@ -205,12 +204,12 @@ fn compute_hmac_sha256(secret: &str, data: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
-/// Constant-time comparison to prevent timing attacks
+/// Constant-time comparison to prevent timing attacks.
+///
+/// Thin wrapper over `crate::security::secret_equal_bytes`; kept as a local
+/// alias so the gateway HMAC verifier stays self-documenting.
 fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.ct_eq(b).into()
+    crate::security::secret_equal_bytes(a, b)
 }
 
 /// Generate a signature for testing/debugging

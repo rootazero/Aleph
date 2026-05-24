@@ -238,11 +238,7 @@ pub fn compute_signature(token: &str, nonce: &str, timestamp: u64, device_id: &s
 
 /// Constant-time byte comparison to prevent timing attacks.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    use subtle::ConstantTimeEq;
-    if a.len() != b.len() {
-        return false;
-    }
-    a.ct_eq(b).into()
+    crate::security::secret_equal_bytes(a, b)
 }
 
 // ---------------------------------------------------------------------------

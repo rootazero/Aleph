@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
+use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -75,9 +76,13 @@ impl AlephTool for BrowserSnapshotTool {
                     } else {
                         (raw, false)
                     };
+                    // Page-derived DOM text is untrusted external content; wrap
+                    // before handing back to the LLM so chat-template markers
+                    // injected by a hostile page cannot escape the boundary.
+                    let wrapped = wrap_external_content(&text, ContentSource::BrowserContent);
                     Ok(BrowserSnapshotOutput {
                         success: true,
-                        snapshot: Some(text),
+                        snapshot: Some(wrapped),
                         truncated,
                         ref_count,
                         message: Some(format!("Snapshot captured in profile '{}'", args.profile)),

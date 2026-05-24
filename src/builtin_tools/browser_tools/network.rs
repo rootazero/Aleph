@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
+use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -50,9 +51,11 @@ impl AlephTool for BrowserNetworkTool {
             Ok((backend, tab_id)) => match backend.network_log(&tab_id).await {
                 Ok(requests) => {
                     let line_count = requests.lines().count();
+                    // Network log entries include URLs/headers from the page; untrusted.
+                    let wrapped = wrap_external_content(&requests, ContentSource::BrowserContent);
                     Ok(BrowserNetworkOutput {
                         success: true,
-                        requests,
+                        requests: wrapped,
                         message: Some(format!("{line_count} network log line(s)")),
                     })
                 }

@@ -12,6 +12,7 @@ pub mod content_sanitizer;
 pub mod context_id_hasher;
 pub mod headers;
 pub mod runtime_guard;
+pub mod secret_equal;
 pub mod ssrf;
 
 pub use audit_drain::spawn_audit_drain;
@@ -19,6 +20,7 @@ pub use context_id_hasher::ContextIdHasher;
 pub use runtime_guard::{
     GuardResult, RuntimeSecurityGuard, SecurityContext, SecurityGuardConfig, SecurityGuardError,
 };
+pub use secret_equal::{secret_equal, secret_equal_bytes};
 
 #[cfg(test)]
 mod export_tests {

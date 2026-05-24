@@ -265,14 +265,10 @@ impl OAuthProvider {
             .code_verifier
             .ok_or_else(|| AlephError::IoError("No code verifier found".to_string()))?;
 
-        // Verify state matches (constant-time comparison to prevent timing oracle)
-        use subtle::ConstantTimeEq;
-        if stored_state
-            .as_bytes()
-            .ct_eq(received_state.as_bytes())
-            .unwrap_u8()
-            == 0
-        {
+        if !crate::security::secret_equal_bytes(
+            stored_state.as_bytes(),
+            received_state.as_bytes(),
+        ) {
             return Err(AlephError::IoError(
                 "State mismatch - possible CSRF attack".to_string(),
             ));

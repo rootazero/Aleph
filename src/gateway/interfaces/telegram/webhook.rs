@@ -83,19 +83,19 @@ impl WebhookHandler for TelegramWebhookHandler {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
-        // Constant-time comparison to prevent timing attacks
         if actual_secret.is_empty() {
             tracing::warn!("Telegram webhook: missing secret token header");
             return false;
         }
 
-        // Use constant-time comparison
-        use subtle::ConstantTimeEq;
-        let result = expected_secret.as_bytes().ct_eq(actual_secret.as_bytes());
+        let result = crate::security::secret_equal_bytes(
+            expected_secret.as_bytes(),
+            actual_secret.as_bytes(),
+        );
         if !result {
             tracing::warn!("Telegram webhook: secret token mismatch");
         }
-        result.into()
+        result
     }
 
     /// Parse a Telegram Update payload into InboundMessages.

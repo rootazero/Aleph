@@ -130,10 +130,7 @@ fn verify_signature(secret: &str, body: &[u8], signature: &str) -> bool {
         Err(_) => return false,
     };
 
-    if expected.len() != sig_bytes.len() {
-        return false;
-    }
-    expected.iter().zip(sig_bytes.iter()).all(|(a, b)| a == b)
+    crate::security::secret_equal_bytes(&expected, &sig_bytes)
 }
 
 async fn handle_connection(

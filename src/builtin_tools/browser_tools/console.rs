@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
+use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -47,9 +48,11 @@ impl AlephTool for BrowserConsoleTool {
             Ok((backend, tab_id)) => match backend.console_messages(&tab_id).await {
                 Ok(messages) => {
                     let line_count = messages.lines().count();
+                    // Console output is page-script-controlled; treat as untrusted.
+                    let wrapped = wrap_external_content(&messages, ContentSource::BrowserContent);
                     Ok(BrowserConsoleOutput {
                         success: true,
-                        messages,
+                        messages: wrapped,
                         message: Some(format!("{line_count} console message(s)")),
                     })
                 }

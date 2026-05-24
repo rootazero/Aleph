@@ -95,8 +95,7 @@ pub fn hmac_sign(secret: &[u8], token: &str) -> String {
 /// Verify an HMAC-SHA256 signature
 pub fn hmac_verify(secret: &[u8], token: &str, signature: &str) -> Result<(), CryptoError> {
     let expected = hmac_sign(secret, token);
-    // Use constant-time comparison
-    if subtle::ConstantTimeEq::ct_eq(expected.as_bytes(), signature.as_bytes()).into() {
+    if crate::security::secret_equal_bytes(expected.as_bytes(), signature.as_bytes()) {
         Ok(())
     } else {
         Err(CryptoError::HmacVerificationFailed)

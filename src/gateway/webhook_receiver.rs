@@ -46,7 +46,6 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
@@ -192,11 +191,7 @@ impl WebhookReceiver {
     /// Returns `true` if the signature matches.
     pub fn verify_signature(secret: &str, body: &[u8], signature: &str) -> bool {
         let expected = Self::compute_signature(secret, body);
-        if expected.len() != signature.len() {
-            return false;
-        }
-        // Constant-time comparison to prevent timing attacks
-        expected.as_bytes().ct_eq(signature.as_bytes()).into()
+        crate::security::secret_equal_bytes(expected.as_bytes(), signature.as_bytes())
     }
 }
 
