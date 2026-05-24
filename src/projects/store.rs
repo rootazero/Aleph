@@ -72,11 +72,32 @@ pub enum ProjectError {
 }
 
 /// Default catalogue path: `~/.aleph/projects.json`.
+///
+/// Falls back to `ALEPH_HOME` when set, otherwise `dirs::home_dir()`. We do
+/// **not** silently drop back to `/tmp` — that path is wiped on reboot and
+/// would surface as "the project picker forgot everything overnight" with
+/// no diagnostic. Callers who hit the panic path can set `ALEPH_HOME` to
+/// rescue the daemon.
 pub fn default_projects_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".aleph")
-        .join("projects.json")
+    aleph_home().join("projects.json")
+}
+
+/// Resolve the catalogue's parent directory. Public so callers can locate
+/// it without recomputing the fallback rules.
+pub(crate) fn aleph_home() -> PathBuf {
+    if let Ok(p) = std::env::var("ALEPH_HOME") {
+        let pb = PathBuf::from(p);
+        if pb.is_absolute() {
+            return pb;
+        }
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| {
+        panic!(
+            "projects: $HOME unavailable and $ALEPH_HOME unset; refusing to fall back to a \
+             volatile path that would lose registered projects on reboot"
+        )
+    });
+    home.join(".aleph")
 }
 
 /// Stable ID for a given path. Public so callers can pre-compute the ID
@@ -444,5 +465,25 @@ mod tests {
         let id1 = project_id_for_path(dir.path());
         let id2 = project_id_for_path(dir.path());
         assert_eq!(id1, id2);
+    }
+
+    /// `aleph_home()` honours `$ALEPH_HOME` when set so the daemon can be
+    /// pointed at an alternate data root (containers, alternate user). This
+    /// is also our escape hatch if `dirs::home_dir()` panics on weird boxes.
+    #[test]
+    fn aleph_home_respects_env_override() {
+        let dir = tempdir().unwrap();
+        let prev = std::env::var("ALEPH_HOME").ok();
+        // SAFETY: this single-threaded test mutates a process env var; the
+        // Rust 2024 unsafe-block rule forbids env writes without acknowledgement.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", dir.path());
+        }
+        let resolved = aleph_home();
+        assert_eq!(resolved, dir.path());
+        match prev {
+            Some(v) => unsafe { std::env::set_var("ALEPH_HOME", v) },
+            None => unsafe { std::env::remove_var("ALEPH_HOME") },
+        }
     }
 }

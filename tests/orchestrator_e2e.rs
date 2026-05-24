@@ -27,6 +27,7 @@ async fn default_agent_roundtrip() {
             trace_sink: None,
             interaction_manifest: None,
             sandbox_override: None,
+            workspace_override: None,
         })
         .await
         .expect("dispatch");

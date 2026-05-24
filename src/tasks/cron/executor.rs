@@ -94,6 +94,10 @@ async fn execute_cron_job(
 
     let timeout_secs = snapshot.timeout_ms.map(|ms| (ms / 1000).max(1) as u64);
 
+    // System-initiated: cron has no parent run, so there is no project
+    // context to inherit. Round-3 follow-up: add an optional
+    // `project_root` field to the job snapshot so scheduled jobs can be
+    // bound to a specific project folder.
     let request = RunRequest {
         run_id: Uuid::new_v4().to_string(),
         input: prompt,

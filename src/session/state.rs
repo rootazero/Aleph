@@ -319,6 +319,7 @@ mod tests {
         s.apply(&SessionEvent::RunStarted {
             run_id: "run-1".into(),
             at: now_ms(),
+            project_root: None,
         });
         s.apply(&SessionEvent::RunFinished {
             run_id: "run-1".into(),

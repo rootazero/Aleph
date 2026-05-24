@@ -490,6 +490,7 @@ mod tests {
         SessionEvent::RunStarted {
             run_id: run_id.to_string(),
             at,
+            project_root: None,
         }
     }
 

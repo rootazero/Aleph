@@ -413,6 +413,17 @@ impl ExtensionManager {
     /// the same executor pass — priority + matcher determine ordering, not
     /// load order.
     async fn sync_user_hooks(&self) {
+        // ExtensionManager is constructed once at boot, so `cwd` here is
+        // the daemon's launch directory — usually `$HOME` or wherever the
+        // desktop App was started from. Project-level `.aleph/hooks.json`
+        // therefore only kicks in when the daemon was started from inside
+        // a project (CLI case).
+        //
+        // Round-3 follow-up: layer project hooks on top of the snapshot
+        // inside `run_agent_loop` when [`crate::projects::current_project_root`]
+        // is `Some`, so a desktop-launched daemon can also pick up
+        // `<project>/.aleph/hooks.{json,local.json}` per-run without
+        // reloading the whole ExtensionManager.
         let cwd = std::env::current_dir().ok();
         let user_hooks = crate::extension::hooks::load_user_hooks(cwd.as_deref());
         if user_hooks.is_empty() {

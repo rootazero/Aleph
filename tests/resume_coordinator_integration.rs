@@ -124,6 +124,7 @@ async fn seed_interrupted_run(store: &Arc<dyn SessionEventStore>, sid: &SessionK
         SessionEvent::RunStarted {
             run_id: "run-1".into(),
             at: at + 2,
+            project_root: None,
         },
         SessionEvent::ToolCallRequested {
             turn_id: tid,
@@ -229,14 +230,17 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         SessionEvent::RunStarted {
             run_id: "r1".into(),
             at,
+            project_root: None,
         },
         SessionEvent::RunStarted {
             run_id: "r2".into(),
             at: at + 1,
+            project_root: None,
         },
         SessionEvent::RunStarted {
             run_id: "r3".into(),
             at: at + 2,
+            project_root: None,
         },
     ]
     .into_iter()

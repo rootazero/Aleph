@@ -261,7 +261,18 @@ async fn pick_directory_via_shell(default_path: Option<String>) -> Result<Option
     let window = web_sys::window().ok_or_else(|| "no global window".to_string())?;
     let shell = Reflect::get(&window, &JsValue::from_str("alephShell"))
         .unwrap_or(JsValue::UNDEFINED);
-    if shell.is_undefined() || shell.is_null() {
+    let pick_handle = if shell.is_undefined() || shell.is_null() {
+        None
+    } else {
+        // Shell exists but may be an older build without pickDirectory —
+        // treat that as "no native picker" rather than a hard error so the
+        // user still gets the prompt fallback instead of a silent dropdown.
+        match Reflect::get(&shell, &JsValue::from_str("pickDirectory")) {
+            Ok(v) if !v.is_undefined() && !v.is_null() && v.is_function() => Some(v),
+            _ => None,
+        }
+    };
+    let Some(pick) = pick_handle else {
         return Ok(window
             .prompt_with_message_and_default(
                 "Project folder absolute path:",
@@ -269,10 +280,9 @@ async fn pick_directory_via_shell(default_path: Option<String>) -> Result<Option
             )
             .ok()
             .flatten()
-            .filter(|s| !s.trim().is_empty()));
-    }
-    let pick = Reflect::get(&shell, &JsValue::from_str("pickDirectory"))
-        .map_err(|_| "alephShell.pickDirectory missing".to_string())?;
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()));
+    };
     let opts = Object::new();
     if let Some(default) = default_path.as_deref() {
         let _ = Reflect::set(

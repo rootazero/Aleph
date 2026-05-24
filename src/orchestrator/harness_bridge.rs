@@ -180,6 +180,7 @@ impl HarnessRunner for AgentHarnessRunner {
         tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
         trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
         interaction_manifest: Option<crate::thinker::InteractionManifest>,
+        workspace_override: Option<std::path::PathBuf>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -378,6 +379,13 @@ impl HarnessRunner for AgentHarnessRunner {
         // these two emits leaves a trailing `RunStarted` with no
         // `RunFinished`, which is exactly what `ResumeCoordinator` detects.
         let run_marker_id = uuid::Uuid::new_v4().to_string();
+        // `project_root` rides on RunStarted so `ResumeCoordinator` can
+        // re-trigger a crashed run in the same user-picked folder. The
+        // field is omitted from the wire form when None (skip_serializing_if)
+        // so legacy event logs stay byte-identical.
+        let project_root_str = workspace_override
+            .as_ref()
+            .map(|p| p.display().to_string());
         if let Err(e) = self
             .session_service
             .emit_event(
@@ -385,6 +393,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 SessionEvent::RunStarted {
                     run_id: run_marker_id.clone(),
                     at: crate::session::events::now_ms(),
+                    project_root: project_root_str,
                 },
             )
             .await

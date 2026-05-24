@@ -119,6 +119,12 @@ pub async fn perform_session_split(
             SessionEvent::RunStarted {
                 run_id: split_run_id,
                 at: crate::session::events::now_ms(),
+                // Session-split forks emit a marker on the child session;
+                // the child inherits whatever project context the parent
+                // was running under via the in-memory RunRequest, so the
+                // resume path does not need a duplicate persisted value
+                // here.
+                project_root: None,
             },
         )
         .await

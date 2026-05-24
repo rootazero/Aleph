@@ -14,8 +14,10 @@
 //! Persistence: `~/.aleph/projects.json`, atomic writes, fs2 advisory
 //! lock on the sidecar `.lock` so concurrent CLI/Panel writes are safe.
 
+mod run_context;
 mod store;
 
+pub use run_context::{current as current_project_root, with_project_root};
 pub use store::{
     default_projects_path, project_id_for_path, Project, ProjectError, ProjectStore,
     RECENT_PROJECTS_CAP,

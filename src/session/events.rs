@@ -116,6 +116,14 @@ pub enum SessionEvent {
     RunStarted {
         run_id: String,
         at: Timestamp,
+        /// Project workspace this run was scoped to, when project-mode is
+        /// active. Persisted so [`crate::gateway::resume_coordinator`] can
+        /// re-trigger an interrupted run in the same project folder
+        /// instead of falling back to `~/.aleph/workspaces/{agent_id}/`.
+        /// Stored as a string (rather than `PathBuf`) so the JSON form
+        /// stays platform-portable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_root: Option<String>,
     },
     /// A harness run reached a terminal state on this session.
     RunFinished {
@@ -286,11 +294,51 @@ mod tests {
         let ev = SessionEvent::RunStarted {
             run_id: "run-abc".into(),
             at: 1_700_000_000_000,
+            project_root: None,
         };
         let json = serde_json::to_string(&ev).unwrap();
         let back: SessionEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(serde_json::to_string(&back).unwrap(), json);
         assert!(json.contains("\"type\":\"run_started\""));
+        // Optional field is omitted on the wire when None so the legacy
+        // 2-field form stays byte-identical for old event-log readers.
+        assert!(!json.contains("project_root"));
+    }
+
+    /// New optional `project_root` field round-trips and survives the
+    /// `#[serde(default)]` re-read path used by old logs (where the field
+    /// simply doesn't exist).
+    #[test]
+    fn run_started_with_project_root_round_trips() {
+        let ev = SessionEvent::RunStarted {
+            run_id: "run-pr".into(),
+            at: 1_700_000_000_000,
+            project_root: Some("/Users/alice/proj".into()),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"project_root\":\"/Users/alice/proj\""));
+        let back: SessionEvent = serde_json::from_str(&json).unwrap();
+        match back {
+            SessionEvent::RunStarted { project_root, .. } => {
+                assert_eq!(project_root.as_deref(), Some("/Users/alice/proj"));
+            }
+            other => panic!("expected RunStarted, got {other:?}"),
+        }
+    }
+
+    /// Backward compatibility: deserialising a legacy 2-field RunStarted
+    /// (no `project_root` key) yields `None` thanks to `#[serde(default)]`.
+    #[test]
+    fn run_started_legacy_log_deserialises_with_none() {
+        let legacy =
+            r#"{"type":"run_started","run_id":"old","at":1700000000000}"#;
+        let back: SessionEvent = serde_json::from_str(legacy).unwrap();
+        match back {
+            SessionEvent::RunStarted { project_root, .. } => {
+                assert!(project_root.is_none());
+            }
+            other => panic!("expected RunStarted, got {other:?}"),
+        }
     }
 
     #[test]

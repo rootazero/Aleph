@@ -311,6 +311,18 @@ impl SessionsSendTool {
         // Convert routing::SessionKey to gateway::router::SessionKey
         let gateway_session_key = session_key_to_gateway(&target_session_key);
 
+        // Inherit the parent run's project root so a sub-agent invoked
+        // mid-flow (e.g. main → coder during a project-scoped chat) lands
+        // inside the same user-picked folder rather than reverting to
+        // `~/.aleph/workspaces/{agent_id}/`. Captured BEFORE any spawn
+        // because tokio task-locals do not cross the `tokio::spawn`
+        // boundary used by fire-and-forget below.
+        let inherited_workspace = crate::projects::current_project_root();
+        let mut sub_metadata = HashMap::new();
+        if let Some(p) = inherited_workspace.as_ref() {
+            sub_metadata.insert("project_root".to_string(), p.display().to_string());
+        }
+
         // Create run request
         let request = RunRequest {
             run_id: run_id.clone(),
@@ -321,11 +333,11 @@ impl SessionsSendTool {
             } else {
                 Some(300) // Default 5 min for fire-and-forget
             },
-            metadata: HashMap::new(),
+            metadata: sub_metadata.clone(),
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sandbox_override: None,
-            workspace_override: None,
+            workspace_override: inherited_workspace.clone(),
         };
 
         // Get execution adapter
@@ -401,11 +413,11 @@ impl SessionsSendTool {
                                 input: "继续".to_string(),
                                 session_key: session_key_to_gateway(&target_session_key),
                                 timeout_secs: Some(args.timeout_seconds as u64),
-                                metadata: HashMap::new(),
+                                metadata: sub_metadata.clone(),
                                 attachments: Vec::new(),
                                 pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
                                 sandbox_override: None,
-                                workspace_override: None,
+                                workspace_override: inherited_workspace.clone(),
                             };
                             let continue_emitter: Arc<
                                 dyn crate::gateway::event_emitter::EventEmitter + Send + Sync,

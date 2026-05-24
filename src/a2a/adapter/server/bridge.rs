@@ -49,6 +49,12 @@ impl AgentLoopBridge {
     }
 
     /// Build a `RunRequest` for the given task and input text.
+    ///
+    /// Inbound A2A delegations are external requests — the caller has no
+    /// notion of our local project layout, so the workspace falls back to
+    /// the agent's default. A2A clients that want to address a specific
+    /// folder should send an absolute path inside the request body and
+    /// let the agent open it with file tools, not pre-bind the run.
     fn build_run_request(task_id: &str, input: &str) -> RunRequest {
         RunRequest {
             run_id: uuid::Uuid::new_v4().to_string(),
