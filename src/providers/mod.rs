@@ -69,6 +69,7 @@ pub mod health;
 pub mod http_provider;
 pub mod llm_retry;
 pub mod message;
+pub mod metadata;
 pub mod metering;
 pub mod mock;
 pub mod model_behaviors;

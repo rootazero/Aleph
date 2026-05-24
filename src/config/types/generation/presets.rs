@@ -2,6 +2,7 @@
 //!
 //! Contains default configurations for known generation providers (image, video, audio, speech).
 
+use crate::providers::metadata::{Modality, ProviderMetadata};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
@@ -100,6 +101,129 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
 
     m
 });
+
+// =============================================================================
+// Generation provider metadata (modality / display name / homepage)
+// =============================================================================
+
+const IMAGE_ONLY: &[Modality] = &[Modality::Image];
+const VIDEO_ONLY: &[Modality] = &[Modality::Video];
+const SPEECH_ONLY: &[Modality] = &[Modality::Speech];
+
+/// Per-preset metadata for generation providers — display name, modalities,
+/// homepage. Mirror of `crate::providers::presets::PRESET_METADATA` for the
+/// image/video/audio layer.
+pub static GENERATION_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = Lazy::new(|| {
+    let mut m: HashMap<&'static str, ProviderMetadata> = HashMap::new();
+
+    m.insert(
+        "openai-dalle",
+        ProviderMetadata {
+            display_name: "OpenAI DALL-E",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://platform.openai.com/docs/guides/images"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "stability-ai",
+        ProviderMetadata {
+            display_name: "Stability AI",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://platform.stability.ai"),
+            notes: Some("Stable Diffusion XL family"),
+        },
+    );
+    m.insert(
+        "google-imagen",
+        ProviderMetadata {
+            display_name: "Google Imagen",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://ai.google.dev/gemini-api/docs/imagen"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "replicate",
+        ProviderMetadata {
+            display_name: "Replicate",
+            modalities: &[Modality::Image, Modality::Video, Modality::Music],
+            homepage: Some("https://replicate.com"),
+            notes: Some("OSS model hosting (Flux, SDXL, MusicGen, …)"),
+        },
+    );
+    m.insert(
+        "google-veo",
+        ProviderMetadata {
+            display_name: "Google Veo",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://deepmind.google/technologies/veo"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "runway",
+        ProviderMetadata {
+            display_name: "Runway Gen-3",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://docs.dev.runwayml.com"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "pika",
+        ProviderMetadata {
+            display_name: "Pika Labs",
+            modalities: VIDEO_ONLY,
+            homepage: Some("https://pika.art"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "openai-tts",
+        ProviderMetadata {
+            display_name: "OpenAI TTS",
+            modalities: SPEECH_ONLY,
+            homepage: Some("https://platform.openai.com/docs/guides/text-to-speech"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "elevenlabs",
+        ProviderMetadata {
+            display_name: "ElevenLabs",
+            modalities: SPEECH_ONLY,
+            homepage: Some("https://elevenlabs.io"),
+            notes: None,
+        },
+    );
+
+    m
+});
+
+/// Look up rich metadata for a generation preset by name.
+pub fn generation_metadata(name: &str) -> Option<&'static ProviderMetadata> {
+    GENERATION_METADATA.get(name)
+}
+
+/// All generation preset names (sorted) that serve the requested modality.
+///
+/// Presets without a metadata entry are excluded — generation providers
+/// must opt in explicitly (unlike chat, which defaults to `Chat`-only).
+pub fn generation_presets_by_modality(modality: Modality) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = PRESETS
+        .keys()
+        .copied()
+        .filter(|name| {
+            GENERATION_METADATA
+                .get(*name)
+                .map(|m| m.supports(modality))
+                .unwrap_or(false)
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
 
 /// Get a generation preset by name (exact match)
 pub fn get_preset(name: &str) -> Option<&'static GenerationPreset> {
@@ -270,6 +394,47 @@ mod tests {
         assert!(
             get_merged_generation_preset("nonexistent", "nonexistent-type", &overrides).is_none()
         );
+    }
+
+    #[test]
+    fn test_generation_metadata_lookup() {
+        let dalle = generation_metadata("openai-dalle").expect("dalle metadata");
+        assert_eq!(dalle.display_name, "OpenAI DALL-E");
+        assert!(dalle.supports(Modality::Image));
+        assert!(!dalle.supports(Modality::Video));
+
+        let veo = generation_metadata("google-veo").expect("veo metadata");
+        assert!(veo.supports(Modality::Video));
+
+        let replicate = generation_metadata("replicate").expect("replicate metadata");
+        assert!(replicate.supports(Modality::Image));
+        assert!(replicate.supports(Modality::Video));
+        assert!(replicate.supports(Modality::Music));
+    }
+
+    #[test]
+    fn test_generation_presets_by_modality() {
+        let images = generation_presets_by_modality(Modality::Image);
+        assert!(images.contains(&"openai-dalle"));
+        assert!(images.contains(&"stability-ai"));
+        assert!(images.contains(&"google-imagen"));
+        assert!(images.contains(&"replicate"));
+        // Should not include video/audio-only providers
+        assert!(!images.contains(&"google-veo"));
+        assert!(!images.contains(&"elevenlabs"));
+
+        let videos = generation_presets_by_modality(Modality::Video);
+        assert!(videos.contains(&"google-veo"));
+        assert!(videos.contains(&"runway"));
+        assert!(videos.contains(&"pika"));
+        assert!(videos.contains(&"replicate"));
+
+        let speech = generation_presets_by_modality(Modality::Speech);
+        assert!(speech.contains(&"openai-tts"));
+        assert!(speech.contains(&"elevenlabs"));
+
+        // Chat is not a generation modality
+        assert!(generation_presets_by_modality(Modality::Chat).is_empty());
     }
 
     #[test]
