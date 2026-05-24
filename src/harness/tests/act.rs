@@ -898,6 +898,7 @@ async fn g3_repairs_case_mismatched_tool_name() {
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
     };
     let harness = AgentHarness::new(deps);
     let state = harness
@@ -964,6 +965,7 @@ async fn g3_does_not_repair_when_lowercase_is_also_unknown() {
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
     };
     let harness = AgentHarness::new(deps);
     let _ = harness
@@ -1020,6 +1022,7 @@ async fn g1_last_step_injects_max_steps_hint() {
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
     };
     let harness = AgentHarness::new(deps);
     let _ = harness
@@ -1076,6 +1079,7 @@ async fn g1_does_not_inject_when_not_last_step() {
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
     };
     let harness = AgentHarness::new(deps);
     let _ = harness
