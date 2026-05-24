@@ -619,12 +619,13 @@ impl BuiltinToolRegistry {
             team_status_tool,
             team_disband_tool,
             team_member_remove_tool,
+            team_from_template_tool,
         ) = if let (Some(ref store), Some(ref coord_store)) =
             (&config.team_store, &config.coord_task_store)
         {
             use crate::builtin_tools::team::{
-                TeamCreateTool, TeamDelegateTool, TeamDisbandTool, TeamMemberRemoveTool,
-                TeamStatusTool,
+                TeamCreateTool, TeamDelegateTool, TeamDisbandTool, TeamFromTemplateTool,
+                TeamMemberRemoveTool, TeamStatusTool,
             };
 
             let agent_registry = config
@@ -646,9 +647,9 @@ impl BuiltinToolRegistry {
                 });
             let create = TeamCreateTool::new(
                 Arc::clone(store),
-                agent_registry,
+                Arc::clone(&agent_registry),
                 config.agent_manager.clone(),
-                sm_for_teams,
+                Arc::clone(&sm_for_teams),
                 current_agent_id.clone(),
             );
             let delegate = TeamDelegateTool::new(
@@ -665,6 +666,18 @@ impl BuiltinToolRegistry {
             let member_remove =
                 TeamMemberRemoveTool::new(Arc::clone(store), current_agent_id.clone());
 
+            // team_from_template reuses the same agent_registry + session_store
+            // wiring that team_create depends on, so we construct it here once
+            // the TeamStore + CoordTaskStore guard is satisfied.
+            let from_template = TeamFromTemplateTool::new(
+                Arc::clone(store),
+                Arc::clone(coord_store),
+                Arc::clone(&agent_registry),
+                config.agent_manager.clone(),
+                Arc::clone(&sm_for_teams),
+                current_agent_id.clone(),
+            );
+
             // Register parameter schemas for team tools
             {
                 use crate::tools::AlephTool;
@@ -674,6 +687,7 @@ impl BuiltinToolRegistry {
                     status.definition(),
                     disband.definition(),
                     member_remove.definition(),
+                    from_template.definition(),
                 ];
                 for td in &tool_defs {
                     let mut ut = UnifiedTool::new(
@@ -687,16 +701,17 @@ impl BuiltinToolRegistry {
                 }
             }
 
-            info!("Registered team management tools (team_create, team_delegate, team_status, team_disband, team_member_remove)");
+            info!("Registered team management tools (team_create, team_delegate, team_status, team_disband, team_member_remove, team_from_template)");
             (
                 Some(create),
                 Some(delegate),
                 Some(status),
                 Some(disband),
                 Some(member_remove),
+                Some(from_template),
             )
         } else {
-            (None, None, None, None, None)
+            (None, None, None, None, None, None)
         };
 
         // Add team_digest tool (if EventLogStore + TeamStore are available)
@@ -1308,6 +1323,7 @@ impl BuiltinToolRegistry {
             team_disband_tool,
             team_member_remove_tool,
             team_digest_tool,
+            team_from_template_tool,
             message_send_tool,
             inbox_read_tool,
             plan_submit_tool,

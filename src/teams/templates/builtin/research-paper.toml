@@ -1,0 +1,77 @@
+# Academic-style research team: lit review → experiment → analysis → writeup.
+
+description = "Research team: lit review, experimentation, analysis, paper draft"
+default_goal = "Investigate the research question stated in the team description"
+
+[leader]
+id = "pi"
+name = "Principal Investigator"
+role = "leader"
+prompt_addendum = """
+You are the PI for `{team_name}`. Coordinate the literature review, experiment
+design, results analysis, and paper drafting around `{goal}`. Reject any
+artifact that lacks citations or experimental evidence.
+"""
+
+[[members]]
+id = "reviewer"
+name = "Literature Reviewer"
+role = "research"
+prompt_addendum = "Survey prior art relevant to `{goal}`. Produce an annotated bibliography."
+
+[[members]]
+id = "experimentalist"
+name = "Experimentalist"
+role = "research"
+prompt_addendum = "Design and run experiments to test the research question."
+
+[[members]]
+id = "analyst"
+name = "Data Analyst"
+role = "research"
+prompt_addendum = "Statistical analysis of experiment outputs; produce figures and tables."
+
+[[members]]
+id = "writer"
+name = "Paper Writer"
+role = "writer"
+prompt_addendum = "Assemble the final paper draft from literature, results, and analysis."
+
+[[tasks]]
+key = "lit_review"
+subject = "Literature review for {goal}"
+description = "Annotated bibliography of the 10-20 most relevant prior works."
+owner = "reviewer"
+priority = "high"
+
+[[tasks]]
+key = "experiment_design"
+subject = "Experiment design for {goal}"
+description = "Propose 2-3 experiments that would yield evidence on `{goal}`."
+owner = "experimentalist"
+priority = "high"
+depends_on = ["lit_review"]
+
+[[tasks]]
+key = "run_experiments"
+subject = "Run experiments for {goal}"
+description = "Execute the approved experiment design and collect raw results."
+owner = "experimentalist"
+priority = "normal"
+depends_on = ["experiment_design"]
+
+[[tasks]]
+key = "analysis"
+subject = "Analyse experiment results"
+description = "Statistical analysis + figures from the experimental outputs."
+owner = "analyst"
+priority = "normal"
+depends_on = ["run_experiments"]
+
+[[tasks]]
+key = "draft"
+subject = "Draft paper on {goal}"
+description = "Assemble final paper: intro, methods, results, discussion, refs."
+owner = "writer"
+priority = "high"
+depends_on = ["analysis", "lit_review"]

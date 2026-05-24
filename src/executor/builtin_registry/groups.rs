@@ -137,6 +137,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         name: "团队协调",
         tools: &[
             "team_create",
+            "team_from_template",
             "team_delegate",
             "team_status",
             "team_disband",

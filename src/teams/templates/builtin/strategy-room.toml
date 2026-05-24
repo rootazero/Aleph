@@ -1,0 +1,63 @@
+# Strategic decision war-room.
+# Three analysts argue from distinct positions (bull / bear / contrarian),
+# the moderator synthesises a recommendation with confidence bands.
+
+description = "Strategic decision war-room: bull + bear + contrarian → moderator synthesis"
+default_goal = "Evaluate the decision described in the team description"
+
+[leader]
+id = "moderator"
+name = "Strategy Moderator"
+role = "leader"
+prompt_addendum = """
+You moderate a structured debate on `{goal}`. Read each analyst's position,
+identify shared assumptions, then output: recommendation + confidence (low /
+medium / high) + the two strongest counterarguments you're discounting.
+"""
+
+[[members]]
+id = "bull"
+name = "Bull Case Analyst"
+role = "analyst"
+prompt_addendum = "Argue the strongest possible case FOR `{goal}`. State your three best supporting facts."
+
+[[members]]
+id = "bear"
+name = "Bear Case Analyst"
+role = "analyst"
+prompt_addendum = "Argue the strongest possible case AGAINST `{goal}`. State the three biggest risks."
+
+[[members]]
+id = "contrarian"
+name = "Contrarian"
+role = "analyst"
+prompt_addendum = "Argue a third position neither bull nor bear has considered. Aim for unexpected framings."
+
+[[tasks]]
+key = "bull_case"
+subject = "Bull case for {goal}"
+description = "Best-case analysis with three concrete supporting facts."
+owner = "bull"
+priority = "normal"
+
+[[tasks]]
+key = "bear_case"
+subject = "Bear case for {goal}"
+description = "Worst-case analysis with three concrete risks."
+owner = "bear"
+priority = "normal"
+
+[[tasks]]
+key = "contrarian_case"
+subject = "Contrarian framing for {goal}"
+description = "A third position that reframes the question entirely."
+owner = "contrarian"
+priority = "normal"
+
+[[tasks]]
+key = "synthesis"
+subject = "Strategic recommendation for {goal}"
+description = "Recommendation + confidence + two discounted counterarguments."
+owner = "moderator"
+priority = "high"
+depends_on = ["bull_case", "bear_case", "contrarian_case"]

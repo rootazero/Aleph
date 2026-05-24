@@ -3,6 +3,7 @@
 mod create;
 mod delegate;
 mod disband;
+pub mod from_template;
 pub mod inbox_read;
 pub mod lifecycle_idle;
 pub mod lifecycle_request_shutdown;
@@ -25,6 +26,7 @@ pub use create::{
 };
 pub use delegate::{DelegateStatus, TeamDelegateArgs, TeamDelegateOutput, TeamDelegateTool};
 pub use disband::{TeamDisbandArgs, TeamDisbandOutput, TeamDisbandTool};
+pub use from_template::{TeamFromTemplateArgs, TeamFromTemplateOutput, TeamFromTemplateTool};
 pub use inbox_read::{InboxReadArgs, InboxReadOutput, InboxReadTool};
 pub use lifecycle_idle::{LifecycleIdleArgs, LifecycleIdleOutput, LifecycleIdleTool};
 pub use lifecycle_request_shutdown::{

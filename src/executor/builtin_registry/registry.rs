@@ -249,6 +249,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) team_disband_tool: Option<crate::builtin_tools::team::TeamDisbandTool>,
     pub(crate) team_member_remove_tool: Option<crate::builtin_tools::team::TeamMemberRemoveTool>,
     pub(crate) team_digest_tool: Option<crate::builtin_tools::team::TeamDigestTool>,
+    /// One-shot team instantiation from a TOML blueprint (optional — requires
+    /// TeamStore + CoordTaskStore + AgentRegistry + SessionStore).
+    pub(crate) team_from_template_tool:
+        Option<crate::builtin_tools::team::TeamFromTemplateTool>,
     /// Team messaging tools (optional — require MessageRouter / Inbox)
     pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
     pub(crate) inbox_read_tool: Option<crate::builtin_tools::team::InboxReadTool>,
@@ -1065,6 +1069,14 @@ impl ToolRegistry for BuiltinToolRegistry {
             "team_digest" => Box::pin(async move {
                 let tool = self.team_digest_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("team_digest not available: no EventLogStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "team_from_template" => Box::pin(async move {
+                let tool = self.team_from_template_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "team_from_template not available: TeamStore + CoordTaskStore required",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),

@@ -477,6 +477,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Generate a summary of recent team activity for the specified time period",
         requires_config: true,
     },
+    BuiltinToolDefinition {
+        name: "team_from_template",
+        description: "Materialize a team from a TOML blueprint in one shot — leader + workers + initial task DAG. Use `teams.list_templates` RPC to discover available templates.",
+        requires_config: true,
+    },
     // Team messaging tools — require MessageRouter / Inbox
     BuiltinToolDefinition {
         name: "message_send",
@@ -759,6 +764,7 @@ pub fn create_tool_boxed(
         | "team_disband"
         | "team_member_remove"
         | "team_digest"
+        | "team_from_template"
         | "message_send"
         | "inbox_read"
         | "plan_submit"

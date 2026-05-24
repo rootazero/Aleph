@@ -706,3 +706,64 @@ mod tests {
         );
     }
 }
+
+// =============================================================================
+// teams.list_templates — discover available team templates (built-in + user)
+// =============================================================================
+
+/// Handle `teams.list_templates` — no params; returns the discoverable
+/// templates' metadata so a UI can render a picker. Materialization itself
+/// happens via the `team_from_template` builtin tool (R8 — tool-for-everything)
+/// so we don't double-plumb the heavy dep set through the gateway.
+pub async fn handle_list_templates(request: JsonRpcRequest) -> JsonRpcResponse {
+    debug!("Handling teams.list_templates request");
+
+    let registry = crate::teams::templates::TemplateRegistry::discover(
+        &crate::teams::templates::loader::default_user_dir(),
+    );
+
+    let entries: Vec<serde_json::Value> = registry
+        .list()
+        .map(|tpl| {
+            json!({
+                "name": tpl.name,
+                "description": tpl.description,
+                "default_goal": tpl.default_goal,
+                "leader_id": tpl.leader.id,
+                "leader_role": tpl.leader.role,
+                "member_count": tpl.members.len(),
+                "task_count": tpl.tasks.len(),
+            })
+        })
+        .collect();
+
+    JsonRpcResponse::success(request.id, json!({ "templates": entries }))
+}
+
+#[cfg(test)]
+mod template_handler_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn list_templates_returns_builtins() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "teams.list_templates".into(),
+            params: None,
+            id: Some(serde_json::Value::Number(1.into())),
+        };
+        let resp = handle_list_templates(req).await;
+        assert!(resp.error.is_none(), "expected ok, got {:?}", resp.error);
+        let entries = resp.result.expect("result")["templates"].clone();
+        let names: Vec<String> = entries
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|v| v["name"].as_str().map(String::from))
+            .collect();
+        assert!(names.contains(&"software-dev".to_string()));
+        assert!(names.contains(&"code-review".to_string()));
+        assert!(names.contains(&"research-paper".to_string()));
+        assert!(names.contains(&"strategy-room".to_string()));
+    }
+}

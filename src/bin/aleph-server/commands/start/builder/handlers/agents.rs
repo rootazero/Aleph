@@ -174,6 +174,11 @@ pub(in crate::commands::start) fn register_teams_handlers(
     register_handler!(server, "teams.disband", teams::handle_disband, store);
     register_handler!(server, "teams.delete", teams::handle_delete, store);
     register_handler!(server, "agents.teams", teams::handle_agent_teams, store);
+    // Templates RPC is stateless — the handler discovers builtins +
+    // ~/.aleph/teams/templates on every call. Materialization itself runs
+    // through the `team_from_template` builtin tool (R8) so we don't
+    // double-plumb the heavy dep set through the gateway.
+    register_handler!(server, "teams.list_templates", teams::handle_list_templates);
     register_handler!(
         server,
         "teams.list_tasks",

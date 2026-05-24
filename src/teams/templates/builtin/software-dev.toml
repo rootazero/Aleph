@@ -1,0 +1,83 @@
+# Full-stack software development team.
+# Leader decomposes the goal; backend + frontend implement in parallel;
+# QA validates after both are done.
+
+description = "Full-stack software development team: tech-lead + backend + frontend + QA"
+default_goal = "Implement the feature described in the team description"
+
+[leader]
+id = "lead"
+name = "Tech Lead"
+role = "leader"
+prompt_addendum = """
+You are the technical lead for `{team_name}`. Your charter:
+1. Decompose `{goal}` into worker-sized tasks via `task_create` (already done by
+   the template; review the initial board with `team_status`).
+2. Approve plans submitted via `plan_submit` before workers implement.
+3. Resolve blockers and rebalance ownership when tasks stall.
+4. Synthesise the final result once all tasks are `completed`.
+"""
+
+[[members]]
+id = "backend"
+name = "Backend Engineer"
+role = "backend"
+prompt_addendum = """
+You build APIs, data models, and migrations. Coordinate via `task_comment` for
+handoff notes. Always submit a `plan_submit` before non-trivial changes.
+"""
+
+[[members]]
+id = "frontend"
+name = "Frontend Engineer"
+role = "frontend"
+prompt_addendum = """
+You build UI components against the backend contract. If the contract is
+unclear, `message_send` the backend agent before assuming.
+"""
+
+[[members]]
+id = "qa"
+name = "QA Engineer"
+role = "qa"
+prompt_addendum = """
+You verify acceptance criteria by writing tests and exercising the integrated
+system. Reject any merge that lacks coverage for the acceptance criteria.
+"""
+
+[[tasks]]
+key = "design"
+subject = "Design: {goal}"
+description = """
+Produce a short architecture sketch + acceptance criteria for `{goal}`.
+Output: a `plan_submit` artifact that backend and frontend can implement against.
+"""
+owner = "lead"
+priority = "high"
+
+[[tasks]]
+key = "backend_impl"
+subject = "Backend implementation for {goal}"
+description = "Implement the API surface and data layer per the design artifact."
+owner = "backend"
+priority = "normal"
+depends_on = ["design"]
+
+[[tasks]]
+key = "frontend_impl"
+subject = "Frontend implementation for {goal}"
+description = "Implement the UI per the design artifact and the backend contract."
+owner = "frontend"
+priority = "normal"
+depends_on = ["design"]
+
+[[tasks]]
+key = "qa_pass"
+subject = "QA pass for {goal}"
+description = """
+Exercise the integrated flow end-to-end. Verify each acceptance criterion in
+the design artifact. File defects via `task_comment` on the relevant task.
+"""
+owner = "qa"
+priority = "normal"
+depends_on = ["backend_impl", "frontend_impl"]

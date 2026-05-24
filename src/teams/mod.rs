@@ -13,6 +13,7 @@ pub mod notifier;
 pub mod plans;
 pub mod sessions;
 pub mod store;
+pub mod templates;
 pub mod types;
 
 #[cfg(test)]
