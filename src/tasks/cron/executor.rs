@@ -62,7 +62,7 @@ async fn execute_cron_job(
                 ErrorReason::Permanent(format!("agent '{agent_id}' is not registered")),
                 // Missing-agent is never transient — classify returns permanent.
                 RetryHint::permanent(),
-                snapshot.trigger_source.clone(),
+                snapshot.trigger_source,
             );
         }
     };
@@ -166,7 +166,7 @@ async fn execute_cron_job(
                 error_reason: None,
                 delivery_status: Some(delivery_status),
                 agent_used_messaging_tool: false,
-                trigger_source: snapshot.trigger_source.clone(),
+                trigger_source: snapshot.trigger_source,
                 retry_hint: None,
             }
         }
@@ -183,7 +183,7 @@ async fn execute_cron_job(
                 error_reason: Some(ErrorReason::Transient("timeout".to_string())),
                 delivery_status: None,
                 agent_used_messaging_tool: false,
-                trigger_source: snapshot.trigger_source.clone(),
+                trigger_source: snapshot.trigger_source,
                 retry_hint: Some(classify("timeout")),
             }
         }
@@ -205,7 +205,7 @@ async fn execute_cron_job(
                 error_reason: Some(ErrorReason::Transient(msg)),
                 delivery_status: None,
                 agent_used_messaging_tool: false,
-                trigger_source: snapshot.trigger_source.clone(),
+                trigger_source: snapshot.trigger_source,
                 retry_hint: Some(hint),
             }
         }
@@ -245,7 +245,7 @@ async fn execute_cron_job(
                 err_text,
                 error_reason,
                 hint,
-                snapshot.trigger_source.clone(),
+                snapshot.trigger_source,
             )
         }
     }
