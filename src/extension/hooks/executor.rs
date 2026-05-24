@@ -110,6 +110,24 @@ impl HookExecutor {
         self.hooks.push(hook);
     }
 
+    /// Remove every hook whose `plugin_name` starts with `prefix`.
+    ///
+    /// Used by the hot-reload path: user-level hooks loaded from
+    /// `~/.aleph/hooks.json` are tagged `user:global` / `user:project` /
+    /// `user:project-local`, so calling `remove_by_plugin_prefix("user:")`
+    /// drops the prior layer before re-appending the freshly-parsed config —
+    /// preventing duplicate registrations on every hot-reload tick.
+    ///
+    /// Returns the number of hooks removed.
+    pub fn remove_by_plugin_prefix(&mut self, prefix: &str) -> usize {
+        let before = self.hooks.len();
+        self.hooks.retain(|h| !h.plugin_name.starts_with(prefix));
+        // Regex cache is keyed by matcher, not plugin — entries become
+        // harmlessly orphaned, not stale; cleanup on the next compile is
+        // sufficient. Re-building the whole cache here would be wasted work.
+        before - self.hooks.len()
+    }
+
     /// Build regex cache from all hooks
     fn build_regex_cache(hooks: &[HookConfig]) -> HashMap<String, Option<regex::Regex>> {
         let mut cache = HashMap::new();
@@ -754,5 +772,50 @@ impl HookExecutor {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extension::types::HookEvent;
+    use std::path::PathBuf;
+
+    fn dummy_hook(plugin_name: &str) -> HookConfig {
+        HookConfig {
+            event: HookEvent::MessageReceived,
+            kind: HookKind::Observer,
+            priority: Default::default(),
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: "true".into(),
+            }],
+            plugin_name: plugin_name.into(),
+            plugin_root: PathBuf::new(),
+            handler: None,
+            timeout_secs: None,
+        }
+    }
+
+    #[test]
+    fn remove_by_plugin_prefix_drops_only_matching_entries() {
+        let mut exec = HookExecutor::empty();
+        exec.add_hook(dummy_hook("user:global"));
+        exec.add_hook(dummy_hook("user:project"));
+        exec.add_hook(dummy_hook("plugin:foo"));
+        assert_eq!(exec.hook_count(), 3);
+
+        let removed = exec.remove_by_plugin_prefix("user:");
+        assert_eq!(removed, 2);
+        assert_eq!(exec.hook_count(), 1);
+        assert_eq!(exec.hooks[0].plugin_name, "plugin:foo");
+    }
+
+    #[test]
+    fn remove_by_plugin_prefix_is_a_noop_when_nothing_matches() {
+        let mut exec = HookExecutor::empty();
+        exec.add_hook(dummy_hook("plugin:foo"));
+        assert_eq!(exec.remove_by_plugin_prefix("user:"), 0);
+        assert_eq!(exec.hook_count(), 1);
     }
 }

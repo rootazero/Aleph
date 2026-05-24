@@ -80,14 +80,18 @@ pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::Mutex as StdMutex;
 use crate::sync_primitives::RwLock as StdRwLock;
 use crate::sync_primitives::{AtomicU64, Ordering};
 use hooks::{HookExecutor, ShellHookConsent};
 use manifest::adapter::AdapterRegistry;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
+use watcher::{
+    ExtensionChangeEvent, ExtensionChangeType, ExtensionWatcher, InternalWriteTracker,
+};
 
 // =============================================================================
 // Cache State
@@ -171,6 +175,22 @@ pub struct ExtensionManager {
     memory_registry: crate::sync_primitives::RwLock<
         Option<crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
     >,
+
+    /// File watcher for hot-reloading commands/agents/plugins/hooks.json.
+    /// `None` until [`Self::start_watcher`] is called (test/CLI paths skip
+    /// the watcher entirely).
+    watcher: StdMutex<Option<Arc<ExtensionWatcher>>>,
+
+    /// Tracks paths Aleph itself just wrote so the watcher can skip them
+    /// and avoid a write→reload→write feedback loop. Shared with the watcher
+    /// callback via `Arc`.
+    internal_writes: Arc<InternalWriteTracker>,
+
+    /// Counts how many times `reload()` has executed since construction.
+    /// Exposed via [`Self::reload_count`] — used by integration tests to
+    /// assert at-most-once reload behaviour on adjacent watcher events,
+    /// and available for future runtime observability.
+    reload_count: AtomicU64,
 }
 
 impl ExtensionManager {
@@ -205,6 +225,9 @@ impl ExtensionManager {
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Mutex::new(()),
             memory_registry: crate::sync_primitives::RwLock::new(None),
+            watcher: StdMutex::new(None),
+            internal_writes: Arc::new(InternalWriteTracker::default()),
+            reload_count: AtomicU64::new(0),
         })
     }
 
@@ -358,6 +381,8 @@ impl ExtensionManager {
 
     /// Force reload all extensions
     pub async fn reload(&self) -> ExtensionResult<LoadSummary> {
+        self.reload_count.fetch_add(1, Ordering::SeqCst);
+
         {
             let mut state = self.cache_state.write().await;
             state.loaded = false;
@@ -369,6 +394,164 @@ impl ExtensionManager {
             HookExecutor::empty().with_consent(ShellHookConsent::shared());
 
         self.load_all().await
+    }
+
+    /// Record that Aleph itself just wrote `path`. The hot-reload watcher
+    /// will skip events for this path within the suppression TTL, preventing
+    /// a write→reload→write feedback loop.
+    ///
+    /// Cheap to call even when no watcher is active — the tracker is always
+    /// constructed.
+    pub fn mark_self_write(&self, path: &Path) {
+        self.internal_writes.mark(path);
+    }
+
+    /// Returns the total number of times [`Self::reload`] has executed.
+    /// Used by integration tests and (in future) runtime observability.
+    pub fn reload_count(&self) -> u64 {
+        self.reload_count.load(Ordering::SeqCst)
+    }
+
+    /// Spawn the hot-reload watcher. Idempotent — second call returns Ok
+    /// without re-spawning. Caller is expected to hold `Arc<Self>` so the
+    /// watcher callback can keep the manager alive for the watcher's
+    /// lifetime.
+    ///
+    /// The optional `notify_cb` runs on every reloadable event before the
+    /// reload itself fires — boot wiring uses it to publish an
+    /// `extension.reloaded` topic event on the gateway event bus so Panel UI
+    /// can show a toast.
+    ///
+    /// Routing by [`ExtensionChangeType`]:
+    /// - `Skill` → no-op (delegated to the already-wired `SkillWatcher`
+    ///   which does per-skill targeted reloads — full `reload()` here would
+    ///   double-fire).
+    /// - `HooksConfig` → [`Self::sync_user_hooks`] only (cheap, no plugin
+    ///   re-discovery).
+    /// - everything else → full [`Self::reload`].
+    pub async fn start_watcher(
+        self: &Arc<Self>,
+        notify_cb: Option<Box<dyn Fn(ExtensionChangeEvent) + Send + Sync>>,
+    ) -> ExtensionResult<()> {
+        self.start_watcher_with_dirs(None, notify_cb).await
+    }
+
+    /// Same as [`Self::start_watcher`] but lets the caller override the
+    /// watched directory list. `None` uses the defaults (`~/.claude/`,
+    /// `~/.aleph/`). Primarily used by integration tests that need to
+    /// substitute a `TempDir` for the home directory.
+    pub async fn start_watcher_with_dirs(
+        self: &Arc<Self>,
+        watch_dirs: Option<Vec<PathBuf>>,
+        notify_cb: Option<Box<dyn Fn(ExtensionChangeEvent) + Send + Sync>>,
+    ) -> ExtensionResult<()> {
+        {
+            let guard = self
+                .watcher
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if guard.is_some() {
+                return Ok(());
+            }
+        }
+
+        let manager = Arc::clone(self);
+        let internal_writes = Arc::clone(&self.internal_writes);
+        let cb_arc: Arc<Option<Box<dyn Fn(ExtensionChangeEvent) + Send + Sync>>> =
+            Arc::new(notify_cb);
+        // The notify-debouncer-full callback runs on a dedicated OS thread
+        // outside the Tokio runtime, so we must hand it a Handle captured
+        // here in async context — bare `tokio::spawn` would panic.
+        let runtime = tokio::runtime::Handle::current();
+
+        let on_event = move |event: ExtensionChangeEvent| {
+            // Filter out paths Aleph itself just wrote (5s suppression).
+            let filtered: Vec<PathBuf> = event
+                .changed_paths
+                .iter()
+                .filter(|p| !internal_writes.was_recent(p))
+                .cloned()
+                .collect();
+            if filtered.is_empty() {
+                tracing::trace!(
+                    paths = ?event.changed_paths,
+                    "Extension watcher: suppressed (internal-write window)"
+                );
+                return;
+            }
+
+            let mut effective = event.clone();
+            effective.changed_paths = filtered;
+
+            // Notify outer callback (e.g. gateway event publisher).
+            if let Some(cb) = cb_arc.as_ref() {
+                cb(effective.clone());
+            }
+
+            // Route to the cheapest correct reload path.
+            match effective.change_type {
+                ExtensionChangeType::Skill => {
+                    // SkillWatcher already handles SKILL.md targeted reloads;
+                    // running full reload() here would double-fire.
+                    tracing::trace!(
+                        paths = ?effective.changed_paths,
+                        "Extension watcher: skill change deferred to SkillWatcher"
+                    );
+                }
+                ExtensionChangeType::HooksConfig => {
+                    let mgr = Arc::clone(&manager);
+                    runtime.spawn(async move {
+                        tracing::info!(
+                            paths = ?effective.changed_paths,
+                            "Extension watcher: hooks config changed, reloading user hooks"
+                        );
+                        mgr.sync_user_hooks().await;
+                    });
+                }
+                _ => {
+                    let mgr = Arc::clone(&manager);
+                    runtime.spawn(async move {
+                        tracing::info!(
+                            kind = ?effective.change_type,
+                            paths = ?effective.changed_paths,
+                            "Extension watcher: triggering full reload"
+                        );
+                        if let Err(e) = mgr.reload().await {
+                            tracing::warn!(error = %e, "Extension hot reload failed");
+                        }
+                    });
+                }
+            }
+        };
+
+        let watcher = match watch_dirs {
+            Some(dirs) => ExtensionWatcher::new_with_dirs(dirs, on_event),
+            None => ExtensionWatcher::new(None, on_event),
+        };
+
+        watcher
+            .start()
+            .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+
+        let mut guard = self
+            .watcher
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = Some(Arc::new(watcher));
+        Ok(())
+    }
+
+    /// Stop the hot-reload watcher (no-op if not started). Tests use this
+    /// to release watch handles before TempDir drops.
+    pub fn stop_watcher(&self) -> ExtensionResult<()> {
+        let mut guard = self
+            .watcher
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(w) = guard.take() {
+            w.stop().map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Collect all plugin directories from discovery, deduplicating by canonical path.
@@ -412,18 +595,27 @@ impl ExtensionManager {
     /// [`Self::sync_hooks_from_registry`] so user entries are evaluated in
     /// the same executor pass — priority + matcher determine ordering, not
     /// load order.
-    async fn sync_user_hooks(&self) {
+    ///
+    /// Idempotent: every prior entry tagged with the `user:` plugin prefix
+    /// is dropped before the freshly-parsed config is appended. This lets the
+    /// hot-reload watcher call this method on every `hooks.json` change
+    /// without leaking duplicate registrations.
+    pub(crate) async fn sync_user_hooks(&self) {
         let cwd = std::env::current_dir().ok();
         let user_hooks = crate::extension::hooks::load_user_hooks(cwd.as_deref());
+        let mut executor = self.hook_executor.write().await;
+        let removed = executor.remove_by_plugin_prefix("user:");
         if user_hooks.is_empty() {
+            if removed > 0 {
+                tracing::info!(removed, "Cleared user-level hook configs");
+            }
             return;
         }
         let count = user_hooks.len();
-        let mut executor = self.hook_executor.write().await;
         for h in user_hooks {
             executor.add_hook(h);
         }
-        tracing::info!(count, "Loaded user-level hook configs");
+        tracing::info!(count, removed, "Loaded user-level hook configs");
     }
 
     /// Sync hooks from PluginRegistry to HookExecutor.

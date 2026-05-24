@@ -1540,6 +1540,55 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Watcher Wiring Cycle: connect the previously-dead `ExtensionWatcher`
+    // (notify-debouncer-full over ~/.claude/ and ~/.aleph/) into the running
+    // server. Detects edits to commands/agents/plugins/hooks.json files and
+    // hot-reloads via the cheapest correct path (sync_user_hooks for hooks,
+    // full reload for everything else). SKILL.md changes are deferred to the
+    // SkillWatcher above so we don't double-fire.
+    if let Some(em) = alephcore::extension::try_extension_manager() {
+        use alephcore::extension::watcher::{ExtensionChangeEvent, ExtensionChangeType};
+        let bus = event_bus.clone();
+        let cb: Box<dyn Fn(ExtensionChangeEvent) + Send + Sync> = Box::new(
+            move |ev: ExtensionChangeEvent| {
+                let kind = match ev.change_type {
+                    ExtensionChangeType::Skill => "skill",
+                    ExtensionChangeType::Command => "command",
+                    ExtensionChangeType::Agent => "agent",
+                    ExtensionChangeType::Plugin => "plugin",
+                    ExtensionChangeType::HooksConfig => "hooks",
+                    ExtensionChangeType::Unknown => "unknown",
+                };
+                let paths: Vec<String> = ev
+                    .changed_paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                let topic = alephcore::gateway::TopicEvent::new(
+                    "extension.reloaded",
+                    serde_json::json!({
+                        "kind": kind,
+                        "paths": paths,
+                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                    }),
+                );
+                if let Err(e) = bus.publish_json(&topic) {
+                    tracing::warn!(error = %e, "Failed to publish extension.reloaded event");
+                }
+            },
+        );
+        match em.start_watcher(Some(cb)).await {
+            Ok(()) => {
+                if !args.daemon {
+                    println!("Extension watcher: hot-reload active (commands/agents/plugins/hooks.json)");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "extension watcher disabled");
+            }
+        }
+    }
+
     // Spawn cron timer loop (after agent handlers, so AgentRegistry is populated)
     if let Some(ref cron_svc) = cron_service {
         if let (Some(ref exec_adapter), Some(ref registry)) = (

@@ -14,9 +14,9 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::{Arc, Mutex};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 /// Debounce delay for extension file changes (ms)
@@ -48,16 +48,36 @@ pub enum ExtensionChangeType {
     Agent,
     /// Plugin manifest changed
     Plugin,
+    /// User-level hooks config (`~/.aleph/hooks.json` or
+    /// `<cwd>/.aleph/hooks.{json,local.json}`) changed. Routed through the
+    /// lightweight `sync_user_hooks` path so a hooks-only edit doesn't
+    /// trigger a full plugin re-discovery.
+    HooksConfig,
     /// Unknown/mixed change
     Unknown,
 }
 
 impl ExtensionChangeType {
     /// Determine change type from file path
-    fn from_path(path: &Path) -> Self {
+    pub(crate) fn from_path(path: &Path) -> Self {
         let path_str = path.to_string_lossy();
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let parent_name = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
 
-        if path_str.contains("/skills/") {
+        // hooks.json / hooks.local.json living under a `.aleph` or `.claude`
+        // directory is the user-level hook config layer (Claude Code parity).
+        if matches!(file_name, "hooks.json" | "hooks.local.json")
+            && (parent_name == ".aleph" || parent_name == ".claude")
+        {
+            Self::HooksConfig
+        } else if path_str.contains("/skills/") {
             Self::Skill
         } else if path_str.contains("/commands/") {
             Self::Command
@@ -285,6 +305,90 @@ impl Drop for ExtensionWatcher {
     }
 }
 
+/// Default suppression window for Aleph's own writes (Claude Code parity:
+/// `changeDetector.ts` uses 5s — long enough to outlast typical
+/// fs event delivery latency, short enough to recover if a mark is leaked).
+const DEFAULT_INTERNAL_WRITE_TTL: Duration = Duration::from_secs(5);
+
+/// Tracks file paths that Aleph itself just wrote, so the file watcher can
+/// skip them and avoid a feedback loop (write -> reload -> write -> ...).
+///
+/// Writers call [`InternalWriteTracker::mark`] immediately after a successful
+/// write; the watcher callback consults [`InternalWriteTracker::was_recent`]
+/// and drops matching events.
+///
+/// Stored entries expire after `ttl` (default 5s). Pruning is lazy: each
+/// `was_recent` / `mark` call evicts expired entries — there is no background
+/// thread.
+#[derive(Debug)]
+pub struct InternalWriteTracker {
+    recent: Mutex<HashMap<PathBuf, Instant>>,
+    ttl: Duration,
+}
+
+impl Default for InternalWriteTracker {
+    fn default() -> Self {
+        Self::with_ttl(DEFAULT_INTERNAL_WRITE_TTL)
+    }
+}
+
+impl InternalWriteTracker {
+    /// Construct a tracker with a custom TTL. Tests use a short TTL to
+    /// avoid sleeping for seconds.
+    pub fn with_ttl(ttl: Duration) -> Self {
+        Self {
+            recent: Mutex::new(HashMap::new()),
+            ttl,
+        }
+    }
+
+    /// Record that Aleph just wrote `path`. Subsequent watcher events
+    /// targeting the same canonicalised path within `ttl` are suppressed.
+    pub fn mark(&self, path: &Path) {
+        let key = canonicalize_best_effort(path);
+        let mut guard = self.recent.lock().unwrap_or_else(|e| e.into_inner());
+        Self::prune_locked(&mut guard, self.ttl);
+        guard.insert(key, Instant::now());
+    }
+
+    /// Returns true if `path` was marked within the TTL window.
+    pub fn was_recent(&self, path: &Path) -> bool {
+        let key = canonicalize_best_effort(path);
+        let mut guard = self.recent.lock().unwrap_or_else(|e| e.into_inner());
+        Self::prune_locked(&mut guard, self.ttl);
+        guard.contains_key(&key)
+    }
+
+    fn prune_locked(map: &mut HashMap<PathBuf, Instant>, ttl: Duration) {
+        let now = Instant::now();
+        map.retain(|_, ts| now.duration_since(*ts) < ttl);
+    }
+}
+
+/// Canonicalise `path` so that marks recorded before a file exists still
+/// match watcher events fired after creation.
+///
+/// `Path::canonicalize` requires the file to exist, but writers typically
+/// call [`InternalWriteTracker::mark`] *before* the write completes. We
+/// therefore fall back to `parent.canonicalize().join(file_name)`, which
+/// works whenever the parent directory exists — true for every file write
+/// inside `~/.aleph/` or a project `.aleph/` dir. If even the parent is
+/// missing we accept the raw path; the suppression window will then only
+/// match if the watcher event echoes the same uncanonicalised form
+/// (rare).
+fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    if let Ok(p) = path.canonicalize() {
+        return p;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => match parent.canonicalize() {
+            Ok(canon_parent) => canon_parent.join(name),
+            Err(_) => path.to_path_buf(),
+        },
+        _ => path.to_path_buf(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +458,67 @@ mod tests {
             ExtensionChangeType::from_path(&PathBuf::from("/foo/random.md")),
             ExtensionChangeType::Unknown
         );
+    }
+
+    #[test]
+    fn test_change_type_detects_hooks_config() {
+        for parent in [".aleph", ".claude"] {
+            for file in ["hooks.json", "hooks.local.json"] {
+                let p = PathBuf::from(format!("/home/u/{parent}/{file}"));
+                assert_eq!(
+                    ExtensionChangeType::from_path(&p),
+                    ExtensionChangeType::HooksConfig,
+                    "expected HooksConfig for {}",
+                    p.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_change_type_ignores_unrelated_hooks_json() {
+        // A `hooks.json` under a plugin dir (not `.aleph`/`.claude`) must NOT
+        // be classified as user-level hooks config — those go through the
+        // plugin manifest path instead.
+        assert_eq!(
+            ExtensionChangeType::from_path(&PathBuf::from("/p/plugin-x/hooks/hooks.json")),
+            ExtensionChangeType::Unknown
+        );
+    }
+
+    #[test]
+    fn test_internal_write_tracker_suppresses_in_window() {
+        let temp = TempDir::new().unwrap();
+        let p = temp.path().join("foo.json");
+        fs::write(&p, b"{}").unwrap();
+        let tracker = InternalWriteTracker::default();
+        assert!(!tracker.was_recent(&p));
+        tracker.mark(&p);
+        assert!(tracker.was_recent(&p));
+    }
+
+    #[test]
+    fn test_internal_write_tracker_expires_after_ttl() {
+        let temp = TempDir::new().unwrap();
+        let p = temp.path().join("foo.json");
+        fs::write(&p, b"{}").unwrap();
+        let tracker = InternalWriteTracker::with_ttl(Duration::from_millis(50));
+        tracker.mark(&p);
+        assert!(tracker.was_recent(&p));
+        thread::sleep(Duration::from_millis(80));
+        assert!(!tracker.was_recent(&p));
+    }
+
+    #[test]
+    fn test_internal_write_tracker_missing_file_falls_back_to_raw_path() {
+        // `canonicalize` fails for nonexistent paths — we still want mark/query
+        // to round-trip on the raw path so writers can mark a path before the
+        // write completes.
+        let temp = TempDir::new().unwrap();
+        let p = temp.path().join("not-yet-created.json");
+        let tracker = InternalWriteTracker::default();
+        tracker.mark(&p);
+        assert!(tracker.was_recent(&p));
     }
 
     #[test]
