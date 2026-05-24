@@ -258,9 +258,7 @@ pub async fn materialize_template(
 /// Topologically order the template's tasks so dependencies are created first.
 /// Returns the tasks in execution order. `TeamTemplate::validate` already
 /// ruled out cycles, so this is Kahn's algorithm without the cycle check.
-fn topo_sort<'a>(
-    tpl: &'a TeamTemplate,
-) -> Result<Vec<&'a super::types::TemplateTask>, TeamTemplateError> {
+fn topo_sort(tpl: &TeamTemplate) -> Result<Vec<&super::types::TemplateTask>, TeamTemplateError> {
     // Build adjacency + in-degree maps keyed by task.key.
     let mut in_deg: HashMap<&str, usize> = HashMap::with_capacity(tpl.tasks.len());
     for t in &tpl.tasks {

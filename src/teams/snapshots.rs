@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::agents::swarm::tasks::{
-    CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskStore, NewCoordTask, Priority,
+    CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskStore, NewCoordTask,
 };
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
@@ -455,10 +455,6 @@ pub async fn restore_snapshot(
     Ok(diff)
 }
 
-// Silence unused-Priority warning when restore is the only consumer.
-#[allow(dead_code)]
-fn _priority_marker(_p: Priority) {}
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -467,6 +463,7 @@ fn _priority_marker(_p: Priority) {}
 mod tests {
     use super::*;
     use crate::agents::swarm::tasks::store::SqliteCoordTaskStore;
+    use crate::agents::swarm::tasks::Priority;
     use crate::teams::{NewTeam, NewTeamMember, SqliteTeamStore};
 
     async fn setup() -> (Arc<SqliteSnapshotStore>, Arc<SqliteTeamStore>, Arc<SqliteCoordTaskStore>) {
