@@ -460,6 +460,11 @@ pub struct ExecutionResult {
     pub delivery_status: Option<DeliveryStatus>,
     pub agent_used_messaging_tool: bool,
     pub trigger_source: TriggerSource,
+    /// Classification of `error` produced by [`crate::tasks::shared::retry_hint::classify`].
+    /// `None` on success; `Some(RetryHint::permanent())` for a classified non-transient
+    /// failure (the writeback path uses this to stop scheduling further retries and
+    /// to bypass the failure-alert cooldown).
+    pub retry_hint: Option<crate::tasks::shared::retry_hint::RetryHint>,
 }
 
 // ── CronJobView ─────────────────────────────────────────────────────────

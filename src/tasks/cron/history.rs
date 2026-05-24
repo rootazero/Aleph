@@ -23,16 +23,54 @@ CREATE TABLE IF NOT EXISTS cron_job_runs (
     error_reason TEXT,
     output_summary TEXT,
     delivery_status TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    retry_category TEXT,
+    retryable INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cron_runs_job_id ON cron_job_runs(job_id);
 CREATE INDEX IF NOT EXISTS idx_cron_runs_created_at ON cron_job_runs(created_at);
 "#;
 
 /// Initialize the cron history schema on an existing connection.
+///
+/// Runs the `CREATE TABLE IF NOT EXISTS` then idempotently ALTERs in any columns
+/// added after launch (currently `retry_category`, `retryable`). Older databases
+/// without these columns are upgraded in place; columns already present are
+/// detected via `PRAGMA table_info` so re-running is a no-op.
 pub fn init_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(CREATE_SCHEMA_SQL)
-        .map_err(|e| format!("failed to create cron history schema: {e}"))
+        .map_err(|e| format!("failed to create cron history schema: {e}"))?;
+    ensure_column(conn, "cron_job_runs", "retry_category", "TEXT")?;
+    ensure_column(conn, "cron_job_runs", "retryable", "INTEGER")?;
+    Ok(())
+}
+
+/// Add `column` to `table` with the given SQLite type if it is not already there.
+/// `PRAGMA table_info` is the lightest way to introspect columns and avoids the
+/// "duplicate column" error that ALTER would raise on a repeat run.
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    sql_type: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("failed to prepare PRAGMA: {e}"))?;
+    let existing: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("failed to query PRAGMA: {e}"))?
+        .filter_map(Result::ok)
+        .collect();
+    if existing.iter().any(|c| c == column) {
+        return Ok(());
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {sql_type}"),
+        [],
+    )
+    .map_err(|e| format!("failed to ALTER TABLE {table} ADD {column}: {e}"))?;
+    Ok(())
 }
 
 // ── CronRunRecord ───────────────────────────────────────────────────────
@@ -52,6 +90,15 @@ pub struct CronRunRecord {
     pub output_summary: Option<String>,
     pub delivery_status: Option<String>,
     pub created_at: i64,
+    /// Wire token from [`crate::tasks::shared::retry_hint::RetryCategory::as_str`]
+    /// when the run failed transiently (rate_limit / overloaded / network /
+    /// timeout / server_error). `None` on success or permanent failure.
+    #[serde(default)]
+    pub retry_category: Option<String>,
+    /// `Some(true)` if the writeback path classified the error as retryable,
+    /// `Some(false)` if it was permanent, `None` on success.
+    #[serde(default)]
+    pub retryable: Option<bool>,
 }
 
 // ── Insert ──────────────────────────────────────────────────────────────
@@ -61,8 +108,9 @@ pub fn insert_cron_run(conn: &Connection, record: &CronRunRecord) -> Result<(), 
     conn.execute(
         "INSERT INTO cron_job_runs (
             id, job_id, trigger_source, status, started_at, ended_at,
-            duration_ms, error, error_reason, output_summary, delivery_status, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            duration_ms, error, error_reason, output_summary, delivery_status, created_at,
+            retry_category, retryable
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             record.id,
             record.job_id,
@@ -76,6 +124,8 @@ pub fn insert_cron_run(conn: &Connection, record: &CronRunRecord) -> Result<(), 
             record.output_summary,
             record.delivery_status,
             record.created_at,
+            record.retry_category,
+            record.retryable.map(|b| if b { 1_i64 } else { 0_i64 }),
         ],
     )
     .map_err(|e| format!("failed to insert cron run: {e}"))?;
@@ -95,7 +145,8 @@ pub fn get_cron_runs(
     let mut stmt = conn
         .prepare(
             "SELECT id, job_id, trigger_source, status, started_at, ended_at,
-                    duration_ms, error, error_reason, output_summary, delivery_status, created_at
+                    duration_ms, error, error_reason, output_summary, delivery_status, created_at,
+                    retry_category, retryable
              FROM cron_job_runs
              WHERE job_id = ?1
              ORDER BY created_at DESC
@@ -118,6 +169,8 @@ pub fn get_cron_runs(
                 output_summary: row.get(9)?,
                 delivery_status: row.get(10)?,
                 created_at: row.get(11)?,
+                retry_category: row.get(12)?,
+                retryable: row.get::<_, Option<i64>>(13)?.map(|v| v != 0),
             })
         })
         .map_err(|e| format!("failed to query cron runs: {e}"))?;
@@ -134,7 +187,8 @@ pub fn get_all_cron_runs(conn: &Connection, limit: usize) -> Result<Vec<CronRunR
     let mut stmt = conn
         .prepare(
             "SELECT id, job_id, trigger_source, status, started_at, ended_at,
-                    duration_ms, error, error_reason, output_summary, delivery_status, created_at
+                    duration_ms, error, error_reason, output_summary, delivery_status, created_at,
+                    retry_category, retryable
              FROM cron_job_runs
              ORDER BY created_at DESC
              LIMIT ?1",
@@ -156,6 +210,8 @@ pub fn get_all_cron_runs(conn: &Connection, limit: usize) -> Result<Vec<CronRunR
                 output_summary: row.get(9)?,
                 delivery_status: row.get(10)?,
                 created_at: row.get(11)?,
+                retry_category: row.get(12)?,
+                retryable: row.get::<_, Option<i64>>(13)?.map(|v| v != 0),
             })
         })
         .map_err(|e| format!("failed to query cron runs: {e}"))?;
@@ -213,6 +269,8 @@ mod tests {
             output_summary: Some("done".to_string()),
             delivery_status: None,
             created_at,
+            retry_category: None,
+            retryable: None,
         }
     }
 
@@ -336,5 +394,54 @@ mod tests {
         insert_cron_run(&conn, &record).unwrap();
         let result = insert_cron_run(&conn, &record);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn retry_hint_columns_roundtrip() {
+        let conn = setup_db();
+        let mut record = make_record("rt-1", "job-z", "error", 2_000_000);
+        record.error = Some("HTTP 429".to_string());
+        record.retry_category = Some("rate_limit".to_string());
+        record.retryable = Some(true);
+        insert_cron_run(&conn, &record).unwrap();
+
+        let runs = get_cron_runs(&conn, "job-z", 10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].retry_category.as_deref(), Some("rate_limit"));
+        assert_eq!(runs[0].retryable, Some(true));
+    }
+
+    #[test]
+    fn init_schema_idempotent_on_legacy_db() {
+        // Simulate a pre-retry-hint database by creating the legacy table shape
+        // manually, then re-running init_schema to confirm it ALTERs the new
+        // columns in without errors (and a second call is a no-op).
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE cron_job_runs (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                trigger_source TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                ended_at INTEGER,
+                duration_ms INTEGER,
+                error TEXT,
+                error_reason TEXT,
+                output_summary TEXT,
+                delivery_status TEXT,
+                created_at INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+        init_schema(&conn).expect("first upgrade");
+        init_schema(&conn).expect("second upgrade is a no-op");
+
+        let mut record = make_record("legacy-1", "job-l", "error", 1_111_111);
+        record.retry_category = Some("network".to_string());
+        record.retryable = Some(true);
+        insert_cron_run(&conn, &record).unwrap();
+        let runs = get_cron_runs(&conn, "job-l", 10).unwrap();
+        assert_eq!(runs[0].retry_category.as_deref(), Some("network"));
     }
 }

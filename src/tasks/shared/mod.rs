@@ -5,6 +5,7 @@
 
 pub mod clock;
 pub mod delivery;
+pub mod retry_hint;
 pub mod schedule;
 pub mod store;
 pub mod targets;

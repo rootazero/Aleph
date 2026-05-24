@@ -212,6 +212,7 @@ mod tests {
                     delivery_status: None,
                     agent_used_messaging_tool: false,
                     trigger_source: snapshot.trigger_source.clone(),
+                    retry_hint: None,
                 }
             })
         })

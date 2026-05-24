@@ -21,6 +21,7 @@ use crate::tasks::cron::config::{
     TriggerSource,
 };
 use crate::tasks::cron::service::timer::JobExecutorFn;
+use crate::tasks::shared::retry_hint::{classify, RetryHint};
 
 /// Deferred channel registry reference — set after channels are initialized.
 pub type ChannelRegistryCell = Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>;
@@ -59,6 +60,8 @@ async fn execute_cron_job(
                 started_at,
                 format!("agent not found: {agent_id}"),
                 ErrorReason::Permanent(format!("agent '{agent_id}' is not registered")),
+                // Missing-agent is never transient — classify returns permanent.
+                RetryHint::permanent(),
                 snapshot.trigger_source.clone(),
             );
         }
@@ -164,6 +167,7 @@ async fn execute_cron_job(
                 delivery_status: Some(delivery_status),
                 agent_used_messaging_tool: false,
                 trigger_source: snapshot.trigger_source.clone(),
+                retry_hint: None,
             }
         }
         Err(ExecutionError::Timeout) => {
@@ -180,11 +184,17 @@ async fn execute_cron_job(
                 delivery_status: None,
                 agent_used_messaging_tool: false,
                 trigger_source: snapshot.trigger_source.clone(),
+                retry_hint: Some(classify("timeout")),
             }
         }
         Err(ExecutionError::AgentBusy(msg)) => {
             warn!(job_id = %snapshot.id, %msg, "cron job skipped: agent busy");
             let ended_at = chrono::Utc::now().timestamp_millis();
+            // Agent-busy is a temporary local-side condition, treat as transient
+            // network-shaped backpressure regardless of the message text.
+            let hint = RetryHint::transient(
+                crate::tasks::shared::retry_hint::RetryCategory::Overloaded,
+            );
             ExecutionResult {
                 started_at,
                 ended_at,
@@ -196,14 +206,17 @@ async fn execute_cron_job(
                 delivery_status: None,
                 agent_used_messaging_tool: false,
                 trigger_source: snapshot.trigger_source.clone(),
+                retry_hint: Some(hint),
             }
         }
         Err(e) => {
             error!(job_id = %snapshot.id, error = %e, "cron job failed");
 
+            let err_text = e.to_string();
+            let hint = classify(&err_text);
             let error_msg = format!(
                 "❌ Cron job execution failed\n\nJob: {}\nError: {}",
-                snapshot.id, e
+                snapshot.id, err_text
             );
             if let (Some(ref ch_id), Some(ref conv_id)) = (
                 &snapshot.source_channel_id,
@@ -219,10 +232,19 @@ async fn execute_cron_job(
                 .await;
             }
 
+            // Match historical behaviour: errors that look transient stay
+            // `Transient`; otherwise mark `Permanent` so phase3 can short-circuit
+            // retries instead of hammering with backoff.
+            let error_reason = if hint.retryable {
+                ErrorReason::Transient(err_text.clone())
+            } else {
+                ErrorReason::Permanent(err_text.clone())
+            };
             make_error_result(
                 started_at,
-                e.to_string(),
-                ErrorReason::Transient(e.to_string()),
+                err_text,
+                error_reason,
+                hint,
                 snapshot.trigger_source.clone(),
             )
         }
@@ -331,6 +353,7 @@ fn make_error_result(
     started_at: i64,
     error: String,
     reason: ErrorReason,
+    retry_hint: RetryHint,
     trigger_source: TriggerSource,
 ) -> ExecutionResult {
     let ended_at = chrono::Utc::now().timestamp_millis();
@@ -345,6 +368,7 @@ fn make_error_result(
         delivery_status: None,
         agent_used_messaging_tool: false,
         trigger_source,
+        retry_hint: Some(retry_hint),
     }
 }
 

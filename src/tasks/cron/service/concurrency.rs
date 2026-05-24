@@ -7,10 +7,11 @@
 //! This model minimizes lock hold time — the lock is only held during
 //! brief metadata updates, never during actual job execution.
 
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::sync_primitives::Arc;
 
+use crate::tasks::cron::alert::should_send_alert;
 use crate::tasks::cron::chain;
 use crate::tasks::cron::config::{
     ExecutionResult, JobSnapshot, RunStatus, ScheduleKind, TriggerSource,
@@ -19,9 +20,22 @@ use crate::tasks::cron::history::CronRunRecord;
 use crate::tasks::cron::store::CronStore;
 use crate::tasks::cron::template::resolve_job_prompt;
 use crate::tasks::shared::clock::Clock;
+use crate::tasks::shared::retry_hint::RetryHint;
 use crate::tasks::shared::schedule::compute_backoff_ms;
 
 use super::ops::{advance_next_run, recompute_next_run_maintenance};
+
+/// A pending failure alert returned from [`phase3_writeback`] for the caller to
+/// dispatch via the shared delivery pipeline. The phase3 path itself does not
+/// hold the channel registry or delivery handle — it only decides *whether* an
+/// alert should fire and packages the payload.
+#[derive(Debug, Clone)]
+pub struct PendingAlert {
+    pub job_id: String,
+    pub job_name: String,
+    pub message: String,
+    pub target: crate::tasks::cron::config::DeliveryTargetConfig,
+}
 
 /// Phase 1: Mark due jobs and return snapshots for execution.
 ///
@@ -156,7 +170,7 @@ pub async fn phase3_writeback<C: Clock>(
     store: &Arc<tokio::sync::Mutex<CronStore>>,
     clock: &C,
     results: &[(String, ExecutionResult)],
-) -> Result<(), String> {
+) -> Result<Vec<PendingAlert>, String> {
     let mut guard = store.lock().await;
 
     guard.force_reload()?;
@@ -234,8 +248,15 @@ pub async fn phase3_writeback<C: Clock>(
         }
     }
 
-    // Record execution history
+    // Record execution history (now also persists retry hint classification)
     for (job_id, result) in results {
+        let (retry_category, retryable) = match result.retry_hint {
+            Some(hint) => (
+                hint.category.map(|c| c.as_str().to_string()),
+                Some(hint.retryable),
+            ),
+            None => (None, None),
+        };
         let record = CronRunRecord {
             id: uuid::Uuid::new_v4().to_string(),
             job_id: job_id.clone(),
@@ -251,6 +272,8 @@ pub async fn phase3_writeback<C: Clock>(
                 .delivery_status
                 .map(|s| format!("{s:?}").to_lowercase()),
             created_at: clock.now_ms(),
+            retry_category,
+            retryable,
         };
         if let Err(e) = guard.insert_run(&record) {
             warn!(job_id, error = %e, "failed to record cron run history");
@@ -270,9 +293,17 @@ pub async fn phase3_writeback<C: Clock>(
         }
     }
 
-    // Failure backoff: a recurring job that just failed gets its next run
-    // pushed out by an escalating delay so it does not hot-loop at its normal
-    // interval. `consecutive_errors` was already incremented above.
+    // Failure backoff + retry-hint short-circuit:
+    //   - **Transient** failures (rate_limit / overloaded / network / timeout /
+    //     server_error) keep the existing escalating backoff so we don't
+    //     hot-loop a recurring job at its normal interval.
+    //   - **Permanent** failures (auth error, missing agent, validation) skip
+    //     scheduling another retry entirely — `next_run_at_ms` is cleared so
+    //     the operator gets the alert below and can fix the config without the
+    //     job churning in the background.
+    //
+    // Both cases stay limited to non-`At` (recurring) jobs; one-shot `At` jobs
+    // are never rescheduled and may have already been removed above.
     let backoff_now = clock.now_ms();
     for (job_id, result) in results {
         if !matches!(result.status, RunStatus::Error | RunStatus::Timeout) {
@@ -282,13 +313,72 @@ pub async fn phase3_writeback<C: Clock>(
             continue;
         };
         if matches!(job.schedule_kind, ScheduleKind::At { .. }) {
-            continue; // one-shot jobs are not rescheduled
+            continue;
+        }
+        let hint = result.retry_hint.unwrap_or_else(RetryHint::permanent);
+        if !hint.retryable {
+            // Permanent: do not schedule another run; the alert dispatcher
+            // below will notify the user with the classified reason.
+            if job.state.next_run_at_ms.is_some() {
+                info!(
+                    job_id,
+                    "phase3: permanent failure detected, clearing next_run_at_ms"
+                );
+            }
+            job.state.next_run_at_ms = None;
+            continue;
         }
         let backoff = compute_backoff_ms(job.state.consecutive_errors);
         if backoff > 0 {
             let floor = backoff_now.saturating_add(backoff);
             let next = job.state.next_run_at_ms.map_or(floor, |n| n.max(floor));
             job.state.next_run_at_ms = Some(next);
+        }
+    }
+
+    // Failure alerts: for any job configured with `failure_alert`, evaluate
+    // `should_send_alert` against the freshly-incremented `consecutive_errors`
+    // and the run's classified retry hint. Permanent failures bypass the
+    // cooldown (the original alert helper only respected `cooldown_ms`, so the
+    // policy lives here in the caller). The returned `PendingAlert`s are
+    // dispatched by the timer loop via the shared delivery pipeline — phase3
+    // keeps no I/O coupling beyond SQLite.
+    let now_alert = clock.now_ms();
+    let mut pending_alerts: Vec<PendingAlert> = Vec::new();
+    for (job_id, result) in results {
+        if !matches!(result.status, RunStatus::Error | RunStatus::Timeout) {
+            continue;
+        }
+        let Some(job) = guard.get_job_mut(job_id) else {
+            continue;
+        };
+        let Some(alert_cfg) = job.failure_alert.clone() else {
+            continue;
+        };
+        let hint = result.retry_hint.unwrap_or_else(RetryHint::permanent);
+        // Permanent failures fire on the first error, bypassing both the
+        // `after` threshold and the cooldown — operator intervention is
+        // required anyway, no point burying it under retry noise.
+        let bypass = !hint.retryable;
+        let msg = if bypass {
+            Some(format!(
+                "Cron job '{}' ({}) failed permanently (no further retries scheduled). \
+                 Last error: {}",
+                job.name,
+                job.id,
+                job.state.last_error.as_deref().unwrap_or("unknown")
+            ))
+        } else {
+            should_send_alert(job, &alert_cfg, now_alert)
+        };
+        if let Some(message) = msg {
+            job.state.last_failure_alert_at_ms = Some(now_alert);
+            pending_alerts.push(PendingAlert {
+                job_id: job.id.clone(),
+                job_name: job.name.clone(),
+                message,
+                target: alert_cfg.target,
+            });
         }
     }
 
@@ -332,7 +422,7 @@ pub async fn phase3_writeback<C: Clock>(
 
     guard.persist()?;
 
-    Ok(())
+    Ok(pending_alerts)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -385,6 +475,7 @@ mod tests {
             delivery_status: None,
             agent_used_messaging_tool: false,
             trigger_source: TriggerSource::Schedule,
+            retry_hint: None,
         }
     }
 
