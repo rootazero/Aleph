@@ -484,9 +484,11 @@ html.translucent { --aleph-canvas-base: transparent; }
               inset  1px 0 0 var(--aleph-sheen);
 }
 
-/* Brand row — padded on macOS to clear the overlay traffic lights at the
-   top-left. The sidebar toggle now lives at the top-right of the window, so
-   no extra padding is needed for it on the sidebar's left edge. */
+/* Brand row — hugs the top of the sidebar by default. On macOS the row
+   is padded down to clear the overlay traffic lights (and the fixed
+   sidebar-toggle that sits in the same band, next to them). Web + Tauri
+   Win/Linux carry their own inline collapse button inside the brand row,
+   so the row stays tight against the top edge. */
 .aleph-sidebar-head { padding-top: 0.85rem; }
 html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 
@@ -706,19 +708,21 @@ html[data-platform="macos"] .aleph-titlebar-drag {
     display: block;
 }
 
-/* Sidebar toggle — always visible, fixed in the title-bar row. Position is
-   anchored to the window (not the sidebar), so collapsing or expanding the
-   sidebar leaves the button exactly where it is.
+/* Fixed top-left sidebar toggle — pinned to the window, not the sidebar,
+   so it remains clickable when the sidebar slides off-screen.
 
-   • macOS: sits just to the right of the overlay traffic lights (~8–60 px
-     from the left edge), so it always reads as a title-bar control next to
-     the OS chrome.
-   • Win/Linux: no traffic lights, so the button right-aligns to the title
-     bar — the conventional spot for window-level toggles. */
+   Visibility model:
+   • macOS Tauri: always visible. Sits in the title-bar row next to the
+     overlay traffic lights and is the only collapse control there
+     (the inline brand-row variant is hidden on macOS).
+   • Web (browser) + Tauri Win/Linux: only visible when the sidebar is
+     collapsed. While the sidebar is open, the inline collapse button in
+     the brand row handles it; this fixed one takes over as soon as the
+     sidebar slides away. */
 .aleph-sidebar-toggle {
     position: fixed;
     top: 8px;
-    right: 10px;
+    left: 10px;
     z-index: 50;
     display: flex;
     align-items: center;
@@ -745,13 +749,51 @@ html[data-platform="macos"] .aleph-titlebar-drag {
     outline: 2px solid var(--color-primary);
     outline-offset: 1px;
 }
-html[data-platform="macos"] .aleph-sidebar-toggle {
-    top: 10px;
-    /* Right-of-traffic-lights anchor: lights end ~60 px from the left edge,
-       leave a small breathing gap before the button. `right` is unset so
-       the button does not also stretch to the right edge. */
+/* Hide the fixed toggle while the sidebar is expanded (the inline brand-row
+   button is in charge). macOS Tauri overrides this back to flex below. */
+.aleph-shell:not(.sidebar-collapsed) .aleph-sidebar-toggle {
+    display: none;
+}
+/* macOS Tauri — fixed toggle is always visible, vertically centred with
+   the overlay traffic lights (their visual midline sits at y≈15 with
+   Tauri's default Overlay title-bar style), and offset to start just past
+   the lights (they end ~60 px from the left edge). */
+html[data-platform="macos"] .aleph-shell .aleph-sidebar-toggle {
+    display: flex;
+    top: 2px;
     left: 72px;
-    right: auto;
+}
+
+/* Inline collapse button — lives inside the brand row next to ThemeToggle.
+   Visible on web + Tauri Win/Linux; hidden on macOS (the fixed toggle
+   above is the only collapse control there). */
+.aleph-sidebar-inline-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    background: transparent;
+    color: var(--color-text-secondary);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.aleph-sidebar-inline-toggle:hover {
+    background-color: color-mix(in oklch, var(--color-text-primary) 12%, transparent);
+    color: var(--color-text-primary);
+}
+.aleph-sidebar-inline-toggle:active {
+    background-color: color-mix(in oklch, var(--color-text-primary) 18%, transparent);
+}
+.aleph-sidebar-inline-toggle:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 1px;
+}
+html[data-platform="macos"] .aleph-sidebar-inline-toggle {
+    display: none;
 }
 
 /* ── Accent-aware caret + scrollbar ──────────────────────────────────

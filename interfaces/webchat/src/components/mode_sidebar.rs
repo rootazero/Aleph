@@ -13,6 +13,7 @@ use super::nav_menu::NavMenu;
 use super::theme_toggle::ThemeToggle;
 use crate::components::settings_sidebar::SETTINGS_GROUPS;
 use crate::i18n::*;
+use crate::state::memory::MemoryState;
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_location;
@@ -75,11 +76,15 @@ pub fn ModeSidebar() -> impl IntoView {
     }
 }
 
-/// Brand row pinned to the top of the left column — the ℵ wordmark plus
-/// the theme picker. Padded down on macOS (via `.aleph-sidebar-head`) so
-/// it clears the overlay traffic lights.
+/// Brand row pinned to the top of the left column — the ℵ wordmark on the
+/// left, the theme picker + inline sidebar-collapse button on the right.
+/// On macOS the row is padded down (via `.aleph-sidebar-head`) so it clears
+/// the overlay traffic lights and the fixed top-left toggle that lives
+/// alongside them. On web / Tauri Win/Linux the row hugs the top and carries
+/// its own inline collapse button instead.
 #[component]
 fn SidebarBrand() -> impl IntoView {
+    let mem = expect_context::<MemoryState>();
     view! {
         <div class="aleph-sidebar-head flex items-center justify-between px-3.5 pb-2.5">
             <div class="flex items-center gap-2.5">
@@ -89,7 +94,31 @@ fn SidebarBrand() -> impl IntoView {
                 </div>
                 <span class="text-[15px] font-semibold tracking-tight">"Aleph"</span>
             </div>
-            <ThemeToggle />
+            <div class="flex items-center gap-1">
+                <ThemeToggle />
+                // Inline collapse button — visible on web + Tauri Win/Linux.
+                // Hidden on macOS via CSS (the fixed top-left toggle next to
+                // the overlay traffic lights covers it).
+                <button
+                    type="button"
+                    class="aleph-sidebar-inline-toggle"
+                    on:click=move |_| {
+                        let s = &mem.sidebar_collapsed;
+                        s.set(!s.get());
+                    }
+                    title="Collapse sidebar"
+                    aria-label="Collapse sidebar"
+                >
+                    <svg
+                        width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="1.8"
+                        stroke-linecap="round" stroke-linejoin="round"
+                    >
+                        <rect x="3" y="5" width="18" height="14" rx="2.5" />
+                        <line x1="9" y1="5" x2="9" y2="19" />
+                    </svg>
+                </button>
+            </div>
         </div>
     }
 }

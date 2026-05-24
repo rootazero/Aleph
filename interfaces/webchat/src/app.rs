@@ -101,13 +101,16 @@ fn AppContent() -> impl IntoView {
             // shadowed by a second drag zone.
             <div class="aleph-titlebar-drag" data-tauri-drag-region=""></div>
 
-            // Sidebar toggle — fixed in the title-bar row. On macOS it sits
-            // just to the right of the overlay traffic lights; on Win/Linux
-            // (no traffic lights) it right-aligns. Anchored to the window,
-            // not the sidebar — collapsing/expanding the sidebar leaves the
-            // button (position and look) untouched. `data-tauri-drag-region=
-            // "false"` explicitly opts out of the parent drag strip so
-            // clicks aren't swallowed by the window-drag handler.
+            // Fixed top-left collapse button — anchored to the window so it
+            // stays clickable when the sidebar slides off-screen. Visibility
+            // (see tailwind.css):
+            //   • macOS Tauri: always visible, vertically centred with the
+            //     overlay traffic lights.
+            //   • Web + Tauri Win/Linux: only visible when the sidebar is
+            //     collapsed; while expanded, the inline brand-row button in
+            //     SidebarBrand handles it.
+            // `data-tauri-drag-region="false"` opts out of the parent drag
+            // strip so clicks aren't swallowed by the window-drag handler.
             <button
                 type="button"
                 class="aleph-sidebar-toggle"
