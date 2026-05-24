@@ -163,4 +163,68 @@ impl AcpApi {
             .await?;
         Ok(())
     }
+
+    // ── Live session pool (Panel Teams → ACP Workers) ────────────────────
+
+    pub async fn list_sessions(
+        state: &DashboardState,
+    ) -> Result<Vec<AcpSessionSnapshot>, String> {
+        let result = state.rpc_call("acp.sessions.list", Value::Null).await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse ACP session snapshots: {}", e))
+    }
+
+    pub async fn cancel_session(
+        state: &DashboardState,
+        harness: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+    ) -> Result<(), String> {
+        state
+            .rpc_call(
+                "acp.sessions.cancel",
+                serde_json::json!({
+                    "harness": harness,
+                    "cwd": cwd,
+                    "session_name": session_name,
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn shutdown_session(
+        state: &DashboardState,
+        harness: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+    ) -> Result<(), String> {
+        state
+            .rpc_call(
+                "acp.sessions.shutdown",
+                serde_json::json!({
+                    "harness": harness,
+                    "cwd": cwd,
+                    "session_name": session_name,
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+/// Live snapshot of a single pooled ACP session.
+///
+/// Mirrors `alephcore::acp::manager::SessionSnapshot`. The `state` field is
+/// the lowercased AcpSessionState (`idle` | `busy` | `error`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcpSessionSnapshot {
+    pub harness_id: String,
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp_session_id: Option<String>,
+    pub alive: bool,
+    pub state: String,
 }

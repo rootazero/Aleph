@@ -1,15 +1,19 @@
 //! Teams Tab (top-level panel mode).
 //!
-//! Houses two sub-views:
+//! Houses three sub-views:
 //! - Overview: existing collapsible team-cards list (migrated from /dashboard/teams)
 //! - Kanban: 5-column task board over CoordTask
+//! - Workers: live ACP harness session pool (acpx-parity Phase 2) —
+//!   surfaces external coding agents (Claude Code / Codex / Gemini /
+//!   custom) as first-class workers visible to humans.
 //!
-//! A small sidebar lets the user pick between the two sub-views and select
-//! the active team for the kanban.
+//! A small sidebar lets the user pick between the three sub-views and
+//! select the active team for the kanban.
 
 pub mod components;
 pub mod kanban;
 pub mod overview;
+pub mod workers;
 
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
@@ -22,6 +26,7 @@ use leptos::task::spawn_local;
 pub enum TeamsSubTab {
     Overview,
     Kanban,
+    Workers,
 }
 
 /// Shared signals for the Teams tab. Created once at the top-level and
@@ -69,6 +74,7 @@ pub fn TeamsView() -> impl IntoView {
             {move || match tab_state.sub_tab.get() {
                 TeamsSubTab::Overview => view! { <overview::OverviewView /> }.into_any(),
                 TeamsSubTab::Kanban => view! { <kanban::KanbanView /> }.into_any(),
+                TeamsSubTab::Workers => view! { <workers::WorkersView /> }.into_any(),
             }}
         </div>
     }
@@ -97,6 +103,11 @@ pub fn TeamsSidebar() -> impl IntoView {
                     label=Signal::derive(move || t_string!(i18n, teams.subtab.kanban).to_string())
                     current=tab_state.sub_tab
                     target=TeamsSubTab::Kanban
+                />
+                <SubTabButton
+                    label=Signal::derive(|| "ACP Workers".to_string())
+                    current=tab_state.sub_tab
+                    target=TeamsSubTab::Workers
                 />
             </nav>
             <div class="px-3 py-3 border-t border-border">

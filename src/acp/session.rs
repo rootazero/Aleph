@@ -1,13 +1,14 @@
 //! ACP session — manages a single CLI subprocess lifecycle.
 
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::Duration;
 use tokio::process::{Child, Command};
 use tracing::{debug, error, info, warn};
 
 use crate::acp::protocol::{AcpRequest, AcpResponse, AcpSessionState};
-use crate::acp::transport::StdioTransport;
+use crate::acp::transport::{write_request, SharedStdin, StdioTransport};
 use crate::acp::AcpChunkCallback;
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 
 // =============================================================================
 // AdapterConfig
@@ -69,9 +70,48 @@ pub struct AcpSession {
     state: AcpSessionState,
     initialized: bool,
     /// ACP session ID returned by `session/new`.
-    acp_session_id: Option<String>,
+    ///
+    /// Wrapped in `Arc<RwLock>` so a `CancelHandle` cloned by the manager
+    /// can read the current id without acquiring the session mutex held by
+    /// an in-flight prompt. Always read via the `acp_session_id()` accessor.
+    acp_session_id: Arc<StdRwLock<Option<String>>>,
     /// Background task reading stderr for diagnostic logging.
     _stderr_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// Cloneable "send cancel without locking the session" handle.
+///
+/// The manager keeps one of these alongside each pooled session entry so
+/// `session/cancel` notifications can interrupt an in-flight prompt that
+/// currently owns the per-session async mutex.
+#[derive(Clone)]
+pub struct CancelHandle {
+    harness_id: String,
+    stdin: SharedStdin,
+    acp_session_id: Arc<StdRwLock<Option<String>>>,
+}
+
+impl CancelHandle {
+    /// Fire-and-forget `session/cancel` notification. No-op when the session
+    /// has not yet been created via `session/new`.
+    pub async fn send_cancel(&self) -> Result<()> {
+        let sid = self
+            .acp_session_id
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(session_id) = sid else {
+            debug!(harness_id = %self.harness_id, "ACP cancel handle: no session yet, skipping");
+            return Ok(());
+        };
+        let req = AcpRequest::cancel(&session_id);
+        write_request(&self.stdin, &req).await
+    }
+
+    /// Harness ID this handle targets — used by manager-level tracing.
+    pub fn harness_id(&self) -> &str {
+        &self.harness_id
+    }
 }
 
 impl AcpSession {
@@ -92,24 +132,27 @@ impl AcpSession {
         }
 
         let mut child = cmd.spawn().map_err(|e| {
-            AlephError::tool(format!(
-                "Failed to spawn ACP harness '{}' (executable: '{}'): {}. \
-                 Is the executable installed and in PATH?",
-                harness_id, config.executable, e
-            ))
+            crate::acp::protocol::AcpOperationError::new(
+                crate::acp::protocol::AcpErrorCode::SpawnFailed,
+                format!(
+                    "Failed to spawn ACP harness '{}' (executable: '{}'): {}. \
+                     Is the executable installed and in PATH?",
+                    harness_id, config.executable, e
+                ),
+            )
         })?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
-            AlephError::tool(format!(
-                "ACP harness '{}': failed to capture stdin",
-                harness_id
-            ))
+            crate::acp::protocol::AcpOperationError::new(
+                crate::acp::protocol::AcpErrorCode::SpawnFailed,
+                format!("ACP harness '{}': failed to capture stdin", harness_id),
+            )
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
-            AlephError::tool(format!(
-                "ACP harness '{}': failed to capture stdout",
-                harness_id
-            ))
+            crate::acp::protocol::AcpOperationError::new(
+                crate::acp::protocol::AcpErrorCode::SpawnFailed,
+                format!("ACP harness '{}': failed to capture stdout", harness_id),
+            )
         })?;
         let stderr = child.stderr.take();
 
@@ -137,9 +180,20 @@ impl AcpSession {
             transport,
             state: AcpSessionState::Idle,
             initialized: false,
-            acp_session_id: None,
+            acp_session_id: Arc::new(StdRwLock::new(None)),
             _stderr_handle: stderr_handle,
         })
+    }
+
+    /// Clone a cancel handle that can fire `session/cancel` without holding
+    /// the session mutex. Safe to call before `create_acp_session` — the
+    /// returned handle becomes effective once the session id is populated.
+    pub fn cancel_handle(&self) -> CancelHandle {
+        CancelHandle {
+            harness_id: self.harness_id.clone(),
+            stdin: self.transport.stdin_handle(),
+            acp_session_id: Arc::clone(&self.acp_session_id),
+        }
     }
 
     /// Send the ACP `initialize` request and wait for a response.
@@ -169,8 +223,13 @@ impl AcpSession {
     ///
     /// The ACP protocol requires `session/new` after `initialize` before prompts.
     pub async fn create_acp_session(&mut self, cwd: &str, timeout: Duration) -> Result<String> {
-        if let Some(ref sid) = self.acp_session_id {
-            return Ok(sid.clone());
+        if let Some(sid) = self
+            .acp_session_id
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            return Ok(sid);
         }
 
         let req = AcpRequest::new_session(cwd);
@@ -182,15 +241,18 @@ impl AcpSession {
             .and_then(|r| r.get("sessionId"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                AlephError::tool(format!(
-                    "ACP harness '{}': session/new response missing sessionId",
-                    self.harness_id
-                ))
+                crate::acp::protocol::AcpOperationError::new(
+                    crate::acp::protocol::AcpErrorCode::ProtocolError { code: -32603 },
+                    format!(
+                        "ACP harness '{}': session/new response missing sessionId",
+                        self.harness_id
+                    ),
+                )
             })?
             .to_string();
 
         info!(harness_id = %self.harness_id, session_id = %session_id, "ACP session created");
-        self.acp_session_id = Some(session_id.clone());
+        *self.acp_session_id.write().unwrap_or_else(|e| e.into_inner()) = Some(session_id.clone());
         Ok(session_id)
     }
 
@@ -214,7 +276,8 @@ impl AcpSession {
                     .unwrap_or(session_id)
                     .to_string();
                 info!(harness_id = %self.harness_id, session_id = %sid, "ACP session loaded");
-                self.acp_session_id = Some(sid.clone());
+                *self.acp_session_id.write().unwrap_or_else(|e| e.into_inner()) =
+                    Some(sid.clone());
                 Ok(sid)
             }
             Err(e) => {
@@ -237,10 +300,11 @@ impl AcpSession {
         on_chunk: Option<&AcpChunkCallback>,
     ) -> Result<(String, Vec<AcpResponse>)> {
         if self.state == AcpSessionState::Error {
-            return Err(AlephError::tool(format!(
-                "ACP harness '{}' is in error state",
-                self.harness_id
-            )));
+            return Err(crate::acp::protocol::AcpOperationError::new(
+                crate::acp::protocol::AcpErrorCode::SessionDead,
+                format!("ACP harness '{}' is in error state", self.harness_id),
+            )
+            .into());
         }
 
         self.state = AcpSessionState::Busy;
@@ -313,8 +377,17 @@ impl AcpSession {
     /// Send a cancel request to interrupt the current operation.
     ///
     /// No-op if no ACP session has been created yet (nothing to cancel).
+    /// Note: this requires `&mut self`. For the common case of cancelling
+    /// an in-flight prompt that owns the session mutex, use a
+    /// `CancelHandle` cloned via `cancel_handle()` — it can send the cancel
+    /// notification without locking the session.
     pub async fn cancel(&mut self) -> Result<()> {
-        let session_id = match self.acp_session_id.as_deref() {
+        let session_id = match self
+            .acp_session_id
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
             Some(id) => id,
             None => {
                 debug!(harness_id = %self.harness_id, "ACP cancel: no session yet, skipping");
@@ -322,7 +395,7 @@ impl AcpSession {
                 return Ok(());
             }
         };
-        let req = AcpRequest::cancel(session_id);
+        let req = AcpRequest::cancel(&session_id);
         if let Err(e) = self.transport.send(&req).await {
             self.state = AcpSessionState::Error;
             return Err(e);
@@ -332,14 +405,99 @@ impl AcpSession {
         Ok(())
     }
 
+    /// Switch the adapter's interaction mode via `session/set_mode`.
+    ///
+    /// Mirrors acpx's session control errors: ACP `-32601` / `-32602` (and
+    /// `-32603 invalid params`) are mapped to `SessionControlUnsupported`
+    /// so callers can downgrade gracefully when the adapter doesn't
+    /// implement this method.
+    pub async fn set_mode(&mut self, mode_id: &str, timeout: Duration) -> Result<()> {
+        let session_id = self.require_session_id("set_mode")?;
+        let req = AcpRequest::set_mode(&session_id, mode_id);
+        self.send_session_control(req, timeout, "set_mode").await
+    }
+
+    /// Switch the underlying model via `session/set_model`.
+    pub async fn set_model(&mut self, model_id: &str, timeout: Duration) -> Result<()> {
+        let session_id = self.require_session_id("set_model")?;
+        let req = AcpRequest::set_model(&session_id, model_id);
+        self.send_session_control(req, timeout, "set_model").await
+    }
+
+    /// Set an adapter-specific runtime config option via
+    /// `session/set_config_option`.
+    pub async fn set_config_option(
+        &mut self,
+        key: &str,
+        value: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<()> {
+        let session_id = self.require_session_id("set_config_option")?;
+        let req = AcpRequest::set_config_option(&session_id, key, value);
+        self.send_session_control(req, timeout, "set_config_option")
+            .await
+    }
+
+    /// Run the ACP `authenticate` handshake. Returns `AuthRequired` if the
+    /// adapter rejects the credential, `SessionControlUnsupported` if the
+    /// adapter doesn't expose the method.
+    pub async fn authenticate(
+        &mut self,
+        method_id: &str,
+        credential: &str,
+        timeout: Duration,
+    ) -> Result<()> {
+        let req = AcpRequest::authenticate(method_id, credential);
+        match self.transport.request(&req, timeout).await {
+            Ok(_) => {
+                info!(harness_id = %self.harness_id, method_id, "ACP authenticate OK");
+                Ok(())
+            }
+            Err(e) => Err(map_auth_error(e)),
+        }
+    }
+
+    fn require_session_id(&self, op: &'static str) -> Result<String> {
+        self.acp_session_id().ok_or_else(|| {
+            crate::acp::protocol::AcpOperationError::new(
+                crate::acp::protocol::AcpErrorCode::SessionDead,
+                format!(
+                    "ACP {} called before session/new for harness '{}'",
+                    op, self.harness_id
+                ),
+            )
+            .into()
+        })
+    }
+
+    async fn send_session_control(
+        &mut self,
+        req: AcpRequest,
+        timeout: Duration,
+        op: &'static str,
+    ) -> Result<()> {
+        match self.transport.request(&req, timeout).await {
+            Ok(_) => {
+                debug!(harness_id = %self.harness_id, op, "ACP session control OK");
+                Ok(())
+            }
+            Err(e) => Err(map_session_control_error(e, op)),
+        }
+    }
+
     /// Get the current session state.
     pub fn state(&self) -> AcpSessionState {
         self.state
     }
 
-    /// Get the ACP session ID, if one has been created.
-    pub fn acp_session_id(&self) -> Option<&str> {
-        self.acp_session_id.as_deref()
+    /// Get the ACP session ID, if one has been created. Returns an owned
+    /// copy because the id lives behind an `Arc<RwLock<>>` so a cancel
+    /// handle can read it concurrently.
+    pub fn acp_session_id(&self) -> Option<String> {
+        self.acp_session_id
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Check if the child process is still running.
@@ -383,6 +541,50 @@ impl AcpSession {
     pub fn harness_id(&self) -> &str {
         &self.harness_id
     }
+}
+
+/// Downgrade a session-control error to `SessionControlUnsupported` when the
+/// remote returned `-32601` / `-32602` / `invalid params`, matching acpx's
+/// `isLikelySessionControlUnsupportedError` heuristic. Other errors pass
+/// through unchanged.
+fn map_session_control_error(err: crate::error::AlephError, op: &'static str) -> crate::error::AlephError {
+    if let crate::error::AlephError::AcpError {
+        code,
+        message,
+        ..
+    } = &err
+    {
+        if code == "protocol_error" {
+            let lower = message.to_lowercase();
+            if lower.contains("invalid params")
+                || lower.contains("-32601")
+                || lower.contains("-32602")
+                || lower.contains("method not found")
+            {
+                return crate::acp::protocol::AcpOperationError::new(
+                    crate::acp::protocol::AcpErrorCode::SessionControlUnsupported,
+                    format!("ACP {op} not supported by adapter: {message}"),
+                )
+                .into();
+            }
+        }
+    }
+    err
+}
+
+/// Map an authenticate failure to `AuthRequired` so callers know to prompt
+/// the user for a different credential. Other errors pass through.
+fn map_auth_error(err: crate::error::AlephError) -> crate::error::AlephError {
+    if let crate::error::AlephError::AcpError { code, message, .. } = &err {
+        if code == "protocol_error" {
+            return crate::acp::protocol::AcpOperationError::new(
+                crate::acp::protocol::AcpErrorCode::AuthRequired,
+                format!("ACP authenticate failed: {message}"),
+            )
+            .into();
+        }
+    }
+    err
 }
 
 impl Drop for AcpSession {

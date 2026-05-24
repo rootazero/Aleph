@@ -180,7 +180,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "acp",
         name: "外部代码 Agent",
-        tools: &["acp_delegate", "acp_switch"],
+        tools: &["acp_delegate", "acp_switch", "acp_session_control"],
     },
     ToolCategory {
         id: "a2a",

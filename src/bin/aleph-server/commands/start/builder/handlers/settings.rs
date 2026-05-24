@@ -662,6 +662,24 @@ pub(in crate::commands::start) fn register_config_handlers(
         );
         register_handler!(server, "acp.presets", acp_config::handle_presets);
         register_handler!(server, "acp.presets_meta", acp_config::handle_presets_meta);
+        register_handler!(
+            server,
+            "acp.sessions.list",
+            acp_config::handle_sessions_list,
+            acp
+        );
+        register_handler!(
+            server,
+            "acp.sessions.cancel",
+            acp_config::handle_sessions_cancel,
+            acp
+        );
+        register_handler!(
+            server,
+            "acp.sessions.shutdown",
+            acp_config::handle_sessions_shutdown,
+            acp
+        );
     }
 }
 

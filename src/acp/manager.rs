@@ -10,11 +10,13 @@ use tracing::{debug, info, warn};
 
 use crate::acp::adapter::{AcpAdapter, AdapterMode};
 use crate::acp::adapters::{CustomAcpAdapter, GenericAcpAdapter};
-use crate::acp::session::AcpSession;
+use crate::acp::protocol::{AcpErrorCode, AcpOperationError};
+use crate::acp::session::{AcpSession, CancelHandle};
 use crate::acp::AcpChunkCallback;
 use crate::config::types::acp::AcpAdapterEntry;
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::sync_primitives::Arc;
+use tokio::sync::Mutex as AsyncMutex;
 
 // =============================================================================
 // Session persistence file I/O
@@ -122,35 +124,65 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
 // =============================================================================
 
 /// Canonicalized session pool key — prevents duplicate sessions for equivalent paths.
+///
+/// Includes an optional `name` so callers can run multiple parallel
+/// sessions in the same repo (mirrors acpx's `-s backend` / `-s frontend`).
+/// The empty string is the canonical "default" name and is the legacy
+/// shape — old callers via `SessionKey::new` see no behavioral change.
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct SessionKey {
     harness_id: String,
     cwd: PathBuf,
+    name: String,
 }
 
 impl SessionKey {
+    /// Default (unnamed) session for the given harness + cwd.
     pub fn new(harness_id: &str, cwd: &str) -> Self {
+        Self::with_name(harness_id, cwd, None)
+    }
+
+    /// Named session — `None` is equivalent to `new()` (empty name).
+    pub fn with_name(harness_id: &str, cwd: &str, name: Option<&str>) -> Self {
         Self {
             harness_id: harness_id.to_string(),
-            cwd: std::fs::canonicalize(cwd).unwrap_or_else(|_| {
-                let path = PathBuf::from(cwd);
-                let normalized = normalize_path(&path);
-                let final_path = if normalized.is_absolute() {
-                    normalized
-                } else {
-                    std::env::current_dir()
-                        .map(|cd| cd.join(&normalized))
-                        .unwrap_or(normalized)
-                };
-                debug!(
-                    cwd,
-                    ?final_path,
-                    "SessionKey: canonicalize failed, using normalized path"
-                );
-                final_path
-            }),
+            cwd: canonicalize_cwd(cwd),
+            name: name.unwrap_or("").to_string(),
         }
     }
+
+    pub fn harness_id(&self) -> &str {
+        &self.harness_id
+    }
+
+    pub fn cwd(&self) -> &std::path::Path {
+        &self.cwd
+    }
+
+    /// Empty string for the default/unnamed session.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+fn canonicalize_cwd(cwd: &str) -> PathBuf {
+    std::fs::canonicalize(cwd).unwrap_or_else(|_| {
+        let path = PathBuf::from(cwd);
+        let normalized = normalize_path(&path);
+        let final_path = if normalized.is_absolute() {
+            normalized
+        } else {
+            std::env::current_dir()
+                .map(|cd| cd.join(&normalized))
+                .unwrap_or(normalized)
+        };
+        debug!(
+            cwd,
+            ?final_path,
+            "SessionKey: canonicalize failed, using normalized path"
+        );
+        final_path
+    })
 }
 
 fn normalize_path(path: &std::path::Path) -> PathBuf {
@@ -189,12 +221,40 @@ fn normalize_path(path: &std::path::Path) -> PathBuf {
 /// - **Oneshot**: Fresh process per prompt (Claude Code, Codex).
 ///   No persistent session needed.
 ///
+/// Pooled session slot.
+///
+/// `session` is an `Arc<AsyncMutex<AcpSession>>` so concurrent prompts to the
+/// same (harness, cwd) serialize via the inner mutex instead of racing
+/// remove/re-insert on the map. Different keys still progress in parallel.
+///
+/// `cancel` is a cloned handle that writes `session/cancel` directly to the
+/// child's stdin — it does NOT acquire `session`, so it can interrupt an
+/// in-flight prompt that currently owns the inner mutex.
+#[derive(Clone)]
+pub struct SessionEntry {
+    pub session: Arc<AsyncMutex<AcpSession>>,
+    pub cancel: CancelHandle,
+}
+
+impl SessionEntry {
+    fn new(session: AcpSession) -> Self {
+        let cancel = session.cancel_handle();
+        Self {
+            session: Arc::new(AsyncMutex::new(session)),
+            cancel,
+        }
+    }
+}
+
 /// All harness and config state is behind `RwLock` for runtime dynamic management.
 pub struct AcpAdapterManager {
     adapters: RwLock<HashMap<String, Arc<dyn AcpAdapter>>>,
     configs: RwLock<HashMap<String, AcpAdapterEntry>>,
     /// Active sessions for NativeAcp harnesses, keyed by (harness_id, cwd).
-    sessions: RwLock<HashMap<SessionKey, AcpSession>>,
+    ///
+    /// Outer `RwLock` guards the map shape (insert/remove). Each entry's
+    /// inner `AsyncMutex` serializes operations on that specific session.
+    sessions: RwLock<HashMap<SessionKey, SessionEntry>>,
     /// Optional persistence callback for session state changes.
     persistence_hook: RwLock<Option<super::PersistenceHook>>,
 }
@@ -326,10 +386,11 @@ impl AcpAdapterManager {
     /// (no sessions lock needed — new harness has no sessions yet)
     pub async fn register_harness(&self, id: String, entry: AcpAdapterEntry) -> Result<()> {
         if !entry.enabled {
-            return Err(AlephError::tool(format!(
-                "Cannot register disabled harness '{}'",
-                id
-            )));
+            return Err(AcpOperationError::new(
+                AcpErrorCode::HarnessDenied,
+                format!("Cannot register disabled harness '{}'", id),
+            )
+            .into());
         }
 
         let harness = Self::build_harness(&id, &entry);
@@ -341,10 +402,14 @@ impl AcpAdapterManager {
         let mut configs = self.configs.write().await;
 
         if adapters.contains_key(&id) {
-            return Err(AlephError::tool(format!(
-                "Harness '{}' is already registered. Use update_harness to modify it.",
-                id
-            )));
+            return Err(AcpOperationError::new(
+                AcpErrorCode::HarnessDenied,
+                format!(
+                    "Harness '{}' is already registered. Use update_harness to modify it.",
+                    id
+                ),
+            )
+            .into());
         }
 
         info!(harness_id = %id, "Registering new ACP harness");
@@ -361,10 +426,14 @@ impl AcpAdapterManager {
     /// (matches `update_harness` and `ensure_session` to prevent deadlocks)
     pub async fn unregister_harness(&self, id: &str) -> Result<()> {
         if AcpAdapterEntry::is_preset_id(id) {
-            return Err(AlephError::tool(format!(
-                "Cannot unregister preset harness '{}'. Disable it via update_harness instead.",
-                id
-            )));
+            return Err(AcpOperationError::new(
+                AcpErrorCode::HarnessDenied,
+                format!(
+                    "Cannot unregister preset harness '{}'. Disable it via update_harness instead.",
+                    id
+                ),
+            )
+            .into());
         }
 
         // Acquire locks in consistent order: sessions → harnesses → configs
@@ -373,10 +442,11 @@ impl AcpAdapterManager {
         let mut configs = self.configs.write().await;
 
         if adapters.remove(id).is_none() {
-            return Err(AlephError::tool(format!(
-                "Harness '{}' is not registered",
-                id
-            )));
+            return Err(AcpOperationError::new(
+                AcpErrorCode::HarnessNotFound,
+                format!("Harness '{}' is not registered", id),
+            )
+            .into());
         }
 
         configs.remove(id);
@@ -388,7 +458,8 @@ impl AcpAdapterManager {
             .cloned()
             .collect();
         for key in keys_to_remove {
-            if let Some(mut session) = sessions.remove(&key) {
+            if let Some(entry) = sessions.remove(&key) {
+                let mut session = entry.session.lock().await;
                 session.kill().await;
             }
         }
@@ -410,7 +481,7 @@ impl AcpAdapterManager {
         let mut configs = self.configs.write().await;
 
         // Helper: kill all sessions for this harness_id (across all cwds)
-        let kill_sessions = |sessions: &mut HashMap<SessionKey, AcpSession>, harness_id: &str| {
+        let kill_sessions = |sessions: &mut HashMap<SessionKey, SessionEntry>, harness_id: &str| {
             let keys_to_remove: Vec<SessionKey> = sessions
                 .keys()
                 .filter(|k| k.harness_id == harness_id)
@@ -418,8 +489,8 @@ impl AcpAdapterManager {
                 .collect();
             let mut removed = Vec::new();
             for key in keys_to_remove {
-                if let Some(session) = sessions.remove(&key) {
-                    removed.push(session);
+                if let Some(entry) = sessions.remove(&key) {
+                    removed.push(entry);
                 }
             }
             removed
@@ -432,7 +503,8 @@ impl AcpAdapterManager {
 
             // Kill active sessions
             let removed = kill_sessions(&mut sessions, id);
-            for mut session in removed {
+            for entry in removed {
+                let mut session = entry.session.lock().await;
                 session.kill().await;
             }
 
@@ -446,7 +518,8 @@ impl AcpAdapterManager {
 
         // Kill any active sessions so they will be respawned with the new config
         let removed = kill_sessions(&mut sessions, id);
-        for mut session in removed {
+        for entry in removed {
+            let mut session = entry.session.lock().await;
             session.kill().await;
         }
 
@@ -529,7 +602,10 @@ impl AcpAdapterManager {
             }
 
             info!(harness_id = %entry.harness_id, "Restored ACP session");
-            self.sessions.write().await.insert(key, session);
+            self.sessions
+                .write()
+                .await
+                .insert(key, SessionEntry::new(session));
             restored.push(entry.harness_id);
         }
         restored
@@ -551,65 +627,92 @@ impl AcpAdapterManager {
     /// we re-check whether another task already inserted a live session for the same
     /// key. If so, we drop our freshly spawned session instead of overwriting.
     pub async fn ensure_session(&self, harness_id: &str, cwd: &str) -> Result<()> {
-        let key = SessionKey::new(harness_id, cwd);
+        self.ensure_session_named(harness_id, cwd, None).await
+    }
 
-        // Check if we already have a live session
-        {
-            let mut sessions = self.sessions.write().await;
-            if let Some(session) = sessions.get_mut(&key) {
-                if session.is_alive()
-                    && session.state() != crate::acp::protocol::AcpSessionState::Error
-                {
-                    return Ok(());
-                }
-                // Dead or error session — remove it
-                warn!(
-                    harness_id,
-                    "ACP session died or entered error state, respawning"
-                );
-                self.emit_persistence_event(super::AcpSessionEvent::Removed {
-                    harness_id: harness_id.to_string(),
-                    cwd: cwd.to_string(),
-                })
-                .await;
-                sessions.remove(&key);
+    /// Like `ensure_session`, but with an explicit session name so callers
+    /// can keep multiple parallel sessions in the same repo
+    /// (mirrors acpx's `-s backend` / `-s frontend`). `None` is the
+    /// default/unnamed session.
+    pub async fn ensure_session_named(
+        &self,
+        harness_id: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+    ) -> Result<()> {
+        let _ = self
+            .acquire_live_entry(harness_id, cwd, session_name)
+            .await?;
+        Ok(())
+    }
+
+    /// Look up or spawn a live `SessionEntry` for the given harness + cwd
+    /// + optional session name.
+    ///
+    /// Race-safe: if two tasks call simultaneously, one wins the spawn and
+    /// the other's spawned session is killed. A dead/errored entry is
+    /// evicted and replaced with a fresh `SessionEntry` (new Arc + new
+    /// cancel handle), so callers always get a live session.
+    ///
+    /// Returned entry's inner session mutex is NOT held — caller may lock it.
+    async fn acquire_live_entry(
+        &self,
+        harness_id: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+    ) -> Result<SessionEntry> {
+        let key = SessionKey::with_name(harness_id, cwd, session_name);
+
+        // Fast path: existing entry whose process is still alive.
+        let existing = self.sessions.read().await.get(&key).cloned();
+        if let Some(entry) = existing {
+            let is_live = {
+                let mut s = entry.session.lock().await;
+                s.is_alive() && s.state() != crate::acp::protocol::AcpSessionState::Error
+            };
+            if is_live {
+                return Ok(entry);
             }
+            // Dead — evict, then fall through to spawn a replacement.
+            warn!(
+                harness_id,
+                "ACP session died or entered error state, respawning"
+            );
+            self.emit_persistence_event(super::AcpSessionEvent::Removed {
+                harness_id: harness_id.to_string(),
+                cwd: cwd.to_string(),
+            })
+            .await;
+            self.sessions.write().await.remove(&key);
         }
 
-        // Clone Arc ref under brief read lock, then spawn without holding it.
-        // spawn_session may take seconds (process startup + initialize handshake).
+        // Slow path: spawn outside any lock, then double-check.
         let harness = {
             let adapters = self.adapters.read().await;
             Arc::clone(adapters.get(harness_id).ok_or_else(|| {
-                AlephError::tool(format!("Unknown ACP harness: '{}'", harness_id))
+                AcpOperationError::new(
+                    AcpErrorCode::HarnessNotFound,
+                    format!("Unknown ACP harness: '{}'", harness_id),
+                )
             })?)
         };
-
         let mut new_session = harness.spawn_session(Some(cwd)).await?;
 
-        // Re-check under write lock: another task may have raced us and already
-        // inserted a live session for the same key while we were spawning.
         let mut sessions = self.sessions.write().await;
-        if let Some(existing) = sessions.get_mut(&key) {
-            if existing.is_alive() {
-                // Another task won the race — drop our session
-                debug!(
-                    harness_id,
-                    "ACP session race: another task already spawned, dropping ours"
-                );
-                new_session.kill().await;
-                return Ok(());
-            }
-            // Existing is dead — remove it
-            sessions.remove(&key);
+        if let Some(existing) = sessions.get(&key).cloned() {
+            // Race lost — drop our extra session.
+            debug!(
+                harness_id,
+                "ACP session race: another task spawned first, dropping ours"
+            );
+            new_session.kill().await;
+            return Ok(existing);
         }
 
         info!(harness_id, "ACP session started");
-        // Note: Created persistence event is NOT emitted here because spawn_session
-        // only calls initialize(), not create_acp_session(). The session_id is None.
-        // The Created event fires in prompt() after create_acp_session() sets the ID.
-        sessions.insert(key, new_session);
-        Ok(())
+        let entry = SessionEntry::new(new_session);
+        sessions.insert(key, entry.clone());
+        Ok(entry)
     }
 
     /// Send a prompt to the specified harness, using the appropriate mode.
@@ -629,21 +732,53 @@ impl AcpAdapterManager {
         reuse_session: bool,
         on_chunk: Option<AcpChunkCallback>,
     ) -> Result<String> {
+        self.prompt_named(
+            harness_id,
+            prompt_text,
+            cwd,
+            None,
+            mode,
+            reuse_session,
+            on_chunk,
+        )
+        .await
+    }
+
+    /// Like `prompt`, but with an explicit session name. `None` is the
+    /// default/unnamed session and is equivalent to `prompt()`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prompt_named(
+        &self,
+        harness_id: &str,
+        prompt_text: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+        mode: Option<AdapterMode>,
+        reuse_session: bool,
+        on_chunk: Option<AcpChunkCallback>,
+    ) -> Result<String> {
         // Resolve effective mode and validate
         let (effective_mode, timeout) = {
             let adapters = self.adapters.read().await;
             let harness = adapters.get(harness_id).ok_or_else(|| {
-                AlephError::tool(format!("Unknown ACP harness: '{}'", harness_id))
+                AcpOperationError::new(
+                    AcpErrorCode::HarnessNotFound,
+                    format!("Unknown ACP harness: '{}'", harness_id),
+                )
             })?;
 
             let effective = mode.unwrap_or_else(|| harness.mode());
 
             // Validate mode is supported
             if !harness.supported_modes().contains(&effective) {
-                return Err(AlephError::tool(format!(
-                    "Harness '{}' does not support {:?} mode",
-                    harness_id, effective
-                )));
+                return Err(AcpOperationError::new(
+                    AcpErrorCode::ModeUnsupported,
+                    format!(
+                        "Harness '{}' does not support {:?} mode",
+                        harness_id, effective
+                    ),
+                )
+                .into());
             }
 
             let timeout = harness.build_config(Some(cwd)).timeout;
@@ -653,30 +788,25 @@ impl AcpAdapterManager {
 
         match effective_mode {
             AdapterMode::NativeAcp => {
-                let key = SessionKey::new(harness_id, cwd);
+                let key = SessionKey::with_name(harness_id, cwd, session_name);
 
-                // If not reusing, kill existing session first
+                // If not reusing, evict any existing session first so the
+                // next acquire_live_entry spawns a fresh one.
                 if !reuse_session {
-                    let mut pool = self.sessions.write().await;
-                    if let Some(mut session) = pool.remove(&key) {
-                        session.kill().await;
+                    if let Some(old) = self.sessions.write().await.remove(&key) {
+                        let mut s = old.session.lock().await;
+                        s.kill().await;
                     }
                 }
 
-                // Ensure a live session exists
-                self.ensure_session(harness_id, cwd).await?;
+                let entry = self
+                    .acquire_live_entry(harness_id, cwd, session_name)
+                    .await?;
 
-                // Extract session from pool (brief write lock)
-                let mut session = {
-                    let mut pool = self.sessions.write().await;
-                    pool.remove(&key).ok_or_else(|| {
-                        AlephError::tool(format!(
-                            "ACP session for '{}' disappeared unexpectedly",
-                            harness_id
-                        ))
-                    })?
-                };
-                // Write lock released — other harness calls can proceed
+                // Lock the inner mutex — concurrent prompts to the same
+                // (harness, cwd) queue here. The cancel handle (held outside
+                // this lock by the manager) can still fire `session/cancel`.
+                let mut session = entry.session.lock().await;
 
                 let result = session
                     .prompt(prompt_text, cwd, timeout, on_chunk.as_ref())
@@ -684,37 +814,37 @@ impl AcpAdapterManager {
 
                 match result {
                     Ok((text, _notifications)) => {
-                        // Re-insert session if still alive
                         if session.is_alive() {
                             if let Some(sid) = session.acp_session_id() {
-                                // Use Created (idempotent: retain + push in hook) because
-                                // ensure_session cannot emit Created (session_id is None at spawn time).
+                                // Idempotent Created: ensure_session can't fire
+                                // it because session_id is None at spawn time.
                                 self.emit_persistence_event(super::AcpSessionEvent::Created {
                                     harness_id: harness_id.to_string(),
-                                    acp_session_id: sid.to_string(),
+                                    acp_session_id: sid,
                                     cwd: cwd.to_string(),
                                 })
                                 .await;
                             }
-                            self.sessions.write().await.insert(key, session);
                         } else {
+                            // Process died — evict the entry. Drop session
+                            // lock first to avoid holding it across the write.
+                            drop(session);
+                            self.sessions.write().await.remove(&key);
                             self.emit_persistence_event(super::AcpSessionEvent::Removed {
                                 harness_id: harness_id.to_string(),
                                 cwd: cwd.to_string(),
                             })
                             .await;
-                            warn!(
-                                harness_id,
-                                "ACP session died after prompt, not re-inserting"
-                            );
+                            warn!(harness_id, "ACP session died after prompt, evicted");
                         }
                         Ok(text)
                     }
                     Err(e) => {
-                        // Session entered error state during prompt — kill it and do not re-insert
                         if session.is_alive() {
                             session.kill().await;
                         }
+                        drop(session);
+                        self.sessions.write().await.remove(&key);
                         self.emit_persistence_event(super::AcpSessionEvent::Removed {
                             harness_id: harness_id.to_string(),
                             cwd: cwd.to_string(),
@@ -729,7 +859,10 @@ impl AcpAdapterManager {
                 let harness = {
                     let adapters = self.adapters.read().await;
                     Arc::clone(adapters.get(harness_id).ok_or_else(|| {
-                        AlephError::tool(format!("Unknown ACP harness: '{}'", harness_id))
+                        AcpOperationError::new(
+                            AcpErrorCode::HarnessNotFound,
+                            format!("Unknown ACP harness: '{}'", harness_id),
+                        )
                     })?)
                 };
                 harness.execute_oneshot(prompt_text, cwd).await
@@ -737,28 +870,204 @@ impl AcpAdapterManager {
         }
     }
 
-    /// Cancel the current operation on the specified harness + cwd.
+    /// Cooperatively cancel the in-flight prompt on the specified harness + cwd.
+    ///
+    /// Uses the pre-cloned `CancelHandle` so the cancel notification can
+    /// race ahead of an in-flight prompt that currently holds the
+    /// per-session mutex. The agent will respond with a `stopReason`
+    /// notification, the prompt resolves, and the next caller sees the
+    /// session in `Idle` state again.
+    ///
+    /// Returns `SessionDead` if no entry exists for this harness/cwd.
     pub async fn cancel(&self, harness_id: &str, cwd: &str) -> Result<()> {
-        let key = SessionKey::new(harness_id, cwd);
-        let mut sessions = self.sessions.write().await;
-        let session = sessions.get_mut(&key).ok_or_else(|| {
-            AlephError::tool(format!(
-                "No active ACP session for '{}' in '{}'",
-                harness_id, cwd
-            ))
-        })?;
-        session.cancel().await
+        self.cancel_named(harness_id, cwd, None).await
+    }
+
+    /// Like `cancel`, but targets a specific named session.
+    pub async fn cancel_named(
+        &self,
+        harness_id: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+    ) -> Result<()> {
+        let key = SessionKey::with_name(harness_id, cwd, session_name);
+        let entry = self
+            .sessions
+            .read()
+            .await
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| {
+                AcpOperationError::new(
+                    AcpErrorCode::SessionDead,
+                    format!(
+                        "No active ACP session for '{}' in '{}'{}",
+                        harness_id,
+                        cwd,
+                        session_name
+                            .map(|n| format!(" (session '{n}')"))
+                            .unwrap_or_default()
+                    ),
+                )
+            })?;
+        entry.cancel.send_cancel().await
+    }
+
+    /// Run a session-control RPC against the existing session for
+    /// (harness, cwd). Returns `SessionDead` if the session is gone.
+    /// Inner errors are normalized to `SessionControlUnsupported` when
+    /// the adapter doesn't implement the method.
+    pub async fn set_mode(
+        &self,
+        harness_id: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+        mode_id: &str,
+    ) -> Result<()> {
+        let (entry, timeout) = self
+            .entry_and_timeout(harness_id, cwd, session_name)
+            .await?;
+        let mut s = entry.session.lock().await;
+        s.set_mode(mode_id, timeout).await
+    }
+
+    pub async fn set_model(
+        &self,
+        harness_id: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+        model_id: &str,
+    ) -> Result<()> {
+        let (entry, timeout) = self
+            .entry_and_timeout(harness_id, cwd, session_name)
+            .await?;
+        let mut s = entry.session.lock().await;
+        s.set_model(model_id, timeout).await
+    }
+
+    pub async fn set_config_option(
+        &self,
+        harness_id: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<()> {
+        let (entry, timeout) = self
+            .entry_and_timeout(harness_id, cwd, session_name)
+            .await?;
+        let mut s = entry.session.lock().await;
+        s.set_config_option(key, value, timeout).await
+    }
+
+    /// Authenticate the existing session. `credential` is opaque — typically
+    /// pulled from env `ACP_AUTH_<METHOD_ID>` by the caller.
+    pub async fn authenticate(
+        &self,
+        harness_id: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+        method_id: &str,
+        credential: &str,
+    ) -> Result<()> {
+        let (entry, timeout) = self
+            .entry_and_timeout(harness_id, cwd, session_name)
+            .await?;
+        let mut s = entry.session.lock().await;
+        s.authenticate(method_id, credential, timeout).await
+    }
+
+    async fn entry_and_timeout(
+        &self,
+        harness_id: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+    ) -> Result<(SessionEntry, std::time::Duration)> {
+        let timeout = {
+            let adapters = self.adapters.read().await;
+            let harness = adapters.get(harness_id).ok_or_else(|| {
+                AcpOperationError::new(
+                    AcpErrorCode::HarnessNotFound,
+                    format!("Unknown ACP harness: '{}'", harness_id),
+                )
+            })?;
+            harness.build_config(Some(cwd)).timeout
+        };
+        let entry = self.acquire_live_entry(harness_id, cwd, session_name).await?;
+        Ok((entry, timeout))
+    }
+
+    /// Snapshot of every pooled session for diagnostics + panel display.
+    ///
+    /// Acquires a brief lock per entry to read state. Does NOT block a
+    /// running prompt — uses `try_lock` and falls back to `Busy` when held.
+    pub async fn list_sessions(&self) -> Vec<SessionSnapshot> {
+        let entries: Vec<(SessionKey, SessionEntry)> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        };
+        let mut out = Vec::with_capacity(entries.len());
+        for (key, entry) in entries {
+            let (alive, state, sid) = match entry.session.try_lock() {
+                Ok(mut s) => (s.is_alive(), s.state(), s.acp_session_id()),
+                Err(_) => (
+                    true,
+                    crate::acp::protocol::AcpSessionState::Busy,
+                    None,
+                ),
+            };
+            out.push(SessionSnapshot {
+                harness_id: key.harness_id.clone(),
+                cwd: key.cwd.to_string_lossy().into_owned(),
+                session_name: if key.name.is_empty() {
+                    None
+                } else {
+                    Some(key.name.clone())
+                },
+                acp_session_id: sid,
+                alive,
+                state,
+            });
+        }
+        out.sort_by(|a, b| {
+            a.harness_id
+                .cmp(&b.harness_id)
+                .then(a.cwd.cmp(&b.cwd))
+                .then(a.session_name.cmp(&b.session_name))
+        });
+        out
     }
 
     /// Kill all active sessions.
     pub async fn shutdown_all(&self) {
-        let mut sessions = self.sessions.write().await;
-        for (key, session) in sessions.iter_mut() {
+        let entries: Vec<(SessionKey, SessionEntry)> = {
+            let mut sessions = self.sessions.write().await;
+            let drained = sessions
+                .drain()
+                .collect::<Vec<_>>();
+            drained
+        };
+        for (key, entry) in entries {
             info!(harness_id = %key.harness_id, cwd = ?key.cwd, "Shutting down ACP session");
+            let mut session = entry.session.lock().await;
             session.kill().await;
         }
-        sessions.clear();
     }
+}
+
+/// Lightweight view of a pooled ACP session — used by gateway RPC + panel.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionSnapshot {
+    pub harness_id: String,
+    pub cwd: String,
+    /// `None` for the default unnamed session.
+    pub session_name: Option<String>,
+    pub acp_session_id: Option<String>,
+    pub alive: bool,
+    pub state: crate::acp::protocol::AcpSessionState,
 }
 
 // =============================================================================
@@ -1067,5 +1376,43 @@ mod tests {
         let path = std::path::Path::new(".");
         let normalized = normalize_path(path);
         assert_eq!(normalized, std::path::PathBuf::from("."));
+    }
+
+    // ── Phase 1.5: named sessions ────────────────────────────────────────
+
+    #[test]
+    fn test_session_key_default_name_matches_legacy() {
+        let legacy = SessionKey::new("claude-code", "/tmp");
+        let named = SessionKey::with_name("claude-code", "/tmp", None);
+        assert_eq!(legacy, named, "None name must equal legacy new()");
+        assert_eq!(legacy.name(), "");
+    }
+
+    #[test]
+    fn test_session_key_distinguishes_names_same_cwd() {
+        let backend = SessionKey::with_name("claude-code", "/tmp", Some("backend"));
+        let frontend = SessionKey::with_name("claude-code", "/tmp", Some("frontend"));
+        let default = SessionKey::with_name("claude-code", "/tmp", None);
+        assert_ne!(backend, frontend, "different names → different keys");
+        assert_ne!(backend, default, "named != unnamed");
+        assert_eq!(backend.name(), "backend");
+        assert_eq!(frontend.name(), "frontend");
+    }
+
+    #[test]
+    fn test_session_key_accessors() {
+        let key = SessionKey::with_name("claude-code", "/tmp", Some("alpha"));
+        assert_eq!(key.harness_id(), "claude-code");
+        assert_eq!(key.name(), "alpha");
+        assert!(key.cwd().to_string_lossy().contains("tmp"));
+    }
+
+    // ── Phase 2: SessionSnapshot for panel ───────────────────────────────
+
+    #[tokio::test]
+    async fn test_list_sessions_empty_pool() {
+        let manager = AcpAdapterManager::new();
+        let snaps = manager.list_sessions().await;
+        assert!(snaps.is_empty(), "no sessions yet → empty snapshot list");
     }
 }

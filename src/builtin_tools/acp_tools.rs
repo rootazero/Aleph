@@ -34,6 +34,10 @@ pub struct AcpDelegateArgs {
     pub mode: Option<String>,
     /// Whether to reuse an existing session for multi-step continuity (native_acp mode only). Defaults to true.
     pub reuse_session: Option<bool>,
+    /// Optional session name. Lets you keep multiple parallel sessions in the
+    /// same cwd (mirrors acpx's `-s backend` / `-s frontend`). Omit for the
+    /// default unnamed session.
+    pub session_name: Option<String>,
 }
 
 /// Output from the unified ACP delegate tool.
@@ -77,10 +81,13 @@ impl AlephTool for AcpDelegateTool {
             .get_config(&args.harness)
             .await
             .ok_or_else(|| {
-                AlephError::tool(format!(
-                    "Unknown ACP harness: '{}'. Check available harnesses via acp.list.",
-                    args.harness
-                ))
+                crate::acp::protocol::AcpOperationError::new(
+                    crate::acp::protocol::AcpErrorCode::HarnessNotFound,
+                    format!(
+                        "Unknown ACP harness: '{}'. Check available harnesses via acp.list.",
+                        args.harness
+                    ),
+                )
             })?;
 
         match config.trust_level {
@@ -90,7 +97,11 @@ impl AlephTool for AcpDelegateTool {
                     args.harness
                 );
                 notify_tool_result(Self::NAME, &msg, false);
-                return Err(AlephError::tool(msg));
+                return Err(crate::acp::protocol::AcpOperationError::new(
+                    crate::acp::protocol::AcpErrorCode::HarnessDenied,
+                    msg,
+                )
+                .into());
             }
             TrustLevel::Confirm => {
                 // User confirmation not yet integrated with gateway approval mechanism.
@@ -102,7 +113,11 @@ impl AlephTool for AcpDelegateTool {
                     args.harness
                 );
                 notify_tool_result(Self::NAME, &msg, false);
-                return Err(AlephError::tool(msg));
+                return Err(crate::acp::protocol::AcpOperationError::new(
+                    crate::acp::protocol::AcpErrorCode::HarnessDenied,
+                    msg,
+                )
+                .into());
             }
             TrustLevel::Full => {}
         }
@@ -118,10 +133,11 @@ impl AlephTool for AcpDelegateTool {
 
         let result = self
             .manager
-            .prompt(
+            .prompt_named(
                 &args.harness,
                 &args.prompt,
                 &cwd,
+                args.session_name.as_deref(),
                 mode,
                 reuse,
                 Some(on_chunk),
@@ -235,6 +251,190 @@ impl AlephTool for AcpSwitchTool {
 }
 
 // =============================================================================
+// AcpSessionControlTool — set_mode / set_model / set_config_option /
+// authenticate / cancel against an existing ACP session.
+//
+// R8 (Everything is a Tool): exposes every ACP runtime knob as a single tool
+// the LLM can call. Mirrors acpx's session-control surface.
+// =============================================================================
+
+/// Discriminator for `acp_session_control`.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AcpSessionAction {
+    /// Switch the agent's interaction mode (adapter-specific IDs).
+    SetMode,
+    /// Switch the underlying model (adapter-specific IDs).
+    SetModel,
+    /// Set an adapter-specific runtime config option (e.g. `temperature`).
+    SetConfigOption,
+    /// Run the ACP `authenticate` handshake. Reads credential from env
+    /// `ACP_AUTH_<METHOD_ID>` (uppercased, non-alphanumeric → `_`) when
+    /// `credential` is omitted, mirroring acpx's auth-env policy.
+    Authenticate,
+    /// Send a cooperative `session/cancel` notification (does not block on
+    /// an in-flight prompt; uses the manager's `CancelHandle`).
+    Cancel,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct AcpSessionControlArgs {
+    /// Which harness to control. Must already have an active session.
+    pub harness: String,
+    /// Working directory of the session. Defaults to home if omitted.
+    pub cwd: Option<String>,
+    /// Optional session name (parallel-sessions-in-same-cwd, mirrors
+    /// acpx `-s <name>`). Omit for the default unnamed session.
+    pub session_name: Option<String>,
+    /// What to do.
+    pub action: AcpSessionAction,
+    /// For `set_mode` / `set_model`: the target id. Ignored otherwise.
+    pub id: Option<String>,
+    /// For `set_config_option`: the option key (e.g. `temperature`).
+    pub key: Option<String>,
+    /// For `set_config_option`: the option value (any JSON).
+    pub value: Option<serde_json::Value>,
+    /// For `authenticate`: the auth `methodId` advertised by the adapter.
+    pub method_id: Option<String>,
+    /// For `authenticate`: opaque credential. If omitted, reads
+    /// `ACP_AUTH_<methodId>` from process env.
+    pub credential: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AcpSessionControlOutput {
+    pub harness: String,
+    pub action: AcpSessionAction,
+    pub message: String,
+}
+
+#[derive(Clone)]
+pub struct AcpSessionControlTool {
+    manager: Arc<AcpAdapterManager>,
+}
+
+impl AcpSessionControlTool {
+    pub fn new(manager: Arc<AcpAdapterManager>) -> Self {
+        Self { manager }
+    }
+}
+
+#[async_trait]
+impl AlephTool for AcpSessionControlTool {
+    const NAME: &'static str = "acp_session_control";
+    const DESCRIPTION: &'static str =
+        "Control an existing ACP session: set_mode, set_model, set_config_option, \
+         authenticate, or cancel. Requires that the session has already been \
+         created (use acp_delegate first to create one).";
+
+    type Args = AcpSessionControlArgs;
+    type Output = AcpSessionControlOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        notify_tool_start(Self::NAME, &format!("{}: {:?}", args.harness, args.action));
+        let cwd = resolve_cwd(args.cwd.as_deref());
+        let session_name = args.session_name.as_deref();
+        let message = match args.action {
+            AcpSessionAction::SetMode => {
+                let id = require_field(&args.id, "id", "set_mode")?;
+                self.manager
+                    .set_mode(&args.harness, &cwd, session_name, id)
+                    .await?;
+                format!("mode set to {id}")
+            }
+            AcpSessionAction::SetModel => {
+                let id = require_field(&args.id, "id", "set_model")?;
+                self.manager
+                    .set_model(&args.harness, &cwd, session_name, id)
+                    .await?;
+                format!("model set to {id}")
+            }
+            AcpSessionAction::SetConfigOption => {
+                let key = require_field(&args.key, "key", "set_config_option")?;
+                let value = args.value.clone().unwrap_or(serde_json::Value::Null);
+                self.manager
+                    .set_config_option(&args.harness, &cwd, session_name, key, value)
+                    .await?;
+                format!("config option {key} updated")
+            }
+            AcpSessionAction::Authenticate => {
+                let method_id =
+                    require_field(&args.method_id, "method_id", "authenticate")?;
+                let credential = match args.credential.as_deref() {
+                    Some(c) => c.to_string(),
+                    None => read_auth_env(method_id).ok_or_else(|| {
+                        crate::acp::protocol::AcpOperationError::new(
+                            crate::acp::protocol::AcpErrorCode::AuthRequired,
+                            format!(
+                                "no credential provided and env ACP_AUTH_{} unset",
+                                env_token(method_id)
+                            ),
+                        )
+                    })?,
+                };
+                self.manager
+                    .authenticate(&args.harness, &cwd, session_name, method_id, &credential)
+                    .await?;
+                format!("authenticated via method {method_id}")
+            }
+            AcpSessionAction::Cancel => {
+                self.manager
+                    .cancel_named(&args.harness, &cwd, session_name)
+                    .await?;
+                "cancel notification sent".to_string()
+            }
+        };
+        notify_tool_result(Self::NAME, &message, true);
+        Ok(AcpSessionControlOutput {
+            harness: args.harness,
+            action: args.action,
+            message,
+        })
+    }
+}
+
+fn require_field<'a>(
+    field: &'a Option<String>,
+    name: &str,
+    op: &str,
+) -> Result<&'a str> {
+    field.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| {
+        crate::acp::protocol::AcpOperationError::new(
+            crate::acp::protocol::AcpErrorCode::ProtocolError { code: -32602 },
+            format!("acp_session_control: '{name}' required for action '{op}'"),
+        )
+        .into()
+    })
+}
+
+/// Translate a method_id into the ACP_AUTH_* env variable name per
+/// acpx's `auth-env.ts` policy: trim, non-alphanumeric → `_`, uppercase.
+fn env_token(method_id: &str) -> String {
+    method_id
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
+}
+
+fn read_auth_env(method_id: &str) -> Option<String> {
+    let token = env_token(method_id);
+    if token.is_empty() {
+        return None;
+    }
+    let key = format!("ACP_AUTH_{token}");
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+// =============================================================================
 // Helpers
 // =============================================================================
 
@@ -242,10 +442,11 @@ fn parse_mode(s: &str) -> Result<AdapterMode> {
     match s {
         "oneshot" => Ok(AdapterMode::Oneshot),
         "native_acp" => Ok(AdapterMode::NativeAcp),
-        _ => Err(AlephError::tool(format!(
-            "Invalid mode '{}'. Use 'oneshot' or 'native_acp'.",
-            s
-        ))),
+        _ => Err(crate::acp::protocol::AcpOperationError::new(
+            crate::acp::protocol::AcpErrorCode::ModeUnsupported,
+            format!("Invalid mode '{}'. Use 'oneshot' or 'native_acp'.", s),
+        )
+        .into()),
     }
 }
 

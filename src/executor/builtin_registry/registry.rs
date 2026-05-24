@@ -224,6 +224,8 @@ pub struct BuiltinToolRegistry {
     /// ACP delegate tool (optional - requires AcpAdapterManager)
     pub(crate) acp_delegate_tool: Option<crate::builtin_tools::acp_tools::AcpDelegateTool>,
     pub(crate) acp_switch_tool: Option<crate::builtin_tools::acp_tools::AcpSwitchTool>,
+    pub(crate) acp_session_control_tool:
+        Option<crate::builtin_tools::acp_tools::AcpSessionControlTool>,
     /// A2A outbound tools (optional - require the A2A subsystem enabled)
     pub(crate) a2a_delegate_tool: Option<crate::builtin_tools::a2a_tools::A2ADelegateTool>,
     pub(crate) a2a_agents_tool: Option<crate::builtin_tools::a2a_tools::A2AAgentsTool>,
@@ -1230,6 +1232,14 @@ impl ToolRegistry for BuiltinToolRegistry {
             "acp_switch" => Box::pin(async move {
                 let tool = self.acp_switch_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("acp_switch not available: ACP not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "acp_session_control" => Box::pin(async move {
+                let tool = self.acp_session_control_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "acp_session_control not available: ACP not configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),

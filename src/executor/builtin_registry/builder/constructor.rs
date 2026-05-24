@@ -453,8 +453,14 @@ impl BuiltinToolRegistry {
             };
 
         // Add ACP delegate tools (if AcpAdapterManager is provided)
-        let (acp_delegate_tool, acp_switch_tool) = if let Some(ref manager) = config.acp_manager {
-            use crate::builtin_tools::acp_tools::{AcpDelegateTool, AcpSwitchTool};
+        let (acp_delegate_tool, acp_switch_tool, acp_session_control_tool) = if let Some(
+            ref manager,
+        ) =
+            config.acp_manager
+        {
+            use crate::builtin_tools::acp_tools::{
+                AcpDelegateTool, AcpSessionControlTool, AcpSwitchTool,
+            };
             use crate::tools::AlephTool;
             info!("Creating ACP delegate tools");
 
@@ -467,6 +473,10 @@ impl BuiltinToolRegistry {
             let acp_switch_schema =
                 serde_json::to_value(schema_for!(crate::builtin_tools::acp_tools::AcpSwitchArgs))
                     .unwrap_or_default();
+            let acp_session_control_schema = serde_json::to_value(schema_for!(
+                crate::builtin_tools::acp_tools::AcpSessionControlArgs
+            ))
+            .unwrap_or_default();
 
             let mut ut = UnifiedTool::new(
                 "builtin:acp_delegate",
@@ -489,10 +499,24 @@ impl BuiltinToolRegistry {
             tools.insert("acp_switch".to_string(), ut);
             let sw = Some(AcpSwitchTool::new(Arc::clone(manager)));
 
-            info!("Registered ACP tools (acp_delegate=true, acp_switch=true)");
-            (delegate, sw)
+            // acp_session_control — set_mode / set_model / set_config_option /
+            // authenticate / cancel against an existing session (Phase 1.4).
+            let mut ut = UnifiedTool::new(
+                "builtin:acp_session_control",
+                "acp_session_control",
+                AcpSessionControlTool::DESCRIPTION,
+                ToolSource::Builtin,
+            );
+            ut.parameters_schema = Some(acp_session_control_schema);
+            tools.insert("acp_session_control".to_string(), ut);
+            let session_control = Some(AcpSessionControlTool::new(Arc::clone(manager)));
+
+            info!(
+                "Registered ACP tools (acp_delegate=true, acp_switch=true, acp_session_control=true)"
+            );
+            (delegate, sw, session_control)
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         // Add A2A outbound delegation tools (if the A2A subsystem is enabled).
@@ -1255,6 +1279,7 @@ impl BuiltinToolRegistry {
             extension_manager: config.extension_manager.clone(),
             acp_delegate_tool,
             acp_switch_tool,
+            acp_session_control_tool,
             a2a_delegate_tool,
             a2a_agents_tool,
             channel_registry_cell: {

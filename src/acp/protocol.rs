@@ -101,6 +101,70 @@ impl AcpRequest {
             })),
         }
     }
+
+    /// Create a `session/set_mode` request — switches the agent's interaction
+    /// mode (e.g. "chat" vs "code"). The available mode IDs are adapter-specific
+    /// and advertised in the `session/new` response.
+    pub fn set_mode(session_id: &str, mode_id: &str) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: next_id(),
+            method: "session/set_mode".to_string(),
+            params: Some(serde_json::json!({
+                "sessionId": session_id,
+                "modeId": mode_id,
+            })),
+        }
+    }
+
+    /// Create a `session/set_model` request — switches the underlying model.
+    /// The available model IDs are adapter-specific and advertised in the
+    /// `session/new` response under `availableModels`.
+    pub fn set_model(session_id: &str, model_id: &str) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: next_id(),
+            method: "session/set_model".to_string(),
+            params: Some(serde_json::json!({
+                "sessionId": session_id,
+                "modelId": model_id,
+            })),
+        }
+    }
+
+    /// Create a `session/set_config_option` request — sets an adapter-specific
+    /// runtime knob (e.g. `temperature`, `tools.allowFileWrite`).
+    pub fn set_config_option(
+        session_id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: next_id(),
+            method: "session/set_config_option".to_string(),
+            params: Some(serde_json::json!({
+                "sessionId": session_id,
+                "key": key,
+                "value": value,
+            })),
+        }
+    }
+
+    /// Create an `authenticate` request — performs adapter-side credential
+    /// handshake. `method_id` selects which auth method the adapter advertised
+    /// (e.g. `"api_key"`, `"oauth2"`); `credential` is the opaque token value.
+    pub fn authenticate(method_id: &str, credential: &str) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: next_id(),
+            method: "authenticate".to_string(),
+            params: Some(serde_json::json!({
+                "methodId": method_id,
+                "credential": credential,
+            })),
+        }
+    }
 }
 
 // =============================================================================
@@ -259,6 +323,10 @@ impl std::error::Error for AcpError {}
 // =============================================================================
 
 /// Classifies ACP operation failures for programmatic handling.
+///
+/// Mirrors acpx's `OutputErrorCode` surface so callers (LLM, panel, gateway)
+/// can branch on a stable classification instead of substring-matching error
+/// strings. See `as_str()` for the canonical wire token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcpErrorCode {
     HarnessNotFound,
@@ -270,6 +338,43 @@ pub enum AcpErrorCode {
     ModeUnsupported,
     Cancelled,
     SpawnFailed,
+    /// Adapter advertised it requires auth and the caller has no credential.
+    AuthRequired,
+    /// Session control RPC (`session/set_mode`, `session/set_model`,
+    /// `session/set_config_option`) failed because the adapter doesn't
+    /// implement it. Maps to acpx's session-control-errors classification.
+    SessionControlUnsupported,
+}
+
+impl AcpErrorCode {
+    /// Stable wire token used in error envelopes and tracing logs.
+    ///
+    /// These strings are part of the gateway contract — never rename without
+    /// migrating panel + downstream consumers.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::HarnessNotFound => "harness_not_found",
+            Self::HarnessUnavailable => "harness_unavailable",
+            Self::HarnessDenied => "harness_denied",
+            Self::SessionDead => "session_dead",
+            Self::Timeout => "timeout",
+            Self::ProtocolError { .. } => "protocol_error",
+            Self::ModeUnsupported => "mode_unsupported",
+            Self::Cancelled => "cancelled",
+            Self::SpawnFailed => "spawn_failed",
+            Self::AuthRequired => "auth_required",
+            Self::SessionControlUnsupported => "session_control_unsupported",
+        }
+    }
+
+    /// Heuristic for callers deciding whether to retry. Mirrors acpx's
+    /// `retryable` flag on `NormalizedOutputError`.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::SessionDead | Self::Timeout | Self::HarnessUnavailable | Self::SpawnFailed
+        )
+    }
 }
 
 /// Structured ACP operation error with classification.
@@ -282,7 +387,7 @@ pub struct AcpOperationError {
 
 impl fmt::Display for AcpOperationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ACP {:?}: {}", self.code, self.message)
+        write!(f, "ACP {}: {}", self.code.as_str(), self.message)
     }
 }
 
@@ -290,7 +395,11 @@ impl std::error::Error for AcpOperationError {}
 
 impl From<AcpOperationError> for crate::error::AlephError {
     fn from(e: AcpOperationError) -> Self {
-        crate::error::AlephError::tool(e.to_string())
+        crate::error::AlephError::AcpError {
+            code: e.code.as_str().to_string(),
+            message: e.message,
+            retryable: e.code.is_retryable(),
+        }
     }
 }
 
@@ -524,15 +633,100 @@ mod tests {
     #[test]
     fn test_acp_operation_error_display() {
         let err = AcpOperationError::new(AcpErrorCode::Timeout, "timed out after 5m");
-        assert!(err.to_string().contains("Timeout"));
+        // After acpx-parity: stable wire token in Display
+        assert!(err.to_string().contains("timeout"));
         assert!(err.to_string().contains("timed out"));
     }
 
     #[test]
-    fn test_acp_operation_error_into_aleph_error() {
+    fn test_acp_operation_error_into_aleph_error_preserves_code() {
         let err = AcpOperationError::new(AcpErrorCode::HarnessNotFound, "not found");
         let aleph_err: crate::error::AlephError = err.into();
-        assert!(aleph_err.to_string().contains("HarnessNotFound"));
+        match aleph_err {
+            crate::error::AlephError::AcpError {
+                code,
+                message,
+                retryable,
+            } => {
+                assert_eq!(code, "harness_not_found");
+                assert_eq!(message, "not found");
+                assert!(!retryable, "HarnessNotFound is not retryable");
+            }
+            other => panic!("expected AlephError::AcpError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_acp_error_code_retryable() {
+        assert!(AcpErrorCode::SessionDead.is_retryable());
+        assert!(AcpErrorCode::Timeout.is_retryable());
+        assert!(AcpErrorCode::HarnessUnavailable.is_retryable());
+        assert!(AcpErrorCode::SpawnFailed.is_retryable());
+        assert!(!AcpErrorCode::HarnessNotFound.is_retryable());
+        assert!(!AcpErrorCode::HarnessDenied.is_retryable());
+        assert!(!AcpErrorCode::AuthRequired.is_retryable());
+        assert!(!AcpErrorCode::Cancelled.is_retryable());
+        assert!(!AcpErrorCode::SessionControlUnsupported.is_retryable());
+    }
+
+    #[test]
+    fn test_acp_error_code_as_str_stable_tokens() {
+        // These are part of the gateway contract — must never silently
+        // rename without migrating panel + downstream consumers.
+        assert_eq!(AcpErrorCode::HarnessNotFound.as_str(), "harness_not_found");
+        assert_eq!(AcpErrorCode::Timeout.as_str(), "timeout");
+        assert_eq!(AcpErrorCode::SessionDead.as_str(), "session_dead");
+        assert_eq!(AcpErrorCode::Cancelled.as_str(), "cancelled");
+        assert_eq!(AcpErrorCode::AuthRequired.as_str(), "auth_required");
+        assert_eq!(
+            AcpErrorCode::SessionControlUnsupported.as_str(),
+            "session_control_unsupported"
+        );
+        assert_eq!(
+            AcpErrorCode::ProtocolError { code: -32601 }.as_str(),
+            "protocol_error"
+        );
+    }
+
+    #[test]
+    fn test_set_mode_request() {
+        let req = AcpRequest::set_mode("sess-1", "code");
+        assert_eq!(req.method, "session/set_mode");
+        let p = req.params.unwrap();
+        assert_eq!(p["sessionId"], "sess-1");
+        assert_eq!(p["modeId"], "code");
+    }
+
+    #[test]
+    fn test_set_model_request() {
+        let req = AcpRequest::set_model("sess-1", "claude-opus-4-7");
+        assert_eq!(req.method, "session/set_model");
+        let p = req.params.unwrap();
+        assert_eq!(p["sessionId"], "sess-1");
+        assert_eq!(p["modelId"], "claude-opus-4-7");
+    }
+
+    #[test]
+    fn test_set_config_option_request() {
+        let req = AcpRequest::set_config_option(
+            "sess-1",
+            "temperature",
+            serde_json::json!(0.7),
+        );
+        assert_eq!(req.method, "session/set_config_option");
+        let p = req.params.unwrap();
+        assert_eq!(p["sessionId"], "sess-1");
+        assert_eq!(p["key"], "temperature");
+        assert_eq!(p["value"], serde_json::json!(0.7));
+    }
+
+    #[test]
+    fn test_authenticate_request() {
+        let req = AcpRequest::authenticate("api_key", "secret-token");
+        assert_eq!(req.method, "authenticate");
+        let p = req.params.unwrap();
+        assert_eq!(p["methodId"], "api_key");
+        assert_eq!(p["credential"], "secret-token");
     }
 
     #[test]

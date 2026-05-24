@@ -201,6 +201,19 @@ pub enum AlephError {
     /// Input validation error (content rejected by scanner, schema violation, etc.)
     #[error("Validation error: {0}")]
     Validation(String),
+
+    /// ACP harness operation failed with a classified reason.
+    ///
+    /// `code` is the stable wire token from `AcpErrorCode::as_str()`
+    /// (e.g. `"timeout"`, `"session_dead"`, `"auth_required"`). Callers
+    /// (tools, gateway, panel) branch on `code` instead of substring-matching
+    /// the message. `retryable` mirrors acpx's classification.
+    #[error("ACP {code}: {message}")]
+    AcpError {
+        code: String,
+        message: String,
+        retryable: bool,
+    },
 }
 
 impl AlephError {
@@ -371,7 +384,8 @@ impl AlephError {
             | AlephError::ChannelClosed(_)
             | AlephError::SandboxUnavailable { .. }
             | AlephError::ExecutionTimeout { .. }
-            | AlephError::Validation(_) => None,
+            | AlephError::Validation(_)
+            | AlephError::AcpError { .. } => None,
         }
     }
 
@@ -540,6 +554,20 @@ impl AlephError {
             AlephError::Validation(msg) => {
                 format!("Validation failed: {}", msg)
             }
+            AlephError::AcpError {
+                code,
+                message,
+                retryable,
+            } => {
+                if *retryable {
+                    format!(
+                        "ACP harness error ({}): {}. This is usually transient — try again.",
+                        code, message
+                    )
+                } else {
+                    format!("ACP harness error ({}): {}.", code, message)
+                }
+            }
         }
     }
 
@@ -662,6 +690,17 @@ impl AlephError {
             AlephError::CorruptData(_) => ErrorClass::Unexpected,
             AlephError::ChannelClosed(_) => ErrorClass::Unexpected,
             AlephError::SandboxUnavailable { .. } => ErrorClass::Unexpected,
+            // ACP harness errors — split by retryable flag. Retryable
+            // (timeout/session_dead/spawn_failed) are Transient; the rest
+            // are Fixable (model can switch harness, request creds, etc.)
+            // mirroring acpx's `NormalizedOutputError.retryable` policy.
+            AlephError::AcpError { retryable, .. } => {
+                if *retryable {
+                    ErrorClass::Transient
+                } else {
+                    ErrorClass::Fixable
+                }
+            }
         }
     }
 

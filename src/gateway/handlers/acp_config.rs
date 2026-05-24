@@ -565,6 +565,90 @@ pub async fn handle_presets(request: JsonRpcRequest) -> JsonRpcResponse {
     )
 }
 
+/// Handle acp.sessions.list — snapshot every pooled ACP session.
+///
+/// Used by Panel Teams → ACP Workers view to render live status badges
+/// (running / idle / busy / dead) per harness + cwd. No params.
+pub async fn handle_sessions_list(
+    request: JsonRpcRequest,
+    manager: Arc<AcpAdapterManager>,
+) -> JsonRpcResponse {
+    let snapshots = manager.list_sessions().await;
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::to_value(&snapshots).unwrap_or_else(|_| json!([])),
+    )
+}
+
+/// Handle acp.sessions.cancel — fire a cooperative cancel notification
+/// at the given (harness, cwd, optional session_name). Returns success
+/// even if no in-flight prompt — the cancel is fire-and-forget.
+#[derive(Debug, Deserialize)]
+struct SessionCancelParams {
+    harness: String,
+    cwd: String,
+    #[serde(default)]
+    session_name: Option<String>,
+}
+
+pub async fn handle_sessions_cancel(
+    request: JsonRpcRequest,
+    manager: Arc<AcpAdapterManager>,
+) -> JsonRpcResponse {
+    let params: SessionCancelParams = match request
+        .params
+        .clone()
+        .map(serde_json::from_value)
+        .unwrap_or_else(|| Err(serde::de::Error::missing_field("params")))
+    {
+        Ok(p) => p,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("invalid params: {e}"),
+            )
+        }
+    };
+    match manager
+        .cancel_named(&params.harness, &params.cwd, params.session_name.as_deref())
+        .await
+    {
+        Ok(()) => JsonRpcResponse::success(request.id, json!({ "success": true })),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+    }
+}
+
+/// Handle acp.sessions.shutdown — kill the session for (harness, cwd, name).
+/// Returns success even if the session is already gone (idempotent).
+pub async fn handle_sessions_shutdown(
+    request: JsonRpcRequest,
+    manager: Arc<AcpAdapterManager>,
+) -> JsonRpcResponse {
+    let params: SessionCancelParams = match request
+        .params
+        .clone()
+        .map(serde_json::from_value)
+        .unwrap_or_else(|| Err(serde::de::Error::missing_field("params")))
+    {
+        Ok(p) => p,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("invalid params: {e}"),
+            )
+        }
+    };
+    // Best-effort: cancel first to give the agent a chance to flush, then
+    // we leave eviction to the next prompt's liveness check. Hard-kill is
+    // also fine if needed via shutdown_all — but that's all-or-nothing.
+    let _ = manager
+        .cancel_named(&params.harness, &params.cwd, params.session_name.as_deref())
+        .await;
+    JsonRpcResponse::success(request.id, json!({ "success": true }))
+}
+
 /// Handle acp.presets_meta — return lightweight metadata for all presets.
 pub async fn handle_presets_meta(request: JsonRpcRequest) -> JsonRpcResponse {
     let presets = crate::config::types::acp::HARNESS_PRESETS;

@@ -2,10 +2,11 @@
 //!
 //! Wraps a child process's stdin/stdout for newline-delimited JSON messaging.
 
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use tracing::{debug, warn};
 
 use crate::acp::protocol::{AcpRequest, AcpResponse};
@@ -13,12 +14,19 @@ use crate::error::{AlephError, Result};
 
 const MAX_NOTIFICATIONS: usize = 1024;
 
+/// Cloneable handle to the child stdin writer.
+///
+/// Held inside the transport AND handed out as a `cancel_handle` so cancel
+/// notifications can be written while another task holds the session mutex
+/// for an in-flight prompt (see `acp::manager::SessionEntry`).
+pub type SharedStdin = Arc<AsyncMutex<ChildStdin>>;
+
 /// NDJSON stdio transport for communicating with an ACP child process.
 ///
 /// Reads newline-delimited JSON from the child's stdout in a background task
 /// and provides methods to send requests and receive responses.
 pub struct StdioTransport {
-    stdin: ChildStdin,
+    stdin: SharedStdin,
     event_rx: mpsc::Receiver<Result<AcpResponse>>,
     _reader_handle: tokio::task::JoinHandle<()>,
 }
@@ -77,27 +85,46 @@ impl StdioTransport {
         });
 
         Self {
-            stdin,
+            stdin: Arc::new(AsyncMutex::new(stdin)),
             event_rx: rx,
             _reader_handle: handle,
         }
     }
 
-    /// Serialize a request to JSON, append newline, write to stdin, and flush.
-    pub async fn send(&mut self, req: &AcpRequest) -> Result<()> {
-        let mut line = serde_json::to_string(req)?;
-        line.push('\n');
-        self.stdin
-            .write_all(line.as_bytes())
-            .await
-            .map_err(|e| AlephError::IoError(format!("ACP stdin write error: {}", e)))?;
-        self.stdin
-            .flush()
-            .await
-            .map_err(|e| AlephError::IoError(format!("ACP stdin flush error: {}", e)))?;
-        debug!("ACP sent: method={} id={}", req.method, req.id);
-        Ok(())
+    /// Hand out a shared writer to the child's stdin.
+    ///
+    /// Used by `AcpSession::cancel_handle()` so the manager can send
+    /// `session/cancel` notifications without blocking on the per-session
+    /// mutex held by an in-flight prompt.
+    pub fn stdin_handle(&self) -> SharedStdin {
+        Arc::clone(&self.stdin)
     }
+
+    /// Serialize a request to JSON, append newline, write to stdin, and flush.
+    pub async fn send(&self, req: &AcpRequest) -> Result<()> {
+        write_request(&self.stdin, req).await
+    }
+}
+
+/// Write a JSON-RPC request through a `SharedStdin`. Extracted so cancel
+/// handles can reuse the same NDJSON framing without owning the transport.
+pub async fn write_request(stdin: &SharedStdin, req: &AcpRequest) -> Result<()> {
+    let mut line = serde_json::to_string(req)?;
+    line.push('\n');
+    let mut guard = stdin.lock().await;
+    guard
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|e| AlephError::IoError(format!("ACP stdin write error: {}", e)))?;
+    guard
+        .flush()
+        .await
+        .map_err(|e| AlephError::IoError(format!("ACP stdin flush error: {}", e)))?;
+    debug!("ACP sent: method={} id={}", req.method, req.id);
+    Ok(())
+}
+
+impl StdioTransport {
 
     /// Receive the next parsed event from the reader channel.
     pub async fn recv(&mut self) -> Option<Result<AcpResponse>> {
@@ -126,26 +153,34 @@ impl StdioTransport {
                         if resp.id == Some(expected_id) {
                             // Check for ACP error
                             if let Some(ref err) = resp.error {
-                                return Err(AlephError::tool(format!(
-                                    "ACP error {}: {}",
-                                    err.code, err.message
-                                )));
+                                return Err(crate::acp::protocol::AcpOperationError::with_remote(
+                                    crate::acp::protocol::AcpErrorCode::ProtocolError {
+                                        code: err.code,
+                                    },
+                                    format!("ACP error {}: {}", err.code, err.message),
+                                    err.clone(),
+                                )
+                                .into());
                             }
                             return Ok((resp, notifications));
                         }
                         // Otherwise it's a notification or response for a different id
                         if notifications.len() >= MAX_NOTIFICATIONS {
-                            return Err(AlephError::tool(
+                            return Err(crate::acp::protocol::AcpOperationError::new(
+                                crate::acp::protocol::AcpErrorCode::ProtocolError { code: -32603 },
                                 "ACP notification buffer overflow: too many out-of-band messages",
-                            ));
+                            )
+                            .into());
                         }
                         notifications.push(resp);
                     }
                     Some(Err(e)) => return Err(e),
                     None => {
-                        return Err(AlephError::tool(
+                        return Err(crate::acp::protocol::AcpOperationError::new(
+                            crate::acp::protocol::AcpErrorCode::SessionDead,
                             "ACP connection closed while waiting for response",
-                        ));
+                        )
+                        .into());
                     }
                 }
             }
@@ -154,10 +189,11 @@ impl StdioTransport {
 
         match result {
             Ok(inner) => inner,
-            Err(_elapsed) => Err(AlephError::tool(format!(
-                "ACP request timed out after {:?}",
-                timeout
-            ))),
+            Err(_elapsed) => Err(crate::acp::protocol::AcpOperationError::new(
+                crate::acp::protocol::AcpErrorCode::Timeout,
+                format!("ACP request timed out after {:?}", timeout),
+            )
+            .into()),
         }
     }
 
