@@ -1653,6 +1653,7 @@ async fn stop_hook_halt_terminates_loop_with_dedicated_reason() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -1779,6 +1780,7 @@ async fn max_output_tokens_recovery_eventually_returns_clean_text() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
@@ -1834,6 +1836,7 @@ async fn max_output_tokens_recovery_exhausted_sets_dedicated_terminate_reason() 
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
         parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
