@@ -460,6 +460,18 @@ mod tests {
     }
 
     fn make_execution_result(status: RunStatus) -> ExecutionResult {
+        // Failed-status fixtures default to a transient retry hint so existing
+        // tests that exercise the *backoff* path keep working — without this
+        // a `None` hint trips the permanent short-circuit added by the
+        // retry-hint port and `next_run_at_ms` is cleared. Tests that
+        // specifically want the permanent branch override the hint after.
+        let retry_hint = if matches!(status, RunStatus::Error | RunStatus::Timeout) {
+            Some(crate::tasks::shared::retry_hint::RetryHint::transient(
+                crate::tasks::shared::retry_hint::RetryCategory::Timeout,
+            ))
+        } else {
+            None
+        };
         ExecutionResult {
             started_at: 1_000_000,
             ended_at: 1_005_000,
@@ -475,7 +487,7 @@ mod tests {
             delivery_status: None,
             agent_used_messaging_tool: false,
             trigger_source: TriggerSource::Schedule,
-            retry_hint: None,
+            retry_hint,
         }
     }
 
