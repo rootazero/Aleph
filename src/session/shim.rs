@@ -34,6 +34,7 @@ pub async fn mirror_user_message(
                     thinking_signature: None,
                 },
                 at: now_ms(),
+                synthetic: false,
             },
         )
         .await

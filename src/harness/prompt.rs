@@ -138,8 +138,31 @@ impl PromptBuilder for DefaultPromptBuilder {
         // Walk the tail and emit UserMessage / ToolResult entries.
         for (offset, record) in events[tail_start..].iter().enumerate() {
             match &record.event {
-                SessionEvent::UserMessage { content, .. } => {
-                    messages.push(UnifiedMessage::user(&content.text));
+                SessionEvent::UserMessage {
+                    content, synthetic, ..
+                } => {
+                    // G2 (opencode parity): wrap real mid-loop user messages
+                    // in `<system-reminder>` so the model recognises them as
+                    // genuine user interjections rather than synthetic harness
+                    // chatter (verifier vetoes, MAX_STEPS hints). The wrap
+                    // only fires when an assistant turn already exists
+                    // (`tail_start > 0`) — the conversation-opening user
+                    // message is never wrapped.
+                    let wrapped;
+                    let text: &str = if !*synthetic && tail_start > 0 {
+                        wrapped = format!(
+                            "<system-reminder>\n\
+                             The user sent the following message:\n\
+                             {}\n\n\
+                             Please address this message and continue with your tasks.\n\
+                             </system-reminder>",
+                            content.text,
+                        );
+                        &wrapped
+                    } else {
+                        content.text.as_str()
+                    };
+                    messages.push(UnifiedMessage::user(text));
                 }
                 SessionEvent::ToolResult {
                     call_id, output, ..
@@ -286,6 +309,7 @@ mod tests {
                     thinking_signature: None,
                 },
                 at: now_ms(),
+                synthetic: false,
             }),
             mk_record(SessionEvent::AssistantMessage {
                 turn_id: turn,
@@ -326,6 +350,7 @@ mod tests {
                     thinking_signature: None,
                 },
                 at: now_ms(),
+                synthetic: false,
             }),
         ];
 
@@ -392,6 +417,7 @@ mod tests {
                     thinking_signature: None,
                 },
                 at: now_ms(),
+                synthetic: false,
             }),
         ];
 
@@ -407,5 +433,151 @@ mod tests {
             "no assistant message should be emitted when only orphans + thinking remain",
         );
         assert_eq!(messages.len(), 1, "expected only the new user message");
+    }
+
+    /// G2 (opencode parity): a real mid-loop user message — synthetic=false
+    /// AND tail_start > 0 — must be wrapped in `<system-reminder>` so the
+    /// model recognises it as a user interjection. The conversation-opening
+    /// user message (tail_start == 0) is never wrapped.
+    #[tokio::test]
+    async fn g2_wraps_real_midloop_user_message_in_system_reminder() {
+        let turn = uuid::Uuid::new_v4();
+        let events: Vec<SessionEventRecord> = vec![
+            mk_record(SessionEvent::AssistantMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "Working on it.".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "actually wait, do this instead".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+                synthetic: false,
+            }),
+        ];
+        let ctx = TurnContext::new(&events, 1);
+        let messages = DefaultPromptBuilder
+            .assemble(&ctx)
+            .await
+            .expect("assemble ok");
+        let user_text = messages
+            .iter()
+            .find_map(|m| match m {
+                UnifiedMessage::User { content } => content.first().and_then(|b| match b {
+                    ContentBlock::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .expect("user message present");
+        assert!(
+            user_text.contains("<system-reminder>"),
+            "real mid-loop user message must be wrapped; got: {user_text}",
+        );
+        assert!(
+            user_text.contains("actually wait, do this instead"),
+            "original user text preserved inside wrap",
+        );
+    }
+
+    /// G2: synthetic user messages (verifier vetoes, MAX_STEPS hints) must
+    /// pass through unwrapped — the model has already been trained on the
+    /// `<system-reminder>` shape; wrapping a synthetic reminder inside
+    /// another reminder muddles the signal.
+    #[tokio::test]
+    async fn g2_does_not_wrap_synthetic_user_message() {
+        let turn = uuid::Uuid::new_v4();
+        let events: Vec<SessionEventRecord> = vec![
+            mk_record(SessionEvent::AssistantMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "Done.".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "[verifier veto] something".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+                synthetic: true,
+            }),
+        ];
+        let ctx = TurnContext::new(&events, 1);
+        let messages = DefaultPromptBuilder
+            .assemble(&ctx)
+            .await
+            .expect("assemble ok");
+        let user_text = messages
+            .iter()
+            .find_map(|m| match m {
+                UnifiedMessage::User { content } => content.first().and_then(|b| match b {
+                    ContentBlock::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .expect("user message present");
+        assert!(
+            !user_text.contains("<system-reminder>"),
+            "synthetic user message must not be re-wrapped; got: {user_text}",
+        );
+        assert_eq!(user_text, "[verifier veto] something");
+    }
+
+    /// G2: the conversation-opening user message (tail_start == 0) is the
+    /// genuine first prompt and must NOT be wrapped — wrapping would
+    /// confuse the model on turn 1.
+    #[tokio::test]
+    async fn g2_does_not_wrap_opening_user_message() {
+        let turn = uuid::Uuid::new_v4();
+        let events: Vec<SessionEventRecord> = vec![mk_record(SessionEvent::UserMessage {
+            turn_id: turn,
+            content: MessageContent {
+                text: "hello, help me with X".into(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+            synthetic: false,
+        })];
+        let ctx = TurnContext::new(&events, 0);
+        let messages = DefaultPromptBuilder
+            .assemble(&ctx)
+            .await
+            .expect("assemble ok");
+        let user_text = messages
+            .iter()
+            .find_map(|m| match m {
+                UnifiedMessage::User { content } => content.first().and_then(|b| match b {
+                    ContentBlock::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .expect("user message present");
+        assert!(
+            !user_text.contains("<system-reminder>"),
+            "opening user message must not be wrapped; got: {user_text}",
+        );
+        assert_eq!(user_text, "hello, help me with X");
     }
 }

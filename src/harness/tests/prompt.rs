@@ -29,6 +29,7 @@ fn user_msg(text: &str) -> SessionEventRecord {
             thinking_signature: None,
         },
         at: now_ms(),
+        synthetic: false,
     })
 }
 

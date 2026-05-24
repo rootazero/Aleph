@@ -233,6 +233,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                         thinking_signature: None,
                     },
                     at: now_ms(),
+                    synthetic: false,
                 },
             )
             .await

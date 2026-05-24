@@ -317,6 +317,7 @@ mod tests {
                     thinking_signature: None,
                 },
                 at: now_ms(),
+                synthetic: false,
             },
             created_at_ms: now_ms(),
         }

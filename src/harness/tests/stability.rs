@@ -253,6 +253,7 @@ pub(super) async fn fresh_session(
                     thinking_signature: None,
                 },
                 at: now_ms(),
+                synthetic: false,
             },
         )
         .await

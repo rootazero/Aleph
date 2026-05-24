@@ -77,6 +77,27 @@ impl AgentHarness {
         };
 
         for mut call in tool_calls {
+            // G3 (opencode-inspired): mechanical tool-name auto-repair. Models
+            // occasionally emit `Read` when the tool is registered as `read`
+            // (case drift) — without this, the call would be dispatched as
+            // unknown and bounce through ToolError before the model self-
+            // corrects. Pure string handling: lowercase only, and only when
+            // the original is absent AND a lowercase variant exists. Anything
+            // ambiguous falls through to the normal unknown-tool path.
+            // R10-safe: no intent inference, no fuzzy matching.
+            if !call.name.is_empty() && call.name.chars().any(|c| c.is_ascii_uppercase()) {
+                let lower = call.name.to_ascii_lowercase();
+                if self.deps.tools.describe(&call.name).await.is_none()
+                    && self.deps.tools.describe(&lower).await.is_some()
+                {
+                    tracing::debug!(
+                        original = %call.name,
+                        repaired = %lower,
+                        "tool name auto-repaired (case mismatch)",
+                    );
+                    call.name = lower;
+                }
+            }
             callback.on_tool_call(&call.name);
             let started = Instant::now();
             self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallStarted {

@@ -139,6 +139,16 @@ pub enum SessionEvent {
         turn_id: TurnId,
         content: MessageContent,
         at: Timestamp,
+        /// `true` when this entry was injected by the harness itself rather
+        /// than coming from the real end-user (e.g. verifier-veto nudge,
+        /// grace-turn MAX_STEPS hint). Defaults to `false` for backward
+        /// compatibility with on-disk session logs that pre-date this field.
+        ///
+        /// The prompt builder (G2) wraps every *real* mid-loop user message
+        /// in `<system-reminder>` so the model treats it as an interjection;
+        /// synthetic messages are passed through unchanged.
+        #[serde(default)]
+        synthetic: bool,
     },
     AssistantMessage {
         turn_id: TurnId,

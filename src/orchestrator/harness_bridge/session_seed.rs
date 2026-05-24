@@ -79,6 +79,7 @@ pub(super) async fn seed_session(
                             thinking_signature: None,
                         },
                         at: now_ms(),
+                        synthetic: false,
                     },
                 )
                 .await
@@ -110,6 +111,7 @@ pub(super) async fn emit_message(
             turn_id: uuid::Uuid::new_v4(),
             content,
             at: now_ms(),
+            synthetic: false,
         }
     } else {
         SessionEvent::AssistantMessage {

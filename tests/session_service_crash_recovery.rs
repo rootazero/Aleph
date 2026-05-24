@@ -45,6 +45,7 @@ async fn crash_then_wake_then_continue() {
                 thinking_signature: None,
             },
             at: now_ms(),
+            synthetic: false,
         },
     )
     .await

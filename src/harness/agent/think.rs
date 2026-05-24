@@ -44,6 +44,27 @@ const GRACE_NUDGE_MAX_ITERATIONS: &str =
 /// endpoint that more retries will not fix.
 const EMPTY_RESPONSE_RETRIES: u32 = 2;
 
+/// G1 (opencode-inspired): last-step soft warning. Injected as a synthetic
+/// trailing user message wrapped in `<system-reminder>` on the LAST allowed
+/// iteration so the model uses *this* turn to emit a final summary instead
+/// of triggering the post-hoc C1 grace turn (which costs an extra LLM
+/// round-trip). C1 remains as a fail-safe for the rare case where the
+/// model ignores this hint and still emits tool_use.
+///
+/// Text intentionally mirrors opencode's `max-steps.txt` shape so model
+/// behaviour transfers across harnesses.
+const MAX_STEPS_HINT: &str = "<system-reminder>\n\
+CRITICAL — MAXIMUM ITERATIONS REACHED\n\n\
+This is the LAST iteration allowed for this task. Tools are effectively \
+disabled — any tool_use you emit will be discarded after one more grace \
+turn. You MUST respond with TEXT ONLY now.\n\n\
+Your response should include:\n\
+- A short statement that the iteration cap was reached\n\
+- A summary of what was accomplished so far\n\
+- Any tasks that remain incomplete\n\
+- A recommendation for what should be done next\n\
+</system-reminder>";
+
 /// Why a grace turn is being fired. Selects the nudge text; otherwise
 /// the call path is identical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,6 +385,28 @@ impl AgentHarness {
             return Ok((TurnState::Done, 0, false, None));
         }
 
+        // 2d-G1. Last-step soft hint (opencode parity). When the iteration
+        // cap is set AND this is the LAST allowed turn, append a synthetic
+        // `<system-reminder>` user message warning the model to respond with
+        // text only. Saves the post-hoc C1 grace-turn LLM round-trip in the
+        // common case; C1 remains as fail-safe if the model still emits a
+        // tool_use. R10-safe: static text, no reasoning, no policy.
+        if let Some(cap) = self.deps.max_iterations {
+            if cap > 0 && iterations.saturating_add(1) >= cap {
+                messages.push(crate::providers::message::UnifiedMessage::User {
+                    content: vec![crate::providers::message::ContentBlock::Text {
+                        text: MAX_STEPS_HINT.to_string(),
+                        cache_control: None,
+                    }],
+                });
+                tracing::debug!(
+                    iterations,
+                    cap,
+                    "max-iterations soft hint injected (G1)",
+                );
+            }
+        }
+
         // 2d. Derive the optional tool-schema reference for the request payload
         // from the metadata tools fetched above (Stage 2). Cache invalidation
         // is owned by `ToolService` impls; see `to_metadata_form`.
@@ -563,6 +606,7 @@ impl AgentHarness {
                     thinking_signature: None,
                 },
                 at: crate::session::events::now_ms(),
+                synthetic: true,
             };
             self.deps
                 .session
@@ -898,6 +942,7 @@ mod tests {
                 thinking_signature: None,
             },
             at: now_ms(),
+            synthetic: false,
         }
     }
 

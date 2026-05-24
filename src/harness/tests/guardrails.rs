@@ -281,6 +281,7 @@ fn user_message(text: &str) -> SessionEvent {
             thinking_signature: None,
         },
         at: now_ms(),
+        synthetic: false,
     }
 }
 

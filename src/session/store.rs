@@ -518,6 +518,7 @@ mod tests {
                 thinking_signature: None,
             },
             at: at + 1,
+            synthetic: false,
         };
 
         store.append(&sid, 1, &e1, at).await.unwrap();
