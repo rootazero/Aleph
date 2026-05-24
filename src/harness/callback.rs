@@ -14,21 +14,6 @@ use std::fmt;
 
 use crate::orchestrator::dispatch::FlowOutcome;
 
-/// Legacy hint pre-dating [`HarnessCallback::on_complete_with_outcome`]
-/// taking the full [`FlowOutcome`]. Kept so external callers that
-/// referenced it keep compiling; new code should consume the
-/// `FlowOutcome` reference directly via the trait method.
-#[derive(Debug, Clone, Default)]
-#[deprecated(
-    since = "0.3.0",
-    note = "Use HarnessCallback::on_complete_with_outcome(&FlowOutcome) instead — \
-            OutcomeHint only carried hit_limit:bool, FlowOutcome carries the full \
-            terminate reason, timeline, and breakdown."
-)]
-pub struct OutcomeHint {
-    pub hit_limit: bool,
-}
-
 pub trait HarnessCallback: Send {
     /// Invoked when the harness produces (or forwards) a chunk of assistant
     /// text. May be called multiple times per turn if the upstream LLM layer
