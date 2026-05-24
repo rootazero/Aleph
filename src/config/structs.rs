@@ -5,6 +5,7 @@
 use crate::config::types::*;
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;
+use crate::tasks::shared::reaper::ReaperConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -119,6 +120,10 @@ pub struct Config {
     /// Heartbeat monitoring configuration
     #[serde(default)]
     pub heartbeat: HeartbeatConfig,
+    /// Periodic task-history reaper daemon (cleans `cron_job_runs`,
+    /// `heartbeat_runs`, and `heartbeat_dedup` on a single cadence).
+    #[serde(default, alias = "task_reaper")]
+    pub tasks_reaper: ReaperConfig,
     /// Preset persona definitions for group chat
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub personas: Vec<PersonaConfig>,
@@ -377,6 +382,7 @@ impl Default for Config {
             group_chat: GroupChatConfig::default(),
             cron: CronConfig::default(),
             heartbeat: HeartbeatConfig::default(),
+            tasks_reaper: ReaperConfig::default(),
             personas: Vec::new(),
             evolution: EvolutionConfig::default(),
             media: MediaConfig::default(),

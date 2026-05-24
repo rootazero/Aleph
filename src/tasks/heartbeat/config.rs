@@ -112,6 +112,12 @@ pub struct HeartbeatTask {
     pub delivery_config: Option<crate::tasks::shared::delivery::DeliveryConfig>,
     /// Per-task dedup configuration (overrides service defaults)
     pub dedup: DedupConfig,
+    /// Optional weekly time-window gate. When set, the timer skips ticks
+    /// outside the window and advances `next_due_ms` to the next window
+    /// start (computed in the task's timezone, defaulting to UTC if absent).
+    /// Mirrors openclaw's `src/infra/heartbeat-active-hours.ts`.
+    #[serde(default)]
+    pub active_hours: Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>,
     /// Runtime state (mutable, persisted separately)
     pub state: HeartbeatState,
     /// Creation timestamp (Unix ms)
@@ -139,6 +145,7 @@ impl HeartbeatTask {
             probe,
             delivery_config: None,
             dedup: DedupConfig::default(),
+            active_hours: None,
             state: HeartbeatState::default(),
             created_at: now,
             updated_at: now,
@@ -233,6 +240,8 @@ pub struct HeartbeatTaskView {
     pub interval_ms: u64,
     pub probe: ProbeConfig,
     pub dedup: DedupConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>,
     pub state: HeartbeatState,
     pub created_at: i64,
     pub updated_at: i64,
@@ -248,6 +257,7 @@ impl From<&HeartbeatTask> for HeartbeatTaskView {
             interval_ms: task.interval_ms,
             probe: task.probe.clone(),
             dedup: task.dedup.clone(),
+            active_hours: task.active_hours.clone(),
             state: task.state.clone(),
             created_at: task.created_at,
             updated_at: task.updated_at,

@@ -166,13 +166,17 @@ async fn collect_due_tasks(
     let mut store = state.store.lock().await;
     let now_ms = state.clock.now_ms();
 
-    // First pass (immutable): identify which tasks are due.
+    // First pass (immutable): identify which tasks are due AND inside their
+    // configured active-hours window (if any). A task that is due but outside
+    // its window is not skipped silently — its `next_due_ms` is pushed forward
+    // to the next window start in the second pass below so the timer doesn't
+    // re-evaluate every tick.
     let mut due_ids: Vec<(String, Option<String>)> = Vec::new();
+    let mut gated_ids: Vec<(String, i64)> = Vec::new(); // (task_id, new_next_due_ms)
     for task in store.tasks() {
         if !task.enabled {
             continue;
         }
-        // Skip tasks that are already running (per-task exclusion).
         if task.state.running_at_ms.is_some() {
             continue;
         }
@@ -181,20 +185,42 @@ async fn collect_due_tasks(
             .iter()
             .find(|w| w.task_id == task.id)
             .and_then(|w| w.reason.clone());
-        if is_due || wake_reason.is_some() {
+        if !is_due && wake_reason.is_none() {
+            continue;
+        }
+        // Manual wake bypasses the gate — the user explicitly asked for it.
+        if wake_reason.is_some() {
             due_ids.push((task.id.clone(), wake_reason));
+            continue;
+        }
+        match &task.active_hours {
+            None => due_ids.push((task.id.clone(), None)),
+            Some(sched) => {
+                if sched.is_open_at(now_ms) {
+                    due_ids.push((task.id.clone(), None));
+                } else if let Some(next_open) = sched.next_open_after(now_ms) {
+                    gated_ids.push((task.id.clone(), next_open));
+                } else {
+                    // Permanently closed — push very far out so we stop polling
+                    // it but the task survives for the operator to fix.
+                    gated_ids.push((task.id.clone(), now_ms + 86_400_000));
+                }
+            }
         }
     }
 
     // Second pass (mutable): mark each due task as running *before* handing
-    // it to the executor. This is what makes the per-task exclusion guard
-    // above effective — the next tick skips a task that is still running,
-    // and a crash leaves a stale marker that startup catchup clears.
+    // it to the executor; advance gated tasks' next_due_ms past their window.
     let mut due = Vec::with_capacity(due_ids.len());
     for (id, wake_reason) in due_ids {
         if let Some(task) = store.get_task_mut(&id) {
             task.state.running_at_ms = Some(now_ms);
             due.push((task.clone(), wake_reason));
+        }
+    }
+    for (id, new_next_due) in gated_ids {
+        if let Some(task) = store.get_task_mut(&id) {
+            task.state.next_due_ms = Some(new_next_due);
         }
     }
     if !due.is_empty() {

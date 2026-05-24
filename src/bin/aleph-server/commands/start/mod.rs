@@ -1364,9 +1364,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let app_config_for_channels = app_config.clone();
     let app_config_for_reload = app_config.clone();
     let app_config_for_oauth = app_config.clone();
+    // Clone here so `app_config` remains available for downstream wiring
+    // (e.g. the task reaper that reads `tasks_reaper` after handlers are
+    // registered). `register_config_handlers` owns it via `Arc`, so the
+    // extra reference count is the only cost.
     register_config_handlers(
         &mut server,
-        app_config,
+        app_config.clone(),
         config_patcher,
         event_bus.clone(),
         auth_bundle.device_store.clone(),
@@ -1876,6 +1880,51 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         } else if !args.daemon {
             println!("Heartbeat timer loop: skipped (no execution adapter)");
+        }
+    }
+
+    // Spawn the task-history reaper daemon.
+    //
+    // Periodically deletes old rows from `cron_job_runs` and `heartbeat_runs`
+    // honouring each subsystem's `history_retention_days`. Idempotent at the
+    // process level (singleton-guarded). Dedup-table cleanup is deferred — its
+    // owning `DedupEngine` lives inside the heartbeat-timer scope above and
+    // would need lifting before the reaper can reach it; the unwired
+    // `DedupEngine::cleanup` API stays in place for the future hookup.
+    {
+        let reaper_cfg = {
+            let app_cfg = app_config.read().await;
+            app_cfg.tasks_reaper.clone()
+        };
+        let mut subs: Vec<Arc<dyn alephcore::tasks::shared::reaper::HistoryReap>> = Vec::new();
+        if let Some(ref svc) = cron_service {
+            subs.push(Arc::new(
+                alephcore::tasks::shared::reaper::CronHistoryReaper(svc.clone()),
+            ));
+        }
+        if let Some(ref svc) = heartbeat_service {
+            subs.push(Arc::new(
+                alephcore::tasks::shared::reaper::HeartbeatHistoryReaper(svc.clone()),
+            ));
+        }
+        if subs.is_empty() {
+            if !args.daemon {
+                println!("Task reaper: skipped (no task subsystems enabled)");
+            }
+        } else {
+            // `aleph-server` does not yet expose a unified shutdown watch channel
+            // (subsystems poll their own `is_shutdown` flags). Park the receiver
+            // on a never-signalled channel so the reaper relies on tokio runtime
+            // teardown to stop — exactly what the cron/heartbeat timer loops do.
+            let (_keep_tx, rx) = tokio::sync::watch::channel(false);
+            // Leak the sender so the watch channel stays open for the lifetime
+            // of the process; dropping it would cause `shutdown.changed()` to
+            // fire spuriously inside the reaper's `select!` arm.
+            Box::leak(Box::new(_keep_tx));
+            let _ = alephcore::tasks::shared::reaper::spawn_task_reaper(reaper_cfg, subs, rx);
+            if !args.daemon {
+                println!("Task reaper: started");
+            }
         }
     }
 

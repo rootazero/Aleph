@@ -109,6 +109,15 @@ impl HeartbeatService {
     pub fn request_shutdown(&self) {
         self.state.request_shutdown();
     }
+
+    /// Delete heartbeat run history older than `history_retention_days`
+    /// (from this service's `HeartbeatConfig`). Called periodically by the
+    /// shared task reaper daemon ([[reaper]]). Returns rows deleted.
+    pub async fn reap_history(&self) -> Result<usize, String> {
+        let retention = self.state.config.history_retention_days;
+        let store = self.state.store.lock().await;
+        store.cleanup_old_runs(retention)
+    }
 }
 
 #[cfg(test)]

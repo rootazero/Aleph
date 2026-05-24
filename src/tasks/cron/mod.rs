@@ -191,6 +191,17 @@ impl CronService {
     pub fn state(&self) -> &Arc<ServiceState<SystemClock>> {
         &self.state
     }
+
+    /// Delete cron run history older than `history_retention_days`
+    /// (from this service's `CronConfig`). Used by the shared task reaper
+    /// daemon ([[reaper]]) so the cron history table does not grow without
+    /// bound. Returns the number of rows deleted.
+    pub async fn reap_history(&self) -> Result<u64, String> {
+        let now = self.state.clock.now_ms();
+        let retention = self.state.config.history_retention_days;
+        let store = self.state.store.lock().await;
+        store.cleanup_old_runs(retention, now)
+    }
 }
 
 #[cfg(test)]
