@@ -16,6 +16,7 @@ use serde_json::json;
 use tracing::debug;
 
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStore};
+use crate::resilience::{AgentUsageTotal, StateDatabase};
 use crate::sync_primitives::Arc;
 use crate::teams::snapshots::{capture_snapshot, restore_snapshot, SqliteSnapshotStore};
 use crate::teams::TeamStore;
@@ -901,6 +902,124 @@ pub async fn handle_snapshot_restore(
     }
 }
 
+// =============================================================================
+// teams.usage — per-team provider token aggregation (F5)
+// =============================================================================
+
+/// Params for `teams.usage`. `since` / `until` are optional epoch-second
+/// bounds. They default to "all time" when absent.
+#[derive(Debug, Deserialize)]
+pub struct UsageParams {
+    pub team_id: String,
+    #[serde(default)]
+    pub since: Option<i64>,
+    #[serde(default)]
+    pub until: Option<i64>,
+}
+
+/// teams.usage — returns provider-token usage aggregated across all members
+/// of `team_id`, plus a per-agent breakdown. Pure read-side: derived from
+/// `task_traces` ProviderUsage events that are already persisted by the
+/// gateway execution engine.
+///
+/// Cost is intentionally not computed here — tokens are factual, cost is
+/// rate-card policy that lives in the provider config / UI layer.
+pub async fn handle_usage(
+    request: JsonRpcRequest,
+    team_store: Arc<dyn TeamStore>,
+    state_db: Arc<StateDatabase>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.usage request");
+    let params: UsageParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    // Step 1 — resolve team members. Both "team not found" and "team exists
+    // but is empty" are distinguishable here so the response can disambiguate.
+    let team_exists = match team_store.get_team(&params.team_id).await {
+        Ok(Some(_)) => true,
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                RESOURCE_NOT_FOUND,
+                format!("Team '{}' not found", params.team_id),
+            );
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to load team '{}': {}", params.team_id, e),
+            );
+        }
+    };
+    let _ = team_exists; // pure existence check; member list drives the join
+
+    let members = match team_store.get_members(&params.team_id).await {
+        Ok(m) => m,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to load members for '{}': {}", params.team_id, e),
+            );
+        }
+    };
+    let agent_ids: Vec<String> = members.iter().map(|m| m.agent_id.clone()).collect();
+
+    // Step 2 — aggregate usage across the team's members.
+    let per_agent: Vec<AgentUsageTotal> = match state_db
+        .aggregate_usage_by_agents(&agent_ids, params.since, params.until)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Usage aggregation failed for '{}': {}", params.team_id, e),
+            );
+        }
+    };
+
+    // Step 3 — fold into team totals. Saturating sums match the harness
+    // `TokenBreakdown::total()` semantics.
+    let mut total_calls: u64 = 0;
+    let mut total_input: u64 = 0;
+    let mut total_output: u64 = 0;
+    let mut total_cache_read: u64 = 0;
+    let mut total_cache_creation: u64 = 0;
+    let mut total_reasoning: u64 = 0;
+    for row in &per_agent {
+        total_calls = total_calls.saturating_add(row.call_count);
+        total_input = total_input.saturating_add(row.input_tokens);
+        total_output = total_output.saturating_add(row.output_tokens);
+        total_cache_read = total_cache_read.saturating_add(row.cache_read_tokens);
+        total_cache_creation = total_cache_creation.saturating_add(row.cache_creation_tokens);
+        total_reasoning = total_reasoning.saturating_add(row.reasoning_tokens);
+    }
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "team_id": params.team_id,
+            "since": params.since,
+            "until": params.until,
+            "member_count": agent_ids.len(),
+            "total": {
+                "call_count": total_calls,
+                "input_tokens": total_input,
+                "output_tokens": total_output,
+                "cache_read_tokens": total_cache_read,
+                "cache_creation_tokens": total_cache_creation,
+                "reasoning_tokens": total_reasoning,
+            },
+            "per_agent": per_agent,
+        }),
+    )
+}
+
 /// teams.snapshot.delete — idempotent removal. Returns `existed: bool`.
 pub async fn handle_snapshot_delete(
     request: JsonRpcRequest,
@@ -1085,6 +1204,134 @@ mod snapshot_handler_tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+}
+
+#[cfg(test)]
+mod usage_handler_tests {
+    use super::*;
+    use crate::resilience::{AgentTask, RiskLevel, StateDatabase, TaskTrace};
+    use crate::teams::{NewTeam, NewTeamMember, SqliteTeamStore};
+    use aleph_protocol::AgentTraceEvent;
+    use rusqlite::Connection;
+
+    fn req(method: &str, params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: method.into(),
+            params: Some(params),
+            id: Some(serde_json::Value::Number(1.into())),
+        }
+    }
+
+    async fn setup_team_with_usage() -> (Arc<dyn TeamStore>, Arc<StateDatabase>, String) {
+        let teams_conn = Connection::open_in_memory().unwrap();
+        let teams = Arc::new(SqliteTeamStore::new(teams_conn));
+        teams.migrate().await.unwrap();
+        let team = teams
+            .create_team(NewTeam {
+                name: "UsageTeam".into(),
+                description: "usage rpc".into(),
+                leader_id: "leader".into(),
+            })
+            .await
+            .unwrap();
+        for who in ["leader", "worker"] {
+            teams
+                .add_member(NewTeamMember {
+                    team_id: team.id.clone(),
+                    agent_id: who.into(),
+                    role: who.into(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        // Seed task + provider_usage rows for leader & worker, plus one row
+        // for an unrelated agent that must be filtered out.
+        for (task, agent, input, ts) in [
+            ("t1", "leader", 100u32, 1000i64),
+            ("t1", "leader", 200, 1100),
+            ("t1", "worker", 50, 1200),
+            ("t2", "outsider", 999, 1300),
+        ] {
+            let _ = db
+                .insert_agent_task(&AgentTask::new(task, "s", "coder", "x", RiskLevel::Low))
+                .await;
+            db.insert_trace(&TaskTrace {
+                id: 0,
+                task_id: task.into(),
+                step_index: ts as u32,
+                event: AgentTraceEvent::ProviderUsage {
+                    agent_id: agent.into(),
+                    input_tokens: input,
+                    output_tokens: input / 2,
+                    cache_read_tokens: None,
+                    cache_creation_tokens: None,
+                    thinking_tokens: None,
+                },
+                timestamp: ts,
+            })
+            .await
+            .unwrap();
+        }
+
+        let teams_arc: Arc<dyn TeamStore> = teams;
+        (teams_arc, db, team.id)
+    }
+
+    #[tokio::test]
+    async fn usage_aggregates_members_and_excludes_outsiders() {
+        let (teams, db, team_id) = setup_team_with_usage().await;
+        let resp = handle_usage(
+            req("teams.usage", json!({ "team_id": team_id })),
+            teams.clone(),
+            db.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none(), "usage error: {:?}", resp.error);
+        let result = resp.result.as_ref().unwrap();
+        assert_eq!(result["member_count"].as_u64().unwrap(), 2);
+        // 100 + 200 (leader) + 50 (worker) = 350; outsider's 999 must be ignored.
+        assert_eq!(result["total"]["input_tokens"].as_u64().unwrap(), 350);
+        // outputs = input/2 each → 50 + 100 + 25 = 175
+        assert_eq!(result["total"]["output_tokens"].as_u64().unwrap(), 175);
+        assert_eq!(result["total"]["call_count"].as_u64().unwrap(), 3);
+        let per_agent = result["per_agent"].as_array().unwrap();
+        assert_eq!(per_agent.len(), 2, "outsider must not appear");
+    }
+
+    #[tokio::test]
+    async fn usage_honours_since_until_window() {
+        let (teams, db, team_id) = setup_team_with_usage().await;
+        let resp = handle_usage(
+            req(
+                "teams.usage",
+                json!({ "team_id": team_id, "since": 1050, "until": 1150 }),
+            ),
+            teams.clone(),
+            db.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none());
+        let total = resp.result.as_ref().unwrap()["total"].clone();
+        // Only leader's 1100-stamped row sits inside [1050, 1150].
+        assert_eq!(total["input_tokens"].as_u64().unwrap(), 200);
+        assert_eq!(total["call_count"].as_u64().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn usage_returns_not_found_for_unknown_team() {
+        let (teams, db, _team_id) = setup_team_with_usage().await;
+        let resp = handle_usage(
+            req("teams.usage", json!({ "team_id": "ghost" })),
+            teams.clone(),
+            db.clone(),
+        )
+        .await;
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.as_ref().unwrap().code, RESOURCE_NOT_FOUND);
     }
 }
 

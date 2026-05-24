@@ -21,6 +21,7 @@ pub mod task_comment;
 pub mod task_read_artifact;
 pub mod task_submit;
 mod team_digest;
+pub mod usage;
 
 pub use create::{
     CreateAgentSpec, EnrolledMember, MemberSpec, TeamCreateArgs, TeamCreateOutput, TeamCreateTool,
@@ -54,3 +55,4 @@ pub use task_comment::{TaskCommentArgs, TaskCommentOutput, TaskCommentTool};
 pub use task_read_artifact::{TaskReadArtifactArgs, TaskReadArtifactOutput, TaskReadArtifactTool};
 pub use task_submit::{TaskSubmitArgs, TaskSubmitOutput, TaskSubmitTool};
 pub use team_digest::{TeamDigestArgs, TeamDigestOutput, TeamDigestTool};
+pub use usage::{TeamUsageArgs, TeamUsageOutput, TeamUsageTool, UsageTotal};

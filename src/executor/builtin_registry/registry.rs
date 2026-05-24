@@ -257,6 +257,10 @@ pub struct BuiltinToolRegistry {
     /// + SqliteSnapshotStore; the snapshot store is constructed alongside
     /// coord_task_store in the boot path so they share a connection).
     pub(crate) team_snapshot_tool: Option<crate::builtin_tools::team::TeamSnapshotTool>,
+    /// Per-team token usage aggregation (optional — requires TeamStore +
+    /// StateDatabase; both are populated alongside the other team-coord
+    /// stores in the boot path).
+    pub(crate) team_usage_tool: Option<crate::builtin_tools::team::TeamUsageTool>,
     /// Team messaging tools (optional — require MessageRouter / Inbox)
     pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
     pub(crate) inbox_read_tool: Option<crate::builtin_tools::team::InboxReadTool>,
@@ -1088,6 +1092,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let tool = self.team_snapshot_tool.as_ref().ok_or_else(|| {
                     AlephError::tool(
                         "team_snapshot not available: TeamStore + CoordTaskStore + SqliteSnapshotStore required",
+                    )
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "team_usage" => Box::pin(async move {
+                let tool = self.team_usage_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "team_usage not available: TeamStore + StateDatabase required",
                     )
                 })?;
                 tool.call_json(arguments).await

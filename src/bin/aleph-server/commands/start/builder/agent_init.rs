@@ -60,6 +60,10 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     /// Snapshot store for `teams.snapshot.*` RPC handlers. Shares the coord
     /// connection — None if coord init failed.
     pub snapshot_store: Option<Arc<alephcore::teams::SqliteSnapshotStore>>,
+    /// State database (~/.aleph/data/state.db). Holds `task_traces` rows that
+    /// the `teams.usage` RPC + `team_usage` tool aggregate by team-member
+    /// agent_id. `None` in simulated mode.
+    pub state_db: Option<Arc<alephcore::resilience::StateDatabase>>,
     /// Event-sourced memory command handler (used by Phase 2/3 consumers)
     #[allow(dead_code)]
     pub command_handler:
@@ -145,6 +149,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // into the (legacy) ExecutionEngine so the orchestrator path can build a
     // system prompt with curated memory + hybrid retrieval.
     let mut mcp_for_orchestrator: Option<Arc<alephcore::thinker::MemoryContextProvider>> = None;
+    // F5 (per-team usage): lift `resilience_db` out of the real-engine branch so
+    // the `teams.usage` RPC handler can scan `task_traces` for ProviderUsage
+    // events scoped to a team's members. `None` in the simulated branch (no
+    // state.db == no historical usage to aggregate).
+    let mut state_db_out: Option<Arc<alephcore::resilience::StateDatabase>> = None;
 
     // Create coord task store (SQLite-backed task/team coordination for swarm tools).
     // Created unconditionally so it is available regardless of AI provider availability.
@@ -1149,6 +1158,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         if let Some(ref state_db) = resilience_db {
             engine = engine.with_state_database(state_db.clone());
         }
+        state_db_out = resilience_db.clone();
         if let Some(router) = task_router {
             engine = engine.with_task_router(router);
         }
@@ -2287,6 +2297,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         team_store,
         coord_task_store: coord_store,
         snapshot_store,
+        state_db: state_db_out,
         command_handler: command_handler_out,
         event_store: event_store.clone(),
         message_router: message_router.clone(),

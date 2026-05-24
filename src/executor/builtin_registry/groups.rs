@@ -139,6 +139,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "team_create",
             "team_from_template",
             "team_snapshot",
+            "team_usage",
             "team_delegate",
             "team_status",
             "team_disband",

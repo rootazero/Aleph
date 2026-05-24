@@ -10,6 +10,23 @@ use aleph_protocol::AgentTraceEvent;
 use rusqlite::params;
 use rusqlite::types::Type;
 use rusqlite::OptionalExtension;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// Per-agent rollup of `ProviderUsage` trace events.
+///
+/// Sums are saturating-cast from SQLite `INTEGER` (i64) to u64; in practice
+/// token counts fit comfortably below `i64::MAX`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentUsageTotal {
+    pub agent_id: String,
+    pub call_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub reasoning_tokens: u64,
+}
 
 /// Construct TaskTrace from a rusqlite row.
 /// Expected column order: id, task_id, step_index, event_kind, event_json, timestamp
@@ -320,6 +337,115 @@ impl StateDatabase {
 
         Ok(result)
     }
+
+    // =========================================================================
+    // ProviderUsage aggregation (per-team / per-agent cost rollup)
+    // =========================================================================
+
+    /// Aggregate `ProviderUsage` events grouped by `agent_id`.
+    ///
+    /// Scans `task_traces` for rows where `event_kind = 'provider_usage'` and
+    /// `event_json -> agent_id` is in `agent_ids`. Optional `since` / `until`
+    /// bounds restrict to a timestamp window (epoch ms, same units written by
+    /// `TaskTrace::new`).
+    ///
+    /// Returns one row per agent that actually had usage in the window;
+    /// agents with zero usage are omitted (callers fill zeros at the
+    /// presentation layer).
+    pub async fn aggregate_usage_by_agents(
+        &self,
+        agent_ids: &[String],
+        since: Option<i64>,
+        until: Option<i64>,
+    ) -> Result<Vec<AgentUsageTotal>, AlephError> {
+        if agent_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Build positional placeholders ?1..?N for the IN clause, then ?N+1
+        // and ?N+2 for the optional time bounds (omitted when absent).
+        let placeholders: Vec<String> =
+            (1..=agent_ids.len()).map(|i| format!("?{i}")).collect();
+        let in_list = placeholders.join(", ");
+        let mut next_pos = agent_ids.len() + 1;
+        let mut where_extras: Vec<String> = Vec::new();
+        let mut bind_extras: Vec<i64> = Vec::new();
+        if let Some(ts) = since {
+            where_extras.push(format!("timestamp >= ?{next_pos}"));
+            bind_extras.push(ts);
+            next_pos += 1;
+        }
+        if let Some(ts) = until {
+            where_extras.push(format!("timestamp <= ?{next_pos}"));
+            bind_extras.push(ts);
+        }
+        let extra_sql = if where_extras.is_empty() {
+            String::new()
+        } else {
+            format!(" AND {}", where_extras.join(" AND "))
+        };
+
+        let sql = format!(
+            r#"
+            SELECT
+                json_extract(event_json, '$.agent_id') AS agent_id,
+                COUNT(*) AS call_count,
+                SUM(COALESCE(CAST(json_extract(event_json, '$.input_tokens') AS INTEGER), 0)) AS input,
+                SUM(COALESCE(CAST(json_extract(event_json, '$.output_tokens') AS INTEGER), 0)) AS output,
+                SUM(COALESCE(CAST(json_extract(event_json, '$.cache_read_tokens') AS INTEGER), 0)) AS cache_read,
+                SUM(COALESCE(CAST(json_extract(event_json, '$.cache_creation_tokens') AS INTEGER), 0)) AS cache_creation,
+                SUM(COALESCE(CAST(json_extract(event_json, '$.thinking_tokens') AS INTEGER), 0)) AS reasoning
+            FROM task_traces
+            WHERE event_kind = 'provider_usage'
+              AND json_extract(event_json, '$.agent_id') IN ({in_list}){extra_sql}
+            GROUP BY agent_id
+            ORDER BY agent_id ASC
+            "#
+        );
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| AlephError::config(format!("Failed to prepare usage query: {e}")))?;
+
+        // Combine agent_id text params + optional timestamp ints into a single
+        // params_from_iter sequence in positional order.
+        let id_values: Vec<rusqlite::types::Value> = agent_ids
+            .iter()
+            .map(|s| rusqlite::types::Value::Text(s.clone()))
+            .collect();
+        let ts_values: Vec<rusqlite::types::Value> = bind_extras
+            .into_iter()
+            .map(rusqlite::types::Value::Integer)
+            .collect();
+        let all_values: Vec<rusqlite::types::Value> =
+            id_values.into_iter().chain(ts_values).collect();
+
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(all_values), |row| {
+                let to_u64 = |v: i64| -> u64 {
+                    if v < 0 {
+                        0
+                    } else {
+                        v as u64
+                    }
+                };
+                Ok(AgentUsageTotal {
+                    agent_id: row.get::<_, String>(0)?,
+                    call_count: to_u64(row.get::<_, i64>(1)?),
+                    input_tokens: to_u64(row.get::<_, i64>(2)?),
+                    output_tokens: to_u64(row.get::<_, i64>(3)?),
+                    cache_read_tokens: to_u64(row.get::<_, i64>(4)?),
+                    cache_creation_tokens: to_u64(row.get::<_, i64>(5)?),
+                    reasoning_tokens: to_u64(row.get::<_, i64>(6)?),
+                })
+            })
+            .map_err(|e| AlephError::config(format!("Failed to query usage: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AlephError::config(format!("Failed to collect usage: {e}")))?;
+
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]
@@ -455,5 +581,148 @@ mod tests {
                 r.task_id
             );
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // ProviderUsage aggregation (per-team cost feature)
+    // -------------------------------------------------------------------------
+
+    /// Insert a ProviderUsage trace event directly with a chosen timestamp so
+    /// tests can build deterministic windows.
+    async fn seed_usage(
+        db: &StateDatabase,
+        task_id: &str,
+        step: u32,
+        agent_id: &str,
+        input: u32,
+        output: u32,
+        cache_read: Option<u32>,
+        cache_creation: Option<u32>,
+        thinking: Option<u32>,
+        ts: i64,
+    ) {
+        // Ensure the parent task row exists so foreign keys don't trip.
+        let _ = db
+            .insert_agent_task(&AgentTask::new(
+                task_id,
+                "session",
+                "coder",
+                "seed",
+                RiskLevel::Low,
+            ))
+            .await;
+        let trace = TaskTrace {
+            id: 0,
+            task_id: task_id.to_string(),
+            step_index: step,
+            event: AgentTraceEvent::ProviderUsage {
+                agent_id: agent_id.to_string(),
+                input_tokens: input,
+                output_tokens: output,
+                cache_read_tokens: cache_read,
+                cache_creation_tokens: cache_creation,
+                thinking_tokens: thinking,
+            },
+            timestamp: ts,
+        };
+        db.insert_trace(&trace).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn aggregate_usage_returns_empty_when_no_agents_supplied() {
+        let db = StateDatabase::in_memory().unwrap();
+        seed_usage(&db, "t1", 0, "alice", 100, 50, None, None, None, 1000).await;
+        let rows = db
+            .aggregate_usage_by_agents(&[], None, None)
+            .await
+            .unwrap();
+        assert!(rows.is_empty(), "empty agent_ids must short-circuit");
+    }
+
+    #[tokio::test]
+    async fn aggregate_usage_sums_per_agent() {
+        let db = StateDatabase::in_memory().unwrap();
+        seed_usage(&db, "t1", 0, "alice", 100, 50, Some(20), Some(10), Some(5), 1000).await;
+        seed_usage(
+            &db,
+            "t1",
+            1,
+            "alice",
+            200,
+            80,
+            Some(30),
+            None,
+            None,
+            1100,
+        )
+        .await;
+        seed_usage(&db, "t2", 0, "bob", 50, 20, None, None, None, 1200).await;
+        // Carol is in agent_ids but produced no usage — must be omitted from
+        // the result rows (caller is responsible for zero-filling).
+        let rows = db
+            .aggregate_usage_by_agents(
+                &["alice".into(), "bob".into(), "carol".into()],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2, "carol must not appear with zero usage");
+        let alice = rows.iter().find(|r| r.agent_id == "alice").unwrap();
+        assert_eq!(alice.call_count, 2);
+        assert_eq!(alice.input_tokens, 300);
+        assert_eq!(alice.output_tokens, 130);
+        assert_eq!(alice.cache_read_tokens, 50);
+        assert_eq!(alice.cache_creation_tokens, 10);
+        assert_eq!(alice.reasoning_tokens, 5);
+        let bob = rows.iter().find(|r| r.agent_id == "bob").unwrap();
+        assert_eq!(bob.call_count, 1);
+        assert_eq!(bob.input_tokens, 50);
+    }
+
+    #[tokio::test]
+    async fn aggregate_usage_honours_time_window() {
+        let db = StateDatabase::in_memory().unwrap();
+        seed_usage(&db, "t1", 0, "alice", 100, 50, None, None, None, 1000).await;
+        seed_usage(&db, "t1", 1, "alice", 200, 80, None, None, None, 2000).await;
+        seed_usage(&db, "t1", 2, "alice", 400, 100, None, None, None, 3000).await;
+        let mid_only = db
+            .aggregate_usage_by_agents(&["alice".into()], Some(1500), Some(2500))
+            .await
+            .unwrap();
+        assert_eq!(mid_only.len(), 1);
+        assert_eq!(mid_only[0].call_count, 1);
+        assert_eq!(mid_only[0].input_tokens, 200);
+        let lower_bound_only = db
+            .aggregate_usage_by_agents(&["alice".into()], Some(2000), None)
+            .await
+            .unwrap();
+        assert_eq!(lower_bound_only[0].call_count, 2);
+        assert_eq!(lower_bound_only[0].input_tokens, 600);
+    }
+
+    #[tokio::test]
+    async fn aggregate_usage_ignores_non_provider_usage_events() {
+        let db = StateDatabase::in_memory().unwrap();
+        // One legitimate ProviderUsage row.
+        seed_usage(&db, "t1", 0, "alice", 100, 50, None, None, None, 1000).await;
+        // A TextEmitted event with the same agent must NOT contribute.
+        let textual = TaskTrace::new(
+            "t1",
+            1,
+            AgentTraceEvent::TextEmitted {
+                iteration: 0,
+                stream: AgentTraceTextKind::Final,
+                text: "alice said hi".into(),
+            },
+        );
+        db.insert_trace(&textual).await.unwrap();
+        let rows = db
+            .aggregate_usage_by_agents(&["alice".into()], None, None)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].call_count, 1);
+        assert_eq!(rows[0].input_tokens, 100);
     }
 }

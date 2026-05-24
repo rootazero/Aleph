@@ -89,6 +89,10 @@ impl Lane {
             // gateway.metrics.lanes is a read-only diagnostics gauge.
             // The `.lanes` suffix doesn't match the Query heuristic.
             "gateway.metrics.lanes" => Some(Lane::Query),
+            // teams.usage is a read-only token aggregation over task_traces.
+            // The `.usage` suffix isn't in the Query heuristic; keep it out of
+            // Mutate so it isn't idempotency-guarded for nothing.
+            "teams.usage" => Some(Lane::Query),
             // connect.challenge issues a nonce — read-only, idempotent.
             // The `.challenge` suffix doesn't match the Query heuristic;
             // putting it on Query keeps it out of the Mutate lane that
@@ -406,6 +410,10 @@ mod tests {
         // Execute lane
         assert_eq!(Lane::for_method("agent.run"), Lane::Execute);
         assert_eq!(Lane::for_method("chat.send"), Lane::Execute);
+
+        // teams.usage is a read-only aggregator → explicit Query override
+        // (its `.usage` suffix isn't covered by the heuristic).
+        assert_eq!(Lane::for_method("teams.usage"), Lane::Query);
 
         // Mutate lane
         assert_eq!(Lane::for_method("config.patch"), Lane::Mutate);

@@ -487,6 +487,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Manage team snapshots — create / list / get / restore (dry-run by default) / delete. Restore is conservative: InProgress tasks are never clobbered.",
         requires_config: true,
     },
+    BuiltinToolDefinition {
+        name: "team_usage",
+        description: "Aggregate LLM provider token usage for a team over an optional time window. Returns the team total plus a per-agent breakdown. Cost is not computed — tokens are factual, cost is a rate-card concern.",
+        requires_config: true,
+    },
     // Team messaging tools — require MessageRouter / Inbox
     BuiltinToolDefinition {
         name: "message_send",
@@ -771,6 +776,7 @@ pub fn create_tool_boxed(
         | "team_digest"
         | "team_from_template"
         | "team_snapshot"
+        | "team_usage"
         | "message_send"
         | "inbox_read"
         | "plan_submit"

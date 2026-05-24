@@ -167,6 +167,7 @@ pub(in crate::commands::start) fn register_teams_handlers(
     coord_store: &Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>,
     event_store: Option<&Arc<dyn alephcore::teams::events::EventLogStore>>,
     snapshot_store: Option<&Arc<alephcore::teams::SqliteSnapshotStore>>,
+    state_db: Option<&Arc<alephcore::resilience::StateDatabase>>,
 ) {
     use alephcore::gateway::handlers::teams;
 
@@ -254,6 +255,14 @@ pub(in crate::commands::start) fn register_teams_handlers(
             snap
         );
         register_handler!(server, "teams.snapshot.delete", teams::handle_snapshot_delete, snap);
+    }
+
+    // teams.usage — per-team provider token aggregation. Requires state.db
+    // (where ProviderUsage trace events live); in simulated mode the handler
+    // is simply absent and the placeholder in handlers/mod.rs surfaces a clear
+    // error.
+    if let Some(db) = state_db {
+        register_handler!(server, "teams.usage", teams::handle_usage, store, db);
     }
 }
 

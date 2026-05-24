@@ -747,6 +747,36 @@ impl BuiltinToolRegistry {
             None
         };
 
+        // Build team_usage when TeamStore + StateDatabase are both present.
+        // The state.db lives in ~/.aleph/data and holds the task_traces rows
+        // that the aggregator scans; without it the tool returns NotAvailable.
+        let team_usage_tool = if let (Some(ref team_store), Some(ref state_db)) =
+            (&config.team_store, &config.state_db)
+        {
+            use crate::builtin_tools::team::TeamUsageTool;
+            let tool = TeamUsageTool::new(
+                Arc::clone(team_store),
+                Arc::clone(state_db),
+                current_agent_id.clone(),
+            );
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered team_usage tool");
+            Some(tool)
+        } else {
+            None
+        };
+
         // Add team_digest tool (if EventLogStore + TeamStore are available)
         let team_digest_tool = if let (Some(ref event_store), Some(ref team_store)) =
             (&config.event_store, &config.team_store)
@@ -1358,6 +1388,7 @@ impl BuiltinToolRegistry {
             team_digest_tool,
             team_from_template_tool,
             team_snapshot_tool,
+            team_usage_tool,
             message_send_tool,
             inbox_read_tool,
             plan_submit_tool,

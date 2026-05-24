@@ -17,3 +17,4 @@ mod tasks;
 mod traces;
 
 pub use state_database::{MemoryStats, StateDatabase, DEFAULT_EMBEDDING_DIM};
+pub use traces::AgentUsageTotal;

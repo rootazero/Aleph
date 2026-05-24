@@ -1434,6 +1434,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             cs,
             agent_result.event_store.as_ref(),
             agent_result.snapshot_store.as_ref(),
+            agent_result.state_db.as_ref(),
         );
     }
 
