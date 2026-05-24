@@ -191,6 +191,7 @@ mod tests {
             attachments: Vec::new(),
             pending_media: PendingMedia::default(),
             sandbox_override: None,
+            workspace_override: None,
         };
 
         let result = adapter.execute(request, agent, emitter).await;

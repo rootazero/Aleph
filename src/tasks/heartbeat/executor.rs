@@ -133,6 +133,9 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
         let mut metadata = HashMap::new();
         metadata.insert("heartbeat_agent_id".to_string(), agent_id.to_string());
 
+        // System-initiated: heartbeat has no parent run, so no project
+        // context to inherit. Same round-3 follow-up as cron applies if
+        // a heartbeat ever needs to fire inside a specific project.
         let request = RunRequest {
             run_id,
             input: prompt.to_string(),
@@ -142,6 +145,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sandbox_override: None,
+            workspace_override: None,
         };
 
         // Collect events (no user-facing emitter): the L2 agent declares its

@@ -1408,6 +1408,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }
 
+    // Project catalogue (~/.aleph/projects.json). Stateless store — every
+    // op re-reads under an fs2 lock so CLI/Panel writes stay consistent.
+    let project_store = Arc::new(alephcore::projects::ProjectStore::new());
+    register_projects_handlers(&mut server, &project_store, args.daemon);
+
     // Agent management (agent_manager created earlier for tool config sharing)
     register_agents_handlers(&mut server, &agent_manager, &event_bus);
 

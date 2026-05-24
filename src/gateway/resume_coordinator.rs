@@ -70,6 +70,20 @@ pub(crate) fn classify_markers(markers: &[SessionEventRecord]) -> ScanVerdict {
     }
 }
 
+/// Extract `project_root` from the most recent `RunStarted` marker.
+/// Returns `None` for legacy logs or when the original run was not
+/// project-scoped, so the caller falls back to the agent's default
+/// workspace — same shape as the in-memory `RunRequest.workspace_override`
+/// field flows through the engine.
+pub(crate) fn latest_project_root(markers: &[SessionEventRecord]) -> Option<std::path::PathBuf> {
+    markers.iter().rev().find_map(|record| match &record.event {
+        SessionEvent::RunStarted { project_root, .. } => {
+            project_root.as_deref().map(std::path::PathBuf::from)
+        }
+        _ => None,
+    })
+}
+
 /// Walk a full session event log and return a synthetic `ToolError` for
 /// every `ToolCallRequested` whose `call_id` has no matching `ToolResult`
 /// or `ToolError`. The returned events are ready to append to the log; the
@@ -163,8 +177,15 @@ impl ResumeCoordinator {
                     report.skipped += 1;
                 }
                 ScanVerdict::Interrupted { trailing_starts } => {
-                    self.handle_interrupted(&session_id, &markers, trailing_starts, &mut report)
-                        .await;
+                    let project_root = latest_project_root(&markers);
+                    self.handle_interrupted(
+                        &session_id,
+                        &markers,
+                        trailing_starts,
+                        project_root,
+                        &mut report,
+                    )
+                    .await;
                 }
             }
         }
@@ -186,6 +207,7 @@ impl ResumeCoordinator {
         session_id: &SessionId,
         markers: &[SessionEventRecord],
         trailing_starts: usize,
+        project_root: Option<std::path::PathBuf>,
         report: &mut ResumeReport,
     ) {
         // The dangling RunStarted is the last marker (classify_markers
@@ -231,8 +253,24 @@ impl ResumeCoordinator {
             return;
         }
 
-        // Re-trigger. Task 6 implements `retrigger`.
-        match self.retrigger(session_id).await {
+        // Re-trigger. Task 6 implements `retrigger`. When the original
+        // run carried a `project_root`, pre-validate it still exists so a
+        // moved/deleted folder degrades to a default-workspace resume
+        // (with a warn) instead of failing the run mid-tool-call.
+        let resume_project_root = match project_root {
+            Some(p) if p.is_dir() => Some(p),
+            Some(p) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    project_root = %p.display(),
+                    "resume: original project folder no longer exists; \
+                     falling back to agent workspace"
+                );
+                None
+            }
+            None => None,
+        };
+        match self.retrigger(session_id, resume_project_root).await {
             Ok(()) => report.resumed += 1,
             Err(e) => {
                 tracing::warn!(
@@ -300,6 +338,7 @@ impl ResumeCoordinator {
     async fn retrigger(
         &self,
         session_id: &SessionId,
+        workspace_override: Option<std::path::PathBuf>,
     ) -> Result<(), crate::session::service::SessionError> {
         use crate::session::service::SessionError;
         use std::collections::HashMap;
@@ -318,6 +357,9 @@ impl ResumeCoordinator {
 
         let mut metadata: HashMap<String, String> = HashMap::new();
         metadata.insert("resume".to_string(), "true".to_string());
+        if let Some(p) = workspace_override.as_ref() {
+            metadata.insert("project_root".to_string(), p.display().to_string());
+        }
 
         let request = RunRequest {
             run_id: uuid::Uuid::new_v4().to_string(),
@@ -330,6 +372,7 @@ impl ResumeCoordinator {
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sandbox_override: None,
+            workspace_override,
         };
 
         let collector = Arc::new(CollectingEventEmitter::new());
@@ -366,6 +409,15 @@ mod tests {
         SessionEvent::RunStarted {
             run_id: format!("r-{at}"),
             at,
+            project_root: None,
+        }
+    }
+
+    fn run_started_with_project(at: i64, project: &str) -> SessionEvent {
+        SessionEvent::RunStarted {
+            run_id: format!("r-{at}"),
+            at,
+            project_root: Some(project.to_string()),
         }
     }
 
@@ -468,6 +520,28 @@ mod tests {
             rec(2, tool_result("c1"), 2),
         ];
         assert!(compute_boundary_repairs(&events).is_empty());
+    }
+
+    /// `latest_project_root` walks the marker list from newest to oldest
+    /// and returns the most recent persisted `project_root`, falling back
+    /// to `None` (legacy log, or non-project run) for the resume default.
+    #[test]
+    fn latest_project_root_picks_newest_marker() {
+        let markers = vec![
+            rec(1, run_started_with_project(10, "/a"), 10),
+            rec(2, run_finished(20), 20),
+            rec(3, run_started_with_project(30, "/b"), 30),
+        ];
+        assert_eq!(
+            latest_project_root(&markers),
+            Some(std::path::PathBuf::from("/b"))
+        );
+    }
+
+    #[test]
+    fn latest_project_root_returns_none_for_legacy_runs() {
+        let markers = vec![rec(1, run_started(10), 10)];
+        assert_eq!(latest_project_root(&markers), None);
     }
 
     #[test]

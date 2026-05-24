@@ -315,6 +315,11 @@ pub async fn handle(
     let run_id = uuid::Uuid::new_v4().to_string();
     let pending_media: PendingMedia = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
+    // OpenAI-compat shim is for third-party SDKs (LangChain, LiteLLM, plain
+    // `openai.ChatCompletion.create(...)`), none of which know about
+    // Aleph's project picker. Clients that want project-scoped execution
+    // should use the JSON-RPC `chat.send` endpoint (which carries
+    // `project_root`) instead of the OpenAI shim.
     let run_request = RunRequest {
         run_id: run_id.clone(),
         input,
@@ -324,6 +329,7 @@ pub async fn handle(
         attachments: Vec::new(),
         pending_media,
         sandbox_override: None,
+        workspace_override: None,
     };
 
     let is_streaming = req.stream.unwrap_or(false);

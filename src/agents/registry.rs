@@ -72,6 +72,14 @@ impl AgentRegistry {
     /// Returns shadow events (id collisions where a higher-tier definition
     /// replaced a lower-tier one). Builtin-source agents in the merged set
     /// are skipped — they are already registered via `with_builtins()`.
+    ///
+    /// Boot wiring currently passes `project_dir = None` (the desktop
+    /// daemon has no active project at boot). Round-3 follow-up: build a
+    /// per-run [`AgentRegistry`] overlay seeded from
+    /// [`crate::projects::current_project_root`] so a project's
+    /// `<project>/.aleph/agents/*.md` definitions can shadow the
+    /// user-tier agents for runs scoped to that project — without
+    /// reloading the global registry.
     pub fn register_from_dirs(
         &self,
         home_dir: &std::path::Path,

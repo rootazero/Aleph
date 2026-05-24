@@ -1,10 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The shell hosts the Panel webview and exposes no IPC commands to it; only core window permissions are granted. `start-dragging` is required so the Panel's `data-tauri-drag-region` strip (macOS overlay-titlebar workaround) can actually move the window. The `remote` block extends this capability to the Panel's loopback origin (the daemon serves it from http://127.0.0.1:18790), otherwise Tauri does NOT inject `__TAURI_INTERNALS__` on remote origins and the drag-region runtime fails silently.",
+  "description": "Surface the shell exposes to the Panel webview. `core:window:allow-start-dragging` is required for the macOS overlay-titlebar drag strip. The two project picker permissions are defined in `permissions/projects.toml` and back the Panel's \"进入项目工作\" flow — they live in the shell because NSOpenPanel must be presented from the UI process that owns the window. The `remote` block extends every permission to the Panel's loopback origin (http://127.0.0.1:18790, served by the daemon); without it Tauri does NOT inject `__TAURI_INTERNALS__` for remote origins and the picker runtime fails silently.",
   "windows": ["main"],
   "remote": {
     "urls": ["http://127.0.0.1:18790/*"]
   },
-  "permissions": ["core:default", "core:window:allow-start-dragging"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "allow-pick-project-directory",
+    "allow-create-project-directory"
+  ]
 }

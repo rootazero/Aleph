@@ -245,6 +245,12 @@ impl SessionScheduler {
             metadata.insert("platform".to_string(), channel.channel_type().to_string());
         }
 
+        // Channel-routed messages (Telegram, Slack, Bot…) do not carry a
+        // project context — the desktop Panel's "进入项目工作" flow lives
+        // on `chat.send`, which constructs `RunRequest` directly in
+        // `AgentRunManager::start_run` and therefore bypasses this
+        // scheduler entirely. If a future channel ever needs to inherit
+        // a project, propagate it through `ChannelMessageContext` here.
         let request = RunRequest {
             run_id: run_id.to_string(),
             input: enriched.enriched_text.clone(),
@@ -254,6 +260,7 @@ impl SessionScheduler {
             attachments: ctx.message.attachments.clone(),
             pending_media: pending_media.clone(),
             sandbox_override: None,
+            workspace_override: None,
         };
 
         info!(
@@ -530,6 +537,7 @@ async fn execute_next(
         attachments: ctx.message.attachments.clone(),
         pending_media: pending_media.clone(),
         sandbox_override: None,
+        workspace_override: None,
     };
 
     info!(

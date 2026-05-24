@@ -46,6 +46,7 @@ where
             // the harness bridge falls back to Background paradigm.
             interaction_manifest: None,
             sandbox_override: None,
+            workspace_override: None,
         };
 
         let handle = orchestrator

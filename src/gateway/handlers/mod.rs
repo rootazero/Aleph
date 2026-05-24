@@ -89,6 +89,7 @@ pub mod oauth;
 pub mod pairing;
 pub mod plugins;
 pub mod profiles;
+pub mod projects;
 pub mod providers;
 pub mod request_state;
 pub mod rerank_config;
@@ -507,6 +508,46 @@ impl HandlerRegistry {
                 "agents.bindings requires AgentEnvStore - wire Gateway runtime first".to_string(),
             )
         });
+
+        // Project catalogue — backed by `~/.aleph/projects.json`. The store is
+        // stateless (every op re-reads under an fs2 lock) so the default
+        // instance is safe to share across all handler closures. Real wiring
+        // happens in `register_projects_handlers`; this default registration
+        // keeps `projects.*` usable in test harnesses that boot via
+        // `HandlerRegistry::new()` directly.
+        {
+            let default_store = Arc::new(crate::projects::ProjectStore::new());
+            let s = default_store.clone();
+            registry.register("projects.list", move |req| {
+                let s = s.clone();
+                async move { projects::handle_list(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("projects.add", move |req| {
+                let s = s.clone();
+                async move { projects::handle_add(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("projects.create_blank", move |req| {
+                let s = s.clone();
+                async move { projects::handle_create_blank(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("projects.remove", move |req| {
+                let s = s.clone();
+                async move { projects::handle_remove(req, s).await }
+            });
+            let s = default_store.clone();
+            registry.register("projects.touch", move |req| {
+                let s = s.clone();
+                async move { projects::handle_touch(req, s).await }
+            });
+            let s = default_store;
+            registry.register("projects.get", move |req| {
+                let s = s.clone();
+                async move { projects::handle_get(req, s).await }
+            });
+        }
 
         // Group Chat handlers (placeholders - actual handlers wired with GroupChatOrchestrator)
         registry.register("group_chat.start", group_chat::handle_start_placeholder);

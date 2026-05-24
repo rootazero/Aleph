@@ -110,6 +110,12 @@ pub async fn execute_member_task(
         m
     };
 
+    // Inherit the dispatcher's project root so a team worker spawned
+    // inside a project-scoped chat lands in the same folder. Captured
+    // before the spawn boundary because tokio task-locals do not cross
+    // `tokio::spawn`.
+    let inherited_workspace = crate::projects::current_project_root();
+
     let request = RunRequest {
         run_id,
         input: task_text,
@@ -119,6 +125,7 @@ pub async fn execute_member_task(
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override,
+        workspace_override: inherited_workspace,
     };
 
     let execution_adapter = Arc::clone(context.execution_adapter());

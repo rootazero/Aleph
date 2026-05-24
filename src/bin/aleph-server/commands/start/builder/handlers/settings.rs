@@ -62,6 +62,48 @@ pub(in crate::commands::start) fn register_workspace_handlers(
     }
 }
 
+// ─── register_projects_handlers ──────────────────────────────────────────────
+
+/// Wire the per-user project catalogue (`~/.aleph/projects.json`).
+///
+/// These methods drive the desktop Panel's "进入项目工作" picker: list /
+/// add an existing folder / create a blank one / remove / touch / get.
+pub(in crate::commands::start) fn register_projects_handlers(
+    server: &mut GatewayServer,
+    project_store: &Arc<alephcore::projects::ProjectStore>,
+    daemon: bool,
+) {
+    use alephcore::gateway::handlers::projects as projects_handlers;
+
+    register_handler!(server, "projects.list", projects_handlers::handle_list, project_store);
+    register_handler!(server, "projects.add", projects_handlers::handle_add, project_store);
+    register_handler!(
+        server,
+        "projects.create_blank",
+        projects_handlers::handle_create_blank,
+        project_store
+    );
+    register_handler!(
+        server,
+        "projects.remove",
+        projects_handlers::handle_remove,
+        project_store
+    );
+    register_handler!(server, "projects.touch", projects_handlers::handle_touch, project_store);
+    register_handler!(server, "projects.get", projects_handlers::handle_get, project_store);
+
+    if !daemon {
+        println!("Project methods:");
+        println!("  - projects.list         : List recent projects (sorted by last_used_at)");
+        println!("  - projects.add          : Register an existing folder as a project");
+        println!("  - projects.create_blank : Create + register a new empty folder");
+        println!("  - projects.remove       : Drop a project entry (does not delete the folder)");
+        println!("  - projects.touch        : Bump last_used_at for a project");
+        println!("  - projects.get          : Fetch a single project by ID");
+        println!();
+    }
+}
+
 // ─── register_config_handlers ────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]

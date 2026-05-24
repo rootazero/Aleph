@@ -282,6 +282,13 @@ pub struct FlowRequest {
     ///
     /// Not included in `Debug` output because `Arc<dyn Sandbox>` is not `Debug`.
     pub sandbox_override: Option<std::sync::Arc<dyn crate::sandbox::Sandbox>>,
+    /// Per-request workspace override (project mode). When `Some`, this path
+    /// is persisted on the `RunStarted` marker so a crash-resume can land
+    /// back in the same project folder, and it surfaces to `HarnessRunner`
+    /// implementations that need to scope their work to a user-picked
+    /// directory rather than `~/.aleph/workspaces/{agent_id}/`. `None`
+    /// keeps the legacy agent-workspace behaviour.
+    pub workspace_override: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -355,6 +362,11 @@ impl Drop for SessionLockGuard {
 #[async_trait::async_trait]
 #[allow(clippy::too_many_arguments)] // trait shape driven by Orchestrator::dispatch wiring (Task 2)
 pub trait HarnessRunner: Send + Sync {
+    /// Drive one flow execution. The trailing `workspace_override` is the
+    /// per-run project workspace from the desktop "进入项目工作" picker;
+    /// `None` keeps the legacy agent-workspace path. Implementations MUST
+    /// persist it on the `RunStarted` marker so [`crate::gateway::resume_coordinator`]
+    /// can land a re-trigger back in the same project folder.
     async fn run(
         &self,
         session_key: String,
@@ -366,6 +378,7 @@ pub trait HarnessRunner: Send + Sync {
         tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
         trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
         interaction_manifest: Option<crate::thinker::interaction::InteractionManifest>,
+        workspace_override: Option<std::path::PathBuf>,
     ) -> Result<FlowOutcome, FlowError>;
 }
 
@@ -488,6 +501,7 @@ impl Orchestrator {
         let tool_service_override = req.tool_service.clone();
         let trace_sink = req.trace_sink.clone();
         let interaction_manifest = req.interaction_manifest.clone();
+        let workspace_override = req.workspace_override.clone();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -505,6 +519,7 @@ impl Orchestrator {
                     tool_service_override,
                     trace_sink,
                     interaction_manifest,
+                    workspace_override,
                 )
                 .await;
             // `done_tx.send` returns Err only when `done_rx` was dropped by the

@@ -231,6 +231,9 @@ impl InboundMessageRouter {
             metadata.insert("voice_mode_active".to_string(), "true".to_string());
         }
 
+        // Channel-routed messages have no project context — see the same
+        // note in `gateway/session_scheduler.rs`. Project-mode flows enter
+        // via the desktop Panel's `chat.send` and bypass this router.
         let request = RunRequest {
             run_id: run_id.clone(),
             input: ctx.message.text.clone(),
@@ -240,6 +243,7 @@ impl InboundMessageRouter {
             attachments: ctx.message.attachments.clone(),
             pending_media: pending_media.clone(),
             sandbox_override: None,
+            workspace_override: None,
         };
 
         if !request.attachments.is_empty() {

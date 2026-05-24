@@ -84,6 +84,9 @@ impl FlowRunTool {
             // the harness bridge's Background paradigm default.
             interaction_manifest: None,
             sandbox_override: None,
+            // Subagent sub-flow inherits the parent's project root via the
+            // surrounding RunRequest path (see send_tool / teams dispatcher).
+            workspace_override: None,
         };
         let handle = self.orchestrator.dispatch(req).await?;
         let outcome = handle

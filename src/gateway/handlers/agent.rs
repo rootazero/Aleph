@@ -60,6 +60,11 @@ pub struct AgentRunParams {
     /// Explicit target agent ID (bypasses channel binding resolution)
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Optional absolute project root. When set, the agent's tool calls
+    /// run inside this directory instead of `~/.aleph/workspaces/{agent_id}`.
+    /// See `gateway/handlers/chat.rs` for the user-facing flow.
+    #[serde(default)]
+    pub project_root: Option<String>,
 }
 
 fn default_stream() -> bool {
@@ -195,6 +200,24 @@ impl AgentRunManager {
             metadata.insert("peer_id".to_string(), peer_id.clone());
         }
 
+        // Validate and resolve optional project_root. We refuse anything that
+        // isn't an existing absolute directory so the rest of the engine can
+        // assume the override is safe to chdir/scan into.
+        let workspace_override = match params.project_root.as_deref() {
+            Some(raw) => {
+                let path = std::path::PathBuf::from(raw);
+                if !path.is_absolute() {
+                    return Err(format!("project_root must be absolute: {raw}"));
+                }
+                if !path.is_dir() {
+                    return Err(format!("project_root is not a directory: {raw}"));
+                }
+                metadata.insert("project_root".to_string(), path.display().to_string());
+                Some(path)
+            }
+            None => None,
+        };
+
         let request = RunRequest {
             run_id: run_id.clone(),
             input: params.input.clone(),
@@ -204,6 +227,7 @@ impl AgentRunManager {
             attachments: vec![],
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sandbox_override: None,
+            workspace_override,
         };
 
         let emitter: Arc<dyn EventEmitter + Send + Sync> =
@@ -525,6 +549,7 @@ mod tests {
             thinking: None,
             attachments: vec![],
             agent_id: None,
+            project_root: None,
         };
 
         let result = manager.start_run(params).await.unwrap();
@@ -549,6 +574,7 @@ mod tests {
             thinking: None,
             attachments: vec![],
             agent_id: None,
+            project_root: None,
         };
 
         let result = manager.start_run(params).await.unwrap();

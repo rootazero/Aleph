@@ -82,6 +82,7 @@ async fn test_simple_execution_engine_basic() {
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
+        workspace_override: None,
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -129,6 +130,7 @@ async fn test_simple_execution_engine_run() {
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
+        workspace_override: None,
     };
 
     // This should succeed and complete quickly

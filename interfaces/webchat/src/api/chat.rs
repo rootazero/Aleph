@@ -41,12 +41,19 @@ impl ChatApi {
     ///
     /// `agent_id` — explicit target agent (bypasses channel binding resolution).
     /// Extracted from the current session_key when available.
+    ///
+    /// `project_root` — absolute path of the active project folder when
+    /// the user has entered project mode via "进入项目工作". Forwarded as
+    /// `RunRequest.workspace_override` so the agent's tool calls run
+    /// inside that folder instead of `~/.aleph/workspaces/{agent_id}`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn send(
         state: &DashboardState,
         message: &str,
         session_key: Option<&str>,
         attachments: Vec<ChatAttachment>,
         agent_id: Option<&str>,
+        project_root: Option<&str>,
     ) -> Result<ChatSendResponse, String> {
         let attachments_json: Vec<Value> = attachments
             .iter()
@@ -66,6 +73,7 @@ impl ChatApi {
             "stream": true,
             "attachments": attachments_json,
             "agent_id": agent_id,
+            "project_root": project_root,
         });
         let result = state.rpc_call("chat.send", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())

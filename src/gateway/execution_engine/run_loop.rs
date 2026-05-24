@@ -91,8 +91,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        let result = self
-            .run_agent_loop_inner(
+        // Publish the project root as a task-local for the duration of the
+        // think→act loop so child runs spawned mid-loop (session.send, team
+        // dispatcher worker tasks, etc.) inherit the project context.
+        // `None` is also published explicitly so a nested run cannot leak
+        // an outer scope's project into a non-project agent.
+        let result = crate::projects::with_project_root(
+            request.workspace_override.clone(),
+            self.run_agent_loop_inner(
                 run_id,
                 request,
                 agent.clone(),
@@ -103,8 +109,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 extension_manager,
                 hook_executor.clone(),
                 hook_session_id.clone(),
-            )
-            .await;
+            ),
+        )
+        .await;
 
         // AgentEnd — observers only; the run is already over, nothing to block.
         if let Some(executor) = hook_executor.as_ref() {
@@ -139,10 +146,78 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
-        // Write workspace-scoped output paths to tool context handle
+        // Effective workspace: if the request carries a per-run `workspace_override`
+        // (project mode), use it; otherwise fall back to the agent's stable
+        // `~/.aleph/workspaces/{agent_id}` directory.
+        //
+        // The override was validated as an existing absolute directory by the
+        // gateway handler that constructed the RunRequest, but that check is
+        // TOCTOU: between handler dispatch and `run_agent_loop` firing, the
+        // directory can be unmounted, deleted by another process, or replaced
+        // by a non-directory. Re-verify and fail the run cleanly with a
+        // user-facing reason rather than discovering the disappearance
+        // mid-tool-call.
+        let effective_workspace: std::path::PathBuf = match &request.workspace_override {
+            Some(p) => {
+                if !p.is_dir() {
+                    error!(
+                        run_id = run_id,
+                        project_root = %p.display(),
+                        "project_root vanished between request and execution"
+                    );
+                    return Err(ExecutionError::Failed(format!(
+                        "project folder no longer exists: {} — pick another folder \
+                         or re-create it before retrying",
+                        p.display()
+                    )));
+                }
+                p.clone()
+            }
+            None => agent.workspace().to_path_buf(),
+        };
+
+        // Bump `last_used_at` in the project catalogue so the Panel picker
+        // can sort by recency without each entry point (CLI, OpenAI-compat,
+        // resume, cron, heartbeat) having to remember to fire `projects.touch`
+        // themselves. Best-effort: the run continues even when the store
+        // write fails (read-only home dir, etc.).
+        if request.workspace_override.is_some() {
+            let path = effective_workspace.clone();
+            tokio::task::spawn_blocking(move || {
+                let store = crate::projects::ProjectStore::new();
+                match store.find_by_path(&path) {
+                    Ok(Some(project)) => {
+                        if let Err(e) = store.touch(&project.id) {
+                            tracing::debug!(
+                                error = %e,
+                                project = %path.display(),
+                                "projects.touch failed; recents ordering may be stale"
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        // The user ran with a project_root that is not yet in
+                        // the catalogue (CLI / programmatic entry). Register
+                        // it so the desktop picker shows it next time.
+                        if let Err(e) = store.add(&path, None) {
+                            tracing::debug!(
+                                error = %e,
+                                project = %path.display(),
+                                "projects.add (auto-register) failed"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::debug!(error = %e, "projects.find_by_path failed"),
+                }
+            });
+        }
+
+        // Write workspace-scoped output paths to tool context handle. With a
+        // project override active, tool artifacts land under `<project>/output/`
+        // — same convention used for agent workspaces, just rooted at the
+        // user-picked project.
         if let Some(tc_handle) = self.tool_registry.tool_context_handle() {
-            let workspace_path = agent.workspace();
-            match crate::tools::ToolContext::from_workspace(workspace_path) {
+            match crate::tools::ToolContext::from_workspace(&effective_workspace) {
                 Ok(ctx) => {
                     let mut tc = tc_handle.write().await;
                     *tc = ctx;
@@ -150,7 +225,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Err(e) => {
                     tracing::warn!(
                         "Failed to create ToolContext from workspace {}: {}",
-                        workspace_path.display(),
+                        effective_workspace.display(),
                         e
                     );
                 }
@@ -159,7 +234,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // === Pre-compute values reusable across retry attempts ===
 
-        let default_working_dir = Some(agent.workspace().to_string_lossy().to_string());
+        let default_working_dir = Some(effective_workspace.to_string_lossy().to_string());
 
         // Resolve soul for prompt building (constant across retries).
         let _ = agent.agent_dir();
@@ -300,6 +375,26 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     }
                 }
                 Err(e) => warn!(run_id = run_id, error = %e, "UserPromptSubmit hook failed"),
+            }
+        }
+
+        // Project-mode context: when the run is scoped to a user-picked
+        // project folder, surface its `AGENTS.md` and `CLAUDE.md` (Claude
+        // Code parity) to the model the same way UserPromptSubmit hooks do
+        // — as `<system-reminder>` blocks prefixed to the user's prompt.
+        // This is intentionally a one-shot inline read rather than a new
+        // PromptLayer: project files vary per run, so they cannot live in
+        // the cached stable prefix anyway, and the read cost is dwarfed by
+        // the LLM call that follows.
+        if request.workspace_override.is_some() {
+            let blocks = collect_project_context_blocks(&effective_workspace);
+            if !blocks.is_empty() {
+                let joined = blocks
+                    .into_iter()
+                    .map(|b| format!("<system-reminder>\n{}\n</system-reminder>", b.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                effective_user_input = format!("{joined}\n\n{}", effective_user_input);
             }
         }
 
@@ -632,6 +727,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // dispatcher's WorktreeSandbox replaces the orchestrator's
                 // sandbox_factory output for this run.
                 sandbox_override: request.sandbox_override.clone(),
+                // Project mode — the workspace override flows into
+                // `HarnessRunner::run` and lands on the `RunStarted` marker
+                // for resume parity.
+                workspace_override: request.workspace_override.clone(),
             };
 
             // Dispatch via the orchestrator
@@ -761,4 +860,376 @@ fn lifecycle_hook_context(session_id: &str, run_id: &str, agent: &AgentInstance)
     HookContext::new(session_id)
         .with_env("RUN_ID", run_id)
         .with_env("AGENT_ID", agent.id())
+}
+
+/// Per-directory project context filenames. `AGENTS.md` is Aleph's native
+/// operating manual, `CLAUDE.md` is recognised for Claude Code parity, and
+/// the `.claude/CLAUDE.md` / `.aleph/CLAUDE.md` subdir variants let a repo
+/// keep its assistant config out of the project root README slot.
+const PROJECT_CONTEXT_FILES: &[&str] = &[
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".claude/CLAUDE.md",
+    ".aleph/CLAUDE.md",
+];
+
+/// Per-file byte cap for project context injection. Project READMEs and
+/// long contributor guides can be huge — bound the prompt impact so a
+/// 200 KB CLAUDE.md cannot crowd out the rest of the system prompt.
+const PROJECT_CONTEXT_MAX_BYTES: usize = 32 * 1024;
+
+/// Aggregate cap across all walked files + rules combined. Without this a
+/// deep monorepo with eight ancestors × four files × 32 KB could push
+/// ~1 MB into a single user turn.
+const PROJECT_CONTEXT_TOTAL_MAX_BYTES: usize = 128 * 1024;
+
+/// Maximum number of ancestor directories to traverse before stopping.
+/// Belt-and-suspenders against pathological filesystem layouts; the `.git`
+/// boundary and `$HOME` stops normally trip first.
+const PROJECT_CONTEXT_MAX_DEPTH: usize = 8;
+
+/// Read project context files from the active workspace root, walking
+/// upward like Claude Code's `claudemd.ts`: each ancestor's `AGENTS.md`,
+/// `CLAUDE.md`, `.claude/CLAUDE.md` and `.aleph/CLAUDE.md` are loaded,
+/// plus `<project_root>/.claude/rules/*.md` (rules are project-scoped, not
+/// walked).
+///
+/// Order is ancestor-first → project-last so files closer to the project
+/// root override the parent's guidance (last-wins for the LLM). Missing
+/// or unreadable files are silently skipped.
+///
+/// Walk stops at the first of:
+/// - A directory containing `.git/` (the repo root)
+/// - The user's `$HOME` directory (don't walk above it)
+/// - The filesystem root
+/// - [`PROJECT_CONTEXT_MAX_DEPTH`] hops, whichever comes first
+fn collect_project_context_blocks(workspace: &std::path::Path) -> Vec<String> {
+    let chain = ancestor_chain(workspace);
+    let mut body = String::new();
+    let mut total_bytes: usize = 0;
+    let header = format!(
+        "Active project: `{}`. The following project files describe \
+        local conventions, scope, and constraints — treat them as \
+        durable context for this conversation. Files are listed from the \
+        outermost ancestor (`<dir>/...`) down to the project root; later \
+        entries override earlier ones on conflict.",
+        workspace.display()
+    );
+
+    // Pass 1 — ancestor → project root. Label is the relative-to-workspace
+    // name when the file is in the project root, the full absolute path
+    // otherwise — keeps the system-reminder readable for the common case
+    // while still attributing inherited files to their source dir.
+    for dir in &chain {
+        let is_project_root = dir == workspace;
+        for name in PROJECT_CONTEXT_FILES {
+            let candidate = dir.join(name);
+            let Some(content) = read_capped_text(&candidate) else {
+                continue;
+            };
+            let label = if is_project_root {
+                name.to_string()
+            } else {
+                candidate.display().to_string()
+            };
+            append_block(&mut body, &mut total_bytes, &header, &label, &content);
+        }
+    }
+
+    // Pass 2 — `.claude/rules/*.md` is project-scoped (not walked up).
+    // Skip on read errors so a missing rules dir is a no-op.
+    let rules_dir = workspace.join(".claude").join("rules");
+    if let Ok(entries) = std::fs::read_dir(&rules_dir) {
+        let mut rule_files: Vec<std::path::PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.is_file()
+                    && p.extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|s| s.eq_ignore_ascii_case("md"))
+                        .unwrap_or(false)
+            })
+            .collect();
+        rule_files.sort();
+        for path in rule_files {
+            let Some(content) = read_capped_text(&path) else {
+                continue;
+            };
+            let label = format!(
+                ".claude/rules/{}",
+                path.file_name().unwrap().to_string_lossy()
+            );
+            append_block(&mut body, &mut total_bytes, &header, &label, &content);
+        }
+    }
+
+    if body.is_empty() {
+        Vec::new()
+    } else {
+        vec![body]
+    }
+}
+
+/// Walk from `start` upward, returning the chain in **ancestor → start**
+/// order. Stops at `.git`, `$HOME`, filesystem root, or after
+/// [`PROJECT_CONTEXT_MAX_DEPTH`] hops.
+fn ancestor_chain(start: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let home = dirs::home_dir();
+    let home_ref = home.as_deref();
+    let mut up = Vec::new();
+    let mut cur = start.to_path_buf();
+    up.push(cur.clone());
+    let mut steps = 0;
+    while steps < PROJECT_CONTEXT_MAX_DEPTH {
+        // Stop conditions checked AFTER recording the current dir so the
+        // boundary dir itself contributes its CLAUDE.md.
+        if cur.join(".git").exists() {
+            break;
+        }
+        if home_ref.map(|h| h == cur.as_path()).unwrap_or(false) {
+            break;
+        }
+        let Some(parent) = cur.parent() else { break };
+        if parent == cur {
+            break;
+        }
+        cur = parent.to_path_buf();
+        up.push(cur.clone());
+        steps += 1;
+    }
+    // Reverse to ancestor-first ordering.
+    up.reverse();
+    up
+}
+
+/// Read a file with UTF-8 truncation at [`PROJECT_CONTEXT_MAX_BYTES`].
+/// Returns `None` when the file is missing, unreadable, empty, or
+/// whitespace-only — all four are normal "no project context" cases.
+fn read_capped_text(path: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    if content.trim().is_empty() {
+        return None;
+    }
+    if content.len() <= PROJECT_CONTEXT_MAX_BYTES {
+        return Some(content);
+    }
+    // Find a char boundary at-or-before the cap to avoid splitting a
+    // codepoint mid-bytes. Falls back to 0 in the unreachable case where
+    // no boundary exists (every char-boundary at 0 satisfies this).
+    let mut end = PROJECT_CONTEXT_MAX_BYTES;
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut shortened = content[..end].to_string();
+    shortened.push_str("\n\n... [project file truncated for prompt budget]");
+    Some(shortened)
+}
+
+/// Append `(label, content)` to the in-progress system-reminder body,
+/// respecting [`PROJECT_CONTEXT_TOTAL_MAX_BYTES`]. The header is added
+/// lazily on the first appended block so an empty project produces an
+/// empty block list.
+fn append_block(
+    body: &mut String,
+    total_bytes: &mut usize,
+    header: &str,
+    label: &str,
+    content: &str,
+) {
+    if *total_bytes >= PROJECT_CONTEXT_TOTAL_MAX_BYTES {
+        return;
+    }
+    if body.is_empty() {
+        body.push_str(header);
+        body.push_str("\n\n");
+        *total_bytes += header.len() + 2;
+    }
+    let prefix = format!("### {label}\n\n");
+    body.push_str(&prefix);
+    body.push_str(content.trim_end());
+    body.push_str("\n\n");
+    *total_bytes += prefix.len() + content.len() + 2;
+}
+
+#[cfg(test)]
+mod project_context_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// Mark `dir` as a `.git` boundary so [`ancestor_chain`] halts there.
+    /// Tests build their workspaces inside a tempdir and would otherwise
+    /// walk up to whichever directory holds the test runner — sometimes a
+    /// user's real `~/.aleph/...` layout — and pick up files that pollute
+    /// assertions. Calling this on the workspace root keeps the walk
+    /// confined to the tempdir.
+    fn anchor(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+    }
+
+    #[test]
+    fn returns_nothing_when_no_project_files() {
+        let dir = tempdir().unwrap();
+        anchor(dir.path());
+        let blocks = collect_project_context_blocks(dir.path());
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn reads_agents_md_when_present() {
+        let dir = tempdir().unwrap();
+        anchor(dir.path());
+        std::fs::write(dir.path().join("AGENTS.md"), "# Project rules\nNo force push.\n").unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].contains("Active project"));
+        assert!(blocks[0].contains("### AGENTS.md"));
+        assert!(blocks[0].contains("No force push"));
+    }
+
+    #[test]
+    fn includes_both_agents_and_claude_md_when_both_present() {
+        let dir = tempdir().unwrap();
+        anchor(dir.path());
+        std::fs::write(dir.path().join("AGENTS.md"), "# Aleph rules").unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "# CC rules").unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].contains("### AGENTS.md"));
+        assert!(blocks[0].contains("### CLAUDE.md"));
+    }
+
+    #[test]
+    fn ignores_whitespace_only_files() {
+        let dir = tempdir().unwrap();
+        anchor(dir.path());
+        std::fs::write(dir.path().join("AGENTS.md"), "   \n\n\t\n").unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn truncates_oversized_files() {
+        let dir = tempdir().unwrap();
+        anchor(dir.path());
+        let big = "x".repeat(PROJECT_CONTEXT_MAX_BYTES + 4096);
+        std::fs::write(dir.path().join("AGENTS.md"), &big).unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert!(blocks[0].contains("[project file truncated for prompt budget]"));
+        assert!(blocks[0].len() < big.len() + 4096);
+    }
+
+    #[test]
+    fn loads_claude_md_in_subdir() {
+        let dir = tempdir().unwrap();
+        anchor(dir.path());
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join(".claude/CLAUDE.md"), "# CC sub").unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert!(blocks[0].contains(".claude/CLAUDE.md"));
+        assert!(blocks[0].contains("# CC sub"));
+    }
+
+    #[test]
+    fn loads_aleph_claude_md_in_subdir() {
+        let dir = tempdir().unwrap();
+        anchor(dir.path());
+        std::fs::create_dir_all(dir.path().join(".aleph")).unwrap();
+        std::fs::write(dir.path().join(".aleph/CLAUDE.md"), "# Aleph sub").unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert!(blocks[0].contains(".aleph/CLAUDE.md"));
+        assert!(blocks[0].contains("# Aleph sub"));
+    }
+
+    /// Walk-up: parent CLAUDE.md is included, and parent appears BEFORE
+    /// the project root's so the LLM reads parent first → project last
+    /// (last-wins ordering).
+    #[test]
+    fn walks_up_to_ancestor_claude_md_until_git_boundary() {
+        let root = tempdir().unwrap();
+        anchor(root.path()); // `.git` lives on the outer dir (the repo root)
+        std::fs::write(root.path().join("CLAUDE.md"), "# outer").unwrap();
+        let inner = root.path().join("packages").join("svc");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("CLAUDE.md"), "# inner").unwrap();
+
+        let blocks = collect_project_context_blocks(&inner);
+        assert_eq!(blocks.len(), 1);
+        let body = &blocks[0];
+        let outer_pos = body
+            .find("# outer")
+            .expect("outer CLAUDE.md must be injected");
+        let inner_pos = body
+            .find("# inner")
+            .expect("inner CLAUDE.md must be injected");
+        assert!(
+            outer_pos < inner_pos,
+            "ancestor must appear before project root so last-wins ordering holds"
+        );
+    }
+
+    /// Walk-up halts at `.git`: a CLAUDE.md sitting above the boundary is
+    /// NOT injected, even if it physically exists on disk.
+    #[test]
+    fn walk_stops_at_git_boundary() {
+        let outer = tempdir().unwrap();
+        std::fs::write(outer.path().join("CLAUDE.md"), "# above boundary").unwrap();
+        let project = outer.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        anchor(&project); // `.git` lives ON the project root → stops walk there
+        std::fs::write(project.join("CLAUDE.md"), "# project").unwrap();
+
+        let blocks = collect_project_context_blocks(&project);
+        assert!(blocks[0].contains("# project"));
+        assert!(
+            !blocks[0].contains("# above boundary"),
+            "files above the .git boundary must NOT leak into project context"
+        );
+    }
+
+    #[test]
+    fn loads_claude_rules_glob() {
+        let dir = tempdir().unwrap();
+        anchor(dir.path());
+        let rules = dir.path().join(".claude").join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(rules.join("a.md"), "rule alpha").unwrap();
+        std::fs::write(rules.join("b.md"), "rule beta").unwrap();
+        std::fs::write(rules.join("ignored.txt"), "not a rule").unwrap();
+        let blocks = collect_project_context_blocks(dir.path());
+        assert!(blocks[0].contains("rule alpha"));
+        assert!(blocks[0].contains("rule beta"));
+        assert!(!blocks[0].contains("not a rule"));
+        // a.md should appear before b.md (sort order).
+        assert!(blocks[0].find("rule alpha").unwrap() < blocks[0].find("rule beta").unwrap());
+    }
+
+    /// Aggregate-size cap: a deep tree with many ancestors and big files
+    /// cannot exceed [`PROJECT_CONTEXT_TOTAL_MAX_BYTES`] by more than a
+    /// single last-block worth of overshoot.
+    #[test]
+    fn enforces_total_context_cap() {
+        let outer = tempdir().unwrap();
+        anchor(outer.path());
+        // 7 ancestor dirs each with a 32 KB CLAUDE.md — total raw input
+        // would be ~224 KB, well above the 128 KB cap.
+        let mut cur = outer.path().to_path_buf();
+        for i in 0..7 {
+            cur = cur.join(format!("lvl{i}"));
+            std::fs::create_dir_all(&cur).unwrap();
+            std::fs::write(
+                cur.join("CLAUDE.md"),
+                "x".repeat(PROJECT_CONTEXT_MAX_BYTES),
+            )
+            .unwrap();
+        }
+        let blocks = collect_project_context_blocks(&cur);
+        // Overshoot is bounded by one block (~32 KB) + a small header.
+        let allowed = PROJECT_CONTEXT_TOTAL_MAX_BYTES + PROJECT_CONTEXT_MAX_BYTES + 1024;
+        assert!(
+            blocks[0].len() <= allowed,
+            "context body {} exceeds allowed budget {}",
+            blocks[0].len(),
+            allowed
+        );
+    }
 }
