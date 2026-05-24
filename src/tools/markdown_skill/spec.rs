@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 /// Phase 2 (earliest 2026-06-03) absorbs the fields into
 /// `crate::domain::skill::SkillManifest` and deletes this type.
 #[deprecated(
-    since = "2026.05.20",
+    since = "26.5.20",
     note = "use crate::domain::skill::SkillManifest via From impl; will be removed in Phase 2 (≥2026-06-03) per docs/superpowers/specs/2026-05-20-skill-data-model-unification-design.md"
 )]
 #[derive(Debug, Clone, Serialize, Deserialize)]

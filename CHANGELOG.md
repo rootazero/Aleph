@@ -7,8 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **Memory canvas: rich Markdown node cards (FULL / MINI / DOT modes)** rendered as a Leptos DOM overlay over Canvas2D edges. The center node renders as a 280px FULL card with stripe + title + lazy-fetched Markdown excerpt + tag chips; 1-hop nodes render as 140px MINI pills; 2-hop and orphan nodes render as 10px colored DOTs. Hovering or selecting a node promotes it one tier (DOT→MINI→FULL); zoom < 0.5 force-collapses everything to DOTs.
+## [26.5.24]
+
+### Highlight — Aleph is now a native desktop app
+
+This release marks a major repositioning. Aleph previously shipped as a
+headless `aleph-server` daemon (openclaw-style) that users wired up to
+channel bots from a terminal. **Starting with the 26.5.x line, the primary
+delivery is a signed native desktop app for macOS, Windows, and Linux** —
+the app bundles `aleph-server` via Tauri `externalBin`, runs in the system
+tray, and exposes the full assistant through a polished Leptos chat panel.
+
+What this changes for users:
+
+- **One-click install** — `.dmg` / `.msi` / `.deb` installers, no Docker, no
+  terminal, no `docker compose`, no port forwarding
+- **System-tray daemon** with launch-at-login, global summon hotkey, native
+  OS notifications, `aleph://` deep links, and signed background auto-update
+- **In-app pairing wizard** and visual settings panel — `aleph.toml` editing
+  is no longer required for normal use
+- **Native macOS / Windows / Linux integration** — titlebar drag, accent
+  scrollbars, theme toggle, sidebar collapse, single-instance enforcement,
+  window-state persistence
+- **Channel bots and WebChat keep working unchanged** — the same `aleph-server`
+  inside the desktop app still serves Telegram / Discord / Slack / WhatsApp /
+  iMessage / 15+ other channels plus the browser WebChat UI. The desktop app
+  is an additional surface, not a replacement
+- **Headless mode is still supported** — `cargo run --bin aleph-server start`
+  on a VPS works exactly as before for users who only want remote channel
+  access
+
+See the rewritten [README](README.md) / [README_CN](README_CN.md) for the
+full pitch. Hero screenshot: `docs/images/aleph-desktop.png`.
+
+### Added — Desktop shell
+
+- **Native desktop shell** (`desktop/shell/`, Tauri v2) — full lifecycle:
+  window management, system tray, OS notifications, signed auto-update,
+  `aleph://` deep links, global summon hotkey, macOS app menu, daemon
+  supervision (`externalBin` boots `aleph-server` on app launch, restarts on
+  crash, shuts down gracefully on quit). Single-instance enforcement +
+  window-state persistence carry over across restarts.
+- **In-app pairing wizard** — replaces the deleted `aleph pair` CLI
+  bootstrap. PairingFlow + Leptos `PairingModal` drive `wizard.*` JSON-RPC,
+  auto-triggers on `pairing_required`, reconnects with the issued token,
+  and persists credentials to the OS keychain (`keyring` crate). Gateway
+  auth allows unauthenticated `wizard.*` on loopback for the bootstrap
+  hop only. Shell loads the gateway token from the keychain before any
+  subsystem boots.
+- **Hebrew aleph (א) glyph as the app icon** + brand identity artwork
+  archived under `docs/brand/`.
+- **Codex-style panel layout** — chat-first shell with bottom-left section
+  menu, single-row composer (paperclip + textarea + send), glass theme set
+  (Gemini light-field aesthetic + dark / contrast variants), macOS
+  titlebar drag strip with right-aligned sidebar toggle, accent scrollbars,
+  inline theme-toggle popover anchored inside the sidebar.
+- **Cycle 3 desktop bridge / daemon trio** — `MicLevelMonitor` (opt-in,
+  AVAudioEngine tap via Swift `MicMeterSession` actor), `screen.capture`
+  via ScreenCaptureKit with xcap fallback on macOS 13, `PresenceReporter`
+  daemon for Slack-style presence. Permission-kind enum unified across
+  macOS / Windows / Linux into a single 14-variant `PermissionKind` with
+  bridge-only kinds returning `Unknown` on unsupported platforms.
+- **Cycle 3 hardening** — fixed Windows idle-time `u32` wrap, macOS
+  `request_notifications` no-op, Linux Wayland silent fail; added Automation
+  Finder probe + Location bridge gaps.
+- **`just verify-build`** — CI build-only three-platform verification target
+  (build + upload artifacts, no tag, no release) for pre-release sanity
+  checks. Sibling to `just release`.
+- **Per-channel-class concurrency** with a reserved Desktop lane in the
+  gateway router so panel traffic never queues behind a slow Telegram
+  poll or a long-running channel bot turn.
+
+### Added — Core (memory canvas, hooks, security, providers)
+
+- **Memory canvas: rich Markdown node cards (FULL / MINI / DOT modes)** rendered as a Leptos DOM overlay over Canvas2D edges. The center node renders as a 280px FULL card with stripe + title + lazy-fetched Markdown excerpt + tag chips; 1-hop nodes render as 140px MINI pills; 2-hop and orphan nodes render as 10px colored DOTs. Hovering or selecting a node promotes it one tier (DOT→MINI→FULL); zoom < 0.5 force-collapses everything to DOTs. rendered as a Leptos DOM overlay over Canvas2D edges. The center node renders as a 280px FULL card with stripe + title + lazy-fetched Markdown excerpt + tag chips; 1-hop nodes render as 140px MINI pills; 2-hop and orphan nodes render as 10px colored DOTs. Hovering or selecting a node promotes it one tier (DOT→MINI→FULL); zoom < 0.5 force-collapses everything to DOTs.
 - **Memory sidebar: filled the shared left column** with agent picker, search input, fold-threshold slider, and a `<NodeDetailPanel>` that lists recently visited memories when nothing is selected. The four right-side widgets (agent selector, toolbar, breadcrumb, detail panel) were stripped; their state lives in a new `MemoryState` Leptos context provided at the `App` root.
 - **Sidebar collapse**: ⇧ button at the sidebar footer + Esc key + 8px right-edge hover strip + peek-handle button + localStorage persistence (`aleph.sidebar.collapsed`). The whole sidebar slides out via CSS transform animation, giving the canvas full-width when in focus.
 - **Edge labels**: free-form `label` and `kind` fields on graph edges (Obsidian JSON Canvas-compatible naming); labels fade in for edges adjacent to the hovered/selected node when zoom ≥ 0.7. Position pinned to Bézier midpoint, rotation clamped to `[-π/4, π/4]` so labels never read upside-down.
@@ -127,7 +199,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OpenAI Provider Cycle 1 — Chat finish_reason mapping** — expanded to cover `function_call` (legacy tool-call shape) → `ToolUse`, `content_policy_violation` → `MaxTokens`, and `incomplete` → `MaxTokens` (aligns with Responses-side `is_incomplete` handling). Unknown finish_reason values now `tracing::warn!` and fall back to `EndTurn` instead of silent `None` (which could be interpreted as "stream not done" and hang the loop driver).
 - **OpenAI Provider Cycle 1 — Responses `reasoning_summary_*` event coverage** — the four `StreamEvent::ReasoningSummary*` variants (`PartAdded` / `TextDelta` / `TextDone` / `PartDone`) are now explicitly matched. `TextDelta` continues to emit `ProviderDelta::ThinkingDelta` (unchanged behavior); the other three emit `tracing::debug!` markers under target `aleph::openai_responses_sse` instead of being silently dropped by the `_ => {}` catch-all. Per R10 YAGNI no new canonical Delta variant is introduced — there are no consumers for part boundaries today.
 
-## [2026.05.07]
+## [26.5.7]
 
 ### Added
 - **Harness Stage 6a — Verification turn-level seam (#10, partial)** — new `TurnVerifier` trait + `VerifierChain` registry land in `src/verification/`. `StopHookVerifier` migrates the existing pre-stop shell-hook flow 1:1 (only fires when `stop_reason.is_some()`); `ToolLoopVerifier` closes the master roadmap § 1.4 P1 gap by detecting N consecutive identical tool calls with no thinking text (default threshold = 5, `args_hash` via `DefaultHasher` of canonical `serde_json` bytes). A single callsite in `AgentHarness::run_turn_internal` now covers both pre-stop and mid-turn checks, replacing the legacy `evaluate_stop_hooks` helper. The harness `run` loop holds an 8-slot `VecDeque<ToolCallSummary>` ring buffer so the verifier can detect repetition without re-scanning event history. `HarnessDeps.stop_hooks` retired in favour of `HarnessDeps.verifier_chain: Option<Arc<VerifierChain>>`; orchestrator boot wraps shell hooks into a `StopHookVerifier` and adds a default `ToolLoopVerifier`. `MAX_VERIFIER_VETOS = 10` cap and `[verifier veto]` injected message preserve the pre-6a safety net. 16 acceptance tests added (4 chain semantics + concurrency hammer, 3 stop-hook adapter, 6 tool-loop edges, 1 harness death-loop integration end-to-end). `agent.rs` net trim: 1500 → 1499 lines (under R10 cap). Stage 6b (`JudgeVerifier` + `ComputationalVerifier`) explicitly deferred pending an explicit redline waiver in `src/verification/mod.rs`. Master spec § Stage 6 / 6a plan: `docs/superpowers/specs/2026-05-06-harness-stage6a-turn-verifier-plan.md`.
@@ -149,7 +221,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Harness `src/harness/stall.rs` module file** — contents folded into `deps.rs` next to `HarnessDeps.stall_config`. R10 file count rebalanced for the new `prompt.rs` seam.
 - **Harness per-turn schema conversion** — `agent.rs` no longer rebuilds `Vec<DispatcherToolDefinition>` every Think turn; replaced by cached `Arc<[T]>` from `ToolService::dispatcher_schema()`.
 
-## [2026.04.27]
+## [26.4.27]
 
 ### Added
 - **Canvas Agent Selector** — `AgentSelectorBar` component in the Memory (Canvas) panel, letting users switch between agents. Graph API handlers (`graph.query`, `graph.neighbors`, `graph.node_detail`, `graph.search`) now accept an optional `agent_id` parameter to filter results per agent.
@@ -166,7 +238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Config Secrets Vault Routing** — `config.patch` now intercepts `channels.*` patches and routes secrets (`bot_token`, `api_key`, etc.) into the vault before persisting config, preventing plaintext leakage in `config.toml`.
 - **Config Handler Registration** — Removed duplicate `config.get` registration in server builder that caused a boot-time handler collision.
 
-## [2026.04.23]
+## [26.4.23]
 
 ### Changed
 - **Idiomatic Rust refactoring:** Systematic cleanup across core modules to eliminate technical debt and improve code purity.
@@ -191,7 +263,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Telegram config parsing:** Add `#[serde(default)]` to `groups` field in `TelegramAccountConfig`, fixing V2 config parsing when groups are omitted.
 - **Memory ingest snapshot:** Update snapshot to match updated prompt text.
 
-## [2026.04.22]
+## [26.4.22]
 
 ### Added
 - **Config migration for vector_db:** Auto-migrates `vector_db = "lancedb"` to `vector_db = "sqlite-vec"` on server boot. Migration is logged and persisted back to `config.toml`.
@@ -209,9 +281,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Config persistence:** Migrated values are now written back to `config.toml` instead of only existing in memory.
 
-## [2026.04.18]
+## [26.4.18]
 
-This release lands a 10-day stretch of foundational refactors: the memory layer is rebuilt around an 8-spec architecture (notes-as-source-of-truth, L0 raw memory, compound LLM ingestion, strategy-driven Dream Daemon), seven new chat channels ship (WeChat, QQ, Discord, Matrix, Signal, LINE, WhatsApp) plus a structured Telegram v2, the runtime security orchestrator goes live, browser automation migrates from MCP to Playwright CLI, the agent loop adopts Claude Code-style preflight + recovery cascades, and the provider/vault path is hardened end-to-end. 566 commits since v2026.04.08.
+This release lands a 10-day stretch of foundational refactors: the memory layer is rebuilt around an 8-spec architecture (notes-as-source-of-truth, L0 raw memory, compound LLM ingestion, strategy-driven Dream Daemon), seven new chat channels ship (WeChat, QQ, Discord, Matrix, Signal, LINE, WhatsApp) plus a structured Telegram v2, the runtime security orchestrator goes live, browser automation migrates from MCP to Playwright CLI, the agent loop adopts Claude Code-style preflight + recovery cascades, and the provider/vault path is hardened end-to-end. 566 commits since v26.4.8.
 
 ### Memory Layer — 8-Spec Evolution
   `src/session/driver.rs` introduces the `SessionDriver` trait as the
@@ -344,9 +416,9 @@ This release lands a 10-day stretch of foundational refactors: the memory layer 
 ### Added (pre-existing)
 - **Docs:** canonical glossary at `docs/reference/GLOSSARY.md` aligning Harness / Sandbox / Session / Tools / Orchestrator / AcpAdapter with Anthropic's managed-agents paradigm.
 
-## [2026.04.18]
+## [26.4.18]
 
-This release lands a 10-day stretch of foundational refactors: the memory layer is rebuilt around an 8-spec architecture (notes-as-source-of-truth, L0 raw memory, compound LLM ingestion, strategy-driven Dream Daemon), seven new chat channels ship (WeChat, QQ, Discord, Matrix, Signal, LINE, WhatsApp) plus a structured Telegram v2, the runtime security orchestrator goes live, browser automation migrates from MCP to Playwright CLI, the agent loop adopts Claude Code-style preflight + recovery cascades, and the provider/vault path is hardened end-to-end. 566 commits since v2026.04.08.
+This release lands a 10-day stretch of foundational refactors: the memory layer is rebuilt around an 8-spec architecture (notes-as-source-of-truth, L0 raw memory, compound LLM ingestion, strategy-driven Dream Daemon), seven new chat channels ship (WeChat, QQ, Discord, Matrix, Signal, LINE, WhatsApp) plus a structured Telegram v2, the runtime security orchestrator goes live, browser automation migrates from MCP to Playwright CLI, the agent loop adopts Claude Code-style preflight + recovery cascades, and the provider/vault path is hardened end-to-end. 566 commits since v26.4.8.
 
 ### Memory Layer — 8-Spec Evolution
 
@@ -494,7 +566,7 @@ Seven new chat channels plus a structured Telegram v2.
 - **Runtime status UI**: moved from Settings → Browser to top-level Panel "Runtimes" sidebar entry.
 - **Kimi/Moonshot users**: `moonshot` preset now points to `https://api.moonshot.ai/v1` (OpenAI-compatible). For the Anthropic-compatible IDE endpoint use the new `kimi-for-coding` preset instead.
 
-## [2026.04.08]
+## [26.4.8]
 
 ### Added
 - **记忆数据库迁移: LanceDB → sqlite-vec** — 新增 SqliteMemoryBackend 骨架与 sqlite-vec 向量搜索支持，移除 LanceDB 和 Arrow 全部依赖，删除 SessionStore trait 及所有调用方，记忆层全面轻量化
@@ -514,7 +586,7 @@ Seven new chat channels plus a structured Telegram v2.
 - Desktop OCR 模块缺失导入修复
 - 移除 AgentInstance 中冗余的内存 session 缓存
 
-## [2026.04.07]
+## [26.4.7]
 
 ### Added
 - Unified prompt system: PromptSnapshot, ToolUsageGrammarLayer, section caching, and hybrid memory injection replacing 26 legacy prompt_sections (~1000 lines removed)
@@ -553,7 +625,7 @@ Seven new chat channels plus a structured Telegram v2.
 - Deleted subagent_runner.rs, migrated types to AgentRuntime
 - LoopCallback consumes needs_user_confirmation instead of silent denial
 
-## [2026.04.06]
+## [26.4.6]
 
 ### Added
 - Session state machine: lifecycle states (Created → Active → Running → Idle → Stopped/Error) with enforced valid transitions in session manager
@@ -596,7 +668,7 @@ Seven new chat channels plus a structured Telegram v2.
 - Extracted subagent_runner.rs from agent_loop, dreaming pipeline from monolithic dreaming.rs
 - Removed CompressionDaemon in favor of raw chunk storage for semantic recovery
 
-## [2026.04.02]
+## [26.4.2]
 
 ### Added
 - ToolPipeline: 7-stage hook-integrated tool execution engine with deny semantics, input schema validation, structured tracing spans, and post-hook output modification
@@ -623,7 +695,7 @@ Seven new chat channels plus a structured Telegram v2.
 - Removed SubAgentHandler, EscalateTaskTool placeholder, and unused InterceptorResult
 - Removed system_prompt from AgentDef, replaced with prompt_sections
 
-## [2026.03.29]
+## [26.3.29]
 
 ### Added
 - MS Teams channel configuration UI in Panel — brand card, 7-field config form (App ID, App Password, Tenant ID, Webhook Path, Group/Team toggle, Typing Indicator, Allowed Users)

@@ -14,7 +14,7 @@ in the original text — do not shorten, paraphrase, or reconstruct them:\n\
 - UUIDs and hashes (e.g., a1b2c3d4-...)\n\
 - URLs and endpoints (e.g., https://api.example.com/v1/...)\n\
 - Commit references (e.g., 0949c9fc)\n\
-- Version numbers (e.g., v2026.04.02)\n\
+- Version numbers (e.g., v26.4.2)\n\
 - Configuration keys and environment variables\n\
 - Error codes and status codes\n\
 \n\

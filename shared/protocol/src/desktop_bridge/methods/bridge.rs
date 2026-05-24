@@ -33,7 +33,7 @@ mod tests {
     #[test]
     fn handshake_roundtrip() {
         let req = HandshakeParams {
-            rust_version: "2026.04.24".into(),
+            rust_version: "26.4.24".into(),
             protocol_version: 2,
         };
         let j = serde_json::to_string(&req).unwrap();
