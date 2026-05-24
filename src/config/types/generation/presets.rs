@@ -64,20 +64,23 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             base_url: None,
         },
     );
+    // Runway / Pika are reached via the Fal aggregator (no separate native
+    // provider_type — factory has no handler for "runway"/"pika"). Preset
+    // names preserved for backward compat; Phase F (entropy reduction).
     m.insert(
         "runway",
         GenerationPreset {
-            provider_type: "runway",
-            default_model: "gen-3",
-            base_url: Some("https://api.runwayml.com/v1"),
+            provider_type: "fal",
+            default_model: "fal-ai/runway-gen3/turbo/image-to-video",
+            base_url: Some("https://queue.fal.run"),
         },
     );
     m.insert(
         "pika",
         GenerationPreset {
-            provider_type: "pika",
-            default_model: "pika-1.0",
-            base_url: Some("https://api.pika.art/v1"),
+            provider_type: "fal",
+            default_model: "fal-ai/pika/v2.2/text-to-video",
+            base_url: Some("https://queue.fal.run"),
         },
     );
 
