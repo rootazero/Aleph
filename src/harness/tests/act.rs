@@ -791,3 +791,310 @@ async fn tool_error_trace_carries_retryable_flag() {
         "a Transport (retryable) tool error must trace as retryable: true",
     );
 }
+
+// --- G3: tool-name auto-repair --------------------------------------------
+
+/// ToolService that only knows lowercase tool names — `describe()` returns
+/// `Some` only for the lowercase form. `execute()` records every name it
+/// receives so the test can verify the harness sent the repaired form.
+struct LowercaseOnlyTools {
+    known: &'static str,
+    calls: Mutex<Vec<String>>,
+}
+
+impl LowercaseOnlyTools {
+    fn new(known: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            known,
+            calls: Mutex::new(Vec::new()),
+        })
+    }
+
+    async fn names_seen(&self) -> Vec<String> {
+        self.calls.lock().await.clone()
+    }
+}
+
+#[async_trait]
+impl ToolService for LowercaseOnlyTools {
+    async fn execute(
+        &self,
+        name: &str,
+        _input: serde_json::Value,
+    ) -> Result<ToolOutput, ToolError> {
+        self.calls.lock().await.push(name.to_string());
+        if name == self.known {
+            Ok(ok_output(serde_json::json!({"ok": true})))
+        } else {
+            Err(ToolError::Other(format!("unknown tool: {name}")))
+        }
+    }
+
+    async fn list(&self) -> Vec<ToolDefinition> {
+        vec![ToolDefinition {
+            name: self.known.to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({}),
+            metadata: Default::default(),
+        }]
+    }
+
+    async fn describe(&self, name: &str) -> Option<ToolDefinition> {
+        if name == self.known {
+            Some(ToolDefinition {
+                name: self.known.to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+                metadata: Default::default(),
+            })
+        } else {
+            None
+        }
+    }
+
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
+}
+
+/// G3: a model that emits a CamelCase tool name (`Read_File`) when the
+/// registry only knows the lowercase form (`read_file`) gets a silent
+/// rename — the underlying ToolService.execute is invoked under the
+/// repaired name, the call succeeds, and no ToolError event is emitted.
+#[tokio::test]
+async fn g3_repairs_case_mismatched_tool_name() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let tools = LowercaseOnlyTools::new("read_file");
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: tools.clone(),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::with_tool_calls(
+            "calling…",
+            vec![NativeToolCall {
+                thought_signature: None,
+                id: "c1".into(),
+                name: "Read_File".into(),
+                arguments: serde_json::json!({"path": "a.txt"}),
+            }],
+        ),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn ok");
+    assert_eq!(state, TurnState::Continue);
+
+    let names = tools.names_seen().await;
+    assert_eq!(
+        names,
+        vec!["read_file".to_string()],
+        "execute() must see the repaired lowercase name",
+    );
+
+    let events = session.snapshot().await;
+    let errors = events
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolError { .. }))
+        .count();
+    assert_eq!(errors, 0, "repaired call must succeed, no ToolError");
+    let results = events
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolResult { .. }))
+        .count();
+    assert_eq!(results, 1, "repaired call produces exactly one ToolResult");
+}
+
+/// G3 negative case: if the lowercase variant is ALSO unknown, the call
+/// proceeds with the original name and the normal ToolError path fires.
+/// No silent rename, no shadow execution.
+#[tokio::test]
+async fn g3_does_not_repair_when_lowercase_is_also_unknown() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let tools = LowercaseOnlyTools::new("read_file");
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: tools.clone(),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::with_tool_calls(
+            "calling…",
+            vec![NativeToolCall {
+                thought_signature: None,
+                id: "c1".into(),
+                name: "TotallyUnknownTool".into(),
+                arguments: serde_json::json!({}),
+            }],
+        ),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let _ = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn returns Ok even on tool error");
+
+    let names = tools.names_seen().await;
+    assert_eq!(
+        names,
+        vec!["TotallyUnknownTool".to_string()],
+        "execute() must see the original (untouched) name",
+    );
+    let events = session.snapshot().await;
+    let errors = events
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolError { .. }))
+        .count();
+    assert_eq!(errors, 1, "unknown tool must surface as ToolError");
+}
+
+// --- G1: MAX_STEPS soft hint ----------------------------------------------
+
+/// G1: when `max_iterations` is set and this is the last allowed turn,
+/// the assembled messages must include a trailing user-role
+/// `<system-reminder>` warning the model to respond with text only. Saves
+/// the post-hoc C1 grace-turn LLM round-trip in the common case.
+#[tokio::test]
+async fn g1_last_step_injects_max_steps_hint() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let tools = ScriptedTools::new(vec![]);
+    let provider = CapturingProvider::text_only("final summary");
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools,
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        // cap=1, fresh session → iterations passed = 1, 1+1 >= 1 → hint injects.
+        max_iterations: Some(1),
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let _ = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn ok");
+
+    let req = provider.last_request_messages().await.expect("captured");
+    let last_user_text = req
+        .iter()
+        .rev()
+        .find_map(|m| match m {
+            UnifiedMessage::User { content } => content.first().and_then(|b| match b {
+                ContentBlock::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("a user message in the request");
+    assert!(
+        last_user_text.contains("MAXIMUM ITERATIONS REACHED"),
+        "last-step hint must be present in the prompt; got: {last_user_text}",
+    );
+}
+
+/// G1 negative: when there are plenty of iterations left, no hint should
+/// be injected.
+#[tokio::test]
+async fn g1_does_not_inject_when_not_last_step() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let tools = ScriptedTools::new(vec![]);
+    let provider = CapturingProvider::text_only("ok");
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools,
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        // cap=10, fresh session → iterations=1, 1+1=2 < 10 → no hint.
+        max_iterations: Some(10),
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let _ = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn ok");
+
+    let req = provider.last_request_messages().await.expect("captured");
+    let any_user_text: String = req
+        .iter()
+        .filter_map(|m| match m {
+            UnifiedMessage::User { content } => content.first().and_then(|b| match b {
+                ContentBlock::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !any_user_text.contains("MAXIMUM ITERATIONS REACHED"),
+        "hint must NOT appear when iterations remain; got: {any_user_text}",
+    );
+}
