@@ -15,7 +15,7 @@ use tracing::{debug, warn};
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
-use crate::sandbox::platforms::common::truncate_output;
+use crate::sandbox::platforms::common::run_child_with_drain;
 use crate::sandbox::policy::{FsPolicy, NetworkPolicy, SandboxPolicy};
 use crate::sandbox::windows_init::WindowsInitPolicy;
 
@@ -267,7 +267,12 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .stdin(std::process::Stdio::piped())
-                .creation_flags(CREATE_NEW_PROCESS_GROUP as u32);
+                .creation_flags(CREATE_NEW_PROCESS_GROUP as u32)
+                // Belt-and-braces: if our future is dropped (e.g. upstream
+                // cancellation) the OS terminates the child instead of
+                // leaking it. The job object below provides the same
+                // guarantee for descendant processes when enabled.
+                .kill_on_drop(true);
 
             // Job Object is optional — honors
             // WindowsSandboxConfig.use_job_object. When enabled, the
@@ -290,7 +295,7 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 None
             };
 
-            let mut child = cmd.spawn().map_err(|e| {
+            let child = cmd.spawn().map_err(|e| {
                 SandboxError::ExecutionFailed(format!("failed to spawn process: {e}"))
             })?;
 
@@ -304,44 +309,11 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 }
             }
 
-            if let Some(stdin_data) = stdin {
-                if let Some(mut child_stdin) = child.stdin.take() {
-                    use tokio::io::AsyncWriteExt;
-                    child_stdin
-                        .write_all(stdin_data)
-                        .await
-                        .map_err(|e| SandboxError::Io(format!("stdin write failed: {e}")))?;
-                }
-            }
-
-            let start = std::time::Instant::now();
-            let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
-            let elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-
-            match result {
-                Ok(Ok(output)) => {
-                    let status = output.status;
-                    let (stdout, stdout_truncated) =
-                        truncate_output(output.stdout, max_output_bytes);
-                    let (stderr, stderr_truncated) =
-                        truncate_output(output.stderr, max_output_bytes);
-
-                    Ok(SandboxOutput {
-                        stdout,
-                        stderr,
-                        exit_code: status.code(),
-                        // Windows processes are not terminated by Unix
-                        // signals; `signal` is always `None` here.
-                        signal: None,
-                        truncated: stdout_truncated || stderr_truncated,
-                        duration_ms: elapsed_ms,
-                    })
-                }
-                Ok(Err(e)) => Err(SandboxError::ExecutionFailed(format!(
-                    "process execution error: {e}"
-                ))),
-                Err(_) => Err(SandboxError::Timeout { elapsed_ms }),
-            }
+            // `_job` is kept alive across the await: its Drop closes the
+            // job-object handle (auto-killing any surviving children) only
+            // after the helper has reaped the main child process.
+            let _job = job;
+            run_child_with_drain(child, stdin, timeout, max_output_bytes).await
         }
 
         #[cfg(not(target_os = "windows"))]

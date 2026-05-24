@@ -15,7 +15,7 @@ use tracing::debug;
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
-use crate::sandbox::platforms::common::{termination_signal, truncate_output};
+use crate::sandbox::platforms::common::run_child_with_drain;
 use crate::sandbox::policy::{EnvPolicy, FsPolicy, NetworkPolicy, ProcessPolicy, SandboxPolicy};
 
 /// Path to the trusted `sandbox-exec` binary.
@@ -771,51 +771,23 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
             .envs(env)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .stdin(std::process::Stdio::piped());
+            .stdin(std::process::Stdio::piped())
+            // Belt-and-braces: if our future is dropped (e.g. an upstream
+            // cancellation) the OS reaps the child instead of leaking it.
+            .kill_on_drop(true);
 
         if let Some(mb) = profile.max_memory_mb {
             apply_memory_rlimit(&mut cmd, mb);
         }
 
-        let mut child = cmd.spawn().map_err(|e| {
+        let child = cmd.spawn().map_err(|e| {
             SandboxError::ExecutionFailed(format!("failed to spawn sandbox-exec: {e}"))
         })?;
 
-        if let Some(stdin_data) = stdin {
-            if let Some(mut child_stdin) = child.stdin.take() {
-                use tokio::io::AsyncWriteExt;
-                child_stdin
-                    .write_all(stdin_data)
-                    .await
-                    .map_err(|e| SandboxError::Io(format!("stdin write failed: {e}")))?;
-            }
-        }
-
-        let start = std::time::Instant::now();
-        let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
-
-        let elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-
-        match result {
-            Ok(Ok(output)) => {
-                let status = output.status;
-                let (stdout, stdout_truncated) = truncate_output(output.stdout, max_output_bytes);
-                let (stderr, stderr_truncated) = truncate_output(output.stderr, max_output_bytes);
-
-                Ok(SandboxOutput {
-                    stdout,
-                    stderr,
-                    exit_code: status.code(),
-                    signal: termination_signal(&status),
-                    truncated: stdout_truncated || stderr_truncated,
-                    duration_ms: elapsed_ms,
-                })
-            }
-            Ok(Err(e)) => Err(SandboxError::ExecutionFailed(format!(
-                "sandbox-exec execution error: {e}"
-            ))),
-            Err(_) => Err(SandboxError::Timeout { elapsed_ms }),
-        }
+        // Helper owns stdin write, output drain, timeout-with-kill, and
+        // partial-output capture so the three platform drivers stay in
+        // lock-step with codex's IO_DRAIN_TIMEOUT discipline.
+        run_child_with_drain(child, stdin, timeout, max_output_bytes).await
     }
 }
 

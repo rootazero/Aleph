@@ -10,7 +10,7 @@ use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
 use crate::sandbox::platforms::common::{
-    is_wsl, termination_signal, truncate_output, wsl_version, LINUX_PLATFORM_DEFAULT_READ_ROOTS,
+    is_wsl, run_child_with_drain, wsl_version, LINUX_PLATFORM_DEFAULT_READ_ROOTS,
 };
 use crate::sandbox::policy::{FsPolicy, NetworkPolicy, ProcessPolicy, SandboxPolicy};
 
@@ -530,7 +530,12 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             .envs(env)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .stdin(std::process::Stdio::piped());
+            .stdin(std::process::Stdio::piped())
+            // Belt-and-braces: kill bwrap if our future is dropped.
+            // bwrap already passes `--die-with-parent` so the inner
+            // payload follows, but the OS-level reap on drop guards
+            // against future code paths that bypass that.
+            .kill_on_drop(true);
 
         self.apply_no_new_privs(&mut cmd);
         if let Some(mb) = profile.max_memory_mb {
@@ -539,7 +544,7 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
 
         // SP-5: build cgroup v2 sub-cgroup before spawn so the child can
         // be attached via pre_exec. The scope is owned by this `run()`
-        // frame; its Drop fires after `wait_with_output()` completes and
+        // frame; its Drop fires after `run_child_with_drain` returns and
         // rmdir's the cgroup directory. RLIMIT_AS (above) continues to
         // apply as a fallback when cgroups are unavailable.
         let _cgroup_scope: Option<crate::sandbox::cgroup_v2::CgroupV2Scope> =
@@ -572,45 +577,14 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
                 None
             };
 
-        let mut child = cmd
+        let child = cmd
             .spawn()
             .map_err(|e| SandboxError::ExecutionFailed(format!("failed to spawn bwrap: {e}")))?;
 
-        if let Some(stdin_data) = stdin {
-            if let Some(mut child_stdin) = child.stdin.take() {
-                use tokio::io::AsyncWriteExt;
-                child_stdin
-                    .write_all(stdin_data)
-                    .await
-                    .map_err(|e| SandboxError::Io(format!("stdin write failed: {e}")))?;
-            }
-        }
-
-        let start = std::time::Instant::now();
-        let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
-
-        let elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-
-        match result {
-            Ok(Ok(output)) => {
-                let status = output.status;
-                let (stdout, stdout_truncated) = truncate_output(output.stdout, max_output_bytes);
-                let (stderr, stderr_truncated) = truncate_output(output.stderr, max_output_bytes);
-
-                Ok(SandboxOutput {
-                    stdout,
-                    stderr,
-                    exit_code: status.code(),
-                    signal: termination_signal(&status),
-                    truncated: stdout_truncated || stderr_truncated,
-                    duration_ms: elapsed_ms,
-                })
-            }
-            Ok(Err(e)) => Err(SandboxError::ExecutionFailed(format!(
-                "bwrap execution error: {e}"
-            ))),
-            Err(_) => Err(SandboxError::Timeout { elapsed_ms }),
-        }
+        // `_cgroup_scope` is kept alive across the await so its Drop —
+        // which rmdir's the cgroup directory — only fires after the
+        // child has been reaped by the helper.
+        run_child_with_drain(child, stdin, timeout, max_output_bytes).await
     }
 }
 

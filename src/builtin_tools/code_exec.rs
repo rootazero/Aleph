@@ -120,7 +120,18 @@ impl CodeExecArgs {
     }
 }
 
-/// Output from code execution tool
+/// Output from code execution tool.
+///
+/// `truncated` stays for back-compat; new callers should inspect
+/// `stdout_truncated_bytes` / `stderr_truncated_bytes` for the exact
+/// number of bytes that were dropped per stream — codex-style
+/// "what did I lose" visibility.
+///
+/// On timeout: `success` is `false`, `exit_code` is `124` (POSIX
+/// `timeout(1)` convention so the model can pattern-match), `stdout`
+/// carries whatever the process printed before the kill, and `stderr`
+/// is a human-readable message that also embeds the partial stderr
+/// captured during the IO-drain window.
 #[derive(Debug, Clone, Serialize)]
 pub struct CodeExecOutput {
     pub success: bool,
@@ -131,6 +142,17 @@ pub struct CodeExecOutput {
     pub language: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
+    /// Bytes dropped from stdout to satisfy the sandbox cap.
+    /// Omitted from JSON when zero so existing consumers stay quiet.
+    #[serde(skip_serializing_if = "is_zero", default)]
+    pub stdout_truncated_bytes: u64,
+    /// Bytes dropped from stderr to satisfy the sandbox cap.
+    #[serde(skip_serializing_if = "is_zero", default)]
+    pub stderr_truncated_bytes: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 /// Code execution tool. Holds `Arc<dyn Sandbox>` (Phase 3 Task 8) so every
@@ -153,18 +175,40 @@ impl CodeExecTool {
     /// Tool identifier
     pub const NAME: &'static str = "code_exec";
 
-    /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str = r#"Execute code in various programming languages. Supported languages:
-- python: Execute Python 3 code
-- javascript: Execute JavaScript code using Node.js
-- shell: Execute shell commands using bash
+    /// Tool description for AI prompt — also used at the trait-impl
+    /// site below so the `bash` wrapper inherits the same teaching.
+    pub const DESCRIPTION: &'static str = r#"Execute code in a per-session sandboxed workspace. Supported languages:
+- python: runs via `python3 -c <code>`
+- javascript: runs via `node -e <code>`
+- shell: runs via `bash -c <code>` (or `bash -s` over stdin for scripts >32 KB)
 
-Timeout: Default 60 seconds, configurable.
+Multi-line code is first-class for all three languages. For shell, prefer
+ONE multi-line script (newlines, heredocs, pipelines, `set -e`) over many
+small calls — each call is a fresh process, so `cd`, env vars, virtualenv
+activation, and similar state do NOT persist between calls. If you need
+cross-call state, write it to a file under `working_dir`.
+
+`working_dir` (optional) is resolved inside the session workspace; paths
+outside the workspace are denied. Defaults to the workspace root.
+
+`timeout` defaults to 60s, capped by the tool budget (180s ceiling). On
+timeout the runtime is killed, stdout/stderr are drained for up to 2s,
+and we return `exit_code = 124` (POSIX `timeout(1)` convention) with the
+partial output preserved so you can see what the script accomplished.
+
+Output is capped per stream; the response carries
+`stdout_truncated_bytes` / `stderr_truncated_bytes` when bytes were
+dropped, so you know exactly how much you lost.
+
+Capability escalations (`allow_network`, `allow_subprocess`,
+`extra_writable_paths`) require approval the first time per session.
 
 Examples:
 - Python: {"language": "python", "code": "print('Hello, World!')"}
 - JavaScript: {"language": "javascript", "code": "console.log('Hello, World!')"}
-- Shell: {"language": "shell", "code": "echo 'Hello, World!' && ls -la"}
+- Shell (single-line): {"language": "shell", "code": "ls -la"}
+- Shell (multi-line): {"language": "shell", "code": "set -e\ncd src\ncargo check\necho ok"}
+- Shell (heredoc): {"language": "shell", "code": "cat <<'EOF' > /tmp/x\nhello\nEOF\nwc -l /tmp/x"}
 "#;
 
     /// Create a new code execution tool without a sandbox wired in yet.
@@ -199,6 +243,8 @@ Examples:
                     duration_ms: 0,
                     language: language_label(&args.language),
                     truncated: None,
+                    stdout_truncated_bytes: 0,
+                    stderr_truncated_bytes: 0,
                 });
             }
         };
@@ -218,6 +264,8 @@ Examples:
                     duration_ms: 0,
                     language: language_label(&args.language),
                     truncated: None,
+                    stdout_truncated_bytes: 0,
+                    stderr_truncated_bytes: 0,
                 });
             }
         };
@@ -380,6 +428,8 @@ fn sandbox_result_to_output(
                 exit_code = exit_code,
                 duration_ms = out.duration_ms,
                 truncated = out.truncated,
+                stdout_truncated_bytes = out.stdout_truncated_bytes,
+                stderr_truncated_bytes = out.stderr_truncated_bytes,
                 "Code execution completed"
             );
 
@@ -391,22 +441,48 @@ fn sandbox_result_to_output(
                 duration_ms: out.duration_ms,
                 language,
                 truncated: if out.truncated { Some(true) } else { None },
+                stdout_truncated_bytes: out.stdout_truncated_bytes,
+                stderr_truncated_bytes: out.stderr_truncated_bytes,
             }
         }
-        Err(SandboxError::Timeout { elapsed_ms }) => {
+        Err(SandboxError::Timeout {
+            elapsed_ms,
+            partial_stdout,
+            partial_stderr,
+        }) => {
             warn!(
                 timeout_secs = timeout_secs,
                 elapsed_ms = elapsed_ms,
-                "Sandbox code execution timed out"
+                partial_stdout_bytes = partial_stdout.len(),
+                partial_stderr_bytes = partial_stderr.len(),
+                "Sandbox code execution timed out — surfacing partial output"
             );
+            let stdout = String::from_utf8_lossy(&partial_stdout).to_string();
+            let partial_stderr_text = String::from_utf8_lossy(&partial_stderr).to_string();
+            // Frame the human-readable banner so the model can see _that_
+            // it timed out, and inline the captured partial stderr (if
+            // any) so it knows _what the script printed_ on its way out.
+            let stderr = if partial_stderr_text.is_empty() {
+                format!(
+                    "Execution timed out after {timeout_secs}s (exit code 124, POSIX timeout convention). Partial stdout above was captured before the kill; partial stderr was empty."
+                )
+            } else {
+                format!(
+                    "Execution timed out after {timeout_secs}s (exit code 124, POSIX timeout convention). Partial stderr captured before kill:\n{partial_stderr_text}"
+                )
+            };
             CodeExecOutput {
                 success: false,
-                exit_code: -1,
-                stdout: String::new(),
-                stderr: format!("Execution timed out after {} seconds", timeout_secs),
+                // POSIX `timeout(1)` exit convention — codex returns the
+                // same so the model can pattern-match across both stacks.
+                exit_code: 124,
+                stdout,
+                stderr,
                 duration_ms: elapsed_ms,
                 language,
                 truncated: None,
+                stdout_truncated_bytes: 0,
+                stderr_truncated_bytes: 0,
             }
         }
         Err(SandboxError::CapabilityDenied { reason }) => CodeExecOutput {
@@ -417,6 +493,8 @@ fn sandbox_result_to_output(
             duration_ms: 0,
             language,
             truncated: None,
+            stdout_truncated_bytes: 0,
+            stderr_truncated_bytes: 0,
         },
         Err(err) => CodeExecOutput {
             success: false,
@@ -426,6 +504,8 @@ fn sandbox_result_to_output(
             duration_ms: 0,
             language,
             truncated: None,
+            stdout_truncated_bytes: 0,
+            stderr_truncated_bytes: 0,
         },
     }
 }
@@ -440,12 +520,10 @@ impl Default for CodeExecTool {
 #[async_trait]
 impl AlephTool for CodeExecTool {
     const NAME: &'static str = "code_exec";
-    const DESCRIPTION: &'static str = r#"Execute code in various programming languages. Supported languages:
-- python: Execute Python 3 code
-- javascript: Execute JavaScript code using Node.js
-- shell: Execute shell commands using bash
-
-Timeout: Default 60 seconds, configurable."#;
+    // Share the rich teaching with the inherent `DESCRIPTION` const so
+    // there's a single source of truth — keeps the prompt and the
+    // type-API description in lock-step.
+    const DESCRIPTION: &'static str = Self::DESCRIPTION;
 
     type Args = CodeExecArgs;
     type Output = CodeExecOutput;
@@ -473,11 +551,9 @@ mod tests {
     fn ok_output(stdout: &str) -> SandboxOutput {
         SandboxOutput {
             stdout: stdout.as_bytes().to_vec(),
-            stderr: Vec::new(),
             exit_code: Some(0),
-            signal: None,
-            truncated: false,
             duration_ms: 7,
+            ..Default::default()
         }
     }
 
@@ -486,6 +562,28 @@ mod tests {
         assert_eq!(Language::Python.runtime(), "python3");
         assert_eq!(Language::JavaScript.runtime(), "node");
         assert_eq!(Language::Shell.runtime(), "bash");
+    }
+
+    #[test]
+    fn description_is_single_sourced() {
+        // The AlephTool::DESCRIPTION should be the same string as the
+        // inherent const so there's no drift between the type API and
+        // what the model actually sees in the prompt.
+        assert_eq!(CodeExecTool::DESCRIPTION, <CodeExecTool as AlephTool>::DESCRIPTION);
+    }
+
+    #[test]
+    fn description_teaches_partial_output_and_stateless_sessions() {
+        let d = CodeExecTool::DESCRIPTION;
+        assert!(d.contains("multi-line"), "should encourage multi-line code");
+        assert!(d.contains("heredoc"), "should mention heredoc for shell");
+        assert!(d.contains("32 KB"), "should mention the stdin-pipe threshold");
+        assert!(d.contains("124"), "should document the POSIX timeout exit code");
+        assert!(d.contains("preserved"), "should promise partial output on kill");
+        assert!(
+            d.contains("stdout_truncated_bytes"),
+            "should mention the explicit truncation byte fields"
+        );
     }
 
     #[tokio::test]
@@ -750,7 +848,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_timeout_surfaces_as_structured_failure() {
+    async fn sandbox_timeout_surfaces_partial_output_and_posix_exit() {
+        // Simulate the helper having drained partial output before the
+        // kill: stdout has "started" (so the model can see what the
+        // script accomplished) and stderr has a warning line.
         struct TimeoutSandbox;
         #[async_trait::async_trait]
         impl Sandbox for TimeoutSandbox {
@@ -758,7 +859,11 @@ mod tests {
                 &self,
                 _cmd: SandboxCommand,
             ) -> std::result::Result<SandboxOutput, SandboxError> {
-                Err(SandboxError::Timeout { elapsed_ms: 1234 })
+                Err(SandboxError::Timeout {
+                    elapsed_ms: 1234,
+                    partial_stdout: b"started step 1\n".to_vec(),
+                    partial_stderr: b"warning: foo\n".to_vec(),
+                })
             }
         }
 
@@ -768,7 +873,7 @@ mod tests {
             .scope(sid(), async {
                 tool.call(CodeExecArgs {
                     language: Language::Shell,
-                    code: "sleep 9999".to_string(),
+                    code: "echo started step 1; sleep 9999".to_string(),
                     working_dir: None,
                     timeout: Some(5),
                     allow_network: false,
@@ -781,12 +886,113 @@ mod tests {
             .await;
 
         assert!(!out.success);
-        assert_eq!(out.exit_code, -1);
+        // POSIX timeout convention (codex parity) — the model can
+        // pattern-match `exit_code == 124` instead of parsing strings.
+        assert_eq!(out.exit_code, 124);
+        assert_eq!(
+            out.stdout, "started step 1\n",
+            "partial stdout must surface verbatim"
+        );
         assert!(
-            out.stderr.contains("timed out"),
-            "unexpected stderr: {}",
+            out.stderr.contains("timed out after 5s"),
+            "stderr banner missing timeout signal: {}",
+            out.stderr
+        );
+        assert!(
+            out.stderr.contains("warning: foo"),
+            "stderr must embed partial stderr captured during drain: {}",
             out.stderr
         );
         assert_eq!(out.duration_ms, 1234);
+    }
+
+    #[tokio::test]
+    async fn timeout_with_empty_partial_streams_still_explains() {
+        struct TimeoutSandbox;
+        #[async_trait::async_trait]
+        impl Sandbox for TimeoutSandbox {
+            async fn execute(
+                &self,
+                _cmd: SandboxCommand,
+            ) -> std::result::Result<SandboxOutput, SandboxError> {
+                Err(SandboxError::Timeout {
+                    elapsed_ms: 500,
+                    partial_stdout: Vec::new(),
+                    partial_stderr: Vec::new(),
+                })
+            }
+        }
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(TimeoutSandbox);
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+        let out = SESSION_ID
+            .scope(sid(), async {
+                tool.call(CodeExecArgs {
+                    language: Language::Shell,
+                    code: "sleep 9999".to_string(),
+                    working_dir: None,
+                    timeout: Some(1),
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+        assert_eq!(out.exit_code, 124);
+        assert!(out.stdout.is_empty());
+        assert!(
+            out.stderr.contains("partial stderr was empty"),
+            "drain-empty banner missing: {}",
+            out.stderr
+        );
+    }
+
+    #[tokio::test]
+    async fn truncation_bytes_propagate_to_output() {
+        // SandboxOutput carries explicit dropped byte counts now; the
+        // tool envelope should pass them through unchanged so the model
+        // can see exactly how much it lost.
+        struct TruncatingSandbox;
+        #[async_trait::async_trait]
+        impl Sandbox for TruncatingSandbox {
+            async fn execute(
+                &self,
+                _cmd: SandboxCommand,
+            ) -> std::result::Result<SandboxOutput, SandboxError> {
+                Ok(SandboxOutput {
+                    stdout: b"hello".to_vec(),
+                    stderr: Vec::new(),
+                    exit_code: Some(0),
+                    truncated: true,
+                    stdout_truncated_bytes: 4242,
+                    stderr_truncated_bytes: 7,
+                    duration_ms: 9,
+                    ..Default::default()
+                })
+            }
+        }
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(TruncatingSandbox);
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+        let out = SESSION_ID
+            .scope(sid(), async {
+                tool.call(CodeExecArgs {
+                    language: Language::Shell,
+                    code: "yes".to_string(),
+                    working_dir: None,
+                    timeout: Some(1),
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+        assert_eq!(out.stdout_truncated_bytes, 4242);
+        assert_eq!(out.stderr_truncated_bytes, 7);
+        assert_eq!(out.truncated, Some(true));
     }
 }

@@ -241,8 +241,16 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
                 Ok(Ok(out)) => out,
                 Ok(Err(e)) => return Err(crate::sandbox::SandboxError::Io(e.to_string())),
                 Err(_) => {
+                    // Worktree-isolated commands use `cmd.output()` which
+                    // can't surface partial stdout/stderr on timeout — the
+                    // future is dropped before we can split the pipes.
+                    // Treat both partial buffers as empty here; callers
+                    // that need partial output should go through the
+                    // sandbox driver path which uses run_child_with_drain.
                     return Err(crate::sandbox::SandboxError::Timeout {
                         elapsed_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                        partial_stdout: Vec::new(),
+                        partial_stderr: Vec::new(),
                     });
                 }
             }
@@ -266,6 +274,8 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             exit_code: exec.status.code(),
             signal,
             truncated: false,
+            stdout_truncated_bytes: 0,
+            stderr_truncated_bytes: 0,
             duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
         })
     }

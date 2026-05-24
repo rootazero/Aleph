@@ -42,12 +42,8 @@ struct InertSandbox;
 impl Sandbox for InertSandbox {
     async fn execute(&self, _cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         Ok(SandboxOutput {
-            stdout: Vec::new(),
-            stderr: Vec::new(),
             exit_code: Some(0),
-            signal: None,
-            truncated: false,
-            duration_ms: 0,
+            ..Default::default()
         })
     }
 }

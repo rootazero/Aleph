@@ -259,11 +259,9 @@ mod tests {
         ) -> Result<SandboxOutput, SandboxError> {
             Ok(SandboxOutput {
                 stdout: b"ok".to_vec(),
-                stderr: Vec::new(),
                 exit_code: Some(0),
-                signal: None,
-                truncated: false,
                 duration_ms: 1,
+                ..Default::default()
             })
         }
     }

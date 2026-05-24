@@ -462,11 +462,9 @@ mod tests {
             *self.run_count.write().await += 1;
             Ok(SandboxOutput {
                 stdout: b"ok".to_vec(),
-                stderr: Vec::new(),
                 exit_code: Some(0),
-                signal: None,
-                truncated: false,
                 duration_ms: 5,
+                ..Default::default()
             })
         }
     }
@@ -775,11 +773,9 @@ mod tests {
             *self.last_env.write().await = env.clone();
             Ok(SandboxOutput {
                 stdout: b"ok".to_vec(),
-                stderr: Vec::new(),
                 exit_code: Some(0),
-                signal: None,
-                truncated: false,
                 duration_ms: 1,
+                ..Default::default()
             })
         }
     }
@@ -946,9 +942,8 @@ mod scrub_integration_tests {
                 stdout: self.stdout_payload.clone(),
                 stderr: self.stderr_payload.clone(),
                 exit_code: Some(0),
-                signal: None,
-                truncated: false,
                 duration_ms: 1,
+                ..Default::default()
             })
         }
     }

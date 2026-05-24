@@ -201,12 +201,8 @@ fn sample_session_id() -> SessionId {
 
 fn noop_sandbox_output() -> SandboxOutput {
     SandboxOutput {
-        stdout: Vec::new(),
-        stderr: Vec::new(),
         exit_code: Some(0),
-        signal: None,
-        truncated: false,
-        duration_ms: 0,
+        ..Default::default()
     }
 }
 

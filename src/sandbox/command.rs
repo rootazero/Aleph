@@ -21,13 +21,23 @@ pub struct SandboxCommand {
     pub timeout: Option<Duration>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SandboxOutput {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub exit_code: Option<i32>,
     pub signal: Option<i32>,
+    /// True when either stream was shortened to fit `max_output_bytes`.
+    /// Derived from `stdout_truncated_bytes` / `stderr_truncated_bytes` so
+    /// older readers that only check this flag keep working.
     pub truncated: bool,
+    /// Bytes dropped from stdout to satisfy `max_output_bytes`. Lets the
+    /// model see *how much* it lost, not just the boolean.
+    #[serde(default)]
+    pub stdout_truncated_bytes: u64,
+    /// Bytes dropped from stderr to satisfy `max_output_bytes`.
+    #[serde(default)]
+    pub stderr_truncated_bytes: u64,
     pub duration_ms: u64,
 }
 
@@ -42,8 +52,17 @@ pub enum SandboxError {
     #[error("io error: {0}")]
     Io(String),
 
+    /// Wall-clock timeout fired. The child was killed and we drained the
+    /// stdout/stderr pipes for up to 2s (codex-parity `IO_DRAIN_TIMEOUT_MS`)
+    /// so the model still sees whatever the script printed before the kill —
+    /// "started, did X, then sleep 9999" is much more useful than zero bytes.
+    /// Either partial buffer may be empty when nothing was captured.
     #[error("timeout after {elapsed_ms}ms")]
-    Timeout { elapsed_ms: u64 },
+    Timeout {
+        elapsed_ms: u64,
+        partial_stdout: Vec<u8>,
+        partial_stderr: Vec<u8>,
+    },
 
     #[error("execution failed: {0}")]
     ExecutionFailed(String),

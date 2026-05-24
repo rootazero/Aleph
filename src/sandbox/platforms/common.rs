@@ -1,4 +1,17 @@
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use tokio::io::AsyncReadExt;
+use tokio::process::Child;
+
+use crate::sandbox::command::{SandboxError, SandboxOutput};
+
+/// How long to wait for the stdout/stderr reader tasks to drain after we
+/// kill a child that hit its wall-clock timeout. Matches codex's
+/// `IO_DRAIN_TIMEOUT_MS = 2_000` — a grandchild process inheriting our
+/// pipes can hold them open indefinitely, so we cap how long we'll wait
+/// for "real" output before giving up and returning what we have.
+const KILL_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     "/bin",
@@ -85,21 +98,25 @@ pub fn glob_to_regex(pattern: &str) -> Option<String> {
 
 /// Truncate captured process output to at most `max_bytes`, never cutting
 /// a UTF-8 codepoint in half (project rule P7). Returns the (possibly
-/// shortened) buffer and whether truncation occurred.
+/// shortened) buffer and the number of bytes dropped (0 when no
+/// truncation happened).
 ///
 /// The cut index is backed off any UTF-8 continuation byte
 /// (`0b10xx_xxxx`), so a multi-byte char is never split — for binary
-/// (non-UTF-8) output the worst case drops at most 3 extra bytes.
-pub fn truncate_output(mut buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, bool) {
-    if buf.len() <= max_bytes {
-        return (buf, false);
+/// (non-UTF-8) output the worst case drops at most 3 extra bytes, which
+/// the returned drop count reflects.
+pub fn truncate_output(mut buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
+    let orig_len = buf.len();
+    if orig_len <= max_bytes {
+        return (buf, 0);
     }
     let mut end = max_bytes;
     while end > 0 && (buf[end] & 0xC0) == 0x80 {
         end -= 1;
     }
     buf.truncate(end);
-    (buf, true)
+    let dropped = (orig_len - end) as u64;
+    (buf, dropped)
 }
 
 /// The Unix signal that terminated a child process, if it was killed by a
@@ -110,6 +127,116 @@ pub fn truncate_output(mut buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, bool) {
 pub fn termination_signal(status: &std::process::ExitStatus) -> Option<i32> {
     use std::os::unix::process::ExitStatusExt;
     status.signal()
+}
+
+/// Cross-platform variant of [`termination_signal`] — always `None` on
+/// Windows where ExitStatus has no signal concept. Used inside helpers
+/// that need to compile on all platforms.
+#[cfg(unix)]
+fn termination_signal_xplat(status: &std::process::ExitStatus) -> Option<i32> {
+    termination_signal(status)
+}
+
+#[cfg(not(unix))]
+fn termination_signal_xplat(_status: &std::process::ExitStatus) -> Option<i32> {
+    None
+}
+
+/// Spawn stdout/stderr reader tasks, optionally pipe `stdin_data`, then
+/// race the child's `wait()` against `timeout`.
+///
+/// On natural exit: returns a `SandboxOutput` with both streams truncated
+/// to `max_output_bytes` and the dropped byte counts surfaced.
+///
+/// On timeout: kills the child explicitly (so we don't rely on the
+/// caller's `kill_on_drop` flag firing later), drains the reader tasks
+/// for up to [`KILL_DRAIN_TIMEOUT`], and returns
+/// `SandboxError::Timeout { elapsed_ms, partial_stdout, partial_stderr }`.
+/// Partial buffers may be empty if a grandchild was holding the pipes
+/// open longer than the drain budget.
+///
+/// Used by every platform driver (seatbelt / bwrap / windows) so the
+/// kill-and-drain logic only lives in one place.
+pub async fn run_child_with_drain(
+    mut child: Child,
+    stdin_data: Option<&[u8]>,
+    timeout: Duration,
+    max_output_bytes: usize,
+) -> Result<SandboxOutput, SandboxError> {
+    if let Some(data) = stdin_data {
+        if let Some(mut child_stdin) = child.stdin.take() {
+            use tokio::io::AsyncWriteExt;
+            child_stdin
+                .write_all(data)
+                .await
+                .map_err(|e| SandboxError::Io(format!("stdin write failed: {e}")))?;
+            // Drop closes stdin so the child sees EOF.
+        }
+    }
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = stdout {
+            let _ = pipe.read_to_end(&mut buf).await;
+        }
+        buf
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = stderr {
+            let _ = pipe.read_to_end(&mut buf).await;
+        }
+        buf
+    });
+
+    let start = Instant::now();
+    let wait_result = tokio::time::timeout(timeout, child.wait()).await;
+    let elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+
+    match wait_result {
+        Ok(Ok(status)) => {
+            let stdout_buf = stdout_task.await.unwrap_or_default();
+            let stderr_buf = stderr_task.await.unwrap_or_default();
+            let (stdout, stdout_dropped) = truncate_output(stdout_buf, max_output_bytes);
+            let (stderr, stderr_dropped) = truncate_output(stderr_buf, max_output_bytes);
+            Ok(SandboxOutput {
+                stdout,
+                stderr,
+                exit_code: status.code(),
+                signal: termination_signal_xplat(&status),
+                truncated: stdout_dropped > 0 || stderr_dropped > 0,
+                stdout_truncated_bytes: stdout_dropped,
+                stderr_truncated_bytes: stderr_dropped,
+                duration_ms: elapsed_ms,
+            })
+        }
+        Ok(Err(e)) => Err(SandboxError::ExecutionFailed(format!("wait error: {e}"))),
+        Err(_) => {
+            // Wall-clock fired. Force-kill the child immediately rather
+            // than relying on `kill_on_drop` firing when we return.
+            let _ = child.start_kill();
+            let drain = tokio::time::timeout(KILL_DRAIN_TIMEOUT, async {
+                let stdout_buf = stdout_task.await.unwrap_or_default();
+                let stderr_buf = stderr_task.await.unwrap_or_default();
+                (stdout_buf, stderr_buf)
+            })
+            .await;
+            let (partial_stdout, partial_stderr) =
+                drain.unwrap_or_else(|_| (Vec::new(), Vec::new()));
+            // Cap partial output too — a runaway loop can fill the pipe
+            // with megabytes before the kill takes effect.
+            let (partial_stdout, _) = truncate_output(partial_stdout, max_output_bytes);
+            let (partial_stderr, _) = truncate_output(partial_stderr, max_output_bytes);
+            Err(SandboxError::Timeout {
+                elapsed_ms,
+                partial_stdout,
+                partial_stderr,
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -235,23 +362,23 @@ mod tests {
 
     #[test]
     fn truncate_output_keeps_short_buffer_intact() {
-        let (out, truncated) = truncate_output(b"hello".to_vec(), 1024);
+        let (out, dropped) = truncate_output(b"hello".to_vec(), 1024);
         assert_eq!(out, b"hello");
-        assert!(!truncated);
+        assert_eq!(dropped, 0);
     }
 
     #[test]
     fn truncate_output_at_exact_len_does_not_truncate() {
-        let (out, truncated) = truncate_output(b"hello".to_vec(), 5);
+        let (out, dropped) = truncate_output(b"hello".to_vec(), 5);
         assert_eq!(out, b"hello");
-        assert!(!truncated);
+        assert_eq!(dropped, 0);
     }
 
     #[test]
     fn truncate_output_cuts_ascii_at_boundary() {
-        let (out, truncated) = truncate_output(b"hello world".to_vec(), 5);
+        let (out, dropped) = truncate_output(b"hello world".to_vec(), 5);
         assert_eq!(out, b"hello");
-        assert!(truncated);
+        assert_eq!(dropped, 6, "' world' is 6 bytes dropped");
     }
 
     #[test]
@@ -259,24 +386,26 @@ mod tests {
         // "a€b" = 61 E2 82 AC 62 — the euro sign is a 3-byte sequence.
         let buf = "a€b".as_bytes().to_vec();
         // Cutting at 2 lands inside the euro sign → must back off to "a".
-        let (out, truncated) = truncate_output(buf.clone(), 2);
+        let (out, dropped) = truncate_output(buf.clone(), 2);
         assert_eq!(out, b"a");
-        assert!(truncated);
+        // Originally 5 bytes ("a€b"), kept 1, so 4 dropped.
+        assert_eq!(dropped, 4);
         assert!(
             std::str::from_utf8(&out).is_ok(),
             "result must stay valid UTF-8"
         );
         // Cutting at 4 lands exactly after the euro sign → "a€" kept whole.
-        let (out, truncated) = truncate_output(buf, 4);
+        let (out, dropped) = truncate_output(buf, 4);
         assert_eq!(std::str::from_utf8(&out).unwrap(), "a€");
-        assert!(truncated);
+        // Originally 5 bytes, kept 4, so just the trailing "b" dropped.
+        assert_eq!(dropped, 1);
     }
 
     #[test]
     fn truncate_output_zero_max_yields_empty() {
-        let (out, truncated) = truncate_output(b"x".to_vec(), 0);
+        let (out, dropped) = truncate_output(b"x".to_vec(), 0);
         assert!(out.is_empty());
-        assert!(truncated);
+        assert_eq!(dropped, 1);
     }
 
     #[cfg(unix)]
@@ -303,5 +432,114 @@ mod tests {
             .expect("run /usr/bin/true");
         assert_eq!(termination_signal(&status), None);
         assert_eq!(status.code(), Some(0));
+    }
+
+    // ---- run_child_with_drain ------------------------------------------------
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_child_with_drain_natural_exit_captures_output() {
+        use tokio::process::Command;
+        let child = Command::new("bash")
+            .arg("-c")
+            .arg("echo hello; echo oops 1>&2; exit 0")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn bash");
+
+        let out = run_child_with_drain(child, None, Duration::from_secs(5), 1024)
+            .await
+            .expect("natural exit");
+        assert_eq!(out.exit_code, Some(0));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "hello\n");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), "oops\n");
+        assert!(!out.truncated);
+        assert_eq!(out.stdout_truncated_bytes, 0);
+        assert_eq!(out.stderr_truncated_bytes, 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_child_with_drain_timeout_captures_partial_output() {
+        use tokio::process::Command;
+        // Print a line, *flush* it, then sleep long enough to trip the
+        // 500ms timeout. The captured partial stdout proves the drain
+        // works — codex's IO_DRAIN_TIMEOUT pattern in miniature.
+        let child = Command::new("bash")
+            .arg("-c")
+            .arg("echo started; exec 1>&-; sleep 30")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn bash");
+
+        let err = run_child_with_drain(child, None, Duration::from_millis(500), 1024)
+            .await
+            .expect_err("should time out");
+        match err {
+            SandboxError::Timeout {
+                elapsed_ms,
+                partial_stdout,
+                partial_stderr,
+            } => {
+                assert!(elapsed_ms >= 400, "elapsed_ms = {elapsed_ms}");
+                assert_eq!(
+                    String::from_utf8_lossy(&partial_stdout),
+                    "started\n",
+                    "partial stdout must be drained after kill"
+                );
+                assert!(partial_stderr.is_empty());
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_child_with_drain_stdin_pipe_works() {
+        use tokio::process::Command;
+        let child = Command::new("bash")
+            .arg("-s")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn bash");
+
+        let script = b"echo from-stdin\n";
+        let out = run_child_with_drain(child, Some(script), Duration::from_secs(5), 1024)
+            .await
+            .expect("natural exit");
+        assert_eq!(out.exit_code, Some(0));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "from-stdin\n");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_child_with_drain_records_truncation_bytes() {
+        use tokio::process::Command;
+        // Produce 200 bytes of stdout; cap at 50 → 150 bytes dropped.
+        let child = Command::new("bash")
+            .arg("-c")
+            .arg("printf 'x%.0s' {1..200}")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn bash");
+
+        let out = run_child_with_drain(child, None, Duration::from_secs(5), 50)
+            .await
+            .expect("natural exit");
+        assert_eq!(out.stdout.len(), 50);
+        assert_eq!(out.stdout_truncated_bytes, 150);
+        assert!(out.truncated);
     }
 }
