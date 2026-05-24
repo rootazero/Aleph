@@ -2,6 +2,7 @@
 //!
 //! Contains default configurations for known AI providers.
 
+use crate::providers::metadata::{Modality, ProviderMetadata};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
@@ -323,8 +324,494 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
+    // -------------------------------------------------------------------------
+    // Phase B (openclaw parity) — additional chat presets. All map onto an
+    // existing protocol adapter; no new protocol code required.
+    // -------------------------------------------------------------------------
+
+    // Cerebras — ultra-fast Llama inference, OpenAI-compatible
+    m.insert(
+        "cerebras",
+        ProviderPreset {
+            base_url: "https://api.cerebras.ai/v1",
+            protocol: "openai",
+            color: "#f97316",
+            default_model: "llama-3.3-70b",
+        },
+    );
+
+    // Stepfun — Chinese multimodal LLM, OpenAI-compatible
+    m.insert(
+        "stepfun",
+        ProviderPreset {
+            base_url: "https://api.stepfun.com/v1",
+            protocol: "openai",
+            color: "#0ea5e9",
+            default_model: "step-1-8k",
+        },
+    );
+
+    // HuggingFace Router — OpenAI-compatible front for HF Inference API
+    m.insert(
+        "huggingface",
+        ProviderPreset {
+            base_url: "https://router.huggingface.co/v1",
+            protocol: "openai",
+            color: "#ffd21e",
+            default_model: "meta-llama/Llama-3.3-70B-Instruct",
+        },
+    );
+
+    // Vertex AI (Anthropic on GCP) — uses Anthropic protocol, region-specific URL
+    // Default region is us-east5; users can override via base_url for other regions.
+    m.insert(
+        "vertex-anthropic",
+        ProviderPreset {
+            base_url: "https://us-east5-aiplatform.googleapis.com/v1",
+            protocol: "anthropic",
+            color: "#4285f4",
+            default_model: "claude-sonnet-4@20250514",
+        },
+    );
+
+    // Azure OpenAI — OpenAI-compatible, but users must override base_url with
+    // their resource endpoint (https://<resource>.openai.azure.com). The
+    // placeholder is intentional so misconfiguration is obvious.
+    m.insert(
+        "azure-openai",
+        ProviderPreset {
+            base_url: "https://YOUR-RESOURCE.openai.azure.com",
+            protocol: "openai",
+            color: "#0078d4",
+            default_model: "gpt-4o",
+        },
+    );
+
+    // xAI Grok — OpenAI-compatible
+    m.insert(
+        "xai",
+        ProviderPreset {
+            base_url: "https://api.x.ai/v1",
+            protocol: "openai",
+            color: "#000000",
+            default_model: "grok-4-0709",
+        },
+    );
+    m.insert(
+        "grok",
+        ProviderPreset {
+            base_url: "https://api.x.ai/v1",
+            protocol: "openai",
+            color: "#000000",
+            default_model: "grok-4-0709",
+        },
+    );
+
+    // Qwen / DashScope — Alibaba 通义, OpenAI-compatible endpoint
+    m.insert(
+        "qwen",
+        ProviderPreset {
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            protocol: "openai",
+            color: "#615ced",
+            default_model: "qwen-max-2025-01-25",
+        },
+    );
+    m.insert(
+        "dashscope",
+        ProviderPreset {
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            protocol: "openai",
+            color: "#615ced",
+            default_model: "qwen-max-2025-01-25",
+        },
+    );
+
+    // Baichuan 百川 — OpenAI-compatible
+    m.insert(
+        "baichuan",
+        ProviderPreset {
+            base_url: "https://api.baichuan-ai.com/v1",
+            protocol: "openai",
+            color: "#e11d48",
+            default_model: "Baichuan4",
+        },
+    );
+
+    // Hunyuan 腾讯混元 — OpenAI-compatible
+    m.insert(
+        "hunyuan",
+        ProviderPreset {
+            base_url: "https://api.hunyuan.cloud.tencent.com/v1",
+            protocol: "openai",
+            color: "#1e40af",
+            default_model: "hunyuan-pro",
+        },
+    );
+
+    // Spark 讯飞星火 — V4 Ultra OpenAI-compatible endpoint
+    m.insert(
+        "spark",
+        ProviderPreset {
+            base_url: "https://spark-api-open.xf-yun.com/v1",
+            protocol: "openai",
+            color: "#ff4d4f",
+            default_model: "4.0Ultra",
+        },
+    );
+
     m
 });
+
+// =============================================================================
+// Provider metadata (modality / display name / homepage)
+// =============================================================================
+//
+// Stored in a parallel map rather than embedded in `ProviderPreset` so adding
+// it is zero-churn for the 28 existing entries above. Lookups by name are
+// case-insensitive at the call site (we lowercase before query).
+
+const CHAT_ONLY: &[Modality] = &[Modality::Chat];
+
+/// Per-preset metadata for chat providers — display name, modalities,
+/// homepage. Used by panel/RPC catalog and modality-based routing.
+///
+/// Not every preset needs an entry; missing names fall back to the
+/// default-chat assumption (see [`provider_metadata`] / [`presets_by_modality`]).
+pub static PRESET_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = Lazy::new(|| {
+    let mut m: HashMap<&'static str, ProviderMetadata> = HashMap::new();
+
+    m.insert(
+        "openai",
+        ProviderMetadata {
+            display_name: "OpenAI",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://platform.openai.com"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "chatgpt",
+        ProviderMetadata {
+            display_name: "ChatGPT (Codex Login)",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://chatgpt.com"),
+            notes: Some("OAuth login, Codex Responses protocol"),
+        },
+    );
+    m.insert(
+        "deepseek",
+        ProviderMetadata {
+            display_name: "DeepSeek",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://platform.deepseek.com"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "moonshot",
+        ProviderMetadata {
+            display_name: "Moonshot / Kimi",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://platform.moonshot.ai"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "kimi-for-coding",
+        ProviderMetadata {
+            display_name: "Kimi for Coding",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://platform.moonshot.ai"),
+            notes: Some("Anthropic-protocol endpoint for IDE agents"),
+        },
+    );
+    m.insert(
+        "doubao",
+        ProviderMetadata {
+            display_name: "Volcengine Doubao",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://www.volcengine.com/product/ark"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "siliconflow",
+        ProviderMetadata {
+            display_name: "SiliconFlow",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://siliconflow.cn"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "zhipu",
+        ProviderMetadata {
+            display_name: "Zhipu GLM",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://open.bigmodel.cn"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "minimax",
+        ProviderMetadata {
+            display_name: "MiniMax",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://www.minimax.io"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "t8star",
+        ProviderMetadata {
+            display_name: "T8Star",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://t8star.cn"),
+            notes: Some("OpenAI-compatible aggregator"),
+        },
+    );
+    m.insert(
+        "claude",
+        ProviderMetadata {
+            display_name: "Anthropic Claude",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://docs.anthropic.com"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "gemini",
+        ProviderMetadata {
+            display_name: "Google Gemini",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://ai.google.dev"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "groq",
+        ProviderMetadata {
+            display_name: "Groq",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://groq.com"),
+            notes: Some("Ultra-fast inference"),
+        },
+    );
+    m.insert(
+        "together",
+        ProviderMetadata {
+            display_name: "Together.ai",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://www.together.ai"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "perplexity",
+        ProviderMetadata {
+            display_name: "Perplexity",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://docs.perplexity.ai"),
+            notes: Some("Search-augmented LLMs"),
+        },
+    );
+    m.insert(
+        "mistral",
+        ProviderMetadata {
+            display_name: "Mistral AI",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://docs.mistral.ai"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "cohere",
+        ProviderMetadata {
+            display_name: "Cohere",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://docs.cohere.com"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "fireworks",
+        ProviderMetadata {
+            display_name: "Fireworks.ai",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://fireworks.ai"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "anyscale",
+        ProviderMetadata {
+            display_name: "Anyscale",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://www.anyscale.com"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "replicate",
+        ProviderMetadata {
+            display_name: "Replicate",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://replicate.com"),
+            notes: Some("Hosting; image/video via generation layer"),
+        },
+    );
+    m.insert(
+        "openrouter",
+        ProviderMetadata {
+            display_name: "OpenRouter",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://openrouter.ai"),
+            notes: Some("Multi-model router"),
+        },
+    );
+    m.insert(
+        "lepton",
+        ProviderMetadata {
+            display_name: "Lepton AI",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://www.lepton.ai"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "hyperbolic",
+        ProviderMetadata {
+            display_name: "Hyperbolic",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://hyperbolic.xyz"),
+            notes: None,
+        },
+    );
+
+    // Phase B chat additions
+    m.insert(
+        "cerebras",
+        ProviderMetadata {
+            display_name: "Cerebras",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://cerebras.ai"),
+            notes: Some("Ultra-fast Llama inference"),
+        },
+    );
+    m.insert(
+        "stepfun",
+        ProviderMetadata {
+            display_name: "Stepfun",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://stepfun.com"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "huggingface",
+        ProviderMetadata {
+            display_name: "HuggingFace Inference",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://huggingface.co/docs/api-inference"),
+            notes: Some("Routes to community-hosted open models"),
+        },
+    );
+    m.insert(
+        "vertex-anthropic",
+        ProviderMetadata {
+            display_name: "Vertex AI — Anthropic",
+            modalities: CHAT_ONLY,
+            homepage: Some(
+                "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude",
+            ),
+            notes: Some("Claude via GCP Vertex; region-specific base URL"),
+        },
+    );
+    m.insert(
+        "azure-openai",
+        ProviderMetadata {
+            display_name: "Azure OpenAI",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://learn.microsoft.com/azure/ai-services/openai"),
+            notes: Some("Override base_url with your Azure resource"),
+        },
+    );
+    m.insert(
+        "xai",
+        ProviderMetadata {
+            display_name: "xAI Grok",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://docs.x.ai"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "qwen",
+        ProviderMetadata {
+            display_name: "Qwen / 通义",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://help.aliyun.com/zh/dashscope"),
+            notes: Some("Alibaba DashScope compatible endpoint"),
+        },
+    );
+    m.insert(
+        "baichuan",
+        ProviderMetadata {
+            display_name: "Baichuan / 百川",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://platform.baichuan-ai.com"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "hunyuan",
+        ProviderMetadata {
+            display_name: "Hunyuan / 腾讯混元",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://cloud.tencent.com/document/product/1729"),
+            notes: None,
+        },
+    );
+    m.insert(
+        "spark",
+        ProviderMetadata {
+            display_name: "Spark / 讯飞星火",
+            modalities: CHAT_ONLY,
+            homepage: Some("https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html"),
+            notes: Some("V3.5+ OpenAI-compatible endpoint"),
+        },
+    );
+
+    m
+});
+
+/// Look up rich metadata for a preset by name (case-insensitive).
+///
+/// Returns `None` if the preset has no metadata entry — callers can still
+/// treat it as a chat-only provider for routing purposes.
+pub fn provider_metadata(name: &str) -> Option<&'static ProviderMetadata> {
+    PRESET_METADATA.get(name.to_lowercase().as_str())
+}
+
+/// All preset names (sorted) that serve the requested modality.
+///
+/// Presets without an explicit metadata entry are treated as `Chat`-only,
+/// matching the historical default — this keeps backward compatibility
+/// while letting new multimodal entries opt in via [`PRESET_METADATA`].
+pub fn presets_by_modality(modality: Modality) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = PRESETS
+        .keys()
+        .copied()
+        .filter(|name| match PRESET_METADATA.get(*name) {
+            Some(meta) => meta.supports(modality),
+            // Default assumption for entries without metadata: chat-only.
+            None => modality == Modality::Chat,
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
 
 /// Get a preset by name (case-insensitive)
 pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
@@ -428,6 +915,40 @@ mod tests {
         assert!(PRESETS.contains_key("openrouter"));
         assert!(PRESETS.contains_key("lepton"));
         assert!(PRESETS.contains_key("hyperbolic"));
+
+        // Phase B (openclaw parity)
+        assert!(PRESETS.contains_key("cerebras"));
+        assert!(PRESETS.contains_key("stepfun"));
+        assert!(PRESETS.contains_key("huggingface"));
+        assert!(PRESETS.contains_key("vertex-anthropic"));
+        assert!(PRESETS.contains_key("azure-openai"));
+        assert!(PRESETS.contains_key("xai"));
+        assert!(PRESETS.contains_key("grok"));
+        assert!(PRESETS.contains_key("qwen"));
+        assert!(PRESETS.contains_key("dashscope"));
+        assert!(PRESETS.contains_key("baichuan"));
+        assert!(PRESETS.contains_key("hunyuan"));
+        assert!(PRESETS.contains_key("spark"));
+    }
+
+    #[test]
+    fn test_phase_b_aliases_share_target() {
+        // xai / grok point to the same endpoint
+        let xai = get_preset("xai").unwrap();
+        let grok = get_preset("grok").unwrap();
+        assert_eq!(xai.base_url, grok.base_url);
+
+        // qwen / dashscope point to the same endpoint
+        let qwen = get_preset("qwen").unwrap();
+        let dashscope = get_preset("dashscope").unwrap();
+        assert_eq!(qwen.base_url, dashscope.base_url);
+    }
+
+    #[test]
+    fn test_vertex_anthropic_uses_anthropic_protocol() {
+        let p = get_preset("vertex-anthropic").unwrap();
+        assert_eq!(p.protocol, "anthropic");
+        assert!(p.base_url.contains("aiplatform.googleapis.com"));
     }
 
     #[test]
@@ -596,6 +1117,38 @@ mod tests {
     fn test_get_merged_preset_not_found() {
         let overrides = crate::config::presets_override::PresetsOverride::default();
         assert!(get_merged_preset("nonexistent-provider", &overrides).is_none());
+    }
+
+    #[test]
+    fn test_provider_metadata_lookup() {
+        let meta = provider_metadata("DeepSeek").expect("deepseek metadata present");
+        assert_eq!(meta.display_name, "DeepSeek");
+        assert!(meta.supports(Modality::Chat));
+        assert!(!meta.supports(Modality::Image));
+        // Missing entries return None.
+        assert!(provider_metadata("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_presets_by_modality_chat_includes_all() {
+        // Every shipped preset is chat-capable today.
+        let chat = presets_by_modality(Modality::Chat);
+        assert_eq!(chat.len(), PRESETS.len());
+        assert!(chat.contains(&"openai"));
+        assert!(chat.contains(&"claude"));
+        assert!(chat.contains(&"gemini"));
+        // Should be sorted.
+        let mut sorted = chat.clone();
+        sorted.sort_unstable();
+        assert_eq!(chat, sorted);
+    }
+
+    #[test]
+    fn test_presets_by_modality_image_currently_empty() {
+        // No chat preset declares Image yet — generation lives in the
+        // separate generation layer (see Phase A in generation/presets).
+        assert!(presets_by_modality(Modality::Image).is_empty());
+        assert!(presets_by_modality(Modality::Video).is_empty());
     }
 
     #[test]

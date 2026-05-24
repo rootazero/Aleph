@@ -34,6 +34,7 @@
 //! ```
 
 pub mod elevenlabs;
+pub mod fal;
 mod factory;
 pub mod google_imagen;
 pub mod google_veo;
@@ -49,6 +50,7 @@ pub mod url_normalize;
 mod tests;
 
 pub use elevenlabs::ElevenLabsProvider;
+pub use fal::{FalProvider, FalProviderBuilder};
 pub use factory::create_provider;
 pub use google_imagen::GoogleImagenProvider;
 pub use google_veo::GoogleVeoProvider;

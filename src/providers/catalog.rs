@@ -1,0 +1,259 @@
+//! Unified provider catalog.
+//!
+//! Aleph keeps chat providers in `src/providers/` and generation providers
+//! in `src/generation/` (the two layers have very different traits and
+//! request types — keeping them separate is intentional). This module
+//! gives the rest of the codebase **one place** to ask "what providers are
+//! available, and what modalities can they serve?" without having to know
+//! which layer hosts which.
+//!
+//! The catalog is purely metadata — it doesn't instantiate providers and
+//! has no I/O. Use it for:
+//!
+//! * Panel / RPC listings (`/providers/catalog`).
+//! * Modality-aware routing ("pick any video provider").
+//! * "What can this Aleph install do?" introspection.
+
+use crate::config::types::generation::presets as gen_presets;
+use crate::providers::metadata::{Modality, ProviderMetadata};
+use crate::providers::presets as chat_presets;
+
+/// Which side of the provider house an entry lives on.
+///
+/// Stays as a coarse enum on purpose — finer routing (e.g. "is this a
+/// chat-completion or chat-stream") belongs at the protocol-adapter layer,
+/// not at the catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogKind {
+    /// LLM chat / text generation (`src/providers/`).
+    Chat,
+    /// Image / video / audio generation (`src/generation/`).
+    Generation,
+}
+
+/// One row in the unified catalog.
+#[derive(Debug, Clone)]
+pub struct CatalogEntry {
+    /// Preset name (the key used to look it up).
+    pub name: &'static str,
+    /// Which subsystem hosts this preset.
+    pub kind: CatalogKind,
+    /// Optional rich metadata. `None` means "no entry registered" —
+    /// chat presets default to `Modality::Chat` in that case.
+    pub metadata: Option<&'static ProviderMetadata>,
+}
+
+impl CatalogEntry {
+    /// True if this preset can serve the requested modality.
+    pub fn supports(&self, modality: Modality) -> bool {
+        match self.metadata {
+            Some(meta) => meta.supports(modality),
+            // No metadata recorded: a chat-side entry defaults to Chat
+            // (historical behaviour). Generation-side requires explicit
+            // metadata, so the absence means "no" — matches
+            // `generation_presets_by_modality` semantics.
+            None => self.kind == CatalogKind::Chat && modality == Modality::Chat,
+        }
+    }
+}
+
+/// All presets across both subsystems, sorted by (kind, name).
+///
+/// Chat entries come first, then generation entries; within each group
+/// names are sorted alphabetically for deterministic UI ordering.
+pub fn all_presets() -> Vec<CatalogEntry> {
+    let mut chat: Vec<CatalogEntry> = chat_presets::PRESETS
+        .keys()
+        .map(|name| CatalogEntry {
+            name,
+            kind: CatalogKind::Chat,
+            metadata: chat_presets::provider_metadata(name),
+        })
+        .collect();
+    chat.sort_unstable_by_key(|e| e.name);
+
+    let mut gen: Vec<CatalogEntry> = gen_presets::PRESETS
+        .keys()
+        .map(|name| CatalogEntry {
+            name,
+            kind: CatalogKind::Generation,
+            metadata: gen_presets::generation_metadata(name),
+        })
+        .collect();
+    gen.sort_unstable_by_key(|e| e.name);
+
+    chat.extend(gen);
+    chat
+}
+
+/// All presets across both subsystems that can serve a given modality.
+///
+/// Equivalent to `all_presets().into_iter().filter(|e| e.supports(m))` but
+/// implemented directly so callers don't have to materialise the full
+/// catalog first.
+pub fn presets_for_modality(modality: Modality) -> Vec<CatalogEntry> {
+    let mut out = Vec::new();
+
+    // Chat side — uses the chat default-to-Chat convention.
+    let mut chat: Vec<CatalogEntry> = chat_presets::presets_by_modality(modality)
+        .into_iter()
+        .map(|name| CatalogEntry {
+            name,
+            kind: CatalogKind::Chat,
+            metadata: chat_presets::provider_metadata(name),
+        })
+        .collect();
+    chat.sort_unstable_by_key(|e| e.name);
+    out.append(&mut chat);
+
+    // Generation side — explicit metadata only.
+    let mut gen: Vec<CatalogEntry> = gen_presets::generation_presets_by_modality(modality)
+        .into_iter()
+        .map(|name| CatalogEntry {
+            name,
+            kind: CatalogKind::Generation,
+            metadata: gen_presets::generation_metadata(name),
+        })
+        .collect();
+    gen.sort_unstable_by_key(|e| e.name);
+    out.append(&mut gen);
+
+    out
+}
+
+/// Look up a single entry by name across both subsystems.
+///
+/// Resolution order: chat first (lowercased), then generation (exact match,
+/// matching the underlying generation registry).
+pub fn lookup(name: &str) -> Option<CatalogEntry> {
+    let lower = name.to_lowercase();
+    if chat_presets::PRESETS.contains_key(lower.as_str()) {
+        return Some(CatalogEntry {
+            // We use the lowercased name as the canonical form for chat
+            // entries, matching the chat get_preset convention.
+            name: chat_presets::PRESETS
+                .keys()
+                .find(|k| **k == lower.as_str())
+                .copied()
+                .unwrap_or(""),
+            kind: CatalogKind::Chat,
+            metadata: chat_presets::provider_metadata(&lower),
+        });
+    }
+    if gen_presets::PRESETS.contains_key(name) {
+        return Some(CatalogEntry {
+            name: gen_presets::PRESETS
+                .keys()
+                .find(|k| **k == name)
+                .copied()
+                .unwrap_or(""),
+            kind: CatalogKind::Generation,
+            metadata: gen_presets::generation_metadata(name),
+        });
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_presets_contains_both_sides() {
+        let entries = all_presets();
+        // Chat side
+        assert!(entries
+            .iter()
+            .any(|e| e.name == "openai" && e.kind == CatalogKind::Chat));
+        // Phase B chat additions
+        assert!(entries
+            .iter()
+            .any(|e| e.name == "qwen" && e.kind == CatalogKind::Chat));
+        // Generation side
+        assert!(entries
+            .iter()
+            .any(|e| e.name == "openai-dalle" && e.kind == CatalogKind::Generation));
+        // Phase C Fal family
+        assert!(entries
+            .iter()
+            .any(|e| e.name == "fal-kling-video" && e.kind == CatalogKind::Generation));
+    }
+
+    #[test]
+    fn presets_for_modality_video_only_returns_generation_video_presets() {
+        let videos = presets_for_modality(Modality::Video);
+        // Pure video presets we shipped in Phase C
+        for needed in [
+            "fal-kling-video",
+            "fal-luma",
+            "fal-runway",
+            "fal-pika",
+            "fal-hailuo",
+            "fal-jimeng",
+            "google-veo",
+        ] {
+            assert!(
+                videos.iter().any(|e| e.name == needed),
+                "modality Video should include {needed}, got {:?}",
+                videos.iter().map(|e| e.name).collect::<Vec<_>>()
+            );
+        }
+        // No chat presets advertise video
+        assert!(videos.iter().all(|e| e.kind == CatalogKind::Generation));
+    }
+
+    #[test]
+    fn presets_for_modality_chat_is_chat_only() {
+        let chats = presets_for_modality(Modality::Chat);
+        assert!(!chats.is_empty());
+        assert!(chats.iter().all(|e| e.kind == CatalogKind::Chat));
+    }
+
+    #[test]
+    fn presets_for_modality_music_includes_fal_musicgen() {
+        let music = presets_for_modality(Modality::Music);
+        assert!(music.iter().any(|e| e.name == "fal-musicgen"));
+        // replicate is multimodality (image+video+music)
+        assert!(music.iter().any(|e| e.name == "replicate"));
+    }
+
+    #[test]
+    fn lookup_resolves_chat_case_insensitive() {
+        let e = lookup("DeepSeek").unwrap();
+        assert_eq!(e.kind, CatalogKind::Chat);
+        assert_eq!(e.name, "deepseek");
+    }
+
+    #[test]
+    fn lookup_resolves_generation_exact() {
+        let e = lookup("fal-luma").unwrap();
+        assert_eq!(e.kind, CatalogKind::Generation);
+        assert_eq!(e.name, "fal-luma");
+        let meta = e.metadata.unwrap();
+        assert!(meta.supports(Modality::Video));
+    }
+
+    #[test]
+    fn lookup_returns_none_for_unknown() {
+        assert!(lookup("not-a-real-provider").is_none());
+    }
+
+    #[test]
+    fn catalog_entry_supports_uses_metadata_when_present() {
+        let e = lookup("fal-musicgen").unwrap();
+        assert!(e.supports(Modality::Music));
+        assert!(!e.supports(Modality::Video));
+    }
+
+    #[test]
+    fn catalog_entry_supports_default_chat_for_chat_without_metadata() {
+        // Synthesise an entry to test the no-metadata branch.
+        let e = CatalogEntry {
+            name: "synthetic",
+            kind: CatalogKind::Chat,
+            metadata: None,
+        };
+        assert!(e.supports(Modality::Chat));
+        assert!(!e.supports(Modality::Image));
+    }
+}
