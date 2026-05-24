@@ -64,6 +64,11 @@ pub type SharedCronService = Arc<tokio::sync::Mutex<CronService>>;
 /// Provides a simple async API for gateway handlers and CLI.
 pub struct CronService {
     state: Arc<ServiceState<SystemClock>>,
+    /// Optional event-bus handle. When set, every successful write
+    /// (`add_job`, `update_job`, `delete_job`, toggle, run) publishes a
+    /// [`crate::gateway::events::GatewayEventFrame::CronJobChanged`] frame so
+    /// the panel can drop polling. Wired at startup via [`with_event_bus`].
+    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 impl CronService {
@@ -83,7 +88,38 @@ impl CronService {
         let store = Arc::new(tokio::sync::Mutex::new(store));
         let state = Arc::new(ServiceState::new(store, clock, config));
 
-        Ok(Self { state })
+        Ok(Self {
+            state,
+            event_bus: None,
+        })
+    }
+
+    /// Attach an event bus so subsequent mutations emit `CronJobChanged`.
+    ///
+    /// Builder-style setter — services are constructed once at startup and the
+    /// bus is wired in immediately after; callers that don't want push (tests,
+    /// CLI tooling) can simply skip this.
+    pub fn with_event_bus(
+        mut self,
+        bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
+    ) -> Self {
+        self.event_bus = Some(bus);
+        self
+    }
+
+    /// Internal helper — publishes a `CronJobChanged` frame if the event bus
+    /// is wired. Errors are logged at debug level since failures here are
+    /// not user-facing.
+    fn emit_change(&self, job_id: &str, change: crate::gateway::events::ChangeKind) {
+        if let Some(bus) = &self.event_bus {
+            let frame = crate::gateway::events::GatewayEventFrame::CronJobChanged {
+                job_id: job_id.to_string(),
+                change,
+            };
+            if let Err(e) = bus.publish_frame(&frame) {
+                tracing::debug!(error = %e, "cron: failed to publish CronJobChanged frame");
+            }
+        }
     }
 
     // ── Read operations ─────────────────────────────────────────────
@@ -104,9 +140,13 @@ impl CronService {
 
     /// Add a new job. Returns the job ID.
     pub async fn add_job(&self, job: CronJob) -> Result<String, String> {
-        let mut store = self.state.store.lock().await;
-        let id = service::ops::add_job(&mut store, job, self.state.clock.as_ref());
-        store.persist()?;
+        let id = {
+            let mut store = self.state.store.lock().await;
+            let id = service::ops::add_job(&mut store, job, self.state.clock.as_ref());
+            store.persist()?;
+            id
+        };
+        self.emit_change(&id, crate::gateway::events::ChangeKind::Created);
         Ok(id)
     }
 
@@ -116,74 +156,93 @@ impl CronService {
         id: &str,
         updates: service::ops::CronJobUpdates,
     ) -> Result<(), String> {
-        let mut store = self.state.store.lock().await;
-        service::ops::update_job(&mut store, id, updates, self.state.clock.as_ref())?;
-        store.persist()?;
+        {
+            let mut store = self.state.store.lock().await;
+            service::ops::update_job(&mut store, id, updates, self.state.clock.as_ref())?;
+            store.persist()?;
+        }
+        self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(())
     }
 
     /// Delete a job by ID.
     pub async fn delete_job(&self, id: &str) -> Result<(), String> {
-        let mut store = self.state.store.lock().await;
-        service::ops::delete_job(&mut store, id)?;
-        store.persist()?;
+        {
+            let mut store = self.state.store.lock().await;
+            service::ops::delete_job(&mut store, id)?;
+            store.persist()?;
+        }
+        self.emit_change(id, crate::gateway::events::ChangeKind::Deleted);
         Ok(())
     }
 
     /// Enable a job by ID.
     pub async fn enable_job(&self, id: &str) -> Result<(), String> {
-        let mut store = self.state.store.lock().await;
-        let job = store
-            .get_job_mut(id)
-            .ok_or_else(|| format!("job not found: {id}"))?;
-        if !job.enabled {
-            job.enabled = true;
-            job.updated_at = self.state.clock.now_ms();
-            service::ops::recompute_next_run_full(job, self.state.clock.as_ref());
+        {
+            let mut store = self.state.store.lock().await;
+            let job = store
+                .get_job_mut(id)
+                .ok_or_else(|| format!("job not found: {id}"))?;
+            if !job.enabled {
+                job.enabled = true;
+                job.updated_at = self.state.clock.now_ms();
+                service::ops::recompute_next_run_full(job, self.state.clock.as_ref());
+            }
+            store.persist()?;
         }
-        store.persist()?;
+        self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(())
     }
 
     /// Disable a job by ID.
     pub async fn disable_job(&self, id: &str) -> Result<(), String> {
-        let mut store = self.state.store.lock().await;
-        let job = store
-            .get_job_mut(id)
-            .ok_or_else(|| format!("job not found: {id}"))?;
-        if job.enabled {
-            job.enabled = false;
-            job.state.next_run_at_ms = None;
-            job.updated_at = self.state.clock.now_ms();
+        {
+            let mut store = self.state.store.lock().await;
+            let job = store
+                .get_job_mut(id)
+                .ok_or_else(|| format!("job not found: {id}"))?;
+            if job.enabled {
+                job.enabled = false;
+                job.state.next_run_at_ms = None;
+                job.updated_at = self.state.clock.now_ms();
+            }
+            store.persist()?;
         }
-        store.persist()?;
+        self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(())
     }
 
     /// Toggle a job's enabled state. Returns the new enabled state.
     pub async fn toggle_job(&self, id: &str) -> Result<bool, String> {
-        let mut store = self.state.store.lock().await;
-        let result = service::ops::toggle_job(&mut store, id, self.state.clock.as_ref())?;
-        store.persist()?;
+        let result = {
+            let mut store = self.state.store.lock().await;
+            let result = service::ops::toggle_job(&mut store, id, self.state.clock.as_ref())?;
+            store.persist()?;
+            result
+        };
+        self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(result)
     }
 
     /// Trigger a job to run immediately by setting its next_run_at_ms to now.
     /// The timer loop will pick it up on the next tick.
     pub async fn run_job(&self, id: &str) -> Result<(), String> {
-        let mut store = self.state.store.lock().await;
-        let job = store
-            .get_job_mut(id)
-            .ok_or_else(|| format!("job not found: {id}"))?;
-        if !job.enabled {
-            return Err(format!("job '{}' is disabled, enable it first", id));
+        {
+            let mut store = self.state.store.lock().await;
+            let job = store
+                .get_job_mut(id)
+                .ok_or_else(|| format!("job not found: {id}"))?;
+            if !job.enabled {
+                return Err(format!("job '{}' is disabled, enable it first", id));
+            }
+            if job.state.running_at_ms.is_some() {
+                return Err(format!("job '{}' is already running", id));
+            }
+            let now = self.state.clock.now_ms();
+            job.state.next_run_at_ms = Some(now);
+            store.persist()?;
         }
-        if job.state.running_at_ms.is_some() {
-            return Err(format!("job '{}' is already running", id));
-        }
-        let now = self.state.clock.now_ms();
-        job.state.next_run_at_ms = Some(now);
-        store.persist()?;
+        self.emit_change(id, crate::gateway::events::ChangeKind::StateChanged);
         Ok(())
     }
 

@@ -162,6 +162,34 @@ pub enum GatewayEventFrame {
     /// respawned). Payload-free on purpose: panels re-fetch via
     /// `acp.sessions.list` so the truth source stays single.
     AcpSessionsChanged,
+    /// Emitted whenever a cron job is mutated server-side (created / updated
+    /// / deleted / enabled / disabled / forced-run / state-changed by a
+    /// scheduler tick). The panel subscribes to `cron.job.changed` so it can
+    /// drop polling. Payload is intentionally minimal — clients fetch the
+    /// full job via `cron.get` if they need fresh data.
+    CronJobChanged {
+        job_id: String,
+        change: ChangeKind,
+    },
+    /// Heartbeat-task analogue of `CronJobChanged`. Topic: `heartbeat.task.changed`.
+    HeartbeatTaskChanged {
+        task_id: String,
+        change: ChangeKind,
+    },
+}
+
+/// Tagging value for the panel so it can pick the right local action
+/// (re-fetch list vs drop row) without re-issuing a list query.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeKind {
+    Created,
+    Updated,
+    Deleted,
+    /// Runtime-state-only change (e.g. `last_run_at_ms`, `consecutive_errors`).
+    /// Cheaper than `Updated` so clients can skip re-rendering the whole form
+    /// while still refreshing the timeline indicators.
+    StateChanged,
 }
 
 impl From<StreamEvent> for GatewayEventFrame {
@@ -346,6 +374,8 @@ impl GatewayEventFrame {
             GatewayEventFrame::ApprovalExpired { .. } => "approval.expired",
             GatewayEventFrame::SessionLifecycleChanged { .. } => "session.lifecycle.changed",
             GatewayEventFrame::AcpSessionsChanged => "acp.sessions.changed",
+            GatewayEventFrame::CronJobChanged { .. } => "cron.job.changed",
+            GatewayEventFrame::HeartbeatTaskChanged { .. } => "heartbeat.task.changed",
         }
         .to_string()
     }

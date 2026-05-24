@@ -304,19 +304,42 @@ pub fn CronView() -> impl IntoView {
     let saving = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
 
-    // Load jobs on mount
-    spawn_local(async move {
-        match CronApi::list(&state).await {
-            Ok(list) => {
-                jobs.set(list);
-                loading.set(false);
+    // Closure that re-loads the job list. Reused by initial mount, by the
+    // `cron.job.changed` push handler (drops the old 5s polling pattern), and
+    // by manual refresh actions further down.
+    let refresh_jobs = move || {
+        spawn_local(async move {
+            match CronApi::list(&state).await {
+                Ok(list) => {
+                    jobs.set(list);
+                    loading.set(false);
+                }
+                Err(e) => {
+                    error.set(Some(format!("Failed to load jobs: {}", e)));
+                    loading.set(false);
+                }
             }
-            Err(e) => {
-                error.set(Some(format!("Failed to load jobs: {}", e)));
-                loading.set(false);
-            }
+        });
+    };
+
+    // Initial load on mount.
+    refresh_jobs();
+
+    // Live push: subscribe to `cron.job.changed` and re-fetch whenever a
+    // CRUD or scheduler-tick mutation lands. Server-side emit lives in
+    // `CronService` (see [[tasks-openclaw-parity]] spec D2).
+    Effect::new(move |_| {
+        let dash = state;
+        spawn_local(async move {
+            let _ = dash.subscribe_topic("cron.job.changed").await;
+        });
+    });
+    let sub_id = state.subscribe_events(move |evt| {
+        if evt.topic == "cron.job.changed" {
+            refresh_jobs();
         }
     });
+    on_cleanup(move || state.unsubscribe_events(sub_id));
 
     view! {
         <div class="flex flex-col h-full">
@@ -341,6 +364,48 @@ pub fn CronView() -> impl IntoView {
 // JobList — Left Pane
 // ============================================================================
 
+/// A preset cron-job template for the Quick Create drawer. Each entry maps
+/// to a [`CreateCronJob`] payload via `to_create_cron_job`. The drawer
+/// stays panel-local — there is no backend list of templates, so adding /
+/// removing presets here does not need a server change.
+#[derive(Clone)]
+struct QuickCreatePreset {
+    label: &'static str,
+    description: &'static str,
+    schedule_kind: serde_json::Value,
+    sample_prompt: &'static str,
+}
+
+fn cron_quick_create_presets() -> Vec<QuickCreatePreset> {
+    vec![
+        QuickCreatePreset {
+            label: "Daily 9 AM digest",
+            description: "Runs every day at 09:00 local time",
+            // Six-field cron: sec min hour dom mon dow
+            schedule_kind: serde_json::json!({"kind": "cron", "expr": "0 0 9 * * *"}),
+            sample_prompt: "Summarize my emails, calendar, and tasks for today.",
+        },
+        QuickCreatePreset {
+            label: "Hourly health check",
+            description: "Pings on the hour and reports anomalies",
+            schedule_kind: serde_json::json!({"kind": "every", "every_ms": 3_600_000_i64}),
+            sample_prompt: "Check system health and notify on anything unusual.",
+        },
+        QuickCreatePreset {
+            label: "Weekly Monday review",
+            description: "Mondays at 10:00",
+            schedule_kind: serde_json::json!({"kind": "cron", "expr": "0 0 10 * * MON"}),
+            sample_prompt: "Prepare a weekly review of last week's accomplishments and this week's plan.",
+        },
+        QuickCreatePreset {
+            label: "Every 5 minutes monitor",
+            description: "Tight-loop monitoring (use sparingly)",
+            schedule_kind: serde_json::json!({"kind": "every", "every_ms": 300_000_i64}),
+            sample_prompt: "Run a lightweight check and alert me only on changes.",
+        },
+    ]
+}
+
 #[component]
 fn JobList(
     jobs: RwSignal<Vec<CronJobInfo>>,
@@ -348,17 +413,69 @@ fn JobList(
     loading: RwSignal<bool>,
 ) -> impl IntoView {
     let i18n = use_i18n();
+    let state = expect_context::<DashboardState>();
+    let quick_open = RwSignal::new(false);
+    let presets = cron_quick_create_presets();
 
     view! {
         <div class="w-80 border-r border-border flex flex-col">
-            // Add button
-            <div class="p-4 border-b border-border">
+            // Add button + Quick Create toggle
+            <div class="p-4 border-b border-border space-y-2">
                 <button
                     on:click=move |_| selected.set(Some(usize::MAX))
                     class="w-full px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
                 >
                     {t!(i18n, cron.new_job_btn)}
                 </button>
+                <button
+                    on:click=move |_| quick_open.update(|v| *v = !*v)
+                    class="w-full px-4 py-2 bg-surface-sunken hover:bg-surface-raised text-text-primary border border-border rounded-lg transition-colors text-sm"
+                >
+                    {move || if quick_open.get() { "Hide Quick Create ▲" } else { "Quick Create ▼" }}
+                </button>
+                {move || {
+                    if !quick_open.get() {
+                        view! { <div></div> }.into_any()
+                    } else {
+                        let cards = presets.clone();
+                        view! {
+                            <div class="space-y-1 pt-2 border-t border-border">
+                                {cards.into_iter().map(|preset| {
+                                    let label = preset.label;
+                                    let desc = preset.description;
+                                    let schedule_kind = preset.schedule_kind.clone();
+                                    let prompt = preset.sample_prompt;
+                                    view! {
+                                        <button
+                                            on:click=move |_| {
+                                                let payload = CreateCronJob {
+                                                    name: label.to_string(),
+                                                    schedule: String::new(),
+                                                    schedule_kind: Some(schedule_kind.clone()),
+                                                    agent_id: "main".to_string(),
+                                                    prompt: prompt.to_string(),
+                                                    enabled: true,
+                                                    timezone: None,
+                                                    tags: vec!["quick-create".to_string()],
+                                                    session_target: Some("isolated".to_string()),
+                                                    failure_alert: None,
+                                                };
+                                                spawn_local(async move {
+                                                    let _ = CronApi::create(&state, payload).await;
+                                                });
+                                                quick_open.set(false);
+                                            }
+                                            class="w-full p-2 text-left bg-surface-sunken hover:bg-surface-raised border border-border rounded-lg transition-colors"
+                                        >
+                                            <div class="text-xs font-medium text-text-primary">{label}</div>
+                                            <div class="text-xs text-text-tertiary">{desc}</div>
+                                        </button>
+                                    }
+                                }).collect::<Vec<_>>()}
+                            </div>
+                        }.into_any()
+                    }
+                }}
             </div>
 
             // Jobs list
@@ -1268,8 +1385,36 @@ fn RunHistory(runs: RwSignal<Vec<JobRunInfo>>) -> impl IntoView {
 
     view! {
         <div class="border border-border rounded-lg">
-            <div class="px-4 py-3 border-b border-border">
+            <div class="px-4 py-3 border-b border-border flex items-center justify-between gap-3">
                 <h3 class="text-sm font-semibold text-text-primary">{t!(i18n, cron.history_title)}</h3>
+                // Sparkline of the last 12 run outcomes (newest on the right).
+                // Pure CSS divs — no chart library (R3 core-lightweight).
+                {move || {
+                    let run_list = runs.get();
+                    if run_list.is_empty() {
+                        view! { <span></span> }.into_any()
+                    } else {
+                        let take = 12usize;
+                        // RunHistory is sorted newest-first by the backend;
+                        // reverse a windowed copy so the newest sits on the right.
+                        let mut window: Vec<_> = run_list.iter().take(take).cloned().collect();
+                        window.reverse();
+                        view! {
+                            <div class="flex items-center gap-0.5"
+                                 title="Recent runs — newest on right (green=ok, red=failed, yellow=timeout, gray=other)">
+                                {window.into_iter().map(|run| {
+                                    let cls = match run.status.as_str() {
+                                        "success" => "w-1.5 h-4 rounded-sm bg-success",
+                                        "failed"  => "w-1.5 h-4 rounded-sm bg-danger",
+                                        "timeout" => "w-1.5 h-4 rounded-sm bg-warning",
+                                        _         => "w-1.5 h-4 rounded-sm bg-text-tertiary opacity-40",
+                                    };
+                                    view! { <div class=cls></div> }
+                                }).collect::<Vec<_>>()}
+                            </div>
+                        }.into_any()
+                    }
+                }}
             </div>
 
             {move || {

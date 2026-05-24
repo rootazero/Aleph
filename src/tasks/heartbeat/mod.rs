@@ -31,6 +31,10 @@ pub type SharedHeartbeatService = Arc<Mutex<HeartbeatService>>;
 pub struct HeartbeatService {
     state: Arc<HeartbeatServiceState>,
     wake_queue: Arc<wake::WakeQueue>,
+    /// Optional event-bus handle, mirrored from [[CronService]]. Wired via
+    /// [`with_event_bus`] at startup so each successful mutation publishes
+    /// `HeartbeatTaskChanged` for the panel to drop polling.
+    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 impl HeartbeatService {
@@ -43,6 +47,28 @@ impl HeartbeatService {
         Self {
             state,
             wake_queue: Arc::new(wake::WakeQueue::new()),
+            event_bus: None,
+        }
+    }
+
+    /// Builder: attach an event bus for `HeartbeatTaskChanged` push.
+    pub fn with_event_bus(
+        mut self,
+        bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
+    ) -> Self {
+        self.event_bus = Some(bus);
+        self
+    }
+
+    fn emit_change(&self, task_id: &str, change: crate::gateway::events::ChangeKind) {
+        if let Some(bus) = &self.event_bus {
+            let frame = crate::gateway::events::GatewayEventFrame::HeartbeatTaskChanged {
+                task_id: task_id.to_string(),
+                change,
+            };
+            if let Err(e) = bus.publish_frame(&frame) {
+                tracing::debug!(error = %e, "heartbeat: failed to publish HeartbeatTaskChanged frame");
+            }
         }
     }
 
@@ -70,9 +96,13 @@ impl HeartbeatService {
 
     /// Add a new task. Returns the task ID.
     pub async fn add_task<C: Clock>(&self, task: HeartbeatTask, clock: &C) -> String {
-        let mut store = self.state.store.lock().await;
-        let id = ops::add_task(&mut store, task, clock);
-        let _ = store.persist();
+        let id = {
+            let mut store = self.state.store.lock().await;
+            let id = ops::add_task(&mut store, task, clock);
+            let _ = store.persist();
+            id
+        };
+        self.emit_change(&id, crate::gateway::events::ChangeKind::Created);
         id
     }
 
@@ -83,25 +113,35 @@ impl HeartbeatService {
         updates: ops::HeartbeatTaskUpdates,
         clock: &C,
     ) -> Result<(), String> {
-        let mut store = self.state.store.lock().await;
-        ops::update_task(&mut store, id, updates, clock)?;
-        let _ = store.persist();
+        {
+            let mut store = self.state.store.lock().await;
+            ops::update_task(&mut store, id, updates, clock)?;
+            let _ = store.persist();
+        }
+        self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(())
     }
 
     /// Delete a task by ID.
     pub async fn delete_task(&self, id: &str) -> Result<(), String> {
-        let mut store = self.state.store.lock().await;
-        ops::delete_task(&mut store, id)?;
-        let _ = store.persist();
+        {
+            let mut store = self.state.store.lock().await;
+            ops::delete_task(&mut store, id)?;
+            let _ = store.persist();
+        }
+        self.emit_change(id, crate::gateway::events::ChangeKind::Deleted);
         Ok(())
     }
 
     /// Toggle a task's enabled state. Returns the new enabled state.
     pub async fn toggle_task<C: Clock>(&self, id: &str, clock: &C) -> Result<bool, String> {
-        let mut store = self.state.store.lock().await;
-        let enabled = ops::toggle_task(&mut store, id, clock)?;
-        let _ = store.persist();
+        let enabled = {
+            let mut store = self.state.store.lock().await;
+            let enabled = ops::toggle_task(&mut store, id, clock)?;
+            let _ = store.persist();
+            enabled
+        };
+        self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         Ok(enabled)
     }
 

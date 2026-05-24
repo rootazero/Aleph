@@ -161,19 +161,38 @@ fn HeartbeatView() -> impl IntoView {
     let saving = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
 
-    // Load tasks on mount
-    spawn_local(async move {
-        match HeartbeatApi::list(&state).await {
-            Ok(list) => {
-                tasks.set(list);
-                loading.set(false);
+    let refresh_tasks = move || {
+        spawn_local(async move {
+            match HeartbeatApi::list(&state).await {
+                Ok(list) => {
+                    tasks.set(list);
+                    loading.set(false);
+                }
+                Err(e) => {
+                    error.set(Some(format!("Failed to load tasks: {}", e)));
+                    loading.set(false);
+                }
             }
-            Err(e) => {
-                error.set(Some(format!("Failed to load tasks: {}", e)));
-                loading.set(false);
-            }
+        });
+    };
+
+    // Initial load on mount.
+    refresh_tasks();
+
+    // Live push: subscribe to `heartbeat.task.changed`. Mirrors the cron-view
+    // wiring — server-side emit lives in `HeartbeatService::emit_change`.
+    Effect::new(move |_| {
+        let dash = state;
+        spawn_local(async move {
+            let _ = dash.subscribe_topic("heartbeat.task.changed").await;
+        });
+    });
+    let sub_id = state.subscribe_events(move |evt| {
+        if evt.topic == "heartbeat.task.changed" {
+            refresh_tasks();
         }
     });
+    on_cleanup(move || state.unsubscribe_events(sub_id));
 
     view! {
         <div class="flex flex-col h-full">

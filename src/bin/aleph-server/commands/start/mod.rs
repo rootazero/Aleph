@@ -938,6 +938,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         if cron_config.enabled {
             match CronService::new(cron_config) {
                 Ok(svc) => {
+                    // Attach the event bus so cron CRUD pushes `cron.job.changed`
+                    // frames to subscribers (panel drops 5s polling).
+                    let svc = svc.with_event_bus(event_bus.clone());
                     let shared: SharedCronService = Arc::new(tokio::sync::Mutex::new(svc));
                     register_cron_handlers(&mut server, &shared, args.daemon);
                     Some(shared)
@@ -973,7 +976,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     let hb_db_path = dir.join("heartbeat.db");
                     match HeartbeatStore::open(&hb_db_path) {
                         Ok(store) => {
-                            let svc = HeartbeatService::new(store, hb_config);
+                            // Mirror cron: wire the event bus for
+                            // `heartbeat.task.changed` push.
+                            let svc = HeartbeatService::new(store, hb_config)
+                                .with_event_bus(event_bus.clone());
                             let shared: SharedHeartbeatService =
                                 Arc::new(tokio::sync::Mutex::new(svc));
                             register_heartbeat_handlers(&mut server, &shared, args.daemon);
