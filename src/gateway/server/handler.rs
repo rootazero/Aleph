@@ -30,7 +30,8 @@ use crate::gateway::lane::{ChannelClass, LaneManager};
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
 use crate::gateway::protocol::{
-    JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, INTERNAL_ERROR, PARSE_ERROR, RATE_LIMITED,
+    JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
+    PARSE_ERROR, RATE_LIMITED,
 };
 use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
 use crate::gateway::state_version::StateVersionTracker;
@@ -72,6 +73,10 @@ struct ConnectionContext {
     /// Close the connection if no inbound frame arrives within this many
     /// seconds. See `GatewayConfig`.
     idle_timeout_secs: u64,
+    /// When true, every mutating RPC (Execute / Mutate / System lane)
+    /// MUST carry an `idempotency_key` or it is rejected before lane
+    /// dispatch with [`IDEMPOTENCY_KEY_REQUIRED`].
+    require_idempotency_key: bool,
 }
 
 /// axum handler: upgrade HTTP connection to WebSocket at `/ws`
@@ -123,6 +128,7 @@ pub(super) async fn ws_upgrade_handler(
             channel_class,
             ping_interval_secs: state.ping_interval_secs,
             idle_timeout_secs: state.idle_timeout_secs,
+            require_idempotency_key: state.require_idempotency_key,
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -218,8 +224,13 @@ async fn handle_connection(
                                     && !is_authenticated
                                     && !allow_unauth_wizard
                                 {
-                                    // First message must be "connect"
-                                    if is_first && req.method != "connect" {
+                                    // Allow `connect.challenge` pre-auth too — clients need
+                                    // to fetch a nonce before they can sign a `connect`.
+                                    let is_connect_family =
+                                        req.method == "connect" || req.method == "connect.challenge";
+
+                                    // First message must be "connect" (or "connect.challenge")
+                                    if is_first && !is_connect_family {
                                         warn!(
                                             "Connection {} rejected: first request must be 'connect' (got '{}')",
                                             conn_id, req.method
@@ -236,7 +247,7 @@ async fn handle_connection(
                                     }
 
                                     // Non-connect requests require authentication
-                                    if !is_first && req.method != "connect" {
+                                    if !is_first && !is_connect_family {
                                         warn!(
                                             "Connection {} rejected: not authenticated (method: '{}')",
                                             conn_id, req.method
@@ -416,6 +427,36 @@ async fn handle_connection(
                                             .map(String::from);
 
                                         let lane = crate::gateway::lane::Lane::for_method(&req.method);
+
+                                        // Hard-require idempotency_key when the operator opted in
+                                        // (require_idempotency_key=true). Read-only Query-lane RPCs
+                                        // are exempt — they can never double-execute mutations.
+                                        if ctx.require_idempotency_key
+                                            && lane.needs_idempotency()
+                                            && idempotency_key.is_none()
+                                        {
+                                            warn!(
+                                                method = %req.method,
+                                                lane = %lane,
+                                                "Rejecting mutating RPC without idempotency_key (require_idempotency_key=true)"
+                                            );
+                                            let resp = JsonRpcResponse::error_with_data(
+                                                req.id.clone(),
+                                                IDEMPOTENCY_KEY_REQUIRED,
+                                                "idempotency_key required for mutating RPCs",
+                                                serde_json::json!({
+                                                    "method": req.method,
+                                                    "lane": lane.to_string(),
+                                                    "hint": "include a stable per-attempt idempotency_key (UUID v4) in params",
+                                                }),
+                                            );
+                                            let resp_str = serde_json::to_string(&resp).unwrap_or_default();
+                                            if let Err(e) = write.send(WsMessage::Text(resp_str.into())).await {
+                                                error!("Failed to send idempotency-required response to {}: {}", conn_id, e);
+                                                break;
+                                            }
+                                            continue;
+                                        }
 
                                         // Helper closure: standard lane dispatch (no idempotency)
                                         let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass| async move {
@@ -658,7 +699,14 @@ async fn handle_connection(
                                     .unwrap_or(false)
                             };
 
-                            scope_allowed && ctx.subscription_manager.should_receive(&conn_id, topic).await
+                            // Extract payload data for field-level filter predicates.
+                            // TopicEvent shape stores it at .data; JSON-RPC notifications
+                            // store it at .params (then nested .data for our wrapper).
+                            let event_data = event_obj
+                                .get("data")
+                                .or_else(|| event_obj.get("params").and_then(|p| p.get("data")));
+
+                            scope_allowed && ctx.subscription_manager.should_receive(&conn_id, topic, event_data).await
                         } else {
                             // Can't parse event, forward by default
                             true

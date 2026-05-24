@@ -38,6 +38,12 @@ pub const TIMEOUT: i32 = TIMEOUT_ERROR;
 /// JSON-RPC reserves -32000..-32099 for implementation-defined server errors;
 /// -32099 sits at the bottom to avoid collision with future aleph-protocol codes.
 pub const SERVICE_UNAVAILABLE: i32 = -32099;
+/// The server is configured with `require_idempotency_key = true` and the
+/// caller submitted a mutating RPC (Execute / Mutate / System lane) without
+/// an `idempotency_key` in its params. Caller should retry with a UUID v4
+/// (or any stable per-attempt key) and the request will be deduplicated on
+/// re-send. Read-only Query-lane calls are never rejected this way.
+pub const IDEMPOTENCY_KEY_REQUIRED: i32 = -32030;
 
 // ============================================================================
 // JsonRpcRequest with backward-compatible API

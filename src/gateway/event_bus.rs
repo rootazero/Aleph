@@ -171,45 +171,147 @@ pub fn topic_matches(topic: &str, pattern: &str) -> bool {
     topic_idx == topic_parts.len() && pattern_idx == pattern_parts.len()
 }
 
+/// A single equality predicate against a field inside the event's `data`
+/// payload. `field` is a dot-separated path resolved one segment at a time,
+/// so `"scope"`, `"device.role"`, or `"meta.tags.0"` all work.
+///
+/// `equals` is matched with `==` against the resolved [`serde_json::Value`].
+/// Strings, numbers, booleans, and JSON null all work; nested objects compare
+/// structurally (rarely useful — prefer narrowing the path).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FieldPredicate {
+    /// Dot-separated path inside the event's `data` object.
+    pub field: String,
+    /// Required value at that path for the event to be delivered.
+    pub equals: Value,
+}
+
+/// A subscription entry: a topic pattern plus an optional list of
+/// field-equality predicates. When `where_clause` is empty the subscription
+/// is topic-only (the pre-T3 behaviour). When non-empty, the event is
+/// delivered only if every predicate resolves true against the event's
+/// `data` field — useful for splitting a noisy fan-out topic like
+/// `tools.changed` into per-`scope` channels without server-side knowledge
+/// of subscriber intent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TopicSubscription {
+    /// Glob-style topic pattern (see [`topic_matches`]).
+    pub pattern: String,
+    #[serde(default, rename = "where", skip_serializing_if = "Vec::is_empty")]
+    pub where_clause: Vec<FieldPredicate>,
+}
+
+impl TopicSubscription {
+    /// Build a topic-only subscription (no field predicates) — the same
+    /// behaviour as the original `Vec<String>` patterns.
+    pub fn pattern_only(pattern: impl Into<String>) -> Self {
+        Self {
+            pattern: pattern.into(),
+            where_clause: Vec::new(),
+        }
+    }
+}
+
+fn resolve_field<'a>(data: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut cur = data;
+    for seg in path.split('.') {
+        cur = match cur {
+            Value::Object(map) => map.get(seg)?,
+            Value::Array(items) => {
+                let idx: usize = seg.parse().ok()?;
+                items.get(idx)?
+            }
+            _ => return None,
+        };
+    }
+    Some(cur)
+}
+
+fn where_clause_matches(predicates: &[FieldPredicate], data: Option<&Value>) -> bool {
+    if predicates.is_empty() {
+        return true;
+    }
+    let Some(data) = data else {
+        return false; // predicates requested but no payload data → no match
+    };
+    predicates
+        .iter()
+        .all(|p| resolve_field(data, &p.field) == Some(&p.equals))
+}
+
 /// A subscription filter for topic-based events
 #[derive(Debug, Clone)]
 pub struct TopicFilter {
-    patterns: Vec<String>,
+    subscriptions: Vec<TopicSubscription>,
 }
 
 impl TopicFilter {
     /// Create a filter that matches all events
     pub fn all() -> Self {
         Self {
-            patterns: vec!["*".to_string()],
+            subscriptions: vec![TopicSubscription::pattern_only("*")],
         }
     }
 
-    /// Create a filter with specific patterns
+    /// Create a filter with specific patterns (no field predicates).
     pub fn with_patterns(patterns: Vec<String>) -> Self {
-        Self { patterns }
+        Self {
+            subscriptions: patterns
+                .into_iter()
+                .map(TopicSubscription::pattern_only)
+                .collect(),
+        }
     }
 
-    /// Check if a topic matches any pattern in this filter
-    pub fn matches(&self, topic: &str) -> bool {
-        self.patterns.iter().any(|p| topic_matches(topic, p))
+    /// Create a filter with full subscription entries (patterns + optional
+    /// `where_clause` predicates).
+    pub fn with_subscriptions(subscriptions: Vec<TopicSubscription>) -> Self {
+        Self { subscriptions }
     }
 
-    /// Add a pattern to the filter
+    /// Check if a topic + payload satisfies any subscription in this filter.
+    /// Pass `None` for `data` when no payload context is available; entries
+    /// with field predicates will then be skipped (predicates can never match
+    /// against missing data).
+    pub fn matches(&self, topic: &str, data: Option<&Value>) -> bool {
+        self.subscriptions.iter().any(|sub| {
+            topic_matches(topic, &sub.pattern) && where_clause_matches(&sub.where_clause, data)
+        })
+    }
+
+    /// Add a pattern-only subscription (no field predicates) to the filter.
     pub fn add_pattern(&mut self, pattern: impl Into<String>) {
-        self.patterns.push(pattern.into());
+        self.subscriptions
+            .push(TopicSubscription::pattern_only(pattern));
     }
 
-    /// Remove a pattern from the filter
+    /// Add a full subscription entry (pattern + optional predicates).
+    pub fn add_subscription(&mut self, subscription: TopicSubscription) {
+        self.subscriptions.push(subscription);
+    }
+
+    /// Remove every subscription whose pattern equals `pattern`. Returns true
+    /// if at least one entry was removed.
     pub fn remove_pattern(&mut self, pattern: &str) -> bool {
-        let initial_len = self.patterns.len();
-        self.patterns.retain(|p| p != pattern);
-        self.patterns.len() < initial_len
+        let initial_len = self.subscriptions.len();
+        self.subscriptions.retain(|s| s.pattern != pattern);
+        self.subscriptions.len() < initial_len
     }
 
-    /// Get all patterns
-    pub fn patterns(&self) -> &[String] {
-        &self.patterns
+    /// Get all patterns currently subscribed to (sans `where_clause`
+    /// metadata) — sufficient for the `events.list` response shape.
+    pub fn patterns(&self) -> Vec<String> {
+        self.subscriptions
+            .iter()
+            .map(|s| s.pattern.clone())
+            .collect()
+    }
+
+    /// Get the full subscription entries, including any `where_clause`
+    /// predicates. Use this when callers need to round-trip the richer
+    /// shape.
+    pub fn subscriptions(&self) -> &[TopicSubscription] {
+        &self.subscriptions
     }
 }
 
@@ -464,17 +566,62 @@ mod tests {
         let filter =
             TopicFilter::with_patterns(vec!["agent.run.*".to_string(), "session.*".to_string()]);
 
-        assert!(filter.matches("agent.run.started"));
-        assert!(filter.matches("agent.run.completed"));
-        assert!(filter.matches("session.created"));
-        assert!(!filter.matches("config.updated"));
+        assert!(filter.matches("agent.run.started", None));
+        assert!(filter.matches("agent.run.completed", None));
+        assert!(filter.matches("session.created", None));
+        assert!(!filter.matches("config.updated", None));
+    }
+
+    #[test]
+    fn test_field_filter_matches_when_predicate_satisfied() {
+        let filter = TopicFilter::with_subscriptions(vec![TopicSubscription {
+            pattern: "tools.changed".to_string(),
+            where_clause: vec![FieldPredicate {
+                field: "scope".to_string(),
+                equals: Value::String("extension".to_string()),
+            }],
+        }]);
+
+        let extension_data = serde_json::json!({"scope": "extension", "detail": {}});
+        let mcp_data = serde_json::json!({"scope": "mcp", "detail": {}});
+
+        assert!(filter.matches("tools.changed", Some(&extension_data)));
+        assert!(!filter.matches("tools.changed", Some(&mcp_data)));
+        // Predicate present but no data → must not match (can't verify).
+        assert!(!filter.matches("tools.changed", None));
+        // Topic mismatch wins even when data could satisfy the where clause.
+        assert!(!filter.matches("session.created", Some(&extension_data)));
+    }
+
+    #[test]
+    fn test_field_filter_dot_path_traverses_nested_objects() {
+        let filter = TopicFilter::with_subscriptions(vec![TopicSubscription {
+            pattern: "presence.changed".to_string(),
+            where_clause: vec![FieldPredicate {
+                field: "device.role".to_string(),
+                equals: Value::String("operator".to_string()),
+            }],
+        }]);
+
+        let operator = serde_json::json!({"device": {"role": "operator"}});
+        let viewer = serde_json::json!({"device": {"role": "viewer"}});
+        assert!(filter.matches("presence.changed", Some(&operator)));
+        assert!(!filter.matches("presence.changed", Some(&viewer)));
+    }
+
+    #[test]
+    fn test_topic_only_subscription_ignores_data() {
+        let filter = TopicFilter::with_patterns(vec!["agent.run.*".to_string()]);
+        let anything = serde_json::json!({"whatever": 1});
+        assert!(filter.matches("agent.run.started", Some(&anything)));
+        assert!(filter.matches("agent.run.started", None));
     }
 
     #[test]
     fn test_topic_filter_all() {
         let filter = TopicFilter::all();
-        assert!(filter.matches("anything"));
-        assert!(filter.matches("any.nested.topic"));
+        assert!(filter.matches("anything", None));
+        assert!(filter.matches("any.nested.topic", None));
     }
 
     #[test]

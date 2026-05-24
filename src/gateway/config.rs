@@ -121,6 +121,22 @@ pub struct GatewayServerConfig {
     /// Default 90s.
     #[serde(default = "default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
+    /// When true, mutating RPCs (Execute / Mutate / System lanes) MUST
+    /// carry an `idempotency_key` in their params or the gateway rejects
+    /// them with `IDEMPOTENCY_KEY_REQUIRED` (-32030) before lane dispatch.
+    /// Read-only Query-lane calls are exempt. Default `false` so existing
+    /// clients keep working; ops can flip this on to harden against
+    /// double-send bugs (e.g. retried mutations after a network blip).
+    #[serde(default)]
+    pub require_idempotency_key: bool,
+    /// When true, token-bearing `connect` calls MUST carry a signed
+    /// `challenge: {nonce, signature}` payload obtained from
+    /// `connect.challenge`. Guest invitations are exempt. Default
+    /// `false`. Recommended `true` for LAN / Tailnet bind modes where
+    /// the same token may be observed on the wire by a witness who can
+    /// later replay it.
+    #[serde(default)]
+    pub require_challenge: bool,
 }
 
 fn default_ping_interval_secs() -> u64 {
@@ -143,6 +159,8 @@ impl Default for GatewayServerConfig {
             lane: LaneConfig::default(),
             ping_interval_secs: default_ping_interval_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),
+            require_idempotency_key: false,
+            require_challenge: false,
         }
     }
 }
@@ -570,6 +588,33 @@ headless = true
         assert_eq!(config.bindings["cli:*"], "work");
         assert!(config.channels.get("telegram").is_some());
         assert!(config.sandbox.enabled);
+    }
+
+    #[test]
+    fn test_require_idempotency_key_and_challenge_default_false_and_parse() {
+        // Defaults stay false for existing TOML files (additive knobs).
+        let defaults = GatewayServerConfig::default();
+        assert!(!defaults.require_idempotency_key);
+        assert!(!defaults.require_challenge);
+
+        // Both knobs round-trip through TOML when opted in.
+        let toml = r#"
+[gateway]
+require_idempotency_key = true
+require_challenge = true
+"#;
+        let parsed = GatewayConfig::from_toml(toml).expect("parse opt-in flags");
+        assert!(parsed.gateway.require_idempotency_key);
+        assert!(parsed.gateway.require_challenge);
+
+        // Older TOML files (missing the keys) keep loading.
+        let legacy_toml = r#"
+[gateway]
+host = "0.0.0.0"
+"#;
+        let legacy = GatewayConfig::from_toml(legacy_toml).expect("legacy still loads");
+        assert!(!legacy.gateway.require_idempotency_key);
+        assert!(!legacy.gateway.require_challenge);
     }
 
     #[test]

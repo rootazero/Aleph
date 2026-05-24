@@ -38,8 +38,66 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
             device_name: None,
             device_type: None,
             device_id: None,
+            challenge: None,
         },
     };
+
+    // Resolve the bearer the client will sign (token > shared_token).
+    // Guest invitations have no per-device bearer and are exempt from
+    // challenge-response — the invitation_token is one-shot and time-windowed
+    // by the InvitationManager already, so replay is bounded.
+    let bearer_for_challenge: Option<&str> = params
+        .token
+        .as_deref()
+        .or(params.shared_token.as_deref());
+
+    // Enforcement: when ops sets require_challenge=true, any bearer-bound
+    // connect (shared_token / token) MUST carry a signed challenge or we
+    // reject before touching SecurityStore. Guest invitations and the
+    // pure-pairing case (no bearer) are exempt.
+    if ctx.require_challenge && bearer_for_challenge.is_some() && params.challenge.is_none() {
+        return JsonRpcResponse::error_with_data(
+            request.id,
+            AUTH_FAILED,
+            "challenge_required",
+            json!({
+                "hint": "fetch a nonce via `connect.challenge`, sign it with HMAC-SHA256(bearer, nonce + timestamp + device_id), and resend connect with `challenge: {nonce, signature}`",
+            }),
+        );
+    }
+
+    // Verification: when the client opts in (challenge field present),
+    // we ALWAYS verify, even when require_challenge=false. This lets
+    // clients opt in unilaterally on hostile networks without waiting
+    // for ops to flip the global knob.
+    if let Some(chal) = &params.challenge {
+        let Some(bearer) = bearer_for_challenge else {
+            return JsonRpcResponse::error(
+                request.id,
+                AUTH_FAILED,
+                "challenge supplied but no bearer (token / shared_token) accompanies it",
+            );
+        };
+        let Some(device_id) = params.device_id.as_deref() else {
+            return JsonRpcResponse::error(
+                request.id,
+                AUTH_FAILED,
+                "challenge requires a `device_id` to bind the signature to",
+            );
+        };
+        if let Err(e) =
+            ctx.challenge_manager
+                .verify(&chal.nonce, device_id, &chal.signature, bearer)
+        {
+            return JsonRpcResponse::error_with_data(
+                request.id,
+                AUTH_FAILED,
+                "challenge_verification_failed",
+                json!({ "reason": e.to_string() }),
+            );
+        }
+        debug!(device_id = %device_id, "challenge verified");
+    }
 
     // Check for guest invitation token FIRST
     // Guest invitations should work regardless of auth_mode setting
@@ -120,6 +178,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                             }),
                         state_version: ctx.state_versions.snapshot(),
                         transport: ctx.transport_policy.clone(),
+                        hello: super::build_hello_snapshot(&ctx),
                     }),
                 );
             }
@@ -197,6 +256,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                         ),
                         state_version: ctx.state_versions.snapshot(),
                         transport: ctx.transport_policy.clone(),
+                        hello: super::build_hello_snapshot(&ctx),
                     }),
                 );
             }
@@ -272,6 +332,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     ),
                 state_version: ctx.state_versions.snapshot(),
                 transport: ctx.transport_policy.clone(),
+                hello: super::build_hello_snapshot(&ctx),
             }),
         );
     }
@@ -324,6 +385,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                             ),
                             state_version: ctx.state_versions.snapshot(),
                             transport: ctx.transport_policy.clone(),
+                            hello: super::build_hello_snapshot(&ctx),
                         }),
                     );
                 }
@@ -384,6 +446,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                         ),
                     state_version: ctx.state_versions.snapshot(),
                     transport: ctx.transport_policy.clone(),
+                    hello: super::build_hello_snapshot(&ctx),
                 }),
             );
         }
@@ -530,6 +593,12 @@ mod tests {
             shared_token_mgr,
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
             transport_policy: TransportPolicy::defaults(),
+            instance_id: "test-instance".to_string(),
+            started_at_unix: 1_700_000_000,
+            presence: Arc::new(crate::gateway::presence::PresenceTracker::new()),
+            max_connections: 1000,
+            challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
+            require_challenge: false,
         });
 
         let request = JsonRpcRequest::new(
@@ -544,6 +613,26 @@ mod tests {
         let result = response.result.unwrap();
         assert!(result.get("token").is_some());
         assert!(result.get("device_id").is_some());
+
+        // T1: HelloSnapshot is delivered inline so clients don't need to
+        // fan out to `gateway.identity.get` + `presence.list` + `config.get`
+        // immediately after `connect`.
+        let hello = result
+            .get("hello")
+            .expect("connect response must carry hello snapshot");
+        assert_eq!(hello["server_id"], "test-instance");
+        assert!(
+            hello["capabilities"]
+                .as_array()
+                .map(|c| !c.is_empty())
+                .unwrap_or(false),
+            "hello.capabilities must advertise at least one capability"
+        );
+        assert_eq!(hello["limits"]["max_connections"], 1000);
+        assert!(hello["limits"]["current_connections"].is_u64());
+        assert!(hello["state_version"].is_object());
+        assert!(hello["uptime_ms"].is_u64());
+        assert!(hello["presence"].is_array());
     }
 
     #[tokio::test]
@@ -607,6 +696,12 @@ mod tests {
             auth_mode: AuthMode::Token,
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
             transport_policy: TransportPolicy::defaults(),
+            instance_id: "test-instance".to_string(),
+            started_at_unix: 1_700_000_000,
+            presence: Arc::new(crate::gateway::presence::PresenceTracker::new()),
+            max_connections: 1000,
+            challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
+            require_challenge: false,
         });
 
         let request = JsonRpcRequest::new(
@@ -665,6 +760,12 @@ mod tests {
             shared_token_mgr,
             state_versions,
             transport_policy: TransportPolicy::defaults(),
+            instance_id: "test-instance".to_string(),
+            started_at_unix: 1_700_000_000,
+            presence: Arc::new(crate::gateway::presence::PresenceTracker::new()),
+            max_connections: 1000,
+            challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
+            require_challenge: false,
         });
 
         let request = JsonRpcRequest::new(
@@ -724,6 +825,12 @@ mod tests {
                 ping_interval_secs: 17,
                 idle_timeout_secs: 53,
             },
+            instance_id: "test-instance".to_string(),
+            started_at_unix: 1_700_000_000,
+            presence: Arc::new(crate::gateway::presence::PresenceTracker::new()),
+            max_connections: 1000,
+            challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
+            require_challenge: false,
         });
 
         let request = JsonRpcRequest::new(
@@ -741,5 +848,136 @@ mod tests {
             .expect("connect response must carry transport policy");
         assert_eq!(transport["ping_interval_secs"], 17);
         assert_eq!(transport["idle_timeout_secs"], 53);
+    }
+
+    #[tokio::test]
+    async fn connect_with_require_challenge_rejects_missing_signature() {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id: "test-dev",
+                device_name: "Test",
+                device_type: None,
+                public_key: &[1u8; 32],
+                fingerprint: "fp",
+                role: "operator",
+                scopes: &[],
+            })
+            .unwrap();
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_test_t4.vault",
+        ));
+        let token = shared_token_mgr.generate_token().unwrap();
+        let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
+        let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
+        let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+
+        let ctx = Arc::new(AuthContext {
+            token_manager: Arc::new(TokenManager::new(store.clone())),
+            pairing_manager: Arc::new(PairingManager::new(store.clone())),
+            device_store: Arc::new(DeviceStore::in_memory().unwrap()),
+            security_store: store,
+            shared_token_mgr,
+            invitation_manager,
+            guest_session_manager,
+            event_bus,
+            auth_mode: AuthMode::Token,
+            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
+            transport_policy: TransportPolicy::defaults(),
+            instance_id: "test-srv".to_string(),
+            started_at_unix: 1_700_000_000,
+            presence: Arc::new(crate::gateway::presence::PresenceTracker::new()),
+            max_connections: 1000,
+            challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
+            require_challenge: true,
+        });
+
+        // Missing challenge → rejected, even though the shared_token is valid.
+        let request = JsonRpcRequest::new(
+            "connect",
+            Some(json!({"shared_token": token, "device_name": "Web Panel"})),
+            Some(json!(1)),
+        );
+        let response = handle_connect(request, ctx).await;
+        assert!(
+            response.is_error(),
+            "expected challenge-required rejection, got: {response:?}"
+        );
+        let err = response.error.unwrap();
+        assert_eq!(err.message, "challenge_required");
+    }
+
+    #[tokio::test]
+    async fn connect_with_valid_challenge_succeeds() {
+        use crate::gateway::challenge::compute_signature;
+
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id: "test-dev",
+                device_name: "Test",
+                device_type: None,
+                public_key: &[1u8; 32],
+                fingerprint: "fp",
+                role: "operator",
+                scopes: &[],
+            })
+            .unwrap();
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_test_t4b.vault",
+        ));
+        let token = shared_token_mgr.generate_token().unwrap();
+        let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
+        let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
+        let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let challenge_manager = Arc::new(crate::gateway::challenge::ChallengeManager::new());
+
+        // Client first fetches a nonce.
+        let challenge = challenge_manager.generate();
+        let device_id = "panel-1";
+        // Client signs `nonce + timestamp + device_id` with the shared_token.
+        let signature =
+            compute_signature(&token, &challenge.nonce, challenge.timestamp, device_id);
+
+        let ctx = Arc::new(AuthContext {
+            token_manager: Arc::new(TokenManager::new(store.clone())),
+            pairing_manager: Arc::new(PairingManager::new(store.clone())),
+            device_store: Arc::new(DeviceStore::in_memory().unwrap()),
+            security_store: store,
+            shared_token_mgr,
+            invitation_manager,
+            guest_session_manager,
+            event_bus,
+            auth_mode: AuthMode::Token,
+            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
+            transport_policy: TransportPolicy::defaults(),
+            instance_id: "test-srv".to_string(),
+            started_at_unix: 1_700_000_000,
+            presence: Arc::new(crate::gateway::presence::PresenceTracker::new()),
+            max_connections: 1000,
+            challenge_manager,
+            require_challenge: true,
+        });
+
+        let request = JsonRpcRequest::new(
+            "connect",
+            Some(json!({
+                "shared_token": token,
+                "device_name": "Web Panel",
+                "device_id": device_id,
+                "challenge": {
+                    "nonce": challenge.nonce,
+                    "signature": signature,
+                }
+            })),
+            Some(json!(1)),
+        );
+        let response = handle_connect(request, ctx).await;
+        assert!(
+            response.is_success(),
+            "expected success with valid challenge, got: {response:?}"
+        );
     }
 }

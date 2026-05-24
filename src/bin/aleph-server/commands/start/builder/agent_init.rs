@@ -2197,6 +2197,23 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         }
     }
 
+    // G4b: register gateway.metrics.lanes with the live LaneManager.
+    // Cloning Arc<LaneManager> is cheap; the handler reads available_permits()
+    // off the underlying tokio::Semaphore — racy by design (gauge, not txn).
+    {
+        use alephcore::gateway::handlers::gateway_metrics::handle_gateway_metrics_lanes;
+        let lane_mgr = server.lane_manager.clone();
+        server
+            .handlers_mut()
+            .register("gateway.metrics.lanes", move |req| {
+                let mgr = lane_mgr.clone();
+                async move { handle_gateway_metrics_lanes(req, mgr).await }
+            });
+        if !daemon {
+            println!("  gateway.metrics.lanes: wired");
+        }
+    }
+
     // G2: signal readiness. /ready returns 200 from this point onward;
     // before this, it returns 503 so proxies don't route to a gateway
     // whose handler tree is still being wired.

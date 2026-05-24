@@ -155,6 +155,12 @@ mod tests {
             shared_token_mgr: Arc::new(SharedTokenManager::new(store, "/tmp/aleph_test.vault")),
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
             transport_policy: crate::gateway::handlers::auth::TransportPolicy::defaults(),
+            instance_id: "test-instance".to_string(),
+            started_at_unix: 1_700_000_000,
+            presence: Arc::new(crate::gateway::presence::PresenceTracker::new()),
+            max_connections: 1000,
+            challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
+            require_challenge: false,
         })
     }
 

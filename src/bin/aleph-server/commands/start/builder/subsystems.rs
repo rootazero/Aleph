@@ -44,12 +44,18 @@ pub(in crate::commands::start) struct AuthBundle {
 
 /// Initialize authentication and security subsystems (construction only).
 /// Does NOT register handlers — the orchestrator layer is responsible for that.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) fn initialize_auth(
     port: u16,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     auth_mode: alephcore::gateway::config::AuthMode,
     state_versions: Arc<alephcore::gateway::state_version::StateVersionTracker>,
     transport_policy: alephcore::gateway::handlers::auth::TransportPolicy,
+    instance_id: String,
+    started_at_unix: i64,
+    presence: Arc<alephcore::gateway::presence::PresenceTracker>,
+    max_connections: u32,
+    require_challenge: bool,
     daemon: bool,
 ) -> AuthBundle {
     use alephcore::utils::paths;
@@ -169,6 +175,14 @@ pub(in crate::commands::start) fn initialize_auth(
         shared_token_mgr,
         state_versions,
         transport_policy,
+        instance_id: instance_id.clone(),
+        started_at_unix,
+        presence,
+        max_connections,
+        challenge_manager: Arc::new(alephcore::gateway::challenge::ChallengeManager::with_server_id(
+            instance_id,
+        )),
+        require_challenge,
     });
 
     if !daemon {

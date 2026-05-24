@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Gateway hello snapshot** — `connect` response now carries a `hello`
+  field with server identity, uptime, presence roster, connection limits,
+  capabilities, and active workspace. Lets clients render the panel
+  without follow-up RPCs immediately after authentication.
+- **Gateway `connect.challenge` RPC** — server issues a single-use HMAC
+  nonce; clients echo `{nonce, signature}` on `connect` for replay
+  hardening of token / shared_token auth. Opt-in via
+  `[gateway] require_challenge = true`; recommended for LAN / Tailnet
+  bind modes. Guest invitations exempt.
+- **Idempotency-key enforcement** — opt-in via
+  `[gateway] require_idempotency_key = true`; mutating RPCs (Execute /
+  Mutate / System lanes) without an `idempotency_key` are rejected with
+  the new `IDEMPOTENCY_KEY_REQUIRED` (-32030) error before lane dispatch.
+- **Field-level event subscription filters** — `events.subscribe` accepts
+  the richer `{topic, where: [{field, equals}]}` shape alongside plain
+  pattern strings; dot-paths resolve nested data (`device.role`). Lets a
+  subscriber narrow a noisy fan-out topic like `tools.changed` to its own
+  `scope`.
+- **Gateway `gateway.metrics.lanes` RPC** — live per-lane occupancy gauge
+  (desktop/shared totals + currently-available permits in Query / Execute
+  / Mutate / System order). Panel UIs can detect saturation before it
+  manifests as user-visible timeouts.
+
 ## [26.5.24]
 
 ### Highlight — Aleph is now a native desktop app

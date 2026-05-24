@@ -86,6 +86,14 @@ impl Lane {
             // gateway.identity.get matches the .get suffix; listed
             // defensively in case it's ever renamed.
             "gateway.identity.get" => Some(Lane::Query),
+            // gateway.metrics.lanes is a read-only diagnostics gauge.
+            // The `.lanes` suffix doesn't match the Query heuristic.
+            "gateway.metrics.lanes" => Some(Lane::Query),
+            // connect.challenge issues a nonce — read-only, idempotent.
+            // The `.challenge` suffix doesn't match the Query heuristic;
+            // putting it on Query keeps it out of the Mutate lane that
+            // would otherwise idempotency-guard a side-effect-free call.
+            "connect.challenge" => Some(Lane::Query),
             // skills.delete is package management, not a data delete →
             // System lane. memory.delete / session.delete / session.truncate
             // are data ops that fall through to default Mutate.
@@ -215,10 +223,35 @@ impl std::error::Error for LaneError {}
 /// Semaphore pair for one lane.
 ///
 /// `desktop` is `None` for lanes (Query / System) that aren't split per
-/// channel class.
+/// channel class. `desktop_total` / `shared_total` snapshot the configured
+/// capacity at construction so [`LaneManager::snapshot`] can report a stable
+/// denominator alongside the live `available_permits()` reading from the
+/// `Semaphore`.
 struct LanePool {
     desktop: Option<Arc<Semaphore>>,
     shared: Arc<Semaphore>,
+    desktop_total: Option<usize>,
+    shared_total: usize,
+}
+
+/// Live occupancy of a single lane, suitable for diagnostics (`gateway.metrics.lanes`).
+///
+/// `*_available` is sampled from the underlying [`Semaphore`] at snapshot
+/// time and may race with concurrent acquires/releases — it is a *gauge*,
+/// not a transactional reading.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LaneOccupancy {
+    /// Lane name (matches the [`Lane`] `Display` impl).
+    pub lane: String,
+    /// Total desktop-pool permits, `None` for lanes (Query / System) that
+    /// don't split per channel class.
+    pub desktop_total: Option<usize>,
+    /// Currently free desktop-pool permits.
+    pub desktop_available: Option<usize>,
+    /// Total shared-pool permits.
+    pub shared_total: usize,
+    /// Currently free shared-pool permits.
+    pub shared_available: usize,
 }
 
 /// Lane-based concurrency manager.
@@ -244,6 +277,8 @@ impl LaneManager {
             LanePool {
                 desktop: None,
                 shared: Arc::new(Semaphore::new(config.query_concurrency)),
+                desktop_total: None,
+                shared_total: config.query_concurrency,
             },
         );
         lanes.insert(
@@ -251,6 +286,8 @@ impl LaneManager {
             LanePool {
                 desktop: None,
                 shared: Arc::new(Semaphore::new(config.system_concurrency)),
+                desktop_total: None,
+                shared_total: config.system_concurrency,
             },
         );
 
@@ -260,6 +297,8 @@ impl LaneManager {
             LanePool {
                 desktop: Some(Arc::new(Semaphore::new(config.desktop_execute_concurrency))),
                 shared: Arc::new(Semaphore::new(config.shared_execute_concurrency)),
+                desktop_total: Some(config.desktop_execute_concurrency),
+                shared_total: config.shared_execute_concurrency,
             },
         );
         lanes.insert(
@@ -267,6 +306,8 @@ impl LaneManager {
             LanePool {
                 desktop: Some(Arc::new(Semaphore::new(config.desktop_mutate_concurrency))),
                 shared: Arc::new(Semaphore::new(config.shared_mutate_concurrency)),
+                desktop_total: Some(config.desktop_mutate_concurrency),
+                shared_total: config.shared_mutate_concurrency,
             },
         );
 
@@ -316,6 +357,30 @@ impl LaneManager {
             }
             Err(_elapsed) => Err(LaneError::Congested(lane)),
         }
+    }
+
+    /// Snapshot the live occupancy of every lane in a fixed order
+    /// (Query, Execute, Mutate, System) for diagnostics endpoints.
+    ///
+    /// Each entry's `*_available` field is sampled from the underlying
+    /// [`Semaphore`] and races with concurrent acquires/releases — treat it
+    /// as a gauge, not a transactional reading.
+    pub fn snapshot(&self) -> Vec<LaneOccupancy> {
+        // Fixed iteration order makes the output stable and predictable.
+        // (HashMap iteration would otherwise reshuffle on each call.)
+        [Lane::Query, Lane::Execute, Lane::Mutate, Lane::System]
+            .iter()
+            .filter_map(|lane| {
+                let pool = self.lanes.get(lane)?;
+                Some(LaneOccupancy {
+                    lane: lane.to_string(),
+                    desktop_total: pool.desktop_total,
+                    desktop_available: pool.desktop.as_ref().map(|s| s.available_permits()),
+                    shared_total: pool.shared_total,
+                    shared_available: pool.shared.available_permits(),
+                })
+            })
+            .collect()
     }
 }
 
@@ -392,6 +457,56 @@ mod tests {
                 assert_eq!(lane, Lane::Execute);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn snapshot_reports_per_lane_occupancy_in_fixed_order() {
+        let manager = LaneManager::new(LaneConfig {
+            query_concurrency: 5,
+            system_concurrency: 2,
+            desktop_execute_concurrency: 4,
+            shared_execute_concurrency: 3,
+            desktop_mutate_concurrency: 8,
+            shared_mutate_concurrency: 4,
+            acquire_timeout_secs: 30,
+        });
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 4, "expect one entry per lane");
+        // Fixed iteration order so this isn't HashMap-shuffled.
+        assert_eq!(snap[0].lane, "Query");
+        assert_eq!(snap[1].lane, "Execute");
+        assert_eq!(snap[2].lane, "Mutate");
+        assert_eq!(snap[3].lane, "System");
+
+        // Query / System are single-pool — no desktop split.
+        assert!(snap[0].desktop_total.is_none() && snap[0].desktop_available.is_none());
+        assert!(snap[3].desktop_total.is_none() && snap[3].desktop_available.is_none());
+        assert_eq!(snap[0].shared_total, 5);
+        assert_eq!(snap[0].shared_available, 5);
+
+        // Execute / Mutate split per channel class.
+        assert_eq!(snap[1].desktop_total, Some(4));
+        assert_eq!(snap[1].desktop_available, Some(4));
+        assert_eq!(snap[1].shared_total, 3);
+        assert_eq!(snap[1].shared_available, 3);
+
+        // Holding a Desktop Execute permit drops desktop_available by 1.
+        let _permit = manager
+            .acquire("agent.run", ChannelClass::Desktop)
+            .await
+            .expect("desktop acquire should succeed");
+        let snap2 = manager.snapshot();
+        let exec = snap2.iter().find(|s| s.lane == "Execute").unwrap();
+        assert_eq!(
+            exec.desktop_available,
+            Some(3),
+            "live desktop_available should reflect the held permit"
+        );
+        assert_eq!(
+            exec.shared_available, 3,
+            "shared pool must be untouched when Desktop drew from its own pool"
+        );
     }
 
     #[test]

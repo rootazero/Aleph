@@ -451,6 +451,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         ping_interval_secs: full_config.gateway.ping_interval_secs,
         idle_timeout_secs: full_config.gateway.idle_timeout_secs,
         lane: full_config.gateway.lane.clone(),
+        require_idempotency_key: full_config.gateway.require_idempotency_key,
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 
@@ -687,6 +688,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             ping_interval_secs: full_config.gateway.ping_interval_secs,
             idle_timeout_secs: full_config.gateway.idle_timeout_secs,
         },
+        server.instance_id.clone(),
+        server.started_at_unix,
+        server.presence.clone(),
+        u32::try_from(full_config.gateway.max_connections).unwrap_or(u32::MAX),
+        full_config.gateway.require_challenge,
         args.daemon,
     );
     register_auth_handlers(&mut server, &auth_bundle.auth_ctx);

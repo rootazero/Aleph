@@ -4,12 +4,12 @@
 
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::gateway::event_bus::TopicFilter;
+use crate::gateway::event_bus::{TopicFilter, TopicSubscription};
 use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 
@@ -50,6 +50,22 @@ impl SubscriptionManager {
         }
     }
 
+    /// Add full subscription entries (pattern + optional `where_clause`
+    /// field predicates) to a connection's filter.
+    pub async fn add_subscriptions(
+        &self,
+        conn_id: &str,
+        subscriptions: Vec<TopicSubscription>,
+    ) {
+        let mut subs = self.subscriptions.write().await;
+        let filter = subs
+            .entry(conn_id.to_string())
+            .or_insert_with(|| TopicFilter::with_patterns(vec![]));
+        for sub in subscriptions {
+            filter.add_subscription(sub);
+        }
+    }
+
     /// Remove patterns from a connection's filter
     pub async fn remove_patterns(&self, conn_id: &str, patterns: &[String]) -> usize {
         let mut subs = self.subscriptions.write().await;
@@ -72,10 +88,18 @@ impl SubscriptionManager {
     }
 
     /// Check if a connection should receive an event with the given topic
-    pub async fn should_receive(&self, conn_id: &str, topic: &str) -> bool {
+    /// and optional payload `data`. Field-predicate filters consult `data`
+    /// — pass `None` only when payload context isn't available (subscriptions
+    /// with predicates will then be skipped).
+    pub async fn should_receive(
+        &self,
+        conn_id: &str,
+        topic: &str,
+        data: Option<&Value>,
+    ) -> bool {
         let subs = self.subscriptions.read().await;
         match subs.get(conn_id) {
-            Some(filter) => filter.matches(topic),
+            Some(filter) => filter.matches(topic, data),
             None => true, // No filter means receive all (default behavior)
         }
     }
@@ -83,8 +107,15 @@ impl SubscriptionManager {
     /// Get patterns for a connection
     pub async fn get_patterns(&self, conn_id: &str) -> Vec<String> {
         let subs = self.subscriptions.read().await;
+        subs.get(conn_id).map(|f| f.patterns()).unwrap_or_default()
+    }
+
+    /// Get the full subscription entries (with `where_clause` predicates)
+    /// for a connection.
+    pub async fn get_subscriptions(&self, conn_id: &str) -> Vec<TopicSubscription> {
+        let subs = self.subscriptions.read().await;
         subs.get(conn_id)
-            .map(|f| f.patterns().to_vec())
+            .map(|f| f.subscriptions().to_vec())
             .unwrap_or_default()
     }
 }
@@ -95,11 +126,45 @@ impl Default for SubscriptionManager {
     }
 }
 
+/// A single topic selector in the `events.subscribe` payload. Accepts
+/// either a plain pattern string (back-compat, no field filter) or a
+/// structured object `{topic, where: [{field, equals}]}` for field-level
+/// filtering (T3 follow-up).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum TopicSelector {
+    /// Topic-only subscription: just the pattern string.
+    Pattern(String),
+    /// Pattern + optional `where_clause` field predicates.
+    Filtered {
+        /// Topic glob pattern (see `topic_matches`).
+        topic: String,
+        /// Field-equality predicates. Empty list ≡ topic-only.
+        #[serde(default, rename = "where")]
+        where_clause: Vec<crate::gateway::event_bus::FieldPredicate>,
+    },
+}
+
+impl TopicSelector {
+    fn into_subscription(self) -> TopicSubscription {
+        match self {
+            TopicSelector::Pattern(p) => TopicSubscription::pattern_only(p),
+            TopicSelector::Filtered {
+                topic,
+                where_clause,
+            } => TopicSubscription {
+                pattern: topic,
+                where_clause,
+            },
+        }
+    }
+}
+
 /// Parameters for events.subscribe
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubscribeParams {
-    /// Topic patterns to subscribe to
-    pub topics: Vec<String>,
+    /// Topic patterns or `{topic, where: …}` filter objects to subscribe to.
+    pub topics: Vec<TopicSelector>,
 }
 
 /// Parameters for events.unsubscribe
@@ -120,7 +185,10 @@ pub struct SubscriptionResult {
 
 /// Handle "events.subscribe" request
 ///
-/// Subscribes the connection to specified topic patterns.
+/// Subscribes the connection to specified topic patterns or
+/// `{topic, where: …}` filter objects. Plain strings stay backwards-
+/// compatible with pre-T3 clients; the filtered form lets a subscriber
+/// narrow a noisy topic (e.g. `tools.changed` with `scope=extension`).
 pub async fn handle_subscribe(
     request: JsonRpcRequest,
     conn_id: &str,
@@ -136,7 +204,12 @@ pub async fn handle_subscribe(
     }
 
     let count = params.topics.len();
-    manager.add_patterns(conn_id, params.topics).await;
+    let subs: Vec<TopicSubscription> = params
+        .topics
+        .into_iter()
+        .map(TopicSelector::into_subscription)
+        .collect();
+    manager.add_subscriptions(conn_id, subs).await;
     let subscribed = manager.get_patterns(conn_id).await;
 
     info!(
@@ -220,12 +293,24 @@ mod tests {
             .await;
 
         // Check filtering
-        assert!(manager.should_receive("conn1", "agent.run.started").await);
-        assert!(manager.should_receive("conn1", "session.created").await);
-        assert!(!manager.should_receive("conn1", "config.updated").await);
+        assert!(
+            manager
+                .should_receive("conn1", "agent.run.started", None)
+                .await
+        );
+        assert!(
+            manager
+                .should_receive("conn1", "session.created", None)
+                .await
+        );
+        assert!(
+            !manager
+                .should_receive("conn1", "config.updated", None)
+                .await
+        );
 
         // Unknown connection receives all (default)
-        assert!(manager.should_receive("unknown", "anything").await);
+        assert!(manager.should_receive("unknown", "anything", None).await);
     }
 
     #[tokio::test]
@@ -244,8 +329,72 @@ mod tests {
             .await;
         assert_eq!(removed, 1);
 
-        assert!(!manager.should_receive("conn1", "agent.run").await);
-        assert!(manager.should_receive("conn1", "session.created").await);
+        assert!(!manager.should_receive("conn1", "agent.run", None).await);
+        assert!(
+            manager
+                .should_receive("conn1", "session.created", None)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn test_field_filter_round_trip_via_subscribe_request() {
+        use crate::gateway::event_bus::FieldPredicate;
+        let manager = Arc::new(SubscriptionManager::new());
+
+        let request = JsonRpcRequest::new(
+            "events.subscribe",
+            Some(json!({
+                "topics": [
+                    "agent.run.*",
+                    {"topic": "tools.changed", "where": [
+                        {"field": "scope", "equals": "extension"}
+                    ]}
+                ]
+            })),
+            Some(json!(1)),
+        );
+        let response = handle_subscribe(request, "conn-field", manager.clone()).await;
+        assert!(response.is_success(), "subscribe should accept the mixed-shape payload: {response:?}");
+
+        // Topic-only subscription still works for any payload.
+        assert!(
+            manager
+                .should_receive("conn-field", "agent.run.started", None)
+                .await
+        );
+
+        // Filtered subscription delivers only when the predicate is satisfied.
+        let extension = json!({"scope": "extension"});
+        let mcp = json!({"scope": "mcp"});
+        assert!(
+            manager
+                .should_receive("conn-field", "tools.changed", Some(&extension))
+                .await
+        );
+        assert!(
+            !manager
+                .should_receive("conn-field", "tools.changed", Some(&mcp))
+                .await
+        );
+        // No payload → can't verify predicate → drop.
+        assert!(
+            !manager
+                .should_receive("conn-field", "tools.changed", None)
+                .await
+        );
+
+        // Confirm the get_subscriptions API round-trips the where clause.
+        let subs = manager.get_subscriptions("conn-field").await;
+        let filtered = subs.iter().find(|s| s.pattern == "tools.changed").unwrap();
+        assert_eq!(filtered.where_clause.len(), 1);
+        assert_eq!(
+            filtered.where_clause[0],
+            FieldPredicate {
+                field: "scope".to_string(),
+                equals: json!("extension"),
+            }
+        );
     }
 
     #[tokio::test]

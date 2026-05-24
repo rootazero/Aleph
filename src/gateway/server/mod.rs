@@ -110,6 +110,9 @@ pub struct GatewaySharedState {
     /// Inbound idle threshold before the connection is closed. See
     /// `GatewayConfig::idle_timeout_secs`.
     pub idle_timeout_secs: u64,
+    /// Hard-require an `idempotency_key` on mutating RPCs. See
+    /// `GatewayConfig::require_idempotency_key`.
+    pub require_idempotency_key: bool,
 }
 
 /// Configuration for the Gateway server
@@ -134,6 +137,10 @@ pub struct GatewayConfig {
     /// Lane concurrency / channel-class priority config. Populated by
     /// the binary from the TOML `[gateway.lane]` block (or defaults).
     pub lane: LaneConfig,
+    /// When true, mutating RPCs (Execute / Mutate / System lanes) must
+    /// carry an `idempotency_key` in params or are rejected before lane
+    /// dispatch. See `GatewayServerConfig::require_idempotency_key`.
+    pub require_idempotency_key: bool,
 }
 
 impl Default for GatewayConfig {
@@ -145,6 +152,7 @@ impl Default for GatewayConfig {
             ping_interval_secs: 30,
             idle_timeout_secs: 90,
             lane: LaneConfig::default(),
+            require_idempotency_key: false,
         }
     }
 }
@@ -395,6 +403,7 @@ impl GatewayServer {
             started_at_unix: self.started_at_unix,
             ping_interval_secs: self.config.ping_interval_secs,
             idle_timeout_secs: self.config.idle_timeout_secs,
+            require_idempotency_key: self.config.require_idempotency_key,
         });
 
         let control_plane = create_control_plane_router();

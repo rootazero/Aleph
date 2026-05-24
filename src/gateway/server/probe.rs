@@ -91,6 +91,7 @@ mod tests {
             started_at_unix: chrono::Utc::now().timestamp(),
             ping_interval_secs: 30,
             idle_timeout_secs: 90,
+            require_idempotency_key: false,
         })
     }
 

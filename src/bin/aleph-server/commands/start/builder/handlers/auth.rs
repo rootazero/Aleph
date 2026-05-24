@@ -9,6 +9,12 @@ pub(in crate::commands::start) fn register_auth_handlers(
     register_handler!(server, "connect", auth_handlers::handle_connect, auth_ctx);
     register_handler!(
         server,
+        "connect.challenge",
+        auth_handlers::handle_connect_challenge,
+        auth_ctx
+    );
+    register_handler!(
+        server,
         "pairing.approve",
         auth_handlers::handle_pairing_approve,
         auth_ctx
