@@ -110,6 +110,14 @@ impl SessionService for MockSession {
 struct ScriptedTools {
     log: Mutex<Vec<(String, serde_json::Value)>>,
     outcomes: Mutex<Vec<Result<ToolOutput, ToolError>>>,
+    /// Per-tool delay before resolving, used to verify that the parallel
+    /// fast path actually overlaps execution. Sticky across calls; zero
+    /// (the default) means resolve immediately.
+    exec_delay: std::time::Duration,
+    /// Static "every call I see is concurrent-safe" toggle. Used by the
+    /// `act_parallel` test to opt into the fast path without changing
+    /// global mocks.
+    concurrent_safe: bool,
 }
 
 impl ScriptedTools {
@@ -117,6 +125,20 @@ impl ScriptedTools {
         Arc::new(Self {
             log: Mutex::new(Vec::new()),
             outcomes: Mutex::new(outcomes),
+            exec_delay: std::time::Duration::ZERO,
+            concurrent_safe: false,
+        })
+    }
+
+    fn new_concurrent(
+        outcomes: Vec<Result<ToolOutput, ToolError>>,
+        delay: std::time::Duration,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            log: Mutex::new(Vec::new()),
+            outcomes: Mutex::new(outcomes),
+            exec_delay: delay,
+            concurrent_safe: true,
         })
     }
 
@@ -128,10 +150,15 @@ impl ScriptedTools {
 #[async_trait]
 impl ToolService for ScriptedTools {
     async fn execute(&self, name: &str, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+        // Log the call BEFORE the delay so concurrent execution shows up as
+        // overlapping log entries when multiple calls run in parallel.
         self.log
             .lock()
             .await
             .push((name.to_string(), input.clone()));
+        if !self.exec_delay.is_zero() {
+            tokio::time::sleep(self.exec_delay).await;
+        }
         let mut outcomes = self.outcomes.lock().await;
         if outcomes.is_empty() {
             return Err(ToolError::Other(format!(
@@ -151,6 +178,10 @@ impl ToolService for ScriptedTools {
 
     fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         std::sync::Arc::from([])
+    }
+
+    async fn is_call_concurrent_safe(&self, _name: &str, _input: &serde_json::Value) -> bool {
+        self.concurrent_safe
     }
 }
 
@@ -300,6 +331,7 @@ async fn act_executes_tools_sequentially() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -375,6 +407,7 @@ async fn act_tool_failure_returns_harness_tool_error() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -480,6 +513,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -654,6 +688,7 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -770,6 +805,7 @@ async fn tool_error_trace_carries_retryable_flag() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     harness
@@ -899,6 +935,7 @@ async fn g3_repairs_case_mismatched_tool_name() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let state = harness
@@ -966,6 +1003,7 @@ async fn g3_does_not_repair_when_lowercase_is_also_unknown() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let _ = harness
@@ -1023,6 +1061,7 @@ async fn g1_last_step_injects_max_steps_hint() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let _ = harness
@@ -1080,6 +1119,7 @@ async fn g1_does_not_inject_when_not_last_step() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let _ = harness
@@ -1102,5 +1142,204 @@ async fn g1_does_not_inject_when_not_last_step() {
     assert!(
         !any_user_text.contains("MAXIMUM ITERATIONS REACHED"),
         "hint must NOT appear when iterations remain; got: {any_user_text}",
+    );
+}
+
+// =============================================================================
+// Parallel-dispatch fast path (opencode-parity)
+// =============================================================================
+
+/// When every call in a batch reports concurrent-safe and the harness has
+/// `parallel_tool_concurrency` wired, the Act phase overlaps execution. We
+/// assert this two ways:
+///
+/// 1. Wall-clock: 3 calls × 200ms delay each finish in well under 600ms
+///    (the serial-path lower bound).
+/// 2. Side-effect ordering: ToolCallRequested + ToolResult events still
+///    interleave in input order, matching the serial-path contract.
+#[tokio::test]
+async fn act_parallel_overlaps_concurrent_safe_calls_and_preserves_order() {
+    let tool_calls = vec![
+        NativeToolCall {
+            thought_signature: None,
+            id: "p1".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "a.txt"}),
+        },
+        NativeToolCall {
+            thought_signature: None,
+            id: "p2".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "b.txt"}),
+        },
+        NativeToolCall {
+            thought_signature: None,
+            id: "p3".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "c.txt"}),
+        },
+    ];
+
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let tools = ScriptedTools::new_concurrent(
+        vec![
+            Ok(ok_output(serde_json::json!({"content": "A"}))),
+            Ok(ok_output(serde_json::json!({"content": "B"}))),
+            Ok(ok_output(serde_json::json!({"content": "C"}))),
+        ],
+        std::time::Duration::from_millis(200),
+    );
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: tools.clone(),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::with_tool_calls("calling…", tool_calls.clone()),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: Some(8),
+    };
+    let harness = AgentHarness::new(deps);
+
+    let started = std::time::Instant::now();
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+    let elapsed = started.elapsed();
+    assert_eq!(state, TurnState::Continue);
+
+    // 1. Wall-clock parity assertion. Serial would take ≥600ms; parallel
+    //    should finish in well under that. Allow 500ms slack for slow CI.
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "parallel dispatch should overlap execution: 3×200ms calls took {:?}",
+        elapsed
+    );
+
+    // 2. Side-effect ordering — ToolCallRequested events come out in input
+    //    order, followed by ToolResult events also in input order (per the
+    //    Pass 0 → Pass 1 → Pass 2 contract of act_parallel).
+    let events = session.snapshot().await;
+    let requested_ids: Vec<String> = events
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::ToolCallRequested { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let result_ids: Vec<String> = events
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::ToolResult { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        requested_ids,
+        vec!["p1".to_string(), "p2".to_string(), "p3".to_string()],
+        "ToolCallRequested events must be emitted in input order",
+    );
+    assert_eq!(
+        result_ids,
+        vec!["p1".to_string(), "p2".to_string(), "p3".to_string()],
+        "ToolResult events must be emitted in input order",
+    );
+
+    // The execution log records the actual ToolService::execute order. With
+    // a concurrency cap of 8 and 3 calls, all three should kick off before
+    // any completes (i.e., before the 200ms delay elapses).
+    let log = tools.calls().await;
+    assert_eq!(log.len(), 3, "every call must reach execute()");
+}
+
+/// When even one call in a batch is concurrent-unsafe, the fast path bows
+/// out and the existing serial loop handles the whole batch. Wall-clock is
+/// the cheapest signal: a 2-call batch with 200ms delay each must take
+/// ≥400ms serially.
+#[tokio::test]
+async fn act_falls_back_to_serial_when_any_call_is_unsafe() {
+    let tool_calls = vec![
+        NativeToolCall {
+            thought_signature: None,
+            id: "s1".into(),
+            name: "safe".into(),
+            arguments: serde_json::json!({"k": 1}),
+        },
+        NativeToolCall {
+            thought_signature: None,
+            id: "u1".into(),
+            name: "unsafe".into(),
+            arguments: serde_json::json!({"k": 2}),
+        },
+    ];
+
+    // `ScriptedTools::new` defaults to concurrent_safe = false, so even
+    // though both names look benign, the harness sees the batch as unsafe
+    // and routes through the serial loop.
+    let tools = Arc::new(ScriptedTools {
+        log: Mutex::new(Vec::new()),
+        outcomes: Mutex::new(vec![
+            Ok(ok_output(serde_json::json!({"ok": "s1"}))),
+            Ok(ok_output(serde_json::json!({"ok": "u1"}))),
+        ]),
+        exec_delay: std::time::Duration::from_millis(200),
+        concurrent_safe: false,
+    });
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: tools.clone(),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        prompt_builder: std::sync::Arc::new(crate::harness::prompt::DefaultPromptBuilder),
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: Some(8),
+    };
+    let harness = AgentHarness::new(deps);
+
+    let started = std::time::Instant::now();
+    harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn should succeed");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= std::time::Duration::from_millis(400),
+        "serial fallback should take ≥400ms for 2×200ms calls; took {:?}",
+        elapsed,
     );
 }

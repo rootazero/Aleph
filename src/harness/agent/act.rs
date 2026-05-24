@@ -1,7 +1,36 @@
-//! Act phase — sequential tool-call execution with caching and guardrails.
+//! Act phase — tool-call execution with caching, guardrails, and an
+//! opencode-parity parallel fast path.
+//!
+//! The default loop is serial in input order (every existing test relies on
+//! that). When all of the following hold for a single Act batch, the harness
+//! routes through [`AgentHarness::act_parallel`] instead, dispatching the
+//! actual `tools.execute(...)` futures concurrently via
+//! [`futures::stream::FuturesOrdered`] while keeping every side effect — event
+//! emit, trace, layer-3 budget, timeline push — strictly in input order:
+//!
+//! * [`HarnessDeps::parallel_tool_concurrency`](crate::harness::deps::HarnessDeps)
+//!   is `Some(n)` with `n >= 2`.
+//! * the batch has at least two calls.
+//! * every call returns `true` from
+//!   [`ToolService::is_call_concurrent_safe`](crate::tools::service::ToolService::is_call_concurrent_safe)
+//!   for its concrete arguments.
+//! * no two calls in the batch carry the same canonical `(name, args)` —
+//!   parallel mode skips within-batch dedup, so duplicates fall back to the
+//!   serial path where the memo correctly emits a cached result for the
+//!   second occurrence.
+//! * no guardrail registry is wired — the serial path's three-way Block /
+//!   Sanitize / Pass machinery is intentionally not duplicated here; batches
+//!   with guardrails always run serially.
+//!
+//! Any failing precondition falls through to the existing serial loop with no
+//! observable behavior change.
 
 use std::collections::HashMap;
 use std::time::Instant;
+
+use futures::future::BoxFuture;
+use futures::stream;
+use futures::StreamExt;
 
 /// RAII guard that calls `end_turn` on drop so per-turn budget state is
 /// always released even when `act()` exits early via `?`.
@@ -75,6 +104,21 @@ impl AgentHarness {
             budget: self.deps.turn_budget.as_ref().map(|v| v.as_ref()),
             turn_id: &budget_turn_id,
         };
+
+        // opencode-parity parallel fast path. Falls through to the serial loop
+        // below when any precondition fails (see module docs).
+        if self.can_parallel_dispatch(&tool_calls).await {
+            return self
+                .act_parallel(
+                    session_id,
+                    turn_id,
+                    tool_calls,
+                    callback,
+                    iteration,
+                    &budget_turn_id,
+                )
+                .await;
+        }
 
         for mut call in tool_calls {
             // G3 (opencode-inspired): mechanical tool-name auto-repair. Models
@@ -378,6 +422,319 @@ impl AgentHarness {
             if let Some(ref tracker) = self.stall_tracker {
                 tracker.record_activity().await;
             }
+        }
+
+        Ok(executed_count)
+    }
+}
+
+// =============================================================================
+// Parallel fast path
+// =============================================================================
+
+impl AgentHarness {
+    /// Whether the current batch is eligible for the parallel fast path.
+    ///
+    /// All preconditions are checked in O(n) for batch size n; the
+    /// `is_call_concurrent_safe` query is one trait await per call. Returns
+    /// `false` cheaply when concurrency is disabled, when guardrails are
+    /// wired, or when there are fewer than two calls.
+    async fn can_parallel_dispatch(&self, tool_calls: &[NativeToolCall]) -> bool {
+        let Some(par_n) = self.deps.parallel_tool_concurrency else {
+            return false;
+        };
+        if par_n < 2 || tool_calls.len() < 2 {
+            return false;
+        }
+        // Guardrails (Block / Sanitize / Pass) gate dispatch in the serial
+        // loop. Replicating that surface inside the parallel pipeline would
+        // double the failure modes of the fast path; for now any batch with
+        // guardrails wired falls through to serial.
+        if self.deps.guardrails.is_some() {
+            return false;
+        }
+        // Reject batches with within-batch duplicates so the serial dedup
+        // memo continues to own that semantics. (Duplicates are rare; the
+        // common LLM pattern is N distinct read-only calls.)
+        let mut seen = std::collections::HashSet::new();
+        for call in tool_calls {
+            let key = (
+                call.name.clone(),
+                super::canonical_json_string(&call.arguments),
+            );
+            if !seen.insert(key) {
+                return false;
+            }
+        }
+        // Every call must self-report concurrent-safe for its concrete input.
+        for call in tool_calls {
+            if !self
+                .deps
+                .tools
+                .is_call_concurrent_safe(&call.name, &call.arguments)
+                .await
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Parallel fast path. Pre-emits `ToolCallRequested` events in input
+    /// order, dispatches all executes concurrently via `FuturesOrdered`, and
+    /// then walks the completion results in input order to emit
+    /// `ToolResult` / `ToolError`, record the Layer 3 turn budget, and push
+    /// the timeline entry. Side-effect ordering matches the serial loop.
+    ///
+    /// Per-tool wall-clock budget is wrapped around each individual future
+    /// (same as the serial path). A timeout in this path is bubbled up as
+    /// `HarnessError::StalledTurn` AFTER all already-completed results have
+    /// been emitted in input order — strictly more information than the
+    /// serial path (which exits without emitting later calls' results).
+    #[allow(clippy::too_many_arguments)]
+    async fn act_parallel(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        tool_calls: Vec<NativeToolCall>,
+        callback: &mut dyn HarnessCallback,
+        iteration: usize,
+        budget_turn_id: &crate::tools::turn_budget::TurnId,
+    ) -> Result<usize, HarnessError> {
+        let mut executed_count: usize = 0;
+
+        // PASS 0 — serial: notify callback, emit ToolCallStarted trace,
+        // emit ToolCallRequested SessionEvent. Resolve effective per-tool
+        // wall-clock budget. Capture started Instant for duration metrics.
+        let mut started_at: Vec<Instant> = Vec::with_capacity(tool_calls.len());
+        let mut budgets: Vec<Option<std::time::Duration>> = Vec::with_capacity(tool_calls.len());
+        for call in &tool_calls {
+            callback.on_tool_call(&call.name);
+            started_at.push(Instant::now());
+            self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallStarted {
+                iteration,
+                call: crate::harness::trace::ToolCallStartEvent {
+                    tool_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    input: call.arguments.clone(),
+                },
+            });
+            let requested = SessionEvent::ToolCallRequested {
+                turn_id,
+                call_id: call.id.clone(),
+                name: call.name.clone(),
+                input: call.arguments.clone(),
+                at: now_ms(),
+            };
+            self.deps.session.emit_event(session_id, requested).await?;
+
+            let per_tool_budget = self
+                .deps
+                .tools
+                .describe(&call.name)
+                .await
+                .and_then(|d| d.metadata.max_duration_ms)
+                .map(std::time::Duration::from_millis);
+            budgets.push(resolve_effective_budget(per_tool_budget, self.deps.turn_timeout));
+        }
+
+        // PASS 1 — parallel: dispatch up to `parallelism` execute futures
+        // concurrently via `stream::iter(...).buffered(n)`. `buffered` polls
+        // at most `n` futures at a time AND yields completions in input
+        // order — semantically identical to opencode's
+        // `Effect.forEach({ concurrency: n })`. Per-call timeout is wrapped
+        // INSIDE each future so the timeout is owned by the call, not the
+        // batch.
+        let parallelism = self
+            .deps
+            .parallel_tool_concurrency
+            .unwrap_or(0)
+            .max(2);
+        type ExecOutcome =
+            Result<Result<ToolOutput, crate::tools::service::ToolError>, std::time::Duration>;
+        let mut boxed_futs: Vec<BoxFuture<'static, ExecOutcome>> =
+            Vec::with_capacity(tool_calls.len());
+        for (idx, call) in tool_calls.iter().enumerate() {
+            let tools = self.deps.tools.clone();
+            let name = call.name.clone();
+            let args = call.arguments.clone();
+            let budget = budgets[idx];
+            let started = started_at[idx];
+            boxed_futs.push(Box::pin(async move {
+                let exec_fut = tools.execute(&name, args);
+                match budget {
+                    Some(b) => match tokio::time::timeout(b, exec_fut).await {
+                        Ok(inner) => Ok(inner),
+                        Err(_) => Err(started.elapsed()),
+                    },
+                    None => Ok(exec_fut.await),
+                }
+            }));
+        }
+        let results: Vec<ExecOutcome> = stream::iter(boxed_futs)
+            .buffered(parallelism)
+            .collect()
+            .await;
+
+        // PASS 2 — serial in input order: apply Layer 3 budget, emit
+        // ToolResult/ToolError, trace, push timeline entry. The first
+        // timeout encountered is remembered and bubbled up at the end so
+        // later already-completed results still reach the session log.
+        let mut first_stall: Option<(String, std::time::Duration)> = None;
+        for (idx, exec_result) in results.into_iter().enumerate() {
+            let call = &tool_calls[idx];
+            let started = started_at[idx];
+            match exec_result {
+                Err(elapsed) => {
+                    if first_stall.is_none() {
+                        first_stall = Some((call.name.clone(), elapsed));
+                    }
+                    // No SessionEvent::ToolError emitted — matches serial
+                    // semantics where timeout returns StalledTurn without
+                    // emitting a per-call error event.
+                    if let Some(ref tracker) = self.stall_tracker {
+                        tracker.record_activity().await;
+                    }
+                }
+                Ok(Ok(mut output)) => {
+                    executed_count = executed_count.saturating_add(1);
+
+                    // Layer 3 — per-turn aggregate budget (same logic as
+                    // serial path, just iterated in input order over parallel
+                    // results).
+                    if let Some(budget) = self.deps.turn_budget.as_ref() {
+                        let text = match &output.value {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        let already_persisted = text.starts_with("[Full output persisted: ");
+                        let tokens = crate::context::budget::pressure::estimate_tokens_smart(&text);
+                        let record = crate::tools::turn_budget::TurnResult {
+                            call_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                            tokens_in_context: tokens,
+                            in_context_text: text,
+                            already_persisted,
+                        };
+                        let spills = budget.record(budget_turn_id, record);
+                        if !spills.is_empty() {
+                            if let Some(store) = self.deps.result_store.as_ref() {
+                                for spill in spills {
+                                    if spill.call_id != call.id {
+                                        let _ = store.persist_if_large(
+                                            &spill.call_id,
+                                            &spill.tool_name,
+                                            &spill.original_text,
+                                            0,
+                                        );
+                                        continue;
+                                    }
+                                    if let Some(marker) = store.persist_if_large(
+                                        &spill.call_id,
+                                        &spill.tool_name,
+                                        &spill.original_text,
+                                        0,
+                                    ) {
+                                        output.value = serde_json::Value::String(marker);
+                                        output.metadata.truncated = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let output_value = output.value.clone();
+                    let result_event = SessionEvent::ToolResult {
+                        turn_id,
+                        call_id: call.id.clone(),
+                        output,
+                        at: now_ms(),
+                    };
+                    self.deps
+                        .session
+                        .emit_event(session_id, result_event)
+                        .await?;
+                    let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+                    self.emit(
+                        || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                            iteration,
+                            call: crate::harness::trace::ToolCallEndEvent {
+                                tool_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                input: call.arguments.clone(),
+                                duration_ms: dur_ms,
+                            },
+                            result: crate::tools::runtime::ToolResult::Success {
+                                output: output_value,
+                            },
+                        },
+                    );
+                    self.push_tool_invocation(
+                        call.id.clone(),
+                        call.name.clone(),
+                        dur_ms,
+                        true,
+                        None,
+                    );
+                    if let Some(ref tracker) = self.stall_tracker {
+                        tracker.record_activity().await;
+                    }
+                }
+                Ok(Err(e)) => {
+                    let retryable = e.is_retryable();
+                    let error_msg = e.to_string();
+                    let error_event = SessionEvent::ToolError {
+                        turn_id,
+                        call_id: call.id.clone(),
+                        error: error_msg.clone(),
+                        at: now_ms(),
+                    };
+                    if let Err(emit_err) =
+                        self.deps.session.emit_event(session_id, error_event).await
+                    {
+                        tracing::warn!(
+                            ?session_id,
+                            call_id = %call.id,
+                            ?emit_err,
+                            "failed to persist ToolError event",
+                        );
+                    }
+                    let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+                    let error_for_timeline = error_msg.clone();
+                    self.emit(
+                        || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                            iteration,
+                            call: crate::harness::trace::ToolCallEndEvent {
+                                tool_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                input: call.arguments.clone(),
+                                duration_ms: dur_ms,
+                            },
+                            result: crate::tools::runtime::ToolResult::Error {
+                                error: error_msg,
+                                retryable,
+                            },
+                        },
+                    );
+                    self.push_tool_invocation(
+                        call.id.clone(),
+                        call.name.clone(),
+                        dur_ms,
+                        false,
+                        Some(error_for_timeline),
+                    );
+                    if let Some(ref tracker) = self.stall_tracker {
+                        tracker.record_activity().await;
+                    }
+                }
+            }
+        }
+
+        if let Some((tool_name, elapsed)) = first_stall {
+            return Err(HarnessError::StalledTurn {
+                phase: TurnPhase::Act { tool_name },
+                elapsed,
+            });
         }
 
         Ok(executed_count)

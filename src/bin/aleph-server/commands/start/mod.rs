@@ -2153,6 +2153,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 alephcore::tools::turn_budget::DEFAULT_MAX_TURN_TOKENS,
             ));
             alephcore::tools::turn_budget::set_global_turn_result_budget(budget);
+            // TTL hygiene for crash-orphan spill dirs is owned by
+            // `set_global_tool_result_store` (auto-spawns the periodic
+            // sweeper since main's c1756ce80).
             if !args.daemon {
                 println!(
                     "tool-result-budget: ToolResultStore + TurnResultBudget wired \

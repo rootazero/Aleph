@@ -68,6 +68,14 @@ impl ToolService for McpScopedToolService {
             })
     }
 
+    async fn is_call_concurrent_safe(&self, name: &str, input: &serde_json::Value) -> bool {
+        // Parent (typically AllowlistToolService → ScopedToolService) owns
+        // the authoritative answer for any tool it exposes. Extras-only
+        // entries currently route execute() through the parent too (Stage I
+        // MVP), so deferring is correct here as well.
+        self.parent.is_call_concurrent_safe(name, input).await
+    }
+
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
         // For Stage I MVP, compute merged schema from list snapshot.
         // AllowlistToolService above us gates which tools the LLM actually sees,

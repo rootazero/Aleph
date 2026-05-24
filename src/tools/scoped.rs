@@ -346,22 +346,30 @@ impl ScopedToolService {
     /// `ScopedToolService` is the harness's production `ToolService`, so
     /// without this the per-tool wall-clock budget consulted by `act.rs`
     /// via `describe()` would always be `None` and never fire.
-    fn builtin_metadata(name: &str) -> ToolDefinitionMetadata {
+    ///
+    /// `concurrent_safe` flows through from the inner
+    /// [`crate::tools::runtime::ToolDefinition::concurrent_safe`] so the
+    /// harness can advertise / inspect parallel-safety per tool. The
+    /// authoritative per-call dispatch decision still goes through
+    /// [`ToolService::is_call_concurrent_safe`].
+    fn builtin_metadata(name: &str, concurrent_safe: bool) -> ToolDefinitionMetadata {
         ToolDefinitionMetadata {
             idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
             max_duration_ms: crate::tools::budget::builtin_tool_budget_ms(name),
+            concurrent_safe,
             ..ToolDefinitionMetadata::default()
         }
     }
 
     fn loop_tool_to_definition(tool: &dyn LoopTool) -> ToolDefinition {
         let name = tool.name();
+        let concurrent_safe = tool.is_concurrent_safe(&Value::Null);
         ToolDefinition {
             name: name.to_string(),
             description: tool.description().to_string(),
             input_schema: tool.schema(),
             source: ToolSource::Builtin,
-            metadata: Self::builtin_metadata(name),
+            metadata: Self::builtin_metadata(name, concurrent_safe),
         }
     }
 
@@ -432,7 +440,7 @@ impl ToolService for ScopedToolService {
             .tool_definitions()
             .into_iter()
             .map(|d| {
-                let metadata = Self::builtin_metadata(&d.name);
+                let metadata = Self::builtin_metadata(&d.name, d.concurrent_safe);
                 ToolDefinition {
                     name: d.name,
                     description: d.description,
@@ -531,6 +539,30 @@ impl ToolService for ScopedToolService {
         fut.instrument(span).await
     }
 
+    async fn is_call_concurrent_safe(&self, name: &str, input: &Value) -> bool {
+        // Subagent dispatch spawns nested LLM turns and shares the workspace —
+        // never parallel-safe with anything else in the batch.
+        if let Some(ref st) = self.subagent_tool {
+            if st.name() == name {
+                return false;
+            }
+        }
+        // Allowed-set filter gates this just like execute(); an opaque "not
+        // allowed" tool is conservatively unsafe.
+        if !self.is_allowed(name) {
+            return false;
+        }
+        // Confirmation-gated tools require user approval — they must be
+        // routed through the serial path so the prompt is visible in input
+        // order; never run them in parallel.
+        if self.confirm_tools.contains(name) {
+            return false;
+        }
+        self.inner
+            .is_call_concurrent_safe(name, input)
+            .unwrap_or(false)
+    }
+
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
         use std::sync::atomic::Ordering;
 
@@ -572,7 +604,7 @@ impl ToolService for ScopedToolService {
             .tool_definitions()
             .into_iter()
             .map(|d| {
-                let metadata = Self::builtin_metadata(&d.name);
+                let metadata = Self::builtin_metadata(&d.name, d.concurrent_safe);
                 ToolDefinition {
                     name: d.name,
                     description: d.description,
@@ -1914,5 +1946,101 @@ mod tests {
             .expect("tool present");
         assert_eq!(def.metadata.max_duration_ms, None);
         assert!(!def.metadata.idempotent);
+    }
+
+    // -------------------------------------------------------------------------
+    // is_call_concurrent_safe — opencode-parity dispatch query
+    // -------------------------------------------------------------------------
+
+    /// A LoopTool that always reports false for parallel safety, for tests
+    /// that need to see the harness route around the fast path.
+    struct UnsafeStubTool;
+
+    #[async_trait::async_trait]
+    impl LoopTool for UnsafeStubTool {
+        fn name(&self) -> &str {
+            "unsafe_tool"
+        }
+        fn description(&self) -> &str {
+            "stub that mutates shared state"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        async fn execute(&self, _input: Value) -> LoopToolResult {
+            LoopToolResult::Success {
+                output: json!({"ok": true}),
+            }
+        }
+        fn is_concurrent_safe(&self, _input: &Value) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn is_call_concurrent_safe_defaults_true_for_safe_stub_tool() {
+        // `StubTool` doesn't override `is_concurrent_safe`, so the trait
+        // default (true) flows through the registry → ScopedToolService
+        // chain.
+        let registry = make_registry(&["safe_tool"]);
+        let svc = ScopedToolService::new(registry, BTreeSet::new());
+        assert!(svc.is_call_concurrent_safe("safe_tool", &json!({})).await);
+    }
+
+    #[tokio::test]
+    async fn is_call_concurrent_safe_honors_unsafe_tool_override() {
+        // Hand-rolled unsafe tool — propagates `false` through the same
+        // chain.
+        let mut r = LoopToolRegistry::new();
+        r.register(Box::new(UnsafeStubTool));
+        let registry = Arc::new(r);
+        let svc = ScopedToolService::new(registry, BTreeSet::new());
+        assert!(!svc.is_call_concurrent_safe("unsafe_tool", &json!({})).await);
+    }
+
+    #[tokio::test]
+    async fn is_call_concurrent_safe_returns_false_for_unknown_tool() {
+        // Conservative default — the harness must not parallel-dispatch a
+        // tool it cannot find a definition for.
+        let registry = make_registry(&[]);
+        let svc = ScopedToolService::new(registry, BTreeSet::new());
+        assert!(!svc.is_call_concurrent_safe("nope", &json!({})).await);
+    }
+
+    #[tokio::test]
+    async fn is_call_concurrent_safe_returns_false_for_disallowed_tool() {
+        // Tools outside the allow list are conservatively unsafe — the
+        // harness's parallel fast-path scan should never see them as
+        // candidates.
+        let registry = make_registry(&["safe_tool", "other"]);
+        let mut allowed = BTreeSet::new();
+        allowed.insert("other".to_string());
+        let svc = ScopedToolService::new(registry, allowed);
+        assert!(!svc.is_call_concurrent_safe("safe_tool", &json!({})).await);
+        assert!(svc.is_call_concurrent_safe("other", &json!({})).await);
+    }
+
+    #[tokio::test]
+    async fn list_propagates_concurrent_safe_flag_from_inner_tool() {
+        // The metadata view served to gateway / inspection APIs should
+        // surface the inner LoopTool's static parallel-safety hint.
+        let mut r = LoopToolRegistry::new();
+        r.register(Box::new(StubTool {
+            tool_name: "safe_tool",
+        }));
+        r.register(Box::new(UnsafeStubTool));
+        let registry = Arc::new(r);
+        let svc = ScopedToolService::new(registry, BTreeSet::new());
+        let defs = svc.list().await;
+        let safe = defs
+            .iter()
+            .find(|d| d.name == "safe_tool")
+            .expect("safe_tool listed");
+        let unsafe_def = defs
+            .iter()
+            .find(|d| d.name == "unsafe_tool")
+            .expect("unsafe_tool listed");
+        assert!(safe.metadata.concurrent_safe);
+        assert!(!unsafe_def.metadata.concurrent_safe);
     }
 }

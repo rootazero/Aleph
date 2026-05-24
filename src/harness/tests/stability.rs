@@ -293,6 +293,7 @@ pub(super) fn minimal_deps(
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     }
 }
 

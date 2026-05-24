@@ -74,6 +74,15 @@ pub struct ToolDefinitionMetadata {
     /// currently leave this as `None` and inherit the global fallback.
     #[serde(default)]
     pub max_duration_ms: Option<u64>,
+    /// Static "always safe under parallel dispatch" hint, mirroring the
+    /// inner [`crate::tools::runtime::ToolDefinition::concurrent_safe`].
+    /// Tools that mutate shared state (file_write, bash, code_exec,
+    /// send_*) leave this `false`; pure read-only queries set it `true`.
+    /// The harness uses [`ToolService::is_call_concurrent_safe`] for the
+    /// authoritative per-call answer at dispatch time, since some tools
+    /// (e.g. file_ops) flip based on the operation in their input.
+    #[serde(default)]
+    pub concurrent_safe: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -103,6 +112,23 @@ pub trait ToolService: Send + Sync + 'static {
     /// hide the LLM's tool list on any forgotten override. Test mocks must
     /// also implement, typically returning `Arc::from([])`.
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]>;
+
+    /// Whether the named tool reports itself safe to dispatch in parallel
+    /// with other concurrent-safe tools in the same Act batch, given the
+    /// concrete input the LLM emitted.
+    ///
+    /// Default conservative answer is `false` — only implementations with
+    /// real registry visibility (e.g., [`crate::tools::scoped::ScopedToolService`])
+    /// should override. The harness's parallel-dispatch fast path
+    /// considers a batch parallelizable only when EVERY call in the batch
+    /// returns `true` from this query.
+    async fn is_call_concurrent_safe(
+        &self,
+        _name: &str,
+        _input: &serde_json::Value,
+    ) -> bool {
+        false
+    }
 }
 
 /// Convert a slice of loop-side `ToolDefinition`s into the `tool_metadata`
@@ -189,6 +215,7 @@ mod metadata_tests {
             tags: Vec::new(),
             idempotent: true,
             max_duration_ms: Some(5_000),
+            concurrent_safe: false,
         };
         let serialized = serde_json::to_string(&original).unwrap();
         let parsed: ToolDefinitionMetadata = serde_json::from_str(&serialized).unwrap();
@@ -201,5 +228,9 @@ mod metadata_tests {
             r#"{"hidden_from_llm":false,"requires_approval":false,"tags":[],"idempotent":false}"#;
         let parsed: ToolDefinitionMetadata = serde_json::from_str(legacy_json).unwrap();
         assert_eq!(parsed.max_duration_ms, None);
+        assert!(
+            !parsed.concurrent_safe,
+            "absent concurrent_safe must default to false on legacy JSON",
+        );
     }
 }

@@ -120,6 +120,20 @@ pub struct HarnessDeps {
     /// from `raw_memories`. Defaults to `NoopToolSignalSink` (zero cost)
     /// when no `RawMemoryStore` is wired (tests, simple-engine fixtures).
     pub tool_signal_sink: Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
+    /// Maximum number of concurrent-safe tool calls dispatched in parallel
+    /// inside a single Act batch.
+    ///
+    /// When `Some(n)` and `n >= 2`, the Act phase groups concurrent-safe
+    /// runs in the batch and `join_all`s up to `n` of them at once,
+    /// preserving input-order side effects (event emit, trace, budget,
+    /// timeline). Tools that aren't concurrent-safe — or any batch that
+    /// has even one unsafe call — fall through to the serial loop
+    /// unchanged.
+    ///
+    /// `None` or `Some(0..=1)` disables the fast path (every batch runs
+    /// serially). Recommended: `Some(8)` for production gateway,
+    /// matching opencode's `Effect.forEach({ concurrency: 10 })` default.
+    pub parallel_tool_concurrency: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------

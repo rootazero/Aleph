@@ -124,6 +124,7 @@ async fn session_driver_delegates_to_harness_run() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-delegation");
@@ -197,6 +198,7 @@ async fn session_driver_preserves_cancelled_semantics() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-cancelled");

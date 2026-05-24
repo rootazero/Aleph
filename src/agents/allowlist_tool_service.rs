@@ -67,6 +67,15 @@ impl ToolService for AllowlistToolService {
             .collect();
         std::sync::Arc::from(filtered)
     }
+
+    async fn is_call_concurrent_safe(&self, name: &str, input: &Value) -> bool {
+        // Disallowed tools are conservatively unsafe — they'd be rejected by
+        // execute() anyway, so there's no value in parallel-dispatching them.
+        if !self.agent_def.is_tool_allowed(name) {
+            return false;
+        }
+        self.inner.is_call_concurrent_safe(name, input).await
+    }
 }
 
 #[cfg(test)]

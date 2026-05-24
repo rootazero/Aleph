@@ -358,6 +358,12 @@ impl HarnessRunner for AgentHarnessRunner {
                     crate::memory::tool_signal_sink::NoopToolSignalSink,
                 ) as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
             },
+            // opencode-parity parallel-dispatch fast path. `Some(8)` mirrors
+            // opencode's `Effect.forEach({ concurrency: 10 })` default; the
+            // harness's Act phase only takes the fast path when every call in
+            // the batch is concurrent-safe, so unsafe tools (write/exec/send)
+            // still serialize even when this is enabled.
+            parallel_tool_concurrency: Some(8),
         };
         // Stage 7 (#12): emit init-seam visibility before the harness
         // starts its Think→Act loop. Order mirrors HarnessDeps field

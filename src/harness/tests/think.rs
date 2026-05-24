@@ -261,6 +261,7 @@ async fn think_with_no_tool_use_returns_done() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -318,6 +319,7 @@ async fn think_llm_error_maps_to_harness_llm() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -359,6 +361,7 @@ async fn primary_transient_error_without_fallback_still_propagates() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let err = harness
@@ -445,6 +448,7 @@ async fn callback_fires_on_delta_and_tool_call() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let mut cb = CapturingCallback::default();
@@ -512,6 +516,7 @@ async fn run_returns_cancelled_when_token_is_pre_cancelled() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -582,6 +587,7 @@ async fn think_tool_use_after_act_returns_continue() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 

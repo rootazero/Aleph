@@ -70,6 +70,13 @@ impl ToolHandler for BuiltinHandler {
                 tags: Vec::new(),
                 idempotent,
                 max_duration_ms,
+                // The static-dispatch `AlephTool` trait surface this handler
+                // wraps doesn't expose a concurrent-safety hint. The
+                // LoopTool-based production path (`ScopedToolService`) gets
+                // the real flag from `LoopTool::is_concurrent_safe`; this
+                // handler-path falls back to a conservative `false` and
+                // is therefore never picked up by the parallel fast path.
+                concurrent_safe: false,
             },
         }
     }

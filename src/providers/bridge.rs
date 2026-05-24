@@ -146,6 +146,7 @@ mod tests {
                 "required": ["query"]
             }),
             max_result_tokens: None,
+            concurrent_safe: false,
         };
 
         let converted = AiProviderBridge::convert_tool_def(&def);

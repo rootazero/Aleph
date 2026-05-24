@@ -296,6 +296,7 @@ async fn budget_final_reply_skips_grace_turn_when_text_already_present() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -354,6 +355,7 @@ async fn budget_final_reply_fires_grace_turn_when_no_prior_text() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -424,6 +426,7 @@ async fn budget_final_reply_grace_turn_failsoft_on_llm_error() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -490,6 +493,7 @@ async fn budget_warning_invokes_compactor_before_llm() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -577,6 +581,7 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -648,6 +653,7 @@ async fn diminishing_returns_fires_grace_and_hits_limit() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -753,6 +759,7 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();
@@ -888,6 +895,7 @@ async fn per_tool_budget_fires_before_global_turn_timeout() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -1008,6 +1016,7 @@ async fn split_session_directive_continues_run_in_child_session() {
             registrar.clone() as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>
         ),
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();
@@ -1083,6 +1092,7 @@ async fn split_session_failsoft_falls_back_to_final_reply() {
         session_epoch_registrar: Some(Arc::new(FailRegistrar)
             as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>),
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();
@@ -1273,6 +1283,7 @@ async fn max_iterations_cap_fires_grace_turn_for_terminal_text() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();
@@ -1335,6 +1346,7 @@ async fn empty_response_retries_then_recovers() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let state = harness
@@ -1382,6 +1394,7 @@ async fn empty_response_exhausted_sets_terminate_reason() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let state = harness
@@ -1439,6 +1452,7 @@ async fn tool_memo_does_not_span_turns() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();
@@ -1485,6 +1499,7 @@ async fn grace_turn_times_out_instead_of_hanging() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     let started = std::time::Instant::now();
@@ -1543,6 +1558,7 @@ async fn grace_turn_keeps_token_breakdown_in_lockstep() {
         result_store: None,
         session_epoch_registrar: None,
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        parallel_tool_concurrency: None,
     };
     let harness = AgentHarness::new(deps);
     harness
