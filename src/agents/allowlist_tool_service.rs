@@ -8,6 +8,7 @@ use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::agents::AgentDef;
 use crate::session::events::ToolOutput;
@@ -34,6 +35,24 @@ impl ToolService for AllowlistToolService {
             });
         }
         self.inner.execute(name, input).await
+    }
+
+    async fn execute_with_cancel(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        // Run the allowlist check first so a disallowed tool returns the same
+        // `PermissionDenied` error regardless of which call path the harness
+        // took, then delegate to the inner cancel-aware path.
+        if !self.agent_def.is_tool_allowed(name) {
+            return Err(ToolError::PermissionDenied {
+                name: name.to_string(),
+                reason: format!("agent '{}' disallows this tool", self.agent_def.id),
+            });
+        }
+        self.inner.execute_with_cancel(name, input, cancel).await
     }
 
     async fn list(&self) -> Vec<ToolDefinition> {

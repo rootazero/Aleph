@@ -77,6 +77,7 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio_util::sync::CancellationToken;
 
     // -- Mock tool --
 
@@ -98,7 +99,7 @@ mod tests {
             json!({"type": "object"})
         }
 
-        async fn execute(&self, _args: Value) -> ToolResult {
+        async fn execute(&self, _args: Value, _cancel: CancellationToken) -> ToolResult {
             ToolResult::Success {
                 output: Value::Null,
             }

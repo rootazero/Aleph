@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::gateway::handlers::markdown_skills::{markdown_skills_revision, markdown_skills_server};
 use crate::tools::refresh::ToolRefreshSource;
@@ -107,8 +108,23 @@ impl LoopTool for MarkdownLoopTool {
         self.schema.clone()
     }
 
-    async fn execute(&self, input: Value) -> ToolResult {
-        match self.inner.call(input).await {
+    async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
+        // Markdown CLI skills shell out via the user's shell — drop semantics
+        // would only kill the in-flight tokio future, leaving the child
+        // process running until the OS reaps it. Wrap with `tokio::select!`
+        // so a cancelled call still returns promptly to the harness; full
+        // subprocess kill belongs in the markdown server's spawn path.
+        let outcome = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                return ToolResult::Error {
+                    error: format!("markdown skill {} cancelled", self.name),
+                    retryable: false,
+                };
+            }
+            r = self.inner.call(input) => r,
+        };
+        match outcome {
             Ok(output) => ToolResult::Success { output },
             Err(e) => ToolResult::Error {
                 error: e.to_string(),

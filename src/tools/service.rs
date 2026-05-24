@@ -6,6 +6,7 @@ use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use crate::session::events::ToolOutput;
 
@@ -128,6 +129,29 @@ pub trait ToolService: Send + Sync + 'static {
         _input: &serde_json::Value,
     ) -> bool {
         false
+    }
+
+    /// Execute a tool call with an opencode-parity AbortSignal token.
+    ///
+    /// The harness Act phase forks a per-call child token from the run's
+    /// cancellation token and threads it here. Production wrappers
+    /// (`ScopedToolService`, `McpScopedToolService`, `AllowlistToolService`)
+    /// override this to thread `cancel` all the way to
+    /// [`crate::tools::runtime::LoopTool::execute`] so individual tools can
+    /// `select!` against it or have their futures dropped on cancel
+    /// (kill_on_drop for subprocesses, reqwest abort for HTTP).
+    ///
+    /// The default impl discards `cancel` and forwards to [`Self::execute`]
+    /// — sufficient for test stubs that don't model cancellation. Anywhere
+    /// a real run loop calls a tool, the production wrapper's override
+    /// fires the token end-to-end.
+    async fn execute_with_cancel(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        _cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        self.execute(name, input).await
     }
 }
 

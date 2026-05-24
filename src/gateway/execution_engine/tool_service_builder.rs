@@ -94,6 +94,7 @@ mod tests {
     use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
     use async_trait::async_trait;
     use serde_json::{json, Value};
+    use tokio_util::sync::CancellationToken;
 
     struct StubTool;
 
@@ -108,7 +109,7 @@ mod tests {
         fn schema(&self) -> Value {
             json!({ "type": "object" })
         }
-        async fn execute(&self, _input: Value) -> ToolResult {
+        async fn execute(&self, _input: Value, _cancel: CancellationToken) -> ToolResult {
             ToolResult::Success { output: json!({}) }
         }
     }

@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use tokio_util::sync::CancellationToken;
 
 // =============================================================================
 // ToolResult
@@ -72,7 +73,16 @@ pub trait LoopTool: Send + Sync {
     fn schema(&self) -> Value;
 
     /// Execute the tool with the given input.
-    async fn execute(&self, input: Value) -> ToolResult;
+    ///
+    /// `cancel` carries opencode-parity AbortSignal semantics: the harness
+    /// forks a per-call child token from the run's [`ChainContext::cancellation_token`]
+    /// and the harness itself wraps the call in `tokio::select!`. Tools that
+    /// run unbounded loops or want to emit partial results on abort should
+    /// also `select!` against `cancel.cancelled()` cooperatively. Tools that
+    /// just await a single I/O future can ignore the token — when the
+    /// harness drops the call future on cancel, kill-on-drop / reqwest
+    /// cancellation propagates naturally.
+    async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult;
 
     /// Whether this tool can safely run concurrently with other concurrent-safe tools.
     /// Returns true by default. Override to false for tools that mutate shared state.
@@ -155,9 +165,17 @@ impl LoopToolRegistry {
     ///
     /// If exact match fails, tries swapping dots/underscores as a fallback,
     /// since LLMs sometimes confuse `file_ops` with `file.ops` (or vice versa).
-    pub async fn execute(&self, name: &str, input: Value) -> ToolResult {
+    ///
+    /// `cancel` is forwarded verbatim to the resolved tool. See
+    /// [`LoopTool::execute`] for the cancellation contract.
+    pub async fn execute(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> ToolResult {
         if let Some(tool) = self.get(name) {
-            return tool.execute(input).await;
+            return tool.execute(input, cancel).await;
         }
 
         // Fallback: try swapping dots ↔ underscores
@@ -174,7 +192,7 @@ impl LoopToolRegistry {
 
         if let Some(tool) = self.get(&alt) {
             tracing::debug!(original = name, resolved = %alt, "Tool name normalized");
-            return tool.execute(input).await;
+            return tool.execute(input, cancel).await;
         }
 
         ToolResult::Error {
@@ -257,7 +275,7 @@ mod tests {
                 "required": ["message"]
             })
         }
-        async fn execute(&self, input: Value) -> ToolResult {
+        async fn execute(&self, input: Value, _cancel: CancellationToken) -> ToolResult {
             ToolResult::Success { output: input }
         }
     }
@@ -276,7 +294,7 @@ mod tests {
         fn schema(&self) -> Value {
             json!({ "type": "object", "properties": {} })
         }
-        async fn execute(&self, _input: Value) -> ToolResult {
+        async fn execute(&self, _input: Value, _cancel: CancellationToken) -> ToolResult {
             ToolResult::Error {
                 error: "intentional failure".into(),
                 retryable: true,
@@ -288,7 +306,7 @@ mod tests {
     async fn test_minimal_tool_execute() {
         let tool = EchoTool;
         let input = json!({ "message": "hello" });
-        let result = tool.execute(input.clone()).await;
+        let result = tool.execute(input.clone(), CancellationToken::new()).await;
 
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
@@ -315,7 +333,13 @@ mod tests {
         assert!(registry.get("nope").is_none());
 
         // Execute existing tool
-        let result = registry.execute("echo", json!({ "message": "hi" })).await;
+        let result = registry
+            .execute(
+                "echo",
+                json!({ "message": "hi" }),
+                CancellationToken::new(),
+            )
+            .await;
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output, json!({ "message": "hi" }));
@@ -324,7 +348,9 @@ mod tests {
         }
 
         // Execute unknown tool
-        let result = registry.execute("unknown", json!({})).await;
+        let result = registry
+            .execute("unknown", json!({}), CancellationToken::new())
+            .await;
         match result {
             ToolResult::Error {
                 error, retryable, ..
@@ -360,7 +386,7 @@ mod tests {
         fn schema(&self) -> Value {
             json!({ "type": "object", "properties": {} })
         }
-        async fn execute(&self, _input: Value) -> ToolResult {
+        async fn execute(&self, _input: Value, _cancel: CancellationToken) -> ToolResult {
             ToolResult::Success {
                 output: json!("done"),
             }
@@ -409,7 +435,7 @@ mod tests {
         fn schema(&self) -> Value {
             json!({ "type": "object", "properties": {} })
         }
-        async fn execute(&self, _input: Value) -> ToolResult {
+        async fn execute(&self, _input: Value, _cancel: CancellationToken) -> ToolResult {
             ToolResult::Success {
                 output: json!(null),
             }
@@ -451,7 +477,7 @@ mod tests {
         fn schema(&self) -> Value {
             json!({ "type": "object", "properties": {} })
         }
-        async fn execute(&self, _input: Value) -> ToolResult {
+        async fn execute(&self, _input: Value, _cancel: CancellationToken) -> ToolResult {
             ToolResult::Success { output: json!({}) }
         }
         fn max_result_tokens(&self) -> Option<usize> {

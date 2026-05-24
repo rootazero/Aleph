@@ -6,6 +6,7 @@
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
 use crate::executor::ToolRegistry;
 use crate::tool_metadata::UnifiedTool;
@@ -65,7 +66,7 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         !EXCLUSIVE_TOOLS.contains(&self.name.as_str())
     }
 
-    async fn execute(&self, input: Value) -> ToolResult {
+    async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
         tracing::debug!(tool = %self.name, args = %input, "Tool call raw arguments from LLM");
         // Inject default working_dir for bash/code_exec if not provided by LLM
         let input = if WORKING_DIR_TOOLS.contains(&self.name.as_str()) {
@@ -94,7 +95,21 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         } else {
             input
         };
-        match self.registry.execute_tool(&self.name, input).await {
+        // opencode-parity AbortSignal: when the harness cancels this call,
+        // we drop the registry-execute future. Drop semantics propagate down
+        // to whatever the registry's per-tool impl is doing (kill_on_drop
+        // for spawned subprocesses, reqwest abort, etc.).
+        let outcome = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                return ToolResult::Error {
+                    error: format!("tool {} cancelled", self.name),
+                    retryable: false,
+                };
+            }
+            r = self.registry.execute_tool(&self.name, input) => r,
+        };
+        match outcome {
             Ok(output) => ToolResult::Success { output },
             Err(e) => {
                 tracing::warn!(tool = %self.name, error = %e, "Tool execution failed");
@@ -233,7 +248,9 @@ mod tests {
         let tools = vec![make_unified_tool("search", "Search")];
 
         let registry = build_registry_from_tools(tool_registry, &tools, None);
-        let result = registry.execute("search", json!({"q": "rust"})).await;
+        let result = registry
+            .execute("search", json!({"q": "rust"}), CancellationToken::new())
+            .await;
 
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {

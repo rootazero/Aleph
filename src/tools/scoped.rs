@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::agents::subagent_tool::SubagentTool;
 use crate::extension::hooks::{HookContext, HookExecutor, PermissionDecision};
@@ -506,6 +507,19 @@ impl ToolService for ScopedToolService {
     }
 
     async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
+        // Backward-compat shim: callers that don't have a CancellationToken
+        // get a never-fired one. The real per-call cancel is plumbed via
+        // `execute_with_cancel` from the harness Act phase.
+        self.execute_with_cancel(name, input, CancellationToken::new())
+            .await
+    }
+
+    async fn execute_with_cancel(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
         use tracing::Instrument;
 
         // Per-call span mirrors opencode's `Effect.withSpan("Tool.execute", …)`.
@@ -530,10 +544,10 @@ impl ToolService for ScopedToolService {
             match self.turn_context.clone() {
                 Some(turn) => {
                     crate::tools::turn_context::TURN_CONTEXT
-                        .scope(turn, self.execute_inner(name, input))
+                        .scope(turn, self.execute_inner(name, input, cancel))
                         .await
                 }
-                None => self.execute_inner(name, input).await,
+                None => self.execute_inner(name, input, cancel).await,
             }
         };
         fut.instrument(span).await
@@ -636,9 +650,17 @@ impl ToolService for ScopedToolService {
 }
 
 impl ScopedToolService {
-    /// Tool dispatch proper. Wrapped by the `ToolService::execute` trait
-    /// method, which scopes `TURN_CONTEXT` around it.
-    async fn execute_inner(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
+    /// Tool dispatch proper. Wrapped by the `ToolService::execute_with_cancel`
+    /// trait method, which scopes `TURN_CONTEXT` around it. The `cancel`
+    /// token is forked per-call by the harness Act phase and threaded into
+    /// the inner [`LoopToolRegistry::execute`] / [`SubagentTool::execute`]
+    /// so subprocess kill_on_drop, reqwest abort, etc. propagate naturally.
+    async fn execute_inner(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
         // Enforce allowed filter.
         if !self.is_allowed(name) {
             return Err(ToolError::NotFound {
@@ -757,6 +779,7 @@ impl ScopedToolService {
                     crate::tools::retry::execute_with_one_shot_backoff(idempotent, || {
                         let input = effective_input.clone();
                         let name_owned = name.to_string();
+                        let cancel = cancel.clone();
                         async move {
                             let raw = match target {
                                 RoutingTarget::Subagent => {
@@ -767,10 +790,10 @@ impl ScopedToolService {
                                                 .into(),
                                         }
                                     })?;
-                                    st.execute(input).await
+                                    st.execute(input, cancel).await
                                 }
                                 RoutingTarget::Inner => {
-                                    self.inner.execute(&name_owned, input).await
+                                    self.inner.execute(&name_owned, input, cancel).await
                                 }
                                 RoutingTarget::Missing => unreachable!(),
                             };
@@ -1168,7 +1191,7 @@ mod tests {
         fn schema(&self) -> Value {
             json!({ "type": "object" })
         }
-        async fn execute(&self, _input: Value) -> LoopToolResult {
+        async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
             LoopToolResult::Success {
                 output: json!({ "tool": self.tool_name }),
             }
@@ -1649,7 +1672,7 @@ mod tests {
         fn schema(&self) -> Value {
             json!({ "type": "object" })
         }
-        async fn execute(&self, input: Value) -> LoopToolResult {
+        async fn execute(&self, input: Value, _cancel: CancellationToken) -> LoopToolResult {
             LoopToolResult::Success { output: input }
         }
     }
@@ -1821,7 +1844,7 @@ mod tests {
             fn schema(&self) -> Value {
                 json!({ "type": "object" })
             }
-            async fn execute(&self, _input: Value) -> LoopToolResult {
+            async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
                 LoopToolResult::Error {
                     error: "kaboom".to_string(),
                     retryable: false,
@@ -1967,7 +1990,7 @@ mod tests {
         fn schema(&self) -> Value {
             json!({ "type": "object" })
         }
-        async fn execute(&self, _input: Value) -> LoopToolResult {
+        async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
             LoopToolResult::Success {
                 output: json!({"ok": true}),
             }
@@ -2042,5 +2065,120 @@ mod tests {
             .expect("unsafe_tool listed");
         assert!(safe.metadata.concurrent_safe);
         assert!(!unsafe_def.metadata.concurrent_safe);
+    }
+
+    // -------------------------------------------------------------------------
+    // execute_with_cancel — opencode-parity AbortSignal end-to-end
+    // -------------------------------------------------------------------------
+
+    /// LoopTool that sleeps 5s on every call. Used to prove the cancel token
+    /// propagates from `ScopedToolService::execute_with_cancel` → `LoopToolRegistry`
+    /// → the resolved `LoopTool::execute` without ever firing the inner sleep.
+    struct SlowLoopTool;
+
+    #[async_trait::async_trait]
+    impl LoopTool for SlowLoopTool {
+        fn name(&self) -> &str {
+            "slow_tool"
+        }
+        fn description(&self) -> &str {
+            "sleeps forever"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        async fn execute(&self, _input: Value, cancel: CancellationToken) -> LoopToolResult {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => LoopToolResult::Error {
+                    error: "cancelled cooperatively".into(),
+                    retryable: false,
+                },
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => LoopToolResult::Success {
+                    output: json!({"slept": true}),
+                },
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_with_cancel_short_circuits_inner_loop_tool() {
+        let mut r = LoopToolRegistry::new();
+        r.register(Box::new(SlowLoopTool));
+        let registry = Arc::new(r);
+        let svc = ScopedToolService::new(registry, BTreeSet::new());
+
+        let cancel = CancellationToken::new();
+        let cancel_for_spawn = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cancel_for_spawn.cancel();
+        });
+
+        let started = std::time::Instant::now();
+        let result = svc
+            .execute_with_cancel("slow_tool", json!({}), cancel)
+            .await;
+        let elapsed = started.elapsed();
+
+        // Must short-circuit well below the 5s inner sleep — cooperatively
+        // via the tool's own `select!`, not via wrapper drop.
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "expected cancel to abort fast; took {elapsed:?}"
+        );
+        let err = result.expect_err("cancelled call should surface a ToolError");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cancelled"),
+            "expected cancellation error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_with_cancel_runs_to_completion_when_token_never_fires() {
+        // Sanity check: when the caller passes a never-fired token, the
+        // tool's own `select!` lets it complete normally — i.e. the cancel
+        // arm is biased but does not preempt a fresh token.
+        struct InstantTool;
+        #[async_trait::async_trait]
+        impl LoopTool for InstantTool {
+            fn name(&self) -> &str {
+                "instant"
+            }
+            fn description(&self) -> &str {
+                "returns immediately"
+            }
+            fn schema(&self) -> Value {
+                json!({ "type": "object" })
+            }
+            async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+                LoopToolResult::Success {
+                    output: json!({"ok": true}),
+                }
+            }
+        }
+
+        let mut r = LoopToolRegistry::new();
+        r.register(Box::new(InstantTool));
+        let registry = Arc::new(r);
+        let svc = ScopedToolService::new(registry, BTreeSet::new());
+
+        let out = svc
+            .execute_with_cancel("instant", json!({}), CancellationToken::new())
+            .await
+            .expect("never-fired token should let the tool complete");
+        // ScopedToolService routes the inner JSON through `apply_layer_two`,
+        // which can re-render the value as a JSON-encoded string for token
+        // accounting. Accept either representation — what we care about
+        // here is that the call ran to completion rather than being cancelled.
+        let matches = match &out.value {
+            serde_json::Value::Object(_) => out.value == json!({"ok": true}),
+            serde_json::Value::String(s) => {
+                serde_json::from_str::<Value>(s).ok() == Some(json!({"ok": true}))
+            }
+            _ => false,
+        };
+        assert!(matches, "unexpected output shape: {:?}", out.value);
     }
 }

@@ -53,6 +53,7 @@ use crate::harness::trait_def::{HarnessError, TurnPhase};
 use crate::providers::adapter::NativeToolCall;
 use crate::session::events::{now_ms, SessionEvent, ToolOutput, TurnId};
 use crate::session::service::SessionId;
+use tokio_util::sync::CancellationToken;
 
 /// Pick the effective wall-clock budget for a tool call. Per-tool
 /// metadata wins over the harness-wide `turn_timeout` fallback. Both
@@ -82,6 +83,7 @@ impl AgentHarness {
         tool_calls: Vec<NativeToolCall>,
         callback: &mut dyn HarnessCallback,
         iteration: usize,
+        run_cancel: &CancellationToken,
     ) -> Result<usize, HarnessError> {
         let mut executed_count: usize = 0;
 
@@ -116,6 +118,7 @@ impl AgentHarness {
                     callback,
                     iteration,
                     &budget_turn_id,
+                    run_cancel,
                 )
                 .await;
         }
@@ -231,7 +234,15 @@ impl AgentHarness {
                 continue;
             }
 
-            let exec_fut = self.deps.tools.execute(&call.name, call.arguments.clone());
+            // Fork a per-call cancel token from the run's parent so a
+            // selective tool-level abort (or run-wide cancel) drops THIS
+            // call's future without affecting earlier completed events.
+            let call_cancel = run_cancel.child_token();
+            let exec_fut = self.deps.tools.execute_with_cancel(
+                &call.name,
+                call.arguments.clone(),
+                call_cancel,
+            );
 
             // Resolve effective wall-clock budget: per-tool metadata > global fallback.
             let per_tool_budget = self
@@ -500,6 +511,7 @@ impl AgentHarness {
         callback: &mut dyn HarnessCallback,
         iteration: usize,
         budget_turn_id: &crate::tools::turn_budget::TurnId,
+        run_cancel: &CancellationToken,
     ) -> Result<usize, HarnessError> {
         let mut executed_count: usize = 0;
 
@@ -560,8 +572,13 @@ impl AgentHarness {
             let args = call.arguments.clone();
             let budget = budgets[idx];
             let started = started_at[idx];
+            // Each parallel call owns a fresh child token forked from the
+            // run-level cancel. If the run is cancelled mid-batch, every
+            // in-flight call short-circuits without waiting for the entire
+            // batch to drain.
+            let call_cancel = run_cancel.child_token();
             boxed_futs.push(Box::pin(async move {
-                let exec_fut = tools.execute(&name, args);
+                let exec_fut = tools.execute_with_cancel(&name, args, call_cancel);
                 match budget {
                     Some(b) => match tokio::time::timeout(b, exec_fut).await {
                         Ok(inner) => Ok(inner),

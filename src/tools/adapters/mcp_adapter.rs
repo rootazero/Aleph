@@ -6,6 +6,7 @@
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::tools::runtime::{LoopTool, ToolResult};
@@ -68,12 +69,22 @@ impl<T: McpTransportTrait + 'static> LoopTool for McpToolAdapter<T> {
         self.spec.input_schema.clone()
     }
 
-    async fn execute(&self, input: Value) -> ToolResult {
-        match self
-            .transport
-            .call_tool(&self.spec.server_name, &self.spec.name, input)
-            .await
-        {
+    async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
+        // MCP tool calls are stdio JSON-RPC roundtrips. On cancel, drop
+        // semantics close our end of the channel — the inner future is
+        // dropped before completion. The downstream server may still be
+        // mid-work but the harness gets a fast error path.
+        let outcome = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                return ToolResult::Error {
+                    error: format!("mcp tool {} cancelled", self.spec.name),
+                    retryable: false,
+                };
+            }
+            r = self.transport.call_tool(&self.spec.server_name, &self.spec.name, input) => r,
+        };
+        match outcome {
             Ok(output) => {
                 // Wrap MCP tool output with external content boundary markers to guard
                 // against prompt injection from untrusted MCP server responses.
@@ -191,7 +202,7 @@ mod tests {
         let adapter = McpToolAdapter::new(make_spec(), transport);
         let input = json!({ "query": "hello" });
 
-        let result = adapter.execute(input).await;
+        let result = adapter.execute(input, CancellationToken::new()).await;
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 // Output is now wrapped with content boundary markers for prompt injection defense.
@@ -221,7 +232,7 @@ mod tests {
         let adapter = McpToolAdapter::new(make_spec(), transport);
         let input = json!({ "query": "hello" });
 
-        let result = adapter.execute(input).await;
+        let result = adapter.execute(input, CancellationToken::new()).await;
         match result {
             ToolResult::Error {
                 error, retryable, ..

@@ -863,7 +863,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_status_not_found() {
         let tool = make_tool();
-        let result = tool.execute(json!({ "request_id": "nonexistent" })).await;
+        let result = tool.execute(json!({ "request_id": "nonexistent" }), CancellationToken::new()).await;
         match result {
             ToolResult::Error { error, .. } => {
                 assert!(error.contains("No background sub-agent found"));
@@ -889,7 +889,7 @@ mod tests {
             Arc::new(crate::sandbox::NoopSandbox),
         );
 
-        let result = tool.execute(json!({ "request_id": "test-id" })).await;
+        let result = tool.execute(json!({ "request_id": "test-id" }), CancellationToken::new()).await;
         match result {
             ToolResult::Success { output } => {
                 assert_eq!(output["status"], "completed");
@@ -906,7 +906,7 @@ mod tests {
             .execute(json!({
                 "task": "explore the codebase",
                 "agent_type": "explore"
-            }))
+            }), CancellationToken::new())
             .await;
 
         match result {
@@ -927,7 +927,7 @@ mod tests {
             .execute(json!({
                 "task": "do something",
                 "agent_type": "nonexistent_agent"
-            }))
+            }), CancellationToken::new())
             .await;
 
         match result {
@@ -947,7 +947,7 @@ mod tests {
             .execute(json!({
                 "task": "background work",
                 "run_in_background": true
-            }))
+            }), CancellationToken::new())
             .await;
 
         match result {
@@ -965,7 +965,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_missing_task() {
         let tool = make_tool();
-        let result = tool.execute(json!({})).await;
+        let result = tool.execute(json!({}), CancellationToken::new()).await;
 
         match result {
             ToolResult::Error { error, retryable } => {
@@ -999,7 +999,7 @@ mod tests {
                 "to": "agent-b",
                 "text": "hello",
                 "team_name": "alpha"
-            }))
+            }), CancellationToken::new())
             .await;
         match result {
             ToolResult::Error { error, .. } => {
@@ -1019,7 +1019,7 @@ mod tests {
             .execute(json!({
                 "action": "read_inbox",
                 "team_name": "alpha"
-            }))
+            }), CancellationToken::new())
             .await;
         match result {
             ToolResult::Error { error, .. } => {
@@ -1032,7 +1032,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_success() {
         let tool = make_tool();
-        let result = tool.execute(json!({ "task": "say hello" })).await;
+        let result = tool.execute(json!({ "task": "say hello" }), CancellationToken::new()).await;
 
         match result {
             ToolResult::Success { output } => {
@@ -1081,7 +1081,7 @@ mod tests {
         );
 
         let result = tool
-            .execute(serde_json::json!({"action": "check_status", "request_id": "rid"}))
+            .execute(serde_json::json!({"action": "check_status", "request_id": "rid"}), CancellationToken::new())
             .await;
         let output = match result {
             crate::tools::runtime::ToolResult::Success { output } => output,
@@ -1143,7 +1143,7 @@ mod tests {
                     {"task": "first task", "agent_type": "explore"},
                     {"task": "second task", "agent_type": "explore"}
                 ]
-            }))
+            }), CancellationToken::new())
             .await;
 
         match result {
@@ -1203,7 +1203,7 @@ mod tests {
         .with_cancel_token(parent.clone());
 
         let handle = tokio::spawn(async move {
-            tool.execute(serde_json::json!({ "task": "hang", "timeout_secs": 30 }))
+            tool.execute(serde_json::json!({ "task": "hang", "timeout_secs": 30 }), CancellationToken::new())
                 .await
         });
         tokio::time::sleep(std::time::Duration::from_millis(80)).await;
@@ -1275,7 +1275,7 @@ mod tests {
         )
         .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
 
-        let _ = tool.execute(serde_json::json!({ "task": "hi" })).await;
+        let _ = tool.execute(serde_json::json!({ "task": "hi" }), CancellationToken::new()).await;
 
         let events = sink.0.lock().unwrap();
         assert!(
@@ -1301,7 +1301,7 @@ mod tests {
         .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
 
         let out = tool
-            .execute(serde_json::json!({ "task": "bg", "run_in_background": true }))
+            .execute(serde_json::json!({ "task": "bg", "run_in_background": true }), CancellationToken::new())
             .await;
         let rid = match out {
             ToolResult::Success { output } => output["request_id"].as_str().unwrap().to_string(),
@@ -1332,7 +1332,7 @@ mod tests {
             .execute(json!({
                 "batch_tasks": [{"task": "x"}, {"task": "y"}],
                 "run_in_background": true
-            }))
+            }), CancellationToken::new())
             .await;
 
         match result {
@@ -1387,7 +1387,7 @@ mod tests {
             Arc::new(crate::sandbox::NoopSandbox),
         );
 
-        let result = tool.execute(json!({ "action": "list" })).await;
+        let result = tool.execute(json!({ "action": "list" }), CancellationToken::new()).await;
         match result {
             ToolResult::Success { output } => {
                 assert_eq!(output["running_count"], 1);
@@ -1422,7 +1422,7 @@ mod tests {
 
         for poll in 1..=2 {
             let result = tool
-                .execute(json!({ "action": "check_status", "request_id": "rid" }))
+                .execute(json!({ "action": "check_status", "request_id": "rid" }), CancellationToken::new())
                 .await;
             match result {
                 ToolResult::Success { output } => {
@@ -1463,7 +1463,7 @@ mod tests {
         );
 
         let result = tool
-            .execute(json!({ "action": "check_status", "request_id": "rid" }))
+            .execute(json!({ "action": "check_status", "request_id": "rid" }), CancellationToken::new())
             .await;
         match result {
             ToolResult::Success { output } => {

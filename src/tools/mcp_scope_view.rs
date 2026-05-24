@@ -5,6 +5,7 @@
 use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::extension::registry::ToolRegistration;
 use crate::session::events::ToolOutput;
@@ -28,6 +29,17 @@ impl ToolService for McpScopedToolService {
     async fn execute(&self, name: &str, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         // Parent first. Stage I MVP: extras execution deferred to Task 12.
         self.parent.execute(name, input).await
+    }
+
+    async fn execute_with_cancel(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        // Delegate to the parent's cancel-aware path so the inner
+        // `ScopedToolService` actually threads the token into `LoopTool::execute`.
+        self.parent.execute_with_cancel(name, input, cancel).await
     }
 
     async fn list(&self) -> Vec<ToolDefinition> {

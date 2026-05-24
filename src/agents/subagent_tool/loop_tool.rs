@@ -12,6 +12,7 @@ use crate::agents::AgentDef;
 use crate::teams::messages::router::SendRequest;
 use crate::teams::messages::types::MessageType;
 use crate::tools::runtime::{LoopTool, ToolResult};
+use tokio_util::sync::CancellationToken;
 
 use super::{parse_args, SubagentAction, SubagentTool};
 
@@ -114,7 +115,14 @@ impl LoopTool for SubagentTool {
         })
     }
 
-    async fn execute(&self, input: Value) -> ToolResult {
+    async fn execute(&self, input: Value, _cancel: CancellationToken) -> ToolResult {
+        // SubagentTool has its own per-request CancellationToken plumbed
+        // through `BackgroundTracker`. The harness's per-call token only
+        // matters for tools that don't already manage their own cancel; for
+        // foreground sub-agents we rely on drop-cancellation of the runtime
+        // future, and for background ones the LLM uses the `cancel` action
+        // with a request_id. Wiring the harness token into the runtime's
+        // CancelTree is a follow-up.
         // 1. Parse arguments
         let action = match parse_args(&input) {
             Ok(a) => a,

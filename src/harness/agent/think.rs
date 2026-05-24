@@ -632,6 +632,7 @@ impl AgentHarness {
                     response.tool_calls,
                     callback,
                     iterations,
+                    parent_cancel,
                 )
                 .await?;
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;

@@ -7,6 +7,7 @@
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
 use crate::tools::runtime::{LoopTool, ToolResult};
 
@@ -76,7 +77,7 @@ impl<M: MemoryBackend + 'static> LoopTool for MemorySearchTool<M> {
         })
     }
 
-    async fn execute(&self, input: Value) -> ToolResult {
+    async fn execute(&self, input: Value, _cancel: CancellationToken) -> ToolResult {
         let query = match input.get("query").and_then(|v| v.as_str()) {
             Some(q) => q,
             None => {
@@ -159,7 +160,7 @@ impl<M: MemoryBackend + 'static> LoopTool for MemoryStoreTool<M> {
         })
     }
 
-    async fn execute(&self, input: Value) -> ToolResult {
+    async fn execute(&self, input: Value, _cancel: CancellationToken) -> ToolResult {
         let content = match input.get("content").and_then(|v| v.as_str()) {
             Some(c) => c,
             None => {
@@ -246,7 +247,10 @@ mod tests {
         let tool = MemoryStoreTool::new(Arc::clone(&backend));
 
         let result = tool
-            .execute(json!({ "content": "User prefers dark mode" }))
+            .execute(
+                json!({ "content": "User prefers dark mode" }),
+                CancellationToken::new(),
+            )
             .await;
 
         match result {
@@ -266,7 +270,9 @@ mod tests {
         backend.store("User prefers dark mode", None).await.unwrap();
 
         let tool = MemorySearchTool::new(Arc::clone(&backend));
-        let result = tool.execute(json!({ "query": "dark mode" })).await;
+        let result = tool
+            .execute(json!({ "query": "dark mode" }), CancellationToken::new())
+            .await;
 
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
@@ -284,7 +290,12 @@ mod tests {
         let backend = Arc::new(FakeMemory::new());
         let tool = MemorySearchTool::new(Arc::clone(&backend));
 
-        let result = tool.execute(json!({ "query": "nonexistent topic" })).await;
+        let result = tool
+            .execute(
+                json!({ "query": "nonexistent topic" }),
+                CancellationToken::new(),
+            )
+            .await;
 
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
@@ -301,10 +312,13 @@ mod tests {
         let tool = MemoryStoreTool::new(Arc::clone(&backend));
 
         let result = tool
-            .execute(json!({
-                "content": "Meeting at 3pm",
-                "metadata": { "category": "schedule", "priority": "high" }
-            }))
+            .execute(
+                json!({
+                    "content": "Meeting at 3pm",
+                    "metadata": { "category": "schedule", "priority": "high" }
+                }),
+                CancellationToken::new(),
+            )
             .await;
 
         match result {
@@ -328,7 +342,7 @@ mod tests {
         let backend = Arc::new(FakeMemory::new());
         let tool = MemorySearchTool::new(Arc::clone(&backend));
 
-        let result = tool.execute(json!({})).await;
+        let result = tool.execute(json!({}), CancellationToken::new()).await;
         match result {
             ToolResult::Error {
                 error, retryable, ..
@@ -347,7 +361,7 @@ mod tests {
         let backend = Arc::new(FakeMemory::new());
         let tool = MemoryStoreTool::new(Arc::clone(&backend));
 
-        let result = tool.execute(json!({})).await;
+        let result = tool.execute(json!({}), CancellationToken::new()).await;
         match result {
             ToolResult::Error {
                 error, retryable, ..

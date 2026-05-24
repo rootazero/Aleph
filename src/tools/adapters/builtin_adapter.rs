@@ -6,6 +6,7 @@
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::tools::AlephToolDyn;
 
@@ -51,8 +52,25 @@ impl LoopTool for BuiltinToolAdapter {
         self.cached_schema.clone()
     }
 
-    async fn execute(&self, input: Value) -> ToolResult {
-        match self.inner.call(input).await {
+    async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
+        // opencode-parity AbortSignal: wrap the AlephTool::call future so that
+        // when the harness fires `cancel`, the inner future is dropped. Drop
+        // semantics propagate naturally — bash/code_exec subprocess dies via
+        // kill_on_drop, reqwest aborts the in-flight request, file_ops walks
+        // stop on their next await point. Tools that need cooperative
+        // cancellation (partial result emission, cleanup) should `select!`
+        // against `cancel` themselves in their own `LoopTool::execute` impl.
+        let outcome = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                return ToolResult::Error {
+                    error: format!("tool {} cancelled", self.cached_name),
+                    retryable: false,
+                };
+            }
+            r = self.inner.call(input) => r,
+        };
+        match outcome {
             Ok(output) => ToolResult::Success { output },
             Err(e) => {
                 let retryable = matches!(
@@ -159,7 +177,7 @@ mod tests {
         let adapter = BuiltinToolAdapter::new(tool);
         let input = json!({ "query": "hello" });
 
-        let result = adapter.execute(input).await;
+        let result = adapter.execute(input, CancellationToken::new()).await;
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 assert_eq!(output["result"], "hello");
@@ -174,7 +192,7 @@ mod tests {
         let adapter = BuiltinToolAdapter::new(tool);
         let input = json!({ "query": "hello" });
 
-        let result = adapter.execute(input).await;
+        let result = adapter.execute(input, CancellationToken::new()).await;
         match result {
             ToolResult::Error {
                 error, retryable, ..
@@ -185,6 +203,68 @@ mod tests {
             }
             ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
                 panic!("expected error")
+            }
+        }
+    }
+
+    /// AlephTool that sleeps 5s — gives us a long-enough window to flip the
+    /// cancellation token from the test side and verify the wrapper short-
+    /// circuits BEFORE the inner future resolves.
+    struct SlowAlephTool;
+
+    impl AlephToolDyn for SlowAlephTool {
+        fn name(&self) -> &str {
+            "slow_tool"
+        }
+
+        fn definition(&self) -> MetadataToolDefinition {
+            MetadataToolDefinition::new(
+                "slow_tool",
+                "Sleeps for 5 seconds",
+                json!({"type": "object"}),
+                ToolCategory::Builtin,
+            )
+        }
+
+        fn call(&self, _args: Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
+            Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                Ok(json!({}))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn adapter_short_circuits_on_cancel() {
+        let tool = Arc::new(SlowAlephTool);
+        let adapter = BuiltinToolAdapter::new(tool);
+        let cancel = CancellationToken::new();
+
+        // Cancel after 50ms — well before the 5s inner sleep would resolve.
+        let cancel_for_spawn = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cancel_for_spawn.cancel();
+        });
+
+        let started = std::time::Instant::now();
+        let result = adapter.execute(json!({}), cancel).await;
+        let elapsed = started.elapsed();
+
+        // Must abort in well under 1s; not run the full 5s inner sleep.
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "expected cancel to abort fast; took {elapsed:?}"
+        );
+        match result {
+            ToolResult::Error { error, .. } => {
+                assert!(
+                    error.contains("cancelled"),
+                    "expected cancellation error, got: {error}"
+                );
+            }
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+                panic!("expected cancellation error")
             }
         }
     }
