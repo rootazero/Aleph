@@ -25,7 +25,6 @@ impl EventScopeGuard {
     /// | Prefix | Required (any of) |
     /// |--------|-------------------|
     /// | `pairing.` | admin, pairing |
-    /// | `poe.sign.` | admin, poe.approver |
     /// | `guest.` | admin, guest.manager |
     /// | `exec.approval.` | admin, exec.approver |
     /// | `config.changed` | admin, config.viewer |
@@ -35,10 +34,6 @@ impl EventScopeGuard {
                 (
                     "pairing.".to_string(),
                     vec!["admin".to_string(), "pairing".to_string()],
-                ),
-                (
-                    "poe.sign.".to_string(),
-                    vec!["admin".to_string(), "poe.approver".to_string()],
                 ),
                 (
                     "guest.".to_string(),
@@ -126,7 +121,6 @@ mod tests {
         let admin = vec!["admin".to_string()];
 
         assert!(guard.can_receive("pairing.requested", &admin));
-        assert!(guard.can_receive("poe.sign.request", &admin));
         assert!(guard.can_receive("guest.joined", &admin));
         assert!(guard.can_receive("exec.approval.pending", &admin));
         assert!(guard.can_receive("config.changed", &admin));

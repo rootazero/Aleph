@@ -6,7 +6,7 @@
 //! # Lanes
 //!
 //! - **Query**: Read-only queries (health, echo, config.get, etc.)
-//! - **Execute**: Agent execution (agent.run, chat.send, poe.run, etc.)
+//! - **Execute**: Agent execution (agent.run, chat.send, etc.)
 //! - **Mutate**: State mutations (config.patch, memory.store, etc.)
 //! - **System**: System management (plugins.install, skills.delete, etc.)
 //!
@@ -37,7 +37,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 pub enum Lane {
     /// Read-only queries (health, echo, config.get, models.list, etc.)
     Query,
-    /// Agent execution (agent.run, chat.send, poe.run, poe.prepare)
+    /// Agent execution (agent.run, chat.send)
     Execute,
     /// State mutations (config.patch, config.apply, config.set, memory.store, memory.delete, session.compact, session.delete)
     Mutate,
@@ -93,10 +93,6 @@ impl Lane {
             // logs.setLevel changes process-wide runtime config →
             // System lane (preserves pre-G1 hardcode behavior).
             "logs.setLevel" => Some(Lane::System),
-            // poe.prepare initiates a Proof-of-Execution flow (LLM call,
-            // tool registry traversal) — Execute lane. The `.prepare`
-            // suffix isn't a generic Execute signal, so it stays here.
-            "poe.prepare" => Some(Lane::Execute),
             _ => None,
         }
     }
@@ -345,8 +341,6 @@ mod tests {
         // Execute lane
         assert_eq!(Lane::for_method("agent.run"), Lane::Execute);
         assert_eq!(Lane::for_method("chat.send"), Lane::Execute);
-        assert_eq!(Lane::for_method("poe.run"), Lane::Execute);
-        assert_eq!(Lane::for_method("poe.prepare"), Lane::Execute);
 
         // Mutate lane
         assert_eq!(Lane::for_method("config.patch"), Lane::Mutate);

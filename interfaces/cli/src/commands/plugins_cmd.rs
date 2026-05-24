@@ -256,8 +256,16 @@ pub async fn call(
 
     let result: Value = client.call("plugins.callTool", Some(params)).await?;
 
-    let _ = json;
-    output::print_json(&result);
+    if json {
+        output::print_json(&result);
+    } else {
+        // Plain mode: print pretty JSON (no flatter representation exists for
+        // arbitrary tool output) so the user still gets the full response.
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string())
+        );
+    }
 
     client.close().await?;
     Ok(())

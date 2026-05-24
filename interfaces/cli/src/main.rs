@@ -71,8 +71,16 @@ enum Commands {
         message: String,
 
         /// Session key
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "last")]
         session: Option<String>,
+
+        /// Resume the most recently active session (by `last_active_at`)
+        #[arg(long, conflicts_with = "session")]
+        last: bool,
+
+        /// Write the final agent message to FILE (codex-parity `-o`)
+        #[arg(short = 'o', long = "output-last-message", value_name = "FILE")]
+        output_last_message: Option<String>,
     },
 
     /// Check server health
@@ -174,12 +182,6 @@ enum Commands {
         action: ServicesAction,
     },
 
-    /// POE (Principle-Operation-Evaluation) execution engine
-    Poe {
-        #[command(subcommand)]
-        action: PoeAction,
-    },
-
     /// Skill management (file-based and markdown)
     Skills {
         #[command(subcommand)]
@@ -228,6 +230,15 @@ enum Commands {
         #[command(subcommand)]
         action: McpAction,
     },
+
+    /// Run a command under Aleph's sandbox (forwards to aleph-server sandbox-debug)
+    Sandbox {
+        #[command(subcommand)]
+        action: SandboxAction,
+    },
+
+    /// Diagnose installation, config, gateway, providers, MCP and sandbox
+    Doctor,
 
     /// Generate shell completion script
     Completion {
@@ -610,50 +621,6 @@ enum ServicesAction {
 }
 
 #[derive(Subcommand)]
-enum PoeAction {
-    /// Run a POE task
-    Run {
-        /// Task instruction
-        instruction: String,
-        /// Success manifest (JSON)
-        #[arg(long)]
-        manifest: Option<String>,
-        /// Enable streaming
-        #[arg(long)]
-        stream: bool,
-    },
-    /// Get POE task status
-    Status {
-        /// Task ID
-        task_id: String,
-    },
-    /// Cancel a running POE task
-    Cancel {
-        /// Task ID
-        task_id: String,
-    },
-    /// List all POE tasks
-    List,
-    /// Prepare a POE contract
-    Prepare {
-        /// Task instruction
-        instruction: String,
-    },
-    /// Sign (approve) a pending contract
-    Sign {
-        /// Contract ID
-        contract_id: String,
-    },
-    /// Reject a pending contract
-    Reject {
-        /// Contract ID
-        contract_id: String,
-    },
-    /// List pending contracts
-    Pending,
-}
-
-#[derive(Subcommand)]
 enum SkillsAction {
     /// List all skills (file-based and runtime-loaded)
     List,
@@ -774,6 +741,30 @@ enum VaultAction {
 }
 
 #[derive(Subcommand)]
+enum SandboxAction {
+    /// Print the active sandbox profile summary and exit
+    Info,
+    /// Run a command under the active sandbox profile
+    Run {
+        /// Network policy: `none`, `all`, or omit for the default
+        #[arg(long, value_name = "POLICY")]
+        network: Option<String>,
+        /// Extra paths to grant write access to (repeatable)
+        #[arg(long = "fs-write", value_name = "PATH")]
+        fs_write: Vec<String>,
+        /// Extra paths to grant read access to (repeatable)
+        #[arg(long = "fs-read", value_name = "PATH")]
+        fs_read: Vec<String>,
+        /// On macOS, stream sandbox denials from `log stream` while the command runs
+        #[arg(long)]
+        log_denials: bool,
+        /// Command and arguments to execute. Use `--` to separate from flags.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum McpAction {
     /// List pending tool approval requests
     Pending,
@@ -877,8 +868,22 @@ async fn main() -> CliResult<()> {
         Some(Commands::Connect { device }) => {
             commands::connect::run(&server_url, &device, &config, cli.json).await?;
         }
-        Some(Commands::Ask { message, session }) => {
-            commands::ask::run(&server_url, &message, session.as_deref(), &config).await?;
+        Some(Commands::Ask {
+            message,
+            session,
+            last,
+            output_last_message,
+        }) => {
+            commands::ask::run(
+                &server_url,
+                &message,
+                session.as_deref(),
+                last,
+                cli.json,
+                output_last_message.as_deref(),
+                &config,
+            )
+            .await?;
         }
         Some(Commands::Chat { session, agent }) => {
             commands::chat::run(
@@ -1260,43 +1265,6 @@ async fn main() -> CliResult<()> {
                     .await?;
             }
         },
-        Some(Commands::Poe { action }) => match action {
-            PoeAction::Run {
-                instruction,
-                manifest,
-                stream,
-            } => {
-                commands::poe_cmd::run(
-                    &server_url,
-                    &instruction,
-                    manifest.as_deref(),
-                    stream,
-                    cli.json,
-                )
-                .await?;
-            }
-            PoeAction::Status { task_id } => {
-                commands::poe_cmd::status(&server_url, &task_id, cli.json).await?;
-            }
-            PoeAction::Cancel { task_id } => {
-                commands::poe_cmd::cancel(&server_url, &task_id, cli.json).await?;
-            }
-            PoeAction::List => {
-                commands::poe_cmd::list(&server_url, cli.json).await?;
-            }
-            PoeAction::Prepare { instruction } => {
-                commands::poe_cmd::prepare(&server_url, &instruction, cli.json).await?;
-            }
-            PoeAction::Sign { contract_id } => {
-                commands::poe_cmd::sign(&server_url, &contract_id, cli.json).await?;
-            }
-            PoeAction::Reject { contract_id } => {
-                commands::poe_cmd::reject(&server_url, &contract_id, cli.json).await?;
-            }
-            PoeAction::Pending => {
-                commands::poe_cmd::pending(&server_url, cli.json).await?;
-            }
-        },
         Some(Commands::Skills { action }) => match action {
             SkillsAction::List => {
                 commands::skills_cmd::list(&server_url, cli.json).await?;
@@ -1401,6 +1369,29 @@ async fn main() -> CliResult<()> {
             }
             McpAction::Cancel { request_id } => {
                 commands::mcp_cmd::cancel(&server_url, &request_id, cli.json).await?;
+            }
+        },
+        Some(Commands::Doctor) => {
+            commands::doctor::run(&server_url, cli.json).await?;
+        }
+        Some(Commands::Sandbox { action }) => match action {
+            SandboxAction::Info => {
+                commands::sandbox_cmd::info()?;
+            }
+            SandboxAction::Run {
+                network,
+                fs_write,
+                fs_read,
+                log_denials,
+                command,
+            } => {
+                commands::sandbox_cmd::run(
+                    network.as_deref(),
+                    &fs_write,
+                    &fs_read,
+                    log_denials,
+                    &command,
+                )?;
             }
         },
         Some(Commands::ChatControl { action }) => match action {

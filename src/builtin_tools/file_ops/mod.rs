@@ -3,6 +3,7 @@
 //! Implements rig's Tool trait to provide file system operations.
 //! Supports: list, read, write, move, copy, delete, mkdir, search, batch_move, organize
 
+mod apply_patch;
 mod batch;
 pub(crate) mod edit;
 mod edit_match;
@@ -18,6 +19,7 @@ mod types;
 pub(crate) mod write;
 
 // Re-export public API
+pub use apply_patch::{ApplyPatchArgs, ApplyPatchOutput, ApplyPatchTool};
 pub use edit::FileEditTool;
 pub use read::FileReadTool;
 pub use state::{

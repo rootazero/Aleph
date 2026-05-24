@@ -28,7 +28,8 @@ use crate::builtin_tools::browser_tools::{
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
     BashExecTool, CodeExecTool, DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree,
-    DesktopAxSnapshot, DesktopCheckPermissions, DesktopTool, FileEditTool, FileOpsTool,
+    ApplyPatchTool, DesktopAxSnapshot, DesktopCheckPermissions, DesktopTool, FileEditTool,
+    FileOpsTool,
     FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool,
     SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
 };
@@ -91,6 +92,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "file_edit",
         description: "Perform exact string replacement in a file",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "apply_patch",
+        description: "Apply a V4A-format multi-file structured patch (Add/Update/Delete/Move) in one call",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -656,6 +662,7 @@ pub fn create_tool_boxed(
         "file_read" => Some(Box::new(FileReadTool::new())),
         "file_write" => Some(Box::new(FileWriteTool::new())),
         "file_edit" => Some(Box::new(FileEditTool::new())),
+        "apply_patch" => Some(Box::new(ApplyPatchTool::new())),
         "bash" => Some(Box::new(BashExecTool::new())),
         "code_exec" => Some(Box::new(CodeExecTool::new())),
         "pdf_generate" => Some(Box::new(PdfGenerateTool::new())),

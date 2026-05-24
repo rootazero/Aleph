@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::output;
-use aleph_client::CliResult;
+use aleph_client::{CliError, CliResult};
 
 /// Default binary name for the server
 const SERVER_BINARY: &str = "aleph-server";
@@ -64,7 +64,7 @@ fn send_signal(pid: u32, signal: i32) -> bool {
 /// 1. `ALEPH_SERVER_BIN` env var (explicit override)
 /// 2. Same directory as the current `aleph` binary
 /// 3. Fall back to bare name (resolved via PATH)
-fn find_server_binary() -> PathBuf {
+pub(crate) fn find_server_binary() -> PathBuf {
     // 1. Env var override
     if let Ok(path) = std::env::var(SERVER_BINARY_ENV) {
         let p = PathBuf::from(&path);
@@ -142,12 +142,27 @@ pub fn start(
         Ok(child) => {
             let child_pid = child.id();
 
-            // Write PID file so we can track it
+            // Write PID file so we can track it. Failures here are non-fatal
+            // (the server is already spawned), but must be surfaced so users
+            // can diagnose ~/.aleph permission issues that break later
+            // `daemon stop`/`status` calls.
             let pid_file = pid_file_path();
             if let Some(parent) = pid_file.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    eprintln!(
+                        "warning: failed to create PID directory {}: {}",
+                        parent.display(),
+                        e
+                    );
+                }
             }
-            let _ = std::fs::write(&pid_file, child_pid.to_string());
+            if let Err(e) = std::fs::write(&pid_file, child_pid.to_string()) {
+                eprintln!(
+                    "warning: failed to write PID file {}: {} (daemon stop/status may not work)",
+                    pid_file.display(),
+                    e
+                );
+            }
 
             if json {
                 output::print_json(&serde_json::json!({
@@ -175,7 +190,11 @@ pub fn start(
                     SERVER_BINARY_ENV
                 );
             }
-            Ok(())
+            Err(CliError::Other(format!(
+                "failed to spawn {}: {}",
+                binary.display(),
+                e
+            )))
         }
     }
 }

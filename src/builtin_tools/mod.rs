@@ -123,7 +123,10 @@ pub use desktop::{
     DesktopTool,
 };
 pub use error::ToolError;
-pub use file_ops::{FileEditTool, FileOpsArgs, FileOpsTool, FileReadTool, FileWriteTool};
+pub use file_ops::{
+    ApplyPatchArgs, ApplyPatchOutput, ApplyPatchTool, FileEditTool, FileOpsArgs, FileOpsTool,
+    FileReadTool, FileWriteTool,
+};
 pub use flag_user_correction::{
     FlagUserCorrectionArgs, FlagUserCorrectionOutput, FlagUserCorrectionTool,
 };

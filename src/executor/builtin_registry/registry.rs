@@ -80,6 +80,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) file_write_tool: crate::builtin_tools::FileWriteTool,
     /// File edit tool instance
     pub(crate) file_edit_tool: crate::builtin_tools::FileEditTool,
+    /// V4A multi-file structured patch tool instance
+    pub(crate) apply_patch_tool: crate::builtin_tools::ApplyPatchTool,
     /// Bash execution tool instance (wraps CodeExecTool for shell commands)
     pub(crate) bash_tool: crate::builtin_tools::BashExecTool,
     /// Code execution tool instance
@@ -532,6 +534,9 @@ impl ToolRegistry for BuiltinToolRegistry {
                 Box::pin(async move { self.file_write_tool.call_json(arguments).await })
             }
             "file_edit" => Box::pin(async move { self.file_edit_tool.call_json(arguments).await }),
+            "apply_patch" => {
+                Box::pin(async move { self.apply_patch_tool.call_json(arguments).await })
+            }
             "bash" => Box::pin(async move { self.bash_tool.call_json(arguments).await }),
             "code_exec" => Box::pin(async move { self.code_exec_tool.call_json(arguments).await }),
             "pdf_generate" => {

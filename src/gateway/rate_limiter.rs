@@ -368,7 +368,7 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
         | "skills.install" | "skills.delete" => RateLimitScope::RpcWrite,
 
         // Resource-intensive operations
-        "agent.run" | "chat.send" | "poe.run" | "poe.prepare" => RateLimitScope::RpcHeavy,
+        "agent.run" | "chat.send" => RateLimitScope::RpcHeavy,
 
         // Everything else
         _ => RateLimitScope::RpcDefault,
@@ -549,7 +549,7 @@ mod tests {
         }
 
         // RpcHeavy methods
-        for method in &["agent.run", "chat.send", "poe.run", "poe.prepare"] {
+        for method in &["agent.run", "chat.send"] {
             assert_eq!(
                 scope_for_method(method),
                 RateLimitScope::RpcHeavy,
