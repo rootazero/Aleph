@@ -160,6 +160,25 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
         def
     }
 
+    /// Format an LLM-facing prose for an argument validation failure.
+    ///
+    /// Called by the default [`Self::call_json`] when `serde_json::from_value`
+    /// rejects the model's tool arguments. The returned string is surfaced as
+    /// `ToolError::ValidationFailed { cause }` (via `AlephError::Validation`)
+    /// and reaches the model on the next turn. Override to inject schema-shape
+    /// hints or examples that nudge the model toward a valid rewrite.
+    ///
+    /// Default mirrors opencode's `InvalidArgumentsError.message`: it names the
+    /// tool and instructs the model to rewrite the input to match the schema.
+    fn format_validation_error(err: &serde_json::Error) -> String {
+        format!(
+            "The {tool} tool was called with invalid arguments: {detail}. \
+             Please rewrite the input so it satisfies the expected schema.",
+            tool = Self::NAME,
+            detail = err
+        )
+    }
+
     /// Execute the tool with typed arguments.
     ///
     /// This is the main implementation point. Implement your tool logic here.
@@ -169,8 +188,20 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     ///
     /// Default implementation deserializes args, calls `call()`, and serializes output.
     /// Override only for special JSON handling needs.
+    ///
+    /// Argument deserialization failures are returned as
+    /// `AlephError::Validation(<format_validation_error output>)` so the
+    /// `BuiltinHandler` can map them to `ToolError::ValidationFailed` (which
+    /// the harness exposes as a fixable, non-execution failure).
     async fn call_json(&self, args: Value) -> Result<Value> {
-        let typed: Self::Args = serde_json::from_value(args)?;
+        let typed: Self::Args = match serde_json::from_value(args) {
+            Ok(v) => v,
+            Err(err) => {
+                return Err(crate::error::AlephError::Validation(
+                    Self::format_validation_error(&err),
+                ));
+            }
+        };
         let output = self.call(typed).await?;
         Ok(serde_json::to_value(&output)?)
     }

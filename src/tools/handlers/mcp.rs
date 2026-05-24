@@ -121,6 +121,13 @@ fn map_mcp_error(name: String, err: AlephError) -> ToolError {
             elapsed_ms: 0,
         },
         AlephError::McpToolNotFound(tool) => ToolError::NotFound { name: tool },
+        // Surface schema-violation prose (whether ours or relayed from the
+        // MCP server) as a fixable validation failure so the LLM can rewrite
+        // and retry on its next turn.
+        AlephError::Validation(cause) => ToolError::ValidationFailed {
+            name,
+            cause: crate::mcp::redact_mcp_error(&cause),
+        },
         other => ToolError::Execution {
             name,
             cause: crate::mcp::redact_mcp_error(&other.to_string()),

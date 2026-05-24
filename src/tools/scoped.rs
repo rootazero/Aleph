@@ -50,6 +50,38 @@ fn wrap_value_with_hook_contexts(value: Value, contexts: &[String]) -> Value {
 }
 
 // =============================================================================
+// ToolDefinitionRewriter trait
+// =============================================================================
+
+/// Request-time rewriter for tool definitions.
+///
+/// Mirrors opencode's `plugin.trigger("tool.definition", ...)` extension
+/// point: implementations may rewrite a tool's `description` and/or
+/// `input_schema` before the catalog is published to the LLM, without
+/// touching the underlying registry entry. Common uses:
+///
+/// - Inject agent-specific hints into tool descriptions
+/// - Strip or restrict schema fields based on capability flags
+/// - Append usage examples for tools that lack them
+///
+/// Rewriters run in attachment order on a per-tool basis. They are
+/// invoked from `list()` and (on cache miss) from `metadata_schema()`;
+/// the rewritten definitions are what the LLM sees.
+///
+/// Implementations should be deterministic per `(tool name, scope)` —
+/// the schema cache is keyed on a generation counter and assumes
+/// rewriter output does not change between cache hits. Bump the
+/// generation explicitly (via [`ScopedToolService::bump_cache_generation`])
+/// when external state that a rewriter reads has changed.
+pub trait ToolDefinitionRewriter: Send + Sync {
+    /// Mutate the tool definition in place. Called once per tool per
+    /// `list()` / `metadata_schema()` build. The implementation MUST NOT
+    /// rename the tool — `def.name` should be left untouched, since the
+    /// dispatch path resolves the underlying handler by that name.
+    fn rewrite(&self, def: &mut ToolDefinition);
+}
+
+// =============================================================================
 // ToolHookDecorator trait
 // =============================================================================
 
@@ -131,6 +163,10 @@ pub struct ScopedToolService {
     /// drift invalidates the `schema_cache`, so a tool flipping
     /// healthy↔unhealthy retransmits to the LLM on the next turn.
     last_health_generation: std::sync::atomic::AtomicU64,
+    /// Request-time tool definition rewriters. Applied per tool in
+    /// attachment order from `list()` and (on cache miss) from
+    /// `metadata_schema()`. See [`ToolDefinitionRewriter`].
+    definition_rewriters: Vec<Arc<dyn ToolDefinitionRewriter>>,
 }
 
 impl ScopedToolService {
@@ -154,6 +190,41 @@ impl ScopedToolService {
             cache_generation: std::sync::atomic::AtomicU64::new(0),
             health: None,
             last_health_generation: std::sync::atomic::AtomicU64::new(0),
+            definition_rewriters: Vec::new(),
+        }
+    }
+
+    /// Attach a [`ToolDefinitionRewriter`]. Rewriters run in attachment
+    /// order on every `list()` / `metadata_schema()` build (the latter
+    /// only on cache miss; call [`Self::bump_cache_generation`] when
+    /// external state that the rewriter consults has changed).
+    pub fn with_definition_rewriter(
+        mut self,
+        rewriter: Arc<dyn ToolDefinitionRewriter>,
+    ) -> Self {
+        self.definition_rewriters.push(rewriter);
+        self
+    }
+
+    /// Invalidate the cached `metadata_schema()` output so the next call
+    /// re-runs the rewriter chain. Use this when external state that a
+    /// rewriter reads (e.g. an agent's permission set, an extension's
+    /// description override) has changed since the last build.
+    pub fn bump_cache_generation(&self) {
+        self.cache_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Apply every attached [`ToolDefinitionRewriter`] to each `def` in
+    /// `defs`. No-op when no rewriters are attached.
+    fn apply_definition_rewriters(&self, defs: &mut [ToolDefinition]) {
+        if self.definition_rewriters.is_empty() {
+            return;
+        }
+        for def in defs.iter_mut() {
+            for rewriter in &self.definition_rewriters {
+                rewriter.rewrite(def);
+            }
         }
     }
 
@@ -391,6 +462,12 @@ impl ToolService for ScopedToolService {
             defs.retain(|d| snap.is_healthy(&d.name));
         }
 
+        // Request-time rewriter pass: extensions / host code may rewrite
+        // descriptions or schemas without touching the underlying
+        // registry entry. Runs after gating so removed tools are not
+        // visited.
+        self.apply_definition_rewriters(&mut defs);
+
         defs
     }
 
@@ -401,29 +478,57 @@ impl ToolService for ScopedToolService {
         }
 
         // Check subagent tool.
-        if let Some(ref st) = self.subagent_tool {
+        let mut def = if let Some(ref st) = self.subagent_tool {
             if st.name() == name {
-                return Some(Self::subagent_definition(st.as_ref()));
+                Some(Self::subagent_definition(st.as_ref()))
+            } else {
+                self.inner.get(name).map(Self::loop_tool_to_definition)
             }
-        }
+        } else {
+            self.inner.get(name).map(Self::loop_tool_to_definition)
+        };
 
-        // Check inner registry.
-        self.inner.get(name).map(Self::loop_tool_to_definition)
+        // Honor request-time rewriters so a `describe()` consumer (per-tool
+        // budget probe, single-tool catalogue refresh) sees the same
+        // definition that `list()` / `metadata_schema()` would publish.
+        if let Some(ref mut d) = def {
+            self.apply_definition_rewriters(std::slice::from_mut(d));
+        }
+        def
     }
 
     async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
+        use tracing::Instrument;
+
+        // Per-call span mirrors opencode's `Effect.withSpan("Tool.execute", …)`.
+        // Attributes mirror its `tool.name` / `session.id` / `tool.call_id`
+        // contract; `tool.idempotent` is Aleph's extra (drives the one-shot
+        // retry gate). Span lives across the whole dispatch — confirm gate,
+        // pre-/post-hooks, retry, layer-2 budget — so downstream tracing
+        // consumers see a single span tree per LLM tool call.
+        let idempotent = crate::tools::retry::is_idempotent_builtin_name(name);
+        let span = tracing::info_span!(
+            "tool.execute",
+            "tool.name" = %name,
+            "tool.idempotent" = idempotent,
+            "session.id" = %self.hook_session_id,
+        );
+
         // Scope the turn's routing context so HITL tools (sandbox escalation,
         // `requires_confirmation`, `ask_user`) can reach the originating
         // channel. Scoped here — the immediate caller of every tool's
         // `execute` — so it stays visible without crossing a `tokio::spawn`.
-        match self.turn_context.clone() {
-            Some(turn) => {
-                crate::tools::turn_context::TURN_CONTEXT
-                    .scope(turn, self.execute_inner(name, input))
-                    .await
+        let fut = async move {
+            match self.turn_context.clone() {
+                Some(turn) => {
+                    crate::tools::turn_context::TURN_CONTEXT
+                        .scope(turn, self.execute_inner(name, input))
+                        .await
+                }
+                None => self.execute_inner(name, input).await,
             }
-            None => self.execute_inner(name, input).await,
-        }
+        };
+        fut.instrument(span).await
     }
 
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
@@ -487,6 +592,10 @@ impl ToolService for ScopedToolService {
         if let Some(snap) = &health_snap {
             defs.retain(|d| snap.is_healthy(&d.name));
         }
+        // Mirror `list()`: rewriters run after gating, before the
+        // metadata-form conversion. Cached output reflects the rewrite,
+        // so subsequent O(1) hits don't re-pay the cost.
+        self.apply_definition_rewriters(&mut defs);
         let schema = to_metadata_form(&defs);
         self.schema_cache
             .store(Arc::new(Some((gen_now, Arc::clone(&schema)))));
@@ -1094,6 +1203,73 @@ mod tests {
         let defs = svc.list().await;
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "read_file");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 1b: definition rewriter mutates description and schema
+    // -------------------------------------------------------------------------
+
+    /// Rewriter that prepends an "[AGENT-A]" marker and stamps a custom
+    /// `x-agent` field into the schema. Lets us assert the rewriter's
+    /// output reaches the LLM-facing path (both `list()` and the
+    /// `metadata_schema()` cache).
+    struct StampingRewriter;
+    impl ToolDefinitionRewriter for StampingRewriter {
+        fn rewrite(&self, def: &mut ToolDefinition) {
+            def.description = format!("[AGENT-A] {}", def.description);
+            if let Some(obj) = def.input_schema.as_object_mut() {
+                obj.insert("x-agent".into(), json!("agent-a"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn list_applies_definition_rewriter() {
+        let registry = make_registry(&["read_file"]);
+        let svc = ScopedToolService::new(registry, std::collections::BTreeSet::new())
+            .with_definition_rewriter(Arc::new(StampingRewriter));
+
+        let defs = svc.list().await;
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].description, "[AGENT-A] stub");
+        assert_eq!(
+            defs[0].input_schema.get("x-agent"),
+            Some(&json!("agent-a"))
+        );
+    }
+
+    #[tokio::test]
+    async fn describe_applies_definition_rewriter() {
+        let registry = make_registry(&["read_file"]);
+        let svc = ScopedToolService::new(registry, std::collections::BTreeSet::new())
+            .with_definition_rewriter(Arc::new(StampingRewriter));
+
+        let def = svc.describe("read_file").await.expect("present");
+        assert_eq!(def.description, "[AGENT-A] stub");
+    }
+
+    #[test]
+    fn metadata_schema_reflects_rewriter_after_cache_bump() {
+        // metadata_schema() caches its output; assert the bump-generation
+        // helper actually re-runs the rewriter chain so callers can opt-in
+        // to a fresh pass without rebuilding the whole service.
+        let registry = make_registry(&["read_file"]);
+        let svc = ScopedToolService::new(registry, std::collections::BTreeSet::new())
+            .with_definition_rewriter(Arc::new(StampingRewriter));
+
+        let first = svc.metadata_schema();
+        assert_eq!(first[0].description, "[AGENT-A] stub");
+
+        // A second call without bumping → cache hit, same Arc.
+        let second = svc.metadata_schema();
+        assert!(Arc::ptr_eq(&first, &second), "expected cached identity");
+
+        // After an explicit bump the schema is recomputed (rewriter runs
+        // again). Identity differs from the first; content stays correct.
+        svc.bump_cache_generation();
+        let third = svc.metadata_schema();
+        assert!(!Arc::ptr_eq(&first, &third), "cache must invalidate");
+        assert_eq!(third[0].description, "[AGENT-A] stub");
     }
 
     // -------------------------------------------------------------------------

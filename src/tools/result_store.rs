@@ -5,8 +5,9 @@
 //! into the context window so the LLM can identify that the full output
 //! exists but was offloaded.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{Duration, SystemTime};
 
 use crate::sync_primitives::Arc;
 
@@ -14,6 +15,16 @@ use crate::context::budget::pressure::estimate_tokens_smart;
 
 /// Prefix used to identify persisted-result reference lines.
 const PERSISTED_REF_PREFIX: &str = "[Full output persisted: ";
+
+/// Default retention window for the periodic sweeper. Mirrors opencode's
+/// `Truncate.cleanup` cutoff (7 days). Persisted tool-result files older
+/// than this are garbage-collected by [`sweep_stale_tool_result_dirs`].
+pub const DEFAULT_TOOL_RESULT_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Default sweep cadence for the background TTL task. Matches opencode's
+/// hourly cadence — a directory walk over `tool_results/` is cheap and the
+/// task does not need to wake more often than that to bound disk usage.
+pub const DEFAULT_TOOL_RESULT_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 // =============================================================================
 // Process-wide installer
@@ -36,8 +47,34 @@ static GLOBAL_STORE: OnceLock<Arc<ToolResultStore>> = OnceLock::new();
 
 /// Install the process-wide `ToolResultStore`. Idempotent — subsequent calls
 /// are silently ignored so multiple boot paths cannot stomp each other.
+///
+/// First-call side effect: spawns the periodic TTL sweeper
+/// ([`spawn_periodic_sweeper`]) rooted at the store's `tool_results/` parent
+/// directory. The sweeper opportunistically reclaims orphaned session dirs
+/// left behind by hard crashes (where `Drop` cleanup never ran) and stale
+/// dirs from previous runs of the process. Mirrors opencode's `Truncate`
+/// background cleanup loop.
+///
+/// The sweeper is intentionally fire-and-forget: it has no shutdown handle
+/// and is dropped only when the process exits. Test boot paths that want
+/// deterministic GC should call [`sweep_stale_tool_result_dirs`] directly.
 pub fn set_global_tool_result_store(store: Arc<ToolResultStore>) {
-    let _ = GLOBAL_STORE.set(store);
+    // `OnceLock::set` errors if a prior install won — in that case we
+    // intentionally do nothing (the existing sweeper is fine).
+    let installed_now = GLOBAL_STORE.set(store.clone()).is_ok();
+    if installed_now {
+        // The sweeper walks the parent of the per-session dir
+        // (`~/.aleph/data/tool_results/`) so every other session's dir is
+        // visible. `parent()` is `None` only for fs roots — never the case
+        // for our `~/.aleph/data/tool_results/<session_id>` layout.
+        if let Some(parent) = store.base_dir.parent().map(Path::to_path_buf) {
+            spawn_periodic_sweeper(
+                parent,
+                DEFAULT_TOOL_RESULT_RETENTION,
+                DEFAULT_TOOL_RESULT_SWEEP_INTERVAL,
+            );
+        }
+    }
 }
 
 /// Read the process-wide `ToolResultStore`, if installed.
@@ -158,6 +195,125 @@ pub fn extract_persisted_ref(text: &str) -> Option<&str> {
         .find(|line| line.starts_with(PERSISTED_REF_PREFIX))
 }
 
+// =============================================================================
+// TTL sweeper for stale per-session dirs
+// =============================================================================
+
+/// Sweep stale persisted-result directories under `root` and remove any whose
+/// most-recent file mtime is older than `cutoff`. Empty directories are
+/// removed unconditionally.
+///
+/// Returns the number of directories removed. Errors on individual entries
+/// are logged at WARN and skipped so a single permission denial cannot stall
+/// the sweep.
+///
+/// This is the synchronous core of [`spawn_periodic_sweeper`]. It is exposed
+/// publicly so test bootstraps and tools (e.g. an admin `aleph` CLI) can
+/// trigger a one-shot GC pass without owning the background task.
+pub fn sweep_stale_tool_result_dirs(root: &Path, cutoff: Duration) -> usize {
+    let entries = match std::fs::read_dir(root) {
+        Ok(it) => it,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
+        Err(e) => {
+            tracing::warn!(
+                root = %root.display(),
+                error = %e,
+                "tool_result sweep: read_dir failed"
+            );
+            return 0;
+        }
+    };
+    let now = SystemTime::now();
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // The store layout is one directory per session_id; ignore stray
+        // files at the root so we never delete user-placed artifacts.
+        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+        if !is_dir {
+            continue;
+        }
+        if dir_is_stale(&path, now, cutoff) {
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => removed += 1,
+                Err(e) => {
+                    tracing::warn!(
+                        dir = %path.display(),
+                        error = %e,
+                        "tool_result sweep: remove_dir_all failed"
+                    );
+                }
+            }
+        }
+    }
+    removed
+}
+
+/// True iff `dir` has no entries newer than `cutoff` from `now`. An empty
+/// directory is always considered stale (it serves no purpose). Errors
+/// reading individual files are treated as "fresh" — the sweep prefers
+/// false negatives (skip removal) over false positives (kill live state).
+fn dir_is_stale(dir: &Path, now: SystemTime, cutoff: Duration) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            // Unreadable entry → assume live, keep dir.
+            return false;
+        };
+        let mtime = meta.modified().unwrap_or(now);
+        if now.duration_since(mtime).unwrap_or(Duration::ZERO) < cutoff {
+            return false;
+        }
+    }
+    // Either no entries (empty dir → stale) or every entry was older than
+    // `cutoff` (we'd have early-returned `false` otherwise).
+    true
+}
+
+/// Spawn a background Tokio task that periodically calls
+/// [`sweep_stale_tool_result_dirs`] on `root`.
+///
+/// Fire-and-forget: the task is detached. Multiple calls with the same
+/// `root` will spawn multiple sweepers — callers should invoke this once
+/// per `root` (the [`set_global_tool_result_store`] entry point enforces
+/// that via `OnceLock`).
+///
+/// No-op if there is no running Tokio runtime — log at DEBUG and return so
+/// that non-async test bootstraps don't panic.
+pub fn spawn_periodic_sweeper(root: PathBuf, retention: Duration, interval: Duration) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        tracing::debug!(
+            root = %root.display(),
+            "tool_result sweeper not spawned: no Tokio runtime"
+        );
+        return;
+    }
+    tokio::spawn(async move {
+        // First sweep is delayed by one interval so boot doesn't block on
+        // a synchronous fs walk; opencode follows the same pattern.
+        let mut ticker = tokio::time::interval(interval);
+        // Skip the initial "fire immediately" tick.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let root = root.clone();
+            // Move the blocking fs walk off the async runtime.
+            let removed =
+                tokio::task::spawn_blocking(move || sweep_stale_tool_result_dirs(&root, retention))
+                    .await
+                    .unwrap_or(0);
+            if removed > 0 {
+                tracing::info!(
+                    removed,
+                    "tool_result sweeper reclaimed stale session dirs"
+                );
+            }
+        }
+    });
+}
+
 /// Replace characters unsafe for filenames with underscores.
 fn sanitize_for_filename(s: &str) -> String {
     s.chars()
@@ -250,5 +406,97 @@ mod tests {
         let text = "no marker here\njust regular output";
         let found = extract_persisted_ref(text);
         assert!(found.is_none(), "should return None when no marker present");
+    }
+
+    // -------------------------------------------------------------------
+    // TTL sweeper
+    // -------------------------------------------------------------------
+
+    use std::time::Duration;
+
+    fn sweeper_root(name: &str) -> PathBuf {
+        let base = std::env::temp_dir()
+            .join("aleph_test_tool_result_sweeper")
+            .join(name);
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    /// Set mtime backwards by `secs` via `filetime` so the dir looks stale.
+    /// We use the `filetime` crate which is already a transitive dep; if
+    /// not available, fall back to creating the dir and immediately
+    /// claiming it's old enough by passing `cutoff = Duration::ZERO`.
+    fn touch_old(path: &Path, secs: u64) {
+        let when = SystemTime::now() - Duration::from_secs(secs);
+        let ft = filetime::FileTime::from_system_time(when);
+        // Set mtime on the dir and every file inside it.
+        let _ = filetime::set_file_mtime(path, ft);
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let _ = filetime::set_file_mtime(entry.path(), ft);
+            }
+        }
+    }
+
+    #[test]
+    fn sweep_removes_stale_dir() {
+        let root = sweeper_root("removes_stale_dir");
+        let stale = root.join("session_old");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("call_1_bash.txt"), "old data").unwrap();
+        // 14 days old, retention 7 days → stale.
+        touch_old(&stale, 14 * 24 * 60 * 60);
+
+        let removed = sweep_stale_tool_result_dirs(&root, DEFAULT_TOOL_RESULT_RETENTION);
+        assert_eq!(removed, 1, "should remove the one stale dir");
+        assert!(!stale.exists(), "stale dir should be gone");
+    }
+
+    #[test]
+    fn sweep_preserves_fresh_dir() {
+        let root = sweeper_root("preserves_fresh_dir");
+        let fresh = root.join("session_live");
+        std::fs::create_dir_all(&fresh).unwrap();
+        std::fs::write(fresh.join("call_1_bash.txt"), "fresh data").unwrap();
+
+        let removed = sweep_stale_tool_result_dirs(&root, DEFAULT_TOOL_RESULT_RETENTION);
+        assert_eq!(removed, 0, "fresh dir must not be touched");
+        assert!(fresh.exists(), "fresh dir should survive sweep");
+    }
+
+    #[test]
+    fn sweep_removes_empty_dir() {
+        let root = sweeper_root("removes_empty_dir");
+        let empty = root.join("session_empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        // No files inside — empty session dir is always stale.
+        let removed = sweep_stale_tool_result_dirs(&root, DEFAULT_TOOL_RESULT_RETENTION);
+        assert_eq!(removed, 1);
+        assert!(!empty.exists());
+    }
+
+    #[test]
+    fn sweep_ignores_stray_files_at_root() {
+        // We never delete root-level files — only sub-directories — so a
+        // user-placed README at the root survives an aggressive cutoff.
+        let root = sweeper_root("ignores_stray_files");
+        let stray = root.join("README.txt");
+        std::fs::write(&stray, "do not delete").unwrap();
+
+        let removed = sweep_stale_tool_result_dirs(&root, Duration::ZERO);
+        assert_eq!(removed, 0);
+        assert!(stray.exists(), "stray top-level file must survive sweep");
+    }
+
+    #[test]
+    fn sweep_on_missing_root_is_noop() {
+        let missing = std::env::temp_dir()
+            .join("aleph_test_tool_result_sweeper")
+            .join("definitely_missing_xyz");
+        let _ = std::fs::remove_dir_all(&missing);
+        assert!(!missing.exists());
+        let removed = sweep_stale_tool_result_dirs(&missing, DEFAULT_TOOL_RESULT_RETENTION);
+        assert_eq!(removed, 0);
     }
 }

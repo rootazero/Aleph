@@ -72,7 +72,7 @@ pub mod runtime_state;
 pub mod scoped;
 pub mod service;
 pub mod turn_context;
-pub use scoped::ScopedToolService;
+pub use scoped::{ScopedToolService, ToolDefinitionRewriter};
 
 pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
 pub use null::NullToolService;

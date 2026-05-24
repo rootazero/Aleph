@@ -37,6 +37,17 @@ impl ToolHandler for BuiltinHandler {
                 value,
                 metadata: ToolOutputMetadata::default(),
             }),
+            // Argument validation failures originate in `AlephTool::call_json`
+            // (default impl): when the LLM sends arguments that fail
+            // `serde_json::from_value`, the trait returns
+            // `AlephError::Validation(<format_validation_error output>)`.
+            // Map them to `ToolError::ValidationFailed` so the harness reports
+            // them as fixable schema errors with the tool-supplied prose,
+            // rather than opaque `Execution` failures.
+            Err(crate::error::AlephError::Validation(cause)) => Err(ToolError::ValidationFailed {
+                name: self.name.clone(),
+                cause,
+            }),
             Err(e) => Err(ToolError::Execution {
                 name: self.name.clone(),
                 cause: e.to_string(),
@@ -111,5 +122,93 @@ mod builtin_handler_tests {
         );
         let def = handler.definition();
         assert_eq!(def.metadata.max_duration_ms, None);
+    }
+
+    /// A `AlephTool` whose `call_json` will reject malformed args via the
+    /// default `format_validation_error` prose. Used to verify the
+    /// `AlephError::Validation` → `ToolError::ValidationFailed` mapping in
+    /// `BuiltinHandler::invoke`.
+    #[derive(Clone)]
+    struct StrictTool;
+
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct StrictArgs {
+        query: String,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::AlephTool for StrictTool {
+        const NAME: &'static str = "strict_tool";
+        const DESCRIPTION: &'static str = "Demands a query field";
+        type Args = StrictArgs;
+        type Output = serde_json::Value;
+
+        async fn call(&self, _args: Self::Args) -> crate::error::Result<Self::Output> {
+            Ok(serde_json::Value::String("ok".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_maps_validation_error_to_validation_failed() {
+        let handler = BuiltinHandler::new("strict_tool".to_string(), Arc::new(StrictTool));
+        // Missing the required `query` field.
+        let bad_input = serde_json::json!({});
+        let err = handler
+            .invoke(bad_input)
+            .await
+            .expect_err("should fail validation");
+        match err {
+            ToolError::ValidationFailed { name, cause } => {
+                assert_eq!(name, "strict_tool");
+                assert!(
+                    cause.contains("strict_tool"),
+                    "prose should name the tool: {cause}"
+                );
+                assert!(
+                    cause.contains("rewrite the input"),
+                    "default prose should instruct rewrite: {cause}"
+                );
+            }
+            other => panic!("expected ValidationFailed, got {other:?}"),
+        }
+    }
+
+    /// Tool overrides `format_validation_error` to inject a custom hint.
+    #[derive(Clone)]
+    struct CustomProseTool;
+
+    #[async_trait::async_trait]
+    impl crate::tools::AlephTool for CustomProseTool {
+        const NAME: &'static str = "custom_prose_tool";
+        const DESCRIPTION: &'static str = "Has custom validation prose";
+        type Args = StrictArgs;
+        type Output = serde_json::Value;
+
+        fn format_validation_error(err: &serde_json::Error) -> String {
+            format!("[CUSTOM HINT] expected {{query: string}}; got: {err}")
+        }
+
+        async fn call(&self, _args: Self::Args) -> crate::error::Result<Self::Output> {
+            Ok(serde_json::Value::Null)
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_uses_custom_validation_prose_when_overridden() {
+        let handler =
+            BuiltinHandler::new("custom_prose_tool".to_string(), Arc::new(CustomProseTool));
+        let err = handler
+            .invoke(serde_json::json!({}))
+            .await
+            .expect_err("should fail validation");
+        match err {
+            ToolError::ValidationFailed { cause, .. } => {
+                assert!(
+                    cause.starts_with("[CUSTOM HINT]"),
+                    "expected custom prose, got: {cause}"
+                );
+            }
+            other => panic!("expected ValidationFailed, got {other:?}"),
+        }
     }
 }
