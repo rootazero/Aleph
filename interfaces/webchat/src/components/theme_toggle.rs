@@ -185,7 +185,7 @@ pub fn ThemeToggle() -> impl IntoView {
 
             // Popover
             <Show when=move || open.get()>
-                <div class="glass-surface glass animate-pop-in absolute top-full right-0 mt-2 z-50 w-56
+                <div class="theme-picker-popover glass-surface glass animate-pop-in absolute top-full right-0 mt-2 z-50 w-56
                             rounded-xl border border-border bg-surface-overlay/90 shadow-xl p-3 space-y-3"
                      style="transform-origin: top right;"
                 >

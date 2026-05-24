@@ -796,6 +796,21 @@ html[data-platform="macos"] .aleph-sidebar-inline-toggle {
     display: none;
 }
 
+/* Theme popover lives inside ThemeToggle's `.relative` wrapper, which on
+   web + Tauri Win/Linux sits before the inline collapse button in the
+   brand row. Its trigger right edge is therefore 30 px (button 26 + gap 4)
+   shy of the brand row's content right edge — anchoring the popover to
+   `right: 0` of the trigger would push it past the sidebar's left edge.
+   Shift it back so its right edge meets the brand row's right edge. On
+   macOS the inline button is `display: none` and the trigger sits flush
+   right again, so reset the offset there. */
+.aleph-sidebar-head .theme-picker-popover {
+    right: -1.875rem;
+}
+html[data-platform="macos"] .aleph-sidebar-head .theme-picker-popover {
+    right: 0;
+}
+
 /* ── Accent-aware caret + scrollbar ──────────────────────────────────
    Two near-invisible accent surfaces that follow the active palette,
    broadening the perceived footprint of the accent color without
