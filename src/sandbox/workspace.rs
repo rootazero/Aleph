@@ -25,6 +25,7 @@ use crate::sandbox::dns;
 use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::sandbox::hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
+use crate::sandbox::proxy::{self, ProxyHandle};
 use crate::sandbox::Sandbox;
 use crate::session::service::SessionId;
 
@@ -42,8 +43,6 @@ pub struct WorkspaceSandbox {
 /// Per-session workspace state: cwd on disk plus the capability baseline and
 /// the cache of elevations the user already approved this session.
 struct SessionWorkspace {
-    #[allow(dead_code)]
-    session_id: SessionId,
     cwd: PathBuf,
     baseline: SandboxCapabilities,
     granted_elevations: RwLock<HashSet<SandboxCapabilities>>,
@@ -107,7 +106,6 @@ impl WorkspaceSandbox {
             .map_err(|e| SandboxError::Io(format!("create workspace dir: {e}")))?;
 
         let ws = Arc::new(SessionWorkspace {
-            session_id: sid.clone(),
             cwd,
             baseline: SandboxCapabilities::strict(),
             granted_elevations: RwLock::new(HashSet::new()),
@@ -265,10 +263,28 @@ impl Sandbox for WorkspaceSandbox {
             }
         }
 
+        // Cycle 6 Phase A — managed in-process proxy.
+        //
+        // When `NetworkPolicy::AllowHosts` is in effect and the platform
+        // can reach loopback (macOS Seatbelt, Windows AppContainer), we
+        // spawn a per-call HTTP CONNECT + SOCKS5 proxy bound to
+        // `127.0.0.1:0`, enforce the hostname allowlist there, and
+        // collapse the OS-level network policy to "loopback only".
+        // Standard `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` env vars
+        // are injected so HTTP clients route through us.
+        //
+        // Linux bwrap continues to hard-fail at `profile_for` because
+        // `--unshare-net` strips the loopback that the host proxy lives
+        // on. Phase B (netns→UDS→loopback bridge, ported from codex
+        // `proxy_routing.rs`) will close the Linux gap.
+        let proxy_handle: Option<ProxyHandle> =
+            self.maybe_spawn_proxy(&mut cmd).await?;
+
         // SP-4: pre-resolve any hostnames in AllowHosts to IPs before the
-        // driver builds its profile. Driver-level matchers (Seatbelt
-        // `(remote ip ...)`) accept IP literals only. Fail-closed on DNS
-        // failure.
+        // driver builds its profile. After the proxy rewrite above this
+        // is a no-op for the proxy path (capability becomes IP-only), but
+        // it's still required for `AllowAll` (no-op) and for the Linux
+        // fallback path where AllowHosts goes straight to the driver.
         if let Err(e) = dns::resolve_hosts_in_capabilities(&mut cmd.capabilities).await {
             self.hooks
                 .run_after(
@@ -316,6 +332,12 @@ impl Sandbox for WorkspaceSandbox {
                 self.max_output_bytes,
             )
             .await;
+
+        // Keep the managed proxy alive across the OS driver `run` and only
+        // shut it down here (drop = shutdown). Explicit binding is required
+        // because `proxy_handle` is declared early in the function for
+        // scope but not consumed by any sub-call.
+        drop(proxy_handle);
 
         // Byte-level secret scrub before any downstream consumer touches stdout/stderr.
         // Whitelist is fed via SecurityContext.injected_secrets when threaded; for
@@ -368,6 +390,99 @@ impl Sandbox for WorkspaceSandbox {
             .await;
 
         output
+    }
+}
+
+impl WorkspaceSandbox {
+    /// Cycle 6 Phase A — spawn a managed proxy if the current capabilities
+    /// request `AllowHosts` *and* the platform driver supports loopback
+    /// access. Returns:
+    ///
+    /// - `Ok(Some(handle))` — proxy is live, `cmd.capabilities.network`
+    ///   has been rewritten to `AllowHosts(["127.0.0.1"])`, and
+    ///   `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` env vars
+    ///   have been injected into `cmd.env`.
+    /// - `Ok(None)` — policy is not `AllowHosts`, allowlist is empty, or
+    ///   the platform is Linux/bwrap (which strips loopback via
+    ///   `--unshare-net`; see Phase B).
+    /// - `Err(_)` — bind/spawn failure surfaces as `SandboxError::Other`.
+    ///
+    /// The caller is responsible for holding the returned handle alive
+    /// across the OS driver `run`. Drop = shutdown.
+    async fn maybe_spawn_proxy(
+        &self,
+        cmd: &mut SandboxCommand,
+    ) -> Result<Option<ProxyHandle>, SandboxError> {
+        use crate::sandbox::capabilities::NetworkPolicy;
+        let hosts = match &cmd.capabilities.network {
+            NetworkPolicy::AllowHosts { hosts } if !hosts.is_empty() => hosts.clone(),
+            _ => return Ok(None),
+        };
+
+        // Cycle 6 Phase A is macOS-only. Two reasons:
+        //
+        // - `linux/bwrap` unshares the network namespace; loopback inside
+        //   the namespace is empty so the host proxy is unreachable.
+        //   Phase B will add a netns→UDS→loopback bridge.
+        // - `windows/token` runs the target inside an AppContainer whose
+        //   default isolation blocks loopback access (the
+        //   `CheckNetIsolationEnableLoopback` API requires admin to add
+        //   an exemption). Phase D will use WFP filters, which also
+        //   require admin / `LocalSystem`.
+        //
+        // On those platforms we leave the capabilities untouched and let
+        // the existing platform-level hard-fail surface the documented
+        // gap to the caller. Spawning a proxy that the sandboxed process
+        // cannot reach would convert a clean policy refusal into an
+        // opaque "connection refused" at runtime.
+        if self.os_driver.platform() != "macos/seatbelt" {
+            return Ok(None);
+        }
+
+        let allowlist = proxy::AllowList::new(&hosts);
+        let handle = proxy::spawn(allowlist)
+            .await
+            .map_err(|e| SandboxError::Other(format!("managed proxy spawn: {e}")))?;
+        let proxy_url = handle.http_url();
+
+        // Collapse the OS-level allowlist to the proxy's loopback address.
+        // The proxy itself enforces the hostname allowlist; the OS just
+        // ensures nothing escapes loopback.
+        cmd.capabilities.network = NetworkPolicy::AllowHosts {
+            hosts: vec!["127.0.0.1".into()],
+        };
+
+        // Inject standard proxy env vars. `or_insert` lets caller-supplied
+        // env override our defaults — handy for tests that pin the URL
+        // shape, and matches the existing `ALEPH_SANDBOX` env contract.
+        let inject_pairs = [
+            ("HTTP_PROXY", proxy_url.as_str()),
+            ("HTTPS_PROXY", proxy_url.as_str()),
+            ("ALL_PROXY", proxy_url.as_str()),
+            ("http_proxy", proxy_url.as_str()),
+            ("https_proxy", proxy_url.as_str()),
+            ("all_proxy", proxy_url.as_str()),
+        ];
+        for (k, v) in inject_pairs {
+            cmd.env.entry(k.to_string()).or_insert_with(|| v.to_string());
+        }
+        // NO_PROXY exempts the loopback itself so curl/python clients
+        // don't loop back through the proxy when talking to it.
+        cmd.env
+            .entry("NO_PROXY".to_string())
+            .or_insert_with(|| "127.0.0.1,localhost,::1".to_string());
+        cmd.env
+            .entry("no_proxy".to_string())
+            .or_insert_with(|| "127.0.0.1,localhost,::1".to_string());
+
+        tracing::debug!(
+            target: "sandbox.proxy",
+            allowlist = ?hosts,
+            proxy = %proxy_url,
+            "spawned managed proxy for AllowHosts"
+        );
+
+        Ok(Some(handle))
     }
 }
 
@@ -465,6 +580,81 @@ mod tests {
                 exit_code: Some(0),
                 duration_ms: 5,
                 ..Default::default()
+            })
+        }
+    }
+
+    /// Cycle 6: a fake driver that claims `macos/seatbelt` as its platform
+    /// (so `WorkspaceSandbox::maybe_spawn_proxy` engages) and captures the
+    /// `env` + `capabilities` it would have run with. Lets us assert the
+    /// proxy injection without running real macOS sandbox-exec.
+    struct CapturingMacosDriver {
+        captured_env: std::sync::Mutex<HashMap<String, String>>,
+        captured_caps: std::sync::Mutex<Option<SandboxCapabilities>>,
+    }
+
+    impl CapturingMacosDriver {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                captured_env: std::sync::Mutex::new(HashMap::new()),
+                captured_caps: std::sync::Mutex::new(None),
+            })
+        }
+
+        fn env(&self) -> HashMap<String, String> {
+            self.captured_env.lock().unwrap().clone()
+        }
+
+        fn caps(&self) -> Option<SandboxCapabilities> {
+            self.captured_caps.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl OsSandboxDriverTrait for CapturingMacosDriver {
+        fn platform(&self) -> &'static str {
+            "macos/seatbelt"
+        }
+
+        fn is_supported(&self) -> bool {
+            true
+        }
+
+        fn profile_for(
+            &self,
+            capabilities: &SandboxCapabilities,
+            _cwd: &Path,
+        ) -> Result<OsSandboxProfile, SandboxError> {
+            // Capture the (post-proxy-rewrite, post-DNS) capabilities at the
+            // exact moment the OS driver would build its profile.
+            *self.captured_caps.lock().unwrap() = Some(capabilities.clone());
+            Ok(OsSandboxProfile {
+                contents: String::new(),
+                max_memory_mb: None,
+                linux_init_policy: None,
+                windows_init_policy: None,
+            })
+        }
+
+        async fn run(
+            &self,
+            _program: &str,
+            _args: &[String],
+            env: &HashMap<String, String>,
+            _stdin: Option<&[u8]>,
+            _cwd: &Path,
+            _profile: &OsSandboxProfile,
+            _timeout: Duration,
+            _max_output_bytes: usize,
+        ) -> Result<SandboxOutput, SandboxError> {
+            *self.captured_env.lock().unwrap() = env.clone();
+            Ok(SandboxOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: Some(0),
+                signal: None,
+                truncated: false,
+                duration_ms: 1,
             })
         }
     }
@@ -888,6 +1078,123 @@ mod tests {
             Some("explicit-override"),
             "explicit caller env must not be overwritten"
         );
+    }
+
+    // ── Cycle 6 Phase A — managed proxy injection ─────────────────────
+
+    /// Build a sandbox using a `CapturingMacosDriver` so the workspace's
+    /// `maybe_spawn_proxy` path engages (platform == `macos/seatbelt`),
+    /// with the approval gate fixed to `Approved` so AllowHosts requests
+    /// pass the capability check.
+    fn build_macos_capturing(
+        tmp: &tempfile::TempDir,
+    ) -> (WorkspaceSandbox, Arc<CapturingMacosDriver>) {
+        let driver = CapturingMacosDriver::new();
+        let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();
+        let sandbox = WorkspaceSandbox::new(
+            tmp.path().to_path_buf(),
+            driver_trait,
+            build_gate_with(ApprovalOutcome::Approved),
+            SandboxHooks::new(),
+        );
+        (sandbox, driver)
+    }
+
+    fn allow_hosts_caps(hosts: &[&str]) -> SandboxCapabilities {
+        SandboxCapabilities {
+            network: NetworkPolicy::AllowHosts {
+                hosts: hosts.iter().map(|h| h.to_string()).collect(),
+            },
+            ..SandboxCapabilities::default()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn proxy_injects_env_vars_for_allow_hosts_on_macos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (sandbox, driver) = build_macos_capturing(&tmp);
+        let cmd = SandboxCommand {
+            session_id: sid(),
+            program: "curl".into(),
+            args: vec!["https://api.example.com/".into()],
+            env: HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: allow_hosts_caps(&["api.example.com", "*.github.com"]),
+            timeout: None,
+        };
+        let out = sandbox.execute(cmd).await.expect("execute");
+        assert_eq!(out.exit_code, Some(0));
+
+        let env = driver.env();
+        let http_proxy = env.get("HTTP_PROXY").expect("HTTP_PROXY missing");
+        assert!(
+            http_proxy.starts_with("http://127.0.0.1:"),
+            "HTTP_PROXY should point at loopback proxy, got {http_proxy}"
+        );
+        assert_eq!(env.get("HTTPS_PROXY"), Some(http_proxy));
+        assert_eq!(env.get("ALL_PROXY"), Some(http_proxy));
+        assert_eq!(env.get("http_proxy"), Some(http_proxy));
+        assert!(env.get("NO_PROXY").unwrap().contains("127.0.0.1"));
+
+        // Capabilities reaching the OS driver have been collapsed to loopback.
+        let driver_caps = driver.caps().expect("profile_for not called");
+        match driver_caps.network {
+            NetworkPolicy::AllowHosts { hosts } => {
+                assert_eq!(hosts, vec!["127.0.0.1".to_string()]);
+            }
+            other => panic!("expected AllowHosts(['127.0.0.1']), got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn proxy_skipped_when_network_policy_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (sandbox, driver) = build_macos_capturing(&tmp);
+        let cmd = SandboxCommand {
+            session_id: sid(),
+            program: "echo".into(),
+            args: vec!["hi".into()],
+            env: HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: SandboxCapabilities::strict(),
+            timeout: None,
+        };
+        let _ = sandbox.execute(cmd).await.expect("execute");
+        let env = driver.env();
+        assert!(!env.contains_key("HTTP_PROXY"));
+        assert!(!env.contains_key("HTTPS_PROXY"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn proxy_respects_caller_supplied_http_proxy_env() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (sandbox, driver) = build_macos_capturing(&tmp);
+        let mut env_pre = HashMap::new();
+        env_pre.insert("HTTP_PROXY".into(), "http://corporate-proxy:8080".into());
+        let cmd = SandboxCommand {
+            session_id: sid(),
+            program: "curl".into(),
+            args: vec!["https://api.example.com/".into()],
+            env: env_pre,
+            stdin: None,
+            cwd: None,
+            capabilities: allow_hosts_caps(&["api.example.com"]),
+            timeout: None,
+        };
+        let _ = sandbox.execute(cmd).await.expect("execute");
+        let env = driver.env();
+        // Caller wins: HTTP_PROXY stays as supplied; HTTPS_PROXY/ALL_PROXY
+        // (not supplied) point at the loopback proxy.
+        assert_eq!(
+            env.get("HTTP_PROXY"),
+            Some(&"http://corporate-proxy:8080".to_string())
+        );
+        assert!(env
+            .get("HTTPS_PROXY")
+            .map(|v: &String| v.starts_with("http://127.0.0.1:"))
+            .unwrap_or(false));
     }
 }
 

@@ -546,33 +546,23 @@ status` continue to work. Cycle 5 closes the absent-path gap (below).
 |---|---|---|---|
 | `None` | `(deny network*)` | `--unshare-net` + Cycle 3 seccomp deny `socket(AF_INET/INET6/NETLINK)` + `connect` | Token restricts; no inbound caps granted |
 | `AllowAll` | `(allow network*)` | shared netns | network capability granted |
-| `AllowHosts(ips)` | `(allow network-outbound (remote ip ...))` per IP | **Rejected** — pre-resolved IPs surfaced in error | **Rejected** — pre-resolved IPs surfaced in error |
+| `AllowHosts(hosts)` | **Cycle 6**: managed proxy enforces hostname allowlist + Seatbelt restricts to loopback only | **Rejected** — pre-resolved IPs surfaced in error; Phase B (netns→loopback bridge) next | **Rejected** — pre-resolved IPs surfaced in error; Phase D (WFP, admin) deferred |
 | `ProxyOnly` | `(allow ...)` for `localhost:<port>` | Rejected | Rejected |
 
 Cycle 3 lifted Linux closer to codex parity by adding seccomp-level
 socket-family deny for `None` mode (defense in depth on top of
-`--unshare-net`). Per-host enforcement for Linux + Windows is still
-deferred: every plausible mechanism requires either elevated
-privileges we don't hold (CAP_NET_ADMIN on Linux, SeChangeNotify /
-LocalSystem on Windows) or a managed proxy intercepting client
-traffic. The next-cycle work for true per-host filtering is:
+`--unshare-net`). Cycle 6 lit macOS up for hostname allowlists via a
+managed in-process proxy (see "Cycle 6 — managed proxy" below). Linux
+and Windows enforcement remains deferred: every plausible mechanism
+requires either elevated privileges we don't hold (CAP_NET_ADMIN on
+Linux, SeChangeNotify / LocalSystem on Windows) or a path for the
+sandbox to reach the host loopback (Linux requires the netns bridge in
+Phase B; Windows requires admin loopback-exemption for AppContainer).
 
-1. **Managed proxy mode**: ship a small in-process SOCKS / HTTP CONNECT
-   proxy bound to `127.0.0.1:<random>`, expose host+port through
-   `HTTP_PROXY` / `HTTPS_PROXY` env vars to the sandboxed target.
-   Enforces allowlist at the application protocol layer; bypassable
-   only by clients that ignore proxy env vars (rare in practice).
-2. **Linux nftables-in-user-netns**: drop into a user namespace where
-   the host process holds `CAP_NET_ADMIN` over the new netns, install
-   nftables rules allowing only the resolved IPs, then enter the
-   sandbox. Real kernel-level enforcement but adds rootless-network
-   plumbing (slirp4netns / pasta).
-
-Neither has a spec yet; until one ships, `AllowHosts` on Linux/Windows
-hard-fails with a rejection message that includes the exact
-pre-resolved IPs that would be allowed — callers can use this to plan
-around the gap or fall back to `AllowAll` + application-level filtering
-inside the workload.
+Until Phases B / D ship, `AllowHosts` on Linux and Windows hard-fails
+with a rejection message that includes the exact pre-resolved IPs that
+would be allowed — callers can use this to plan around the gap or fall
+back to `AllowAll` + application-level filtering inside the workload.
 
 ## Cycle 4 hardening (2026-05-21)
 
@@ -685,21 +675,88 @@ stub — so the workspace is left exactly as it was found.
 
 ### Per-host network filtering — phased plan
 
-`AllowHosts` / `ProxyOnly` still hard-fail on Linux and Windows. The
-Cycle 5 spec decomposes enforcement into four phases:
+The Cycle 5 spec decomposes enforcement into four phases:
 
-- **Phase A** — a shared in-process HTTP-CONNECT / SOCKS5 allowlist proxy
-  (`src/sandbox/proxy/`), no privilege, usable on all three OSes; also
-  gives macOS an app-layer hostname allowlist.
-- **Phase B** — a Linux netns TCP→UDS→TCP bridge (port of codex
-  `proxy_routing.rs`) + seccomp ProxyRouted mode, so a `--unshare-net`
-  sandbox can reach the host proxy. No extra privilege.
-- **Phase C** — Linux nftables in a `CAP_NET_ADMIN` user namespace (true
-  kernel-level per-IP egress).
-- **Phase D** — Windows WFP filters (admin-only).
+| Phase | Mechanism | Privilege | Platforms | Status |
+|------:|-----------|-----------|-----------|--------|
+| A | In-process HTTP CONNECT + SOCKS5 allowlist proxy (`src/sandbox/proxy/`) | None | macOS | **DONE (Cycle 6)** |
+| B | Linux netns TCP→UDS→TCP bridge + seccomp ProxyRouted | None | Linux | Next |
+| C | nftables in `CAP_NET_ADMIN` user namespace | Admin-equiv | Linux | Deferred |
+| D | Windows WFP filters | Admin / LocalSystem | Windows | Deferred |
 
 Recommended sequencing is `A → B`, then reassess; C and D stay deferred
-until a concrete need. Each phase is its own future cycle.
+until a concrete need.
+
+## Cycle 6 — managed proxy (2026-05-24)
+
+Phase A is **live on macOS**. `NetworkPolicy::AllowHosts { hosts }` no
+longer requires hostnames to pre-resolve to IPs at the call site:
+hostnames (and `*.suffix` wildcards) flow through the workspace
+unchanged, are enforced inside the managed proxy, and the macOS Seatbelt
+profile is collapsed to "allow loopback only".
+
+**How it wires together** (see `src/sandbox/proxy/` and
+`WorkspaceSandbox::maybe_spawn_proxy`):
+
+```
+SandboxCommand                                         OsSandboxDriver
+─────────────                                          ───────────────
+network: AllowHosts{["api.example.com","*.github.com"]}
+        │
+        ▼  WorkspaceSandbox::maybe_spawn_proxy  (macOS only)
+        │  • spawn proxy::ProxyHandle on 127.0.0.1:0
+        │  • cmd.capabilities.network → AllowHosts{["127.0.0.1"]}
+        │  • cmd.env += HTTP_PROXY / HTTPS_PROXY / ALL_PROXY
+        │                = http://127.0.0.1:<port>
+        │                NO_PROXY = 127.0.0.1,localhost,::1
+        ▼  dns::resolve_hosts_in_capabilities  (now a no-op: IP only)
+        ▼  os_driver.profile_for                       → SBPL
+                                                          (allow remote ip "127.0.0.1")
+        ▼  os_driver.run                               → sandbox-exec
+                                                          ⤵ HTTPS client reads HTTPS_PROXY,
+                                                            sends CONNECT api.example.com:443
+                                                          ⤵ proxy enforces allowlist
+                                                          ⤵ proxy dials upstream
+                                                          ⤵ copy_bidirectional
+        ▼  drop(proxy_handle)                          → shutdown
+```
+
+The proxy supports both HTTP CONNECT (RFC 7231 §4.3.6) — for HTTPS
+tunnels, and for HTTP traffic when clients honour `HTTPS_PROXY` — and
+SOCKS5 (RFC 1928, CONNECT command). The first inbound byte selects the
+protocol (`0x05` → SOCKS5, anything else → HTTP). Allowlists accept
+exact hostnames (`api.example.com`), wildcard children
+(`*.example.com` matches one extra label, browser-cookie semantics),
+and IP literals (`140.82.114.4`, `::1`).
+
+**Why macOS only this cycle:**
+
+- **Linux**: `--unshare-net` strips the loopback the host proxy
+  listens on, so a sandboxed process cannot reach `127.0.0.1:<port>`.
+  Phase B (netns→UDS→loopback bridge, ported from codex
+  `linux-sandbox/proxy_routing.rs`) closes this without elevated
+  privileges. The Linux driver continues to hard-fail at
+  `profile_for` with an updated message that points at Phase B.
+- **Windows**: AppContainer isolates loopback by default; enabling it
+  requires `CheckNetIsolationEnableLoopback`, which needs admin /
+  `SeChangeNotifyPrivilege`. Phase D will use WFP filters, also admin
+  / LocalSystem. The Windows driver continues to hard-fail with an
+  updated message that points at Phase D.
+
+**Files changed:**
+
+- New: `src/sandbox/proxy/{mod.rs,allowlist.rs,connect.rs,socks5.rs,lifecycle.rs}`
+- Wired: `src/sandbox/workspace.rs` (`maybe_spawn_proxy`)
+- Comments only: `src/sandbox/platforms/{macos/seatbelt.rs,linux/bwrap.rs,windows/driver.rs}`
+
+**Entropy reduction:** dead field `SessionWorkspace.session_id`
+removed (`src/sandbox/workspace.rs`).
+
+**Verification:** 27 new unit tests in `sandbox::proxy::*` (allowlist
+matcher, CONNECT parse, SOCKS5 layout, lifecycle bind/handshake/shutdown,
+end-to-end happy path through a loopback upstream). 3 new workspace
+tests for the proxy injection (env vars set, capabilities rewritten,
+caller env wins). All existing sandbox tests (199) remain green.
 
 ### Verification
 

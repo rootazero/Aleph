@@ -116,26 +116,32 @@ impl WindowsSandboxDriver {
             NetworkPolicy::AllowHosts(hosts) => {
                 // Workspace pre-resolution has already turned hostnames
                 // into IP literals (see `src/sandbox/dns.rs`); we expose
-                // them in the rejection so callers know exactly which
-                // IPs would be allowed if WFP enforcement existed.
+                // them in the rejection so callers know which IPs would
+                // be allowed under enforcement.
                 //
-                // Why not enforced: WFP filter installation requires
-                // SeChangeNotifyPrivilege + admin (or a service running
-                // as LocalSystem). Even the AppContainer path runs
-                // unprivileged in user-session and cannot add WFP
-                // filters. The single-cycle deliverable would be a
-                // managed proxy plus HTTP_PROXY env injection, matching
-                // the Linux path.
+                // Why Cycle 6 Phase A (managed proxy) does NOT help here:
+                // AppContainer's default isolation BLOCKS loopback
+                // access — that's the well-known "AppContainer loopback
+                // isolation" feature. Enabling loopback for the
+                // per-execution AppContainer SID requires
+                // `CheckNetIsolationEnableLoopback`, which needs admin /
+                // SeChangeNotifyPrivilege to add the exemption. Phase A
+                // is therefore enabled on macOS only.
+                //
+                // Path forward: Phase D — WFP filters via a
+                // privileged sidecar service (still admin / LocalSystem).
+                // Until then, use AllowAll (unfiltered) or None.
                 let allowlist = hosts.join(", ");
                 return Err(SandboxError::UnsupportedPolicy {
                     platform: "windows/token",
                     feature: "NetworkPolicy::AllowHosts".into(),
                     reason: format!(
                         "per-host egress filtering on Windows is not yet enforced. \
-                         Workspace pre-resolved the allowlist to [{allowlist}]; a future \
-                         cycle will land enforcement via a managed proxy or WFP filters \
-                         (the latter requires admin / LocalSystem). For now, use AllowAll \
-                         (unfiltered) or None (no network). Tracked in \
+                         Workspace pre-resolved the allowlist to [{allowlist}]. Cycle 6 \
+                         Phase A (managed proxy) is macOS-only — AppContainer blocks \
+                         loopback to the proxy without admin-level loopback exemption. \
+                         Phase D will use WFP filters (admin / LocalSystem). For now, \
+                         use AllowAll (unfiltered) or None (no network). Tracked in \
                          docs/reference/SANDBOX.md § Network Filtering."
                     ),
                 });

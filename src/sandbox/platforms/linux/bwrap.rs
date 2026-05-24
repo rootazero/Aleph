@@ -148,23 +148,30 @@ impl BubblewrapDriver {
                 // precise about which IPs *would* be allowed if a
                 // future cycle wires per-host enforcement.
                 //
-                // Why not enforced yet: kernel-level per-IP egress
-                // filtering on Linux requires CAP_NET_ADMIN to install
-                // nftables rules inside the bwrap netns, which we don't
-                // hold in the host process. Landlock-net (kernel 6.7+)
-                // only filters by TCP port, not by IP, so it can't
-                // express this policy. A managed-proxy mode (with
-                // HTTP_PROXY env injection) is the most plausible
-                // single-cycle deliverable; tracked as deferred work.
+                // Cycle 6 Phase A delivered a managed in-process HTTP
+                // CONNECT + SOCKS5 proxy that enforces hostname
+                // allowlists on macOS. It does not yet help on Linux:
+                // `--unshare-net` strips the loopback interface inside
+                // the netns, so the host proxy bound on `127.0.0.1:N` is
+                // unreachable from within. Phase B closes this by adding
+                // a netns→UDS→loopback bridge (codex
+                // `linux-sandbox/proxy_routing.rs` does the same), at
+                // which point the workspace pipeline will route Linux
+                // AllowHosts traffic through the same proxy.
+                //
+                // Phase C (nftables in a `CAP_NET_ADMIN` user namespace,
+                // for true kernel-level per-IP egress) remains deferred.
                 let allowlist = hosts.join(", ");
                 return Err(SandboxError::UnsupportedPolicy {
                     platform: "linux/bwrap",
                     feature: "NetworkPolicy::AllowHosts".into(),
                     reason: format!(
                         "per-host egress filtering on Linux is not yet enforced. \
-                         Workspace pre-resolved the allowlist to [{allowlist}]; a future \
-                         cycle will land enforcement via a managed proxy or nftables \
-                         in a CAP_NET_ADMIN-capable user namespace. For now, use \
+                         Workspace pre-resolved the allowlist to [{allowlist}]. \
+                         Cycle 6 Phase A (managed proxy) is live on macOS; Linux waits \
+                         on Phase B (netns→UDS→loopback bridge) because `--unshare-net` \
+                         strips the loopback the host proxy listens on. Phase C \
+                         (nftables under CAP_NET_ADMIN) remains deferred. For now, use \
                          AllowAll (unfiltered) or None (no network). Tracked in \
                          docs/reference/SANDBOX.md § Network Filtering."
                     ),
@@ -174,8 +181,8 @@ impl BubblewrapDriver {
                 return Err(SandboxError::UnsupportedPolicy {
                     platform: "linux/bwrap",
                     feature: "NetworkPolicy::ProxyOnly".into(),
-                    reason: "proxy-only mode requires a managed proxy backend on the host \
-                             namespace (deferred to spec SP-4). Use AllowAll or None."
+                    reason: "proxy-only mode requires Phase B (netns→loopback bridge) \
+                             before Linux can reach the managed proxy. Use AllowAll or None."
                         .into(),
                 });
             }

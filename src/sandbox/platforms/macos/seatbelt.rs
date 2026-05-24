@@ -639,9 +639,21 @@ impl SeatbeltDriver {
             }
             NetworkPolicy::AllowHosts(hosts) => {
                 // Seatbelt's `(remote ip "...")` matcher takes IP literals only;
-                // hostnames silently never match (silent policy violation). Reject
-                // hostnames at profile-generation time so the caller learns
-                // immediately rather than discovering at runtime.
+                // hostnames silently never match (silent policy violation).
+                // Two upstream layers feed us IP-only entries:
+                //
+                // 1. Cycle 6 Phase A: `WorkspaceSandbox::maybe_spawn_proxy`
+                //    rewrites `AllowHosts { hosts: [<hostnames>] }` to
+                //    `AllowHosts { hosts: ["127.0.0.1"] }` and routes the
+                //    sandboxed process through a managed in-process proxy.
+                //    The proxy enforces the hostname allowlist; the OS
+                //    profile only needs to permit loopback.
+                // 2. SP-4 DNS pre-resolution in `WorkspaceSandbox::execute`
+                //    converts any remaining hostname inputs to IPs.
+                //
+                // The rejection branch below is defence-in-depth in case
+                // someone bypasses the workspace pipeline and feeds raw
+                // hostnames to the driver directly.
                 for host in hosts {
                     if !host_is_ip_literal(host) {
                         return Err(SandboxError::UnsupportedPolicy {
@@ -649,9 +661,11 @@ impl SeatbeltDriver {
                             feature: "NetworkPolicy::AllowHosts (hostname)".into(),
                             reason: format!(
                                 "Seatbelt's `(remote ip ...)` accepts IP literals only; \
-                                 '{host}' is not an IP. Pre-resolve hostnames to IPs at \
-                                 the call site, or use AllowAll. Hostname-based filtering \
-                                 is deferred to spec SP-4."
+                                 '{host}' is not an IP. The WorkspaceSandbox pipeline \
+                                 normally routes hostname allowlists through the managed \
+                                 proxy (Cycle 6 Phase A) so this driver only sees \
+                                 loopback. If you are calling the driver directly, \
+                                 pre-resolve hostnames or use AllowAll."
                             ),
                         });
                     }
