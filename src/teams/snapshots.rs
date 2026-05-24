@@ -7,7 +7,7 @@
 //! (not in `teams.db`) so the read path holds one lock for the bulk content.
 //! No FK on `coord_tasks` — historical snapshots must survive task deletion.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -61,6 +61,12 @@ pub struct CreateSnapshotOutput {
 }
 
 /// Diff summary returned by `restore` (always, with or without `dry_run`).
+///
+/// `edges_restored` counts the dependency edges that the restore step
+/// re-attached to newly-created tasks. Edges targeting snapshot tasks not
+/// present in `payload.tasks` are silently dropped; edges onto already-live
+/// tasks are remapped to the live id. On `dry_run`, the count reflects what
+/// *would* be restored.
 #[derive(Debug, Clone, Serialize)]
 pub struct RestoreDiff {
     pub dry_run: bool,
@@ -73,6 +79,8 @@ pub struct RestoreDiff {
     pub tasks_to_skip_active: Vec<String>,
     pub members_to_add: Vec<String>,
     pub members_to_remove: Vec<String>,
+    #[serde(default)]
+    pub edges_restored: usize,
 }
 
 // =============================================================================
@@ -238,6 +246,57 @@ fn db_err(e: impl std::fmt::Display) -> AlephError {
     }
 }
 
+/// Topologically sort `tasks` so every dep that also appears in `tasks` comes
+/// before the dependent. Off-snapshot deps are ignored. Also returns the
+/// count of in-payload dependency edges — these are the edges that the
+/// restore will re-attach (or drop, if all live counterparts are already
+/// covered by `tasks_to_skip_active`).
+///
+/// Errors on cycle — captured snapshots are always acyclic, but a corrupted
+/// blob could be malformed. Defensive bail.
+///
+/// Returns indices into `tasks` (rather than references) so callers can
+/// borrow `tasks` mutably-or-not freely.
+fn topo_sort_and_count_edges(tasks: &[CoordTask]) -> Result<(Vec<usize>, usize)> {
+    let n = tasks.len();
+    let id_to_idx: HashMap<&str, usize> = tasks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id.as_str(), i))
+        .collect();
+    let mut in_degree = vec![0usize; n];
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut edge_count = 0usize;
+    for (i, t) in tasks.iter().enumerate() {
+        for dep in &t.dependencies {
+            if let Some(&j) = id_to_idx.get(dep.as_str()) {
+                in_degree[i] += 1;
+                children[j].push(i);
+                edge_count += 1;
+            }
+        }
+    }
+    let mut queue: VecDeque<usize> =
+        (0..n).filter(|&i| in_degree[i] == 0).collect();
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    while let Some(i) = queue.pop_front() {
+        order.push(i);
+        for &c in &children[i] {
+            in_degree[c] -= 1;
+            if in_degree[c] == 0 {
+                queue.push_back(c);
+            }
+        }
+    }
+    if order.len() != n {
+        return Err(AlephError::ConfigError {
+            message: "snapshot task graph contains a cycle".into(),
+            suggestion: None,
+        });
+    }
+    Ok((order, edge_count))
+}
+
 // =============================================================================
 // Capture & restore orchestration
 // =============================================================================
@@ -378,6 +437,13 @@ pub async fn restore_snapshot(
         }
     }
 
+    // --- Dependency graph -------------------------------------------------
+    // Topo-sort the snapshot tasks so dependencies are created before
+    // dependents. Off-snapshot deps are ignored (their counterparts may have
+    // been deleted in the meantime). `edges_to_restore` is the count of
+    // in-payload edges — what the restore will re-attach.
+    let (topo_order, edges_to_restore) = topo_sort_and_count_edges(&payload.tasks)?;
+
     let diff = RestoreDiff {
         dry_run,
         team_id: team_id.clone(),
@@ -389,6 +455,7 @@ pub async fn restore_snapshot(
         tasks_to_skip_active: tasks_to_skip_active.clone(),
         members_to_add: members_to_add.clone(),
         members_to_remove: members_to_remove.clone(),
+        edges_restored: edges_to_restore,
     };
 
     if dry_run {
@@ -431,25 +498,49 @@ pub async fn restore_snapshot(
         }
     }
 
-    // 3. Tasks: create the additions. Updates and active-skips are recorded
-    //    in the diff but NOT mutated — restoring would clobber live work.
-    //    A future cycle can extend this with explicit `--force` semantics.
+    // 3. Tasks: create the additions in dependency order, remapping snapshot
+    //    `blocked_by` ids to whichever live id ended up backing each snapshot
+    //    task — either a freshly-created one or an already-live counterpart
+    //    matched by (subject, owner). Updates and active-skips are recorded
+    //    in the diff but their config is NOT mutated — restoring would
+    //    clobber live work.
+    //
+    //    Edges whose snapshot dep target is missing from the payload (e.g.
+    //    the dep was deleted before snapshot or pruned) are silently
+    //    dropped. The diff's `edges_restored` counts only the edges that the
+    //    restore will (or did) actually re-attach.
+    let mut id_map: HashMap<String, String> = HashMap::new();
     for snap in &payload.tasks {
         let k = live_key(snap);
-        if live_by_key.contains_key(&k) {
-            continue;
+        if let Some(live) = live_by_key.get(&k) {
+            id_map.insert(snap.id.clone(), live.id.clone());
         }
-        coord_store
+    }
+
+    for idx in topo_order {
+        let snap = &payload.tasks[idx];
+        if id_map.contains_key(&snap.id) {
+            continue; // already live; we don't mutate live tasks
+        }
+        let mut blocked_by: Vec<String> = Vec::with_capacity(snap.dependencies.len());
+        for dep in &snap.dependencies {
+            if let Some(live_id) = id_map.get(dep.as_str()) {
+                blocked_by.push(live_id.clone());
+            }
+            // else: dep target wasn't in payload — drop the edge silently.
+        }
+        let created = coord_store
             .create_task(NewCoordTask {
                 team_id: Some(team_id.clone()),
                 subject: snap.subject.clone(),
                 description: snap.description.clone(),
                 owner: snap.owner.clone(),
                 priority: snap.priority,
-                blocked_by: vec![], // edges not restored — see note below
+                blocked_by,
                 metadata: snap.metadata.clone(),
             })
             .await?;
+        id_map.insert(snap.id.clone(), created.id);
     }
 
     Ok(diff)
@@ -752,5 +843,220 @@ mod tests {
         assert!(snap.delete(&s.snapshot_id).await.unwrap());
         assert!(!snap.delete(&s.snapshot_id).await.unwrap()); // already gone
         assert!(snap.get(&s.snapshot_id).await.unwrap().is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Dependency-edge restoration
+    // -----------------------------------------------------------------------
+
+    fn mk_task(
+        id: &str,
+        team_id: &str,
+        subject: &str,
+        owner: Option<&str>,
+        deps: Vec<&str>,
+    ) -> CoordTask {
+        CoordTask {
+            id: id.into(),
+            team_id: Some(team_id.into()),
+            subject: subject.into(),
+            description: String::new(),
+            status: CoordTaskStatus::Pending,
+            owner: owner.map(str::to_string),
+            priority: Priority::Normal,
+            result: None,
+            metadata: serde_json::json!({}),
+            dependencies: deps.into_iter().map(str::to_string).collect(),
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            locked_by: None,
+            locked_at: None,
+        }
+    }
+
+    fn mk_payload(team: &Team, members: Vec<TeamMember>, tasks: Vec<CoordTask>) -> TeamSnapshotPayload {
+        TeamSnapshotPayload {
+            team: team.clone(),
+            members,
+            tasks,
+            note: String::new(),
+        }
+    }
+
+    async fn add_leader(teams: &SqliteTeamStore, team_id: &str) -> TeamMember {
+        teams
+            .add_member(NewTeamMember {
+                team_id: team_id.into(),
+                agent_id: "leader".into(),
+                role: "leader".into(),
+            })
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn restore_recreates_dependency_edges() {
+        let (snap, teams, coord) = setup().await;
+        let team = seed_team(teams.as_ref()).await;
+        let leader = add_leader(teams.as_ref(), &team.id).await;
+
+        // Build a hand-crafted payload — bypass capture_snapshot so the live
+        // coord_store stays empty and the restore actually has to create.
+        let task_a = mk_task("snap-A", &team.id, "task A", Some("leader"), vec![]);
+        let task_b = mk_task("snap-B", &team.id, "task B", Some("leader"), vec!["snap-A"]);
+        let payload = mk_payload(&team, vec![leader], vec![task_a, task_b]);
+        let (sid, _, _) = snap.insert(&team.id, "v1", &payload).await.unwrap();
+
+        let diff = restore_snapshot(snap.as_ref(), teams.as_ref(), coord.as_ref(), &sid, false)
+            .await
+            .unwrap();
+        assert!(!diff.dry_run);
+        assert_eq!(diff.tasks_to_add.len(), 2);
+        assert_eq!(diff.edges_restored, 1);
+
+        let live = coord
+            .list_tasks(CoordTaskFilter {
+                team_id: Some(team.id.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(live.len(), 2);
+        // Find the dependent task and verify its dependency points at the
+        // freshly-created counterpart of task A (not the stale snap-A id).
+        let b = live.iter().find(|t| t.subject == "task B").expect("task B");
+        let a = live.iter().find(|t| t.subject == "task A").expect("task A");
+        assert_eq!(b.dependencies, vec![a.id.clone()]);
+        // And A must have NO dependencies — it was a root.
+        assert!(a.dependencies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn restore_remaps_dep_to_existing_live_task() {
+        let (snap, teams, coord) = setup().await;
+        let team = seed_team(teams.as_ref()).await;
+        let leader = add_leader(teams.as_ref(), &team.id).await;
+
+        // Live coord already has task A — built independently, so its id
+        // differs from the snapshot's "snap-A".
+        let live_a = coord
+            .create_task(NewCoordTask {
+                team_id: Some(team.id.clone()),
+                subject: "task A".into(),
+                description: String::new(),
+                owner: Some("leader".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        assert_ne!(live_a.id, "snap-A"); // sanity — UUIDs differ
+
+        // Snapshot has both A (mirror, will become tasks_to_update) and B
+        // (new, depends on snap-A id).
+        let task_a = mk_task("snap-A", &team.id, "task A", Some("leader"), vec![]);
+        let task_b = mk_task("snap-B", &team.id, "task B", Some("leader"), vec!["snap-A"]);
+        let payload = mk_payload(&team, vec![leader], vec![task_a, task_b]);
+        let (sid, _, _) = snap.insert(&team.id, "v1", &payload).await.unwrap();
+
+        let diff = restore_snapshot(snap.as_ref(), teams.as_ref(), coord.as_ref(), &sid, false)
+            .await
+            .unwrap();
+        assert_eq!(diff.tasks_to_add, vec!["task B"]);
+        assert_eq!(diff.tasks_to_update, vec!["task A"]);
+        assert_eq!(diff.edges_restored, 1);
+
+        let live = coord
+            .list_tasks(CoordTaskFilter {
+                team_id: Some(team.id.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(live.len(), 2);
+        let b = live.iter().find(|t| t.subject == "task B").expect("task B");
+        // B must point at the pre-existing live A, not a re-created one.
+        assert_eq!(b.dependencies, vec![live_a.id.clone()]);
+    }
+
+    #[tokio::test]
+    async fn restore_drops_orphan_edges_silently() {
+        let (snap, teams, coord) = setup().await;
+        let team = seed_team(teams.as_ref()).await;
+        let leader = add_leader(teams.as_ref(), &team.id).await;
+
+        // B points at a ghost id with no matching payload entry. Restore
+        // must drop that edge and create B with empty blocked_by.
+        let task_b = mk_task("snap-B", &team.id, "task B", Some("leader"), vec!["ghost"]);
+        let payload = mk_payload(&team, vec![leader], vec![task_b]);
+        let (sid, _, _) = snap.insert(&team.id, "v1", &payload).await.unwrap();
+
+        let diff = restore_snapshot(snap.as_ref(), teams.as_ref(), coord.as_ref(), &sid, false)
+            .await
+            .unwrap();
+        assert_eq!(diff.edges_restored, 0);
+
+        let live = coord
+            .list_tasks(CoordTaskFilter {
+                team_id: Some(team.id.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(live.len(), 1);
+        assert!(live[0].dependencies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dry_run_reports_edges_to_restore_without_mutating() {
+        let (snap, teams, coord) = setup().await;
+        let team = seed_team(teams.as_ref()).await;
+        let leader = add_leader(teams.as_ref(), &team.id).await;
+
+        let task_a = mk_task("snap-A", &team.id, "task A", Some("leader"), vec![]);
+        let task_b = mk_task("snap-B", &team.id, "task B", Some("leader"), vec!["snap-A"]);
+        let payload = mk_payload(&team, vec![leader], vec![task_a, task_b]);
+        let (sid, _, _) = snap.insert(&team.id, "v1", &payload).await.unwrap();
+
+        let diff = restore_snapshot(snap.as_ref(), teams.as_ref(), coord.as_ref(), &sid, true)
+            .await
+            .unwrap();
+        assert!(diff.dry_run);
+        assert_eq!(diff.edges_restored, 1);
+
+        // Live state must be untouched.
+        let live = coord
+            .list_tasks(CoordTaskFilter {
+                team_id: Some(team.id.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(live.is_empty());
+    }
+
+    #[test]
+    fn topo_sort_rejects_cyclic_snapshot() {
+        // Synthesise a cycle: a depends on b, b depends on a.
+        let team_id = "t1";
+        let cycle = vec![
+            mk_task("a", team_id, "A", None, vec!["b"]),
+            mk_task("b", team_id, "B", None, vec!["a"]),
+        ];
+        let err = topo_sort_and_count_edges(&cycle).expect_err("cycle must error");
+        assert!(matches!(err, AlephError::ConfigError { .. }));
+    }
+
+    #[test]
+    fn topo_sort_ignores_off_snapshot_deps() {
+        let team_id = "t1";
+        // "external" is not in the payload — must be treated as a free root,
+        // not as an incoming edge.
+        let tasks = vec![mk_task("only", team_id, "only", None, vec!["external"])];
+        let (order, edges) = topo_sort_and_count_edges(&tasks).unwrap();
+        assert_eq!(order, vec![0]);
+        assert_eq!(edges, 0);
     }
 }
