@@ -1,321 +1,262 @@
 # Aleph (ℵ)
 
-> Self-hosted personal AI assistant — one core, many shells.
+> Your personal AI assistant — **native on your desktop, reachable anywhere**.
 
 [![Rust](https://img.shields.io/badge/Rust-1.92%2B-b7410e)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)]()
 
 [中文文档](README_CN.md)
 
+<p align="center">
+  <img src="docs/images/aleph-desktop.png" alt="Aleph desktop app on macOS" width="900">
+</p>
+
+---
+
 ## What is Aleph?
 
-Aleph is a self-hosted personal AI assistant built in Rust. It runs entirely on your own devices, connecting through a unified Gateway to 15+ messaging channels (Telegram, Discord, Slack, WhatsApp, IRC, Matrix, Signal, and more). The Rust core drives an agent loop with multi-provider LLM support, 30+ built-in tools, hybrid memory search, and a plugin system — accessible through native apps, CLI, a web panel, and social bots simultaneously.
+Aleph is a self-hosted personal AI assistant that lives on **your** machine. It ships as a **native desktop app** for macOS, Windows, and Linux — install the `.dmg` / `.msi` / `.deb`, launch it, and you have a conversational, multi-modal assistant in your tray within a minute.
 
-## Key Highlights
+The same app quietly hosts `aleph-server`, your private AI brain. Because the brain is always running, Aleph can also reach you on the channels you already use — Telegram, Discord, Slack, WhatsApp, iMessage, Matrix, IRC, email, and a dozen more — so you can keep talking to your assistant from your phone, your watch, or any browser.
 
-### Cognitive Memory Architecture
+**One brain. Many doors. Your data, your devices.**
 
-Aleph's memory system goes beyond simple RAG:
+---
 
-- **Note Layer** — Markdown-based memory with Obsidian-compatible `[[wikilink]]` syntax, forming a traversable knowledge graph
-- **Hybrid Retrieval** — Vector ANN (sqlite-vec) + full-text search (FTS5) + wikilink graph traversal for multi-hop reasoning
-- **Self-Learning** — Automatic skill generation from notes; the system observes patterns in your notes and suggests or auto-generates skills
-- **Dream Daemon** — Background compaction and synthesis of memories into higher-level abstractions
+## Why a desktop app?
 
-### Decoupled Agent Architecture
+Aleph started as a headless server. We rebuilt it around a real desktop app because that's where personal AI actually lives — next to your work, not behind a URL.
+
+### 🖥️ Install in one click, run forever
+
+Download → double-click → done. The installer bundles the `aleph-server` daemon, registers launch-at-login, and parks Aleph in your system tray. No port forwarding, no `docker compose`, no terminal — it just works for non-developers too.
+
+### 💬 A real conversation surface
+
+A polished chat panel (Leptos + WASM) with streaming responses, code blocks, file drops, image previews, voice input, inline tool calls, and approval prompts. It's the experience you'd expect from a Claude/ChatGPT desktop app — but talking to *your* assistant, with *your* memory and *your* tools.
+
+### ⚙️ Visual setup, no config files
+
+Pick a model, paste an API key, toggle a channel, install a skill, manage memory notes — all through the in-app settings panel. Configuration files still exist for power users, but you don't have to touch them.
+
+### 🖱️ Truly native
+
+- **System tray** — Always there, never in the way
+- **Global summon hotkey** — `⌘ ⇧ Space` (configurable) to focus the chat from anywhere
+- **OS notifications** — Push results, daemon alerts, and approval requests through native toast notifications
+- **`aleph://` deep links** — Launch tasks from the browser, other apps, or shortcuts
+- **Auto-update** — Signed updates land in the background; restart when you're ready
+- **Native input/screenshot/clipboard** — Aleph can read your screen and type, with explicit permission
+
+### 🔒 Your data stays local
+
+All conversations, memory notes, vectors, and credentials live under `~/.aleph/`. Aleph only talks to the LLM provider *you* configured (or a local Ollama). Nothing routes through a vendor cloud.
+
+---
+
+## Remote channels — your assistant comes with you
+
+The desktop app is the home base, but Aleph also reaches outward. Through the unified **Gateway**, the same brain handles messages from:
+
+| Category | Channels |
+|----------|----------|
+| **Chat** | Telegram · Discord · Slack · WhatsApp · iMessage · WeChat · QQ · Feishu · Matrix · IRC · LINE · Mattermost · MS Teams · XMPP · Signal · Nostr |
+| **Async** | Email · Webhooks |
+| **Power-user** | Web Chat (browser) · CLI · TUI · MCP · A2A · ACP |
+
+Configure a channel once in the settings panel and your assistant is reachable from your phone, your team's Slack, or a coffee-shop browser — replying with the same memory, the same skills, and the same identity it has on your desktop.
+
+> **R5 design principle — "AI Comes to You"**: Aleph never makes you switch apps. It reaches you where you already are.
+
+---
+
+## Highlights
+
+### 🧠 Cognitive memory, not just RAG
+- **Notes layer** — Markdown memory with Obsidian-style `[[wikilink]]` graphs
+- **Hybrid retrieval** — Vector ANN (sqlite-vec) + FTS5 + wikilink traversal for multi-hop reasoning
+- **Self-learning** — Auto-distills skills from your note patterns
+- **Dream daemon** — Background compaction synthesizing memories into higher-level concepts
+
+### 🤖 Thin-harness agent loop
+Built around the **LLM-Sovereignty** principle: a deliberately tiny `Think → Act` loop (~1,500 LOC) defers every judgment call — intent, tool selection, completion, safety — to the model itself. Stronger models make Aleph stronger, with zero harness changes.
+
+### 🔌 Pluggable everywhere
+- **30+ built-in tools** (filesystem, shell, browser, vision, OCR, memory, …)
+- **MCP** client for external tool servers
+- **Skills** (Python / shell scripts) and **WASM / Node.js extensions**
+- **Multi-provider** LLMs: Claude · GPT · Gemini · DeepSeek · Ollama · Moonshot · Kimi · Qwen
+
+### 🛡️ Sandbox by default
+Every tool runs inside an OS-native sandbox (Seatbelt / Landlock / AppContainer) with capability ledgers, deny-by-default network/file rules, and explicit user approvals for risky actions.
+
+---
+
+## Architecture (one core, many shells)
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│ Orchestrator│────▶│   Harness   │────▶│   Thinker   │
-│             │     │  (Think→Act)│     │  (LLM Call) │
-└─────────────┘     └──────┬──────┘     └─────────────┘
-                           │
-           ┌───────────────┼───────────────┐
-           ▼               ▼               ▼
-    ┌──────────┐    ┌──────────┐    ┌──────────┐
-    │  Session │    │  Tools   │    │ Sandbox  │
-    │ (History)│    │(Execution│    │(Isolation│
-    └──────────┘    └──────────┘    └──────────┘
+                ┌─────────────────────────────────────────┐
+                │      🖥  Native Desktop App (Tauri)      │
+                │   chat panel · tray · hotkey · notify    │
+                └──────────────────┬──────────────────────┘
+                                   │  JSON-RPC (local)
+┌────────────┐  remote ┌───────────▼──────────┐ ┌────────────────┐
+│  Browser   │────────▶│      Gateway         │◀│ Telegram bot   │
+│ (Web Chat) │  WS     │  (auth · sessions ·  │ │ Discord · Slack│
+└────────────┘         │   channel registry)  │ │ WhatsApp · …   │
+                       └───────────┬──────────┘ └────────────────┘
+                                   │
+                       ┌───────────▼──────────┐
+                       │   Orchestrator       │
+                       │   → Harness          │
+                       │      (Think→Act)     │
+                       │   → Thinker (LLM)    │
+                       └─┬─────┬─────┬─────┬──┘
+                         ▼     ▼     ▼     ▼
+                     Session Tools Memory Sandbox
+                                   │
+                            ┌──────┴──────┐
+                            │  ~/.aleph/  │
+                            │  SQLite +   │
+                            │  sqlite-vec │
+                            └─────────────┘
 ```
 
-- **Orchestrator** — Resolves AgentDef + FlowSpec, assembles Harness deps, dispatches execution
-- **Harness** — Think→Act loop with stop-hooks, context budget, and emergency compaction
-- **Sandbox** — Per-session workspace with capability ledger and OS-native isolation (`OsSandboxDriver`)
-- **Session Service** — Append-only event log with in-process actor for authoritative state
-- **Tool Service** — Unified façade over built-in tools, MCP servers, and extensions with layered middleware (audit → permission → context rules → timeout)
+Full design: [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md)
 
-### System Architecture
+---
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        INTERFACE LAYER (I/O)                        │
-│  macOS Native App | WASM Panel | CLI | TUI | Telegram | Discord |   │
-│  Slack | WhatsApp | IRC | Matrix | Signal | Email | ...            │
-├─────────────────────────────┬───────────────────────────────────────┤
-│                       GATEWAY LAYER                                 │
-│  Router | Session Manager | Event Bus | Channel Registry | Security │
-├─────────────────────────────┼───────────────────────────────────────┤
-│                        AGENT LAYER                                  │
-│  Orchestrator | Harness | Thinker | Dispatcher | Compressor        │
-├─────────────────────────────┼───────────────────────────────────────┤
-│                      EXECUTION LAYER                                │
-│  Providers | Engine | Tool Server | MCP | Extensions | Sandbox     │
-├─────────────────────────────┼───────────────────────────────────────┤
-│                       STORAGE LAYER                                 │
-│  Memory (SQLite+vec0) | State (SQLite) | Config (~/.aleph/)        │
-└─────────────────────────────┴───────────────────────────────────────┘
-```
+## Install
 
-See [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) for the full architecture documentation.
-
-## Features
-
-### Core
-
-- Multi-provider LLM support (Claude, GPT-4, Gemini, DeepSeek, Ollama, Moonshot, Kimi)
-- 15+ messaging channel interfaces via unified Gateway
-- 30+ built-in tools with JSON Schema auto-generation
-- **Cognitive Memory** — Note layer with wikilink knowledge graph, hybrid retrieval (vector + FTS + graph), and background dream daemon
-- **Self-Learning** — Automatic skill generation from note patterns
-- MCP protocol support for external tool integration
-- **Decoupled Agent Loop** — Orchestrator + Harness + Sandbox + Session + Tool Service architecture
-- Desktop Bridge for native OS control (OCR, screenshots, input automation, camera, audio)
-
-### Developer Experience
-
-- Hot reload for configuration and protocol changes
-- Plugin system (WASM + Node.js)
-- `just` build pipeline with one-command workflows
-- 58+ Gateway JSON-RPC handlers
-- JSON Schema auto-generation via schemars
-- Proptest, Loom concurrency, and Cucumber BDD test suites
-
-## Installation
-
-Aleph ships as a native desktop app. Download the installer for your platform
-from the [latest release](https://github.com/rootazero/Aleph/releases/latest):
+Download the installer for your platform from the [latest release](https://github.com/rootazero/Aleph/releases/latest):
 
 | Platform | Installer |
 |----------|-----------|
-| macOS    | `.dmg` |
+| macOS    | `.dmg` (Apple Silicon + Intel) |
 | Windows  | `.msi` |
-| Linux    | `.deb` / `.AppImage` |
+| Linux    | `.deb` · `.AppImage` |
 
-The app bundles the `aleph-server` daemon — there is no separate install
-step. On first launch it starts the daemon, registers launch-at-login, and
-lives in the system tray so the assistant stays resident.
+The app bundles `aleph-server`. On first launch it starts the daemon, registers launch-at-login, and lives in the system tray. Open the chat panel from the tray icon or the global hotkey.
 
-> Skills that need a Node.js / Python runtime: open
-> **Panel → Settings → Runtime** once to bootstrap them.
+> Skills that need Node.js / Python runtimes: **Settings → Runtime** bootstraps them on demand.
 
-### Build from Source
+### Data layout
 
-If you prefer to build from source:
-
-```bash
-# Prerequisites: Rust 1.92+, just (cargo install just), npm, wasm-bindgen, Swift (macOS)
-git clone https://github.com/rootazero/Aleph.git
-cd Aleph
-just dev          # Run server in debug mode (rebuilds WASM)
-```
-
-### Configuration
-
-Aleph stores configuration and data at `~/.aleph/`:
+Everything lives under `~/.aleph/`:
 
 ```
 ~/.aleph/
-├── aleph.toml       # Main configuration
+├── aleph.toml       # Main config (channels, providers, ...)
+├── data/            # SQLite + sqlite-vec (memory, sessions, vectors)
 ├── logs/            # Server logs
-├── skills/          # User-installed skills
+├── skills/          # Installed skills
 ├── plugins/         # Extensions
-├── protocols/       # Custom protocol definitions (YAML, hot-reload)
-└── workspaces/      # Per-session sandbox workspaces
+└── workspaces/      # Per-session sandbox dirs
 ```
 
-Channel configuration example in `aleph.toml`:
+---
 
-```toml
-[channels.telegram]
-enabled = true
-token = "your-bot-token"
+## Build from source
+
+Prerequisites: Rust 1.92+, [`just`](https://github.com/casey/just), Node.js, `wasm-bindgen`, Swift toolchain (macOS only).
+
+```bash
+git clone https://github.com/rootazero/Aleph.git
+cd Aleph
+just shell-dev       # Run the desktop app in dev mode (rebuilds WASM)
 ```
-
-## Building
 
 | Command | Description |
 |---------|-------------|
-| `just dev` | Run server in debug mode (rebuilds WASM) |
-| `just build` | Full release build (WASM → Swift Bridge → Server) |
-| `just build-debug` | Debug build (faster compile, no Swift bridge) |
-| `just wasm` | Build WASM Panel UI only |
-| `just swift-bridge` | Build Swift helper process (macOS only) |
-| `just test` | Run core tests |
-| `just test-desktop` | Run desktop crate tests |
-| `just test-desktop-macos` | Run macOS desktop tests |
-| `just test-desktop-all` | Run all desktop-related tests |
-| `just test-proptest` | Run proptest with high coverage |
-| `just test-loom` | Run Loom concurrency tests |
+| `just shell-dev` | Run the desktop app in dev mode |
+| `just shell-build` | Build signed desktop installers (`.dmg` / `.msi` / `.deb`) |
+| `just dev` | Run `aleph-server` headlessly (debug) |
+| `just build` | Release build (WASM + server) |
 | `just test-all` | Run all tests (core + desktop + proptest) |
-| `just clippy` | Lint core with clippy |
-| `just clippy-desktop` | Lint desktop crate |
-| `just clippy-all` | Lint everything |
-| `just check` | Quick compilation check |
-| `just check-desktop` | Quick check desktop crate |
-| `just deps` | Verify build dependencies are installed |
-| `just clean` | Clean all build artifacts |
+| `just clippy` | Lint |
+| `just verify-build` | CI-validate three-platform build (no release) |
+| `just release YY.M.D` | Tag + publish via GitHub workflow |
 
-### Feature Flags
+### Headless / server-only mode
 
-Production features are always compiled. Optional flags control experimental or test functionality:
+Don't want the desktop GUI? You can still run `aleph-server` directly — it's the same binary the app embeds. Useful for VPS deployments where you only need Web Chat + channel bots.
 
-```toml
-[features]
-default = []
-control-plane = []         # Control plane UI (Leptos/WASM dashboard)
-loom = ["dep:loom"]        # Concurrency testing with Loom
-test-helpers = []          # Integration test utilities
-disabled-tests = []        # Disabled test modules awaiting rewrite
-telegram-draft-api = []    # Experimental Telegram Draft API support
+```bash
+cargo run --bin aleph-server start
 ```
 
-## Project Structure
+---
+
+## Project layout
 
 ```
 Aleph/
-├── src/                         # Rust Core (alephcore crate)
-│   ├── bin/aleph-server/        # Server binary entry point
-│   │   ├── commands/            # CLI commands (start, daemon)
-│   │   └── main.rs              # Binary entry
-│   ├── gateway/                 # WebSocket control plane
-│   │   ├── handlers/            # 58+ RPC method handlers
-│   │   ├── interfaces/          # 15+ channel interfaces
-│   │   ├── security/            # Auth, pairing, device management
-│   │   └── ...                  # Router, session, events, voice, webhooks
-│   ├── orchestrator/            # AgentDef resolution + Harness dispatch
-│   ├── harness/                 # Think→Act loop, stop-hooks, context budget
-│   ├── thinker/                 # LLM interaction layer (prompt builder, 29 layers)
-│   ├── dispatcher/              # Task orchestration (DAG scheduling)
-│   ├── engine/                  # Tool execution engine
-│   ├── builtin_tools/           # 30+ built-in tools
-│   ├── memory/                  # SQLite+sqlite-vec storage (vectors + FTS + wikilink graph)
-│   ├── resilience/              # State management (SQLite)
-│   ├── extension/               # WASM + Node.js plugin system
-│   ├── providers/               # AI provider integrations (multi-protocol)
-│   ├── domain/                  # DDD domain model
-│   ├── mcp/                     # MCP protocol client
-│   ├── sandbox/                 # Sandbox trait + WorkspaceSandbox + OsSandboxDriver
-│   ├── exec/                    # Shell execution + security
-│   ├── agents/                  # Agent runtime, subagent spawning, team coordination
-│   ├── a2a/                     # A2A protocol adapter
-│   ├── acp/                     # ACP protocol
-│   ├── approval/                # Approval system
-│   ├── arena/                   # Arena functionality
-│   ├── browser/                 # Browser automation
-│   ├── clawhub/                 # ClawHub integration
-│   ├── components/              # Shared components
-│   ├── compressor/              # Context compression
-│   ├── config/                  # Configuration management
-│   ├── context/                 # Context management
-│   ├── core/                    # Core types and primitives
-│   ├── daemon/                  # Background daemon
-│   ├── discovery/               # Service discovery
-│   ├── event/                   # Event system
-│   ├── generation/              # Media generation
-│   ├── group_chat/              # Group chat management
-│   ├── intent/                  # Intent recognition
-│   ├── logging/                 # Logging infrastructure
-│   ├── markdown/                # Markdown processing
-│   ├── media/                   # Media processing
-│   ├── metrics/                 # Metrics collection
-│   ├── pii/                     # PII detection/handling
-│   ├── process_supervisor/      # Process supervision
-│   ├── prompt/                  # Prompt management
-│   ├── routing/                 # Session key resolution
-│   ├── runtimes/                # Capability ledger
-│   ├── scheduler/               # Job scheduling
-│   ├── search/                  # Search providers
-│   ├── secrets/                 # Secret management
-│   ├── security/                # Security utilities
-│   ├── session/                 # Session service (append-only event log)
-│   ├── skill/                   # Skill system
-│   ├── supervisor/              # Execution supervision
-│   ├── tasks/                   # Task management
-│   ├── teams/                   # Team coordination
-│   ├── tool_output/             # Tool output handling
-│   ├── utils/                   # Utilities
-│   ├── verification/            # Verification system
-│   ├── vision/                  # Vision processing
-│   └── wizard/                  # Wizard flows
+├── src/                 # Rust core (alephcore crate)
+│   ├── gateway/         # JSON-RPC control plane + channel interfaces
+│   ├── orchestrator/    # AgentDef resolution + Harness dispatch
+│   ├── harness/         # Think→Act loop (thin, ~1500 LOC)
+│   ├── thinker/         # LLM interaction layer
+│   ├── memory/          # SQLite + sqlite-vec (notes, vectors, FTS)
+│   ├── builtin_tools/   # 30+ built-in tools
+│   ├── sandbox/         # OS-native isolation
+│   ├── providers/       # Multi-protocol LLM clients
+│   ├── mcp/             # MCP client
+│   ├── extension/       # WASM + Node.js plugin system
+│   └── ...              # session · approval · scheduler · daemon · ...
 ├── desktop/
-│   ├── shared/                  # DesktopCapability trait + IPC protocol
-│   ├── macos/                   # macOS native implementation (AppKit, Vision)
-│   │   └── bridge/              # Swift helper process (JSON-RPC over stdio)
-│   ├── linux/                   # Linux native implementation
-│   └── windows/                 # Windows native implementation
-├── shared/
-│   ├── protocol/                # Shared protocol types (JSON-RPC schemas)
-│   ├── logging/                 # Logging infrastructure
-│   ├── client/                  # Shared client utilities
-│   └── ui_logic/                # Shared UI logic
+│   ├── shell/           # Tauri desktop app (tray, hotkey, notifications, ...)
+│   ├── shared/          # DesktopCapability trait + IPC protocol
+│   ├── macos/ + bridge/ # macOS native (AppKit, Vision, Swift bridge)
+│   ├── windows/         # Windows native (Win32)
+│   └── linux/           # Linux native (Wayland/X11)
 ├── interfaces/
-│   ├── cli/                     # CLI client
-│   ├── tui/                     # TUI client
-│   └── webchat/                 # Web chat / WASM Panel UI
-├── plugins/                     # Plugin crates
-│   ├── diagnostics/             # Diagnostics plugin
-│   ├── diff-viewer/             # Diff viewer plugin
-│   ├── llm-task/                # LLM task plugin
-│   ├── media-office/            # Media office plugin
-│   ├── memory-analytics/        # Memory analytics plugin
-│   ├── phone-control/           # Phone control plugin
-│   └── voice-call/              # Voice call plugin
-├── apps/
-│   └── webchat/                 # Web chat application assets
-├── docs/
-│   ├── reference/               # Architecture & system docs
-│   └── superpowers/             # Design specs & run reports
-├── justfile                     # Build pipeline
-└── Cargo.toml                   # Workspace root
+│   ├── webchat/         # Leptos + WASM Panel UI (used by desktop + browser)
+│   ├── cli/             # CLI client
+│   └── tui/             # TUI client
+├── plugins/             # Built-in plugin crates
+├── docs/reference/      # Architecture & system docs
+└── justfile             # Build pipeline
 ```
+
+---
 
 ## Documentation
 
 | Document | Link |
 |----------|------|
 | Architecture | [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) |
-| Agent System | [AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) |
-| Gateway Protocol | [GATEWAY.md](docs/reference/GATEWAY.md) |
-| Tool System | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) |
-| Memory System | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) |
-| Extension System | [EXTENSION_SYSTEM.md](docs/reference/EXTENSION_SYSTEM.md) |
-| Security | [SECURITY.md](docs/reference/SECURITY.md) |
+| Harness philosophy | [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) |
+| Agent system | [AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) |
+| Gateway protocol | [GATEWAY.md](docs/reference/GATEWAY.md) |
+| Tool system | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) |
+| Memory system | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) |
 | Sandbox | [SANDBOX.md](docs/reference/SANDBOX.md) |
-| Design Patterns | [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md) |
-| Code Organization | [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) |
-| Domain Modeling | [DOMAIN_MODELING.md](docs/reference/DOMAIN_MODELING.md) |
-| Agent Design Philosophy | [AGENT_DESIGN_PHILOSOPHY.md](docs/reference/AGENT_DESIGN_PHILOSOPHY.md) |
-| Server Development | [SERVER_DEVELOPMENT.md](docs/reference/SERVER_DEVELOPMENT.md) |
-| Session Service | [SESSION_SERVICE.md](docs/reference/SESSION_SERVICE.md) |
-| Multi-Agent System | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) |
-| State Layer | [STATE_LAYER.md](docs/reference/STATE_LAYER.md) |
-| Desktop Bridge | [DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) |
-| Glossary | [GLOSSARY.md](docs/reference/GLOSSARY.md) |
+| Security | [SECURITY.md](docs/reference/SECURITY.md) |
+| Desktop shell | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) |
+| Desktop bridge | [DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) |
+| Multi-agent system | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) |
+| Extension system | [EXTENSION_SYSTEM.md](docs/reference/EXTENSION_SYSTEM.md) |
+
+---
 
 ## Contributing
 
 Single-branch development on `main`. Commit format: `<scope>: <description>` (English).
-
 Example: `gateway: add WebSocket server foundation`
 
 Before restarting Aleph in development:
+
 ```bash
 pkill -f "target/release/aleph-server" 2>/dev/null
 pkill -f "target/debug/aleph-server" 2>/dev/null
-sleep 2
 ```
-Multiple processes → HMAC failure → **vault data loss**.
+
+Multiple concurrent daemons → HMAC failure → **vault data loss**. The flock-based singleton makes this very rare, but the safety reminder stands.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
+
+---
 
 ## License
 
