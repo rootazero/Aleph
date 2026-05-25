@@ -119,6 +119,13 @@ pub enum Command {
     },
     /// Bootstrap runtime dependencies (fnm, node, uv, playwright-cli, chromium, venv)
     BootstrapRuntime(BootstrapRuntimeArgs),
+    /// Print the auto-provisioned shared token to stdout (one line, no banner).
+    ///
+    /// Used by the desktop shell to silently bootstrap the embedded Panel —
+    /// reads `~/.aleph/data/security.db` directly (same-UID gate). Exits with
+    /// code 64 (EX_USAGE) and a stderr message if no token has been provisioned
+    /// yet (i.e. the server has never started).
+    BootstrapToken,
     /// SP-2 internal: apply landlock + seccomp then exec target. Invoked
     /// by BubblewrapDriver inside the bwrap namespace; not for users.
     #[command(hide = true)]
@@ -664,6 +671,13 @@ mod tests {
             }
             _ => panic!("Expected Secret command with Verify action"),
         }
+    }
+
+    #[test]
+    fn parses_bootstrap_token_subcommand() {
+        use clap::Parser;
+        let args = Args::try_parse_from(["aleph-server", "bootstrap-token"]).unwrap();
+        assert!(matches!(args.command, Some(Command::BootstrapToken)));
     }
 
     #[test]

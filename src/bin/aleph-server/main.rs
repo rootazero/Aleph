@@ -244,6 +244,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         | Some(Command::Status { .. })
         | Some(Command::Devices { .. })
         | Some(Command::Hooks { .. })
+        | Some(Command::BootstrapToken)
         | Some(Command::SandboxInit { .. })
         | Some(Command::SandboxInitWindows { .. }) => unreachable!(),
     }
