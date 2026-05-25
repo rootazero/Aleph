@@ -343,8 +343,10 @@ mod tests {
         assert!(r.is_none(), "[guardrails] enabled=false should yield None");
     }
 
-    #[test]
-    fn guardrails_enabled_wires_pii_secrets() {
+    #[tokio::test]
+    async fn guardrails_enabled_wires_pii_secrets() {
+        // Async runtime required: `enabled=true` triggers `spawn_audit_drain`,
+        // which calls `tokio::spawn` and panics outside a Tokio reactor.
         let cfg = cfg_with_guardrails(Some(GuardrailsToml { enabled: true }));
         let r = build_guardrail_registry(&cfg, test_shared_token_mgr(), test_security_store())
             .expect("enabled=true should yield Some");

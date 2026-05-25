@@ -306,8 +306,11 @@ mod tests {
             .route(None, Some("gui:window1"), Some("telegram:123"), None)
             .await;
 
+        // SessionKey::peer() runs peer_id through sanitize_component, which
+        // replaces `:` (and other non-[a-z0-9_-] chars) with `-`. The test
+        // asserts the sanitized form to lock that contract.
         assert!(
-            matches!(key, SessionKey::DirectMessage { peer_id, .. } if peer_id == "telegram:123")
+            matches!(key, SessionKey::DirectMessage { peer_id, .. } if peer_id == "telegram-123")
         );
     }
 

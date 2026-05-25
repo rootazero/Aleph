@@ -681,6 +681,9 @@ model = "test"
 
         // Both knobs round-trip through TOML when opted in.
         let toml = r#"
+[agents.main]
+model = "test"
+
 [gateway]
 require_idempotency_key = true
 require_challenge = true
@@ -691,6 +694,9 @@ require_challenge = true
 
         // Older TOML files (missing the keys) keep loading.
         let legacy_toml = r#"
+[agents.main]
+model = "test"
+
 [gateway]
 host = "0.0.0.0"
 "#;
