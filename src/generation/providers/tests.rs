@@ -700,3 +700,37 @@ fn test_create_bfl_provider_bfl_flux_alias() {
     let provider = create_provider("bfl-flux", &config, GenerationType::Image).unwrap();
     assert_eq!(provider.name(), "bfl-flux");
 }
+
+// === Round-3 Phase B3: Cartesia + MiniMax STT ===
+
+#[test]
+fn test_create_cartesia_provider() {
+    let config = GenerationProviderConfig {
+        provider_type: "cartesia".to_string(),
+        api_key: Some("cartesia-key".to_string()),
+        models: vec!["sonic-2".to_string()],
+        defaults: GenerationDefaults {
+            voice: Some("694f9389-aac1-45b6-b726-9d9369183238".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let provider = create_provider("cartesia", &config, GenerationType::Speech).unwrap();
+    assert_eq!(provider.name(), "cartesia");
+    assert!(provider.supports(GenerationType::Speech));
+    assert_eq!(provider.default_model(), Some("sonic-2"));
+}
+
+#[test]
+fn test_create_minimax_stt_provider() {
+    let config = GenerationProviderConfig {
+        provider_type: "minimax_stt".to_string(),
+        api_key: Some("minimax-key".to_string()),
+        models: vec!["whisper-1".to_string()],
+        ..Default::default()
+    };
+    let provider = create_provider("minimax-stt", &config, GenerationType::Transcription).unwrap();
+    assert_eq!(provider.name(), "minimax-stt");
+    assert!(provider.supports(GenerationType::Transcription));
+    assert_eq!(provider.default_model(), Some("whisper-1"));
+}

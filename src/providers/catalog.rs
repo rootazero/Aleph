@@ -295,6 +295,28 @@ mod tests {
     }
 
     #[test]
+    fn presets_for_modality_speech_includes_round3_b3_cartesia() {
+        // Round-3 (Phase B3) adds Cartesia Sonic TTS.
+        let tts = presets_for_modality(Modality::Speech);
+        assert!(
+            tts.iter().any(|e| e.name == "cartesia"),
+            "Speech modality should expose cartesia, got {:?}",
+            tts.iter().map(|e| e.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn presets_for_modality_transcription_includes_round3_b3_minimax() {
+        // Round-3 (Phase B3) adds MiniMax native STT.
+        let stt = presets_for_modality(Modality::Transcription);
+        assert!(
+            stt.iter().any(|e| e.name == "minimax-stt"),
+            "Transcription modality should expose minimax-stt, got {:?}",
+            stt.iter().map(|e| e.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn presets_for_modality_transcription_includes_round2_stt() {
         // Round-2 closes the previously empty Transcription modality.
         let stt = presets_for_modality(Modality::Transcription);

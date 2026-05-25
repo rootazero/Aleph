@@ -35,6 +35,7 @@
 
 pub mod azure_speech;
 pub mod bfl;
+pub mod cartesia;
 pub mod deepgram_stt;
 pub mod deepgram_tts;
 pub mod elevenlabs;
@@ -43,6 +44,7 @@ mod factory;
 pub mod google_imagen;
 pub mod google_veo;
 pub mod midjourney;
+pub mod minimax_stt;
 pub mod openai_compat;
 pub mod openai_image;
 pub mod openai_tts;
@@ -57,10 +59,12 @@ mod tests;
 
 pub use azure_speech::AzureSpeechProvider;
 pub use bfl::BflProvider;
+pub use cartesia::CartesiaProvider;
 pub use deepgram_stt::DeepgramSttProvider;
 pub use deepgram_tts::DeepgramTtsProvider;
 pub use elevenlabs::ElevenLabsProvider;
 pub use fal::{FalProvider, FalProviderBuilder};
+pub use minimax_stt::MinimaxSttProvider;
 pub use suno::SunoProvider;
 pub use factory::create_provider;
 pub use google_imagen::GoogleImagenProvider;

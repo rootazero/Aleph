@@ -181,6 +181,25 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             base_url: Some("https://api.bfl.ai"),
         },
     );
+    // Phase R3-B3 — Cartesia Sonic TTS (Speech) + MiniMax native STT
+    // (Transcription). Both have non-OpenAI wire shapes (nested voice
+    // selector / base_resp envelope) and so live in dedicated modules.
+    m.insert(
+        "cartesia",
+        GenerationPreset {
+            provider_type: "cartesia",
+            default_model: "sonic-2",
+            base_url: Some("https://api.cartesia.ai"),
+        },
+    );
+    m.insert(
+        "minimax-stt",
+        GenerationPreset {
+            provider_type: "minimax_stt",
+            default_model: "whisper-1",
+            base_url: Some("https://api.minimaxi.com"),
+        },
+    );
 
     // Audio/Speech providers
     m.insert(
@@ -685,6 +704,25 @@ pub static GENERATION_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = 
             modalities: IMAGE_ONLY,
             homepage: Some("https://docs.bfl.ai"),
             notes: Some("Direct BFL API; supports flux-pro-1.1, flux-dev, ultra"),
+        },
+    );
+    // Phase R3-B3 metadata: Cartesia (TTS) + MiniMax native STT.
+    m.insert(
+        "cartesia",
+        ProviderMetadata {
+            display_name: "Cartesia Sonic",
+            modalities: SPEECH_ONLY,
+            homepage: Some("https://docs.cartesia.ai"),
+            notes: Some("Sonic-2 multilingual TTS; voice IDs are UUIDs"),
+        },
+    );
+    m.insert(
+        "minimax-stt",
+        ProviderMetadata {
+            display_name: "MiniMax 语音转文本",
+            modalities: &[Modality::Transcription],
+            homepage: Some("https://platform.minimaxi.com"),
+            notes: Some("Native /v1/audio_to_text; requires GroupId in params.extra"),
         },
     );
 
