@@ -10,6 +10,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Wry};
 
 const ID_SHOW: &str = "menu_show";
+const ID_OPEN_BROWSER: &str = "menu_open_browser";
 const ID_CHECK_UPDATE: &str = "menu_check_update";
 const ID_QUIT: &str = "menu_quit";
 const ID_QUIT_STOP: &str = "menu_quit_stop";
@@ -24,6 +25,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::about(app, Some("About Aleph"), None)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, ID_SHOW, "Show Aleph", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                ID_OPEN_BROWSER,
+                "Open in Browser",
+                true,
+                None::<&str>,
+            )?,
             &MenuItem::with_id(
                 app,
                 ID_CHECK_UPDATE,
@@ -85,6 +93,11 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 pub fn on_event(app: &AppHandle, id: &str) {
     match id {
         ID_SHOW => crate::focus_window(app),
+        ID_OPEN_BROWSER => {
+            tauri::async_runtime::spawn(async {
+                crate::daemon::open_in_system_browser().await;
+            });
+        }
         ID_CHECK_UPDATE => crate::update::check_now(app),
         ID_QUIT => app.exit(0),
         ID_QUIT_STOP => {

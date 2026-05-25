@@ -330,6 +330,75 @@ pub(crate) fn build_panel_url(token: Option<&str>) -> Result<Url, url::ParseErro
     Ok(url)
 }
 
+/// Issue a one-time bootstrap nonce via the bundled `aleph-server
+/// bootstrap-url` subcommand and open the resulting loopback URL in
+/// the system browser. Best-effort — failures are logged; user-visible
+/// feedback is a no-op.
+///
+/// Wired to the macOS "Open in Browser" menu item. The same UX is
+/// available on every platform via the `aleph open` CLI subcommand.
+pub(crate) async fn open_in_system_browser() {
+    let url = match tokio::task::spawn_blocking(load_bootstrap_url).await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            tracing::warn!("cannot open browser: bootstrap-url returned nothing");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!("cannot open browser: bootstrap-url join failed: {e}");
+            return;
+        }
+    };
+    open_url_in_browser(&url);
+}
+
+/// Run `aleph-server bootstrap-url` and parse the single-line URL from
+/// stdout. Returns `None` on any failure so the caller can degrade
+/// gracefully — the user can always paste the URL manually via
+/// `aleph open` or open the daemon's `/login` page.
+pub(crate) fn load_bootstrap_url() -> Option<String> {
+    let bin = resolve_daemon_binary()?;
+    let output = std::process::Command::new(&bin)
+        .arg("bootstrap-url")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        tracing::warn!(
+            status = ?output.status.code(),
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "bootstrap-url returned non-zero"
+        );
+        return None;
+    }
+    let raw = String::from_utf8(output.stdout).ok()?;
+    let url = raw.trim();
+    if url.is_empty() {
+        None
+    } else {
+        Some(url.to_string())
+    }
+}
+
+/// Cross-platform "open this URL in the default browser" — used by
+/// the menu handler and as the fallback path in `reveal_panel`.
+fn open_url_in_browser(url: &str) {
+    let result = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).status()
+    } else if cfg!(target_os = "linux") {
+        std::process::Command::new("xdg-open").arg(url).status()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .status()
+    } else {
+        tracing::warn!("no system browser launcher for this platform");
+        return;
+    };
+    if let Err(e) = result {
+        tracing::warn!("failed to open browser at {url}: {e}");
+    }
+}
+
 /// Spawn `aleph-server bootstrap-token` and read the shared token from
 /// stdout. Returns `None` on any failure (binary missing, no token
 /// provisioned yet, parse error) so the shell can still boot and fall

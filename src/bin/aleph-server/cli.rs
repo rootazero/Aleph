@@ -126,6 +126,15 @@ pub enum Command {
     /// code 64 (EX_USAGE) and a stderr message if no token has been provisioned
     /// yet (i.e. the server has never started).
     BootstrapToken,
+    /// Issue a one-time bootstrap nonce against a running daemon and print
+    /// the loopback URL (`http://127.0.0.1:18790/auth/bootstrap?nonce=…`)
+    /// to stdout. Used by the desktop shell's "Open in Browser" menu to
+    /// hand the user's browser an authenticated session cookie without
+    /// ever putting a token in a URL.
+    ///
+    /// Requires the daemon to be running and a shared token provisioned.
+    /// Exits with EX_USAGE (64) if either precondition fails.
+    BootstrapUrl,
     /// SP-2 internal: apply landlock + seccomp then exec target. Invoked
     /// by BubblewrapDriver inside the bwrap namespace; not for users.
     #[command(hide = true)]
@@ -678,6 +687,13 @@ mod tests {
         use clap::Parser;
         let args = Args::try_parse_from(["aleph-server", "bootstrap-token"]).unwrap();
         assert!(matches!(args.command, Some(Command::BootstrapToken)));
+    }
+
+    #[test]
+    fn parses_bootstrap_url_subcommand() {
+        use clap::Parser;
+        let args = Args::try_parse_from(["aleph-server", "bootstrap-url"]).unwrap();
+        assert!(matches!(args.command, Some(Command::BootstrapUrl)));
     }
 
     #[test]
