@@ -239,11 +239,11 @@ pub struct GatewayServer {
     /// 404 from the server side — the CLI is expected to take the local
     /// lock instead.
     admin_router: Option<Router>,
-    /// HTTP auth routes (`/login`, `/auth/login`, `/auth/logout`,
-    /// `/auth/bootstrap`). Mounted at the router root when set so the
-    /// loopback bootstrap-consume endpoint is reachable from the
-    /// browser. `None` falls back to the inline `control_plane` login
-    /// served at `/login`.
+    /// HTTP auth routes (`/auth/logout`, `/auth/bootstrap`, `/pair`,
+    /// `/auth/bootstrap/from_pairing`, `/rpc`). Mounted at the router
+    /// root when set so the loopback bootstrap-consume endpoint and the
+    /// browser-pairing flow are reachable from the browser. The legacy
+    /// `/login` + `/auth/login` token-paste form was removed in Phase 4.
     auth_routes: Option<Router>,
 }
 
@@ -383,10 +383,12 @@ impl GatewayServer {
         self.admin_router = Some(router);
     }
 
-    /// Mount HTTP auth routes (`/login`, `/auth/login`, `/auth/logout`,
-    /// `/auth/bootstrap`) at the router root in `build_router`. Built
-    /// by [`crate::gateway::auth_middleware::auth_routes`]. When set,
-    /// these routes shadow the inline login served by `control_plane`.
+    /// Mount HTTP auth routes (`/auth/logout`, `/auth/bootstrap`,
+    /// `/pair`, `/auth/bootstrap/from_pairing`, `/rpc`) at the router
+    /// root in `build_router`. Built by
+    /// [`crate::gateway::auth_middleware::auth_routes`]. The Phase 4
+    /// deletion of `/login` + `/auth/login` means these routes now
+    /// strictly override only the bootstrap + pairing surfaces.
     /// Idempotent — replaces any previously set auth routes.
     pub fn set_auth_routes(&mut self, router: Router) {
         self.auth_routes = Some(router);
@@ -464,10 +466,10 @@ impl GatewayServer {
             router = router.nest("/v1/admin", admin);
         }
 
-        // Mount auth routes at the root (/login, /auth/*) so the
-        // loopback bootstrap-consume endpoint is reachable. When unset
-        // (early dev paths), the inline login from control_plane keeps
-        // working via the fallback service.
+        // Mount auth routes at the root (`/auth/*`, `/pair`, `/rpc`) so
+        // the loopback bootstrap-consume endpoint and the browser-pairing
+        // flow are reachable. The Phase 4 deletion of `/login` means
+        // unauthenticated browsers are redirected to `/pair` instead.
         if let Some(auth) = self.auth_routes.clone() {
             router = router.merge(auth);
         }

@@ -10,7 +10,6 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::gateway::auth_middleware::login_page_html;
     use crate::gateway::config::AuthMode;
     use crate::gateway::device_store::DeviceStore;
     use crate::gateway::event_bus::GatewayEventBus;
@@ -89,9 +88,9 @@ mod tests {
     // PROBE 1 — Full Login → Session → Validate → Revoke lifecycle
     // =========================================================================
 
-    /// Simulates the entire HTTP Panel login flow:
+    /// Simulates the HTTP Panel bootstrap → session lifecycle:
     ///   1. Generate shared token
-    ///   2. Compute token hash (same as handle_login does)
+    ///   2. Compute token hash (same as `/auth/bootstrap` consumer does)
     ///   3. Create session via HttpSessionManager
     ///   4. Validate session works
     ///   5. Revoke session — subsequent validates must fail
@@ -106,7 +105,7 @@ mod tests {
         let token = shared_mgr.generate_token().unwrap();
         assert!(token.starts_with("aleph-"));
 
-        // 2. Compute HMAC hash (same path as handle_login)
+        // 2. Compute HMAC hash (same path as the bootstrap consumer)
         let hash = hmac_sign(shared_mgr.secret(), &token);
         assert!(!hash.is_empty());
 
@@ -735,36 +734,8 @@ model = "test"
     }
 
     // =========================================================================
-    // PROBE 16 — Login page HTML security properties
+    // PROBE 16 — (removed in Phase 4 along with the legacy `/login` form)
     // =========================================================================
-
-    #[test]
-    fn probe_login_page_security() {
-        let html = login_page_html("");
-
-        // Must be a valid HTML document
-        assert!(html.contains("<!DOCTYPE html>"));
-        assert!(html.contains("<html"));
-        assert!(html.contains("</html>"));
-
-        // Form must POST to correct endpoint
-        assert!(html.contains("action=\"/auth/login\""));
-        assert!(html.contains("method=\"POST\""));
-
-        // Token input must be password type (no shoulder surfing)
-        assert!(html.contains("type=\"password\""));
-
-        // localStorage script stores shared token for WS connect
-        assert!(html.contains("localStorage.setItem"));
-        assert!(html.contains("aleph_shared_token"));
-
-        // Error variant: XSS-safe (no raw script injection)
-        let html_err = login_page_html("<script>alert('xss')</script>");
-        // The error message is in a styled div, not executed
-        assert!(html_err.contains("<script>alert"));
-        // The script tag in the error message is inside a styled div, not a raw script block
-        assert!(html_err.contains("style=\"background:#3b1419"));
-    }
 
     // =========================================================================
     // PROBE 17 — Multiple sessions, selective revocation
@@ -852,14 +823,14 @@ model = "test"
     }
 
     // =========================================================================
-    // PROBE 20 — End-to-end: token generate → HTTP login → session → WS connect
+    // PROBE 20 — End-to-end: token generate → HMAC session → WS connect
     // =========================================================================
 
-    /// The complete "first user" flow:
+    /// The complete "first user" flow (post-Phase-4):
     ///   1. Server starts, generates shared token
-    ///   2. User opens browser, enters token at /login
-    ///   3. handle_login creates session → cookie set
-    ///   4. Panel WASM reads shared_token from localStorage
+    ///   2. Desktop shell (or `/auth/bootstrap`) trades the token for a session
+    ///   3. Session cookie set
+    ///   4. Panel WASM reads shared_token from localStorage (device bootstrap)
     ///   5. Panel calls WS connect with shared_token
     ///   6. Server issues device token
     ///   7. Panel stores device token in localStorage

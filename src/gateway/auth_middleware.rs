@@ -12,7 +12,7 @@ use crate::gateway::session::HttpSessionManager;
 use crate::sync_primitives::Arc;
 use axum::{
     body::Body,
-    extract::{ConnectInfo, Form, Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{header, Request, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
@@ -43,19 +43,17 @@ pub struct AuthState {
     pub auth_ctx: Option<Arc<crate::gateway::handlers::auth::AuthContext>>,
 }
 
-#[derive(Deserialize)]
-struct LoginForm {
-    token: String,
-}
-
 /// Build auth routes (no auth required for these).
 ///
 /// Mount with `into_make_service_with_connect_info::<SocketAddr>()` so the
 /// loopback bootstrap consumer sees the real peer address.
+///
+/// Phase 4 deletion: the legacy `/login` + `/auth/login` token-paste form
+/// has been removed. `/pair` (Phase 3 browser-pairing) is the only inbound
+/// auth surface for cold browsers; `/auth/bootstrap` (Phase 2) handles
+/// loopback handoff from the desktop shell.
 pub fn auth_routes(state: Arc<AuthState>) -> Router {
     Router::new()
-        .route("/login", get(show_login))
-        .route("/auth/login", post(handle_login))
         .route("/auth/logout", post(handle_logout))
         .route("/auth/bootstrap", get(handle_bootstrap_consume))
         .route("/pair", get(show_pair_page))
@@ -109,8 +107,7 @@ async fn handle_bootstrap_consume(
         tracing::info!(error = %e, "bootstrap nonce rejected");
         return (StatusCode::UNAUTHORIZED, "invalid or expired nonce").into_response();
     }
-    // Fabricate a fresh session keyed by the shared-token HMAC, mirroring
-    // `handle_login` above.
+    // Fabricate a fresh session keyed by the shared-token HMAC.
     let token = match state.shared_token_mgr.get_current_token() {
         Some(t) => t,
         None => {
@@ -148,51 +145,16 @@ async fn handle_bootstrap_consume(
         .into_response()
 }
 
-async fn show_login() -> Html<String> {
-    Html(login_page_html(""))
-}
-
-async fn handle_login(
-    State(state): State<Arc<AuthState>>,
-    Form(form): Form<LoginForm>,
-) -> Response {
-    match state.shared_token_mgr.validate(&form.token) {
-        Ok(true) => {
-            // Create session using the HMAC hash of the token
-            let hash =
-                crate::gateway::security::hmac_sign(state.shared_token_mgr.secret(), &form.token);
-            match state.session_mgr.create_session(&hash) {
-                Ok(session_id) => {
-                    let max_age = state.session_mgr.expiry_hours() * 3600;
-                    let cookie = format!(
-                        "aleph_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
-                        session_id, max_age,
-                    );
-                    (
-                        StatusCode::SEE_OTHER,
-                        [
-                            (header::LOCATION, "/".to_string()),
-                            (header::SET_COOKIE, cookie),
-                        ],
-                    )
-                        .into_response()
-                }
-                Err(_) => Html(login_page_html("Internal error")).into_response(),
-            }
-        }
-        Ok(false) => Html(login_page_html("Invalid token")).into_response(),
-        Err(_) => Html(login_page_html("Internal error")).into_response(),
-    }
-}
-
 async fn handle_logout(State(state): State<Arc<AuthState>>) -> Response {
-    // Clear the cookie; session will expire naturally
+    // Clear the cookie; session will expire naturally. Redirect to the
+    // browser-pairing page so an unauthenticated user sees the new UX
+    // (the legacy `/login` token-paste form was removed in Phase 4).
     let _ = &state;
     let cookie = "aleph_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
     (
         StatusCode::SEE_OTHER,
         [
-            (header::LOCATION, "/login".to_string()),
+            (header::LOCATION, "/pair".to_string()),
             (header::SET_COOKIE, cookie.to_string()),
         ],
     )
@@ -405,9 +367,9 @@ pub async fn session_auth_middleware(
         Some(id) if state.session_mgr.validate_session(&id).unwrap_or(false) => {
             next.run(request).await
         }
-        // Cold visit → browser-pairing flow (Phase 3). Legacy `/login`
-        // token-paste form is kept reachable as a fallback until Phase 4
-        // deletes it.
+        // Cold visit → browser-pairing flow (Phase 3). The legacy `/login`
+        // token-paste form was removed in Phase 4; `/pair` is the only
+        // entry point for an unauthenticated browser.
         _ => Redirect::to("/pair").into_response(),
     }
 }
@@ -441,76 +403,9 @@ pub async fn bearer_auth_middleware(
     }
 }
 
-/// Generate the login page HTML
-pub fn login_page_html(error: &str) -> String {
-    let error_block = if error.is_empty() {
-        String::new()
-    } else {
-        format!(
-            r#"<div style="background:#3b1419;border:1px solid #7f1d1d;color:#fca5a5;padding:12px;border-radius:8px;margin-bottom:16px;font-size:14px">{}</div>"#,
-            error
-        )
-    };
-
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Aleph — Login</title>
-<style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0f;color:#e0e0e0;display:flex;justify-content:center;align-items:center;min-height:100vh}}
-.c{{background:#14141f;border:1px solid #2a2a3a;border-radius:16px;padding:40px;max-width:400px;width:100%}}
-h1{{font-size:24px;margin-bottom:8px}}
-p{{color:#888;font-size:14px;margin-bottom:24px}}
-input{{width:100%;padding:12px 16px;background:#0a0a0f;border:1px solid #2a2a3a;border-radius:8px;color:#e0e0e0;font-size:16px;margin-bottom:16px}}
-input:focus{{outline:none;border-color:#6366f1}}
-button{{width:100%;padding:12px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer}}
-button:hover{{background:#5558e6}}
-</style>
-</head>
-<body>
-<div class="c">
-<h1>Aleph</h1>
-<p>Enter your access token to continue</p>
-{}
-<form method="POST" action="/auth/login" id="lf">
-<input type="password" name="token" placeholder="Access token" autofocus required>
-<button type="submit">Sign in</button>
-</form>
-<script>document.getElementById('lf').addEventListener('submit',function(){{var t=this.querySelector('input[name=token]').value;try{{localStorage.setItem('aleph_shared_token',t)}}catch(e){{}}}});</script>
-</div>
-</body>
-</html>"#,
-        error_block
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_login_html_not_empty() {
-        let html = login_page_html("");
-        assert!(html.contains("<form"));
-        assert!(html.contains("token"));
-        assert!(html.contains("Aleph"));
-    }
-
-    #[test]
-    fn test_login_html_shows_error() {
-        let html = login_page_html("Invalid token");
-        assert!(html.contains("Invalid token"));
-    }
-
-    #[test]
-    fn test_login_html_no_error_when_empty() {
-        let html = login_page_html("");
-        assert!(!html.contains("3b1419")); // error bg color shouldn't appear
-    }
 
     #[test]
     fn test_extract_session_cookie_found() {
@@ -533,13 +428,6 @@ mod tests {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(header::COOKIE, "other=val; foo=bar".parse().unwrap());
         assert_eq!(extract_session_cookie(&headers), None);
-    }
-
-    #[test]
-    fn test_local_storage_script_present() {
-        let html = login_page_html("");
-        assert!(html.contains("localStorage.setItem"));
-        assert!(html.contains("aleph_shared_token"));
     }
 
     #[test]
@@ -566,5 +454,67 @@ mod tests {
         // Even a hostile query string can't inject JS via the prefill.
         let html = pair_page_html(Some("abc'); alert('xss"));
         assert!(!html.contains("alert('xss"));
+    }
+
+    /// Phase 4 deletion: `/login` and `/auth/login` no longer exist; the
+    /// `/pair` page (Phase 3) is the only inbound auth surface for
+    /// cold browsers.
+    #[tokio::test]
+    async fn login_route_returns_404_after_phase4_deletion() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let state = test_state();
+        let app = auth_routes(state);
+
+        let resp_get = app
+            .clone()
+            .oneshot(Request::builder().uri("/login").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            resp_get.status(),
+            axum::http::StatusCode::NOT_FOUND,
+            "GET /login must be removed after Phase 4"
+        );
+
+        let resp_post = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/auth/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("token=anything"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp_post.status(),
+            axum::http::StatusCode::NOT_FOUND,
+            "POST /auth/login must be removed after Phase 4"
+        );
+    }
+
+    /// Build a minimal AuthState backed by in-memory stores for route tests.
+    fn test_state() -> Arc<AuthState> {
+        use crate::gateway::bootstrap::BootstrapNonceManager;
+        use crate::gateway::security::{PairingManager, SecurityStore, SharedTokenManager};
+        use crate::gateway::session::HttpSessionManager;
+
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let shared = Arc::new(SharedTokenManager::new(store.clone(), "/tmp/aleph_phase4.vault"));
+        let session_mgr = Arc::new(HttpSessionManager::new(store.clone(), 24));
+        let bootstrap_mgr = Arc::new(BootstrapNonceManager::default());
+        let pairing_mgr = Arc::new(PairingManager::new(store));
+        Arc::new(AuthState {
+            shared_token_mgr: shared,
+            session_mgr,
+            auth_mode: AuthMode::Token,
+            bootstrap_mgr,
+            pairing_mgr,
+            auth_ctx: None,
+        })
     }
 }

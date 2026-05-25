@@ -722,14 +722,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     );
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
 
-    // Mount HTTP auth routes (/login, /auth/login, /auth/logout,
-    // /auth/bootstrap, /pair, /auth/bootstrap/from_pairing) at the router
-    // root so the loopback bootstrap-consume and browser-pairing
-    // endpoints are reachable from a real browser. Same
-    // BootstrapNonceManager, HttpSessionManager, and PairingManager Arcs
-    // as the JSON-RPC handlers (`gateway.bootstrap.issue`,
-    // `pairing.start_browser`, `pairing.poll`), so issuer + consumer
-    // see one source of truth.
+    // Mount HTTP auth routes (/auth/logout, /auth/bootstrap, /pair,
+    // /auth/bootstrap/from_pairing, /rpc) at the router root so the
+    // loopback bootstrap-consume and browser-pairing endpoints are
+    // reachable from a real browser. Same BootstrapNonceManager,
+    // HttpSessionManager, and PairingManager Arcs as the JSON-RPC handlers
+    // (`gateway.bootstrap.issue`, `pairing.start_browser`,
+    // `pairing.poll`), so issuer + consumer see one source of truth.
+    // The legacy `/login` + `/auth/login` token-paste form was removed in
+    // Phase 4 of the auth UX overhaul.
     {
         use alephcore::gateway::auth_middleware::{auth_routes, AuthState};
         let auth_state = std::sync::Arc::new(AuthState {

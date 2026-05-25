@@ -82,7 +82,7 @@ pub async fn handle_pairing_approve(
             ..
         } => {
             // Mint a session keyed to the shared-token HMAC (mirrors
-            // auth_middleware::handle_login at line 138-148). The session_id
+            // auth_middleware::handle_bootstrap_consume). The session_id
             // is stashed in PairingManager.approved_browser_sessions so the
             // browser's `pairing.poll` can retrieve it and redirect to
             // `/auth/bootstrap/from_pairing?code=…`.
