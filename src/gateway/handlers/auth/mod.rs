@@ -195,6 +195,15 @@ pub struct AuthContext {
     /// `AUTH_FAILED`. Guest invitations are exempt. Default `false` —
     /// existing clients keep working until ops flips the knob.
     pub require_challenge: bool,
+    /// One-shot bootstrap-nonce manager. Issues nonces via
+    /// `gateway.bootstrap.issue`; the loopback `/auth/bootstrap` HTTP
+    /// route consumes them and sets the session cookie. See
+    /// [`crate::gateway::bootstrap::BootstrapNonceManager`].
+    pub bootstrap_mgr: Arc<crate::gateway::bootstrap::BootstrapNonceManager>,
+    /// The gateway's listening port — used to build the loopback URL
+    /// returned by `gateway.bootstrap.issue` so callers (CLI, Tauri
+    /// shell) don't need to know it independently.
+    pub bind_port: u16,
 }
 
 /// Build a [`HelloSnapshot`] from the live [`AuthContext`].
@@ -285,6 +294,8 @@ pub(crate) mod tests {
             max_connections: 1000,
             challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
             require_challenge: false,
+            bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            bind_port: 18790,
         })
     }
 }

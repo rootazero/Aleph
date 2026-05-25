@@ -147,6 +147,34 @@ pub struct GatewayServerConfig {
     /// [`crate::gateway::runtime_footer`].
     #[serde(default)]
     pub runtime_footer: crate::gateway::runtime_footer::RuntimeFooterConfig,
+    /// One-shot bootstrap-nonce knobs for the loopback cookie-handoff
+    /// endpoint (`GET /auth/bootstrap?nonce=…`). Used by the desktop
+    /// shell's "Open in Browser" menu item and `aleph open` CLI.
+    #[serde(default)]
+    pub bootstrap: BootstrapConfig,
+}
+
+/// Bootstrap-nonce knobs for the loopback cookie-handoff endpoint.
+///
+/// See [`crate::gateway::bootstrap::BootstrapNonceManager`] for the
+/// runtime that consumes these values.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BootstrapConfig {
+    /// One-shot nonce TTL in seconds. Default 60.
+    pub nonce_ttl_secs: u64,
+    /// How long consumed nonces are remembered for replay protection.
+    /// Default 300 (5 minutes).
+    pub used_retention_secs: u64,
+}
+
+impl Default for BootstrapConfig {
+    fn default() -> Self {
+        Self {
+            nonce_ttl_secs: 60,
+            used_retention_secs: 300,
+        }
+    }
 }
 
 fn default_memory_monitor_secs() -> u64 {
@@ -177,6 +205,7 @@ impl Default for GatewayServerConfig {
             require_challenge: false,
             memory_monitor_secs: default_memory_monitor_secs(),
             runtime_footer: crate::gateway::runtime_footer::RuntimeFooterConfig::default(),
+            bootstrap: BootstrapConfig::default(),
         }
     }
 }
@@ -604,6 +633,43 @@ headless = true
         assert_eq!(config.bindings["cli:*"], "work");
         assert!(config.channels.get("telegram").is_some());
         assert!(config.sandbox.enabled);
+    }
+
+    #[test]
+    fn bootstrap_block_defaults() {
+        let defaults = GatewayServerConfig::default();
+        assert_eq!(defaults.bootstrap.nonce_ttl_secs, 60);
+        assert_eq!(defaults.bootstrap.used_retention_secs, 300);
+
+        // Older TOML files (missing the block) load with defaults.
+        let toml = r#"
+[gateway]
+port = 18790
+
+[agents.main]
+model = "test"
+"#;
+        let cfg = GatewayConfig::from_toml(toml).expect("parse");
+        assert_eq!(cfg.gateway.bootstrap.nonce_ttl_secs, 60);
+        assert_eq!(cfg.gateway.bootstrap.used_retention_secs, 300);
+    }
+
+    #[test]
+    fn bootstrap_block_overrides() {
+        let toml = r#"
+[gateway]
+port = 18790
+
+[gateway.bootstrap]
+nonce_ttl_secs = 30
+used_retention_secs = 600
+
+[agents.main]
+model = "test"
+"#;
+        let cfg = GatewayConfig::from_toml(toml).expect("parse");
+        assert_eq!(cfg.gateway.bootstrap.nonce_ttl_secs, 30);
+        assert_eq!(cfg.gateway.bootstrap.used_retention_secs, 600);
     }
 
     #[test]

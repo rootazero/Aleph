@@ -23,6 +23,10 @@ pub struct AuthState {
     pub shared_token_mgr: Arc<SharedTokenManager>,
     pub session_mgr: Arc<HttpSessionManager>,
     pub auth_mode: AuthMode,
+    /// Issues + consumes one-shot bootstrap nonces for the loopback
+    /// cookie-handoff endpoint. Shared with [`super::handlers::auth::AuthContext`]
+    /// so the JSON-RPC issuer and the HTTP consumer see the same map.
+    pub bootstrap_mgr: Arc<crate::gateway::bootstrap::BootstrapNonceManager>,
 }
 
 #[derive(Deserialize)]

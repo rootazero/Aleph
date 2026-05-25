@@ -40,6 +40,10 @@ pub(in crate::commands::start) struct AuthBundle {
     pub mdns_broadcaster: Option<alephcore::gateway::MdnsBroadcaster>,
     pub invitation_manager: Arc<alephcore::gateway::security::InvitationManager>,
     pub guest_session_manager: Arc<alephcore::gateway::security::GuestSessionManager>,
+    /// Shared with the loopback `/auth/bootstrap` HTTP route so the
+    /// issuer (RPC handler inside `auth_ctx`) and the consumer (HTTP
+    /// route) see the same nonce map.
+    pub bootstrap_mgr: Arc<alephcore::gateway::bootstrap::BootstrapNonceManager>,
 }
 
 /// Initialize authentication and security subsystems (construction only).
@@ -56,6 +60,7 @@ pub(in crate::commands::start) fn initialize_auth(
     presence: Arc<alephcore::gateway::presence::PresenceTracker>,
     max_connections: u32,
     require_challenge: bool,
+    bootstrap_cfg: &alephcore::gateway::config::BootstrapConfig,
     daemon: bool,
 ) -> AuthBundle {
     use alephcore::utils::paths;
@@ -162,6 +167,13 @@ pub(in crate::commands::start) fn initialize_auth(
         }
     }
 
+    let bootstrap_mgr = Arc::new(
+        alephcore::gateway::bootstrap::BootstrapNonceManager::new(
+            std::time::Duration::from_secs(bootstrap_cfg.nonce_ttl_secs),
+            std::time::Duration::from_secs(bootstrap_cfg.used_retention_secs),
+        ),
+    );
+
     let auth_ctx = Arc::new(auth_handlers::AuthContext {
         token_manager,
         pairing_manager,
@@ -182,6 +194,8 @@ pub(in crate::commands::start) fn initialize_auth(
             instance_id,
         )),
         require_challenge,
+        bootstrap_mgr: bootstrap_mgr.clone(),
+        bind_port: port,
     });
 
     if !daemon {
@@ -204,6 +218,7 @@ pub(in crate::commands::start) fn initialize_auth(
         mdns_broadcaster,
         invitation_manager,
         guest_session_manager,
+        bootstrap_mgr,
     }
 }
 

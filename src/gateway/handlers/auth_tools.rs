@@ -161,6 +161,8 @@ mod tests {
             max_connections: 1000,
             challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
             require_challenge: false,
+            bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            bind_port: 18790,
         })
     }
 
