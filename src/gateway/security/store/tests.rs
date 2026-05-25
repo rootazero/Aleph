@@ -83,11 +83,9 @@ fn test_pairing_request_crud() {
             device_name: Some("iPhone"),
             device_type: Some("ios"),
             public_key: Some(&[1u8; 32]),
-            channel: None,
-            sender_id: None,
             remote_addr: Some("192.168.1.1"),
-            metadata: None,
             expires_at: expires,
+            ..PairingRequestData::default()
         })
         .unwrap();
 

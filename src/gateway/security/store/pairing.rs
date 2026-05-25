@@ -10,8 +10,8 @@ impl SecurityStore {
 
         conn.execute(
             "INSERT INTO pairing_requests
-             (request_id, code, pairing_type, device_name, device_type, public_key, channel, sender_id, remote_addr, metadata, created_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             (request_id, code, pairing_type, device_name, device_type, public_key, channel, sender_id, remote_addr, metadata, created_at, expires_at, origin_label, user_agent, peer_ip)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(request_id) DO UPDATE SET
                code = excluded.code,
                expires_at = excluded.expires_at",
@@ -28,6 +28,9 @@ impl SecurityStore {
                 data.metadata,
                 now,
                 data.expires_at,
+                data.origin_label,
+                data.user_agent,
+                data.peer_ip,
             ],
         )?;
         Ok(())
@@ -37,7 +40,7 @@ impl SecurityStore {
     pub fn get_pairing_request(&self, code: &str) -> SqliteResult<Option<PairingRequestRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT request_id, code, pairing_type, device_name, device_type, public_key, channel, sender_id, remote_addr, metadata, created_at, expires_at
+            "SELECT request_id, code, pairing_type, device_name, device_type, public_key, channel, sender_id, remote_addr, metadata, created_at, expires_at, origin_label, user_agent, peer_ip
              FROM pairing_requests WHERE code = ?1 AND expires_at > ?2",
         )?;
 
@@ -66,7 +69,7 @@ impl SecurityStore {
     pub fn list_pairing_requests(&self) -> SqliteResult<Vec<PairingRequestRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT request_id, code, pairing_type, device_name, device_type, public_key, channel, sender_id, remote_addr, metadata, created_at, expires_at
+            "SELECT request_id, code, pairing_type, device_name, device_type, public_key, channel, sender_id, remote_addr, metadata, created_at, expires_at, origin_label, user_agent, peer_ip
              FROM pairing_requests WHERE expires_at > ?1 ORDER BY created_at DESC",
         )?;
 

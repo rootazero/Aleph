@@ -22,7 +22,7 @@ mod tests;
 pub use types::*;
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 8;
+const SCHEMA_VERSION: i32 = 9;
 
 /// Unified security storage backed by SQLite
 pub struct SecurityStore {
@@ -166,6 +166,19 @@ impl SecurityStore {
             self.set_schema_version(8)?;
         }
 
+        if version < 9 {
+            info!(
+                from = version,
+                to = 9,
+                "Migrating security schema to v9 (browser pairing variant)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(SCHEMA_V9)?;
+            drop(conn);
+            self.set_schema_version(9)?;
+        }
+
         // Final safety: ensure version is at latest
         self.set_schema_version(SCHEMA_VERSION)?;
 
@@ -249,7 +262,7 @@ CREATE TABLE pairing_requests (
     metadata        TEXT,
     created_at      INTEGER NOT NULL,
     expires_at      INTEGER NOT NULL,
-    CHECK (pairing_type IN ('device', 'channel'))
+    CHECK (pairing_type IN ('device', 'channel', 'browser'))
 );
 
 CREATE INDEX idx_pairing_code ON pairing_requests(code);
@@ -311,4 +324,36 @@ CREATE TABLE IF NOT EXISTS channel_policies (
     PRIMARY KEY (channel_id, policy_type)
 );
 CREATE INDEX IF NOT EXISTS idx_channel_policies_channel ON channel_policies(channel_id);
+"#;
+
+/// Schema v9 SQL — browser pairing variant.
+///
+/// SQLite can `ADD COLUMN` freely, but it cannot edit a `CHECK` constraint
+/// in place. The v2 table was created with `CHECK (pairing_type IN
+/// ('device', 'channel'))` — to admit the new `'browser'` value we must
+/// rebuild the table. Pending pairings are short-lived (5min default) so
+/// nuking the table is the safe move; legacy rows are never useful after
+/// a daemon restart anyway.
+const SCHEMA_V9: &str = r#"
+DROP TABLE IF EXISTS pairing_requests;
+CREATE TABLE pairing_requests (
+    request_id      TEXT PRIMARY KEY,
+    code            TEXT NOT NULL UNIQUE,
+    pairing_type    TEXT NOT NULL,
+    device_name     TEXT,
+    device_type     TEXT,
+    public_key      BLOB,
+    channel         TEXT,
+    sender_id       TEXT,
+    remote_addr     TEXT,
+    metadata        TEXT,
+    created_at      INTEGER NOT NULL,
+    expires_at      INTEGER NOT NULL,
+    origin_label    TEXT,
+    user_agent      TEXT,
+    peer_ip         TEXT,
+    CHECK (pairing_type IN ('device', 'channel', 'browser'))
+);
+CREATE INDEX IF NOT EXISTS idx_pairing_code ON pairing_requests(code);
+CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_requests(expires_at);
 "#;

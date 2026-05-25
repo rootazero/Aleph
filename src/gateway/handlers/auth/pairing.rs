@@ -75,6 +75,19 @@ pub async fn handle_pairing_approve(
                 }),
             );
         }
+        // Browser pairing path is handled in Task 2 by branching BEFORE
+        // confirm_pairing so the session-id stash can happen. Reaching it
+        // here would mean a Browser code was confirmed without recording
+        // a session — return an error so the operator notices instead of
+        // silently dropping the approval.
+        PairingRequest::Browser { code, .. } => {
+            warn!(code = %code, "Browser pairing reached device-approve path");
+            return JsonRpcResponse::error(
+                request.id,
+                -32603,
+                "Browser pairings must be approved via the browser pairing flow",
+            );
+        }
     };
 
     // Generate device ID and create approved device
@@ -253,6 +266,37 @@ pub async fn handle_pairing_list(
                     "code": code,
                     "channel": channel,
                     "sender_id": sender_id,
+                    "expires_in": remaining,
+                })
+            }
+            PairingRequest::Browser {
+                code,
+                origin_label,
+                user_agent,
+                peer_ip,
+                expires_at,
+                created_at,
+                ..
+            } => {
+                let remaining = if expires_at > created_at {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
+                    if expires_at > now {
+                        ((expires_at - now) / 1000) as u64
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+                json!({
+                    "type": "browser",
+                    "code": code,
+                    "origin_label": origin_label,
+                    "user_agent": user_agent,
+                    "peer_ip": peer_ip,
                     "expires_in": remaining,
                 })
             }

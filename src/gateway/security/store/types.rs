@@ -93,7 +93,34 @@ pub struct PairingRequestData<'a> {
     pub sender_id: Option<&'a str>,
     pub remote_addr: Option<&'a str>,
     pub metadata: Option<&'a str>,
+    /// Browser variant: display label e.g. "Safari on 192.168.1.5".
+    pub origin_label: Option<&'a str>,
+    /// Browser variant: full client `User-Agent` header.
+    pub user_agent: Option<&'a str>,
+    /// Browser variant: peer IP captured server-side.
+    pub peer_ip: Option<&'a str>,
     pub expires_at: i64,
+}
+
+impl<'a> Default for PairingRequestData<'a> {
+    fn default() -> Self {
+        Self {
+            request_id: "",
+            code: "",
+            pairing_type: "device",
+            device_name: None,
+            device_type: None,
+            public_key: None,
+            channel: None,
+            sender_id: None,
+            remote_addr: None,
+            metadata: None,
+            origin_label: None,
+            user_agent: None,
+            peer_ip: None,
+            expires_at: 0,
+        }
+    }
 }
 
 /// Pairing request row from database
@@ -109,6 +136,9 @@ pub struct PairingRequestRow {
     pub sender_id: Option<String>,
     pub remote_addr: Option<String>,
     pub metadata: Option<String>,
+    pub origin_label: Option<String>,
+    pub user_agent: Option<String>,
+    pub peer_ip: Option<String>,
     pub created_at: i64,
     pub expires_at: i64,
 }
@@ -128,6 +158,9 @@ impl PairingRequestRow {
             metadata: row.get(9)?,
             created_at: row.get(10)?,
             expires_at: row.get(11)?,
+            origin_label: row.get(12)?,
+            user_agent: row.get(13)?,
+            peer_ip: row.get(14)?,
         })
     }
 

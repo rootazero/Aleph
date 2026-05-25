@@ -58,6 +58,16 @@ pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
                         remaining
                     );
                 }
+                PairingRequest::Browser {
+                    code,
+                    origin_label,
+                    ..
+                } => {
+                    println!(
+                        "{:<10} {:<8} {:<30} {}s",
+                        "browser", code, origin_label, remaining
+                    );
+                }
             }
         }
     }
@@ -125,6 +135,14 @@ fn approve_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
             println!("  Channel:   {}", channel);
             println!("  Sender ID: {}", sender_id);
             return Ok(());
+        }
+        PairingRequest::Browser { code, .. } => {
+            eprintln!(
+                "Error: Browser pairing code '{}' must be approved from the Panel \
+                 (notification bell), not from the CLI.",
+                code
+            );
+            std::process::exit(1);
         }
     };
 
