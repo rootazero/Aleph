@@ -125,8 +125,9 @@ impl SimpleExecutionEngine {
 
         let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
 
-        let final_result = match &result {
+        let final_result = match result {
             Ok(response) => {
+                let response = &response;
                 agent
                     .add_message(&request.session_key, MessageRole::Assistant, response)
                     .await;
@@ -151,19 +152,21 @@ impl SimpleExecutionEngine {
                 Ok(())
             }
             Err(e) => {
+                let error_code = match &e {
+                    ExecutionError::Timeout => "TIMEOUT".to_string(),
+                    ExecutionError::Cancelled => "CANCELLED".to_string(),
+                    _ => "INTERNAL_ERROR".to_string(),
+                };
                 let _ = emitter
                     .emit(StreamEvent::RunError {
                         run_id: run_id.clone(),
                         seq: final_seq,
                         error: e.to_string(),
-                        error_code: Some(match e {
-                            ExecutionError::Timeout => "TIMEOUT".to_string(),
-                            ExecutionError::Cancelled => "CANCELLED".to_string(),
-                            _ => "INTERNAL_ERROR".to_string(),
-                        }),
+                        error_code: Some(error_code),
                     })
                     .await;
-                Err(ExecutionError::Failed(e.to_string()))
+                // Preserve the typed variant — see execute.rs for rationale.
+                Err(e)
             }
         };
 

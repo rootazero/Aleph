@@ -111,7 +111,7 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         ) => {
             format!(
                 "抱歉，我在处理这个请求时用了太多步骤但没能完成（{iterations} 次迭代，{tool_calls} 次工具调用）。\n\
-                 请尝试更直接的指令，比如使用 /video、/image、/audio 等命令直接生成内容。"
+                 请尝试将任务拆分得更小、更具体，或在配置中调高 `[execution] max_iterations`。"
             )
         }
         (
@@ -124,7 +124,8 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
             format!(
                 "Sorry, I was unable to complete the task within the allowed limits \
                  ({iterations} iterations, {tool_calls} tool calls).\n\
-                 Try using direct commands like /video, /image, or /audio for generation tasks."
+                 Try breaking the task into smaller, more specific steps, \
+                 or raise `[execution] max_iterations` in your config."
             )
         }
 

@@ -339,8 +339,9 @@ where
         // Emit completion event
         let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
 
-        let final_result = match &result {
+        let final_result = match result {
             Ok(response) => {
+                let response = &response;
                 if trace_task_persisted {
                     self.persist_run_task_status(&run_id, TaskStatus::Completed)
                         .await;
@@ -524,7 +525,12 @@ where
                         error_code: Some(error_code.to_string()),
                     })
                     .await;
-                Err(ExecutionError::Failed(e.to_string()))
+                // Preserve the typed variant so downstream callers (cron / heartbeat
+                // executors) can dispatch on `ExecutionError::Timeout`,
+                // `Cancelled`, etc. Collapsing to `Failed(string)` here made the
+                // dedicated Timeout arms unreachable and misclassified timeouts as
+                // permanent failures.
+                Err(e)
             }
         };
 

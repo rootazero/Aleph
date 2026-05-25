@@ -127,7 +127,13 @@ fn patterns() -> &'static [(RetryCategory, Regex)] {
             ),
             (
                 RetryCategory::Timeout,
-                Regex::new(r"(?i)(timeout|etimedout)").expect("timeout pattern compiles"),
+                // Matches "timeout", "timed out", "timing out", and the
+                // libc errno `ETIMEDOUT`. The space variant is critical
+                // because `ExecutionError::Timeout`'s Display is
+                // `"Run timed out"` — without it, every cron timeout
+                // would fall through to permanent.
+                Regex::new(r"(?i)(timeout|tim(?:ed|ing) out|etimedout)")
+                    .expect("timeout pattern compiles"),
             ),
             (
                 RetryCategory::ServerError,
@@ -213,6 +219,24 @@ mod tests {
             let hint = classify(err);
             assert!(hint.retryable);
             assert_eq!(hint.category, Some(RetryCategory::Timeout));
+        }
+    }
+
+    /// Regression: `ExecutionError::Timeout`'s Display is `"Run timed out"`
+    /// (with a space). Before this fix the regex was `(timeout|etimedout)`
+    /// and missed the space variant, so cron timeouts were silently
+    /// classified as permanent and never retried.
+    #[test]
+    fn classifies_execution_error_timeout_display() {
+        for err in [
+            "Run timed out",
+            "Execution failed: Run timed out",
+            "request is timing out",
+            "Job timed out after 30s",
+        ] {
+            let hint = classify(err);
+            assert!(hint.retryable, "{err} should be retryable");
+            assert_eq!(hint.category, Some(RetryCategory::Timeout), "{err}");
         }
     }
 
