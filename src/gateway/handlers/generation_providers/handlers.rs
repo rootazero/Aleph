@@ -1,3 +1,4 @@
+use crate::config::types::generation::presets::{generation_metadata, PRESETS};
 use crate::config::types::generation::GenerationProviderConfig;
 use crate::config::Config;
 use crate::gateway::event_bus::GatewayEventBus;
@@ -632,5 +633,108 @@ pub async fn handle_test_connection(
             INTERNAL_ERROR,
             format!("Failed to serialize result: {}", e),
         ),
+    }
+}
+
+/// `generation_providers.list_presets` — return the authoritative preset
+/// catalogue (id, provider_type, default_model, base_url, display_name,
+/// modalities, homepage, notes) joined from `PRESETS` + `GENERATION_METADATA`.
+///
+/// Stateless. Panel consumes this to render the preset-card grid; the panel
+/// no longer keeps a parallel hard-coded registry. Entries without metadata
+/// are skipped (modality unknown ⇒ can't decide which category tab to show).
+pub async fn handle_list_presets(request: JsonRpcRequest) -> JsonRpcResponse {
+    let mut items: Vec<serde_json::Value> = PRESETS
+        .iter()
+        .filter_map(|(id, preset)| {
+            let meta = generation_metadata(id)?;
+            let modalities: Vec<&'static str> =
+                meta.modalities.iter().map(|m| m.as_str()).collect();
+            Some(serde_json::json!({
+                "id": id,
+                "provider_type": preset.provider_type,
+                "default_model": preset.default_model,
+                "base_url": preset.base_url,
+                "display_name": meta.display_name,
+                "modalities": modalities,
+                "homepage": meta.homepage,
+                "notes": meta.notes,
+            }))
+        })
+        .collect();
+
+    // Stable order: by id ascending (HashMap iteration is unordered).
+    items.sort_by(|a, b| {
+        a.get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .cmp(b.get("id").and_then(|v| v.as_str()).unwrap_or(""))
+    });
+
+    JsonRpcResponse::success(request.id, serde_json::Value::Array(items))
+}
+
+#[cfg(test)]
+mod list_presets_tests {
+    use super::*;
+    use crate::gateway::protocol::JsonRpcRequest;
+
+    fn request() -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(serde_json::json!(1)),
+            method: "generation_providers.list_presets".to_string(),
+            params: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_presets_returns_known_presets_with_metadata() {
+        let resp = handle_list_presets(request()).await;
+        let arr = resp.result.expect("result").as_array().cloned().unwrap();
+        assert!(arr.len() >= 20, "expected ≥20 presets, got {}", arr.len());
+
+        // Every entry has the required UI fields.
+        for entry in &arr {
+            assert!(entry.get("id").and_then(|v| v.as_str()).is_some());
+            assert!(entry.get("provider_type").and_then(|v| v.as_str()).is_some());
+            assert!(entry.get("default_model").and_then(|v| v.as_str()).is_some());
+            assert!(entry.get("display_name").and_then(|v| v.as_str()).is_some());
+            let mods = entry.get("modalities").and_then(|v| v.as_array()).unwrap();
+            assert!(!mods.is_empty(), "modalities cannot be empty for {entry}");
+        }
+    }
+
+    #[tokio::test]
+    async fn list_presets_includes_round3_additions() {
+        let resp = handle_list_presets(request()).await;
+        let arr = resp.result.expect("result").as_array().cloned().unwrap();
+        let ids: Vec<&str> = arr
+            .iter()
+            .filter_map(|e| e.get("id").and_then(|v| v.as_str()))
+            .collect();
+        for required in [
+            "deepgram-tts",
+            "azure-speech",
+            "suno",
+            "bfl-flux",
+            "cartesia",
+            "minimax-stt",
+        ] {
+            assert!(ids.contains(&required), "missing preset {required}");
+        }
+    }
+
+    #[tokio::test]
+    async fn list_presets_is_sorted_by_id() {
+        let resp = handle_list_presets(request()).await;
+        let arr = resp.result.expect("result").as_array().cloned().unwrap();
+        let ids: Vec<&str> = arr
+            .iter()
+            .filter_map(|e| e.get("id").and_then(|v| v.as_str()))
+            .collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(ids, sorted, "preset list must be sorted by id");
     }
 }

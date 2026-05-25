@@ -447,6 +447,11 @@ pub(in crate::commands::start) fn register_config_handlers(
         config,
         shared_token_mgr
     );
+    register_handler!(
+        server,
+        "generation_providers.list_presets",
+        generation_providers::handle_list_presets
+    );
 
     // Embedding providers (vault-backed API key storage)
     register_handler!(

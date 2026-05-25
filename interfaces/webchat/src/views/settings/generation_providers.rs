@@ -6,7 +6,7 @@ use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
 use crate::i18n::*;
-use crate::preset_providers::{PresetProvider, PresetProviders};
+use crate::preset_providers::{PresetCatalog, PresetProvider};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos::*;
@@ -48,27 +48,32 @@ pub fn GenerationProvidersView() -> impl IntoView {
 
     // State
     let (providers, set_providers) = signal(Vec::<GenerationProviderEntry>::new());
+    let (catalog, set_catalog) = signal(PresetCatalog::default());
     let (selected_category, set_selected_category) = signal(GenerationType::Image);
     let (selected_provider_id, set_selected_provider_id) = signal(Option::<String>::None);
     let (show_add_form, set_show_add_form) = signal(false);
     let (is_loading, set_is_loading) = signal(true);
     let (error_message, set_error_message) = signal(Option::<String>::None);
 
-    // Load providers on mount
+    // Load providers + preset catalogue on mount (parallel — independent RPCs)
     spawn_local(async move {
-        match GenerationProvidersApi::list(&state).await {
-            Ok(list) => {
-                set_providers.set(list);
-                set_is_loading.set(false);
-            }
-            Err(e) => {
-                set_error_message.set(Some(format!("Failed to load providers: {}", e)));
-                set_is_loading.set(false);
-            }
+        let (providers_res, presets_res) = futures::future::join(
+            GenerationProvidersApi::list(&state),
+            GenerationProvidersApi::list_presets(&state),
+        )
+        .await;
+        match providers_res {
+            Ok(list) => set_providers.set(list),
+            Err(e) => set_error_message.set(Some(format!("Failed to load providers: {}", e))),
         }
+        match presets_res {
+            Ok(dtos) => set_catalog.set(PresetCatalog::from_dtos(dtos)),
+            Err(e) => set_error_message.set(Some(format!("Failed to load preset catalog: {}", e))),
+        }
+        set_is_loading.set(false);
     });
 
-    // Reload helper
+    // Reload helper (configured providers only; preset catalog is static for the session)
     let reload = move || {
         spawn_local(async move {
             if let Ok(list) = GenerationProvidersApi::list(&state).await {
@@ -78,7 +83,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
     };
 
     // Get current category presets
-    let current_presets = move || PresetProviders::by_category(selected_category.get());
+    let current_presets = move || catalog.get().by_category(selected_category.get());
 
     // Check if a preset is configured
     let is_configured = move |preset_id: &str| providers.get().iter().any(|p| p.name == preset_id);
@@ -185,7 +190,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
 
                                     // Custom providers (not matching any preset in current category)
                                     {move || {
-                                        let all_presets = PresetProviders::by_category(selected_category.get());
+                                        let all_presets = catalog.get().by_category(selected_category.get());
                                         let preset_ids: Vec<String> = all_presets.iter().map(|p| p.id.clone()).collect();
                                         let provider_list = providers.get();
                                         let current_cat = selected_category.get();
@@ -318,6 +323,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                             <ProviderDetailPanel
                                 selected_id=selected_provider_id
                                 providers=providers
+                                catalog=catalog
                                 on_reload=move || reload()
                             />
                         }.into_any()
@@ -377,7 +383,6 @@ fn ProviderCard(
     let color = preset.color.clone();
     let name = preset.name.clone();
     let model = preset.default_model.clone();
-    let is_unsupported = preset.is_unsupported;
 
     view! {
         <button
@@ -388,8 +393,6 @@ fn ProviderCard(
                     format!("{} bg-primary-subtle border-primary", base)
                 } else if is_configured {
                     format!("{} bg-surface-raised border-border hover:border-primary/40", base)
-                } else if is_unsupported {
-                    format!("{} bg-surface-sunken border-border opacity-50", base)
                 } else {
                     format!("{} bg-surface-sunken border-border hover:border-border-strong", base)
                 }
@@ -420,12 +423,6 @@ fn ProviderCard(
                                         {t!(i18n, settings.generation.active)}
                                     </span>
                                 }.into_any()
-                            } else if is_unsupported {
-                                view! {
-                                    <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
-                                        {t!(i18n, settings.generation.unsupported)}
-                                    </span>
-                                }.into_any()
                             } else {
                                 view! { <span></span> }.into_any()
                             }
@@ -448,6 +445,7 @@ fn ProviderCard(
 fn ProviderDetailPanel(
     selected_id: ReadSignal<Option<String>>,
     providers: ReadSignal<Vec<GenerationProviderEntry>>,
+    catalog: ReadSignal<PresetCatalog>,
     on_reload: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
     let _state = expect_context::<DashboardState>();
@@ -458,8 +456,7 @@ fn ProviderDetailPanel(
                 if let Some(provider_id) = selected_id.get() {
                     // Unconfigured preset → show add form pre-filled with preset info
                     if let Some(preset_name) = provider_id.strip_prefix("__preset__") {
-                        let preset = PresetProviders::all().into_iter()
-                            .find(|p| p.id == preset_name);
+                        let preset = catalog.get().find(preset_name);
                         if let Some(preset) = preset {
                             return view! {
                                 <PresetSetupPanel
@@ -478,6 +475,7 @@ fn ProviderDetailPanel(
                         view! {
                             <ProviderDetailView
                                 provider=provider
+                                catalog=catalog
                                 on_reload=on_reload
                             />
                         }.into_any()
@@ -511,6 +509,7 @@ fn EmptyState() -> impl IntoView {
 #[component]
 fn ProviderDetailView(
     provider: GenerationProviderEntry,
+    catalog: ReadSignal<PresetCatalog>,
     on_reload: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
@@ -759,7 +758,7 @@ fn ProviderDetailView(
         }
     });
 
-    let is_preset = PresetProviders::all().iter().any(|p| p.id == provider_name);
+    let is_preset = catalog.get().is_preset(&provider_name);
 
     view! {
         <div class="flex flex-col h-full">

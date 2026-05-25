@@ -1,5 +1,6 @@
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
+use crate::preset_providers::PresetProviderDto;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -209,6 +210,17 @@ impl GenerationProvidersApi {
         let params = serde_json::json!({ "provider_id": provider_id });
         let result = state
             .rpc_call("generation_providers.voices", params)
+            .await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
+    /// Fetch the authoritative preset catalogue from the backend. Returns one
+    /// DTO per `(GenerationPreset, ProviderMetadata)` pair sorted by id. The
+    /// panel converts these into `PresetProvider` via `into_preset()` for
+    /// rendering — no static panel-side registry is consulted.
+    pub async fn list_presets(state: &DashboardState) -> Result<Vec<PresetProviderDto>, String> {
+        let result = state
+            .rpc_call("generation_providers.list_presets", Value::Null)
             .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
