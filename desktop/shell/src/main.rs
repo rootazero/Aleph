@@ -254,13 +254,15 @@ fn spawn_background(handle: tauri::AppHandle) {
 
 /// Point the main window's webview at the live Panel, without disturbing the
 /// window's visibility — used for the first reveal and for a silent reload
-/// after the daemon recovers.
-fn navigate_to_panel(handle: &tauri::AppHandle) {
+/// after the daemon recovers. Pass `token` only on the first reveal: the
+/// Panel stashes it in localStorage and the webview keeps that storage
+/// across in-window navigations, so subsequent reloads do not need it.
+fn navigate_to_panel(handle: &tauri::AppHandle, token: Option<&str>) {
     let Some(window) = handle.get_webview_window("main") else {
         tracing::error!("main window missing — cannot reach the Panel");
         return;
     };
-    match PANEL_URL.parse() {
+    match daemon::build_panel_url(token) {
         Ok(url) => {
             if let Err(e) = window.navigate(url) {
                 tracing::error!("failed to navigate to the Panel: {e}");
@@ -285,7 +287,8 @@ pub(crate) fn focus_window(handle: &tauri::AppHandle) {
 /// forward. The window starts hidden, so this is what the user sees on a
 /// normal launch.
 fn reveal_panel(handle: &tauri::AppHandle) {
-    navigate_to_panel(handle);
+    let token = daemon::load_bootstrap_token();
+    navigate_to_panel(handle, token.as_deref());
     focus_window(handle);
 }
 
@@ -385,7 +388,8 @@ async fn supervise_daemon(handle: tauri::AppHandle, daemon_up: bool) {
             }
             SupervisorAction::ReloadPanel => {
                 tracing::info!("daemon recovered — reloading the Panel");
-                navigate_to_panel(&handle);
+                // token only on first reveal — Panel keeps localStorage thereafter
+                navigate_to_panel(&handle, None);
             }
         }
     }
