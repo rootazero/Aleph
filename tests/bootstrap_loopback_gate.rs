@@ -79,6 +79,7 @@ async fn consume_sets_cookie_on_loopback() {
         auth_mode: AuthMode::Token,
         bootstrap_mgr: bootstrap.clone(),
         pairing_mgr,
+        auth_ctx: None,
     });
 
     let (nonce, _) = bootstrap.issue();
@@ -152,6 +153,7 @@ async fn replay_is_refused() {
         auth_mode: AuthMode::Token,
         bootstrap_mgr: bootstrap.clone(),
         pairing_mgr,
+        auth_ctx: None,
     });
     let (nonce, _) = bootstrap.issue();
 

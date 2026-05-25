@@ -738,6 +738,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             auth_mode: full_config.gateway.auth.mode.clone(),
             bootstrap_mgr: auth_bundle.bootstrap_mgr.clone(),
             pairing_mgr: auth_bundle.pairing_manager.clone(),
+            auth_ctx: Some(auth_bundle.auth_ctx.clone()),
         });
         server.set_auth_routes(auth_routes(auth_state));
     }

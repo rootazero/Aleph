@@ -6,6 +6,7 @@
 use std::net::SocketAddr;
 
 use crate::gateway::config::AuthMode;
+use crate::gateway::protocol::JsonRpcRequest;
 use crate::gateway::security::SharedTokenManager;
 use crate::gateway::session::HttpSessionManager;
 use crate::sync_primitives::Arc;
@@ -16,7 +17,7 @@ use axum::{
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
-    Router,
+    Json, Router,
 };
 use serde::Deserialize;
 
@@ -34,6 +35,12 @@ pub struct AuthState {
     /// the pairing code that `/auth/bootstrap/from_pairing` then trades
     /// for a session cookie.
     pub pairing_mgr: Arc<crate::gateway::security::PairingManager>,
+    /// Shared AuthContext so the anonymous `/rpc` HTTP route (scoped to
+    /// pairing.start_browser + pairing.poll only) can reach the same
+    /// handler functions the WebSocket dispatcher uses. `None` when
+    /// `auth_routes` is built in isolation (e.g. legacy bootstrap-only
+    /// tests); the production wiring always plumbs it.
+    pub auth_ctx: Option<Arc<crate::gateway::handlers::auth::AuthContext>>,
 }
 
 #[derive(Deserialize)]
@@ -51,6 +58,16 @@ pub fn auth_routes(state: Arc<AuthState>) -> Router {
         .route("/auth/login", post(handle_login))
         .route("/auth/logout", post(handle_logout))
         .route("/auth/bootstrap", get(handle_bootstrap_consume))
+        .route("/pair", get(show_pair_page))
+        .route(
+            "/auth/bootstrap/from_pairing",
+            get(handle_bootstrap_from_pairing),
+        )
+        // Tiny anonymous JSON-RPC HTTP endpoint scoped to the two browser-
+        // pairing methods. The gateway's primary RPC surface is WebSocket
+        // (/ws), but the cold `/pair` page can't open a WS before it has
+        // a token; this is the smallest possible bridge.
+        .route("/rpc", post(handle_anonymous_rpc))
         .with_state(state)
 }
 
@@ -182,6 +199,178 @@ async fn handle_logout(State(state): State<Arc<AuthState>>) -> Response {
         .into_response()
 }
 
+#[derive(Deserialize)]
+struct PairQuery {
+    code: Option<String>,
+}
+
+async fn show_pair_page(Query(q): Query<PairQuery>) -> Html<String> {
+    Html(pair_page_html(q.code.as_deref()))
+}
+
+#[derive(Deserialize)]
+struct BootstrapFromPairingQuery {
+    code: String,
+}
+
+/// Trade an approved Browser pairing code for a session cookie + 303 to /.
+///
+/// The corresponding `pairing.approve` call deposited a session_id into
+/// `PairingManager.approved_browser_sessions[code]`. This single-use
+/// fetch removes it; a second request for the same code receives 401.
+///
+/// Unlike `/auth/bootstrap`, this is NOT loopback-gated — the whole
+/// browser-pairing flow exists precisely so a remote LAN browser (mobile,
+/// other laptop) can pair. The security boundary is the in-Panel
+/// operator's 1-click approve.
+async fn handle_bootstrap_from_pairing(
+    State(state): State<Arc<AuthState>>,
+    Query(q): Query<BootstrapFromPairingQuery>,
+) -> Response {
+    let session_id = match state.pairing_mgr.fetch_browser_session(&q.code) {
+        Some(id) => id,
+        None => {
+            tracing::info!(code = %q.code, "pairing not approved or expired");
+            return (StatusCode::UNAUTHORIZED, "pairing not approved").into_response();
+        }
+    };
+    let max_age = state.session_mgr.expiry_hours() * 3600;
+    let cookie = format!(
+        "aleph_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
+        session_id, max_age,
+    );
+    tracing::info!(code = %q.code, "browser pairing cookie issued");
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, "/".to_string()),
+            (header::SET_COOKIE, cookie),
+        ],
+    )
+        .into_response()
+}
+
+/// Tiny anonymous JSON-RPC HTTP endpoint scoped exclusively to the two
+/// browser-pairing methods (`pairing.start_browser`, `pairing.poll`). The
+/// gateway's main RPC surface is WebSocket-only; this endpoint exists so
+/// the cold `/pair` HTML page can do `fetch('/rpc', ...)` before it has a
+/// token to open a WS with.
+///
+/// Other methods receive `-32601 method not allowed via /rpc` — the WS
+/// endpoint enforces the full auth gate; we don't even try to mirror it
+/// here.
+async fn handle_anonymous_rpc(
+    State(state): State<Arc<AuthState>>,
+    Json(req): Json<JsonRpcRequest>,
+) -> Response {
+    let ctx = match &state.auth_ctx {
+        Some(ctx) => ctx.clone(),
+        None => {
+            tracing::error!("/rpc reached without auth_ctx wired into AuthState");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "rpc not available").into_response();
+        }
+    };
+    let response = match req.method.as_str() {
+        "pairing.start_browser" => {
+            crate::gateway::handlers::auth::handle_pairing_start_browser(req, ctx).await
+        }
+        "pairing.poll" => {
+            crate::gateway::handlers::auth::handle_pairing_poll(req, ctx).await
+        }
+        other => crate::gateway::protocol::JsonRpcResponse::error(
+            req.id.clone(),
+            -32601,
+            format!("method '{}' not allowed via /rpc; use /ws", other),
+        ),
+    };
+    Json(response).into_response()
+}
+
+/// Generate the cold-browser pairing HTML page.
+///
+/// Renders a 6-digit code container, polls `pairing.poll` every 2s via
+/// the `/rpc` HTTP endpoint, and redirects to
+/// `/auth/bootstrap/from_pairing?code=…` once approved. No build step,
+/// no framework — single-file vanilla HTML/JS so the page works even
+/// from a fresh browser with no extensions.
+pub fn pair_page_html(prefilled_code: Option<&str>) -> String {
+    // Strip single quotes from the prefill to keep the inline JS literal
+    // safe even if a malicious query string slips through.
+    let prefill_js = match prefilled_code {
+        Some(c) => format!("var prefilled = '{}';", c.replace('\'', "")),
+        None => "var prefilled = null;".to_string(),
+    };
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aleph — Pair this browser</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0f;color:#e0e0e0;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:16px}}
+.c{{background:#14141f;border:1px solid #2a2a3a;border-radius:16px;padding:40px;max-width:480px;width:100%;text-align:center}}
+h1{{font-size:22px;margin-bottom:8px}}
+.s{{color:#888;font-size:14px;margin-bottom:16px;line-height:1.5}}
+.code{{font-family:'SF Mono',Menlo,monospace;font-size:48px;letter-spacing:8px;color:#a5b4fc;background:#0a0a0f;border-radius:12px;padding:24px;margin:24px 0}}
+.err{{color:#fca5a5;margin-top:16px;font-size:14px}}
+</style></head><body>
+<div class="c">
+<h1>Pair this browser</h1>
+<p class="s">Open the Aleph desktop app and approve this code from the notification bell.</p>
+<div class="code" id="code">…</div>
+<div class="s" id="status">Waiting for approval…</div>
+<div class="err" id="err"></div>
+<script>
+{prefill_js}
+function rpc(method, params) {{
+    return fetch('/rpc', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{jsonrpc: '2.0', id: Date.now(), method: method, params: params}})
+    }}).then(function(r) {{ return r.json(); }});
+}}
+function showErr(msg) {{ document.getElementById('err').textContent = msg; }}
+function start() {{
+    return rpc('pairing.start_browser', {{
+        origin_label: 'Browser on this network',
+        user_agent: navigator.userAgent,
+        peer_ip: 'self'
+    }}).then(function(r) {{
+        if (r.error) {{ showErr(r.error.message); return null; }}
+        var code = r.result.code;
+        document.getElementById('code').textContent = code;
+        return code;
+    }});
+}}
+function poll(code) {{
+    setTimeout(function() {{
+        rpc('pairing.poll', {{code: code}}).then(function(r) {{
+            if (r.error) {{ showErr(r.error.message); return; }}
+            var s = r.result.status;
+            if (s === 'approved') {{
+                window.location.href = '/auth/bootstrap/from_pairing?code=' + encodeURIComponent(code);
+            }} else if (s === 'rejected') {{
+                document.getElementById('status').textContent = 'Pairing rejected';
+            }} else if (s === 'expired') {{
+                document.getElementById('status').textContent = 'Pairing expired — refresh to try again';
+            }} else {{
+                poll(code);
+            }}
+        }}).catch(function(e) {{ showErr('Network error: ' + e); }});
+    }}, 2000);
+}}
+if (prefilled) {{
+    document.getElementById('code').textContent = prefilled;
+    poll(prefilled);
+}} else {{
+    start().then(function(code) {{ if (code) poll(code); }});
+}}
+</script>
+</div></body></html>"#
+    )
+}
+
 /// Extract session ID from Cookie header
 fn extract_session_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
@@ -216,7 +405,10 @@ pub async fn session_auth_middleware(
         Some(id) if state.session_mgr.validate_session(&id).unwrap_or(false) => {
             next.run(request).await
         }
-        _ => Redirect::to("/login").into_response(),
+        // Cold visit → browser-pairing flow (Phase 3). Legacy `/login`
+        // token-paste form is kept reachable as a fallback until Phase 4
+        // deletes it.
+        _ => Redirect::to("/pair").into_response(),
     }
 }
 
@@ -348,5 +540,31 @@ mod tests {
         let html = login_page_html("");
         assert!(html.contains("localStorage.setItem"));
         assert!(html.contains("aleph_shared_token"));
+    }
+
+    #[test]
+    fn pair_page_contains_friendly_copy_and_rpc_calls() {
+        let html = pair_page_html(None);
+        // User-visible copy
+        assert!(html.contains("Pair this browser"));
+        // The two anonymous RPC methods the page issues
+        assert!(html.contains("pairing.start_browser"));
+        assert!(html.contains("pairing.poll"));
+        // Redirect target after approval
+        assert!(html.contains("/auth/bootstrap/from_pairing"));
+    }
+
+    #[test]
+    fn pair_page_prefills_code_when_provided() {
+        let html = pair_page_html(Some("654321"));
+        assert!(html.contains("654321"));
+        assert!(html.contains("var prefilled = '654321';"));
+    }
+
+    #[test]
+    fn pair_page_sanitises_single_quotes_in_prefill() {
+        // Even a hostile query string can't inject JS via the prefill.
+        let html = pair_page_html(Some("abc'); alert('xss"));
+        assert!(!html.contains("alert('xss"));
     }
 }
