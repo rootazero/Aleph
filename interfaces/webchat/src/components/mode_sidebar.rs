@@ -211,63 +211,113 @@ fn MemorySidebar() -> impl IntoView {
 }
 
 /// Settings mode sidebar — reuses existing SettingsTab definitions.
+/// Includes a client-side text filter at the top — typed query trims
+/// groups + tabs by label (case-insensitive). Match against group label
+/// shows the full group; match against a tab shows just that tab plus
+/// its parent group header for context.
 #[component]
 fn SettingsSidebar() -> impl IntoView {
     let location = use_location();
     let i18n = use_i18n();
+    let filter = RwSignal::new(String::new());
 
     view! {
-        <div class="flex flex-col h-full overflow-y-auto">
-            {move || SETTINGS_GROUPS.iter().map(|group| {
-                let group_label = group.i18n_label(i18n);
-                view! {
-                    <div class="px-3 py-2 space-y-0.5">
-                        <h3 class="px-3 py-1 text-xs font-medium text-text-tertiary uppercase tracking-wider">
-                            {group_label}
-                        </h3>
-                        {group.tabs.iter().map(|tab| {
-                            let path = tab.path();
-                            let tab_label = tab.i18n_label(i18n);
-                            let icon_svg = tab.icon_svg();
-                            let is_active = {
-                                let location = location.clone();
-                                move || {
-                                    let current = location.pathname.get();
-                                    if path == "/settings/channels" {
-                                        current.starts_with(path)
-                                    } else {
-                                        current == path
-                                    }
-                                }
-                            };
+        <div class="flex flex-col h-full">
+            // Search filter input — sticky so it stays visible when the
+            // tab list scrolls.
+            <div class="sticky top-0 z-10 bg-surface-base/95 backdrop-blur px-3 pt-3 pb-2 border-b border-border/50">
+                <div class="relative">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round"
+                         class="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary"
+                    >
+                        <circle cx="11" cy="11" r="8" />
+                        <path d="m21 21-4.35-4.35" />
+                    </svg>
+                    <input
+                        type="text"
+                        placeholder="Search settings…"
+                        class="w-full pl-8 pr-2 py-1.5 rounded-md bg-surface-sunken border border-border text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
+                        prop:value=move || filter.get()
+                        on:input=move |ev| filter.set(event_target_value(&ev))
+                    />
+                </div>
+            </div>
 
-                            view! {
-                                <A
-                                    href=path
-                                    attr:class=move || {
-                                        if is_active() {
-                                            "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 bg-sidebar-active text-sidebar-accent font-medium"
-                                        } else {
-                                            "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 hover:bg-sidebar-active/50 text-text-secondary hover:text-text-primary"
-                                        }
-                                    }
-                                >
-                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                                         stroke-linejoin="round"
-                                         class=move || {
-                                             if is_active() { "text-sidebar-accent flex-shrink-0" }
-                                             else { "text-text-tertiary flex-shrink-0" }
-                                         }
-                                         inner_html=icon_svg
-                                    />
-                                    <span>{tab_label}</span>
-                                </A>
+            <div class="flex-1 overflow-y-auto">
+                {move || {
+                    let needle = filter.get().trim().to_lowercase();
+                    SETTINGS_GROUPS.iter().filter_map(|group| {
+                        let group_label = group.i18n_label(i18n);
+                        let group_matches = !needle.is_empty()
+                            && group_label.to_lowercase().contains(&needle);
+
+                        // Per-tab visibility: with an empty query everything
+                        // shows; otherwise we keep tabs whose label contains
+                        // the needle, or all tabs when the group label matches.
+                        let visible_tabs: Vec<_> = group.tabs.iter().filter(|tab| {
+                            if needle.is_empty() || group_matches {
+                                true
+                            } else {
+                                tab.i18n_label(i18n).to_lowercase().contains(&needle)
                             }
-                        }).collect_view()}
-                    </div>
-                }
-            }).collect_view()}
+                        }).collect();
+
+                        if visible_tabs.is_empty() {
+                            return None;
+                        }
+
+                        Some(view! {
+                            <div class="px-3 py-2 space-y-0.5">
+                                <h3 class="px-3 py-1 text-xs font-medium text-text-tertiary uppercase tracking-wider">
+                                    {group_label}
+                                </h3>
+                                {visible_tabs.into_iter().map(|tab| {
+                                    let path = tab.path();
+                                    let tab_label = tab.i18n_label(i18n);
+                                    let icon_svg = tab.icon_svg();
+                                    let is_active = {
+                                        let location = location.clone();
+                                        move || {
+                                            let current = location.pathname.get();
+                                            if path == "/settings/channels" {
+                                                current.starts_with(path)
+                                            } else {
+                                                current == path
+                                            }
+                                        }
+                                    };
+
+                                    view! {
+                                        <A
+                                            href=path
+                                            attr:class=move || {
+                                                if is_active() {
+                                                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 bg-sidebar-active text-sidebar-accent font-medium"
+                                                } else {
+                                                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 hover:bg-sidebar-active/50 text-text-secondary hover:text-text-primary"
+                                                }
+                                            }
+                                        >
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                                 stroke-linejoin="round"
+                                                 class=move || {
+                                                     if is_active() { "text-sidebar-accent flex-shrink-0" }
+                                                     else { "text-text-tertiary flex-shrink-0" }
+                                                 }
+                                                 inner_html=icon_svg
+                                            />
+                                            <span>{tab_label}</span>
+                                        </A>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        })
+                    }).collect_view()
+                }}
+            </div>
         </div>
     }
 }

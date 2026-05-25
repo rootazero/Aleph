@@ -31,4 +31,27 @@ impl SystemApi {
 
         serde_json::from_value(result).map_err(|e| format!("Failed to parse system info: {}", e))
     }
+
+    /// `gateway.metrics.lanes` — live per-lane occupancy gauge.
+    /// Single round-trip; safe to poll on a slow tick (the snapshot is
+    /// cheap but eventually consistent).
+    pub async fn lane_metrics(state: &DashboardState) -> Result<Vec<LaneOccupancy>, String> {
+        let result = state
+            .rpc_call("gateway.metrics.lanes", Value::Null)
+            .await?;
+        let lanes = result.get("lanes").cloned().unwrap_or(Value::Array(vec![]));
+        serde_json::from_value(lanes).map_err(|e| format!("Failed to parse lanes: {}", e))
+    }
+}
+
+/// Mirror of server-side `LaneOccupancy`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaneOccupancy {
+    pub lane: String,
+    #[serde(default)]
+    pub desktop_total: Option<usize>,
+    #[serde(default)]
+    pub desktop_available: Option<usize>,
+    pub shared_total: usize,
+    pub shared_available: usize,
 }

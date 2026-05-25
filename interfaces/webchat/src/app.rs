@@ -18,6 +18,7 @@ use crate::views::runtimes::RuntimesView;
 use crate::views::settings::*;
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
+use crate::views::usage::UsageView;
 // Layout components
 use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
 use crate::context::{DashboardContext, DashboardState};
@@ -196,6 +197,7 @@ fn DashboardRouter() -> impl IntoView {
             "/dashboard/logs" => view! { <Logs /> }.into_any(),
             "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
             "/dashboard/runtimes" => view! { <RuntimesView /> }.into_any(),
+            "/dashboard/usage" => view! { <UsageView /> }.into_any(),
             // Not in dashboard mode — render nothing (div is hidden)
             _ => ().into_any(),
         }
@@ -211,7 +213,8 @@ fn SettingsRouter() -> impl IntoView {
         let path = location.pathname.get();
         match path.as_str() {
             // Basic
-            "/settings" | "/settings/general" => view! { <GeneralView /> }.into_any(),
+            "/settings" => view! { <Settings /> }.into_any(),
+            "/settings/general" => view! { <GeneralView /> }.into_any(),
             "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
 
             // AI

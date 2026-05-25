@@ -1,9 +1,118 @@
 use crate::api::{MemoryApi, MemoryStats, SystemApi, SystemInfo};
 use crate::components::ui::*;
-use crate::context::DashboardState;
+use crate::context::{DashboardState, GatewayEvent};
 use crate::i18n::*;
 use leptos::prelude::*;
+use std::collections::VecDeque;
 use wasm_bindgen::JsCast;
+
+/// Maximum number of activity entries kept in the dashboard ring buffer.
+/// Older entries roll off the bottom; UI never re-fetches history.
+const ACTIVITY_BUFFER_CAP: usize = 30;
+
+/// A single rendered row in the Recent Activity feed.
+#[derive(Clone, Debug)]
+struct ActivityEntry {
+    topic: String,
+    summary: String,
+    severity: ActivitySeverity,
+    ts_ms: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActivitySeverity {
+    Info,
+    Success,
+    Warning,
+    Danger,
+}
+
+/// Classify a topic into a dashboard-visible category. Returns `None`
+/// for high-volume streaming chatter we never want on the dashboard
+/// (per-chunk agent reasoning, tool start/update bursts, typing pings).
+fn classify_topic(topic: &str) -> Option<ActivitySeverity> {
+    match topic {
+        "agent.response.chunk"
+        | "agent.reasoning"
+        | "agent.reasoning.block"
+        | "agent.tool.start"
+        | "agent.tool.update"
+        | "channel.typing" => None,
+
+        "agent.run.error" | "channel.error" | "approval.expired" => {
+            Some(ActivitySeverity::Danger)
+        }
+
+        "approval.requested" | "pairing.requested" => Some(ActivitySeverity::Warning),
+
+        "agent.run.complete" | "approval.resolved" | "pairing.completed" => {
+            Some(ActivitySeverity::Success)
+        }
+
+        _ => Some(ActivitySeverity::Info),
+    }
+}
+
+/// Produce a short, human-friendly summary line from a topic + payload.
+fn summarize_event(topic: &str, data: &serde_json::Value) -> String {
+    let pick = |keys: &[&str]| -> Option<String> {
+        for k in keys {
+            if let Some(s) = data.get(k).and_then(|v| v.as_str()) {
+                if !s.is_empty() {
+                    return Some(s.to_string());
+                }
+            }
+        }
+        None
+    };
+
+    match topic {
+        "session.lifecycle.changed" | "session.updated" => pick(&["session_key", "session_id"])
+            .map(|s| format!("session {}", s))
+            .unwrap_or_else(|| topic.to_string()),
+        "channel.message" => pick(&["channel", "from", "user"])
+            .map(|s| format!("message from {}", s))
+            .unwrap_or_else(|| "channel message".to_string()),
+        "channel.status" => pick(&["channel", "status"])
+            .map(|s| format!("channel {}", s))
+            .unwrap_or_else(|| "channel status".to_string()),
+        "config.changed" => pick(&["section"])
+            .map(|s| format!("config: {}", s))
+            .unwrap_or_else(|| "config changed".to_string()),
+        "agent.run.complete" => pick(&["run_id", "session_key"])
+            .map(|s| format!("run {} complete", s))
+            .unwrap_or_else(|| "run complete".to_string()),
+        "agent.run.error" => pick(&["error", "message"])
+            .map(|s| format!("run error: {}", s))
+            .unwrap_or_else(|| "run error".to_string()),
+        "approval.requested" => pick(&["tool", "scope"])
+            .map(|s| format!("approval requested: {}", s))
+            .unwrap_or_else(|| "approval requested".to_string()),
+        "approval.resolved" => pick(&["decision", "tool"])
+            .map(|s| format!("approval resolved: {}", s))
+            .unwrap_or_else(|| "approval resolved".to_string()),
+        "pairing.requested" => "device pairing requested".to_string(),
+        "pairing.completed" => "device pairing completed".to_string(),
+        "presence.joined" => pick(&["conn_id"])
+            .map(|s| format!("client joined ({})", &s[..s.len().min(8)]))
+            .unwrap_or_else(|| "client joined".to_string()),
+        "presence.left" => pick(&["conn_id"])
+            .map(|s| format!("client left ({})", &s[..s.len().min(8)]))
+            .unwrap_or_else(|| "client left".to_string()),
+        "acp.sessions.changed" => "ACP sessions updated".to_string(),
+        _ => pick(&["message", "name", "title", "summary"]).unwrap_or_else(|| topic.to_string()),
+    }
+}
+
+/// Format a wall-clock millisecond timestamp into a `HH:MM:SS` label
+/// based on the browser's local timezone.
+fn format_clock(ts_ms: f64) -> String {
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ts_ms));
+    let hh = date.get_hours();
+    let mm = date.get_minutes();
+    let ss = date.get_seconds();
+    format!("{:02}:{:02}:{:02}", hh, mm, ss)
+}
 
 fn format_uptime(secs: u64) -> String {
     let days = secs / 86400;
@@ -44,6 +153,59 @@ pub fn Home() -> impl IntoView {
     let active_tasks = RwSignal::new(None::<u64>);
     let gateway_latency_ms = RwSignal::new(None::<u64>);
     let is_connecting = RwSignal::new(false);
+
+    // Recent activity ring buffer (newest first). Bounded at
+    // `ACTIVITY_BUFFER_CAP` — older entries roll off.
+    let activity_buffer = RwSignal::new(VecDeque::<ActivityEntry>::with_capacity(
+        ACTIVITY_BUFFER_CAP,
+    ));
+    let activity_sub_id = StoredValue::new(None::<usize>);
+
+    // Wire the gateway event stream into the activity buffer. Fires
+    // exactly once per (re)connection so we don't double-subscribe.
+    Effect::new(move || {
+        if state.is_connected.get() {
+            // Local event-handler registration (always safe to redo —
+            // each handler index is independent).
+            let sub_id = state.subscribe_events(move |event: GatewayEvent| {
+                let Some(severity) = classify_topic(&event.topic) else {
+                    return;
+                };
+                let entry = ActivityEntry {
+                    topic: event.topic.clone(),
+                    summary: summarize_event(&event.topic, &event.data),
+                    severity,
+                    ts_ms: js_sys::Date::now(),
+                };
+                activity_buffer.update(|buf| {
+                    buf.push_front(entry);
+                    while buf.len() > ACTIVITY_BUFFER_CAP {
+                        buf.pop_back();
+                    }
+                });
+            });
+            activity_sub_id.set_value(Some(sub_id));
+
+            // Server-side topic subscription. The bus already filters
+            // by pattern, so `**` is the simplest single round-trip;
+            // streaming chatter is dropped by `classify_topic`.
+            let state_for_topic = state;
+            leptos::task::spawn_local(async move {
+                if let Err(e) = state_for_topic.subscribe_topic("**").await {
+                    web_sys::console::warn_1(
+                        &format!("Activity feed: subscribe failed: {}", e).into(),
+                    );
+                }
+            });
+        } else {
+            // Drop any prior subscriber so a future connect re-installs cleanly.
+            if let Some(id) = activity_sub_id.get_value() {
+                state.unsubscribe_events(id);
+                activity_sub_id.set_value(None);
+            }
+            activity_buffer.update(|buf| buf.clear());
+        }
+    });
 
     // Fetch stats when connected
     Effect::new(move || {
@@ -524,12 +686,45 @@ pub fn Home() -> impl IntoView {
                                 <button class="text-xs text-primary hover:text-primary-hover">{move || t_string!(i18n, dashboard.activity.view_all).to_string()}</button>
                             </div>
                         </div>
-                        <div class="p-8 text-center text-text-tertiary">
+                        <div class="max-h-96 overflow-y-auto">
                             {move || {
                                 if !state.is_connected.get() {
-                                    view! { <p>{move || t_string!(i18n, dashboard.connect_to_view_activity).to_string()}</p> }.into_any()
+                                    view! {
+                                        <div class="p-8 text-center text-text-tertiary">
+                                            <p>{move || t_string!(i18n, dashboard.connect_to_view_activity).to_string()}</p>
+                                        </div>
+                                    }.into_any()
                                 } else {
-                                    view! { <p>{move || t_string!(i18n, dashboard.activity.no_recent).to_string()}</p> }.into_any()
+                                    let buf = activity_buffer.get();
+                                    if buf.is_empty() {
+                                        view! {
+                                            <div class="p-8 text-center text-text-tertiary">
+                                                <p>{move || t_string!(i18n, dashboard.activity.no_recent).to_string()}</p>
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <ul class="divide-y divide-border">
+                                                {buf.into_iter().map(|entry| {
+                                                    let dot_class = match entry.severity {
+                                                        ActivitySeverity::Success => "bg-success",
+                                                        ActivitySeverity::Warning => "bg-warning",
+                                                        ActivitySeverity::Danger => "bg-danger",
+                                                        ActivitySeverity::Info => "bg-primary/60",
+                                                    };
+                                                    let summary_title = entry.summary.clone();
+                                                    view! {
+                                                        <li class="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-sunken transition-colors">
+                                                            <span class=format!("w-2 h-2 rounded-full flex-shrink-0 {}", dot_class)></span>
+                                                            <span class="flex-1 min-w-0 text-sm text-text-primary truncate" title=summary_title>{entry.summary}</span>
+                                                            <span class="text-[10px] font-mono text-text-tertiary uppercase tracking-wider flex-shrink-0">{entry.topic}</span>
+                                                            <span class="text-xs font-mono text-text-tertiary flex-shrink-0">{format_clock(entry.ts_ms)}</span>
+                                                        </li>
+                                                    }
+                                                }).collect_view()}
+                                            </ul>
+                                        }.into_any()
+                                    }
                                 }
                             }}
                         </div>

@@ -321,6 +321,77 @@ impl TeamsApi {
         let v = result.get("events").cloned().unwrap_or(Value::Array(vec![]));
         serde_json::from_value(v).map_err(|e| e.to_string())
     }
+
+    /// teams.usage — per-team provider token aggregation (F5).
+    /// `since`/`until` are optional epoch seconds; both omitted ⇒ all-time.
+    pub async fn usage(
+        state: &DashboardState,
+        team_id: &str,
+        since: Option<i64>,
+        until: Option<i64>,
+    ) -> Result<TeamUsageDto, String> {
+        let mut params = serde_json::Map::new();
+        params.insert("team_id".into(), json!(team_id));
+        if let Some(s) = since {
+            params.insert("since".into(), json!(s));
+        }
+        if let Some(u) = until {
+            params.insert("until".into(), json!(u));
+        }
+        let result = state
+            .rpc_call("teams.usage", Value::Object(params))
+            .await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+}
+
+/// Mirror of server-side `teams.usage` response.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct TeamUsageDto {
+    pub team_id: String,
+    #[serde(default)]
+    pub since: Option<i64>,
+    #[serde(default)]
+    pub until: Option<i64>,
+    #[serde(default)]
+    pub member_count: u64,
+    #[serde(default)]
+    pub total: UsageTotals,
+    #[serde(default)]
+    pub per_agent: Vec<AgentUsageRow>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct UsageTotals {
+    #[serde(default)]
+    pub call_count: u64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct AgentUsageRow {
+    pub agent_id: String,
+    #[serde(default)]
+    pub call_count: u64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
 }
 
 // --- DTOs for the 3 new drawer sections ---------------------------------------

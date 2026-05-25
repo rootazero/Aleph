@@ -43,6 +43,12 @@ pub fn DashboardSidebar() -> impl IntoView {
                     <line x1="8" y1="21" x2="16" y2="21" />
                     <line x1="12" y1="17" x2="12" y2="21" />
                 </SidebarItem>
+                <SidebarItem href="/dashboard/usage" label=Signal::derive(|| "Usage & Lanes".to_string())>
+                    <path d="M3 3v18h18" />
+                    <path d="M18 17V9" />
+                    <path d="M13 17V5" />
+                    <path d="M8 17v-3" />
+                </SidebarItem>
             </nav>
         </div>
     }
