@@ -721,6 +721,26 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     );
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
 
+    // Mount HTTP auth routes (/login, /auth/login, /auth/logout, /auth/bootstrap)
+    // at the router root so the loopback bootstrap-consume endpoint is reachable
+    // from the browser. Pairs with the JSON-RPC issuer `gateway.bootstrap.issue`
+    // (same `BootstrapNonceManager` Arc).
+    {
+        use alephcore::gateway::auth_middleware::{auth_routes, AuthState};
+        use alephcore::gateway::session::HttpSessionManager;
+        let session_mgr = std::sync::Arc::new(HttpSessionManager::new(
+            auth_bundle.security_store.clone(),
+            full_config.gateway.auth.session_expiry_hours,
+        ));
+        let auth_state = std::sync::Arc::new(AuthState {
+            shared_token_mgr: auth_bundle.auth_ctx.shared_token_mgr.clone(),
+            session_mgr,
+            auth_mode: full_config.gateway.auth.mode.clone(),
+            bootstrap_mgr: auth_bundle.bootstrap_mgr.clone(),
+        });
+        server.set_auth_routes(auth_routes(auth_state));
+    }
+
     // Wizard session manager — constructs real PairingFlow + OnboardingFlow factory
     // and replaces the phase-1 service_unavailable stubs installed in HandlerRegistry::new.
     {

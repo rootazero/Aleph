@@ -239,6 +239,12 @@ pub struct GatewayServer {
     /// 404 from the server side — the CLI is expected to take the local
     /// lock instead.
     admin_router: Option<Router>,
+    /// HTTP auth routes (`/login`, `/auth/login`, `/auth/logout`,
+    /// `/auth/bootstrap`). Mounted at the router root when set so the
+    /// loopback bootstrap-consume endpoint is reachable from the
+    /// browser. `None` falls back to the inline `control_plane` login
+    /// served at `/login`.
+    auth_routes: Option<Router>,
 }
 
 impl GatewayServer {
@@ -284,6 +290,7 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
+            auth_routes: None,
         }
     }
 
@@ -330,6 +337,7 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
+            auth_routes: None,
         }
     }
 
@@ -373,6 +381,15 @@ impl GatewayServer {
     /// Idempotent — replaces any previously set admin router.
     pub fn set_admin_router(&mut self, router: Router) {
         self.admin_router = Some(router);
+    }
+
+    /// Mount HTTP auth routes (`/login`, `/auth/login`, `/auth/logout`,
+    /// `/auth/bootstrap`) at the router root in `build_router`. Built
+    /// by [`crate::gateway::auth_middleware::auth_routes`]. When set,
+    /// these routes shadow the inline login served by `control_plane`.
+    /// Idempotent — replaces any previously set auth routes.
+    pub fn set_auth_routes(&mut self, router: Router) {
+        self.auth_routes = Some(router);
     }
 
     /// Get the current number of active connections
@@ -445,6 +462,14 @@ impl GatewayServer {
         // Spec C: mount admin IPC router under /v1/admin if configured.
         if let Some(admin) = self.admin_router.clone() {
             router = router.nest("/v1/admin", admin);
+        }
+
+        // Mount auth routes at the root (/login, /auth/*) so the
+        // loopback bootstrap-consume endpoint is reachable. When unset
+        // (early dev paths), the inline login from control_plane keeps
+        // working via the fallback service.
+        if let Some(auth) = self.auth_routes.clone() {
+            router = router.merge(auth);
         }
 
         router.layer(SecurityHeadersLayer::new())

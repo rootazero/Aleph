@@ -3,13 +3,15 @@
 //! Provides session-cookie-based auth for Panel UI and
 //! Bearer token auth for /v1/* API routes.
 
+use std::net::SocketAddr;
+
 use crate::gateway::config::AuthMode;
 use crate::gateway::security::SharedTokenManager;
 use crate::gateway::session::HttpSessionManager;
 use crate::sync_primitives::Arc;
 use axum::{
     body::Body,
-    extract::{Form, State},
+    extract::{ConnectInfo, Form, Query, State},
     http::{header, Request, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
@@ -34,13 +36,94 @@ struct LoginForm {
     token: String,
 }
 
-/// Build auth routes (no auth required for these)
+/// Build auth routes (no auth required for these).
+///
+/// Mount with `into_make_service_with_connect_info::<SocketAddr>()` so the
+/// loopback bootstrap consumer sees the real peer address.
 pub fn auth_routes(state: Arc<AuthState>) -> Router {
     Router::new()
         .route("/login", get(show_login))
         .route("/auth/login", post(handle_login))
         .route("/auth/logout", post(handle_logout))
+        .route("/auth/bootstrap", get(handle_bootstrap_consume))
         .with_state(state)
+}
+
+/// True when the peer is on a loopback interface (127.0.0.0/8 or ::1).
+/// Used by the bootstrap-consume endpoint to refuse non-local peers
+/// regardless of the `Origin` header.
+pub fn is_loopback_peer(addr: &SocketAddr) -> bool {
+    match addr.ip() {
+        std::net::IpAddr::V4(v4) => v4.is_loopback(),
+        std::net::IpAddr::V6(v6) => v6.is_loopback(),
+    }
+}
+
+#[derive(Deserialize)]
+struct BootstrapQuery {
+    nonce: String,
+}
+
+/// Consume a one-shot bootstrap nonce and 303-redirect to `/` with a
+/// fresh `aleph_session` cookie. Refuses any non-loopback peer with
+/// 403; refuses invalid / expired / replayed nonces with 401.
+///
+/// Pairs with the JSON-RPC issuer `gateway.bootstrap.issue`: same
+/// [`crate::gateway::bootstrap::BootstrapNonceManager`] sits behind
+/// both.
+async fn handle_bootstrap_consume(
+    State(state): State<Arc<AuthState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Query(q): Query<BootstrapQuery>,
+) -> Response {
+    if !is_loopback_peer(&peer) {
+        tracing::warn!(
+            peer = %peer,
+            "rejected non-loopback /auth/bootstrap request"
+        );
+        return (StatusCode::FORBIDDEN, "loopback only").into_response();
+    }
+    if let Err(e) = state.bootstrap_mgr.consume(&q.nonce) {
+        tracing::info!(error = %e, "bootstrap nonce rejected");
+        return (StatusCode::UNAUTHORIZED, "invalid or expired nonce").into_response();
+    }
+    // Fabricate a fresh session keyed by the shared-token HMAC, mirroring
+    // `handle_login` above.
+    let token = match state.shared_token_mgr.get_current_token() {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "no shared token available",
+            )
+                .into_response();
+        }
+    };
+    let hash = crate::gateway::security::hmac_sign(state.shared_token_mgr.secret(), &token);
+    let session_id = match state.session_mgr.create_session(&hash) {
+        Ok(id) => id,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "session creation failed",
+            )
+                .into_response();
+        }
+    };
+    let max_age = state.session_mgr.expiry_hours() * 3600;
+    let cookie = format!(
+        "aleph_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
+        session_id, max_age,
+    );
+    tracing::info!("bootstrap nonce consumed; session cookie issued");
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, "/".to_string()),
+            (header::SET_COOKIE, cookie),
+        ],
+    )
+        .into_response()
 }
 
 async fn show_login() -> Html<String> {
