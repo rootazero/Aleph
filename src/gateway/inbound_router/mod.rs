@@ -707,6 +707,42 @@ impl InboundMessageRouter {
                     if parsed.command_name == "session_new" || parsed.command_name == "new" {
                         return self.handle_new_session(&msg, &ctx).await;
                     }
+                    // Slash-command access tiering — backward-compat: empty
+                    // `allow_admin_from` keeps gating OFF for that scope.
+                    if let Some(cfg) =
+                        self.channel_configs.get(ctx.message.channel_id.as_str())
+                    {
+                        let decision = cfg.slash_command_gate(
+                            &ctx.sender_normalized,
+                            &parsed.command_name,
+                            ctx.message.is_group,
+                        );
+                        if decision.gating_enabled && !decision.allowed {
+                            warn!(
+                                channel = %ctx.message.channel_id.as_str(),
+                                sender = %ctx.sender_normalized,
+                                command = %parsed.command_name,
+                                is_group = ctx.message.is_group,
+                                "[Router] Slash command blocked by access policy"
+                            );
+                            let reply = OutboundMessage {
+                                conversation_id: msg.conversation_id.clone(),
+                                text: format!(
+                                    "/{} is not enabled for your account in this chat.",
+                                    parsed.command_name
+                                ),
+                                attachments: Vec::new(),
+                                reply_to: Some(msg.id.clone()),
+                                inline_keyboard: None,
+                                metadata: Default::default(),
+                            };
+                            let _ = self
+                                .channel_registry
+                                .send(&msg.channel_id, reply)
+                                .await;
+                            return Ok(());
+                        }
+                    }
                     // Use the rich serializer so Skill / Custom / MCP fields
                     // (instructions, allowed_tools, system_prompt, server_name)
                     // are preserved in the mode JSON instead of being lossily

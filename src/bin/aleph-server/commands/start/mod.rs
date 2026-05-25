@@ -300,11 +300,18 @@ async fn initialize_extension_manager(daemon: bool) {
 
 /// Spawn Ctrl-C and SIGTERM handlers; return the oneshot receiver for run_until_shutdown.
 fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
+    use alephcore::gateway::shutdown_forensics::snapshot_shutdown_context;
+
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let pid_file = args.pid_file.clone();
     let daemon_mode = args.daemon;
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
+        // Forensics: capture context before tearing anything down. Skip
+        // `with_parent_command` here — the Ctrl-C path is the interactive
+        // case where the operator already knows who sent it.
+        let ctx = snapshot_shutdown_context("ctrl_c", None, false);
+        tracing::warn!("{}", ctx.as_log_line());
         if !daemon_mode {
             println!("\nShutting down gateway...");
         }
@@ -321,6 +328,11 @@ fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
             use tokio::signal::unix::{signal, SignalKind};
             if let Ok(mut stream) = signal(SignalKind::terminate()) {
                 stream.recv().await;
+                // Forensics: include parent command — SIGTERM usually comes
+                // from launchd / systemd / supervisor scripts and the parent
+                // PID is the diagnostic clue we want.
+                let ctx = snapshot_shutdown_context("SIGTERM", Some(15), true);
+                tracing::warn!("{}", ctx.as_log_line());
                 remove_pid_file(&pid_file_term);
                 std::process::exit(0);
             }
@@ -372,6 +384,10 @@ fn build_http_provider(
 /// Start the gateway server
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
+
+    // Mark process boot as early as possible so shutdown-forensics +
+    // memory-monitor see a meaningful uptime reading.
+    alephcore::gateway::shutdown_forensics::mark_boot();
 
     // Singleton lock is held by `main()` for the entire process lifetime.
     // See Spec C Task 5 — `alephcore::utils::instance_lock::try_acquire`
@@ -2370,8 +2386,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Long-running RSS observability — single grep-friendly `[MEMORY]` line
+    // every `gateway.memory_monitor_secs` seconds. `0` disables. Bound to
+    // graceful shutdown so the final "[MEMORY] reason=shutdown" line lands
+    // on the Ctrl-C path. SIGTERM (`std::process::exit(0)`) bypasses this
+    // — that path already emits its own forensic line.
+    let mut memory_monitor = alephcore::gateway::memory_monitor::MemoryMonitor::start(
+        full_config.gateway.memory_monitor_secs,
+    );
+
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
+    memory_monitor.shutdown().await;
     // Spec C: cleanup endpoint discovery file regardless of outcome.
     // NOTE: SIGTERM path (setup_graceful_shutdown) calls std::process::exit
     // and bypasses this cleanup; stale file is overwritten on next start.

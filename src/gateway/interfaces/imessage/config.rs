@@ -79,6 +79,24 @@ pub struct IMessageConfig {
     #[serde(default)]
     pub group_allow_from: Vec<String>,
 
+    /// DM-scope admin sender IDs — admins can run ALL slash commands.
+    /// Empty = slash-command gating OFF for DM scope (backward-compat).
+    #[serde(default)]
+    pub allow_admin_from: Vec<String>,
+
+    /// DM-scope slash commands that non-admin users may run.
+    #[serde(default)]
+    pub user_allowed_commands: Vec<String>,
+
+    /// Group-scope admin sender IDs.
+    /// Empty = slash-command gating OFF for group scope (backward-compat).
+    #[serde(default)]
+    pub group_allow_admin_from: Vec<String>,
+
+    /// Group-scope slash commands that non-admin users may run.
+    #[serde(default)]
+    pub group_user_allowed_commands: Vec<String>,
+
     /// Whether to require @mention in groups
     #[serde(default = "default_true")]
     pub require_mention: bool,
@@ -118,6 +136,10 @@ impl Default for IMessageConfig {
             group_policy: GroupPolicy::default(),
             allow_from: Vec::new(),
             group_allow_from: Vec::new(),
+            allow_admin_from: Vec::new(),
+            user_allowed_commands: Vec::new(),
+            group_allow_admin_from: Vec::new(),
+            group_user_allowed_commands: Vec::new(),
             require_mention: true,
             bot_name: None,
             include_attachments: true,

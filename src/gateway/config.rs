@@ -137,6 +137,15 @@ pub struct GatewayServerConfig {
     /// later replay it.
     #[serde(default)]
     pub require_challenge: bool,
+    /// Periodic `[MEMORY]` log cadence in seconds for the gateway process.
+    /// `0` disables the monitor. Default 300s (5 min) — see
+    /// [`crate::gateway::memory_monitor`] for the log format.
+    #[serde(default = "default_memory_monitor_secs")]
+    pub memory_monitor_secs: u64,
+}
+
+fn default_memory_monitor_secs() -> u64 {
+    crate::gateway::memory_monitor::DEFAULT_INTERVAL_SECS
 }
 
 fn default_ping_interval_secs() -> u64 {
@@ -161,6 +170,7 @@ impl Default for GatewayServerConfig {
             idle_timeout_secs: default_idle_timeout_secs(),
             require_idempotency_key: false,
             require_challenge: false,
+            memory_monitor_secs: default_memory_monitor_secs(),
         }
     }
 }
