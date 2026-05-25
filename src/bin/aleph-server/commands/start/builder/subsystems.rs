@@ -142,24 +142,23 @@ pub(in crate::commands::start) fn initialize_auth(
 
     if auth_mode.is_auth_required() {
         match shared_token_mgr.try_load_token_from_db() {
-            Some(token) => {
-                info!("========================================");
-                info!("  Access token (existing): {}", token);
-                info!("========================================");
+            Some(_) => {
+                info!(
+                    "auth token ready (loaded from DB) — desktop app auto-injects; \
+                     CLI users: run `aleph-server bootstrap-token` to retrieve"
+                );
             }
-            None => {
-                // First start — generate a new token
-                match shared_token_mgr.generate_token() {
-                    Ok(token) => {
-                        info!("========================================");
-                        info!("  Access token (new): {}", token);
-                        info!("========================================");
-                    }
-                    Err(e) => {
-                        warn!("Failed to generate shared token: {}", e);
-                    }
+            None => match shared_token_mgr.generate_token() {
+                Ok(_) => {
+                    info!(
+                        "auth token provisioned (first start) — desktop app \
+                         auto-injects; CLI users: run `aleph-server bootstrap-token`"
+                    );
                 }
-            }
+                Err(e) => {
+                    warn!("Failed to generate shared token: {}", e);
+                }
+            },
         }
     }
 
