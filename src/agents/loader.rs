@@ -223,6 +223,22 @@ fn scan_dir(dir: &Path, source: AgentSource) -> Result<Vec<AgentDef>, LoaderErro
     Ok(agents)
 }
 
+/// Load only the per-project agent overlay — no builtin/user tier.
+///
+/// Returns an empty Vec if `<project>/.aleph/agents` does not exist.
+/// Used by [`crate::agents::AgentRegistry::lookup_with_overlay`] to fetch
+/// project-scoped agent definitions on demand for a single run.
+///
+/// Errors propagate IO failures only — malformed files inside the
+/// directory are skipped with a tracing warning, same as `scan_dir`.
+pub fn load_project_overlay(project_dir: &Path) -> Result<Vec<AgentDef>, LoaderError> {
+    let proj_agents = project_dir.join(".aleph/agents");
+    if !proj_agents.exists() {
+        return Ok(Vec::new());
+    }
+    scan_dir(&proj_agents, AgentSource::Project)
+}
+
 pub fn load_agents(
     home_dir: &Path,
     project_dir: Option<&Path>,

@@ -380,11 +380,20 @@ impl LoopTool for SubagentTool {
 
                 // Resolve agent_def + per-task overrides up-front so we can
                 // share a single error path between the sync/async branches.
+                // Per-run project overlay (R3 close): when this tool call is
+                // scoped to a project root, `<project>/.aleph/agents/{id}.md`
+                // shadows the globally registered agent. Looked up once per
+                // batch so all rows share the same overlay snapshot.
+                let project_root = crate::projects::current_project_root();
+                let project_root_ref = project_root.as_deref();
                 let mut prepared: Vec<(AgentDef, String, Option<String>, u64)> =
                     Vec::with_capacity(batch.len());
                 for (idx, batch_task) in batch.iter().enumerate() {
                     let agent_def = if let Some(ref agent_type) = batch_task.agent_type {
-                        match self.agent_registry.get(agent_type) {
+                        match self
+                            .agent_registry
+                            .lookup_with_overlay(agent_type, project_root_ref)
+                        {
                             Some(def) => def,
                             None => {
                                 let available = self.agent_registry.list_ids().join(", ");
@@ -398,7 +407,10 @@ impl LoopTool for SubagentTool {
                             }
                         }
                     } else if let Some(ref agent_type) = args.agent_type {
-                        match self.agent_registry.get(agent_type) {
+                        match self
+                            .agent_registry
+                            .lookup_with_overlay(agent_type, project_root_ref)
+                        {
                             Some(def) => def,
                             None => {
                                 let available = self.agent_registry.list_ids().join(", ");
@@ -412,7 +424,10 @@ impl LoopTool for SubagentTool {
                             }
                         }
                     } else {
-                        match self.agent_registry.get("default") {
+                        match self
+                            .agent_registry
+                            .lookup_with_overlay("default", project_root_ref)
+                        {
                             Some(def) => def,
                             None => {
                                 return ToolResult::Error {
@@ -529,9 +544,14 @@ impl LoopTool for SubagentTool {
             "subagent: starting sub-task"
         );
 
-        // 2. Resolve agent definition
+        // 2. Resolve agent definition (per-run project overlay first).
+        let project_root = crate::projects::current_project_root();
+        let project_root_ref = project_root.as_deref();
         let agent_def = if let Some(ref agent_type) = args.agent_type {
-            match self.agent_registry.get(agent_type) {
+            match self
+                .agent_registry
+                .lookup_with_overlay(agent_type, project_root_ref)
+            {
                 Some(def) => def,
                 None => {
                     let available = self.agent_registry.list_ids().join(", ");
@@ -545,7 +565,10 @@ impl LoopTool for SubagentTool {
                 }
             }
         } else {
-            match self.agent_registry.get("default") {
+            match self
+                .agent_registry
+                .lookup_with_overlay("default", project_root_ref)
+            {
                 Some(def) => def,
                 None => {
                     return ToolResult::Error {

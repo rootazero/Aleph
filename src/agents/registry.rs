@@ -73,13 +73,13 @@ impl AgentRegistry {
     /// replaced a lower-tier one). Builtin-source agents in the merged set
     /// are skipped — they are already registered via `with_builtins()`.
     ///
-    /// Boot wiring currently passes `project_dir = None` (the desktop
-    /// daemon has no active project at boot). Round-3 follow-up: build a
-    /// per-run [`AgentRegistry`] overlay seeded from
-    /// [`crate::projects::current_project_root`] so a project's
-    /// `<project>/.aleph/agents/*.md` definitions can shadow the
-    /// user-tier agents for runs scoped to that project — without
-    /// reloading the global registry.
+    /// Boot wiring passes `project_dir = None` (the desktop daemon has no
+    /// active project at boot). Per-run project overlay is exposed via
+    /// [`Self::lookup_with_overlay`] — callers resolving an `agent_id` at
+    /// run time consult that method instead of `get` so a project's
+    /// `<project>/.aleph/agents/*.md` definitions can shadow the user-tier
+    /// agents for runs scoped to that project, without reloading the
+    /// global registry.
     pub fn register_from_dirs(
         &self,
         home_dir: &std::path::Path,
@@ -93,6 +93,35 @@ impl AgentRegistry {
             self.register(agent);
         }
         Ok(shadows)
+    }
+
+    /// Look up an agent by ID, consulting a per-project overlay first.
+    ///
+    /// When `project_root` is `Some`, the corresponding
+    /// `<project_root>/.aleph/agents/{id}.md` shadows the globally
+    /// registered agent for `id`. When `None`, when the project file
+    /// does not exist, or when reading the overlay errors, falls
+    /// through to [`Self::get`].
+    ///
+    /// The overlay is read lazily on each call — no caching. Project
+    /// overlays are small (typically <10 agent files) and `scan_dir`
+    /// only enumerates `.md` files, so the per-call IO cost stays well
+    /// below a single LLM round-trip. If profiling later flags this
+    /// path, the right answer is a small `Mutex<HashMap<PathBuf, …>>`
+    /// keyed on the project root.
+    pub fn lookup_with_overlay(
+        &self,
+        id: &str,
+        project_root: Option<&std::path::Path>,
+    ) -> Option<AgentDef> {
+        if let Some(root) = project_root {
+            if let Ok(overlay) = crate::agents::loader::load_project_overlay(root) {
+                if let Some(def) = overlay.into_iter().find(|d| d.id == id) {
+                    return Some(def);
+                }
+            }
+        }
+        self.get(id)
     }
 
     /// Remove an agent by ID
@@ -360,5 +389,83 @@ mod tests {
             vec!["researcher_protocol"]
         );
         assert_eq!(by_id["verify"].prompt_sections, vec!["verify_protocol"]);
+    }
+
+    // --- lookup_with_overlay (R3 per-project overlay) ----------------------
+
+    /// Helper: write `<dir>/.aleph/agents/<id>.md` with frontmatter matching
+    /// `loader::UserFrontmatter` so `load_project_overlay` can parse it.
+    fn write_project_agent(dir: &std::path::Path, id: &str, description: &str) {
+        let agents_dir = dir.join(".aleph/agents");
+        std::fs::create_dir_all(&agents_dir).expect("create .aleph/agents");
+        let path = agents_dir.join(format!("{id}.md"));
+        let content = format!(
+            "---\nid: {id}\ndescription: \"{description}\"\nwhen_to_use: \"test\"\n---\n\nbody\n"
+        );
+        std::fs::write(&path, content).expect("write agent md");
+    }
+
+    #[test]
+    fn lookup_with_overlay_no_project_root_falls_through_to_get() {
+        let registry = AgentRegistry::with_builtins();
+        let resolved = registry.lookup_with_overlay("explore", None).unwrap();
+        // Builtin description, not a project override.
+        assert_eq!(
+            resolved.description,
+            "Read-only codebase exploration specialist"
+        );
+    }
+
+    #[test]
+    fn lookup_with_overlay_project_agent_shadows_builtin() {
+        let registry = AgentRegistry::with_builtins();
+        let project = tempfile::tempdir().unwrap();
+        write_project_agent(project.path(), "explore", "project-tuned explore");
+
+        let resolved = registry
+            .lookup_with_overlay("explore", Some(project.path()))
+            .unwrap();
+        assert_eq!(resolved.description, "project-tuned explore");
+        assert_eq!(resolved.source, crate::agents::types::AgentSource::Project);
+    }
+
+    #[test]
+    fn lookup_with_overlay_missing_project_file_falls_through() {
+        let registry = AgentRegistry::with_builtins();
+        let project = tempfile::tempdir().unwrap();
+        // Project dir exists but has no .aleph/agents/explore.md — fall through.
+        let resolved = registry
+            .lookup_with_overlay("explore", Some(project.path()))
+            .unwrap();
+        assert_eq!(
+            resolved.description,
+            "Read-only codebase exploration specialist"
+        );
+    }
+
+    #[test]
+    fn lookup_with_overlay_unknown_id_returns_none() {
+        let registry = AgentRegistry::with_builtins();
+        let project = tempfile::tempdir().unwrap();
+        assert!(registry
+            .lookup_with_overlay("nonexistent_agent_id", Some(project.path()))
+            .is_none());
+    }
+
+    #[test]
+    fn lookup_with_overlay_project_agent_does_not_pollute_global_registry() {
+        // Read-only overlay — must not insert into the long-lived registry.
+        let registry = AgentRegistry::with_builtins();
+        let project = tempfile::tempdir().unwrap();
+        write_project_agent(project.path(), "explore", "project-tuned explore");
+
+        let _ = registry.lookup_with_overlay("explore", Some(project.path()));
+
+        // Direct get() must still return the builtin — registry untouched.
+        let global = registry.get("explore").unwrap();
+        assert_eq!(
+            global.description,
+            "Read-only codebase exploration specialist"
+        );
     }
 }
