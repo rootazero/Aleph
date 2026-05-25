@@ -1,4 +1,5 @@
 use crate::components::sidebar::SystemAlert;
+use crate::state::notifications::IncomingPairing;
 use futures::channel::{mpsc, oneshot};
 use futures::{FutureExt, StreamExt};
 use gloo_timers::future::TimeoutFuture;
@@ -108,6 +109,14 @@ pub struct DashboardState {
     /// Alert subscription ID for cleanup
     alert_subscription_id: StoredValue<Option<usize>>,
 
+    /// Pending browser-pairing requests rendered by the NotificationCenter
+    /// with inline Approve / Reject buttons. Sourced from `pairing.**`
+    /// gateway events (see `setup_pairing_subscriptions`).
+    pub incoming_pairings: RwSignal<Vec<IncomingPairing>>,
+
+    /// Pairing subscription ID for cleanup
+    pairing_subscription_id: StoredValue<Option<usize>>,
+
     /// Feature flag: enable radial (TheBrain-style) navigation in the Canvas view.
     /// Initialized from localStorage; mutated by the Settings panel toggle.
     pub canvas_radial_navigation: RwSignal<bool>,
@@ -158,6 +167,8 @@ impl DashboardState {
             disconnect_tx: StoredValue::new(None),
             alerts: RwSignal::new(HashMap::new()),
             alert_subscription_id: StoredValue::new(None),
+            incoming_pairings: RwSignal::new(Vec::new()),
+            pairing_subscription_id: StoredValue::new(None),
             canvas_radial_navigation: RwSignal::new(
                 crate::api::settings::load_canvas_radial_navigation(),
             ),
@@ -776,6 +787,72 @@ impl DashboardState {
         // Store subscription ID for cleanup
         self.alert_subscription_id.set_value(Some(subscription_id));
 
+        Ok(())
+    }
+
+    /// Subscribe to `pairing.**` events so the NotificationCenter can
+    /// render inline Approve / Reject cards for cold-browser pairings.
+    ///
+    /// Mirrors `setup_alert_subscriptions` — wildcard topic subscribe,
+    /// then a typed handler that mutates `incoming_pairings`.
+    pub async fn setup_pairing_subscriptions(&self) -> Result<(), String> {
+        self.subscribe_topic("pairing.**").await?;
+        web_sys::console::log_1(&"Subscribed to pairing.** events".into());
+
+        let state = *self;
+        let subscription_id = self.subscribe_events(move |event: GatewayEvent| {
+            let topic = event.topic.as_str();
+            // The new browser-pairing flow emits the device_name field on
+            // the `pairing.requested` event with the origin_label string
+            // (see handle_pairing_start_browser → PairingRequested frame).
+            // We don't have a 6-digit code in the event payload yet — pull
+            // it from the `code` field if the gateway later includes it,
+            // otherwise leave blank (the operator will pick from the
+            // pairing.list RPC).
+            match topic {
+                "pairing.requested" => {
+                    let code = event
+                        .data
+                        .get("code")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let origin_label = event
+                        .data
+                        .get("origin_label")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| event.data.get("device_name").and_then(|v| v.as_str()))
+                        .unwrap_or("Unknown browser")
+                        .to_string();
+                    state.incoming_pairings.update(|list| {
+                        // De-dupe by code so a re-subscribe doesn't pile up
+                        // stale rows.
+                        list.retain(|p| p.code != code);
+                        list.push(IncomingPairing {
+                            code,
+                            origin_label,
+                            created_at_ms: js_sys::Date::now() as i64,
+                        });
+                    });
+                }
+                "pairing.completed" | "pairing.rejected" => {
+                    let code = event
+                        .data
+                        .get("code")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| event.data.get("device_id").and_then(|v| v.as_str()))
+                        .unwrap_or("")
+                        .to_string();
+                    state.incoming_pairings.update(|list| {
+                        list.retain(|p| p.code != code);
+                    });
+                }
+                _ => {}
+            }
+        });
+
+        self.pairing_subscription_id
+            .set_value(Some(subscription_id));
         Ok(())
     }
 

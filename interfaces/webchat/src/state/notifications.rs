@@ -19,6 +19,25 @@ use crate::components::sidebar::{AlertLevel, SystemAlert};
 use leptos::prelude::*;
 use std::collections::{HashMap, HashSet};
 
+/// A pending browser-pairing request the operator has not yet decided on.
+///
+/// Created by `pairing.requested` events from the gateway; removed when
+/// the operator clicks Approve or Reject, or when a `pairing.completed`
+/// / `pairing.rejected` event arrives (e.g. someone else approved it,
+/// or the code expired).
+#[derive(Debug, Clone)]
+pub struct IncomingPairing {
+    /// 6-digit pairing code (display-only — the operator confirms by
+    /// clicking Approve, not by typing it).
+    pub code: String,
+    /// Human-readable description ("Safari on 192.168.1.5"). Client-supplied
+    /// at `pairing.start_browser` time; display-only.
+    pub origin_label: String,
+    /// Wall-clock ms when the panel received the event. Lets the popover
+    /// sort newest-first without trusting the wire timestamp.
+    pub created_at_ms: i64,
+}
+
 /// Per-window notification UI state. Provided once in `app.rs`, consumed by
 /// [`crate::components::notification_center::NotificationCenter`].
 #[derive(Copy, Clone)]
