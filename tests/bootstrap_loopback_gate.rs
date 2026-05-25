@@ -70,11 +70,15 @@ async fn consume_sets_cookie_on_loopback() {
     let _ = shared.generate_token().expect("generate token");
     let session_mgr = Arc::new(HttpSessionManager::new(store.clone(), 24));
     let bootstrap = Arc::new(BootstrapNonceManager::default());
+    let pairing_mgr = Arc::new(
+        alephcore::gateway::security::PairingManager::new(store.clone()),
+    );
     let state = Arc::new(AuthState {
         shared_token_mgr: shared,
         session_mgr,
         auth_mode: AuthMode::Token,
         bootstrap_mgr: bootstrap.clone(),
+        pairing_mgr,
     });
 
     let (nonce, _) = bootstrap.issue();
@@ -139,11 +143,15 @@ async fn replay_is_refused() {
     let _ = shared.generate_token().expect("generate token");
     let session_mgr = Arc::new(HttpSessionManager::new(store.clone(), 24));
     let bootstrap = Arc::new(BootstrapNonceManager::default());
+    let pairing_mgr = Arc::new(
+        alephcore::gateway::security::PairingManager::new(store.clone()),
+    );
     let state = Arc::new(AuthState {
         shared_token_mgr: shared,
         session_mgr,
         auth_mode: AuthMode::Token,
         bootstrap_mgr: bootstrap.clone(),
+        pairing_mgr,
     });
     let (nonce, _) = bootstrap.issue();
 

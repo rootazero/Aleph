@@ -44,6 +44,10 @@ pub(in crate::commands::start) struct AuthBundle {
     /// issuer (RPC handler inside `auth_ctx`) and the consumer (HTTP
     /// route) see the same nonce map.
     pub bootstrap_mgr: Arc<alephcore::gateway::bootstrap::BootstrapNonceManager>,
+    /// Shared with the loopback `/auth/bootstrap{,/from_pairing}` HTTP
+    /// routes so the Browser-pairing approve flow (inside auth_ctx) and
+    /// the cookie issuer (HTTP route) operate on the same session store.
+    pub session_mgr: Arc<alephcore::gateway::session::HttpSessionManager>,
 }
 
 /// Initialize authentication and security subsystems (construction only).
@@ -61,6 +65,7 @@ pub(in crate::commands::start) fn initialize_auth(
     max_connections: u32,
     require_challenge: bool,
     bootstrap_cfg: &alephcore::gateway::config::BootstrapConfig,
+    session_expiry_hours: u64,
     daemon: bool,
 ) -> AuthBundle {
     use alephcore::utils::paths;
@@ -174,6 +179,11 @@ pub(in crate::commands::start) fn initialize_auth(
         ),
     );
 
+    let session_mgr = Arc::new(alephcore::gateway::session::HttpSessionManager::new(
+        security_store_out.clone(),
+        session_expiry_hours,
+    ));
+
     let auth_ctx = Arc::new(auth_handlers::AuthContext {
         token_manager,
         pairing_manager,
@@ -195,6 +205,7 @@ pub(in crate::commands::start) fn initialize_auth(
         )),
         require_challenge,
         bootstrap_mgr: bootstrap_mgr.clone(),
+        session_mgr: session_mgr.clone(),
         bind_port: port,
     });
 
@@ -219,6 +230,7 @@ pub(in crate::commands::start) fn initialize_auth(
         invitation_manager,
         guest_session_manager,
         bootstrap_mgr,
+        session_mgr,
     }
 }
 

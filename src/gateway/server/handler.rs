@@ -217,7 +217,8 @@ async fn handle_connection(
                                 // token, going through the normal `connect`
                                 // path with the real credentials.
                                 let allow_unauth_wizard =
-                                    allow_unauth_loopback_wizard(&peer_addr, &req.method);
+                                    allow_unauth_loopback_wizard(&peer_addr, &req.method)
+                                        || allow_unauth_browser_pairing(&req.method);
 
                                 // Auth gating logic
                                 if ctx.auth_mode.is_auth_required()
@@ -895,6 +896,20 @@ fn allow_unauth_loopback_wizard(peer: &SocketAddr, method: &str) -> bool {
     peer.ip().is_loopback() && method.starts_with("wizard.")
 }
 
+/// Cold-browser pairing bypass for the WS auth gate.
+///
+/// Returns `true` for the two anonymous methods used by the `/pair` HTML
+/// page (`pairing.start_browser`, `pairing.poll`). Unlike the wizard
+/// bypass, this one is NOT loopback-gated — a remote LAN browser (mobile,
+/// other laptop) hitting `/pair` is the primary use case. The security
+/// boundary is the operator's 1-click approve from the already-
+/// authenticated Panel; rate limiting is the existing
+/// `PairingManager::MAX_PENDING_REQUESTS = 10` cap on pending pairing
+/// requests in the DB.
+fn allow_unauth_browser_pairing(method: &str) -> bool {
+    matches!(method, "pairing.start_browser" | "pairing.poll")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -954,5 +969,18 @@ mod tests {
             &sa("127.0.0.1"),
             "wizardx.foo"
         ));
+    }
+
+    #[test]
+    fn browser_pairing_bypass_admits_only_two_methods() {
+        assert!(allow_unauth_browser_pairing("pairing.start_browser"));
+        assert!(allow_unauth_browser_pairing("pairing.poll"));
+        // Everything else — including the existing authenticated pairing
+        // methods — stays gated.
+        assert!(!allow_unauth_browser_pairing("pairing.approve"));
+        assert!(!allow_unauth_browser_pairing("pairing.reject"));
+        assert!(!allow_unauth_browser_pairing("pairing.list"));
+        assert!(!allow_unauth_browser_pairing("memory.search"));
+        assert!(!allow_unauth_browser_pairing(""));
     }
 }

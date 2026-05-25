@@ -8,10 +8,11 @@ use serde_json::{json, Value};
 use tracing::{info, warn};
 
 use crate::gateway::device_store::ApprovedDevice;
+use crate::gateway::events::GatewayEventFrame;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED};
 use crate::gateway::security::store::DeviceUpsertData;
-use crate::gateway::security::{DeviceRole, DeviceType, PairingRequest};
+use crate::gateway::security::{DeviceRole, DeviceType, PairingRequest, PollState};
 
 use super::AuthContext;
 
@@ -75,17 +76,68 @@ pub async fn handle_pairing_approve(
                 }),
             );
         }
-        // Browser pairing path is handled in Task 2 by branching BEFORE
-        // confirm_pairing so the session-id stash can happen. Reaching it
-        // here would mean a Browser code was confirmed without recording
-        // a session — return an error so the operator notices instead of
-        // silently dropping the approval.
-        PairingRequest::Browser { code, .. } => {
-            warn!(code = %code, "Browser pairing reached device-approve path");
-            return JsonRpcResponse::error(
+        PairingRequest::Browser {
+            code,
+            origin_label,
+            ..
+        } => {
+            // Mint a session keyed to the shared-token HMAC (mirrors
+            // auth_middleware::handle_login at line 138-148). The session_id
+            // is stashed in PairingManager.approved_browser_sessions so the
+            // browser's `pairing.poll` can retrieve it and redirect to
+            // `/auth/bootstrap/from_pairing?code=…`.
+            let shared = match ctx.shared_token_mgr.get_current_token() {
+                Some(t) => t,
+                None => {
+                    warn!("Browser pairing approval failed: no shared token");
+                    return JsonRpcResponse::error(
+                        request.id,
+                        -32603,
+                        "Server has no shared token to mint a session",
+                    );
+                }
+            };
+            let hash = crate::gateway::security::hmac_sign(
+                ctx.shared_token_mgr.secret(),
+                &shared,
+            );
+            let session_id = match ctx.session_mgr.create_session(&hash) {
+                Ok(id) => id,
+                Err(e) => {
+                    warn!(error = %e, "Failed to create session for browser pairing");
+                    return JsonRpcResponse::error(
+                        request.id,
+                        -32603,
+                        format!("Failed to create session: {}", e),
+                    );
+                }
+            };
+            ctx.pairing_manager.record_browser_session(code, &session_id);
+
+            // Light up the PairingCompleted event so the Panel notification
+            // can be dismissed cleanly (paired with pairing.rejected for the
+            // reject branch in handle_pairing_reject).
+            if let Err(e) = ctx
+                .event_bus
+                .publish_frame(&GatewayEventFrame::PairingCompleted {
+                    device_id: code.clone(),
+                })
+            {
+                warn!(error = %e, "Failed to publish PairingCompleted frame");
+            }
+
+            info!(
+                code = %code,
+                origin = %origin_label,
+                "Browser pairing approved"
+            );
+            return JsonRpcResponse::success(
                 request.id,
-                -32603,
-                "Browser pairings must be approved via the browser pairing flow",
+                json!({
+                    "code": code,
+                    "kind": "browser",
+                    "approved": true,
+                }),
             );
         }
     };
@@ -172,8 +224,20 @@ pub async fn handle_pairing_reject(
         Err(e) => return e,
     };
 
+    // Peek at the row first so we can route a Browser reject to the
+    // side-table that `poll_browser_pairing` reads (`mark_browser_rejected`
+    // preserves the rejected state after `cancel_pairing` removes the
+    // DB row).
+    let is_browser = matches!(
+        ctx.pairing_manager.get_request(&params.code),
+        Ok(Some(PairingRequest::Browser { .. }))
+    );
+
     match ctx.pairing_manager.cancel_pairing(&params.code) {
         Ok(true) => {
+            if is_browser {
+                ctx.pairing_manager.mark_browser_rejected(&params.code);
+            }
             info!(code = %params.code, "Pairing rejected");
             JsonRpcResponse::success(request.id, json!({"rejected": true}))
         }
@@ -306,6 +370,128 @@ pub async fn handle_pairing_list(
     JsonRpcResponse::success(request.id, json!({"pending": items}))
 }
 
+/// Handle "pairing.start_browser" — anonymous RPC from the cold `/pair`
+/// HTML page. Creates a Browser pairing record and emits
+/// `pairing.requested` so the desktop Panel can notify the operator.
+///
+/// This endpoint is reachable without authentication (registered in the
+/// loopback allow-list at `server::handler::allow_unauth_loopback_wizard`-
+/// adjacent block) precisely because the browser making the call has no
+/// token yet — that's the whole point of the flow.
+pub async fn handle_pairing_start_browser(
+    request: JsonRpcRequest,
+    ctx: Arc<AuthContext>,
+) -> JsonRpcResponse {
+    #[derive(Debug, Deserialize)]
+    struct StartBrowserParams {
+        #[serde(default)]
+        origin_label: String,
+        #[serde(default)]
+        user_agent: String,
+        #[serde(default)]
+        peer_ip: String,
+    }
+
+    let params: StartBrowserParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let origin = if params.origin_label.is_empty() {
+        "Browser on this network".to_string()
+    } else {
+        params.origin_label.clone()
+    };
+
+    let (code, expires_at) = match ctx.pairing_manager.create_browser_pairing(
+        &origin,
+        &params.user_agent,
+        &params.peer_ip,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "Failed to create browser pairing");
+            return JsonRpcResponse::error(
+                request.id,
+                -32603,
+                format!("Failed to create browser pairing: {}", e),
+            );
+        }
+    };
+
+    // Light up the PairingRequested event — the Panel subscribes via
+    // `events.subscribe` on `pairing.**` and pops a notification card
+    // with Approve/Reject buttons.
+    if let Err(e) = ctx
+        .event_bus
+        .publish_frame(&GatewayEventFrame::PairingRequested {
+            device_name: origin.clone(),
+        })
+    {
+        warn!(error = %e, "Failed to publish PairingRequested frame");
+    }
+
+    // Compute remaining secs from the wall-clock now so the client knows
+    // how long it has before the code self-destructs.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let expires_in_secs = if expires_at > now_ms {
+        ((expires_at - now_ms) / 1000) as u64
+    } else {
+        0
+    };
+
+    info!(code = %code, origin = %origin, "Browser pairing started");
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "code": code,
+            "expires_at": expires_at,
+            "expires_in_secs": expires_in_secs,
+        }),
+    )
+}
+
+/// Handle "pairing.poll" — anonymous polling RPC the `/pair` HTML page
+/// hits every ~2s. Returns one of:
+/// - `{"status": "pending"}` while the operator hasn't decided yet
+/// - `{"status": "approved", "session_id": "…"}` once approved
+///   (single-use: a second poll returns "expired")
+/// - `{"status": "rejected"}` if the operator rejected
+/// - `{"status": "expired"}` if unknown, never created, or TTL elapsed
+pub async fn handle_pairing_poll(
+    request: JsonRpcRequest,
+    ctx: Arc<AuthContext>,
+) -> JsonRpcResponse {
+    #[derive(Debug, Deserialize)]
+    struct PollParams {
+        code: String,
+    }
+
+    let params: PollParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    match ctx.pairing_manager.poll_browser_pairing(&params.code) {
+        PollState::Pending => {
+            JsonRpcResponse::success(request.id, json!({"status": "pending"}))
+        }
+        PollState::Approved { session_id } => JsonRpcResponse::success(
+            request.id,
+            json!({"status": "approved", "session_id": session_id}),
+        ),
+        PollState::Rejected => {
+            JsonRpcResponse::success(request.id, json!({"status": "rejected"}))
+        }
+        PollState::Expired => {
+            JsonRpcResponse::success(request.id, json!({"status": "expired"}))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,5 +539,163 @@ mod tests {
         );
         let reconnect_resp = handle_connect(reconnect_req, ctx).await;
         assert!(reconnect_resp.is_success());
+    }
+
+    #[tokio::test]
+    async fn start_browser_then_poll_pending() {
+        let ctx = super::super::tests::create_test_context();
+
+        let start = handle_pairing_start_browser(
+            JsonRpcRequest::new(
+                "pairing.start_browser",
+                Some(json!({
+                    "origin_label": "Safari on 192.168.1.5",
+                    "user_agent": "Mozilla/5.0",
+                    "peer_ip": "192.168.1.5"
+                })),
+                Some(json!(1)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        assert!(start.is_success(), "start_browser must succeed: {:?}", start);
+        let code = start
+            .result
+            .as_ref()
+            .unwrap()
+            .get("code")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+        assert_eq!(code.len(), 6);
+
+        let poll = handle_pairing_poll(
+            JsonRpcRequest::new(
+                "pairing.poll",
+                Some(json!({ "code": code })),
+                Some(json!(2)),
+            ),
+            ctx,
+        )
+        .await;
+        let status = poll
+            .result
+            .unwrap()
+            .get("status")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(status, "pending");
+    }
+
+    #[tokio::test]
+    async fn approve_browser_pairing_makes_poll_return_approved() {
+        let ctx = super::super::tests::create_test_context();
+
+        let start = handle_pairing_start_browser(
+            JsonRpcRequest::new(
+                "pairing.start_browser",
+                Some(json!({
+                    "origin_label": "Firefox on 192.168.1.5",
+                    "user_agent": "ua",
+                    "peer_ip": "192.168.1.5"
+                })),
+                Some(json!(1)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        let code = start
+            .result
+            .unwrap()
+            .get("code")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let approve = handle_pairing_approve(
+            JsonRpcRequest::new(
+                "pairing.approve",
+                Some(json!({ "code": code.clone() })),
+                Some(json!(2)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        assert!(
+            approve.is_success(),
+            "approve must succeed for Browser variant: {:?}",
+            approve
+        );
+
+        let poll = handle_pairing_poll(
+            JsonRpcRequest::new(
+                "pairing.poll",
+                Some(json!({ "code": code })),
+                Some(json!(3)),
+            ),
+            ctx,
+        )
+        .await;
+        let body = poll.result.unwrap();
+        assert_eq!(body.get("status").unwrap().as_str().unwrap(), "approved");
+        assert!(
+            body.get("session_id").is_some(),
+            "approved poll must include session_id"
+        );
+    }
+
+    #[tokio::test]
+    async fn reject_browser_pairing_makes_poll_return_rejected() {
+        let ctx = super::super::tests::create_test_context();
+
+        let start = handle_pairing_start_browser(
+            JsonRpcRequest::new(
+                "pairing.start_browser",
+                Some(json!({
+                    "origin_label": "Chrome",
+                    "user_agent": "ua",
+                    "peer_ip": "192.168.1.5"
+                })),
+                Some(json!(1)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        let code = start
+            .result
+            .unwrap()
+            .get("code")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let reject = handle_pairing_reject(
+            JsonRpcRequest::new(
+                "pairing.reject",
+                Some(json!({ "code": code.clone() })),
+                Some(json!(2)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        assert!(reject.is_success(), "reject failed: {:?}", reject);
+
+        let poll = handle_pairing_poll(
+            JsonRpcRequest::new(
+                "pairing.poll",
+                Some(json!({ "code": code })),
+                Some(json!(3)),
+            ),
+            ctx,
+        )
+        .await;
+        assert_eq!(
+            poll.result.unwrap().get("status").unwrap().as_str().unwrap(),
+            "rejected"
+        );
     }
 }

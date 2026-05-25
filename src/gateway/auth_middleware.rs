@@ -29,6 +29,11 @@ pub struct AuthState {
     /// cookie-handoff endpoint. Shared with [`super::handlers::auth::AuthContext`]
     /// so the JSON-RPC issuer and the HTTP consumer see the same map.
     pub bootstrap_mgr: Arc<crate::gateway::bootstrap::BootstrapNonceManager>,
+    /// Browser-pairing manager. Shared with [`super::handlers::auth::AuthContext`]
+    /// so `pairing.approve` (Browser arm) can stash a session_id keyed by
+    /// the pairing code that `/auth/bootstrap/from_pairing` then trades
+    /// for a session cookie.
+    pub pairing_mgr: Arc<crate::gateway::security::PairingManager>,
 }
 
 #[derive(Deserialize)]

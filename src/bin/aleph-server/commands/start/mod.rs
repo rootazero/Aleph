@@ -710,6 +710,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         u32::try_from(full_config.gateway.max_connections).unwrap_or(u32::MAX),
         full_config.gateway.require_challenge,
         &full_config.gateway.bootstrap,
+        full_config.gateway.auth.session_expiry_hours,
         args.daemon,
     );
     register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
@@ -721,22 +722,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     );
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
 
-    // Mount HTTP auth routes (/login, /auth/login, /auth/logout, /auth/bootstrap)
-    // at the router root so the loopback bootstrap-consume endpoint is reachable
-    // from the browser. Pairs with the JSON-RPC issuer `gateway.bootstrap.issue`
-    // (same `BootstrapNonceManager` Arc).
+    // Mount HTTP auth routes (/login, /auth/login, /auth/logout,
+    // /auth/bootstrap, /pair, /auth/bootstrap/from_pairing) at the router
+    // root so the loopback bootstrap-consume and browser-pairing
+    // endpoints are reachable from a real browser. Same
+    // BootstrapNonceManager, HttpSessionManager, and PairingManager Arcs
+    // as the JSON-RPC handlers (`gateway.bootstrap.issue`,
+    // `pairing.start_browser`, `pairing.poll`), so issuer + consumer
+    // see one source of truth.
     {
         use alephcore::gateway::auth_middleware::{auth_routes, AuthState};
-        use alephcore::gateway::session::HttpSessionManager;
-        let session_mgr = std::sync::Arc::new(HttpSessionManager::new(
-            auth_bundle.security_store.clone(),
-            full_config.gateway.auth.session_expiry_hours,
-        ));
         let auth_state = std::sync::Arc::new(AuthState {
             shared_token_mgr: auth_bundle.auth_ctx.shared_token_mgr.clone(),
-            session_mgr,
+            session_mgr: auth_bundle.session_mgr.clone(),
             auth_mode: full_config.gateway.auth.mode.clone(),
             bootstrap_mgr: auth_bundle.bootstrap_mgr.clone(),
+            pairing_mgr: auth_bundle.pairing_manager.clone(),
         });
         server.set_auth_routes(auth_routes(auth_state));
     }

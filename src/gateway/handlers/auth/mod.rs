@@ -39,7 +39,10 @@ pub use bootstrap::handle_gateway_bootstrap_issue;
 pub use connect::handle_connect;
 pub use connect_challenge::handle_connect_challenge;
 pub use devices::{handle_devices_list, handle_devices_revoke};
-pub use pairing::{handle_pairing_approve, handle_pairing_list, handle_pairing_reject};
+pub use pairing::{
+    handle_pairing_approve, handle_pairing_list, handle_pairing_poll, handle_pairing_reject,
+    handle_pairing_start_browser,
+};
 
 /// Parameters for the "hello" method (server -> client notification)
 #[derive(Debug, Clone, Serialize)]
@@ -202,6 +205,10 @@ pub struct AuthContext {
     /// route consumes them and sets the session cookie. See
     /// [`crate::gateway::bootstrap::BootstrapNonceManager`].
     pub bootstrap_mgr: Arc<crate::gateway::bootstrap::BootstrapNonceManager>,
+    /// HTTP session manager — shared with [`crate::gateway::auth_middleware::AuthState`]
+    /// so the Browser-pairing approve flow can mint a session keyed by the
+    /// shared-token HMAC and stash the id for the polling browser.
+    pub session_mgr: Arc<crate::gateway::session::HttpSessionManager>,
     /// The gateway's listening port — used to build the loopback URL
     /// returned by `gateway.bootstrap.issue` so callers (CLI, Tauri
     /// shell) don't need to know it independently.
@@ -287,6 +294,14 @@ pub(crate) mod tests {
             store.clone(),
             "/tmp/aleph_test.vault",
         ));
+        // Provision a token so handle_pairing_approve's Browser arm can
+        // mint a session (mirrors the bootstrap-test pattern in
+        // tests/bootstrap_loopback_gate.rs).
+        let _ = shared_token_mgr.generate_token();
+        let session_mgr = Arc::new(crate::gateway::session::HttpSessionManager::new(
+            store.clone(),
+            24,
+        ));
 
         Arc::new(AuthContext {
             token_manager: Arc::new(TokenManager::new(store.clone())),
@@ -307,6 +322,7 @@ pub(crate) mod tests {
             challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
             require_challenge: false,
             bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            session_mgr,
             bind_port: 18790,
         })
     }

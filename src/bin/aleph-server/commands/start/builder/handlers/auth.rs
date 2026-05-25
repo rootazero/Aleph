@@ -31,6 +31,22 @@ pub(in crate::commands::start) fn register_auth_handlers(
         auth_handlers::handle_pairing_list,
         auth_ctx
     );
+    // Anonymous cold-browser pairing surface — reachable without a token
+    // because the calling browser doesn't have one yet (see
+    // gateway::server::handler::allow_unauth_loopback_pairing for the
+    // auth bypass).
+    register_handler!(
+        server,
+        "pairing.start_browser",
+        auth_handlers::handle_pairing_start_browser,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "pairing.poll",
+        auth_handlers::handle_pairing_poll,
+        auth_ctx
+    );
     register_handler!(
         server,
         "devices.list",

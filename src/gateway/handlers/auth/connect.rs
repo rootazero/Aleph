@@ -600,6 +600,10 @@ mod tests {
             challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
             require_challenge: false,
             bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            session_mgr: Arc::new(crate::gateway::session::HttpSessionManager::new(
+                Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+                24,
+            )),
             bind_port: 18790,
         });
 
@@ -705,6 +709,10 @@ mod tests {
             challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
             require_challenge: false,
             bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            session_mgr: Arc::new(crate::gateway::session::HttpSessionManager::new(
+                Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+                24,
+            )),
             bind_port: 18790,
         });
 
@@ -771,6 +779,10 @@ mod tests {
             challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
             require_challenge: false,
             bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            session_mgr: Arc::new(crate::gateway::session::HttpSessionManager::new(
+                Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+                24,
+            )),
             bind_port: 18790,
         });
 
@@ -838,6 +850,10 @@ mod tests {
             challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
             require_challenge: false,
             bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            session_mgr: Arc::new(crate::gateway::session::HttpSessionManager::new(
+                Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+                24,
+            )),
             bind_port: 18790,
         });
 
@@ -900,6 +916,10 @@ mod tests {
             challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
             require_challenge: true,
             bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            session_mgr: Arc::new(crate::gateway::session::HttpSessionManager::new(
+                Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+                24,
+            )),
             bind_port: 18790,
         });
 
@@ -970,6 +990,10 @@ mod tests {
             challenge_manager,
             require_challenge: true,
             bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            session_mgr: Arc::new(crate::gateway::session::HttpSessionManager::new(
+                Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+                24,
+            )),
             bind_port: 18790,
         });
 
