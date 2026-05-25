@@ -2,23 +2,17 @@
 
 use super::events::subscribe_run_events;
 use super::project_menu::ProjectMenu;
-use super::state::{ChatMessage, ChatPhase, ChatState};
+use super::state::{
+    ChatMessage, ChatPhase, ChatSendError, ChatSendErrorCode, ChatState, PendingAttachment,
+};
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use shared_ui_logic::safety::{check_prompt_injection, prompt_guard_message, PromptInjectionVerdict};
 use wasm_bindgen::prelude::*;
-
-/// A file attachment pending upload.
-#[derive(Clone, Debug)]
-struct FileAttachment {
-    name: String,
-    mime_type: String,
-    data_base64: String,
-    size: u64,
-}
 
 /// Top-level Chat view component.
 #[component]
@@ -58,15 +52,113 @@ pub fn ChatView() -> impl IntoView {
         });
     });
 
+    // ---- G5: chat-surface drop zone ----
+    // Listening on the root div so a Finder/Explorer drop anywhere over
+    // the chat (messages list, composer, anywhere in between) routes the
+    // files through the same attachment pipeline as the paperclip input.
+    let on_dragover = move |ev: web_sys::DragEvent| {
+        // Only react to file drags — keeps text-selection drag inside
+        // bubbles silent. `types` reports "Files" when a file is over us.
+        if let Some(dt) = ev.data_transfer() {
+            let types = dt.types();
+            let mut has_files = false;
+            for i in 0..types.length() {
+                if let Some(s) = types.get(i).as_string() {
+                    if s == "Files" {
+                        has_files = true;
+                        break;
+                    }
+                }
+            }
+            if has_files {
+                ev.prevent_default(); // mandatory for drop to fire
+                chat.is_dragging_files.set(true);
+            }
+        }
+    };
+    let on_dragleave = move |_: web_sys::DragEvent| {
+        chat.is_dragging_files.set(false);
+    };
+    let on_drop = move |ev: web_sys::DragEvent| {
+        ev.prevent_default();
+        chat.is_dragging_files.set(false);
+        let Some(dt) = ev.data_transfer() else { return };
+        let Some(files) = dt.files() else { return };
+        let attachments = chat.pending_attachments;
+        for i in 0..files.length() {
+            let Some(file) = files.get(i) else { continue };
+            ingest_dropped_file(file, attachments);
+        }
+    };
+
     view! {
         // Transparent — the shell's light-field shows through.
-        <div class="flex flex-col h-full">
+        <div
+            class="relative flex flex-col h-full"
+            on:dragover=on_dragover
+            on:dragleave=on_dragleave
+            on:drop=on_drop
+        >
             // Message list (scrollable) — or the welcome hero when empty
             <MessageList />
             // Input area (pinned to bottom)
             <InputArea />
+            // Drop overlay — only visible while a file is hovering.
+            <Show when=move || chat.is_dragging_files.get()>
+                <div class="absolute inset-0 z-30 pointer-events-none
+                            flex items-center justify-center
+                            bg-primary/10 border-2 border-dashed border-primary/40 rounded-lg
+                            backdrop-blur-[1px]">
+                    <div class="flex flex-col items-center gap-2 text-primary font-medium">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-10 h-10" viewBox="0 0 24 24"
+                             fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/>
+                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                        <span class="text-sm">"Drop to attach"</span>
+                    </div>
+                </div>
+            </Show>
         </div>
     }
+}
+
+/// Read a single dropped `web_sys::File` into base64 and append it to the
+/// shared pending-attachments list. Mirrors the per-file logic used by the
+/// paperclip input — kept as a free fn so both the change handler and the
+/// drop handler stay tight.
+fn ingest_dropped_file(file: web_sys::File, attachments: RwSignal<Vec<PendingAttachment>>) {
+    let name = file.name();
+    let mime_type = file.type_();
+    let size = file.size() as u64;
+    let Ok(reader) = web_sys::FileReader::new() else {
+        return;
+    };
+    let reader_clone = reader.clone();
+    let file_name = name.clone();
+    let file_mime = if mime_type.is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        mime_type
+    };
+    let onload = Closure::wrap(Box::new(move || {
+        if let Ok(result) = reader_clone.result() {
+            if let Some(data_url) = result.as_string() {
+                let base64_data = data_url.split(',').nth(1).unwrap_or("").to_string();
+                let attachment = PendingAttachment {
+                    name: file_name.clone(),
+                    mime_type: file_mime.clone(),
+                    data_base64: base64_data,
+                    size,
+                };
+                attachments.update(|list| list.push(attachment));
+            }
+        }
+    }) as Box<dyn Fn()>);
+    reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+    onload.forget();
+    let _ = reader.read_as_data_url(&file);
 }
 
 /// Welcome hero — shown in the message area while a conversation is empty.
@@ -102,49 +194,152 @@ fn ChatHero() -> impl IntoView {
     }
 }
 
-/// Scrollable message list.
+/// Scrollable message list — stick-to-bottom variant.
+///
+/// Replaces the cycle-1 "always slam to scroll_height" behavior with the
+/// pattern from openhuman's `useStickToBottom`: we only auto-scroll when
+/// the user is already near the bottom (≤64px). If they've scrolled up to
+/// read history, new content lands silently and a "↓ New messages" pill
+/// appears so they can opt in.
 #[component]
 fn MessageList() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
     let scroll_ref = NodeRef::<leptos::html::Div>::new();
+    // True iff the viewport bottom is within 64px of scroll_height.
+    let stuck_to_bottom = RwSignal::new(true);
+    // Pulse incremented whenever new content lands while NOT stuck — drives
+    // the "↓ New messages" pill so a user reading history sees it appear.
+    let unseen_below = RwSignal::new(false);
 
-    // Auto-scroll to bottom when messages change or during streaming
-    Effect::new(move || {
+    const STICK_THRESHOLD_PX: f64 = 64.0;
+
+    // Scroll event handler updates stuck_to_bottom + clears unseen_below
+    // when the user returns to the bottom on their own.
+    let on_scroll = move |_ev: web_sys::Event| {
+        if let Some(el) = scroll_ref.get() {
+            let el: &web_sys::HtmlElement = &el;
+            let distance =
+                f64::from(el.scroll_height()) - f64::from(el.scroll_top()) - f64::from(el.client_height());
+            let near_bottom = distance <= STICK_THRESHOLD_PX;
+            stuck_to_bottom.set(near_bottom);
+            if near_bottom {
+                unseen_below.set(false);
+            }
+        }
+    };
+
+    // Reactive auto-scroll — only when the user is already at the bottom.
+    Effect::new(move |_| {
+        // Subscribe to message/phase changes (read both untracked-style for re-runs)
         let _msgs = chat.messages.get();
         let _phase = chat.phase.get();
         if let Some(el) = scroll_ref.get() {
-            let el: &web_sys::HtmlElement = &el;
-            el.set_scroll_top(el.scroll_height());
+            if stuck_to_bottom.get_untracked() {
+                let el: &web_sys::HtmlElement = &el;
+                el.set_scroll_top(el.scroll_height());
+            } else {
+                unseen_below.set(true);
+            }
         }
     });
 
+    // Jump-to-bottom button handler (also re-arms stickiness).
+    let on_jump = move |_: web_sys::MouseEvent| {
+        if let Some(el) = scroll_ref.get() {
+            let el: &web_sys::HtmlElement = &el;
+            el.set_scroll_top(el.scroll_height());
+            stuck_to_bottom.set(true);
+            unseen_below.set(false);
+        }
+    };
+
     view! {
-        <div node_ref=scroll_ref class="flex-1 overflow-y-auto">
-            <Show
-                when=move || chat.messages.get().is_empty()
-                fallback=move || view! {
-                    <div class="max-w-3xl mx-auto px-4 py-6 space-y-4">
-                        <For
-                            each=move || chat.messages.get()
-                            key=|msg| format!("{}:{}:{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.is_intermediate, msg.tool_calls.len(), msg.model_info.is_some())
-                            children=move |msg| {
-                                view! { <MessageBubble message=msg /> }
-                            }
-                        />
-                        // Thinking indicator
-                        <Show when=move || chat.phase.get() == ChatPhase::Thinking>
-                            <div class="flex items-center gap-2 text-text-secondary text-sm px-3 py-2">
-                                <span class="inline-block w-2 h-2 rounded-full bg-primary animate-pulse"></span>
-                                {move || t_string!(i18n, chat.thinking).to_string()}
-                            </div>
-                        </Show>
-                    </div>
-                }
-            >
-                <ChatHero />
+        <div class="relative flex-1 min-h-0">
+            <div node_ref=scroll_ref class="absolute inset-0 overflow-y-auto" on:scroll=on_scroll>
+                <Show
+                    when=move || chat.messages.get().is_empty()
+                    fallback=move || view! {
+                        <div class="max-w-3xl mx-auto px-4 py-6 space-y-4">
+                            // Inline send-error banner (G2) — shown when the last
+                            // outbound send failed; colour-coded by error code.
+                            <SendErrorBanner />
+                            <For
+                                each=move || chat.messages.get()
+                                key=|msg| format!("{}:{}:{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.is_intermediate, msg.tool_calls.len(), msg.model_info.is_some())
+                                children=move |msg| {
+                                    view! { <MessageBubble message=msg /> }
+                                }
+                            />
+                            // Thinking indicator
+                            <Show when=move || chat.phase.get() == ChatPhase::Thinking>
+                                <div class="flex items-center gap-2 text-text-secondary text-sm px-3 py-2">
+                                    <span class="inline-block w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+                                    {move || t_string!(i18n, chat.thinking).to_string()}
+                                </div>
+                            </Show>
+                        </div>
+                    }
+                >
+                    <ChatHero />
+                </Show>
+            </div>
+            // "↓ New messages" pill — only when user scrolled up AND new
+            // content has landed since they last looked at the bottom.
+            <Show when=move || unseen_below.get() && !stuck_to_bottom.get()>
+                <button
+                    class="absolute left-1/2 -translate-x-1/2 bottom-3 z-10
+                           px-3 py-1.5 rounded-full text-xs font-medium
+                           bg-primary text-white shadow-md hover:bg-primary-hover
+                           transition-all flex items-center gap-1"
+                    on:click=on_jump
+                >
+                    <span>"\u{2193}"</span>
+                    <span>"New messages"</span>
+                </button>
             </Show>
         </div>
+    }
+}
+
+/// Inline banner for the most recent `ChatSendError`. Empty when none.
+#[component]
+fn SendErrorBanner() -> impl IntoView {
+    let chat = expect_context::<ChatState>();
+    view! {
+        <Show when=move || chat.send_error.get().is_some()>
+            {move || {
+                let err = chat.send_error.get();
+                err.map(|e| {
+                    let is_warning = matches!(e.code, ChatSendErrorCode::PromptReview);
+                    let class_str = if is_warning {
+                        "px-3 py-2 rounded-lg border text-sm bg-warning-subtle border-warning/30 text-warning"
+                    } else {
+                        "px-3 py-2 rounded-lg border text-sm bg-danger-subtle border-danger/30 text-danger"
+                    };
+                    view! {
+                        <div class=class_str role="alert">
+                            <div class="flex items-start gap-2">
+                                <span class="font-mono text-[10px] uppercase tracking-wider opacity-70 shrink-0 pt-0.5">
+                                    {format!("{:?}", e.code).to_lowercase()}
+                                </span>
+                                <span class="flex-1">{e.message}</span>
+                                <button
+                                    class="opacity-60 hover:opacity-100 shrink-0"
+                                    title="Dismiss"
+                                    on:click=move |_| {
+                                        chat.send_error.set(None);
+                                        chat.error_message.set(None);
+                                    }
+                                >
+                                    "\u{2715}"
+                                </button>
+                            </div>
+                        </div>
+                    }
+                })
+            }}
+        </Show>
     }
 }
 
@@ -251,8 +446,35 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
         None
     };
 
+    // ---- G4: per-bubble hover actions (Copy + Retry) ----
+    // Reach for ChatState so the retry button can pulse the composer
+    // without prop-drilling a callback through MessageList → MessageBubble.
+    let chat = expect_context::<ChatState>();
+    let copy_text = content.clone();
+    let on_copy = move |_: web_sys::MouseEvent| {
+        let win = match web_sys::window() {
+            Some(w) => w,
+            None => return,
+        };
+        // Modern API — navigator.clipboard.writeText(text)
+        let clipboard = win.navigator().clipboard();
+        let _promise = clipboard.write_text(&copy_text);
+    };
+    let on_retry = move |_: web_sys::MouseEvent| {
+        chat.request_retry();
+    };
+    // Retry only makes sense on a finalized assistant turn — streaming /
+    // intermediate / error messages are noise.
+    let show_retry = !is_user && !is_streaming && !has_error && !message.is_intermediate;
+    let actions_align = if is_user { "right-2" } else { "left-2" };
+    let action_class = format!(
+        "absolute -bottom-3 {actions_align} flex items-center gap-1 \
+         opacity-0 group-hover:opacity-100 focus-within:opacity-100 \
+         transition-opacity"
+    );
+
     view! {
-        <div class=bubble_align>
+        <div class=format!("{bubble_align} group relative")>
             <div class=bubble_style>
                 {tool_calls_view}
 
@@ -281,6 +503,45 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
 
                 // Model info (with fallback indicator)
                 {model_view}
+            </div>
+            // Hover action bar — Copy (all bubbles) + Retry (final assistant).
+            <div class=action_class>
+                <button
+                    class="px-1.5 h-6 rounded-md bg-surface-raised border border-border
+                           text-[11px] text-text-tertiary hover:text-text-primary hover:bg-surface-sunken
+                           shadow-sm transition-colors flex items-center gap-1"
+                    title="Copy message"
+                    on:click=on_copy
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" stroke-width="2"
+                         stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    <span>"Copy"</span>
+                </button>
+                {if show_retry {
+                    Some(view! {
+                        <button
+                            class="px-1.5 h-6 rounded-md bg-surface-raised border border-border
+                                   text-[11px] text-text-tertiary hover:text-text-primary hover:bg-surface-sunken
+                                   shadow-sm transition-colors flex items-center gap-1"
+                            title="Retry last prompt"
+                            on:click=on_retry
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24"
+                                 fill="none" stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="23 4 23 10 17 10"></polyline>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                            </svg>
+                            <span>"Retry"</span>
+                        </button>
+                    })
+                } else {
+                    None
+                }}
             </div>
         </div>
     }
@@ -364,7 +625,9 @@ fn InputArea() -> impl IntoView {
     let i18n = use_i18n();
     let input_text = RwSignal::new(String::new());
     let is_sending = RwSignal::new(false);
-    let attachments: RwSignal<Vec<FileAttachment>> = RwSignal::new(Vec::new());
+    // Attachments live on ChatState so the chat-surface drop zone (G5) can
+    // share the same list as the paperclip input.
+    let attachments = chat.pending_attachments;
 
     // Slash command palette state
     let all_commands: RwSignal<Vec<CommandInfo>> = RwSignal::new(Vec::new());
@@ -386,6 +649,21 @@ fn InputArea() -> impl IntoView {
         let files = attachments.get_untracked();
         if text.is_empty() && files.is_empty() {
             return;
+        }
+
+        // ---- G1: client-side prompt-injection guard ----
+        // Hard-blocks land here so a wasted round-trip is avoided; reviews
+        // are surfaced live by the banner below but still allowed through
+        // (final authority is server-side security).
+        if !text.is_empty() {
+            let check = check_prompt_injection(&text);
+            if check.verdict == PromptInjectionVerdict::Block {
+                chat.set_send_error(ChatSendError::new(
+                    ChatSendErrorCode::PromptBlocked,
+                    prompt_guard_message(&check),
+                ));
+                return;
+            }
         }
 
         is_sending.set(true);
@@ -417,13 +695,35 @@ fn InputArea() -> impl IntoView {
                     chat.session_key.set(Some(resp.session_key));
                 }
                 Err(e) => {
-                    chat.error_message.set(Some(e.clone()));
-                    chat.phase.set(ChatPhase::Error);
+                    // Promote to structured error so the banner can colour-
+                    // code (warn vs error) and analytics can branch on code.
+                    chat.set_send_error(ChatSendError::classify(e));
                 }
             }
             is_sending.set(false);
         });
     };
+
+    // ---- G4 plumbing: composer listens for retry pulses ----
+    // MessageBubble's Retry button bumps `chat.retry_pulse` — we re-take
+    // the most recent user message and route it through the normal send
+    // pipeline (so prompt-guard + idempotency + error classification all
+    // apply identically to retry vs first send).
+    {
+        let chat = chat;
+        let send_message = send_message.clone();
+        Effect::new(move |prev_pulse: Option<u32>| {
+            let pulse = chat.retry_pulse.get();
+            // Skip the initial run (Effect fires once on subscription).
+            if prev_pulse.is_some() && Some(pulse) != prev_pulse {
+                if let Some(last) = chat.last_user_text() {
+                    input_text.set(last);
+                    send_message();
+                }
+            }
+            pulse
+        });
+    }
 
     // Build palette entries from commands based on current namespace and query
     let build_palette_entries =
@@ -741,7 +1041,7 @@ fn InputArea() -> impl IntoView {
                         // data URL format: "data:<mime>;base64,<data>"
                         let base64_data = data_url.split(',').nth(1).unwrap_or("").to_string();
 
-                        let attachment = FileAttachment {
+                        let attachment = PendingAttachment {
                             name: file_name.clone(),
                             mime_type: file_mime.clone(),
                             data_base64: base64_data,
@@ -891,6 +1191,33 @@ fn InputArea() -> impl IntoView {
                     />
                 </div>
             </Show>
+
+            // Live prompt-injection guard banner (G1) — pure UI heuristic
+            // that hints to the user when their draft looks like an
+            // override / exfiltration / jailbreak attempt. Final authority
+            // is server-side; this lives here so they can rephrase before
+            // sending and wasting a model call.
+            {move || {
+                let text = input_text.get();
+                if text.trim().is_empty() {
+                    return None;
+                }
+                let check = check_prompt_injection(&text);
+                if check.verdict == PromptInjectionVerdict::Allow {
+                    return None;
+                }
+                let is_block = check.verdict == PromptInjectionVerdict::Block;
+                let cls = if is_block {
+                    "mx-1 mb-1 px-2.5 py-1.5 rounded-md text-xs border bg-danger-subtle border-danger/30 text-danger"
+                } else {
+                    "mx-1 mb-1 px-2.5 py-1.5 rounded-md text-xs border bg-warning-subtle border-warning/30 text-warning"
+                };
+                Some(view! {
+                    <div class=cls role="status">
+                        {prompt_guard_message(&check)}
+                    </div>
+                })
+            }}
 
             // Project picker — sits directly above the composer so the
             // dropdown can flip upward (composer lives at the bottom of the
