@@ -42,7 +42,36 @@ This skill is **deterministic**: it reads a static JSON and emits counts/lists. 
 | `redline-r1` | `src/` files naming platform-native APIs (AppKit / Vision / win32 / objc / cocoa / etc.) | Violates R1 brain-limb separation. `src/sandbox/` + `src/bin/aleph-server/` excluded (legitimate bridges) |
 | `redline-r10` | `src/harness/` `.rs` file count vs. 12-file budget | R10 thin-harness invariant — see CLAUDE.md §R10 |
 
-Flags: `--json` (machine output, pipeable to `jq`), `--limit=N` (default 30, widens lists in human mode), `--graph=path` (point at a non-default graph file — useful for subdomain graphs like `frontend-knowledge-graph.json`).
+Flags: `--json` (machine output, pipeable to `jq`), `--limit=N` (default 30, widens lists in human mode), `--graph=path` (point at a non-default graph file — useful for subdomain graphs like `frontend-knowledge-graph.json`), `--scope=prefix/` (restrict audit to nodes whose `filePath` starts with the prefix; trailing `/` auto-appended).
+
+## Module-scoped audits
+
+Use `--scope=<path-prefix>` to confine any audit to a subtree. Filtering is on the graph node's `filePath` field, so it covers all 4 audits consistently. Trailing `/` is auto-appended when the prefix has no `.` (avoiding `src/gateway` accidentally matching `src/gateway_extras/`).
+
+```bash
+# Only audit src/gateway/
+node scripts/graph-audit.mjs summary --scope=src/gateway/
+
+# Only harness dead-code candidates
+node scripts/graph-audit.mjs dead-code --scope=src/harness/
+
+# R1 violations under a single feature subtree
+node scripts/graph-audit.mjs redline-r1 --scope=src/builtin_tools/browser_tools/
+```
+
+Per-audit behaviour under scope:
+
+| Audit | Scoped behaviour |
+|---|---|
+| `orphans` | Only orphans whose `filePath` is within scope. |
+| `dead-code` | Only function/class nodes within scope. Global call-edge stat in warning stays global (not scope-adjusted) — that's intentional, the under-capture is a project-wide signal. |
+| `redline-r1` | Only `src/` files within scope (still excludes bridge subtrees `src/sandbox/` and `src/bin/aleph-server/`). |
+| `redline-r10` | If scope doesn't overlap `src/harness/`, reports **N/A** and returns 0. Otherwise filters harness files by scope. |
+
+**Natural-language triggers** map to scope flags. When the user says:
+- "审 src/gateway/" → `--scope=src/gateway/`
+- "只看 harness 的死代码" → `dead-code --scope=src/harness/`
+- "看看 builtin_tools 里的 R1" → `redline-r1 --scope=src/builtin_tools/`
 
 ## Caveats
 

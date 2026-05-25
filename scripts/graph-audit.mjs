@@ -2,7 +2,7 @@
 // graph-audit.mjs — query .understand-anything/knowledge-graph.json for code-health signals.
 //
 // Usage:
-//   node scripts/graph-audit.mjs <command> [--json] [--limit=N] [--graph=path]
+//   node scripts/graph-audit.mjs <command> [--json] [--limit=N] [--graph=path] [--scope=prefix/]
 //
 // Commands:
 //   orphans      Nodes with zero edges (after the cohort fixes, expect 0).
@@ -10,8 +10,12 @@
 //                File-analyzer under-captures call edges; cross-check before deleting.
 //   redline-r1   src/ files that name platform-native APIs (AppKit, Vision, win32, etc.)
 //                — violates "Brain-Limb separation". Reads file content (graph identifies scope).
-//   redline-r10 src/harness/ file count vs. the 9-file budget.
+//   redline-r10  src/harness/ file count vs. the 12-file budget.
 //   summary      Run all and print one-line counts.
+//
+// --scope=prefix/  Restrict the audit to nodes whose filePath starts with the given prefix
+//                  (e.g. `--scope=src/gateway/`). Trailing slash auto-appended if missing.
+//                  R10 reports N/A when the scope does not overlap src/harness/.
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
@@ -25,6 +29,11 @@ const cmd = args.find(a => !a.startsWith('--')) || 'summary';
 const asJson = args.includes('--json');
 const limit = parseInt((args.find(a => a.startsWith('--limit=')) || '--limit=30').split('=')[1], 10);
 const graphPath = (args.find(a => a.startsWith('--graph=')) || `--graph=${REPO_ROOT}/.understand-anything/knowledge-graph.json`).split('=')[1];
+let scope = (args.find(a => a.startsWith('--scope=')) || '--scope=').split('=')[1];
+if (scope && !scope.endsWith('/') && !scope.includes('.')) scope += '/';
+const scopeTag = scope ? ` [scope=${scope}]` : '';
+const inScope = (n) => !scope || (n.filePath && n.filePath.startsWith(scope));
+const fileInScope = (rel) => !scope || rel.startsWith(scope);
 
 if (!existsSync(graphPath)) {
   console.error(`No knowledge graph at ${graphPath}. Run /understand first.`);
@@ -46,8 +55,10 @@ function emit(label, items, summary) {
 function findOrphans() {
   const seen = new Set();
   graph.edges.forEach(e => { seen.add(e.source); seen.add(e.target); });
-  const orphans = graph.nodes.filter(n => !seen.has(n.id)).map(n => `${n.type}:${n.name}\t${n.id}`);
-  emit('Orphan nodes (no edges)', orphans);
+  const orphans = graph.nodes
+    .filter(n => !seen.has(n.id) && inScope(n))
+    .map(n => `${n.type}:${n.name}\t${n.id}`);
+  emit(`Orphan nodes (no edges)${scopeTag}`, orphans);
   return orphans.length;
 }
 
@@ -58,13 +69,13 @@ function findDeadCode() {
     if (e.type === 'calls') inboundCalls.set(e.target, (inboundCalls.get(e.target) || 0) + 1);
   }
   const dead = graph.nodes
-    .filter(n => (n.type === 'function' || n.type === 'class') && !inboundCalls.has(n.id))
-    .map(n => ({ id: n.id, type: n.type, name: n.name, file: n.id.split(':')[1] }))
+    .filter(n => (n.type === 'function' || n.type === 'class') && !inboundCalls.has(n.id) && inScope(n))
+    .map(n => ({ id: n.id, type: n.type, name: n.name, file: n.filePath || n.id.split(':')[1] }))
     .sort((a, b) => a.file.localeCompare(b.file));
   emit(
-    'Dead-code candidates (no inbound `calls` edge)',
+    `Dead-code candidates (no inbound \`calls\` edge)${scopeTag}`,
     dead.map(d => `${d.type.padEnd(8)} ${d.name.padEnd(40)} ${d.file}`),
-    `WARNING: graph captures only ${graph.edges.filter(e=>e.type==='calls').length} call edges across ${graph.nodes.filter(n=>n.type==='function').length} functions. Under-capture is severe — treat output as CANDIDATES requiring manual cross-check (rg / cargo-machete / IDE find-usages), not deletion list.`
+    `WARNING: graph captures only ${graph.edges.filter(e=>e.type==='calls').length} call edges across ${graph.nodes.filter(n=>n.type==='function').length} functions (global stat — not scope-adjusted). Under-capture is severe — treat output as CANDIDATES requiring manual cross-check (rg / cargo-machete / IDE find-usages), not deletion list.`
   );
   return dead.length;
 }
@@ -90,7 +101,7 @@ function checkR1() {
       && !R1_BRIDGE_PREFIXES.some(p => n.id.startsWith(p))
     )
     .map(n => n.id.replace(/^file:/, ''))
-    .filter(p => p.endsWith('.rs'));
+    .filter(p => p.endsWith('.rs') && fileInScope(p));
   const violations = [];
   for (const rel of srcFiles) {
     const abs = join(REPO_ROOT, rel);
@@ -101,7 +112,7 @@ function checkR1() {
     if (hits.length) violations.push({ file: rel, tokens: hits });
   }
   emit(
-    'R1 violations — src/ files naming platform-native APIs',
+    `R1 violations — src/ files naming platform-native APIs${scopeTag}`,
     violations.map(v => `${v.file}  ←  [${v.tokens.join(', ')}]`),
     'R1: 严禁在 src 中直接调用特定平台系统 API. Sandbox/platforms/ excluded (it IS the bridge).'
   );
@@ -112,12 +123,18 @@ function checkR1() {
 // Synced with CLAUDE.md R10: 8 top-level + 4 under agent/ = 12.
 const HARNESS_BUDGET = 12;
 function checkR10() {
+  // R10 is harness-specific. If scope is set and doesn't overlap src/harness/, mark N/A.
+  if (scope && !'src/harness/'.startsWith(scope) && !scope.startsWith('src/harness/')) {
+    emit('R10 — Thin Harness file budget', [], `R10 N/A — scope=${scope} does not overlap src/harness/`);
+    return 0;
+  }
   const harnessFiles = graph.nodes
     .filter(n => n.type === 'file' && n.id.startsWith('file:src/harness/') && n.id.endsWith('.rs'))
-    .map(n => n.id.replace(/^file:/, ''));
+    .map(n => n.id.replace(/^file:/, ''))
+    .filter(fileInScope);
   const over = harnessFiles.length > HARNESS_BUDGET;
   const summary = `src/harness/ has ${harnessFiles.length} .rs files (budget: ${HARNESS_BUDGET})${over ? ' — OVER BUDGET' : ' — OK'}`;
-  emit('R10 — Thin Harness file budget', harnessFiles, summary);
+  emit(`R10 — Thin Harness file budget${scopeTag}`, harnessFiles, summary);
   return over ? 1 : 0;
 }
 
@@ -131,7 +148,7 @@ function runSummary() {
   ];
   console.log('\n=== graph-audit summary ===');
   console.log(`Graph: ${graphPath}`);
-  console.log(`Nodes: ${graph.nodes.length} | Edges: ${graph.edges.length}\n`);
+  console.log(`Nodes: ${graph.nodes.length} | Edges: ${graph.edges.length}${scope ? ` | scope=${scope}` : ''}\n`);
   const results = [];
   for (const [label, fn] of checks) {
     const before = console.log; console.log = () => {}; // mute per-check output
