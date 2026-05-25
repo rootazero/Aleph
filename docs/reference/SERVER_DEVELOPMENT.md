@@ -44,6 +44,26 @@ export ANTHROPIC_BASE_URL="https://api.anthropic.com"  # 可选
 mkdir -p ~/.aleph
 ```
 
+## First-start auth (no token typing)
+
+1. Install the desktop app (.dmg / .msi / .deb) and launch it.
+2. The Panel opens already signed in — Aleph auto-provisioned a token
+   and the shell handed it off via a one-shot bootstrap nonce.
+3. To use Aleph from a browser on the same machine, click
+   "Open in Browser" in the desktop app menu, or run `aleph open` in a
+   terminal.
+4. To pair a second machine or a phone: in the desktop app go to
+   Settings → Auth (or Devices) and use "Add browser/mobile" to display
+   a QR code; scan it from the second device and approve in the desktop
+   app.
+
+For headless / CI installs without a desktop app:
+`aleph-server bootstrap-token` prints the token on stdout (same threat
+model as `aleph secret list`). The legacy `/login` HTML form was
+removed in Phase 4 of the auth UX overhaul — use the pairing flow or
+`aleph open` instead. See
+[SECURITY.md#auth-ux](SECURITY.md#auth-ux) for the full trust model.
+
 ## 开发流程
 
 ### 快速启动（开发模式）

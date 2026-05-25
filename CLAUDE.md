@@ -236,6 +236,27 @@ Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构�
 `rm ~/.aleph/data/aleph.lock`（理论上不会出现，因为 flock 是 OS 管理的；
 该诊断仅作防御性提示）。
 
+### Auth UX
+
+Auth tokens are auto-provisioned at first daemon start; users never see them.
+
+- **Desktop app**: silent bootstrap via Tauri shell handoff
+  (`aleph-server bootstrap-url` → `/auth/bootstrap?nonce=…` → session cookie).
+- **Same-machine browser**: `aleph open` or the desktop app's
+  "Open in Browser" menu item issues a nonce and launches the system
+  browser; same loopback gate as the shell handoff.
+- **Remote / mobile**: `/pair` shows a 6-digit code; approve from the
+  desktop app's NotificationCenter (or scan the QR in Devices → Add
+  browser/mobile).
+- **Debug only**: `aleph auth debug show-token` prints the token for
+  break-glass scenarios. The legacy `aleph auth show-token` still
+  parses but emits a deprecation warning.
+
+The legacy `/login` token-paste form and the Panel's `?token=` URL
+fallback were removed in Phase 4 of the auth UX overhaul (2026-05).
+See [docs/reference/SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)
+for the full trust-transfer model.
+
 ---
 
 ## 📚 文档索引

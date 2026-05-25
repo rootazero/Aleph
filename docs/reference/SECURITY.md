@@ -1016,6 +1016,44 @@ blocked_hosts = ["*.malware.com"]
 
 ---
 
+## Auth UX (post-2026-05 overhaul) {#auth-ux}
+
+Aleph never asks the user to find, copy, or paste an access token. The
+gateway token is auto-provisioned at first daemon start and stays
+invisible. Three trust-transfer mechanisms move authentication between
+surfaces:
+
+1. **Same-process (Tauri desktop app)** — the shell reads the token from
+   `~/.aleph/data/security.db` (same-UID gate) via the
+   `aleph-server bootstrap-token` subcommand and issues a one-shot
+   bootstrap nonce; the Panel webview navigates to
+   `/auth/bootstrap?nonce=…` which sets the `aleph_session` HttpOnly
+   cookie.
+
+2. **Same-machine browser** — `aleph open` (CLI) and the desktop app's
+   "Open in Browser" menu item issue a nonce and launch the system
+   browser at the same URL. The endpoint refuses any non-loopback peer
+   (`is_loopback_peer` in `src/gateway/auth_middleware.rs`).
+
+3. **Cold browser / remote / mobile** — `/pair` shows a 6-digit code; the
+   desktop app's NotificationCenter renders a row with `Approve` /
+   `Reject` buttons. A QR-code variant in the Devices view covers mobile.
+
+The threat model is unchanged from before the overhaul: same-UID =
+trusted. We just stopped showing the token to the user, because seeing
+it was the friction, not the security.
+
+For debugging: `aleph auth debug show-token` still prints the token.
+
+**Phase 4 deletions** (2026-05): the legacy `/login` + `/auth/login`
+HTML token-paste form was removed; the Panel's `?token=` URL fallback
+was removed; the desktop shell no longer falls back to writing a token
+into the URL bar. The `aleph_session` cookie (issued by
+`/auth/bootstrap` or `/auth/bootstrap/from_pairing`) is the only
+inbound auth surface for the Panel.
+
+---
+
 ## Cross-Cutting Security Module Index
 
 | Module | Location | Purpose |
