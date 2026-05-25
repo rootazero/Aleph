@@ -259,22 +259,15 @@ fn spawn_background(handle: tauri::AppHandle) {
 /// `bootstrap_url`: when present (Phase 2 default), the daemon-issued
 /// `/auth/bootstrap?nonce=…` URL — the daemon validates the nonce and
 /// sets the session cookie, the Panel never sees a token in the URL.
-///
-/// `legacy_token`: Phase 1 fallback. When `bootstrap_url` is `None`
-/// (e.g. nonce-issue failed or daemon doesn't yet expose the RPC), the
-/// Panel falls back to consuming `?token=…`. Pass `(None, None)` for
-/// in-window reloads — the Panel has already stashed credentials in
-/// localStorage.
-fn navigate_to_panel(
-    handle: &tauri::AppHandle,
-    bootstrap_url: Option<&str>,
-    legacy_token: Option<&str>,
-) {
+/// Pass `None` for in-window reloads (the Panel already holds a session
+/// cookie) and for the rare cold path where nonce-issue fails — the
+/// gateway redirects unauthenticated browsers to `/pair`.
+fn navigate_to_panel(handle: &tauri::AppHandle, bootstrap_url: Option<&str>) {
     let Some(window) = handle.get_webview_window("main") else {
         tracing::error!("main window missing — cannot reach the Panel");
         return;
     };
-    match daemon::build_panel_url(bootstrap_url, legacy_token) {
+    match daemon::build_panel_url(bootstrap_url) {
         Ok(url) => {
             if let Err(e) = window.navigate(url) {
                 tracing::error!("failed to navigate to the Panel: {e}");
@@ -299,11 +292,12 @@ pub(crate) fn focus_window(handle: &tauri::AppHandle) {
 /// forward. The window starts hidden, so this is what the user sees on a
 /// normal launch.
 ///
-/// Phase 2: first ask the daemon for a one-shot bootstrap URL (no token
-/// in the URL bar — the daemon validates the nonce on loopback and sets
-/// the session cookie). If that fails (old daemon binary, RPC unreachable),
-/// fall back to the Phase 1 `?token=` path so the user can still land on
-/// an authenticated Panel.
+/// Ask the daemon for a one-shot bootstrap URL (Phase 2 default — no token
+/// in the URL bar; the daemon validates the nonce on loopback and sets the
+/// session cookie). If that fails (binary missing, RPC unreachable), fall
+/// through to the plain Panel URL — the gateway's session middleware will
+/// redirect unauthenticated browsers to `/pair` so the user can complete
+/// pairing manually. Phase 4 removed the legacy `?token=` URL fallback.
 fn reveal_panel(handle: &tauri::AppHandle) {
     let handle = handle.clone();
     tauri::async_runtime::spawn(async move {
@@ -311,13 +305,7 @@ fn reveal_panel(handle: &tauri::AppHandle) {
             .await
             .ok()
             .flatten();
-        // Only consult the legacy token when the nonce path failed — never both.
-        let legacy_token = if bootstrap_url.is_none() {
-            daemon::load_bootstrap_token()
-        } else {
-            None
-        };
-        navigate_to_panel(&handle, bootstrap_url.as_deref(), legacy_token.as_deref());
+        navigate_to_panel(&handle, bootstrap_url.as_deref());
         focus_window(&handle);
     });
 }
@@ -418,10 +406,10 @@ async fn supervise_daemon(handle: tauri::AppHandle, daemon_up: bool) {
             }
             SupervisorAction::ReloadPanel => {
                 tracing::info!("daemon recovered — reloading the Panel");
-                // No bootstrap nonce / token on in-window reloads — the Panel
-                // has already stashed credentials in localStorage on the
-                // first reveal.
-                navigate_to_panel(&handle, None, None);
+                // No bootstrap nonce on in-window reloads — the Panel has
+                // already obtained an `aleph_session` cookie on the first
+                // reveal.
+                navigate_to_panel(&handle, None);
             }
         }
     }
