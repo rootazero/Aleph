@@ -318,13 +318,31 @@ fn daemon_bin_name() -> &'static str {
     }
 }
 
-/// Construct the Panel URL, optionally with a one-time `?token=` query
-/// param that the Panel consumes on first load and immediately removes
-/// from the address bar via `history.replaceState` (see
-/// `interfaces/webchat/src/context.rs:284-313`).
-pub(crate) fn build_panel_url(token: Option<&str>) -> Result<Url, url::ParseError> {
+/// Construct the URL to navigate the embedded Panel webview to.
+///
+/// `bootstrap_url` (if `Some`) is a full server-issued
+/// `/auth/bootstrap?nonce=…` URL — when present we navigate there
+/// directly so the daemon sets the session cookie, and the Panel never
+/// sees a token in any URL parameter (Phase 2 default path).
+///
+/// `legacy_token` is the Phase 1 fallback used when the daemon does
+/// not yet expose `gateway.bootstrap.issue` (old binary, dev rolling
+/// upgrade, race during first-launch where the daemon is mid-boot).
+/// Appended as a `?token=` query param the Panel consumes on first
+/// load and immediately removes from the address bar via
+/// `history.replaceState` (see `interfaces/webchat/src/context.rs`).
+///
+/// Phase 4 removes the `legacy_token` parameter after Phase 2 has
+/// shipped a release cycle.
+pub(crate) fn build_panel_url(
+    bootstrap_url: Option<&str>,
+    legacy_token: Option<&str>,
+) -> Result<Url, url::ParseError> {
+    if let Some(u) = bootstrap_url {
+        return Url::parse(u);
+    }
     let mut url: Url = super::PANEL_URL.parse()?;
-    if let Some(t) = token {
+    if let Some(t) = legacy_token {
         url.query_pairs_mut().append_pair("token", t);
     }
     Ok(url)
@@ -500,7 +518,7 @@ mod tests {
 
     #[test]
     fn build_panel_url_appends_token_query() {
-        let url = build_panel_url(Some("aleph-deadbeef")).expect("build url");
+        let url = build_panel_url(None, Some("aleph-deadbeef")).expect("build url");
         assert_eq!(url.scheme(), "http");
         assert_eq!(url.host_str(), Some("127.0.0.1"));
         assert_eq!(url.port(), Some(18790));
@@ -513,7 +531,7 @@ mod tests {
 
     #[test]
     fn build_panel_url_without_token_has_no_query() {
-        let url = build_panel_url(None).expect("build url");
+        let url = build_panel_url(None, None).expect("build url");
         assert!(url.query().is_none(), "expected no query, got {:?}", url.query());
     }
 
@@ -522,7 +540,7 @@ mod tests {
         // Even though our tokens are aleph-<uuid> and never need escaping,
         // we should not silently double-encode if a future token format
         // contains reserved characters.
-        let url = build_panel_url(Some("with space&amp;")).expect("build url");
+        let url = build_panel_url(None, Some("with space&amp;")).expect("build url");
         let token = url
             .query_pairs()
             .find(|(k, _)| k == "token")
@@ -530,6 +548,19 @@ mod tests {
             .expect("token present");
         // query_pairs() decodes, so we get the original value back.
         assert_eq!(token, "with space&amp;");
+    }
+
+    #[test]
+    fn build_panel_url_prefers_bootstrap_when_present() {
+        let url = build_panel_url(
+            Some("http://127.0.0.1:18790/auth/bootstrap?nonce=abc"),
+            Some("aleph-deadbeef"),
+        )
+        .expect("build url");
+        assert_eq!(url.path(), "/auth/bootstrap");
+        let query = url.query().expect("expected query");
+        assert!(query.contains("nonce=abc"), "got query {query}");
+        assert!(!query.contains("token="), "legacy token must not leak when bootstrap URL is used; got query {query}");
     }
 
     #[test]
