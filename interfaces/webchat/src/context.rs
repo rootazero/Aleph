@@ -432,6 +432,13 @@ impl DashboardState {
                     let mut disconnect_rx = disconnect_rx.fuse();
                     let mut pending_rpcs: HashMap<String, oneshot::Sender<Result<Value, String>>> =
                         HashMap::new();
+                    // Track whether the loop exited because of an explicit
+                    // disconnect() call (no auto-reconnect) or an unintentional
+                    // drop (auto-reconnect to drive ConnectionPhase::Reconnecting
+                    // → ServiceBlockingGate). Captured drop_reason becomes the
+                    // connection_error surfaced in the UI.
+                    let mut intentional_close = false;
+                    let mut drop_reason: Option<String> = None;
 
                     loop {
                         // Use futures::select! to handle multiple async operations
@@ -515,6 +522,7 @@ impl DashboardState {
                                     }
                                     Err(e) => {
                                         web_sys::console::error_1(&format!("Message loop error: {:?}", e).into());
+                                        drop_reason = Some(format!("WebSocket dropped: {}", e));
                                         break;
                                     }
                                 }
@@ -524,15 +532,51 @@ impl DashboardState {
                             _ = disconnect_rx => {
                                 web_sys::console::log_1(&"Disconnect signal received".into());
                                 let _ = connector.disconnect().await;
+                                intentional_close = true;
                                 break;
                             }
 
-                            // If all channels are closed, exit
-                            complete => break,
+                            // If all channels are closed, exit (graceful close
+                            // by remote, or sender side dropped). Treated as
+                            // unintentional — auto-reconnect handles it below.
+                            complete => {
+                                drop_reason = Some(
+                                    "WebSocket closed (channels exhausted)".to_string(),
+                                );
+                                break;
+                            }
                         }
                     }
 
                     web_sys::console::log_1(&"Message loop stopped".into());
+
+                    // Unintentional drop: flip is_connected so ConnectionPhase
+                    // re-derives, then kick off reconnect() from a fresh task
+                    // so ServiceBlockingGate engages after the 5-attempt
+                    // budget exhausts. We intentionally do NOT set
+                    // connection_error here — reconnect() sets it on final
+                    // failure, and setting it now would make the chip flash
+                    // "Failed" during the retry window (the derive rule treats
+                    // any error as terminal). The drop_reason is logged for
+                    // dev-console debugging.
+                    if !intentional_close {
+                        if let Some(reason) = drop_reason.as_deref() {
+                            web_sys::console::warn_1(
+                                &format!(
+                                    "WS dropped unintentionally; auto-reconnecting. reason={}",
+                                    reason
+                                )
+                                .into(),
+                            );
+                        }
+                        state.is_connected.set(false);
+                        // Clear the dead rpc_tx so the next rpc_call() won't
+                        // block on a sender whose receiver task just exited.
+                        state.rpc_tx.set_value(None);
+                        spawn_local(async move {
+                            let _ = state.reconnect().await;
+                        });
+                    }
                 });
 
                 // Authenticate before marking as connected
