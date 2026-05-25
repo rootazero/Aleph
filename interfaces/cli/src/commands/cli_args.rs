@@ -1022,6 +1022,10 @@ pub(crate) enum DevicesAction {
 
 #[derive(Subcommand)]
 pub(crate) enum AuthAction {
+    // DEPRECATED (Phase 4, 26.5.25): `ShowToken` + `ResetToken` are hidden
+    // legacy variants kept for one release cycle so muscle-memory scripts
+    // keep parsing. Drop both variants (and the matching arms in
+    // `interfaces/cli/src/main.rs`) once 26.6.x has shipped.
     /// Display the current shared access token (legacy — prefer `aleph open`
     /// or the desktop app; use `aleph auth debug show-token` for break-glass).
     #[command(hide = true)]
