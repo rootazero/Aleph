@@ -178,8 +178,12 @@ pub fn ProjectMenu() -> impl IntoView {
             </Show>
 
             <Show when=move || menu_open.get()>
+                // bottom-full + mb-1 → menu pops UPWARD from the trigger pill,
+                // because the composer it sits above lives at the bottom of
+                // the viewport and a top-full dropdown would clip below the
+                // visible area.
                 <div
-                    class="absolute z-10 left-0 top-full mt-1 w-64 rounded-lg border border-border-subtle bg-surface-base shadow-lg py-1"
+                    class="absolute z-10 left-0 bottom-full mb-1 w-64 rounded-lg border border-border-subtle bg-surface-base shadow-lg py-1"
                     on:mouseleave=move |_| menu_open.set(false)
                 >
                     <button

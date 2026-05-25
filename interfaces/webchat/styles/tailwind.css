@@ -666,6 +666,13 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
               0 0 0 4px var(--color-ring),
               inset 0 1px 0 var(--aleph-sheen);
 }
+/* The composer's outer 4 px ring already signals focus; suppress the
+   global `:focus-visible` box-shadow ring on the textarea itself so the
+   user doesn't see two stacked highlights (inner rectangle + outer arc). */
+.aleph-composer textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
 
 /* --- Empty-state hero --- */
 .aleph-hero-orb {

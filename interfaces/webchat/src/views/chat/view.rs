@@ -892,9 +892,17 @@ fn InputArea() -> impl IntoView {
                 </div>
             </Show>
 
+            // Project picker — sits directly above the composer so the
+            // dropdown can flip upward (composer lives at the bottom of the
+            // viewport; downward menu would clip).
+            <div class="aleph-project-row px-1 pb-1">
+                <ProjectMenu />
+            </div>
+
             // Compact single-row composer — paperclip | textarea | send,
-            // all on one baseline. Textarea starts as a single 24 px line
-            // and grows up to 140 px when multi-line input is typed
+            // all on one 32 px baseline. Textarea starts at 32 px (matches
+            // the side buttons so the caret aligns with both icons) and
+            // grows up to 140 px when multi-line input is typed
             // (Shift+Enter); items-end keeps the side buttons pinned to the
             // composer's bottom edge as the textarea grows.
             <div class="aleph-composer flex items-end gap-2 px-3 py-1.5">
@@ -922,9 +930,9 @@ fn InputArea() -> impl IntoView {
                 </button>
 
                 <textarea
-                    class="flex-1 min-w-0 resize-none bg-transparent px-1 py-1 text-sm leading-snug
+                    class="flex-1 min-w-0 resize-none bg-transparent px-1 py-[6px] text-sm leading-snug
                            text-text-primary placeholder:text-text-tertiary
-                           focus:outline-none min-h-[24px] max-h-[140px]"
+                           focus:outline-none min-h-[32px] max-h-[140px]"
                     placeholder=move || t_string!(i18n, chat.send_placeholder).to_string()
                     rows=1
                     prop:value=move || input_text.get()
@@ -970,12 +978,6 @@ fn InputArea() -> impl IntoView {
                 </Show>
             </div>
 
-            // Project picker (mirrors the Codex "进入项目工作" affordance).
-            // Lives below the composer row so it never crowds the textarea
-            // and stays visible even while the user types.
-            <div class="aleph-project-row px-3 pb-2">
-                <ProjectMenu />
-            </div>
             </div>
         </div>
     }
