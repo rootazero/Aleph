@@ -27,10 +27,11 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use aleph_client::{CliConfig, CliResult};
 
 use commands::cli_args::{
-    CallsAction, ChannelsAction, ChatControlAction, Commands, ConfigAction, CronAction,
-    DaemonAction, GatewayAction, HeartbeatAction, IdentityAction, LogsAction, MarketplaceAction,
-    McpAction, MemoryAction, ModelsAction, PluginAction, ProvidersAction, SandboxAction,
-    ServicesAction, SessionAction, SkillsAction, ToolsAction, TraceAction, VaultAction,
+    AuthAction, CallsAction, ChannelsAction, ChatControlAction, Commands, ConfigAction, CronAction,
+    DaemonAction, DevicesAction, GatewayAction, HeartbeatAction, HooksAction, IdentityAction,
+    LogsAction, MarketplaceAction, McpAction, MemoryAction, ModelsAction, PairingAction,
+    PluginAction, ProvidersAction, ProxyAction, SandboxAction, SecretAction, ServicesAction,
+    SessionAction, SkillsAction, ToolsAction, TraceAction, VaultAction, WebhookAction,
     WorkspaceAction,
 };
 
@@ -170,6 +171,128 @@ async fn dispatch(
             commands::completion::run(shell);
             Ok(())
         }
+        Commands::Pairing { action } => dispatch_pairing(server_url, action, json).await,
+        Commands::Devices { action } => dispatch_devices(server_url, action, json).await,
+        Commands::Auth { action } => dispatch_auth(server_url, action, json).await,
+        Commands::Secret { action } => dispatch_secret(server_url, action, json).await,
+        Commands::Hooks { action } => dispatch_hooks(server_url, action, json).await,
+        Commands::Webhook { action } => dispatch_webhook(action, json).await,
+        Commands::Proxy { action } => dispatch_proxy(action, json).await,
+    }
+}
+
+async fn dispatch_webhook(action: WebhookAction, json: bool) -> CliResult<()> {
+    use commands::webhook_cmd;
+    match action {
+        WebhookAction::List => webhook_cmd::list(json).await,
+        WebhookAction::Add => webhook_cmd::add(json).await,
+        WebhookAction::Remove => webhook_cmd::remove(json).await,
+    }
+}
+
+async fn dispatch_proxy(action: ProxyAction, json: bool) -> CliResult<()> {
+    use commands::proxy_cmd;
+    match action {
+        ProxyAction::Show => proxy_cmd::show(json).await,
+        ProxyAction::Set => proxy_cmd::set(json).await,
+        ProxyAction::Clear => proxy_cmd::clear(json).await,
+    }
+}
+
+async fn dispatch_pairing(
+    server_url: &str,
+    action: PairingAction,
+    json: bool,
+) -> CliResult<()> {
+    use commands::pairing_cmd;
+    match action {
+        PairingAction::List => pairing_cmd::list(server_url, json).await,
+        PairingAction::Approve { code } => pairing_cmd::approve(server_url, &code, json).await,
+        PairingAction::Reject { code } => pairing_cmd::reject(server_url, &code, json).await,
+    }
+}
+
+async fn dispatch_devices(
+    server_url: &str,
+    action: DevicesAction,
+    json: bool,
+) -> CliResult<()> {
+    use commands::devices_cmd;
+    match action {
+        DevicesAction::List => devices_cmd::list(server_url, json).await,
+        DevicesAction::Revoke { device_id } => {
+            devices_cmd::revoke(server_url, &device_id, json).await
+        }
+    }
+}
+
+async fn dispatch_auth(server_url: &str, action: AuthAction, json: bool) -> CliResult<()> {
+    use commands::auth_cmd;
+    match action {
+        AuthAction::ShowToken => auth_cmd::show_token(server_url, json).await,
+        AuthAction::ResetToken { yes } => auth_cmd::reset_token(server_url, yes, json).await,
+        AuthAction::Sessions => auth_cmd::sessions(server_url, json).await,
+        AuthAction::RevokeSession { session_id } => {
+            auth_cmd::revoke_session(server_url, &session_id, json).await
+        }
+        AuthAction::Login { provider } => auth_cmd::login(server_url, &provider, json).await,
+        AuthAction::Logout { provider } => auth_cmd::logout(server_url, &provider, json).await,
+        AuthAction::OauthStatus { provider } => {
+            auth_cmd::oauth_status(server_url, &provider, json).await
+        }
+    }
+}
+
+async fn dispatch_secret(
+    server_url: &str,
+    action: SecretAction,
+    json: bool,
+) -> CliResult<()> {
+    use commands::secret_cmd;
+    match action {
+        SecretAction::List => secret_cmd::list(server_url, json).await,
+        SecretAction::Set { name, value } => {
+            secret_cmd::set(server_url, &name, value.as_deref(), json).await
+        }
+        SecretAction::Delete { name } => secret_cmd::delete(server_url, &name, json).await,
+        SecretAction::Verify { name } => secret_cmd::verify(server_url, &name, json).await,
+        SecretAction::Providers => secret_cmd::providers(server_url, json).await,
+    }
+}
+
+async fn dispatch_hooks(server_url: &str, action: HooksAction, json: bool) -> CliResult<()> {
+    use commands::hooks_cmd;
+    match action {
+        HooksAction::List => hooks_cmd::list(server_url, json).await,
+        HooksAction::Add {
+            event,
+            command,
+            prompt,
+            agent,
+            url,
+            matcher,
+            timeout_secs,
+        } => {
+            hooks_cmd::add(
+                server_url,
+                &event,
+                command.as_deref(),
+                prompt.as_deref(),
+                agent.as_deref(),
+                url.as_deref(),
+                matcher.as_deref(),
+                timeout_secs,
+                json,
+            )
+            .await
+        }
+        HooksAction::Remove {
+            event,
+            command,
+            index,
+        } => hooks_cmd::remove(server_url, &event, command.as_deref(), index, json).await,
+        HooksAction::Reload => hooks_cmd::reload(server_url, json).await,
+        HooksAction::Events => hooks_cmd::events(server_url, json).await,
     }
 }
 
@@ -890,5 +1013,119 @@ mod tests {
             result.is_err(),
             "legacy `aleph plugins` should now be rejected; use `aleph plugin`"
         );
+    }
+
+    // === Cycle A surfaces (pairing / devices / auth). ===
+
+    #[test]
+    fn parse_pairing_list() {
+        assert!(Cli::try_parse_from(["aleph", "pairing", "list"]).is_ok());
+    }
+
+    #[test]
+    fn parse_pairing_approve_requires_code() {
+        assert!(Cli::try_parse_from(["aleph", "pairing", "approve"]).is_err());
+        assert!(Cli::try_parse_from(["aleph", "pairing", "approve", "ABC123"]).is_ok());
+    }
+
+    #[test]
+    fn parse_devices_revoke_requires_id() {
+        assert!(Cli::try_parse_from(["aleph", "devices", "revoke"]).is_err());
+        assert!(Cli::try_parse_from(["aleph", "devices", "revoke", "dev-1"]).is_ok());
+    }
+
+    #[test]
+    fn parse_auth_subcommands() {
+        assert!(Cli::try_parse_from(["aleph", "auth", "show-token"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "auth", "sessions"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "auth", "reset-token"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "auth", "reset-token", "--yes"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "auth", "revoke-session", "abc"]).is_ok());
+        // revoke-session requires an id
+        assert!(Cli::try_parse_from(["aleph", "auth", "revoke-session"]).is_err());
+    }
+
+    #[test]
+    fn parse_secret_subcommands() {
+        assert!(Cli::try_parse_from(["aleph", "secret", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "secret", "providers"]).is_ok());
+        // Set with inline value, and without (where the handler will prompt).
+        assert!(Cli::try_parse_from(["aleph", "secret", "set", "OPENAI_API_KEY"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "aleph",
+            "secret",
+            "set",
+            "OPENAI_API_KEY",
+            "--value",
+            "sk-x"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from(["aleph", "secret", "delete", "OPENAI_API_KEY"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "secret", "verify", "OPENAI_API_KEY"]).is_ok());
+        // delete/verify require a name
+        assert!(Cli::try_parse_from(["aleph", "secret", "delete"]).is_err());
+        assert!(Cli::try_parse_from(["aleph", "secret", "verify"]).is_err());
+    }
+
+    #[test]
+    fn parse_hooks_subcommands() {
+        assert!(Cli::try_parse_from(["aleph", "hooks", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "hooks", "events"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "hooks", "reload"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "aleph",
+            "hooks",
+            "add",
+            "before_tool_call",
+            "--command",
+            "echo hi"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "aleph",
+            "hooks",
+            "remove",
+            "before_tool_call",
+            "--index",
+            "0"
+        ])
+        .is_ok());
+        // command/prompt/agent/url conflict — clap should refuse two at once
+        assert!(Cli::try_parse_from([
+            "aleph",
+            "hooks",
+            "add",
+            "before_tool_call",
+            "--command",
+            "x",
+            "--prompt",
+            "y"
+        ])
+        .is_err());
+        // remove must supply --command or --index
+        assert!(Cli::try_parse_from(["aleph", "hooks", "remove", "before_tool_call"]).is_ok()); // parses; handler rejects
+    }
+
+    #[test]
+    fn parse_auth_oauth_subcommands() {
+        assert!(Cli::try_parse_from(["aleph", "auth", "login", "chatgpt"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "auth", "logout", "chatgpt"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "auth", "oauth-status", "chatgpt"]).is_ok());
+        // provider arg is required on all three
+        assert!(Cli::try_parse_from(["aleph", "auth", "login"]).is_err());
+        assert!(Cli::try_parse_from(["aleph", "auth", "logout"]).is_err());
+        assert!(Cli::try_parse_from(["aleph", "auth", "oauth-status"]).is_err());
+    }
+
+    #[test]
+    fn parse_webhook_and_proxy_preview_surfaces() {
+        // Webhook
+        assert!(Cli::try_parse_from(["aleph", "webhook", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "webhook", "add"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "webhook", "remove"]).is_ok());
+        // Proxy
+        assert!(Cli::try_parse_from(["aleph", "proxy", "show"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "proxy", "set"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "proxy", "clear"]).is_ok());
     }
 }

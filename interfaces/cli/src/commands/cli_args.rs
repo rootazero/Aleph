@@ -214,6 +214,48 @@ pub(crate) enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+
+    /// Inspect or moderate device pairing requests
+    Pairing {
+        #[command(subcommand)]
+        action: PairingAction,
+    },
+
+    /// Manage approved client devices
+    Devices {
+        #[command(subcommand)]
+        action: DevicesAction,
+    },
+
+    /// Shared-token and HTTP session administration
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+
+    /// Manage named vault secrets (API keys, tokens, etc.)
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
+
+    /// Manage user-level hooks in ~/.aleph/hooks.json
+    Hooks {
+        #[command(subcommand)]
+        action: HooksAction,
+    },
+
+    /// (Preview) Manage inbound webhook subscriptions
+    Webhook {
+        #[command(subcommand)]
+        action: WebhookAction,
+    },
+
+    /// (Preview) Manage outbound HTTP/HTTPS proxy configuration
+    Proxy {
+        #[command(subcommand)]
+        action: ProxyAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -944,4 +986,156 @@ pub(crate) enum ChatControlAction {
         #[arg(long)]
         keep_system: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum PairingAction {
+    /// List pending pairing requests
+    List,
+    /// Approve a pending pairing by code
+    Approve {
+        /// Pairing code shown by the requesting device
+        code: String,
+    },
+    /// Reject a pending pairing by code
+    Reject {
+        /// Pairing code to invalidate
+        code: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DevicesAction {
+    /// List approved devices
+    List,
+    /// Revoke a device (also revokes its tokens)
+    Revoke {
+        /// Device ID to revoke
+        device_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AuthAction {
+    /// Display the current shared access token
+    ShowToken,
+    /// Regenerate the shared token (invalidates all sessions)
+    ResetToken {
+        /// Skip the interactive confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// List active HTTP sessions
+    Sessions,
+    /// Revoke a specific HTTP session
+    RevokeSession {
+        /// Session ID to revoke
+        session_id: String,
+    },
+    /// Start the browser OAuth login flow for a provider (codex/chatgpt)
+    Login {
+        /// Provider key (e.g. `chatgpt`)
+        provider: String,
+    },
+    /// Clear stored OAuth token for a provider
+    Logout {
+        /// Provider key (e.g. `chatgpt`)
+        provider: String,
+    },
+    /// Check OAuth login status for a provider
+    OauthStatus {
+        /// Provider key (e.g. `chatgpt`)
+        provider: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum WebhookAction {
+    /// List configured webhook endpoints (currently TOML-driven)
+    List,
+    /// Add a webhook subscription (backend not yet implemented)
+    Add,
+    /// Remove a webhook subscription by id (backend not yet implemented)
+    Remove,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ProxyAction {
+    /// Show effective proxy configuration (backend not yet implemented)
+    Show,
+    /// Set proxy URL (backend not yet implemented)
+    Set,
+    /// Clear proxy URL (backend not yet implemented)
+    Clear,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum HooksAction {
+    /// Show the current contents of ~/.aleph/hooks.json
+    List,
+    /// Add a hook entry
+    Add {
+        /// Event name (snake_case or PascalCase: `before_tool_call`, `PreToolUse`, ...)
+        event: String,
+        /// Shell command to run
+        #[arg(long, conflicts_with_all = ["prompt", "agent", "url"])]
+        command: Option<String>,
+        /// Inline prompt to inject
+        #[arg(long, conflicts_with_all = ["command", "agent", "url"])]
+        prompt: Option<String>,
+        /// Named subagent to invoke
+        #[arg(long, conflicts_with_all = ["command", "prompt", "url"])]
+        agent: Option<String>,
+        /// HTTP endpoint to POST the event payload to
+        #[arg(long, conflicts_with_all = ["command", "prompt", "agent"])]
+        url: Option<String>,
+        /// Regex matched against `tool_name` for tool-related events
+        #[arg(long)]
+        matcher: Option<String>,
+        /// Per-hook timeout in seconds (applies to command/http actions)
+        #[arg(long)]
+        timeout_secs: Option<u64>,
+    },
+    /// Remove hook entries by substring or index
+    Remove {
+        /// Event name
+        event: String,
+        /// Substring filter — drops every group whose action contains this string
+        #[arg(long, conflicts_with = "index")]
+        command: Option<String>,
+        /// Zero-based group index to drop
+        #[arg(long, conflicts_with = "command")]
+        index: Option<usize>,
+    },
+    /// Force the extension manager to re-read hooks from disk
+    Reload,
+    /// List valid hook event names
+    Events,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SecretAction {
+    /// List secret names (values are never returned)
+    List,
+    /// Store a secret. If --value is omitted, reads from a TTY prompt
+    /// (or stdin in --json mode).
+    Set {
+        /// Secret name (alphanumerics + `_-.:`)
+        name: String,
+        /// Inline value (prefer the interactive prompt to avoid shell history)
+        #[arg(long)]
+        value: Option<String>,
+    },
+    /// Delete a secret by name
+    Delete {
+        /// Secret name
+        name: String,
+    },
+    /// Confirm a secret exists and report its size in bytes
+    Verify {
+        /// Secret name
+        name: String,
+    },
+    /// List configured secret provider backends
+    Providers,
 }

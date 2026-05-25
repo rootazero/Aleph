@@ -69,6 +69,40 @@ pub(in crate::commands::start) fn register_auth_handlers(
         auth_tools_handlers::handle_auth_revoke_session,
         auth_ctx
     );
+
+    // Vault secret CRUD over JSON-RPC. Mirrors `/v1/admin/secrets`
+    // so thin clients don't need an HTTP fallback path.
+    use alephcore::gateway::handlers::secrets as secrets_handlers;
+    register_handler!(
+        server,
+        "secrets.list",
+        secrets_handlers::handle_secrets_list,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "secrets.set",
+        secrets_handlers::handle_secrets_set,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "secrets.delete",
+        secrets_handlers::handle_secrets_delete,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "secrets.verify",
+        secrets_handlers::handle_secrets_verify,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "secrets.providers",
+        secrets_handlers::handle_secrets_providers,
+        auth_ctx
+    );
 }
 
 // ─── register_guest_handlers ─────────────────────────────────────────────────

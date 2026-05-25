@@ -78,6 +78,7 @@ pub mod group_chat;
 pub mod guests;
 pub mod health;
 pub mod heartbeat;
+pub mod hooks_admin;
 pub mod identity;
 pub mod logs;
 pub mod markdown_skills;
@@ -100,6 +101,7 @@ pub mod schema;
 pub mod search_config;
 pub mod secret_approvals;
 pub mod secret_migration;
+pub mod secrets;
 pub mod security_config;
 pub mod services;
 pub mod session;
@@ -254,6 +256,15 @@ impl HandlerRegistry {
                 "command.execute requires ToolRegistry — wire in Gateway startup".to_string(),
             )
         });
+
+        // User-level hooks file admin (`~/.aleph/hooks.json`).
+        // No context needed — the handlers reach the extension manager
+        // via the process-global accessor.
+        registry.register("hooks.list", hooks_admin::handle_hooks_list);
+        registry.register("hooks.add", hooks_admin::handle_hooks_add);
+        registry.register("hooks.remove", hooks_admin::handle_hooks_remove);
+        registry.register("hooks.reload", hooks_admin::handle_hooks_reload);
+        registry.register("hooks.events", hooks_admin::handle_hooks_events);
 
         // Plugin handlers (plural — legacy namespace, kept for backward compatibility)
         registry.register("plugins.list", plugins::handle_list);
