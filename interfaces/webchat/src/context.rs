@@ -87,6 +87,10 @@ pub struct DashboardState {
     pub gateway_url: RwSignal<String>,
     pub connection_error: RwSignal<Option<String>>,
     pub is_reconnecting: RwSignal<bool>,
+    /// Latched true on the first successful authenticate; never reset.
+    /// Lets the boot gate disengage and the service gate engage — two
+    /// surfaces that differ only in "have we ever been live?".
+    pub has_connected_once: RwSignal<bool>,
 
     // Phase 3: Channel to send RPC requests to message loop
     rpc_tx: StoredValue<Option<mpsc::UnboundedSender<RpcRequest>>>,
@@ -147,6 +151,7 @@ impl DashboardState {
             gateway_url: RwSignal::new(derive_gateway_url()),
             connection_error: RwSignal::new(None),
             is_reconnecting: RwSignal::new(false),
+            has_connected_once: RwSignal::new(false),
             rpc_tx: StoredValue::new(None),
             next_id: StoredValue::new(Arc::new(Mutex::new(1))),
             event_handlers: StoredValue::new(Arc::new(Mutex::new(Vec::new()))),
@@ -539,6 +544,7 @@ impl DashboardState {
                         self.connection_error.set(None);
                         self.reconnect_count.set(0);
                         self.is_reconnecting.set(false);
+                        self.has_connected_once.set(true);
 
                         // Subscribe to config events automatically
                         let state_for_subscribe = *self;

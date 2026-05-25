@@ -2,6 +2,7 @@
 
 pub mod agents_sidebar;
 pub mod api_key_input;
+pub mod boot_check_gate;
 pub mod chat_sidebar;
 pub mod command_palette;
 pub mod connection_status;
@@ -11,6 +12,7 @@ pub mod layouts;
 pub mod markdown;
 pub mod mode_sidebar;
 pub mod nav_menu;
+pub mod service_blocking_gate;
 pub mod settings_sidebar;
 pub mod sidebar;
 pub mod theme_toggle;

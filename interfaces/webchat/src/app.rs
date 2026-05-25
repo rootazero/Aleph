@@ -20,8 +20,10 @@ use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 use crate::views::usage::UsageView;
 // Layout components
+use crate::components::boot_check_gate::BootCheckGate;
 use crate::components::command_palette::CommandPalette;
 use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
+use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::context::{DashboardContext, DashboardState};
 use crate::state::hotkey::{self as hotkey, HotkeyState};
 use crate::views::chat::ChatState;
@@ -158,7 +160,17 @@ fn AppContent() -> impl IntoView {
                 // so it can call `use_navigate()`; the overlay itself sits
                 // above all shell chrome via z-index.
                 <CommandPalette />
+
+                // Runtime recovery overlay — engages when the panel was live
+                // but lost the Gateway and exhausted automatic reconnects.
+                // Inside <Router> so its "Open logs" button can navigate.
+                <ServiceBlockingGate />
             </Router>
+
+            // First-boot gate — blocks the shell with a "Connecting…" or
+            // "Cannot reach core" overlay until the first auth succeeds.
+            // Outside <Router> because it never navigates.
+            <BootCheckGate />
 
             // Pairing modal overlays everything when pairing_required is triggered
             <PairingModal />
