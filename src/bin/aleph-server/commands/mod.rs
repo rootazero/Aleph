@@ -4,6 +4,7 @@
 
 pub mod audit;
 pub mod bootstrap_runtime;
+pub mod bootstrap_token;
 pub mod devices;
 pub mod gateway;
 pub mod hooks;
@@ -15,6 +16,7 @@ pub mod start;
 
 // Re-export commonly used items
 pub use audit::*;
+pub use bootstrap_token::handle_bootstrap_token;
 pub use devices::*;
 pub use gateway::*;
 pub use hooks::*;
