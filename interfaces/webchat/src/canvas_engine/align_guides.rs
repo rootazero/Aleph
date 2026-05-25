@@ -13,7 +13,7 @@ use crate::canvas_engine::types::Vec2;
 /// 4 px in world units; the renderer scales by viewport zoom for drawing.
 pub const SNAP_THRESHOLD: f64 = 4.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Axis {
     /// Vertical line — runs top-to-bottom; nodes share the same `x`.
     Vertical,

@@ -24,6 +24,7 @@ pub struct PresetProvider {
     pub default_model: String,
     pub description: String,
     pub base_url: Option<String>,
+    pub homepage: Option<String>,
 }
 
 /// Wire-shape returned by `generation_providers.list_presets`.
@@ -62,6 +63,7 @@ impl PresetProviderDto {
             capabilities,
             default_model: self.default_model,
             base_url: self.base_url,
+            homepage: self.homepage,
         }
     }
 }
@@ -237,5 +239,13 @@ mod tests {
     fn curated_color_for_known_provider() {
         let p = dto("o", "openai", &["image"]).into_preset();
         assert_eq!(p.color, "#10a37f");
+    }
+
+    #[test]
+    fn homepage_propagates_from_dto() {
+        let mut d = dto("openai-dalle", "openai", &["image"]);
+        d.homepage = Some("https://platform.openai.com".to_string());
+        let p = d.into_preset();
+        assert_eq!(p.homepage.as_deref(), Some("https://platform.openai.com"));
     }
 }

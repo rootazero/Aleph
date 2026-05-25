@@ -477,8 +477,7 @@
       "smart_routing": "Smart Routing",
       "smart_routing_hint": "Auto-route requests to the most suitable provider",
       "current_suffix": "(Current)",
-      "select_provider": "Select a provider to view details",
-      "unsupported": "Unsupported"
+      "select_provider": "Select a provider to view details"
     },
     "memory": {
       "title": "Memory & Knowledge",

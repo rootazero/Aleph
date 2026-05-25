@@ -55,22 +55,32 @@ pub fn GenerationProvidersView() -> impl IntoView {
     let (is_loading, set_is_loading) = signal(true);
     let (error_message, set_error_message) = signal(Option::<String>::None);
 
-    // Load providers + preset catalogue on mount (parallel — independent RPCs)
-    spawn_local(async move {
-        let (providers_res, presets_res) = futures::future::join(
-            GenerationProvidersApi::list(&state),
-            GenerationProvidersApi::list_presets(&state),
-        )
-        .await;
-        match providers_res {
-            Ok(list) => set_providers.set(list),
-            Err(e) => set_error_message.set(Some(format!("Failed to load providers: {}", e))),
+    // (Re)load providers + preset catalogue whenever the gateway is connected.
+    // Subscribes to `is_connected` so a server restart (the only realistic catalog
+    // mutation point — PRESETS is a Lazy<HashMap>, compile-time fixed) auto-refreshes
+    // the cards. Disconnected ticks are no-ops; the loader stays visible.
+    Effect::new(move |_| {
+        if !state.is_connected.get() {
+            return;
         }
-        match presets_res {
-            Ok(dtos) => set_catalog.set(PresetCatalog::from_dtos(dtos)),
-            Err(e) => set_error_message.set(Some(format!("Failed to load preset catalog: {}", e))),
-        }
-        set_is_loading.set(false);
+        spawn_local(async move {
+            let (providers_res, presets_res) = futures::future::join(
+                GenerationProvidersApi::list(&state),
+                GenerationProvidersApi::list_presets(&state),
+            )
+            .await;
+            match providers_res {
+                Ok(list) => set_providers.set(list),
+                Err(e) => set_error_message.set(Some(format!("Failed to load providers: {}", e))),
+            }
+            match presets_res {
+                Ok(dtos) => set_catalog.set(PresetCatalog::from_dtos(dtos)),
+                Err(e) => {
+                    set_error_message.set(Some(format!("Failed to load preset catalog: {}", e)))
+                }
+            }
+            set_is_loading.set(false);
+        });
     });
 
     // Reload helper (configured providers only; preset catalog is static for the session)
@@ -1224,13 +1234,29 @@ fn PresetSetupPanel(
         }
     };
 
+    let homepage = preset.homepage.clone();
     view! {
         <div class="flex flex-col h-full">
             <div class="px-6 py-4 border-b border-border">
                 <div class="flex items-center gap-3">
                     <span class="text-2xl">{preset.icon.clone()}</span>
-                    <div>
-                        <h2 class="text-lg font-semibold text-text-primary">{format!("{} {}", t_string!(i18n, settings.generation.setup_prefix), preset.name)}</h2>
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h2 class="text-lg font-semibold text-text-primary">{format!("{} {}", t_string!(i18n, settings.generation.setup_prefix), preset.name)}</h2>
+                            {match homepage {
+                                Some(url) if !url.is_empty() => view! {
+                                    <a
+                                        href=url.clone()
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        class="text-xs text-primary hover:underline shrink-0"
+                                    >
+                                        {"Docs ↗"}
+                                    </a>
+                                }.into_any(),
+                                _ => view! { <span></span> }.into_any(),
+                            }}
+                        </div>
                         <p class="text-sm text-text-tertiary">{preset.description.clone()}</p>
                     </div>
                 </div>

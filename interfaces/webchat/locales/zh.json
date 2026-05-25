@@ -477,8 +477,7 @@
       "smart_routing": "智能路由",
       "smart_routing_hint": "自动将请求路由到最合适的提供商",
       "current_suffix": "（当前）",
-      "select_provider": "选择提供商以查看详情",
-      "unsupported": "不支持"
+      "select_provider": "选择提供商以查看详情"
     },
     "memory": {
       "title": "记忆与知识",
