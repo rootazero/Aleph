@@ -11,6 +11,7 @@ use leptos::task::spawn_local;
 use crate::api::{AuthTokenApi, AuthTokenInfo, SessionInfo};
 use crate::context::DashboardState;
 use crate::i18n::*;
+use crate::views::devices::PairQr;
 
 #[component]
 pub fn AuthView() -> impl IntoView {
@@ -95,6 +96,13 @@ pub fn AuthView() -> impl IntoView {
                                     session_count=session_count
                                     error=error
                                 />
+                                // Browser/mobile pairing — same-LAN QR.
+                                // The cold visitor (phone, second laptop) scans this
+                                // and lands on /pair where a 6-digit code is
+                                // displayed; approve it from the NotificationCenter.
+                                <div class="rounded-2xl bg-surface-raised border border-border">
+                                    <PairQr/>
+                                </div>
                             </div>
                         }.into_any()
                     }

@@ -49,6 +49,11 @@ pulldown-cmark = { version = "0.12", default-features = false, features = ["html
 # Syntax highlighting (WASM-compatible)
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 
+# QR-code rendering for the cold-browser pairing view (Devices → "Add browser/mobile").
+# Pure-Rust + WASM-safe; `svg` feature yields a self-contained SVG string we drop
+# into a div via inner_html, so no canvas / image-decoding deps are pulled in.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+
 # Internal logic
 shared-ui-logic = { path = "../../shared/ui_logic", features = ["leptos", "wasm"] }
 aleph-protocol = { path = "../../shared/protocol" }

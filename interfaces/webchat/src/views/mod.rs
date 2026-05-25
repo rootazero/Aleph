@@ -5,6 +5,7 @@ pub mod canvas;
 pub mod chat;
 pub mod cron;
 pub mod dashboard_cron;
+pub mod devices;
 pub mod home;
 pub mod logs;
 pub mod memory;
