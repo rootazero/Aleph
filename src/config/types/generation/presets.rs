@@ -163,6 +163,24 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             base_url: Some("https://queue.fal.run"),
         },
     );
+    // Phase R3-B2 — Suno direct (paid wrapper), Music modality.
+    m.insert(
+        "suno",
+        GenerationPreset {
+            provider_type: "suno",
+            default_model: "chirp-v3-5",
+            base_url: Some("https://api.sunoaiapi.com"),
+        },
+    );
+    // Phase R3-B2 — BFL FLUX direct, Image modality.
+    m.insert(
+        "bfl-flux",
+        GenerationPreset {
+            provider_type: "bfl",
+            default_model: "flux-pro-1.1",
+            base_url: Some("https://api.bfl.ai"),
+        },
+    );
 
     // Audio/Speech providers
     m.insert(
@@ -647,6 +665,26 @@ pub static GENERATION_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = 
             modalities: SPEECH_ONLY,
             homepage: Some("https://learn.microsoft.com/azure/ai-services/speech-service/"),
             notes: Some("400+ Neural voices, SSML; region required (e.g. eastus)"),
+        },
+    );
+
+    // Phase R3-B2: Suno (music) + BFL FLUX (image) direct providers.
+    m.insert(
+        "suno",
+        ProviderMetadata {
+            display_name: "Suno",
+            modalities: &[Modality::Music],
+            homepage: Some("https://suno.ai"),
+            notes: Some("Targets paid wrappers (sunoapi.com / sunoaiapi.com)"),
+        },
+    );
+    m.insert(
+        "bfl-flux",
+        ProviderMetadata {
+            display_name: "Black Forest Labs FLUX",
+            modalities: IMAGE_ONLY,
+            homepage: Some("https://docs.bfl.ai"),
+            notes: Some("Direct BFL API; supports flux-pro-1.1, flux-dev, ultra"),
         },
     );
 

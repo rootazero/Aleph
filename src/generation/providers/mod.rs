@@ -34,6 +34,7 @@
 //! ```
 
 pub mod azure_speech;
+pub mod bfl;
 pub mod deepgram_stt;
 pub mod deepgram_tts;
 pub mod elevenlabs;
@@ -48,16 +49,19 @@ pub mod openai_tts;
 pub mod openai_whisper;
 pub mod replicate;
 pub mod stability;
+pub mod suno;
 pub mod url_normalize;
 
 #[cfg(test)]
 mod tests;
 
 pub use azure_speech::AzureSpeechProvider;
+pub use bfl::BflProvider;
 pub use deepgram_stt::DeepgramSttProvider;
 pub use deepgram_tts::DeepgramTtsProvider;
 pub use elevenlabs::ElevenLabsProvider;
 pub use fal::{FalProvider, FalProviderBuilder};
+pub use suno::SunoProvider;
 pub use factory::create_provider;
 pub use google_imagen::GoogleImagenProvider;
 pub use google_veo::GoogleVeoProvider;

@@ -120,6 +120,16 @@ pub fn create_provider(
                 .clone()
                 .or_else(|| config.default_model().map(|s| s.to_string())),
         )?),
+        "suno" => Arc::new(SunoProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.default_model().map(|s| s.to_string()),
+        )?),
+        "bfl" | "bfl_flux" | "flux" => Arc::new(BflProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.default_model().map(|s| s.to_string()),
+        )?),
         "openai_compat" => {
             let base_url = config.base_url.clone().ok_or_else(|| {
                 GenerationError::invalid_parameters(
@@ -244,7 +254,7 @@ pub fn create_provider(
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, deepgram_tts, azure_speech, azure_tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal",
+                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, deepgram_tts, azure_speech, azure_tts, suno, bfl, bfl_flux, flux, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal",
                     other
                 ),
                 Some("provider_type".to_string()),

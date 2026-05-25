@@ -647,3 +647,56 @@ fn test_create_azure_speech_rejects_missing_region() {
     let err = result.err().expect("error variant");
     assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
 }
+
+// === Round-3 Phase B2: direct generation providers ===
+
+#[test]
+fn test_create_suno_provider() {
+    let config = GenerationProviderConfig {
+        provider_type: "suno".to_string(),
+        api_key: Some("sk-suno".to_string()),
+        models: vec!["chirp-v3-5".to_string()],
+        ..Default::default()
+    };
+    let provider = create_provider("suno", &config, GenerationType::Audio).unwrap();
+    assert_eq!(provider.name(), "suno");
+    assert!(provider.supports(GenerationType::Audio));
+    assert_eq!(provider.default_model(), Some("chirp-v3-5"));
+}
+
+#[test]
+fn test_create_bfl_provider_default_alias() {
+    let config = GenerationProviderConfig {
+        provider_type: "bfl".to_string(),
+        api_key: Some("bfl-key".to_string()),
+        models: vec!["flux-pro-1.1".to_string()],
+        ..Default::default()
+    };
+    let provider = create_provider("bfl-flux", &config, GenerationType::Image).unwrap();
+    assert_eq!(provider.name(), "bfl-flux");
+    assert!(provider.supports(GenerationType::Image));
+}
+
+#[test]
+fn test_create_bfl_provider_flux_alias() {
+    let config = GenerationProviderConfig {
+        provider_type: "flux".to_string(),
+        api_key: Some("bfl-key".to_string()),
+        models: vec!["flux-dev".to_string()],
+        ..Default::default()
+    };
+    let provider = create_provider("bfl-flux", &config, GenerationType::Image).unwrap();
+    assert_eq!(provider.name(), "bfl-flux");
+    assert_eq!(provider.default_model(), Some("flux-dev"));
+}
+
+#[test]
+fn test_create_bfl_provider_bfl_flux_alias() {
+    let config = GenerationProviderConfig {
+        provider_type: "bfl_flux".to_string(),
+        api_key: Some("bfl-key".to_string()),
+        ..Default::default()
+    };
+    let provider = create_provider("bfl-flux", &config, GenerationType::Image).unwrap();
+    assert_eq!(provider.name(), "bfl-flux");
+}

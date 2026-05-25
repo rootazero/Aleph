@@ -273,6 +273,28 @@ mod tests {
     }
 
     #[test]
+    fn presets_for_modality_music_includes_round3_suno() {
+        // Round-3 (Phase B2) adds Suno music generation.
+        let music = presets_for_modality(Modality::Music);
+        assert!(
+            music.iter().any(|e| e.name == "suno"),
+            "Music modality should expose suno, got {:?}",
+            music.iter().map(|e| e.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn presets_for_modality_image_includes_round3_bfl() {
+        // Round-3 (Phase B2) adds direct BFL FLUX image generation.
+        let imgs = presets_for_modality(Modality::Image);
+        assert!(
+            imgs.iter().any(|e| e.name == "bfl-flux"),
+            "Image modality should expose bfl-flux, got {:?}",
+            imgs.iter().map(|e| e.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn presets_for_modality_transcription_includes_round2_stt() {
         // Round-2 closes the previously empty Transcription modality.
         let stt = presets_for_modality(Modality::Transcription);
