@@ -178,6 +178,7 @@ async fn dispatch(
         Commands::Hooks { action } => dispatch_hooks(server_url, action, json).await,
         Commands::Webhook { action } => dispatch_webhook(action, json).await,
         Commands::Proxy { action } => dispatch_proxy(action, json).await,
+        Commands::Open => commands::open_cmd::run(server_url, json).await,
     }
 }
 
@@ -893,6 +894,11 @@ mod tests {
     #[test]
     fn parse_trace_list_command() {
         assert!(Cli::try_parse_from(["aleph", "trace", "list"]).is_ok());
+    }
+
+    #[test]
+    fn parses_open_subcommand() {
+        assert!(Cli::try_parse_from(["aleph", "open"]).is_ok());
     }
 
     #[test]

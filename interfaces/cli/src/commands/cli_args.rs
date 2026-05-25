@@ -256,6 +256,11 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: ProxyAction,
     },
+
+    /// Open the Aleph Panel in the system browser, auto-authenticated via a
+    /// one-time bootstrap nonce. Same UX as the desktop app's "Open in Browser"
+    /// menu item — no token typing.
+    Open,
 }
 
 #[derive(Subcommand)]
