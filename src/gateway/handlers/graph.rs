@@ -112,7 +112,12 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
     let nodes: Vec<NoteNodeDto> = entries.iter().map(entry_to_dto).collect();
     let edges: Vec<NoteLinkDto> = links
         .into_iter()
-        .map(|(from, to)| NoteLinkDto { from, to })
+        .map(|(from, to)| NoteLinkDto {
+            from,
+            to,
+            label: None,
+            kind: None,
+        })
         .collect();
 
     let response = GraphQueryResponse { nodes, edges };
@@ -182,7 +187,12 @@ pub async fn handle_neighbors_impl(req: JsonRpcRequest, db: MemoryBackend) -> Js
         .collect();
     let edges: Vec<NoteLinkDto> = links
         .into_iter()
-        .map(|(from, to)| NoteLinkDto { from, to })
+        .map(|(from, to)| NoteLinkDto {
+            from,
+            to,
+            label: None,
+            kind: None,
+        })
         .collect();
 
     // Compute hop distance (1 = direct edge to/from center, 2 = further).
@@ -489,6 +499,8 @@ mod tests {
         let edges = vec![NoteLinkDto {
             from: "A".to_string(),
             to: "B".to_string(),
+            label: None,
+            kind: None,
         }];
         assert_eq!(compute_hop_depth("A", "B", &edges), 1);
         assert_eq!(compute_hop_depth("B", "A", &edges), 1); // reverse edge

@@ -40,6 +40,7 @@ pub(crate) mod arena;
 pub mod browser;
 pub mod builtin_tools;
 pub mod bundled;
+pub mod canvas_io;
 pub mod clarification;
 pub mod cli;
 mod clipboard;

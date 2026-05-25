@@ -15,6 +15,7 @@
 //! - [`discovery`] - Service discovery types
 
 pub mod auth;
+pub mod canvas_format;
 pub mod desktop_bridge;
 pub mod discovery;
 pub mod events;

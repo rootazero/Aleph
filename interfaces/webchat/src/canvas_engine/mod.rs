@@ -1,10 +1,12 @@
 pub mod adapter;
+pub mod align_guides;
 pub mod category_color;
 pub mod cluster;
 pub mod drag;
 pub mod edge_curve;
 pub mod fnv1a;
 pub mod interaction;
+pub mod json_canvas;
 pub mod layout;
 pub mod markdown_excerpt;
 pub mod mini_map;

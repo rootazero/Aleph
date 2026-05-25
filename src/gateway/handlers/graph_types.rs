@@ -67,6 +67,18 @@ pub struct NoteNodeDto {
 pub struct NoteLinkDto {
     pub from: String,
     pub to: String,
+    /// Free-form display label for the edge, e.g. the wikilink alias from
+    /// `[[target|alias]]`. Matches the Obsidian JSON Canvas `edge.label` slot.
+    /// `None` until the storage layer learns to surface aliases (tracked in
+    /// the R2 follow-up "wikilink-kind-extraction").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Semantic relation kind, e.g. `"refers"` / `"derives"` / `"follows"` /
+    /// `"related"`. Only members of `DIRECTIONAL_KINDS` (see panel-side
+    /// `edge_curve.rs`) render arrow heads. `None` until the writer pipeline
+    /// extracts kind hints from note bodies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
