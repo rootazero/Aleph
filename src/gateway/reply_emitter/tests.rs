@@ -52,6 +52,7 @@ mod tests {
             debounce_ms: 800,
             min_initial_chars: 30,
             max_message_length: 4096,
+            ..ReplyEmitterConfig::default()
         };
         let registry = Arc::new(ChannelRegistry::new());
         let emitter = ReplyEmitter::with_config(

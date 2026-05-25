@@ -65,6 +65,7 @@ pub mod events;
 pub mod exec_approvals;
 pub mod execution_config;
 pub mod flow_admin;
+pub mod gateway_credentials;
 pub mod gateway_identity;
 pub mod gateway_metrics;
 pub mod general_config;
@@ -580,6 +581,12 @@ impl HandlerRegistry {
             service_unavailable(
                 req,
                 "gateway.metrics.lanes requires LaneManager (boot phase 2)",
+            )
+        });
+        registry.register("gateway.credentials", |req| async move {
+            service_unavailable(
+                req,
+                "gateway.credentials requires gateway config (boot phase 2)",
             )
         });
         // daemon.status and daemon.shutdown need runtime state — placeholders

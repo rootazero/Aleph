@@ -361,6 +361,29 @@ impl EventEmitter for ReplyEmitter {
                     self.buffer.lock().await.push_str(&notice);
                 }
 
+                // Optional runtime-metadata footer (model · tokens · cwd).
+                // Off unless `gateway.runtime_footer.enabled = true` in TOML.
+                if self.config.footer.enabled {
+                    let model_label = self.model_label.lock().await.clone();
+                    let cwd = std::env::current_dir()
+                        .ok()
+                        .and_then(|p| p.to_str().map(|s| s.to_string()));
+                    let home = std::env::var("HOME").ok();
+                    let inputs = crate::gateway::runtime_footer::RuntimeFooterInputs {
+                        model: model_label.as_deref(),
+                        total_tokens: Some(summary.total_tokens),
+                        cwd: cwd.as_deref(),
+                    };
+                    let block = crate::gateway::runtime_footer::build_footer_block(
+                        &self.config.footer,
+                        &inputs,
+                        home.as_deref(),
+                    );
+                    if !block.is_empty() {
+                        self.buffer.lock().await.push_str(&block);
+                    }
+                }
+
                 // Flush accumulated buffer (always flush — intermediate messages
                 // may have set has_sent, but the buffer holds the final response)
                 let text = {
@@ -527,6 +550,10 @@ impl EventEmitter for ReplyEmitter {
 
             // Store fallback info for non-Panel notification
             StreamEvent::ModelResolved { model_info, .. } => {
+                // Cache the resolved model name for the runtime-footer renderer.
+                // Done unconditionally — the footer is opt-in, so the cost of a
+                // mutex write per run is negligible vs threading a state check.
+                *self.model_label.lock().await = Some(model_info.model.clone());
                 if model_info.is_fallback {
                     *self.fallback_info.lock().await = Some(model_info);
                 }

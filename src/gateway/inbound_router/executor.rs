@@ -97,6 +97,9 @@ impl InboundMessageRouter {
         };
         reply_config.voice_enabled = voice_enabled;
         reply_config.voice_reply_hint = ctx.voice_reply_hint;
+        // Pull the process-wide runtime-footer config installed at boot.
+        // Defaults to disabled when never installed (tests, host-only paths).
+        reply_config.footer = crate::gateway::runtime_footer::global_config();
 
         // Per-channel streaming override: if the channel declares EditBased,
         // enable streaming and apply channel-specific debounce/threshold.

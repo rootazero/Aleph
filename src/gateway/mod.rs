@@ -28,6 +28,7 @@ pub mod transport;
 
 pub mod admin_api;
 pub mod auth_middleware;
+pub mod credential_planner;
 pub mod event_bus;
 pub mod event_emitter;
 pub mod events;
@@ -37,6 +38,7 @@ pub mod mdns_broadcaster;
 pub mod memory_monitor;
 pub mod message_dedup;
 pub mod middleware;
+pub mod runtime_footer;
 pub mod shutdown_forensics;
 pub mod protocol;
 pub mod router;

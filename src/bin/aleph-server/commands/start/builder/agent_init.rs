@@ -2270,6 +2270,23 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         }
     }
 
+    // G4c: register gateway.credentials with a snapshot of the live
+    // GatewayServerConfig. Cloning the config into an Arc once at boot is
+    // cheap and avoids holding the FullGatewayConfig across the handler.
+    {
+        use alephcore::gateway::handlers::gateway_credentials::handle_gateway_credentials;
+        let gateway_cfg = std::sync::Arc::new(full_config.gateway.clone());
+        server
+            .handlers_mut()
+            .register("gateway.credentials", move |req| {
+                let cfg = gateway_cfg.clone();
+                async move { handle_gateway_credentials(req, cfg).await }
+            });
+        if !daemon {
+            println!("  gateway.credentials: wired");
+        }
+    }
+
     // G2: signal readiness. /ready returns 200 from this point onward;
     // before this, it returns 503 so proxies don't route to a gateway
     // whose handler tree is still being wired.

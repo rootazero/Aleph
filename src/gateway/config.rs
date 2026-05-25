@@ -142,6 +142,11 @@ pub struct GatewayServerConfig {
     /// [`crate::gateway::memory_monitor`] for the log format.
     #[serde(default = "default_memory_monitor_secs")]
     pub memory_monitor_secs: u64,
+    /// Optional runtime-metadata footer (`model · tokens · cwd`) appended
+    /// to the final agent reply. Disabled by default — see
+    /// [`crate::gateway::runtime_footer`].
+    #[serde(default)]
+    pub runtime_footer: crate::gateway::runtime_footer::RuntimeFooterConfig,
 }
 
 fn default_memory_monitor_secs() -> u64 {
@@ -171,6 +176,7 @@ impl Default for GatewayServerConfig {
             require_idempotency_key: false,
             require_challenge: false,
             memory_monitor_secs: default_memory_monitor_secs(),
+            runtime_footer: crate::gateway::runtime_footer::RuntimeFooterConfig::default(),
         }
     }
 }

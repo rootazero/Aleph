@@ -89,6 +89,9 @@ impl Lane {
             // gateway.metrics.lanes is a read-only diagnostics gauge.
             // The `.lanes` suffix doesn't match the Query heuristic.
             "gateway.metrics.lanes" => Some(Lane::Query),
+            // gateway.credentials returns a read-only auth-surface snapshot.
+            // No `.get`/`.list` suffix to trip the heuristic, so list explicitly.
+            "gateway.credentials" => Some(Lane::Query),
             // teams.usage is a read-only token aggregation over task_traces.
             // The `.usage` suffix isn't in the Query heuristic; keep it out of
             // Mutate so it isn't idempotency-guarded for nothing.

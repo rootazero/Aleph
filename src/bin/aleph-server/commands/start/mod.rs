@@ -2395,6 +2395,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         full_config.gateway.memory_monitor_secs,
     );
 
+    // Install the runtime-metadata footer configuration so reply-emitter
+    // construction paths can opt-in without threading FullGatewayConfig.
+    // Idempotent; second/later starts in tests are a no-op.
+    alephcore::gateway::runtime_footer::set_global_config(
+        full_config.gateway.runtime_footer.clone(),
+    );
+
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
     memory_monitor.shutdown().await;

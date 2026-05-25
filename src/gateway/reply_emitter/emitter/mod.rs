@@ -65,6 +65,11 @@ pub struct ReplyEmitter {
     /// Appended as a notice line to non-Panel channel replies.
     pub(crate) fallback_info: Mutex<Option<crate::providers::health::ModelInfo>>,
 
+    /// Model identifier observed on the last `ModelResolved` event for this run.
+    /// Used to render the optional runtime-metadata footer; `None` if the run
+    /// never emitted `ModelResolved` (older execution paths).
+    pub(crate) model_label: Mutex<Option<String>>,
+
     /// Accumulated reasoning text from StreamEvent::Reasoning / ReasoningBlock.
     pub(crate) reasoning_buffer: Mutex<String>,
 }
@@ -108,6 +113,7 @@ impl ReplyEmitter {
             native_stream_state: Mutex::new(None),
             native_disabled: AtomicBool::new(false),
             fallback_info: Mutex::new(None),
+            model_label: Mutex::new(None),
             reasoning_buffer: Mutex::new(String::new()),
         }
     }
@@ -147,6 +153,7 @@ impl ReplyEmitter {
             native_stream_state: Mutex::new(None),
             native_disabled: AtomicBool::new(false),
             fallback_info: Mutex::new(None),
+            model_label: Mutex::new(None),
             reasoning_buffer: Mutex::new(String::new()),
         }
     }

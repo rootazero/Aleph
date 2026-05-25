@@ -1,3 +1,5 @@
+use crate::gateway::runtime_footer::RuntimeFooterConfig;
+
 #[derive(Debug, Clone)]
 pub struct ReplyEmitterConfig {
     /// Minimum buffer size before auto-flush (in characters)
@@ -27,6 +29,10 @@ pub struct ReplyEmitterConfig {
     /// Maximum message length for the target channel (0 = unlimited).
     /// Used for overflow detection during streaming.
     pub max_message_length: usize,
+
+    /// Optional runtime-metadata footer appended to the final reply.
+    /// Defaults to a disabled config so existing callers stay no-op.
+    pub footer: RuntimeFooterConfig,
 }
 
 impl Default for ReplyEmitterConfig {
@@ -39,6 +45,7 @@ impl Default for ReplyEmitterConfig {
             debounce_ms: 300,
             min_initial_chars: 30,
             max_message_length: 0,
+            footer: RuntimeFooterConfig::default(),
         }
     }
 }
