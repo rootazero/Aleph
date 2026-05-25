@@ -675,6 +675,12 @@ pub fn Home() -> impl IntoView {
                 </div>
             </div>
 
+            // Scheduled job sparkline — pulse of recent cron health
+            <div class="pt-4">
+                <h3 class="text-xl font-semibold px-1 mb-4">"Scheduled Activity"</h3>
+                <crate::views::dashboard_cron::CronSparklines />
+            </div>
+
             // Recent Activity + Quick Actions
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 pt-4">
                 <div class="lg:col-span-2 space-y-6">
