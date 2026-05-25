@@ -1,5 +1,5 @@
 /// Alert level
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AlertLevel {
     /// No alert
     None,
@@ -12,7 +12,7 @@ pub enum AlertLevel {
 }
 
 /// System alert
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SystemAlert {
     /// Alert key (e.g., "system.health")
     pub key: String,

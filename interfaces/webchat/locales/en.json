@@ -55,6 +55,12 @@
     "open_logs": "Open daemon logs",
     "retry_failed": "Reconnect attempt failed — see daemon logs for details."
   },
+  "notifications": {
+    "open_label": "Notifications",
+    "title": "Notifications",
+    "empty": "Nothing to report.",
+    "dismiss_all": "Dismiss all"
+  },
   "dashboard": {
     "title": "System Overview",
     "description": "Command center for your personal AI instance.",

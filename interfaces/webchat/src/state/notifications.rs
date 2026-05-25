@@ -1,0 +1,179 @@
+//! NotificationsState — UI-only projection over `DashboardState.alerts`.
+//!
+//! The data layer already aggregates server-side alerts in
+//! [`DashboardState::alerts`] via the `alerts.**` topic subscription. What's
+//! missing is an aggregate UI surface — a bell with a count badge and a
+//! popover listing every active alert. This module holds the small piece of
+//! UI-private state that surface needs (open/closed, locally-dismissed keys)
+//! and the pure derivations that drive the bell badge + the list.
+//!
+//! Notes on scope:
+//!   * `dismissed` is session-local — we do not RPC the gateway to ack
+//!     alerts. Server-side alerts re-appear if the underlying condition
+//!     persists past reconnect, which is the right behaviour: a stale UI
+//!     dismissal must not mask a real fault.
+//!   * No new gateway event variant is required. Everything reads off the
+//!     existing `RwSignal<HashMap<String, SystemAlert>>`.
+
+use crate::components::sidebar::{AlertLevel, SystemAlert};
+use leptos::prelude::*;
+use std::collections::{HashMap, HashSet};
+
+/// Per-window notification UI state. Provided once in `app.rs`, consumed by
+/// [`crate::components::notification_center::NotificationCenter`].
+#[derive(Copy, Clone)]
+pub struct NotificationsState {
+    /// Popover visibility. Toggled by the bell button.
+    pub is_open: RwSignal<bool>,
+    /// Locally-dismissed alert keys. Cleared on page reload (no persistence).
+    pub dismissed: RwSignal<HashSet<String>>,
+}
+
+impl Default for NotificationsState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NotificationsState {
+    pub fn new() -> Self {
+        Self {
+            is_open: RwSignal::new(false),
+            dismissed: RwSignal::new(HashSet::new()),
+        }
+    }
+}
+
+/// Severity weight for sorting — higher means surfaced earlier.
+fn severity_weight(level: AlertLevel) -> u8 {
+    match level {
+        AlertLevel::Critical => 3,
+        AlertLevel::Warning => 2,
+        AlertLevel::Info => 1,
+        AlertLevel::None => 0,
+    }
+}
+
+/// Filter + sort the alert map into a deterministic list for the popover.
+///
+/// Skips:
+///   * `AlertLevel::None` entries (server may emit them as "cleared" sentinels)
+///   * Keys present in `dismissed`
+///
+/// Order: severity desc, then key asc — so Critical floats to the top and
+/// equal-severity rows have a stable lexicographic order.
+pub fn visible_alerts(
+    alerts: &HashMap<String, SystemAlert>,
+    dismissed: &HashSet<String>,
+) -> Vec<SystemAlert> {
+    let mut out: Vec<SystemAlert> = alerts
+        .values()
+        .filter(|a| a.level != AlertLevel::None)
+        .filter(|a| !dismissed.contains(&a.key))
+        .cloned()
+        .collect();
+    out.sort_by(|a, b| {
+        severity_weight(b.level)
+            .cmp(&severity_weight(a.level))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    out
+}
+
+/// Count of alerts the bell badge should display. Same filter as
+/// [`visible_alerts`] but returns a count to avoid an unnecessary clone in
+/// the hot reactive path (the badge re-renders on every alert update).
+pub fn unread_count(
+    alerts: &HashMap<String, SystemAlert>,
+    dismissed: &HashSet<String>,
+) -> usize {
+    alerts
+        .values()
+        .filter(|a| a.level != AlertLevel::None)
+        .filter(|a| !dismissed.contains(&a.key))
+        .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk(key: &str, level: AlertLevel) -> SystemAlert {
+        SystemAlert {
+            key: key.to_string(),
+            level,
+            count: None,
+            message: None,
+        }
+    }
+
+    #[test]
+    fn empty_map_yields_nothing() {
+        let alerts = HashMap::new();
+        let dismissed = HashSet::new();
+        assert!(visible_alerts(&alerts, &dismissed).is_empty());
+        assert_eq!(unread_count(&alerts, &dismissed), 0);
+    }
+
+    #[test]
+    fn none_level_is_filtered_out() {
+        let mut alerts = HashMap::new();
+        alerts.insert("a".to_string(), mk("a", AlertLevel::None));
+        alerts.insert("b".to_string(), mk("b", AlertLevel::Info));
+        let dismissed = HashSet::new();
+        assert_eq!(unread_count(&alerts, &dismissed), 1);
+        let list = visible_alerts(&alerts, &dismissed);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].key, "b");
+    }
+
+    #[test]
+    fn dismissed_keys_are_skipped() {
+        let mut alerts = HashMap::new();
+        alerts.insert("a".to_string(), mk("a", AlertLevel::Warning));
+        alerts.insert("b".to_string(), mk("b", AlertLevel::Critical));
+        let mut dismissed = HashSet::new();
+        dismissed.insert("b".to_string());
+        let list = visible_alerts(&alerts, &dismissed);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].key, "a");
+        assert_eq!(unread_count(&alerts, &dismissed), 1);
+    }
+
+    #[test]
+    fn sorted_critical_first_then_warning_then_info() {
+        let mut alerts = HashMap::new();
+        alerts.insert("info".to_string(), mk("info", AlertLevel::Info));
+        alerts.insert("crit".to_string(), mk("crit", AlertLevel::Critical));
+        alerts.insert("warn".to_string(), mk("warn", AlertLevel::Warning));
+        let list = visible_alerts(&alerts, &HashSet::new());
+        assert_eq!(
+            list.iter().map(|a| a.key.as_str()).collect::<Vec<_>>(),
+            vec!["crit", "warn", "info"]
+        );
+    }
+
+    #[test]
+    fn equal_severity_sorts_by_key_lex() {
+        let mut alerts = HashMap::new();
+        alerts.insert("zeta".to_string(), mk("zeta", AlertLevel::Warning));
+        alerts.insert("alpha".to_string(), mk("alpha", AlertLevel::Warning));
+        let list = visible_alerts(&alerts, &HashSet::new());
+        assert_eq!(
+            list.iter().map(|a| a.key.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "zeta"]
+        );
+    }
+
+    #[test]
+    fn dismissing_all_reduces_count_to_zero() {
+        let mut alerts = HashMap::new();
+        alerts.insert("a".to_string(), mk("a", AlertLevel::Warning));
+        alerts.insert("b".to_string(), mk("b", AlertLevel::Critical));
+        let mut dismissed = HashSet::new();
+        dismissed.insert("a".to_string());
+        dismissed.insert("b".to_string());
+        assert_eq!(unread_count(&alerts, &dismissed), 0);
+        assert!(visible_alerts(&alerts, &dismissed).is_empty());
+    }
+}

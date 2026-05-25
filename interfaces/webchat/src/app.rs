@@ -23,9 +23,11 @@ use crate::views::usage::UsageView;
 use crate::components::boot_check_gate::BootCheckGate;
 use crate::components::command_palette::CommandPalette;
 use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
+use crate::components::notification_center::NotificationCenter;
 use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::context::{DashboardContext, DashboardState};
 use crate::state::hotkey::{self as hotkey, HotkeyState};
+use crate::state::notifications::NotificationsState;
 use crate::views::chat::ChatState;
 
 #[component]
@@ -56,6 +58,11 @@ fn AppContent() -> impl IntoView {
     let hk = HotkeyState::new();
     provide_context(hk);
     hotkey::install(hk);
+
+    // NotificationCenter UI state — open/closed + dismissed key set. The
+    // data layer (alert subscriptions on DashboardState) is already wired
+    // in `setup_alert_subscriptions()`; this is purely the popover surface.
+    provide_context(NotificationsState::new());
 
     // Esc key: uncollapse sidebar when collapsed. Coexists with the
     // hotkey-installed Esc handler that closes the palette; both only act
@@ -160,6 +167,10 @@ fn AppContent() -> impl IntoView {
                 // so it can call `use_navigate()`; the overlay itself sits
                 // above all shell chrome via z-index.
                 <CommandPalette />
+
+                // Aggregate alert surface — bell + popover anchored top-right.
+                // Reads DashboardState.alerts (already wired via alerts.**).
+                <NotificationCenter />
 
                 // Runtime recovery overlay — engages when the panel was live
                 // but lost the Gateway and exhausted automatic reconnects.

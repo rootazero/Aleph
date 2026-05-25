@@ -12,6 +12,7 @@ pub mod layouts;
 pub mod markdown;
 pub mod mode_sidebar;
 pub mod nav_menu;
+pub mod notification_center;
 pub mod service_blocking_gate;
 pub mod settings_sidebar;
 pub mod sidebar;

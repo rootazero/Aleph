@@ -55,6 +55,12 @@
     "open_logs": "查看核心日志",
     "retry_failed": "重连失败 — 详情请查看核心日志。"
   },
+  "notifications": {
+    "open_label": "通知",
+    "title": "通知",
+    "empty": "暂无通知。",
+    "dismiss_all": "全部清除"
+  },
   "dashboard": {
     "title": "系统概览",
     "description": "您的个人 AI 实例控制中心。",
