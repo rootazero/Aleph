@@ -146,6 +146,11 @@ pub const SPECS: &[RuntimeSpec] = &[
             "Browser automation CLI. Use `playwright-cli -s=<session> <command>`.",
         ),
     },
+    // Cargo / Rust toolchain. Detection-first: if `cargo` is on PATH (user
+    // installed rustup themselves, distro `rust` package, or `nix-shell`), we
+    // use it as-is. Falls back to platform-recommended rustup install when
+    // missing. Bootstrap re-probe relies on `enrich_path_for_reprobe` adding
+    // `$HOME/.cargo/bin` (Unix) or `%USERPROFILE%\.cargo\bin` (Windows) to PATH.
     RuntimeSpec {
         name: "cargo",
         binaries: &["cargo"],
@@ -153,13 +158,36 @@ pub const SPECS: &[RuntimeSpec] = &[
         version_regex: r"cargo (\d+\.\d+\.\d+)",
         min_version: None,
         deps: &[],
-        install: &[],
+        install: &[
+            OsInstall {
+                os: TargetOs::AnyUnix,
+                strategy: InstallStrategy::Shell(
+                    "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal",
+                ),
+            },
+            OsInstall {
+                os: TargetOs::Windows,
+                strategy: InstallStrategy::PowerShell(
+                    "winget install --id Rustlang.Rustup --silent --accept-package-agreements --accept-source-agreements",
+                ),
+            },
+        ],
         post_install: &[],
-        llm_hint: None,
+        llm_hint: Some(
+            "Rust toolchain (cargo). Use `cargo <subcommand>` (build, test, run, fmt, clippy). Installed via rustup; binaries land in `~/.cargo/bin`.",
+        ),
     },
-    // Detection-only: git has no language-native manager; users install via
-    // OS-standard channels (Xcode CLT, apt/dnf, winget). If missing, Aleph
-    // surfaces an actionable error; it does not auto-install.
+    // Git — version control. Detection-first: respects any pre-existing system
+    // git (Xcode CLT, distro package, scoop/winget). Falls back to OS-native
+    // install when missing.
+    //
+    // Caveats:
+    // - macOS without Homebrew triggers Apple's CLT GUI installer (async).
+    //   The shell command returns immediately; re-probe likely fails and the
+    //   user must finish the GUI flow before retrying.
+    // - Linux requires sudo. Aleph inherits the daemon's effective UID; if
+    //   passwordless sudo isn't configured the install will fail and the
+    //   actionable error guides the user to the manual command.
     RuntimeSpec {
         name: "git",
         binaries: &["git"],
@@ -167,10 +195,34 @@ pub const SPECS: &[RuntimeSpec] = &[
         version_regex: r"git version (\d+\.\d+\.\d+)",
         min_version: None,
         deps: &[],
-        install: &[],
+        install: &[
+            OsInstall {
+                os: TargetOs::MacOs,
+                strategy: InstallStrategy::Shell(
+                    "if command -v brew >/dev/null 2>&1; then brew install git; else xcode-select --install >/dev/null 2>&1 || true; fi",
+                ),
+            },
+            OsInstall {
+                os: TargetOs::Linux,
+                strategy: InstallStrategy::Shell(
+                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y git; \
+                     elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y git; \
+                     elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm git; \
+                     elif command -v apk >/dev/null 2>&1; then sudo apk add --no-cache git; \
+                     elif command -v zypper >/dev/null 2>&1; then sudo zypper -n install git; \
+                     else echo 'no supported package manager (apt/dnf/pacman/apk/zypper) on PATH' >&2; exit 1; fi",
+                ),
+            },
+            OsInstall {
+                os: TargetOs::Windows,
+                strategy: InstallStrategy::PowerShell(
+                    "winget install --id Git.Git -e --source winget --silent --accept-package-agreements --accept-source-agreements",
+                ),
+            },
+        ],
         post_install: &[],
         llm_hint: Some(
-            "Git — version control. Use `git <subcommand>` (clone, status, diff, commit, log). Available as a system binary; Aleph does not manage its version.",
+            "Git — version control. Use `git <subcommand>` (clone, status, diff, commit, log). Auto-installed via the platform's native package manager when missing.",
         ),
     },
 ];
@@ -212,11 +264,14 @@ mod tests {
     }
 
     #[test]
-    fn test_git_is_detection_only() {
-        // git has no install strategy — users install it through OS channels.
+    fn test_git_has_install_strategy_on_every_concrete_os() {
+        // git is auto-installable on all three platforms via the OS-native
+        // package manager (xcode-select/brew, apt/dnf/pacman/..., winget).
         let spec = find_spec("git").unwrap();
-        assert!(spec.install.is_empty());
-        assert!(!supported_on_current_os("git"));
+        assert!(!spec.install.is_empty());
+        assert!(select_install(spec.install, TargetOs::MacOs).is_some());
+        assert!(select_install(spec.install, TargetOs::Linux).is_some());
+        assert!(select_install(spec.install, TargetOs::Windows).is_some());
         assert!(spec.llm_hint.is_some());
     }
 
@@ -242,11 +297,9 @@ mod tests {
     #[test]
     fn test_supported_on_current_os_for_real_specs() {
         assert!(supported_on_current_os("fnm"));
-    }
-
-    #[test]
-    fn test_supported_on_current_os_for_cargo_placeholder() {
-        assert!(!supported_on_current_os("cargo"));
+        // cargo and git are auto-installable on every supported OS.
+        assert!(supported_on_current_os("cargo"));
+        assert!(supported_on_current_os("git"));
     }
 
     #[test]

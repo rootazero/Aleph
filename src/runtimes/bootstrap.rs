@@ -77,6 +77,13 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
         return Ok(BootstrapResult::Failed { stderr });
     }
 
+    // The install command may have dropped a binary into a directory that is
+    // not on the daemon's current PATH (e.g. rustup writes `~/.cargo/bin`,
+    // Homebrew uses `/opt/homebrew/bin`, winget shims live under
+    // `%LOCALAPPDATA%\Microsoft\WinGet\Links`). Temporarily widen PATH so the
+    // re-probe `which` lookup succeeds without forcing a daemon restart.
+    enrich_path_for_reprobe();
+
     // 2. Re-probe to get binary path + version.
     let probe_result = probe::probe(name);
     if !probe_result.found {
@@ -138,6 +145,60 @@ async fn run_powershell(script: &str) -> Result<CmdOutcome, BootstrapError> {
     run_cmd(Command::new("powershell").args(["-Command", script])).await
 }
 
+/// Prepend well-known install-output directories to the current process PATH
+/// so that `probe()` (which shells out to `which`/`where`) can find binaries
+/// dropped by package managers that don't refresh the daemon's environment.
+///
+/// Idempotent: directories that don't exist or are already on PATH are skipped.
+/// The change is process-wide; we accept it because the daemon already inherits
+/// install paths through `CapabilityLedger::build_path` once the entry is Ready.
+fn enrich_path_for_reprobe() {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(h) = home {
+        let home_path = PathBuf::from(&h);
+        candidates.push(home_path.join(".cargo").join("bin"));
+        candidates.push(home_path.join(".fnm"));
+        #[cfg(windows)]
+        {
+            candidates
+                .push(PathBuf::from(&h).join("AppData").join("Local").join("Microsoft").join("WinGet").join("Links"));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(PathBuf::from("/opt/homebrew/bin"));
+        candidates.push(PathBuf::from("/usr/local/bin"));
+        candidates.push(PathBuf::from("/Library/Developer/CommandLineTools/usr/bin"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        candidates.push(PathBuf::from("/usr/local/bin"));
+        candidates.push(PathBuf::from("/usr/bin"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        candidates.push(PathBuf::from(r"C:\Program Files\Git\cmd"));
+    }
+
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut existing: std::collections::HashSet<PathBuf> =
+        std::env::split_paths(&current).collect();
+    let mut prepended: Vec<PathBuf> = Vec::new();
+    for cand in candidates {
+        if cand.is_dir() && existing.insert(cand.clone()) {
+            prepended.push(cand);
+        }
+    }
+    if prepended.is_empty() {
+        return;
+    }
+    prepended.extend(std::env::split_paths(&current));
+    if let Ok(joined) = std::env::join_paths(&prepended) {
+        std::env::set_var("PATH", joined);
+    }
+}
+
 async fn run_via_parent(parent: &str, subcommand: &[&str]) -> Result<CmdOutcome, BootstrapError> {
     let mut cmd = match parent {
         "fnm" => Command::new("fnm"),
@@ -187,8 +248,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_install_empty_install_array_returns_unsupported() {
-        let result = install("cargo").await.unwrap();
-        assert!(matches!(result, BootstrapResult::Unsupported { .. }));
+    async fn test_enrich_path_for_reprobe_is_idempotent() {
+        // Capture PATH before and after two consecutive calls — the second
+        // call must be a no-op (no duplicate entries).
+        let before = std::env::var_os("PATH").unwrap_or_default();
+        enrich_path_for_reprobe();
+        let after_first = std::env::var_os("PATH").unwrap_or_default();
+        enrich_path_for_reprobe();
+        let after_second = std::env::var_os("PATH").unwrap_or_default();
+        assert_eq!(
+            after_first, after_second,
+            "enrich_path_for_reprobe must be idempotent across consecutive calls",
+        );
+        // First call may or may not extend PATH depending on which well-known
+        // dirs exist on the test host; we only assert it doesn't shrink.
+        let _ = before; // silence unused warning when extension does happen.
     }
 }

@@ -11,17 +11,19 @@ use std::io::Write;
 use std::sync::Arc;
 
 use alephcore::runtimes::{
-    self, ensure_capability, find_spec, probe, CapabilityLedger, CapabilityStatus,
+    self, ensure_capability, find_spec, CapabilityLedger, CapabilityStatus,
 };
 use tokio::sync::RwLock;
 
 use crate::cli::BootstrapRuntimeArgs;
 
 /// Default target set when neither `--only` nor `--skip` is given.
+///
+/// `cargo` and `git` are install-capable now but intentionally excluded from
+/// the default set — auto-triggering `xcode-select --install` (GUI dialog) or
+/// `sudo apt-get` on every `bootstrap-runtime` invocation is too aggressive.
+/// Users opt in via `--only cargo` / `--only git` or the Panel Install button.
 const DEFAULT_TARGETS: &[&str] = &["uv", "playwright-cli"];
-
-/// Detect-only runtimes — probed but never installed.
-const DETECT_ONLY: &[&str] = &["git", "cargo"];
 
 /// Run the `bootstrap-runtime` subcommand. Returns a POSIX-style exit code.
 pub async fn run(args: BootstrapRuntimeArgs) -> i32 {
@@ -104,12 +106,6 @@ pub async fn run(args: BootstrapRuntimeArgs) -> i32 {
         }
     }
 
-    printer.section("System runtimes (detect-only):");
-    for cap in DETECT_ONLY {
-        let r = probe::probe(cap);
-        printer.detect(cap, r.found, r.version.as_deref());
-    }
-
     printer.summary(&targets, any_failed);
 
     if any_failed && !args.best_effort {
@@ -175,30 +171,6 @@ impl ProgressPrinter {
             for line in err.lines() {
                 eprintln!("    {line}");
             }
-        }
-    }
-
-    fn section(&mut self, title: &str) {
-        if self.quiet || self.json {
-            return;
-        }
-        eprintln!();
-        eprintln!("{title}");
-    }
-
-    fn detect(&mut self, cap: &str, found: bool, version: Option<&str>) {
-        if self.quiet {
-            return;
-        }
-        if self.json {
-            let v = version.unwrap_or("");
-            eprintln!(
-                r#"{{"event":"detect","capability":"{cap}","found":{found},"version":"{v}"}}"#
-            );
-        } else {
-            let mark = if found { "✓" } else { "✗" };
-            let v = version.unwrap_or("(not installed)");
-            eprintln!("  {mark} {cap} {v}");
         }
     }
 

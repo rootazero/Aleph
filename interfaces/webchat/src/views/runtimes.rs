@@ -153,8 +153,9 @@ fn RuntimeCard(info: RuntimeInfo) -> impl IntoView {
                         {move || if installing.get() { "Installing..." } else { "Install" }}
                     </button>
                 })}
-                {(!info.supported_on_current_os).then(|| view! {
-                    <span class="text-xs text-text-tertiary italic">"not supported yet"</span>
+                {(!info.supported_on_current_os
+                    && matches!(info.status, RuntimeStatus::Missing)).then(|| view! {
+                    <span class="text-xs text-text-tertiary italic">"install manually"</span>
                 })}
             </div>
         </div>
