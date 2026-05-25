@@ -78,9 +78,9 @@ fn ChatHero() -> impl IntoView {
             <div class="aleph-rise mb-7" style="animation-delay: 0s">
                 <div class="aleph-hero-orb w-16 h-16 rounded-2xl flex items-center justify-center">
                     // Brand mark — Hebrew aleph, same glyph the app icon uses.
-                    <svg viewBox="0 0 100 100" class="w-12 h-12" xmlns="http://www.w3.org/2000/svg">
-                        <text x="50" y="86"
-                              font-size="104"
+                    <svg viewBox="0 0 100 100" class="w-9 h-9" xmlns="http://www.w3.org/2000/svg">
+                        <text x="50" y="78"
+                              font-size="92"
                               font-family="'Frank Ruhl Libre','David Libre','Times New Roman','Times','Arial Hebrew',serif"
                               text-anchor="middle"
                               fill="white">"\u{05D0}"</text>

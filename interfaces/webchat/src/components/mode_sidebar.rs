@@ -90,7 +90,7 @@ fn SidebarBrand() -> impl IntoView {
             <div class="flex items-center gap-2.5">
                 <div class="aleph-mark w-7 h-7 rounded-xl flex items-center justify-center
                             text-text-inverse">
-                    <span class="text-2xl font-semibold leading-none -mt-0.5">"\u{2135}"</span>
+                    <span class="text-base font-semibold leading-none">"\u{2135}"</span>
                 </div>
                 <span class="text-[15px] font-semibold tracking-tight">"Aleph"</span>
             </div>
