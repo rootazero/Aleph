@@ -70,6 +70,16 @@ pub(in crate::commands::start) fn register_auth_handlers(
         auth_ctx
     );
 
+    // Bootstrap nonce issuer — pairs with the loopback HTTP route
+    // `/auth/bootstrap?nonce=…` to hand the local browser an
+    // authenticated session cookie without showing the user a token.
+    register_handler!(
+        server,
+        "gateway.bootstrap.issue",
+        auth_handlers::handle_gateway_bootstrap_issue,
+        auth_ctx
+    );
+
     // Vault secret CRUD over JSON-RPC. Mirrors `/v1/admin/secrets`
     // so thin clients don't need an HTTP fallback path.
     use alephcore::gateway::handlers::secrets as secrets_handlers;

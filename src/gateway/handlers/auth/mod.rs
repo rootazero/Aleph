@@ -2,6 +2,7 @@
 //!
 //! Handles device authentication, pairing, and connection management.
 
+pub mod bootstrap;
 mod connect;
 mod connect_challenge;
 mod devices;
@@ -34,6 +35,7 @@ pub const SERVER_CAPABILITIES: &[&str] = &[
 ];
 
 // Re-export all public items at their original paths
+pub use bootstrap::handle_gateway_bootstrap_issue;
 pub use connect::handle_connect;
 pub use connect_challenge::handle_connect_challenge;
 pub use devices::{handle_devices_list, handle_devices_revoke};
@@ -204,6 +206,16 @@ pub struct AuthContext {
     /// returned by `gateway.bootstrap.issue` so callers (CLI, Tauri
     /// shell) don't need to know it independently.
     pub bind_port: u16,
+}
+
+impl AuthContext {
+    /// Bind address for loopback URLs (used by the bootstrap-issue
+    /// handler). Always returns `127.0.0.1:<port>` regardless of the
+    /// configured bind address — the issued URL is only valid
+    /// loopback-locally (the consume endpoint enforces this).
+    pub fn public_bind_for_loopback(&self) -> String {
+        format!("127.0.0.1:{}", self.bind_port)
+    }
 }
 
 /// Build a [`HelloSnapshot`] from the live [`AuthContext`].
