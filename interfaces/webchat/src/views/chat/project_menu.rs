@@ -1,24 +1,32 @@
 //! "进入项目工作 ▾" composer affordance.
 //!
-//! Renders a small pill below the textarea. When project mode is inactive
-//! the pill says "进入项目工作 ▾" and opens a dropdown with three actions:
-//! create a blank folder, pick an existing folder, or jump back to a
-//! recent project. Once a project is active the pill shows its name with
-//! a "退出" link so the user can leave project mode cleanly.
+//! Renders a small pill above the textarea. When project mode is inactive
+//! the pill says "进入项目工作 ▾" and opens a dropdown with two actions:
+//! use an existing folder, or create a blank one. Both flows funnel into
+//! the cross-platform [`DirectoryBrowser`] (which talks to the server's
+//! `fs.*` RPCs) so the directory the user picks is **the server's** —
+//! correct for desktop, localhost web, and remote Tailnet web alike.
 //!
-//! The folder/parent picker is owned by the desktop shell (Tauri command
-//! `pick_project_directory`); when the panel runs outside the shell (e.g.
-//! a dev browser tab) the picker is unavailable and the pill falls back
-//! to a path-input prompt.
+//! Once a project is active the pill shows its name with a "×" so the
+//! user can leave project mode cleanly.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use wasm_bindgen::prelude::*;
 
+use crate::api::fs::FsApi;
 use crate::api::projects::{ProjectInfo, ProjectsApi};
+use crate::components::directory_browser::DirectoryBrowser;
 use crate::context::DashboardState;
 
 use super::state::ChatState;
+
+/// Which user action a `DirectoryBrowser` open belongs to. Drives the
+/// modal title and the post-pick callback (`add` vs `create_blank`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BrowserPurpose {
+    PickExisting,
+    NewBlank,
+}
 
 /// Top-level composer accessory. Renders the active-project chip or the
 /// trigger pill that opens the picker dropdown.
@@ -29,8 +37,12 @@ pub fn ProjectMenu() -> impl IntoView {
 
     let menu_open = RwSignal::new(false);
     let recents: RwSignal<Vec<ProjectInfo>> = RwSignal::new(Vec::new());
-    let busy = RwSignal::new(false);
     let last_error: RwSignal<Option<String>> = RwSignal::new(None);
+
+    // DirectoryBrowser modal state. `purpose` decides what happens once
+    // the user confirms a path — register existing, or mkdir + register.
+    let browser_open = RwSignal::new(false);
+    let purpose: RwSignal<BrowserPurpose> = RwSignal::new(BrowserPurpose::PickExisting);
 
     // Refresh the recents list whenever the dropdown opens. Cheap RPC,
     // and we want fresh ordering after every project switch.
@@ -47,72 +59,56 @@ pub fn ProjectMenu() -> impl IntoView {
         });
     });
 
-    let on_pick_existing = move |_| {
-        if busy.get_untracked() {
-            return;
-        }
-        busy.set(true);
+    let open_browser = move |p: BrowserPurpose| {
+        purpose.set(p);
         last_error.set(None);
+        browser_open.set(true);
+        menu_open.set(false);
+    };
+
+    // The DirectoryBrowser fires this with whatever path the user picked.
+    // Branching on `purpose` does the right server-side action.
+    let on_pick = Callback::new(move |path: String| {
         let dash = dashboard;
+        let p = purpose.get_untracked();
         spawn_local(async move {
-            match pick_directory_via_shell(None).await {
-                Ok(Some(path)) => match ProjectsApi::add(&dash, &path, None).await {
+            match p {
+                BrowserPurpose::PickExisting => match ProjectsApi::add(&dash, &path, None).await {
                     Ok(project) => {
                         chat.set_active_project(
                             Some(project.path.clone()),
                             Some(project.name.clone()),
                         );
-                        menu_open.set(false);
                     }
                     Err(e) => last_error.set(Some(e)),
                 },
-                Ok(None) => {}
-                Err(e) => last_error.set(Some(e)),
+                BrowserPurpose::NewBlank => {
+                    // For "new blank", the user picked the *parent*. Ask
+                    // for the project name, then mkdir via fs.create_dir
+                    // (the server validates scope + name shape) and
+                    // register the result.
+                    let name = match prompt_for_project_name() {
+                        Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+                        _ => return,
+                    };
+                    match FsApi::create_dir(&dash, &path, &name).await {
+                        Ok(new_path) => {
+                            match ProjectsApi::add(&dash, &new_path, Some(&name)).await {
+                                Ok(project) => {
+                                    chat.set_active_project(
+                                        Some(project.path.clone()),
+                                        Some(project.name.clone()),
+                                    );
+                                }
+                                Err(e) => last_error.set(Some(e)),
+                            }
+                        }
+                        Err(e) => last_error.set(Some(e)),
+                    }
+                }
             }
-            busy.set(false);
         });
-    };
-
-    let on_create_blank = move |_| {
-        if busy.get_untracked() {
-            return;
-        }
-        busy.set(true);
-        last_error.set(None);
-        let dash = dashboard;
-        spawn_local(async move {
-            let parent = match pick_directory_via_shell(None).await {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    busy.set(false);
-                    return;
-                }
-                Err(e) => {
-                    last_error.set(Some(e));
-                    busy.set(false);
-                    return;
-                }
-            };
-            let name = match prompt_for_project_name() {
-                Some(n) if !n.trim().is_empty() => n.trim().to_string(),
-                _ => {
-                    busy.set(false);
-                    return;
-                }
-            };
-            match ProjectsApi::create_blank(&dash, &parent, &name).await {
-                Ok(project) => {
-                    chat.set_active_project(
-                        Some(project.path.clone()),
-                        Some(project.name.clone()),
-                    );
-                    menu_open.set(false);
-                }
-                Err(e) => last_error.set(Some(e)),
-            }
-            busy.set(false);
-        });
-    };
+    });
 
     let on_exit_project = move |_| {
         chat.set_active_project(None, None);
@@ -168,6 +164,15 @@ pub fn ProjectMenu() -> impl IntoView {
         list.into_iter().take(8).collect::<Vec<ProjectInfo>>()
     };
 
+    let modal_title = move || match purpose.get() {
+        BrowserPurpose::PickExisting => "使用现有文件夹".to_string(),
+        BrowserPurpose::NewBlank => "新建空白项目 — 选择父目录".to_string(),
+    };
+    let modal_confirm = move || match purpose.get() {
+        BrowserPurpose::PickExisting => "选择此目录".to_string(),
+        BrowserPurpose::NewBlank => "在此处新建".to_string(),
+    };
+
     view! {
         <div class="aleph-project-menu relative inline-flex items-center text-xs leading-tight">
             <Show
@@ -188,18 +193,16 @@ pub fn ProjectMenu() -> impl IntoView {
                 >
                     <button
                         type="button"
-                        class="w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-surface-sunken disabled:opacity-50"
-                        disabled=move || busy.get()
-                        on:click=on_create_blank
+                        class="w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-surface-sunken"
+                        on:click=move |_| open_browser(BrowserPurpose::NewBlank)
                     >
                         <span class="text-text-tertiary">"+"</span>
                         <span>"新建空白项目"</span>
                     </button>
                     <button
                         type="button"
-                        class="w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-surface-sunken disabled:opacity-50"
-                        disabled=move || busy.get()
-                        on:click=on_pick_existing
+                        class="w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-surface-sunken"
+                        on:click=move |_| open_browser(BrowserPurpose::PickExisting)
                     >
                         <span class="text-text-tertiary">"\u{1F4C2}"</span>
                         <span>"使用现有文件夹"</span>
@@ -249,65 +252,23 @@ pub fn ProjectMenu() -> impl IntoView {
                     </Show>
                 </div>
             </Show>
+
+            // Cross-platform directory picker — opens for both
+            // BrowserPurpose variants; `on_pick` branches on the active
+            // purpose to decide what to do with the chosen path.
+            <DirectoryBrowser
+                open=browser_open
+                on_pick=on_pick
+                title=Signal::derive(modal_title)
+                confirm_label=Signal::derive(modal_confirm)
+            />
         </div>
     }
 }
 
-// ---------------------------------------------------------------------------
-// JS bridge — `window.alephShell.*` is injected by the Tauri shell. When
-// running outside the shell (browser tab) the methods are absent; we fall
-// back to `window.prompt` so devs can still smoke-test the flow.
-// ---------------------------------------------------------------------------
-
-async fn pick_directory_via_shell(default_path: Option<String>) -> Result<Option<String>, String> {
-    use js_sys::{Object, Reflect};
-
-    let window = web_sys::window().ok_or_else(|| "no global window".to_string())?;
-    let shell = Reflect::get(&window, &JsValue::from_str("alephShell"))
-        .unwrap_or(JsValue::UNDEFINED);
-    let pick_handle = if shell.is_undefined() || shell.is_null() {
-        None
-    } else {
-        // Shell exists but may be an older build without pickDirectory —
-        // treat that as "no native picker" rather than a hard error so the
-        // user still gets the prompt fallback instead of a silent dropdown.
-        match Reflect::get(&shell, &JsValue::from_str("pickDirectory")) {
-            Ok(v) if !v.is_undefined() && !v.is_null() && v.is_function() => Some(v),
-            _ => None,
-        }
-    };
-    let Some(pick) = pick_handle else {
-        return Ok(window
-            .prompt_with_message_and_default(
-                "Project folder absolute path:",
-                default_path.as_deref().unwrap_or(""),
-            )
-            .ok()
-            .flatten()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()));
-    };
-    let opts = Object::new();
-    if let Some(default) = default_path.as_deref() {
-        let _ = Reflect::set(
-            &opts,
-            &JsValue::from_str("defaultPath"),
-            &JsValue::from_str(default),
-        );
-    }
-    let promise = js_sys::Function::from(pick)
-        .call1(&shell, &opts)
-        .map_err(|e| format!("pickDirectory call failed: {e:?}"))?;
-    let promise = js_sys::Promise::from(promise);
-    let resolved = wasm_bindgen_futures::JsFuture::from(promise)
-        .await
-        .map_err(|e| format!("pickDirectory rejected: {e:?}"))?;
-    if resolved.is_null() || resolved.is_undefined() {
-        return Ok(None);
-    }
-    Ok(resolved.as_string())
-}
-
+/// Native `window.prompt` for the project name. We deliberately keep
+/// this as the only browser-native dialog — it's a single short string,
+/// and writing a Leptos modal for it would be 60 lines for a 1-line UX.
 fn prompt_for_project_name() -> Option<String> {
     web_sys::window()?
         .prompt_with_message_and_default("New project name:", "untitled")

@@ -1439,6 +1439,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let project_store = Arc::new(alephcore::projects::ProjectStore::new());
     register_projects_handlers(&mut server, &project_store, args.daemon);
 
+    // Cross-platform directory-browse RPCs that back the Panel's
+    // `<DirectoryBrowser />`. Gated by `[projects].allowed_roots` (default
+    // `["~"]`) so every channel — Tauri webview, localhost web, remote
+    // Tailnet web — picks the *server's* directories, not its own laptop.
+    register_fs_handlers(&mut server, &app_config, args.daemon);
+
     // Agent management (agent_manager created earlier for tool config sharing)
     register_agents_handlers(&mut server, &agent_manager, &event_bus);
 

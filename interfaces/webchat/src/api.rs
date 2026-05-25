@@ -19,6 +19,7 @@ pub mod browser;
 pub mod config;
 pub mod discord;
 pub mod embedding;
+pub mod fs;
 pub mod generation_providers;
 pub mod logs;
 pub mod mcp;

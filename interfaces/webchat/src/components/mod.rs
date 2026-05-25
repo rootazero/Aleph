@@ -7,6 +7,7 @@ pub mod chat_sidebar;
 pub mod command_palette;
 pub mod connection_status;
 pub mod dashboard_sidebar;
+pub mod directory_browser;
 pub mod forms;
 pub mod layouts;
 pub mod markdown;

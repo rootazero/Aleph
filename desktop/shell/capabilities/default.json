@@ -1,15 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Surface the shell exposes to the Panel webview. `core:window:allow-start-dragging` is required for the macOS overlay-titlebar drag strip. The two project picker permissions are defined in `permissions/projects.toml` and back the Panel's \"进入项目工作\" flow — they live in the shell because NSOpenPanel must be presented from the UI process that owns the window. The `remote` block extends every permission to the Panel's loopback origin (http://127.0.0.1:18790, served by the daemon); without it Tauri does NOT inject `__TAURI_INTERNALS__` for remote origins and the picker runtime fails silently.",
+  "description": "Surface the shell exposes to the Panel webview. `core:window:allow-start-dragging` is required for the macOS overlay-titlebar drag strip. The shell no longer exposes any custom Tauri commands — the directory picker and project creation flows route through the gateway's `fs.*` / `projects.*` JSON-RPC instead, which works identically for desktop, localhost web, and remote Tailnet web (R6 — one core, many channels).",
   "windows": ["main"],
   "remote": {
     "urls": ["http://127.0.0.1:18790/*"]
   },
   "permissions": [
     "core:default",
-    "core:window:allow-start-dragging",
-    "allow-pick-project-directory",
-    "allow-create-project-directory"
+    "core:window:allow-start-dragging"
   ]
 }

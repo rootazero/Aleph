@@ -210,6 +210,11 @@ pub struct Config {
     /// Mid-run trajectory resume — boot-scan auto-resume of interrupted runs.
     #[serde(default)]
     pub resume: crate::config::types::ResumeConfig,
+    /// Project-selection filesystem scope — drives the cross-platform
+    /// `<DirectoryBrowser />` (Panel) and `fs.*` RPCs. The roots listed here
+    /// are the only directories a paired client can traverse / mkdir into.
+    #[serde(default)]
+    pub projects: crate::config::types::ProjectsConfig,
     /// Presets override loaded from ~/.aleph/presets.toml
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
@@ -407,6 +412,7 @@ impl Default for Config {
             fallback_provider: None,
             context_budget: None,
             resume: crate::config::types::ResumeConfig::default(),
+            projects: crate::config::types::ProjectsConfig::default(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
             prompts_override: crate::config::prompts_override::PromptsOverride::default(),
             defaults_override: crate::config::defaults_override::DefaultsOverride::default(),

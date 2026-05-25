@@ -104,6 +104,34 @@ pub(in crate::commands::start) fn register_projects_handlers(
     }
 }
 
+// ─── register_fs_handlers ────────────────────────────────────────────────────
+
+/// Wire the cross-platform directory-browse RPCs (`fs.*`) used by the
+/// Panel's `<DirectoryBrowser />`. Scope is gated by
+/// `[projects].allowed_roots`; see `gateway::handlers::fs` for safety
+/// surface details.
+pub(in crate::commands::start) fn register_fs_handlers(
+    server: &mut GatewayServer,
+    config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
+    daemon: bool,
+) {
+    use alephcore::gateway::handlers::fs as fs_handlers;
+
+    register_handler!(server, "fs.allowed_roots", fs_handlers::handle_allowed_roots, config);
+    register_handler!(server, "fs.home_dir", fs_handlers::handle_home_dir);
+    register_handler!(server, "fs.list_dir", fs_handlers::handle_list_dir, config);
+    register_handler!(server, "fs.create_dir", fs_handlers::handle_create_dir, config);
+
+    if !daemon {
+        println!("Filesystem-browse methods (scoped by [projects].allowed_roots):");
+        println!("  - fs.allowed_roots : List configured browseable roots");
+        println!("  - fs.home_dir      : Server's $HOME (for default start path)");
+        println!("  - fs.list_dir      : List subdirectories + files at a path");
+        println!("  - fs.create_dir    : Create a subdirectory inside an allowed root");
+        println!();
+    }
+}
+
 // ─── register_config_handlers ────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]

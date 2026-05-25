@@ -65,6 +65,7 @@ pub mod events;
 pub mod exec_approvals;
 pub mod execution_config;
 pub mod flow_admin;
+pub mod fs;
 pub mod gateway_credentials;
 pub mod gateway_identity;
 pub mod gateway_metrics;

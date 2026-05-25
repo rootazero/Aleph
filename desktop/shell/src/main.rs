@@ -35,91 +35,24 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// ride out a brief stall, short enough to recover quickly.
 const FAILURES_TO_DECLARE_DOWN: u32 = 3;
 
-/// Injected into every document the webview loads (splash and Panel). It
-/// marks the page as shell-hosted, and on macOS records the platform so the
-/// Panel's CSS can adapt — leave room for the overlay traffic lights, let
-/// its translucent theme show the vibrancy material through.
+/// Injected into every document the webview loads (splash and Panel).
+/// Marks the page as shell-hosted, and on macOS records the platform so
+/// the Panel's CSS can adapt — leave room for the overlay traffic
+/// lights, let its translucent theme show the vibrancy material through.
 ///
-/// It also publishes `window.alephShell` — a tiny stable surface the Panel
-/// (Leptos WASM) uses to invoke shell-owned native APIs (folder picker, new
-/// project bootstrap). Without this shim the Panel would need to ship its
-/// own `@tauri-apps/api` bundle just to call `__TAURI_INTERNALS__.invoke`.
+/// The `alephShell.pickDirectory` / `alephShell.createProjectDirectory`
+/// bridge that used to live here was removed: the directory picker now
+/// browses the *server's* filesystem via JSON-RPC (`fs.*`), which is the
+/// only correct semantics for the remote/Tailnet case (R6 — one core,
+/// many channels). The Tauri `pick_project_directory` /
+/// `create_project_directory` commands + `tauri-plugin-dialog` dep are
+/// gone along with it.
 #[cfg(target_os = "macos")]
 const SHELL_MARKER_JS: &str = "var e=document.documentElement;\
     e.setAttribute('data-shell','aleph-tauri');\
-    e.setAttribute('data-platform','macos');\
-    if(window.__TAURI_INTERNALS__&&!window.alephShell){window.alephShell={\
-        pickDirectory:(opts)=>window.__TAURI_INTERNALS__.invoke('pick_project_directory',{defaultPath:(opts&&opts.defaultPath)||null}),\
-        createProjectDirectory:(parent,name)=>window.__TAURI_INTERNALS__.invoke('create_project_directory',{parent:parent,name:name})};}";
+    e.setAttribute('data-platform','macos');";
 #[cfg(not(target_os = "macos"))]
-const SHELL_MARKER_JS: &str = "document.documentElement.setAttribute('data-shell','aleph-tauri');\
-    if(window.__TAURI_INTERNALS__&&!window.alephShell){window.alephShell={\
-        pickDirectory:(opts)=>window.__TAURI_INTERNALS__.invoke('pick_project_directory',{defaultPath:(opts&&opts.defaultPath)||null}),\
-        createProjectDirectory:(parent,name)=>window.__TAURI_INTERNALS__.invoke('create_project_directory',{parent:parent,name:name})};}";
-
-/// Open the native folder picker. Returns the selected absolute path, or
-/// `None` if the user cancelled. The Panel calls this from the "进入项目
-/// 工作 → 使用现有文件夹 / 新建空白项目 (parent picker)" flows.
-///
-/// Lives in the shell rather than the daemon because NSOpenPanel /
-/// IFileOpenDialog must be presented from the UI process that owns the
-/// window context — the headless `aleph-server` cannot drive these.
-#[tauri::command]
-async fn pick_project_directory(
-    app: tauri::AppHandle,
-    default_path: Option<String>,
-) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
-
-    let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
-    let mut builder = app.dialog().file();
-    if let Some(p) = default_path.and_then(|s| {
-        let path = std::path::PathBuf::from(s);
-        if path.is_dir() { Some(path) } else { None }
-    }) {
-        builder = builder.set_directory(p);
-    }
-    builder.pick_folder(move |result| {
-        // `tauri-plugin-dialog` returns `FilePath` (a thin enum). We need
-        // the on-disk absolute path; `into_path()` collapses both variants
-        // into a PathBuf or fails for unsupported schemes.
-        let resolved = result.and_then(|fp| fp.into_path().ok());
-        let _ = tx.send(resolved);
-    });
-    let picked = rx.await.map_err(|e| e.to_string())?;
-    Ok(picked.map(|p| p.to_string_lossy().into_owned()))
-}
-
-/// Materialise a fresh empty project directory inside `parent` and return
-/// its absolute path. Used by "进入项目工作 → 新建空白项目" after the user
-/// picks the parent folder and types a name.
-///
-/// Path validation lives in `crate::projects::ProjectStore::create_blank`
-/// on the daemon side; this command is purely an OS `mkdir`. Returning the
-/// created path lets the Panel immediately register it via `projects.add`.
-#[tauri::command]
-async fn create_project_directory(
-    parent: String,
-    name: String,
-) -> Result<String, String> {
-    let parent_path = std::path::PathBuf::from(&parent);
-    if !parent_path.is_absolute() {
-        return Err(format!("parent must be absolute: {parent}"));
-    }
-    if !parent_path.is_dir() {
-        return Err(format!("parent is not a directory: {parent}"));
-    }
-    let trimmed = name.trim();
-    if trimmed.is_empty() || trimmed.contains(std::path::MAIN_SEPARATOR) {
-        return Err(format!("invalid project name: {name}"));
-    }
-    let target = parent_path.join(trimmed);
-    if target.exists() {
-        return Err(format!("already exists: {}", target.display()));
-    }
-    std::fs::create_dir_all(&target).map_err(|e| format!("mkdir failed: {e}"))?;
-    Ok(target.to_string_lossy().into_owned())
-}
+const SHELL_MARKER_JS: &str = "document.documentElement.setAttribute('data-shell','aleph-tauri');";
 
 /// The window-geometry facets the shell persists across restarts. Visibility
 /// stays out of it — the shell drives that itself (hidden until the daemon
@@ -176,12 +109,11 @@ fn main() {
         // summon hotkey — all pure OS integration.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![
-            pick_project_directory,
-            create_project_directory,
-        ])
+        // No `invoke_handler` — every panel-facing operation now goes
+        // through the gateway's JSON-RPC (see `fs.*` for directory
+        // browsing, `projects.*` for the catalogue). The shell stays
+        // pure UI: window, tray, updater, hotkey.
         // Shared update state: the background checker, the tray, and the
         // macOS menu all read it.
         .manage(update::Updater::default());
