@@ -292,36 +292,11 @@ impl DashboardState {
 
     /// Authenticate with the gateway after WebSocket connection is established
     async fn authenticate(&self) -> Result<(), String> {
-        // Extract ?token= from URL and store as shared token (auto-login via URL)
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Some(window) = web_sys::window() {
-                if let Ok(search) = window.location().search() {
-                    if let Some(token) =
-                        search.trim_start_matches('?').split('&').find_map(|pair| {
-                            let mut parts = pair.splitn(2, '=');
-                            if parts.next() == Some("token") {
-                                parts.next().map(|v| v.to_string())
-                            } else {
-                                None
-                            }
-                        })
-                    {
-                        if !token.is_empty() {
-                            set_local_storage("aleph_shared_token", &token);
-                            // Clean URL to remove token from address bar
-                            let _ = window.history().and_then(|h| {
-                                h.replace_state_with_url(
-                                    &wasm_bindgen::JsValue::NULL,
-                                    "",
-                                    Some("/"),
-                                )
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        // Auth is delivered via the `aleph_session` HttpOnly cookie set by
+        // `/auth/bootstrap` (loopback handoff from the desktop shell) or
+        // `/auth/bootstrap/from_pairing` (cold-browser pairing). The Phase 1
+        // `?token=` URL-param fallback was removed in Phase 4 — the cookie
+        // is now the only inbound auth surface for the Panel.
 
         // Try stored device token first
         if let Some(token) = get_local_storage("aleph_device_token") {
@@ -619,11 +594,13 @@ impl DashboardState {
                         Err(e.clone())
                     }
                     Err(e) => {
-                        // Auth failed — redirect to login page
+                        // Auth failed — redirect to the browser-pairing
+                        // page (the legacy `/login` token-paste form was
+                        // removed in Phase 4 of the auth UX overhaul).
                         #[cfg(target_arch = "wasm32")]
                         {
                             if let Some(window) = web_sys::window() {
-                                let _ = window.location().set_href("/login");
+                                let _ = window.location().set_href("/pair");
                             }
                         }
                         Err(e)
