@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <!--
-    Aleph icon — pure-glyph variant.
+    Aleph icon — pure-glyph variant (canonical raster source for icon.png/icns/ico).
     Source design: aleph_brand_identity.tsx — the Hebrew letter as the sole symbol
     ("起源 / 万物之始 / 一切计算与逻辑的基石").
-    Maximum legibility at every size; cyan ambient halo replaces the pyramid frame.
-    Colors: Void Black #050508, Emergent Cyan #22d3ee.
+    Inner glyph enlarged 2026-05-25 so that visible 'א' fills ~66% of the 1024 frame
+    (was ~52%), giving the mark proper visual weight in dock, menubar, taskbar and
+    shortcut-icon contexts. Colors: Void Black #050508, Emergent Cyan #22d3ee.
   -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -13,20 +14,20 @@
       <stop offset="100%" stop-color="#050508"/>
     </linearGradient>
 
-    <radialGradient id="halo" cx="50%" cy="52%" r="55%">
-      <stop offset="0%"   stop-color="#22d3ee" stop-opacity="0.42"/>
-      <stop offset="55%"  stop-color="#22d3ee" stop-opacity="0.08"/>
+    <radialGradient id="halo" cx="50%" cy="50%" r="60%">
+      <stop offset="0%"   stop-color="#22d3ee" stop-opacity="0.46"/>
+      <stop offset="55%"  stop-color="#22d3ee" stop-opacity="0.10"/>
       <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
     </radialGradient>
 
     <radialGradient id="alephCore" cx="50%" cy="50%" r="50%">
-      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.55"/>
-      <stop offset="55%"  stop-color="#22d3ee" stop-opacity="0.18"/>
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.60"/>
+      <stop offset="55%"  stop-color="#22d3ee" stop-opacity="0.20"/>
       <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
     </radialGradient>
 
     <filter id="softGlow" x="-25%" y="-25%" width="150%" height="150%">
-      <feGaussianBlur stdDeviation="14"/>
+      <feGaussianBlur stdDeviation="16"/>
     </filter>
   </defs>
 
@@ -37,23 +38,23 @@
   <rect x="4" y="4" width="1016" height="1016" rx="226" ry="226"
         fill="none" stroke="#22d3ee" stroke-opacity="0.12" stroke-width="2"/>
 
-  <!-- Ambient cyan halo -->
-  <circle cx="512" cy="532" r="460" fill="url(#halo)"/>
+  <!-- Ambient cyan halo, sized for the bigger glyph -->
+  <circle cx="512" cy="512" r="500" fill="url(#halo)"/>
 
-  <!-- Inner glyph glow -->
-  <circle cx="512" cy="532" r="280" fill="url(#alephCore)"/>
+  <!-- Inner glyph glow follows the larger letter footprint -->
+  <circle cx="512" cy="512" r="340" fill="url(#alephCore)"/>
 
   <!-- Hebrew aleph — large, dominant. Glow + crisp pass for depth. -->
-  <text x="512" y="710"
-        font-size="720"
+  <text x="512" y="825"
+        font-size="900"
         font-family="'Frank Ruhl Libre','David Libre','Times New Roman','Times','Arial Hebrew',serif"
         text-anchor="middle"
         fill="#ffffff"
-        opacity="0.28"
+        opacity="0.30"
         filter="url(#softGlow)">א</text>
 
-  <text x="512" y="710"
-        font-size="720"
+  <text x="512" y="825"
+        font-size="900"
         font-family="'Frank Ruhl Libre','David Libre','Times New Roman','Times','Arial Hebrew',serif"
         text-anchor="middle"
         fill="#ffffff">א</text>
