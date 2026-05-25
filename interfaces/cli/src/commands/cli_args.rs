@@ -1022,13 +1022,22 @@ pub(crate) enum DevicesAction {
 
 #[derive(Subcommand)]
 pub(crate) enum AuthAction {
-    /// Display the current shared access token
+    /// Display the current shared access token (legacy — prefer `aleph open`
+    /// or the desktop app; use `aleph auth debug show-token` for break-glass).
+    #[command(hide = true)]
     ShowToken,
-    /// Regenerate the shared token (invalidates all sessions)
+    /// Regenerate the shared token, invalidating all sessions (legacy —
+    /// use `aleph auth debug reset-token`).
+    #[command(hide = true)]
     ResetToken {
         /// Skip the interactive confirmation prompt
         #[arg(short, long)]
         yes: bool,
+    },
+    /// Debug surfaces (token introspection, regeneration) for developers.
+    Debug {
+        #[command(subcommand)]
+        action: AuthDebugAction,
     },
     /// List active HTTP sessions
     Sessions,
@@ -1051,6 +1060,18 @@ pub(crate) enum AuthAction {
     OauthStatus {
         /// Provider key (e.g. `chatgpt`)
         provider: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AuthDebugAction {
+    /// Show the access token (developer / break-glass use only).
+    ShowToken,
+    /// Reset (regenerate) the access token, invalidating all sessions.
+    ResetToken {
+        /// Skip the interactive confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
     },
 }
 

@@ -27,12 +27,12 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use aleph_client::{CliConfig, CliResult};
 
 use commands::cli_args::{
-    AuthAction, CallsAction, ChannelsAction, ChatControlAction, Commands, ConfigAction, CronAction,
-    DaemonAction, DevicesAction, GatewayAction, HeartbeatAction, HooksAction, IdentityAction,
-    LogsAction, MarketplaceAction, McpAction, MemoryAction, ModelsAction, PairingAction,
-    PluginAction, ProvidersAction, ProxyAction, SandboxAction, SecretAction, ServicesAction,
-    SessionAction, SkillsAction, ToolsAction, TraceAction, VaultAction, WebhookAction,
-    WorkspaceAction,
+    AuthAction, AuthDebugAction, CallsAction, ChannelsAction, ChatControlAction, Commands,
+    ConfigAction, CronAction, DaemonAction, DevicesAction, GatewayAction, HeartbeatAction,
+    HooksAction, IdentityAction, LogsAction, MarketplaceAction, McpAction, MemoryAction,
+    ModelsAction, PairingAction, PluginAction, ProvidersAction, ProxyAction, SandboxAction,
+    SecretAction, ServicesAction, SessionAction, SkillsAction, ToolsAction, TraceAction,
+    VaultAction, WebhookAction, WorkspaceAction,
 };
 
 /// Aleph CLI - Personal AI Assistant Client
@@ -230,8 +230,27 @@ async fn dispatch_devices(
 async fn dispatch_auth(server_url: &str, action: AuthAction, json: bool) -> CliResult<()> {
     use commands::auth_cmd;
     match action {
-        AuthAction::ShowToken => auth_cmd::show_token(server_url, json).await,
-        AuthAction::ResetToken { yes } => auth_cmd::reset_token(server_url, yes, json).await,
+        AuthAction::ShowToken => {
+            eprintln!(
+                "warning: `aleph auth show-token` is deprecated; \
+                 use `aleph open` or the desktop app. \
+                 For break-glass debugging, use `aleph auth debug show-token`."
+            );
+            auth_cmd::show_token(server_url, json).await
+        }
+        AuthAction::ResetToken { yes } => {
+            eprintln!(
+                "warning: `aleph auth reset-token` is deprecated; \
+                 use `aleph auth debug reset-token`."
+            );
+            auth_cmd::reset_token(server_url, yes, json).await
+        }
+        AuthAction::Debug { action } => match action {
+            AuthDebugAction::ShowToken => auth_cmd::show_token(server_url, json).await,
+            AuthDebugAction::ResetToken { yes } => {
+                auth_cmd::reset_token(server_url, yes, json).await
+            }
+        },
         AuthAction::Sessions => auth_cmd::sessions(server_url, json).await,
         AuthAction::RevokeSession { session_id } => {
             auth_cmd::revoke_session(server_url, &session_id, json).await
@@ -1049,6 +1068,25 @@ mod tests {
         assert!(Cli::try_parse_from(["aleph", "auth", "revoke-session", "abc"]).is_ok());
         // revoke-session requires an id
         assert!(Cli::try_parse_from(["aleph", "auth", "revoke-session"]).is_err());
+    }
+
+    #[test]
+    fn parses_auth_debug_show_token() {
+        assert!(Cli::try_parse_from(["aleph", "auth", "debug", "show-token"]).is_ok());
+    }
+
+    #[test]
+    fn parses_auth_debug_reset_token() {
+        assert!(Cli::try_parse_from(["aleph", "auth", "debug", "reset-token"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "auth", "debug", "reset-token", "--yes"]).is_ok());
+    }
+
+    #[test]
+    fn legacy_auth_show_token_still_parses_but_is_hidden() {
+        // Backward compat: existing scripts using `aleph auth show-token` must
+        // still work for one release cycle, but the variant is hidden from help.
+        assert!(Cli::try_parse_from(["aleph", "auth", "show-token"]).is_ok());
+        assert!(Cli::try_parse_from(["aleph", "auth", "reset-token"]).is_ok());
     }
 
     #[test]
