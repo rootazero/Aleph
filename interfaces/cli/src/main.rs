@@ -1,9 +1,4 @@
-//! Aleph CLI - Reference Implementation of Aleph Protocol Client
-//!
-//! This CLI demonstrates how to build a client that communicates with
-//! Aleph Gateway using only the protocol types from `aleph-protocol`.
-//!
-//! ## Architecture
+//! Aleph CLI — reference implementation of the Aleph protocol client.
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────┐
@@ -17,15 +12,27 @@
 //!                                 ↓
 //!                         Aleph Gateway Server
 //! ```
+//!
+//! The CLI is intentionally a thin I/O layer (R4): every subcommand is a
+//! straight argv → JSON-RPC translation followed by response rendering. No
+//! business logic lives here; that all sits behind the gateway.
 
 mod commands;
 pub(crate) mod output;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
+use aleph_client::{CliConfig, CliResult};
+
+use commands::cli_args::{
+    CallsAction, ChannelsAction, ChatControlAction, Commands, ConfigAction, CronAction,
+    DaemonAction, GatewayAction, HeartbeatAction, IdentityAction, LogsAction, MarketplaceAction,
+    McpAction, MemoryAction, ModelsAction, PluginAction, ProvidersAction, SandboxAction,
+    ServicesAction, SessionAction, SkillsAction, ToolsAction, TraceAction, VaultAction,
+    WorkspaceAction,
+};
 
 /// Aleph CLI - Personal AI Assistant Client
 #[derive(Parser)]
@@ -52,810 +59,13 @@ pub(crate) struct Cli {
     command: Option<Commands>,
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Start interactive chat session
-    Chat {
-        /// Session key (creates new if not specified)
-        #[arg(short, long)]
-        session: Option<String>,
-
-        /// Agent name to bind this session to
-        #[arg(short, long)]
-        agent: Option<String>,
-    },
-
-    /// Send a single message and get response
-    Ask {
-        /// The message to send
-        message: String,
-
-        /// Session key
-        #[arg(short, long, conflicts_with = "last")]
-        session: Option<String>,
-
-        /// Resume the most recently active session (by `last_active_at`)
-        #[arg(long, conflicts_with = "session")]
-        last: bool,
-
-        /// Write the final agent message to FILE (codex-parity `-o`)
-        #[arg(short = 'o', long = "output-last-message", value_name = "FILE")]
-        output_last_message: Option<String>,
-    },
-
-    /// Check server health
-    Health,
-
-    /// List available tools
-    Tools {
-        /// Filter by category
-        #[arg(short, long)]
-        category: Option<String>,
-    },
-
-    /// Inspect or cancel in-flight tool calls (per-tool AbortSignal RPC)
-    Calls {
-        #[command(subcommand)]
-        action: CallsAction,
-    },
-
-    /// Manage sessions
-    Session {
-        #[command(subcommand)]
-        action: SessionAction,
-    },
-
-    /// Manage guest invitations and permissions
-    Guests {
-        #[command(subcommand)]
-        action: commands::guests::GuestsAction,
-    },
-
-    /// Show server information
-    Info,
-
-    /// Connect and authenticate with the server
-    Connect {
-        /// Device name for this client
-        #[arg(short, long, default_value = "aleph-cli")]
-        device: String,
-    },
-
-    /// Manage configuration
-    Config {
-        #[command(subcommand)]
-        action: ConfigAction,
-    },
-
-    /// Manage cron jobs
-    Cron {
-        #[command(subcommand)]
-        action: CronAction,
-    },
-
-    /// Manage channels
-    Channels {
-        #[command(subcommand)]
-        action: ChannelsAction,
-    },
-
-    /// Manage Gateway daemon
-    Daemon {
-        #[command(subcommand)]
-        action: DaemonAction,
-    },
-
-    /// Call any Gateway RPC method directly
-    Gateway {
-        #[command(subcommand)]
-        action: GatewayAction,
-    },
-
-    /// AI provider management
-    Providers {
-        #[command(subcommand)]
-        action: ProvidersAction,
-    },
-
-    /// Model management
-    Models {
-        #[command(subcommand)]
-        action: ModelsAction,
-    },
-
-    /// Memory management
-    Memory {
-        #[command(subcommand)]
-        action: MemoryAction,
-    },
-
-    /// Plugin management — lifecycle, dev tools, and marketplace
-    Plugin {
-        #[command(subcommand)]
-        action: PluginAction,
-    },
-
-    /// Plugin lifecycle management (server-connected) [deprecated: use 'plugin']
-    #[command(hide = true)]
-    Plugins {
-        #[command(subcommand)]
-        action: PluginsAction,
-    },
-
-    /// Background service management
-    Services {
-        #[command(subcommand)]
-        action: ServicesAction,
-    },
-
-    /// Skill management (file-based and markdown)
-    Skills {
-        #[command(subcommand)]
-        action: SkillsAction,
-    },
-
-    /// Workspace management
-    Workspace {
-        #[command(subcommand)]
-        action: WorkspaceAction,
-    },
-
-    /// Log management
-    Logs {
-        #[command(subcommand)]
-        action: LogsAction,
-    },
-
-    /// Structured trace replay inspection
-    Trace {
-        #[command(subcommand)]
-        action: TraceAction,
-    },
-
-    /// Identity/soul management
-    Identity {
-        #[command(subcommand)]
-        action: IdentityAction,
-    },
-
-    /// Vault key management
-    Vault {
-        #[command(subcommand)]
-        action: VaultAction,
-    },
-
-    /// Chat control (send, abort, history, clear)
-    #[command(name = "chat-control")]
-    ChatControl {
-        #[command(subcommand)]
-        action: ChatControlAction,
-    },
-
-    /// MCP tool approval workflow
-    Mcp {
-        #[command(subcommand)]
-        action: McpAction,
-    },
-
-    /// Run a command under Aleph's sandbox (forwards to aleph-server sandbox-debug)
-    Sandbox {
-        #[command(subcommand)]
-        action: SandboxAction,
-    },
-
-    /// Diagnose installation, config, gateway, providers, MCP and sandbox
-    Doctor,
-
-    /// Generate shell completion script
-    Completion {
-        /// Shell type (bash, zsh, fish, elvish, powershell)
-        #[arg(value_enum)]
-        shell: clap_complete::Shell,
-    },
-}
-
-#[derive(Subcommand)]
-enum ConfigAction {
-    /// Print config file path
-    File,
-    /// Get configuration (optionally by section: gateway, agents, channels, etc.)
-    Get {
-        /// Config section name (e.g., gateway, agents, channels)
-        section: Option<String>,
-    },
-    /// Set a configuration value
-    Set {
-        /// Dot-separated config path (e.g., gateway.port)
-        path: String,
-        /// Value to set (JSON or plain string)
-        value: String,
-    },
-    /// Validate current configuration
-    Validate,
-    /// Reload configuration on the server
-    Reload,
-    /// Export configuration schema
-    Schema {
-        /// Output file path (prints to stdout if not specified)
-        #[arg(short, long)]
-        output: Option<String>,
-    },
-    /// Open config file in $EDITOR
-    Edit,
-}
-
-#[derive(Subcommand)]
-enum CronAction {
-    /// List all cron jobs
-    List,
-    /// Show cron scheduler status
-    Status,
-    /// Trigger a cron job manually
-    Run {
-        /// Job ID to trigger
-        job_id: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum ChannelsAction {
-    /// List all channels
-    List,
-    /// Show channel status
-    Status {
-        /// Channel name (shows all if not specified)
-        name: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum CallsAction {
-    /// List every currently-in-flight tool call (tools.in_flight)
-    List,
-    /// Cancel a specific in-flight tool call by tool_call_id
-    Cancel {
-        /// LLM-issued tool_call_id (see `aleph calls list`)
-        call_id: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum GatewayAction {
-    /// Call an RPC method
-    Call {
-        /// RPC method name (e.g., "health", "providers.list")
-        method: String,
-        /// JSON params (optional, e.g., '{"section": "general"}')
-        params: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum DaemonAction {
-    /// Show Gateway server status
-    Status,
-    /// Start Gateway server
-    Start {
-        /// Port number for the server
-        #[arg(short, long)]
-        port: Option<u16>,
-        /// Run as a background daemon
-        #[arg(short, long)]
-        daemon: bool,
-        /// Path to configuration file
-        #[arg(short, long)]
-        config: Option<String>,
-    },
-    /// Stop Gateway server
-    Stop,
-    /// Restart Gateway server
-    Restart {
-        /// Port number for the server
-        #[arg(short, long)]
-        port: Option<u16>,
-        /// Run as a background daemon
-        #[arg(short, long)]
-        daemon: bool,
-        /// Path to configuration file
-        #[arg(short, long)]
-        config: Option<String>,
-    },
-    /// View Gateway logs
-    Logs {
-        /// Number of lines to show
-        #[arg(short = 'n', long, default_value = "50")]
-        lines: usize,
-        /// Filter by log level (e.g., warn, error)
-        #[arg(short, long)]
-        level: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum ProvidersAction {
-    /// List all AI providers
-    List,
-    /// Get provider details
-    Get { name: String },
-    /// Add a new provider
-    Add {
-        name: String,
-        /// Provider type (e.g., openai, anthropic, ollama)
-        #[arg(long)]
-        r#type: String,
-        /// API key
-        #[arg(long)]
-        api_key: String,
-        /// Base URL (optional)
-        #[arg(long)]
-        base_url: Option<String>,
-    },
-    /// Test provider connectivity
-    Test { name: String },
-    /// Set as default provider
-    SetDefault { name: String },
-    /// Remove a provider
-    Remove { name: String },
-}
-
-#[derive(Subcommand)]
-enum ModelsAction {
-    /// List all available models
-    List,
-    /// Get model details
-    Get { model_id: String },
-    /// Show model capabilities
-    Capabilities { model_id: String },
-}
-
-#[derive(Subcommand)]
-enum MemoryAction {
-    /// Search memory
-    Search {
-        /// Search query
-        query: String,
-        /// Maximum results to return
-        #[arg(long, default_value = "10")]
-        limit: usize,
-    },
-    /// Show memory statistics
-    Stats,
-    /// Clear memory
-    Clear {
-        /// Only clear facts, keep other memories
-        #[arg(long)]
-        facts_only: bool,
-    },
-    /// Compress and optimize memory
-    Compress,
-    /// Delete a specific memory entry
-    Delete {
-        /// Memory entry ID
-        id: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum PluginsAction {
-    /// List installed plugins
-    List,
-    /// Install a plugin from source (URL, path, or zip)
-    Install { source: String },
-    /// Uninstall a plugin
-    Uninstall { name: String },
-    /// Enable a disabled plugin
-    Enable { name: String },
-    /// Disable a plugin
-    Disable { name: String },
-    /// Call a plugin tool
-    Call {
-        /// Plugin name
-        plugin: String,
-        /// Tool name
-        tool: String,
-        /// JSON params (optional)
-        params: Option<String>,
-    },
-    /// Search for plugins in the registry
-    Search {
-        /// Search query
-        query: String,
-    },
-    /// Check for plugin updates
-    Update,
-    /// Reload all plugins (hot reload)
-    Reload,
-    /// Show detailed info about a specific plugin
-    Info {
-        /// Plugin name or ID
-        name: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum PluginDevAction {
-    /// Scaffold a new plugin project
-    Init {
-        /// Plugin name
-        name: String,
-        /// Plugin type: nodejs, wasm, or static
-        #[arg(short = 't', long = "type", default_value = "nodejs")]
-        template: String,
-        /// Target directory (defaults to ./<name>)
-        #[arg(short, long)]
-        dir: Option<String>,
-    },
-    /// Validate a plugin directory
-    Validate {
-        /// Plugin directory (defaults to current directory)
-        #[arg(default_value = ".")]
-        path: String,
-    },
-    /// Package a plugin for distribution
-    Pack {
-        /// Plugin directory (defaults to current directory)
-        #[arg(default_value = ".")]
-        path: String,
-        /// Output file path
-        #[arg(short, long)]
-        output: Option<String>,
-    },
-    /// Run plugin diagnostics
-    Doctor,
-}
-
-/// Unified plugin subcommands: lifecycle, dev tools, and marketplace
-#[derive(Subcommand)]
-enum PluginAction {
-    // === Lifecycle (server-connected) ===
-    /// List installed plugins
-    List,
-    /// Install a plugin from source (URL, path, or zip)
-    Install {
-        source: String,
-        /// Installation scope: user or system
-        #[arg(long, default_value = "user")]
-        scope: String,
-    },
-    /// Uninstall a plugin
-    Uninstall {
-        name: String,
-        /// Scope override
-        #[arg(long)]
-        scope: Option<String>,
-        /// Keep plugin data directory
-        #[arg(long)]
-        keep_data: bool,
-    },
-    /// Enable a disabled plugin
-    Enable { name: String },
-    /// Disable a plugin
-    Disable { name: String },
-    /// Check for plugin updates
-    Update,
-    /// Reload all plugins (hot reload)
-    Reload,
-    /// Show detailed info about a specific plugin
-    Info {
-        /// Plugin name or ID
-        name: String,
-    },
-    /// Search for plugins in the registry
-    Search {
-        /// Search query
-        query: String,
-    },
-    /// Call a plugin tool
-    Call {
-        /// Plugin name
-        plugin: String,
-        /// Tool name
-        tool: String,
-        /// JSON params (optional)
-        params: Option<String>,
-    },
-    // === Dev tools (local, no server needed) ===
-    /// Scaffold a new plugin project
-    Init {
-        /// Plugin name
-        name: String,
-        /// Plugin type: nodejs, wasm, or static
-        #[arg(short = 't', long = "type", default_value = "static")]
-        template: String,
-        /// Target directory (defaults to ./<name>)
-        #[arg(short, long)]
-        dir: Option<String>,
-    },
-    /// Validate a plugin directory
-    Validate {
-        /// Plugin directory (defaults to current directory)
-        #[arg(default_value = ".")]
-        path: String,
-    },
-    /// Package a plugin for distribution
-    Pack {
-        /// Plugin directory (defaults to current directory)
-        #[arg(default_value = ".")]
-        path: String,
-        /// Output file path
-        #[arg(short, long)]
-        output: Option<String>,
-    },
-    /// Run plugin diagnostics
-    Doctor,
-    // === Marketplace (P2 placeholder) ===
-    /// Plugin marketplace management
-    Marketplace {
-        #[command(subcommand)]
-        action: MarketplaceAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum MarketplaceAction {
-    /// Add a marketplace source
-    Add { source: String },
-    /// List configured marketplace sources
-    List,
-    /// Update marketplace index (all sources or a specific one)
-    Update { name: Option<String> },
-    /// Remove a marketplace source
-    Remove { name: String },
-}
-
-#[derive(Subcommand)]
-enum ServicesAction {
-    /// List background services
-    List {
-        /// Filter by plugin ID
-        #[arg(long)]
-        plugin: Option<String>,
-        /// Filter by state (running, stopped, error)
-        #[arg(long)]
-        state: Option<String>,
-    },
-    /// Get service status
-    Status {
-        /// Plugin ID
-        plugin_id: String,
-        /// Service ID
-        service_id: String,
-    },
-    /// Start a service
-    Start {
-        /// Plugin ID
-        plugin_id: String,
-        /// Service ID
-        service_id: String,
-    },
-    /// Stop a service
-    Stop {
-        /// Plugin ID
-        plugin_id: String,
-        /// Service ID
-        service_id: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum SkillsAction {
-    /// List all skills (file-based and runtime-loaded)
-    List,
-    /// Install a skill from source
-    Install { source: String },
-    /// Reload a markdown skill
-    Reload { name: String },
-    /// Delete/unload a skill
-    Delete { name: String },
-}
-
-#[derive(Subcommand)]
-enum SessionAction {
-    /// List all sessions
-    List,
-    /// Create a new session
-    New {
-        /// Session name
-        #[arg(short, long)]
-        name: Option<String>,
-    },
-    /// Delete a session
-    Delete {
-        /// Session key to delete
-        key: String,
-    },
-    /// Show session usage statistics
-    Usage {
-        /// Session key
-        key: String,
-    },
-    /// Compact session (compress history)
-    Compact {
-        /// Session key
-        key: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum WorkspaceAction {
-    /// List all workspaces
-    List,
-    /// Create a new workspace
-    Create {
-        /// Workspace name
-        name: String,
-        /// Optional description
-        #[arg(long)]
-        description: Option<String>,
-    },
-    /// Switch to a workspace
-    Switch {
-        /// Workspace name to switch to
-        name: String,
-    },
-    /// Show the currently active workspace
-    Active,
-    /// Archive a workspace
-    Archive {
-        /// Workspace name to archive
-        name: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum LogsAction {
-    /// Get current log level
-    Level,
-    /// Set log level (trace, debug, info, warn, error)
-    SetLevel {
-        /// Log level to set
-        level: String,
-    },
-    /// Show log directory path
-    Dir,
-}
-
-#[derive(Subcommand)]
-enum TraceAction {
-    /// List recent persisted trace replays
-    List {
-        /// Maximum number of tasks to show
-        #[arg(short, long, default_value_t = 10)]
-        limit: usize,
-    },
-    /// Show a structured replay for a persisted task
-    Show {
-        /// Replay task ID
-        task_id: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum IdentityAction {
-    /// Get current identity/soul
-    Get,
-    /// Set identity from JSON manifest
-    Set {
-        /// Soul manifest as JSON string
-        manifest: String,
-    },
-    /// Clear session identity override
-    Clear,
-    /// List identity sources
-    List,
-}
-
-#[derive(Subcommand)]
-enum VaultAction {
-    /// Show vault status
-    Status,
-    /// Store master key (interactive input)
-    Store,
-    /// Delete master key
-    Delete,
-    /// Verify vault integrity
-    Verify,
-}
-
-#[derive(Subcommand)]
-enum SandboxAction {
-    /// Print the active sandbox profile summary and exit
-    Info,
-    /// Run a command under the active sandbox profile
-    Run {
-        /// Network policy: `none`, `all`, or omit for the default
-        #[arg(long, value_name = "POLICY")]
-        network: Option<String>,
-        /// Extra paths to grant write access to (repeatable)
-        #[arg(long = "fs-write", value_name = "PATH")]
-        fs_write: Vec<String>,
-        /// Extra paths to grant read access to (repeatable)
-        #[arg(long = "fs-read", value_name = "PATH")]
-        fs_read: Vec<String>,
-        /// On macOS, stream sandbox denials from `log stream` while the command runs
-        #[arg(long)]
-        log_denials: bool,
-        /// Command and arguments to execute. Use `--` to separate from flags.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        command: Vec<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum McpAction {
-    /// List pending tool approval requests
-    Pending,
-    /// Approve a tool execution request
-    Approve {
-        /// Request ID
-        request_id: String,
-        /// Reason for approval
-        #[arg(long)]
-        reason: Option<String>,
-    },
-    /// Reject a tool execution request
-    Reject {
-        /// Request ID
-        request_id: String,
-        /// Reason for rejection
-        #[arg(long)]
-        reason: Option<String>,
-    },
-    /// Cancel a pending approval
-    Cancel {
-        /// Request ID
-        request_id: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum ChatControlAction {
-    /// Send a message (non-interactive)
-    Send {
-        /// The message to send
-        message: String,
-        /// Session key
-        #[arg(short, long)]
-        session: Option<String>,
-        /// Enable streaming
-        #[arg(long)]
-        stream: bool,
-        /// Thinking level (none, concise, verbose)
-        #[arg(long)]
-        thinking: Option<String>,
-    },
-    /// Abort a running chat
-    Abort {
-        /// Run ID to abort
-        run_id: String,
-    },
-    /// Show chat history
-    History {
-        /// Session key
-        session_key: String,
-        /// Maximum messages to return
-        #[arg(long)]
-        limit: Option<usize>,
-    },
-    /// Clear chat history
-    Clear {
-        /// Session key
-        session_key: String,
-        /// Keep system messages
-        #[arg(long)]
-        keep_system: bool,
-    },
-}
-
 #[tokio::main]
 async fn main() -> CliResult<()> {
     let cli = Cli::parse();
 
-    // Initialize logging with unified file + console output
     let default_filter = if cli.verbose { "debug" } else { "info" };
     if let Err(e) = aleph_logging::init_component_logging("cli", 7, default_filter) {
         eprintln!("Failed to init file logging: {e}");
-        // Fallback to console-only
         tracing_subscriber::registry()
             .with(fmt::layer())
             .with(if cli.verbose {
@@ -866,606 +76,690 @@ async fn main() -> CliResult<()> {
             .init();
     }
 
-    // Load configuration
     let config = CliConfig::load(cli.config.as_deref())?;
-    let server_url = cli.server;
+    let server_url = cli.server.clone();
+    let json = cli.json;
 
     info!("Aleph CLI v{}", env!("CARGO_PKG_VERSION"));
 
     match cli.command {
-        Some(Commands::Health) => {
-            commands::health::run(&server_url, cli.json).await?;
+        Some(cmd) => dispatch(cmd, &server_url, &config, json, cli.verbose).await?,
+        None => commands::chat::run(&server_url, None, None, &config, cli.verbose).await?,
+    }
+
+    Ok(())
+}
+
+/// Dispatch the parsed top-level subcommand to its handler module.
+///
+/// Each arm is intentionally short: convert clap variants into the
+/// JSON-RPC-shaped argv each module expects and forward. No branching policy
+/// lives here.
+async fn dispatch(
+    cmd: Commands,
+    server_url: &str,
+    config: &CliConfig,
+    json: bool,
+    verbose: bool,
+) -> CliResult<()> {
+    match cmd {
+        Commands::Health => commands::health::run(server_url, json).await,
+        Commands::Info => commands::info::run(server_url, json).await,
+        Commands::Tools { category, action } => {
+            dispatch_tools(server_url, category, action, json).await
         }
-        Some(Commands::Info) => {
-            commands::info::run(&server_url, cli.json).await?;
+        Commands::Calls { action } => dispatch_calls(server_url, action, json).await,
+        Commands::Connect { device } => {
+            commands::connect::run(server_url, &device, config, json).await
         }
-        Some(Commands::Tools { category }) => {
-            commands::tools::run(&server_url, category.as_deref(), cli.json).await?;
-        }
-        Some(Commands::Calls { action }) => match action {
-            CallsAction::List => commands::calls::list(&server_url, cli.json).await?,
-            CallsAction::Cancel { call_id } => {
-                commands::calls::cancel(&server_url, &call_id, cli.json).await?
-            }
-        },
-        Some(Commands::Connect { device }) => {
-            commands::connect::run(&server_url, &device, &config, cli.json).await?;
-        }
-        Some(Commands::Ask {
+        Commands::Ask {
             message,
             session,
             last,
             output_last_message,
-        }) => {
+        } => {
             commands::ask::run(
-                &server_url,
+                server_url,
                 &message,
                 session.as_deref(),
                 last,
-                cli.json,
+                json,
                 output_last_message.as_deref(),
-                &config,
+                config,
             )
-            .await?;
+            .await
         }
-        Some(Commands::Chat { session, agent }) => {
+        Commands::Chat { session, agent } => {
             commands::chat::run(
-                &server_url,
+                server_url,
                 agent.as_deref(),
                 session.as_deref(),
-                &config,
-                cli.verbose,
+                config,
+                verbose,
             )
-            .await?;
+            .await
         }
-        Some(Commands::Session { action }) => match action {
-            SessionAction::List => {
-                commands::session::list(&server_url, &config, cli.json).await?;
-            }
-            SessionAction::New { name } => {
-                commands::session::create(&server_url, name.as_deref(), &config, cli.json).await?;
-            }
-            SessionAction::Delete { key } => {
-                commands::session::delete(&server_url, &key, &config, cli.json).await?;
-            }
-            SessionAction::Usage { key } => {
-                commands::session::usage(&server_url, &key, &config, cli.json).await?;
-            }
-            SessionAction::Compact { key } => {
-                commands::session::compact(&server_url, &key, &config, cli.json).await?;
-            }
-        },
-        Some(Commands::Guests { action }) => {
-            commands::guests::handle_guests(&server_url, action, &config, cli.json).await?;
+        Commands::Session { action } => dispatch_session(server_url, action, config, json).await,
+        Commands::Guests { action } => {
+            commands::guests::handle_guests(server_url, action, config, json).await
         }
-        Some(Commands::Config { action }) => match action {
-            ConfigAction::File => {
-                commands::config_cmd::file();
-            }
-            ConfigAction::Get { section } => {
-                commands::config_cmd::get(&server_url, section.as_deref(), &config, cli.json)
-                    .await?;
-            }
-            ConfigAction::Set { path, value } => {
-                commands::config_cmd::set(&server_url, &path, &value, &config, cli.json).await?;
-            }
-            ConfigAction::Validate => {
-                commands::config_cmd::validate(&server_url, &config, cli.json).await?;
-            }
-            ConfigAction::Reload => {
-                commands::config_cmd::reload(&server_url, &config, cli.json).await?;
-            }
-            ConfigAction::Schema { output } => {
-                commands::config_cmd::schema(&server_url, output.as_deref(), &config, cli.json)
-                    .await?;
-            }
-            ConfigAction::Edit => {
-                commands::config_cmd::edit()?;
-            }
-        },
-        Some(Commands::Cron { action }) => match action {
-            CronAction::List => {
-                commands::cron_cmd::list(&server_url, &config, cli.json).await?;
-            }
-            CronAction::Status => {
-                commands::cron_cmd::status(&server_url, &config, cli.json).await?;
-            }
-            CronAction::Run { job_id } => {
-                commands::cron_cmd::run(&server_url, &job_id, &config, cli.json).await?;
-            }
-        },
-        Some(Commands::Channels { action }) => match action {
-            ChannelsAction::List => {
-                commands::channels_cmd::list(&server_url, &config, cli.json).await?;
-            }
-            ChannelsAction::Status { name } => {
-                commands::channels_cmd::status(&server_url, name.as_deref(), &config, cli.json)
-                    .await?;
-            }
-        },
-        Some(Commands::Daemon { action }) => match action {
-            DaemonAction::Status => {
-                commands::daemon::status(cli.json)?;
-            }
-            DaemonAction::Start {
-                port,
-                daemon,
-                config,
-            } => {
-                commands::daemon::start(port, daemon, config.as_deref(), cli.json)?;
-            }
-            DaemonAction::Stop => {
-                commands::daemon::stop(cli.json)?;
-            }
-            DaemonAction::Restart {
-                port,
-                daemon,
-                config,
-            } => {
-                commands::daemon::restart(port, daemon, config.as_deref(), cli.json)?;
-            }
-            DaemonAction::Logs { lines, level } => {
-                commands::daemon::logs(lines, level.as_deref(), cli.json)?;
-            }
-        },
-        Some(Commands::Providers { action }) => match action {
-            ProvidersAction::List => {
-                commands::providers_cmd::list(&server_url, cli.json).await?;
-            }
-            ProvidersAction::Get { name } => {
-                commands::providers_cmd::get(&server_url, &name, cli.json).await?;
-            }
-            ProvidersAction::Add {
-                name,
-                r#type,
-                api_key,
-                base_url,
-            } => {
-                commands::providers_cmd::add(
-                    &server_url,
-                    &name,
-                    &r#type,
-                    &api_key,
-                    base_url.as_deref(),
-                    cli.json,
-                )
-                .await?;
-            }
-            ProvidersAction::Test { name } => {
-                commands::providers_cmd::test(&server_url, &name, cli.json).await?;
-            }
-            ProvidersAction::SetDefault { name } => {
-                commands::providers_cmd::set_default(&server_url, &name, cli.json).await?;
-            }
-            ProvidersAction::Remove { name } => {
-                commands::providers_cmd::remove(&server_url, &name, cli.json).await?;
-            }
-        },
-        Some(Commands::Models { action }) => match action {
-            ModelsAction::List => {
-                commands::models_cmd::list(&server_url, cli.json).await?;
-            }
-            ModelsAction::Get { model_id } => {
-                commands::models_cmd::get(&server_url, &model_id, cli.json).await?;
-            }
-            ModelsAction::Capabilities { model_id } => {
-                commands::models_cmd::capabilities(&server_url, &model_id, cli.json).await?;
-            }
-        },
-        Some(Commands::Memory { action }) => match action {
-            MemoryAction::Search { query, limit } => {
-                commands::memory_cmd::search(&server_url, &query, limit, cli.json).await?
-            }
-            MemoryAction::Stats => commands::memory_cmd::stats(&server_url, cli.json).await?,
-            MemoryAction::Clear { facts_only } => {
-                commands::memory_cmd::clear(&server_url, facts_only, cli.json).await?
-            }
-            MemoryAction::Compress => commands::memory_cmd::compress(&server_url, cli.json).await?,
-            MemoryAction::Delete { id } => {
-                commands::memory_cmd::delete(&server_url, &id, cli.json).await?
-            }
-        },
-        Some(Commands::Plugin { action }) => {
-            use commands::plugin_cmd;
-            match action {
-                // Lifecycle commands
-                PluginAction::List => {
-                    commands::plugins_cmd::list(&server_url, cli.json).await?;
-                }
-                PluginAction::Install { source, .. } => {
-                    // If source looks like a plain plugin name (no '/', '.', or ':'),
-                    // route to marketplace install instead.
-                    let is_marketplace_name =
-                        !source.contains('/') && !source.contains('.') && !source.contains(':');
-                    if is_marketplace_name {
-                        let (client, _events) = AlephClient::connect(&server_url).await?;
-                        let result: serde_json::Value = client
-                            .call(
-                                "plugin.marketplace.install",
-                                Some(serde_json::json!({ "name": source })),
-                            )
-                            .await?;
-                        if cli.json {
-                            crate::output::print_json(&result);
-                        } else {
-                            println!("{}", result);
-                        }
-                        client.close().await?;
-                    } else {
-                        commands::plugins_cmd::install(&server_url, &source, cli.json).await?;
-                    }
-                }
-                PluginAction::Uninstall { name, .. } => {
-                    commands::plugins_cmd::uninstall(&server_url, &name, cli.json).await?;
-                }
-                PluginAction::Enable { name } => {
-                    commands::plugins_cmd::enable(&server_url, &name, cli.json).await?;
-                }
-                PluginAction::Disable { name } => {
-                    commands::plugins_cmd::disable(&server_url, &name, cli.json).await?;
-                }
-                PluginAction::Call {
-                    plugin,
-                    tool,
-                    params,
-                } => {
-                    commands::plugins_cmd::call(
-                        &server_url,
-                        &plugin,
-                        &tool,
-                        params.as_deref(),
-                        cli.json,
-                    )
-                    .await?;
-                }
-                PluginAction::Search { query } => {
-                    commands::plugins_cmd::search(&server_url, &query, cli.json).await?;
-                }
-                PluginAction::Update => {
-                    commands::plugins_cmd::update(&server_url, cli.json).await?;
-                }
-                PluginAction::Reload => {
-                    commands::plugins_cmd::reload(&server_url, cli.json).await?;
-                }
-                PluginAction::Info { name } => {
-                    commands::plugins_cmd::info(&server_url, &name, cli.json).await?;
-                }
-                // Dev tool commands
-                PluginAction::Init {
-                    name,
-                    template,
-                    dir,
-                } => {
-                    let tmpl: plugin_cmd::PluginTemplate =
-                        template.parse().map_err(|e: String| CliError::Other(e))?;
-                    let dir_path = dir.map(std::path::PathBuf::from);
-                    plugin_cmd::init(&name, tmpl, dir_path.as_deref())?;
-                }
-                PluginAction::Validate { path } => {
-                    plugin_cmd::validate(std::path::Path::new(&path), cli.json)?;
-                }
-                PluginAction::Pack { path, output } => {
-                    let out = output.map(std::path::PathBuf::from);
-                    plugin_cmd::pack(std::path::Path::new(&path), out.as_deref())?;
-                }
-                PluginAction::Doctor => {
-                    plugin_cmd::doctor(cli.json)?;
-                }
-                // Marketplace
-                PluginAction::Marketplace { action } => {
-                    let (client, _events) = AlephClient::connect(&server_url).await?;
-                    match action {
-                        MarketplaceAction::Add { source } => {
-                            let result: serde_json::Value = client
-                                .call(
-                                    "plugin.marketplace.add",
-                                    Some(serde_json::json!({ "source": source })),
-                                )
-                                .await?;
-                            if cli.json {
-                                crate::output::print_json(&result);
-                            } else {
-                                println!("{}", result);
-                            }
-                        }
-                        MarketplaceAction::List => {
-                            let result: serde_json::Value = client
-                                .call("plugin.marketplace.list", Some(serde_json::json!({})))
-                                .await?;
-                            if cli.json {
-                                crate::output::print_json(&result);
-                            } else {
-                                println!("{}", serde_json::to_string_pretty(&result)?);
-                            }
-                        }
-                        MarketplaceAction::Update { name } => {
-                            let params = match name {
-                                Some(n) => serde_json::json!({ "name": n }),
-                                None => serde_json::json!({}),
-                            };
-                            let result: serde_json::Value = client
-                                .call("plugin.marketplace.update", Some(params))
-                                .await?;
-                            if cli.json {
-                                crate::output::print_json(&result);
-                            } else {
-                                println!("{}", result);
-                            }
-                        }
-                        MarketplaceAction::Remove { name } => {
-                            let result: serde_json::Value = client
-                                .call(
-                                    "plugin.marketplace.remove",
-                                    Some(serde_json::json!({ "name": name })),
-                                )
-                                .await?;
-                            if cli.json {
-                                crate::output::print_json(&result);
-                            } else {
-                                println!("{}", result);
-                            }
-                        }
-                    }
-                    client.close().await?;
-                }
-            }
+        Commands::Config { action } => dispatch_config(server_url, action, config, json).await,
+        Commands::Cron { action } => dispatch_cron(server_url, action, config, json).await,
+        Commands::Heartbeat { action } => dispatch_heartbeat(server_url, action, json).await,
+        Commands::Channels { action } => dispatch_channels(server_url, action, config, json).await,
+        Commands::Daemon { action } => dispatch_daemon(action, json),
+        Commands::Providers { action } => dispatch_providers(server_url, action, json).await,
+        Commands::Models { action } => dispatch_models(server_url, action, json).await,
+        Commands::Memory { action } => dispatch_memory(server_url, action, json).await,
+        Commands::Plugin { action } => dispatch_plugin(server_url, action, json).await,
+        Commands::Services { action } => dispatch_services(server_url, action, json).await,
+        Commands::Skills { action } => dispatch_skills(server_url, action, json).await,
+        Commands::Workspace { action } => dispatch_workspace(server_url, action, json).await,
+        Commands::Gateway { action } => dispatch_gateway(server_url, action, json).await,
+        Commands::Logs { action } => dispatch_logs(server_url, action, json).await,
+        Commands::Trace { action } => dispatch_trace(server_url, action, json).await,
+        Commands::Identity { action } => dispatch_identity(server_url, action, json).await,
+        Commands::Vault { action } => dispatch_vault(server_url, action, json).await,
+        Commands::Mcp { action } => dispatch_mcp(server_url, action, json).await,
+        Commands::Sandbox { action } => dispatch_sandbox(action),
+        Commands::ChatControl { action } => {
+            dispatch_chat_control(server_url, action, config, json).await
         }
-        Some(Commands::Plugins { action }) => {
-            eprintln!("Warning: 'aleph plugins' is deprecated. Use 'aleph plugin' instead.");
-            match action {
-                PluginsAction::List => {
-                    commands::plugins_cmd::list(&server_url, cli.json).await?;
-                }
-                PluginsAction::Install { source } => {
-                    commands::plugins_cmd::install(&server_url, &source, cli.json).await?;
-                }
-                PluginsAction::Uninstall { name } => {
-                    commands::plugins_cmd::uninstall(&server_url, &name, cli.json).await?;
-                }
-                PluginsAction::Enable { name } => {
-                    commands::plugins_cmd::enable(&server_url, &name, cli.json).await?;
-                }
-                PluginsAction::Disable { name } => {
-                    commands::plugins_cmd::disable(&server_url, &name, cli.json).await?;
-                }
-                PluginsAction::Call {
-                    plugin,
-                    tool,
-                    params,
-                } => {
-                    commands::plugins_cmd::call(
-                        &server_url,
-                        &plugin,
-                        &tool,
-                        params.as_deref(),
-                        cli.json,
-                    )
-                    .await?;
-                }
-                PluginsAction::Search { query } => {
-                    commands::plugins_cmd::search(&server_url, &query, cli.json).await?;
-                }
-                PluginsAction::Update => {
-                    commands::plugins_cmd::update(&server_url, cli.json).await?;
-                }
-                PluginsAction::Reload => {
-                    commands::plugins_cmd::reload(&server_url, cli.json).await?;
-                }
-                PluginsAction::Info { name } => {
-                    commands::plugins_cmd::info(&server_url, &name, cli.json).await?;
-                }
-            }
-        }
-        Some(Commands::Services { action }) => match action {
-            ServicesAction::List { plugin, state } => {
-                commands::services_cmd::list(
-                    &server_url,
-                    plugin.as_deref(),
-                    state.as_deref(),
-                    cli.json,
-                )
-                .await?;
-            }
-            ServicesAction::Status {
-                plugin_id,
-                service_id,
-            } => {
-                commands::services_cmd::status(&server_url, &plugin_id, &service_id, cli.json)
-                    .await?;
-            }
-            ServicesAction::Start {
-                plugin_id,
-                service_id,
-            } => {
-                commands::services_cmd::start(&server_url, &plugin_id, &service_id, cli.json)
-                    .await?;
-            }
-            ServicesAction::Stop {
-                plugin_id,
-                service_id,
-            } => {
-                commands::services_cmd::stop(&server_url, &plugin_id, &service_id, cli.json)
-                    .await?;
-            }
-        },
-        Some(Commands::Skills { action }) => match action {
-            SkillsAction::List => {
-                commands::skills_cmd::list(&server_url, cli.json).await?;
-            }
-            SkillsAction::Install { source } => {
-                commands::skills_cmd::install(&server_url, &source, cli.json).await?;
-            }
-            SkillsAction::Reload { name } => {
-                commands::skills_cmd::reload(&server_url, &name, cli.json).await?;
-            }
-            SkillsAction::Delete { name } => {
-                commands::skills_cmd::delete(&server_url, &name, cli.json).await?;
-            }
-        },
-        Some(Commands::Workspace { action }) => match action {
-            WorkspaceAction::List => {
-                commands::workspace_cmd::list(&server_url, cli.json).await?;
-            }
-            WorkspaceAction::Create { name, description } => {
-                commands::workspace_cmd::create(
-                    &server_url,
-                    &name,
-                    description.as_deref(),
-                    cli.json,
-                )
-                .await?;
-            }
-            WorkspaceAction::Switch { name } => {
-                commands::workspace_cmd::switch(&server_url, &name, cli.json).await?;
-            }
-            WorkspaceAction::Active => {
-                commands::workspace_cmd::active(&server_url, cli.json).await?;
-            }
-            WorkspaceAction::Archive { name } => {
-                commands::workspace_cmd::archive(&server_url, &name, cli.json).await?;
-            }
-        },
-        Some(Commands::Gateway { action }) => match action {
-            GatewayAction::Call { method, params } => {
-                commands::gateway_cmd::call(&server_url, &method, params.as_deref(), cli.json)
-                    .await?
-            }
-        },
-        Some(Commands::Logs { action }) => match action {
-            LogsAction::Level => {
-                commands::logs_cmd::level(&server_url, cli.json).await?;
-            }
-            LogsAction::SetLevel { level } => {
-                commands::logs_cmd::set_level(&server_url, &level, cli.json).await?;
-            }
-            LogsAction::Dir => {
-                commands::logs_cmd::dir(&server_url, cli.json).await?;
-            }
-        },
-        Some(Commands::Trace { action }) => match action {
-            TraceAction::List { limit } => {
-                commands::trace_cmd::list(&server_url, limit, cli.json).await?;
-            }
-            TraceAction::Show { task_id } => {
-                commands::trace_cmd::show(&server_url, &task_id, cli.json).await?;
-            }
-        },
-        Some(Commands::Identity { action }) => match action {
-            IdentityAction::Get => {
-                commands::identity_cmd::get(&server_url, cli.json).await?;
-            }
-            IdentityAction::Set { manifest } => {
-                commands::identity_cmd::set(&server_url, &manifest, cli.json).await?;
-            }
-            IdentityAction::Clear => {
-                commands::identity_cmd::clear(&server_url, cli.json).await?;
-            }
-            IdentityAction::List => {
-                commands::identity_cmd::list(&server_url, cli.json).await?;
-            }
-        },
-        Some(Commands::Vault { action }) => match action {
-            VaultAction::Status => {
-                commands::vault_cmd::status(&server_url, cli.json).await?;
-            }
-            VaultAction::Store => {
-                commands::vault_cmd::store(&server_url, cli.json).await?;
-            }
-            VaultAction::Delete => {
-                commands::vault_cmd::delete(&server_url, cli.json).await?;
-            }
-            VaultAction::Verify => {
-                commands::vault_cmd::verify(&server_url, cli.json).await?;
-            }
-        },
-        Some(Commands::Mcp { action }) => match action {
-            McpAction::Pending => {
-                commands::mcp_cmd::pending(&server_url, cli.json).await?;
-            }
-            McpAction::Approve { request_id, reason } => {
-                commands::mcp_cmd::approve(&server_url, &request_id, reason.as_deref(), cli.json)
-                    .await?;
-            }
-            McpAction::Reject { request_id, reason } => {
-                commands::mcp_cmd::reject(&server_url, &request_id, reason.as_deref(), cli.json)
-                    .await?;
-            }
-            McpAction::Cancel { request_id } => {
-                commands::mcp_cmd::cancel(&server_url, &request_id, cli.json).await?;
-            }
-        },
-        Some(Commands::Doctor) => {
-            commands::doctor::run(&server_url, cli.json).await?;
-        }
-        Some(Commands::Sandbox { action }) => match action {
-            SandboxAction::Info => {
-                commands::sandbox_cmd::info()?;
-            }
-            SandboxAction::Run {
-                network,
-                fs_write,
-                fs_read,
-                log_denials,
-                command,
-            } => {
-                commands::sandbox_cmd::run(
-                    network.as_deref(),
-                    &fs_write,
-                    &fs_read,
-                    log_denials,
-                    &command,
-                )?;
-            }
-        },
-        Some(Commands::ChatControl { action }) => match action {
-            ChatControlAction::Send {
-                message,
-                session,
-                stream,
-                thinking,
-            } => {
-                commands::chat_cmd::send(
-                    &server_url,
-                    &message,
-                    session.as_deref(),
-                    stream,
-                    thinking.as_deref(),
-                    &config,
-                    cli.json,
-                )
-                .await?;
-            }
-            ChatControlAction::Abort { run_id } => {
-                commands::chat_cmd::abort(&server_url, &run_id, &config, cli.json).await?;
-            }
-            ChatControlAction::History { session_key, limit } => {
-                commands::chat_cmd::history(&server_url, &session_key, limit, &config, cli.json)
-                    .await?;
-            }
-            ChatControlAction::Clear {
-                session_key,
-                keep_system,
-            } => {
-                commands::chat_cmd::clear(
-                    &server_url,
-                    &session_key,
-                    keep_system,
-                    &config,
-                    cli.json,
-                )
-                .await?;
-            }
-        },
-        Some(Commands::Completion { shell }) => {
+        Commands::Doctor => commands::doctor::run(server_url, json).await,
+        Commands::Completion { shell } => {
             commands::completion::run(shell);
-        }
-        None => {
-            // Default: start interactive chat
-            commands::chat::run(&server_url, None, None, &config, cli.verbose).await?;
+            Ok(())
         }
     }
+}
 
+async fn dispatch_tools(
+    server_url: &str,
+    category: Option<String>,
+    action: Option<ToolsAction>,
+    json: bool,
+) -> CliResult<()> {
+    match action {
+        // `aleph tools` (no subcommand) — preserve legacy list behaviour, honouring
+        // the global `--category` shortcut.
+        None => commands::tools::run(server_url, category.as_deref(), json).await,
+        Some(ToolsAction::List { category: sub }) => {
+            // Sub-flag wins; falls back to the parent --category if absent.
+            let effective = sub.or(category);
+            commands::tools::run(server_url, effective.as_deref(), json).await
+        }
+        Some(ToolsAction::Describe { name }) => {
+            commands::tools::describe(server_url, &name, json).await
+        }
+        Some(ToolsAction::Invoke { name, args, agent }) => {
+            commands::tools::invoke(server_url, &name, args.as_deref(), agent.as_deref(), json)
+                .await
+        }
+    }
+}
+
+async fn dispatch_calls(server_url: &str, action: CallsAction, json: bool) -> CliResult<()> {
+    match action {
+        CallsAction::List => commands::calls::list(server_url, json).await,
+        CallsAction::Cancel { call_id } => {
+            commands::calls::cancel(server_url, &call_id, json).await
+        }
+    }
+}
+
+async fn dispatch_session(
+    server_url: &str,
+    action: SessionAction,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
+    use commands::session;
+    match action {
+        SessionAction::List => session::list(server_url, config, json).await,
+        SessionAction::New { name } => {
+            session::create(server_url, name.as_deref(), config, json).await
+        }
+        SessionAction::Delete { key } => session::delete(server_url, &key, config, json).await,
+        SessionAction::Usage { key } => session::usage(server_url, &key, config, json).await,
+        SessionAction::Compact { key } => session::compact(server_url, &key, config, json).await,
+        SessionAction::Truncate { key, keep } => {
+            session::truncate(server_url, &key, keep, config, json).await
+        }
+    }
+}
+
+async fn dispatch_config(
+    server_url: &str,
+    action: ConfigAction,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
+    use commands::config_cmd;
+    match action {
+        ConfigAction::File => {
+            config_cmd::file();
+            Ok(())
+        }
+        ConfigAction::Get { section } => {
+            config_cmd::get(server_url, section.as_deref(), config, json).await
+        }
+        ConfigAction::Set { path, value } => {
+            config_cmd::set(server_url, &path, &value, config, json).await
+        }
+        ConfigAction::Validate => config_cmd::validate(server_url, config, json).await,
+        ConfigAction::Reload => config_cmd::reload(server_url, config, json).await,
+        ConfigAction::Schema { output } => {
+            config_cmd::schema(server_url, output.as_deref(), config, json).await
+        }
+        ConfigAction::Edit => config_cmd::edit(),
+    }
+}
+
+async fn dispatch_cron(
+    server_url: &str,
+    action: CronAction,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
+    use commands::cron_cmd;
+    match action {
+        CronAction::List => cron_cmd::list(server_url, config, json).await,
+        CronAction::Status => cron_cmd::status(server_url, config, json).await,
+        CronAction::Get { job_id } => cron_cmd::get(server_url, &job_id, config, json).await,
+        CronAction::Run { job_id } => cron_cmd::run(server_url, &job_id, config, json).await,
+        CronAction::Runs { job_id, limit } => {
+            cron_cmd::runs(server_url, &job_id, limit, config, json).await
+        }
+        CronAction::Create {
+            name,
+            schedule,
+            schedule_kind,
+            agent,
+            prompt,
+            timezone,
+            tags,
+        } => {
+            cron_cmd::create(
+                server_url,
+                &name,
+                schedule.as_deref(),
+                schedule_kind.as_deref(),
+                &agent,
+                &prompt,
+                timezone.as_deref(),
+                tags.as_deref(),
+                config,
+                json,
+            )
+            .await
+        }
+        CronAction::Update {
+            job_id,
+            name,
+            agent,
+            prompt,
+            schedule,
+            schedule_kind,
+            timezone,
+            tags,
+            enable,
+            disable,
+        } => {
+            cron_cmd::update(
+                server_url,
+                &job_id,
+                name.as_deref(),
+                agent.as_deref(),
+                prompt.as_deref(),
+                schedule.as_deref(),
+                schedule_kind.as_deref(),
+                timezone.as_deref(),
+                tags.as_deref(),
+                enable,
+                disable,
+                config,
+                json,
+            )
+            .await
+        }
+        CronAction::Delete { job_id } => cron_cmd::delete(server_url, &job_id, config, json).await,
+        CronAction::Toggle {
+            job_id,
+            enable,
+            disable,
+        } => cron_cmd::toggle(server_url, &job_id, enable, disable, config, json).await,
+    }
+}
+
+async fn dispatch_heartbeat(
+    server_url: &str,
+    action: HeartbeatAction,
+    json: bool,
+) -> CliResult<()> {
+    use commands::heartbeat_cmd;
+    match action {
+        HeartbeatAction::List => heartbeat_cmd::list(server_url, json).await,
+        HeartbeatAction::Get { task_id } => heartbeat_cmd::get(server_url, &task_id, json).await,
+        HeartbeatAction::Create {
+            name,
+            interval,
+            tool,
+            agent,
+            params,
+            trigger,
+            disabled,
+        } => {
+            heartbeat_cmd::create(
+                server_url,
+                &name,
+                &interval,
+                &tool,
+                &agent,
+                params.as_deref(),
+                trigger.as_deref(),
+                disabled,
+                json,
+            )
+            .await
+        }
+        HeartbeatAction::Update {
+            task_id,
+            name,
+            agent,
+            interval,
+            enable,
+            disable,
+        } => {
+            heartbeat_cmd::update(
+                server_url,
+                &task_id,
+                name.as_deref(),
+                agent.as_deref(),
+                interval.as_deref(),
+                enable,
+                disable,
+                json,
+            )
+            .await
+        }
+        HeartbeatAction::Delete { task_id } => {
+            heartbeat_cmd::delete(server_url, &task_id, json).await
+        }
+        HeartbeatAction::Toggle {
+            task_id,
+            enable,
+            disable,
+        } => heartbeat_cmd::toggle(server_url, &task_id, enable, disable, json).await,
+        HeartbeatAction::Wake { task_id, reason } => {
+            heartbeat_cmd::wake(server_url, &task_id, reason.as_deref(), json).await
+        }
+        HeartbeatAction::Runs { task_id, limit } => {
+            heartbeat_cmd::runs(server_url, &task_id, limit, json).await
+        }
+    }
+}
+
+async fn dispatch_channels(
+    server_url: &str,
+    action: ChannelsAction,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
+    use commands::channels_cmd;
+    match action {
+        ChannelsAction::List => channels_cmd::list(server_url, config, json).await,
+        ChannelsAction::Status { name } => {
+            channels_cmd::status(server_url, name.as_deref(), config, json).await
+        }
+    }
+}
+
+fn dispatch_daemon(action: DaemonAction, json: bool) -> CliResult<()> {
+    use commands::daemon;
+    match action {
+        DaemonAction::Status => daemon::status(json),
+        DaemonAction::Start {
+            port,
+            daemon: bg,
+            config,
+        } => daemon::start(port, bg, config.as_deref(), json),
+        DaemonAction::Stop => daemon::stop(json),
+        DaemonAction::Restart {
+            port,
+            daemon: bg,
+            config,
+        } => daemon::restart(port, bg, config.as_deref(), json),
+        DaemonAction::Logs { lines, level } => daemon::logs(lines, level.as_deref(), json),
+    }
+}
+
+async fn dispatch_providers(
+    server_url: &str,
+    action: ProvidersAction,
+    json: bool,
+) -> CliResult<()> {
+    use commands::providers_cmd;
+    match action {
+        ProvidersAction::List => providers_cmd::list(server_url, json).await,
+        ProvidersAction::Get { name } => providers_cmd::get(server_url, &name, json).await,
+        ProvidersAction::Add {
+            name,
+            r#type,
+            api_key,
+            base_url,
+        } => {
+            providers_cmd::add(
+                server_url,
+                &name,
+                &r#type,
+                &api_key,
+                base_url.as_deref(),
+                json,
+            )
+            .await
+        }
+        ProvidersAction::Test { name } => providers_cmd::test(server_url, &name, json).await,
+        ProvidersAction::SetDefault { name } => {
+            providers_cmd::set_default(server_url, &name, json).await
+        }
+        ProvidersAction::Remove { name } => providers_cmd::remove(server_url, &name, json).await,
+    }
+}
+
+async fn dispatch_models(server_url: &str, action: ModelsAction, json: bool) -> CliResult<()> {
+    use commands::models_cmd;
+    match action {
+        ModelsAction::List => models_cmd::list(server_url, json).await,
+        ModelsAction::Get { model_id } => models_cmd::get(server_url, &model_id, json).await,
+        ModelsAction::Capabilities { model_id } => {
+            models_cmd::capabilities(server_url, &model_id, json).await
+        }
+    }
+}
+
+async fn dispatch_memory(server_url: &str, action: MemoryAction, json: bool) -> CliResult<()> {
+    use commands::memory_cmd;
+    match action {
+        MemoryAction::Search { query, limit } => {
+            memory_cmd::search(server_url, &query, limit, json).await
+        }
+        MemoryAction::Stats => memory_cmd::stats(server_url, json).await,
+        MemoryAction::Clear { facts_only } => memory_cmd::clear(server_url, facts_only, json).await,
+        MemoryAction::Compress => memory_cmd::compress(server_url, json).await,
+        MemoryAction::Delete { id } => memory_cmd::delete(server_url, &id, json).await,
+    }
+}
+
+async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> CliResult<()> {
+    use aleph_client::{AlephClient, CliError};
+    use commands::{plugin_cmd, plugins_cmd};
+
+    match action {
+        // Lifecycle (server-connected)
+        PluginAction::List => plugins_cmd::list(server_url, json).await,
+        PluginAction::Install { source, .. } => {
+            // A bare plugin name routes to the marketplace; URLs, paths, and zip
+            // refs go to the direct installer.
+            let looks_like_marketplace =
+                !source.contains('/') && !source.contains('.') && !source.contains(':');
+            if looks_like_marketplace {
+                let (client, _events) = AlephClient::connect(server_url).await?;
+                let result: serde_json::Value = client
+                    .call(
+                        "plugin.marketplace.install",
+                        Some(serde_json::json!({ "name": source })),
+                    )
+                    .await?;
+                if json {
+                    crate::output::print_json(&result);
+                } else {
+                    println!("{}", result);
+                }
+                client.close().await?;
+                Ok(())
+            } else {
+                plugins_cmd::install(server_url, &source, json).await
+            }
+        }
+        PluginAction::Uninstall { name, .. } => {
+            plugins_cmd::uninstall(server_url, &name, json).await
+        }
+        PluginAction::Enable { name } => plugins_cmd::enable(server_url, &name, json).await,
+        PluginAction::Disable { name } => plugins_cmd::disable(server_url, &name, json).await,
+        PluginAction::Call {
+            plugin,
+            tool,
+            params,
+        } => plugins_cmd::call(server_url, &plugin, &tool, params.as_deref(), json).await,
+        PluginAction::Search { query } => plugins_cmd::search(server_url, &query, json).await,
+        PluginAction::Update => plugins_cmd::update(server_url, json).await,
+        PluginAction::Reload => plugins_cmd::reload(server_url, json).await,
+        PluginAction::Info { name } => plugins_cmd::info(server_url, &name, json).await,
+        // Dev tools (local, no server)
+        PluginAction::Init {
+            name,
+            template,
+            dir,
+        } => {
+            let tmpl: plugin_cmd::PluginTemplate =
+                template.parse().map_err(|e: String| CliError::Other(e))?;
+            let dir_path = dir.map(std::path::PathBuf::from);
+            plugin_cmd::init(&name, tmpl, dir_path.as_deref())
+        }
+        PluginAction::Validate { path } => plugin_cmd::validate(std::path::Path::new(&path), json),
+        PluginAction::Pack { path, output } => {
+            let out = output.map(std::path::PathBuf::from);
+            plugin_cmd::pack(std::path::Path::new(&path), out.as_deref())
+        }
+        PluginAction::Doctor => plugin_cmd::doctor(json),
+        // Marketplace (P2 placeholder)
+        PluginAction::Marketplace { action } => {
+            dispatch_marketplace(server_url, action, json).await
+        }
+    }
+}
+
+async fn dispatch_marketplace(
+    server_url: &str,
+    action: MarketplaceAction,
+    json: bool,
+) -> CliResult<()> {
+    use aleph_client::AlephClient;
+    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (method, params) = match action {
+        MarketplaceAction::Add { source } => (
+            "plugin.marketplace.add",
+            serde_json::json!({ "source": source }),
+        ),
+        MarketplaceAction::List => ("plugin.marketplace.list", serde_json::json!({})),
+        MarketplaceAction::Update { name } => (
+            "plugin.marketplace.update",
+            match name {
+                Some(n) => serde_json::json!({ "name": n }),
+                None => serde_json::json!({}),
+            },
+        ),
+        MarketplaceAction::Remove { name } => (
+            "plugin.marketplace.remove",
+            serde_json::json!({ "name": name }),
+        ),
+    };
+    let result: serde_json::Value = client.call(method, Some(params)).await?;
+    if json {
+        crate::output::print_json(&result);
+    } else if matches!(method, "plugin.marketplace.list") {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("{}", result);
+    }
+    client.close().await?;
     Ok(())
+}
+
+async fn dispatch_services(server_url: &str, action: ServicesAction, json: bool) -> CliResult<()> {
+    use commands::services_cmd;
+    match action {
+        ServicesAction::List { plugin, state } => {
+            services_cmd::list(server_url, plugin.as_deref(), state.as_deref(), json).await
+        }
+        ServicesAction::Status {
+            plugin_id,
+            service_id,
+        } => services_cmd::status(server_url, &plugin_id, &service_id, json).await,
+        ServicesAction::Start {
+            plugin_id,
+            service_id,
+        } => services_cmd::start(server_url, &plugin_id, &service_id, json).await,
+        ServicesAction::Stop {
+            plugin_id,
+            service_id,
+        } => services_cmd::stop(server_url, &plugin_id, &service_id, json).await,
+    }
+}
+
+async fn dispatch_skills(server_url: &str, action: SkillsAction, json: bool) -> CliResult<()> {
+    use commands::skills_cmd;
+    match action {
+        SkillsAction::List => skills_cmd::list(server_url, json).await,
+        SkillsAction::Install { source } => skills_cmd::install(server_url, &source, json).await,
+        SkillsAction::Reload { name } => skills_cmd::reload(server_url, &name, json).await,
+        SkillsAction::Delete { name } => skills_cmd::delete(server_url, &name, json).await,
+    }
+}
+
+async fn dispatch_workspace(
+    server_url: &str,
+    action: WorkspaceAction,
+    json: bool,
+) -> CliResult<()> {
+    use commands::workspace_cmd;
+    match action {
+        WorkspaceAction::List => workspace_cmd::list(server_url, json).await,
+        WorkspaceAction::Create { name, description } => {
+            workspace_cmd::create(server_url, &name, description.as_deref(), json).await
+        }
+        WorkspaceAction::Switch { name } => workspace_cmd::switch(server_url, &name, json).await,
+        WorkspaceAction::Active => workspace_cmd::active(server_url, json).await,
+        WorkspaceAction::Archive { name } => workspace_cmd::archive(server_url, &name, json).await,
+    }
+}
+
+async fn dispatch_gateway(server_url: &str, action: GatewayAction, json: bool) -> CliResult<()> {
+    use commands::gateway_cmd;
+    match action {
+        GatewayAction::Call { method, params } => {
+            gateway_cmd::call(server_url, &method, params.as_deref(), json).await
+        }
+    }
+}
+
+async fn dispatch_logs(server_url: &str, action: LogsAction, json: bool) -> CliResult<()> {
+    use commands::logs_cmd;
+    match action {
+        LogsAction::Level => logs_cmd::level(server_url, json).await,
+        LogsAction::SetLevel { level } => logs_cmd::set_level(server_url, &level, json).await,
+        LogsAction::Dir => logs_cmd::dir(server_url, json).await,
+    }
+}
+
+async fn dispatch_trace(server_url: &str, action: TraceAction, json: bool) -> CliResult<()> {
+    use commands::trace_cmd;
+    match action {
+        TraceAction::List { limit } => trace_cmd::list(server_url, limit, json).await,
+        TraceAction::Show { task_id } => trace_cmd::show(server_url, &task_id, json).await,
+    }
+}
+
+async fn dispatch_identity(server_url: &str, action: IdentityAction, json: bool) -> CliResult<()> {
+    use commands::identity_cmd;
+    match action {
+        IdentityAction::Get => identity_cmd::get(server_url, json).await,
+        IdentityAction::Set { manifest } => identity_cmd::set(server_url, &manifest, json).await,
+        IdentityAction::Clear => identity_cmd::clear(server_url, json).await,
+        IdentityAction::List => identity_cmd::list(server_url, json).await,
+    }
+}
+
+async fn dispatch_vault(server_url: &str, action: VaultAction, json: bool) -> CliResult<()> {
+    use commands::vault_cmd;
+    match action {
+        VaultAction::Status => vault_cmd::status(server_url, json).await,
+        VaultAction::Store => vault_cmd::store(server_url, json).await,
+        VaultAction::Delete => vault_cmd::delete(server_url, json).await,
+        VaultAction::Verify => vault_cmd::verify(server_url, json).await,
+    }
+}
+
+async fn dispatch_mcp(server_url: &str, action: McpAction, json: bool) -> CliResult<()> {
+    use commands::mcp_cmd;
+    match action {
+        McpAction::Pending => mcp_cmd::pending(server_url, json).await,
+        McpAction::Approve { request_id, reason } => {
+            mcp_cmd::approve(server_url, &request_id, reason.as_deref(), json).await
+        }
+        McpAction::Reject { request_id, reason } => {
+            mcp_cmd::reject(server_url, &request_id, reason.as_deref(), json).await
+        }
+        McpAction::Cancel { request_id } => mcp_cmd::cancel(server_url, &request_id, json).await,
+    }
+}
+
+fn dispatch_sandbox(action: SandboxAction) -> CliResult<()> {
+    use commands::sandbox_cmd;
+    match action {
+        SandboxAction::Info => sandbox_cmd::info(),
+        SandboxAction::Run {
+            network,
+            fs_write,
+            fs_read,
+            log_denials,
+            command,
+        } => sandbox_cmd::run(
+            network.as_deref(),
+            &fs_write,
+            &fs_read,
+            log_denials,
+            &command,
+        ),
+    }
+}
+
+async fn dispatch_chat_control(
+    server_url: &str,
+    action: ChatControlAction,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
+    use commands::chat_cmd;
+    match action {
+        ChatControlAction::Send {
+            message,
+            session,
+            stream,
+            thinking,
+        } => {
+            chat_cmd::send(
+                server_url,
+                &message,
+                session.as_deref(),
+                stream,
+                thinking.as_deref(),
+                config,
+                json,
+            )
+            .await
+        }
+        ChatControlAction::Abort { run_id } => {
+            chat_cmd::abort(server_url, &run_id, config, json).await
+        }
+        ChatControlAction::History { session_key, limit } => {
+            chat_cmd::history(server_url, &session_key, limit, config, json).await
+        }
+        ChatControlAction::Clear {
+            session_key,
+            keep_system,
+        } => chat_cmd::clear(server_url, &session_key, keep_system, config, json).await,
+    }
 }
 
 #[cfg(test)]
@@ -1481,5 +775,120 @@ mod tests {
     #[test]
     fn parse_trace_show_command() {
         assert!(Cli::try_parse_from(["aleph", "trace", "show", "task-1"]).is_ok());
+    }
+
+    // === Backward-compatibility guards: every legacy command path must still parse. ===
+
+    #[test]
+    fn parse_tools_bare_remains_supported() {
+        // `aleph tools` (no subcommand) preserves the original list-with-filter shape.
+        assert!(Cli::try_parse_from(["aleph", "tools"]).is_ok());
+    }
+
+    #[test]
+    fn parse_tools_legacy_category_flag_still_parses() {
+        // Existing scripts using `aleph tools -c foo` must keep working.
+        assert!(Cli::try_parse_from(["aleph", "tools", "-c", "memory"]).is_ok());
+    }
+
+    #[test]
+    fn parse_tools_describe_subcommand() {
+        assert!(Cli::try_parse_from(["aleph", "tools", "describe", "memory_search"]).is_ok());
+    }
+
+    #[test]
+    fn parse_tools_invoke_with_args() {
+        assert!(Cli::try_parse_from([
+            "aleph",
+            "tools",
+            "invoke",
+            "memory_search",
+            "--args",
+            r#"{"query":"x"}"#
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn parse_cron_create_minimum() {
+        assert!(Cli::try_parse_from([
+            "aleph",
+            "cron",
+            "create",
+            "daily-job",
+            "--schedule",
+            "0 0 * * *"
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn parse_cron_update_with_enable() {
+        assert!(Cli::try_parse_from([
+            "aleph",
+            "cron",
+            "update",
+            "id-1",
+            "--name",
+            "renamed",
+            "--enable"
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn parse_cron_update_enable_and_disable_conflict() {
+        let result =
+            Cli::try_parse_from(["aleph", "cron", "update", "id-1", "--enable", "--disable"]);
+        assert!(
+            result.is_err(),
+            "clap's conflicts_with should reject --enable --disable"
+        );
+    }
+
+    #[test]
+    fn parse_session_truncate() {
+        assert!(
+            Cli::try_parse_from(["aleph", "session", "truncate", "abc", "-n", "10"]).is_ok()
+        );
+    }
+
+    #[test]
+    fn parse_heartbeat_create_basic() {
+        assert!(Cli::try_parse_from([
+            "aleph",
+            "heartbeat",
+            "create",
+            "check-gmail",
+            "-i",
+            "5m",
+            "-t",
+            "memory_search"
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn parse_heartbeat_wake() {
+        assert!(Cli::try_parse_from([
+            "aleph",
+            "heartbeat",
+            "wake",
+            "check-gmail",
+            "-r",
+            "manual probe"
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn parse_plugins_legacy_alias_removed() {
+        // Confirm the deprecated `aleph plugins` variant no longer exists as a
+        // top-level subcommand — only `aleph plugin` is recognised.
+        let result = Cli::try_parse_from(["aleph", "plugins", "list"]);
+        assert!(
+            result.is_err(),
+            "legacy `aleph plugins` should now be rejected; use `aleph plugin`"
+        );
     }
 }

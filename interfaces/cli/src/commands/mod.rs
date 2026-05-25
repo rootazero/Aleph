@@ -1,10 +1,15 @@
-//! Command handlers
+//! Command handlers.
+//!
+//! Each submodule owns one top-level CLI subcommand (e.g. `cron_cmd` →
+//! `aleph cron`). `cli_args` collects every Clap `Subcommand` enum so
+//! `main.rs` stays focused on parsing and dispatch.
 
 pub mod ask;
 pub mod calls;
 pub mod channels_cmd;
 pub mod chat;
 pub mod chat_cmd;
+pub(crate) mod cli_args;
 pub mod completion;
 pub mod config_cmd;
 pub mod connect;
@@ -14,6 +19,7 @@ pub mod doctor;
 pub mod gateway_cmd;
 pub mod guests;
 pub mod health;
+pub mod heartbeat_cmd;
 pub mod identity_cmd;
 pub mod info;
 pub mod logs_cmd;

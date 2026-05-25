@@ -204,6 +204,45 @@ pub async fn usage(server_url: &str, key: &str, config: &CliConfig, json: bool) 
     Ok(())
 }
 
+/// Truncate the session's message log to the most-recent `keep` messages.
+///
+/// Forwards to `session.truncate`. The session itself (key, metadata, agent
+/// binding) is preserved; only the tail of the message log is kept.
+pub async fn truncate(
+    server_url: &str,
+    key: &str,
+    keep: usize,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url).await?;
+    client.authenticate(config).await?;
+
+    let params = serde_json::json!({ "session_key": key, "keep": keep });
+    let result: serde_json::Value = client.call("session.truncate", Some(params)).await?;
+
+    if json {
+        output::print_json(&result);
+    } else {
+        let kept = result
+            .get("kept")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| keep.to_string());
+        let removed = result
+            .get("removed")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "-".into());
+        println!("✓ session {key} truncated");
+        println!("  kept   : {kept}");
+        println!("  removed: {removed}");
+    }
+
+    client.close().await?;
+    Ok(())
+}
+
 /// Compact a session (compress history)
 pub async fn compact(server_url: &str, key: &str, config: &CliConfig, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;

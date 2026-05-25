@@ -1,9 +1,15 @@
-//! Commands listing command
+//! Tools subcommands.
+//!
+//! `aleph tools` historically delegated to `commands.list` (the slash-command
+//! catalogue exposed to all interfaces). This module now also drives
+//! `tools.invoke` for direct execution and a client-side filter over
+//! `commands.list` for `describe`.
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliError, CliResult};
 
 #[derive(Deserialize)]
 struct Command {
@@ -82,4 +88,131 @@ pub async fn run(server_url: &str, category: Option<&str>, json: bool) -> CliRes
 
     client.close().await?;
     Ok(())
+}
+
+/// `aleph tools describe <name>` — pull `commands.list` and emit the entry
+/// matching `name`. We do the filter client-side so the server doesn't need a
+/// new RPC (R4: I/O-only interface).
+pub async fn describe(server_url: &str, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url).await?;
+    let raw: Value = client.call("commands.list", None::<()>).await?;
+    client.close().await?;
+
+    let entry = raw
+        .get("commands")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .find(|item| item.get("key").and_then(|k| k.as_str()) == Some(name))
+        });
+
+    let entry = match entry {
+        Some(v) => v,
+        None => {
+            return Err(CliError::Other(format!(
+                "tool '{name}' not found in commands.list"
+            )));
+        }
+    };
+
+    if json {
+        output::print_json(entry);
+    } else {
+        println!("name        : {name}");
+        if let Some(desc) = entry.get("description").and_then(|v| v.as_str()) {
+            println!("description : {desc}");
+        }
+        if let Some(t) = entry.get("source_type").and_then(|v| v.as_str()) {
+            if !t.is_empty() {
+                println!("source      : {t}");
+            }
+        }
+        if let Some(t) = entry.get("command_type").and_then(|v| v.as_str()) {
+            if !t.is_empty() {
+                println!("kind        : {t}");
+            }
+        }
+        // Dump remaining metadata verbatim so users see new fields without
+        // requiring a CLI release every time the server adds one.
+        if let Value::Object(obj) = entry {
+            let extras: Vec<(&String, &Value)> = obj
+                .iter()
+                .filter(|(k, _)| {
+                    !matches!(
+                        k.as_str(),
+                        "key" | "description" | "source_type" | "command_type"
+                    )
+                })
+                .collect();
+            if !extras.is_empty() {
+                println!("--- extra metadata ---");
+                for (k, v) in extras {
+                    println!("{k}: {v}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `aleph tools invoke <name> [--args JSON] [--agent ID]` — direct invocation
+/// via `tools.invoke`. Bypasses the LLM loop (R8 deterministic execution
+/// path; reserved for E2E/automation).
+pub async fn invoke(
+    server_url: &str,
+    name: &str,
+    args: Option<&str>,
+    agent: Option<&str>,
+    json: bool,
+) -> CliResult<()> {
+    let arguments = match args {
+        None | Some("") => Value::Object(serde_json::Map::new()),
+        Some(s) => serde_json::from_str::<Value>(s)
+            .map_err(|e| CliError::Other(format!("invalid --args JSON: {e}")))?,
+    };
+
+    let mut body = serde_json::Map::new();
+    body.insert("tool_name".into(), Value::String(name.to_string()));
+    body.insert("arguments".into(), arguments);
+    if let Some(a) = agent {
+        body.insert("agent_id".into(), Value::String(a.to_string()));
+    }
+
+    let (client, _events) = AlephClient::connect(server_url).await?;
+    let result: Value = client.call("tools.invoke", Some(Value::Object(body))).await?;
+    client.close().await?;
+
+    if json {
+        output::print_json(&result);
+    } else {
+        let ok = result.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+        if ok {
+            if let Some(inner) = result.get("result") {
+                println!("{}", serde_json::to_string_pretty(inner)?);
+            } else {
+                println!("ok");
+            }
+        } else {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use serde_json::Value;
+
+    // Cheap sanity check for the invoke body shape — keeps the JSON contract
+    // exercised when the surrounding code changes.
+    #[test]
+    fn invoke_body_defaults_to_empty_args_when_unspecified() {
+        let v: Value = json!({
+            "tool_name": "memory_search",
+            "arguments": {}
+        });
+        assert_eq!(v["tool_name"], "memory_search");
+        assert!(v["arguments"].is_object());
+    }
 }

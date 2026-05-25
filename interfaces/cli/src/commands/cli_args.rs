@@ -1,0 +1,947 @@
+//! CLI argument enums for the `aleph` binary.
+//!
+//! Extracted out of `main.rs` so the entry point stays focused on parsing,
+//! logging and dispatch. Every subcommand enum lives here; `main.rs` only
+//! wires them to handler functions.
+
+use clap::Subcommand;
+
+use crate::commands::guests::GuestsAction;
+
+/// Top-level subcommands for the `aleph` client CLI.
+///
+/// Each variant maps to one handler module under `commands/`. Variants do not
+/// carry logic — they are pure I/O envelopes (R4: interface-only).
+#[derive(Subcommand)]
+pub(crate) enum Commands {
+    /// Start interactive chat session
+    Chat {
+        /// Session key (creates new if not specified)
+        #[arg(short, long)]
+        session: Option<String>,
+
+        /// Agent name to bind this session to
+        #[arg(short, long)]
+        agent: Option<String>,
+    },
+
+    /// Send a single message and get response
+    Ask {
+        /// The message to send
+        message: String,
+
+        /// Session key
+        #[arg(short, long, conflicts_with = "last")]
+        session: Option<String>,
+
+        /// Resume the most recently active session (by `last_active_at`)
+        #[arg(long, conflicts_with = "session")]
+        last: bool,
+
+        /// Write the final agent message to FILE (codex-parity `-o`)
+        #[arg(short = 'o', long = "output-last-message", value_name = "FILE")]
+        output_last_message: Option<String>,
+    },
+
+    /// Check server health
+    Health,
+
+    /// List, describe, or directly invoke registered tools
+    Tools {
+        /// Filter the implicit list by category (legacy shortcut for `tools list -c`)
+        #[arg(short, long)]
+        category: Option<String>,
+
+        #[command(subcommand)]
+        action: Option<ToolsAction>,
+    },
+
+    /// Inspect or cancel in-flight tool calls (per-tool AbortSignal RPC)
+    Calls {
+        #[command(subcommand)]
+        action: CallsAction,
+    },
+
+    /// Manage sessions
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
+
+    /// Manage guest invitations and permissions
+    Guests {
+        #[command(subcommand)]
+        action: GuestsAction,
+    },
+
+    /// Show server information
+    Info,
+
+    /// Connect and authenticate with the server
+    Connect {
+        /// Device name for this client
+        #[arg(short, long, default_value = "aleph-cli")]
+        device: String,
+    },
+
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
+    /// Manage cron jobs
+    Cron {
+        #[command(subcommand)]
+        action: CronAction,
+    },
+
+    /// Manage heartbeat tasks (recurring agent probes with conditional wake)
+    Heartbeat {
+        #[command(subcommand)]
+        action: HeartbeatAction,
+    },
+
+    /// Manage channels
+    Channels {
+        #[command(subcommand)]
+        action: ChannelsAction,
+    },
+
+    /// Manage Gateway daemon
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+
+    /// Call any Gateway RPC method directly
+    Gateway {
+        #[command(subcommand)]
+        action: GatewayAction,
+    },
+
+    /// AI provider management
+    Providers {
+        #[command(subcommand)]
+        action: ProvidersAction,
+    },
+
+    /// Model management
+    Models {
+        #[command(subcommand)]
+        action: ModelsAction,
+    },
+
+    /// Memory management
+    Memory {
+        #[command(subcommand)]
+        action: MemoryAction,
+    },
+
+    /// Plugin management — lifecycle, dev tools, and marketplace
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+
+    /// Background service management
+    Services {
+        #[command(subcommand)]
+        action: ServicesAction,
+    },
+
+    /// Skill management (file-based and markdown)
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
+
+    /// Workspace management
+    Workspace {
+        #[command(subcommand)]
+        action: WorkspaceAction,
+    },
+
+    /// Log management
+    Logs {
+        #[command(subcommand)]
+        action: LogsAction,
+    },
+
+    /// Structured trace replay inspection
+    Trace {
+        #[command(subcommand)]
+        action: TraceAction,
+    },
+
+    /// Identity/soul management
+    Identity {
+        #[command(subcommand)]
+        action: IdentityAction,
+    },
+
+    /// Vault key management
+    Vault {
+        #[command(subcommand)]
+        action: VaultAction,
+    },
+
+    /// Chat control (send, abort, history, clear)
+    #[command(name = "chat-control")]
+    ChatControl {
+        #[command(subcommand)]
+        action: ChatControlAction,
+    },
+
+    /// MCP tool approval workflow
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+
+    /// Run a command under Aleph's sandbox (forwards to aleph-server sandbox-debug)
+    Sandbox {
+        #[command(subcommand)]
+        action: SandboxAction,
+    },
+
+    /// Diagnose installation, config, gateway, providers, MCP and sandbox
+    Doctor,
+
+    /// Generate shell completion script
+    Completion {
+        /// Shell type (bash, zsh, fish, elvish, powershell)
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ToolsAction {
+    /// List registered tools (optionally filtered by category)
+    List {
+        /// Filter by category
+        #[arg(short, long)]
+        category: Option<String>,
+    },
+    /// Show a single tool's description and schema metadata
+    Describe {
+        /// Tool name (key) as shown by `aleph tools list`
+        name: String,
+    },
+    /// Directly invoke a tool, bypassing the LLM loop. JSON arguments are
+    /// forwarded to `tools.invoke` (deterministic execution path).
+    Invoke {
+        /// Registered tool name (e.g. "memory_search")
+        name: String,
+        /// JSON arguments object (e.g. '{"query": "foo"}'). Defaults to `{}`.
+        #[arg(short = 'a', long = "args", value_name = "JSON")]
+        args: Option<String>,
+        /// Override the resolving agent_id (defaults to "main" server-side)
+        #[arg(long)]
+        agent: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ConfigAction {
+    /// Print config file path
+    File,
+    /// Get configuration (optionally by section: gateway, agents, channels, etc.)
+    Get {
+        /// Config section name (e.g., gateway, agents, channels)
+        section: Option<String>,
+    },
+    /// Set a configuration value
+    Set {
+        /// Dot-separated config path (e.g., gateway.port)
+        path: String,
+        /// Value to set (JSON or plain string)
+        value: String,
+    },
+    /// Validate current configuration
+    Validate,
+    /// Reload configuration on the server
+    Reload,
+    /// Export configuration schema
+    Schema {
+        /// Output file path (prints to stdout if not specified)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Open config file in $EDITOR
+    Edit,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum CronAction {
+    /// List all cron jobs
+    List,
+    /// Show cron scheduler status
+    Status,
+    /// Inspect a single job's definition and state
+    Get {
+        /// Job ID
+        job_id: String,
+    },
+    /// Trigger a cron job manually (sets next_run_at_ms to now)
+    Run {
+        /// Job ID to trigger
+        job_id: String,
+    },
+    /// Show execution history for a job (SQLite-backed)
+    Runs {
+        /// Job ID
+        job_id: String,
+        /// Max records to return
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
+    /// Create a new cron job
+    Create {
+        /// Human-readable job name
+        name: String,
+        /// Cron expression (e.g. '*/5 * * * *'). Use --schedule-kind for At/Interval.
+        #[arg(short = 's', long, conflicts_with = "schedule_kind")]
+        schedule: Option<String>,
+        /// Raw ScheduleKind JSON (advanced; conflicts with --schedule)
+        #[arg(long = "schedule-kind", value_name = "JSON")]
+        schedule_kind: Option<String>,
+        /// Agent ID to run as (defaults to "main")
+        #[arg(short, long, default_value = "main")]
+        agent: String,
+        /// Prompt the agent should run on each tick
+        #[arg(short, long, default_value = "")]
+        prompt: String,
+        /// IANA timezone (e.g. "America/New_York")
+        #[arg(long)]
+        timezone: Option<String>,
+        /// Comma-separated tags
+        #[arg(long)]
+        tags: Option<String>,
+    },
+    /// Update an existing cron job (partial — only provided flags are sent)
+    Update {
+        /// Job ID
+        job_id: String,
+        /// New name
+        #[arg(long)]
+        name: Option<String>,
+        /// New agent ID
+        #[arg(long)]
+        agent: Option<String>,
+        /// New prompt
+        #[arg(long)]
+        prompt: Option<String>,
+        /// New cron expression (mutually exclusive with --schedule-kind)
+        #[arg(long, conflicts_with = "schedule_kind")]
+        schedule: Option<String>,
+        /// New ScheduleKind JSON (advanced)
+        #[arg(long = "schedule-kind", value_name = "JSON")]
+        schedule_kind: Option<String>,
+        /// New timezone
+        #[arg(long)]
+        timezone: Option<String>,
+        /// Comma-separated tags
+        #[arg(long)]
+        tags: Option<String>,
+        /// Enable the job (mutually exclusive with --disable)
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Disable the job
+        #[arg(long)]
+        disable: bool,
+    },
+    /// Delete a cron job permanently
+    Delete {
+        /// Job ID
+        job_id: String,
+    },
+    /// Toggle enabled state (or force enable/disable)
+    Toggle {
+        /// Job ID
+        job_id: String,
+        /// Force enable
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Force disable
+        #[arg(long)]
+        disable: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum HeartbeatAction {
+    /// List heartbeat tasks
+    List,
+    /// Inspect a single heartbeat task
+    Get {
+        /// Task ID
+        task_id: String,
+    },
+    /// Create a heartbeat task. The probe tool is invoked each interval; when
+    /// `--trigger always` or the configured trigger fires, the agent wakes.
+    Create {
+        /// Task name
+        name: String,
+        /// Probe interval (e.g. "5m", "30s", "1h", or raw ms)
+        #[arg(short, long)]
+        interval: String,
+        /// Probe tool name (registered in the BuiltinToolRegistry)
+        #[arg(short = 't', long)]
+        tool: String,
+        /// Agent ID to wake (defaults to "main")
+        #[arg(short, long, default_value = "main")]
+        agent: String,
+        /// JSON object passed as probe tool_params
+        #[arg(short = 'p', long = "params", value_name = "JSON")]
+        params: Option<String>,
+        /// Raw TriggerCondition JSON (defaults to {"Always":{}} server-side)
+        #[arg(long = "trigger", value_name = "JSON")]
+        trigger: Option<String>,
+        /// Start disabled (default is enabled)
+        #[arg(long)]
+        disabled: bool,
+    },
+    /// Update an existing heartbeat task (partial)
+    Update {
+        /// Task ID
+        task_id: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        agent: Option<String>,
+        /// New interval (e.g. "10m")
+        #[arg(short, long)]
+        interval: Option<String>,
+        /// Enable the task (mutually exclusive with --disable)
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Disable the task
+        #[arg(long)]
+        disable: bool,
+    },
+    /// Delete a heartbeat task
+    Delete {
+        /// Task ID
+        task_id: String,
+    },
+    /// Toggle enabled state (or force enable/disable)
+    Toggle {
+        /// Task ID
+        task_id: String,
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        #[arg(long)]
+        disable: bool,
+    },
+    /// Manually trigger a heartbeat task (UserAction priority)
+    Wake {
+        /// Task ID
+        task_id: String,
+        /// Free-form reason recorded in the wake request
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
+    /// Show execution history for a task
+    Runs {
+        /// Task ID
+        task_id: String,
+        /// Max records to return
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ChannelsAction {
+    /// List all channels
+    List,
+    /// Show channel status
+    Status {
+        /// Channel name (shows all if not specified)
+        name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum CallsAction {
+    /// List every currently-in-flight tool call (tools.in_flight)
+    List,
+    /// Cancel a specific in-flight tool call by tool_call_id
+    Cancel {
+        /// LLM-issued tool_call_id (see `aleph calls list`)
+        call_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum GatewayAction {
+    /// Call an RPC method
+    Call {
+        /// RPC method name (e.g., "health", "providers.list")
+        method: String,
+        /// JSON params (optional, e.g., '{"section": "general"}')
+        params: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DaemonAction {
+    /// Show Gateway server status
+    Status,
+    /// Start Gateway server
+    Start {
+        /// Port number for the server
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Run as a background daemon
+        #[arg(short, long)]
+        daemon: bool,
+        /// Path to configuration file
+        #[arg(short, long)]
+        config: Option<String>,
+    },
+    /// Stop Gateway server
+    Stop,
+    /// Restart Gateway server
+    Restart {
+        /// Port number for the server
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Run as a background daemon
+        #[arg(short, long)]
+        daemon: bool,
+        /// Path to configuration file
+        #[arg(short, long)]
+        config: Option<String>,
+    },
+    /// View Gateway logs
+    Logs {
+        /// Number of lines to show
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+        /// Filter by log level (e.g., warn, error)
+        #[arg(short, long)]
+        level: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ProvidersAction {
+    /// List all AI providers
+    List,
+    /// Get provider details
+    Get { name: String },
+    /// Add a new provider
+    Add {
+        name: String,
+        /// Provider type (e.g., openai, anthropic, ollama)
+        #[arg(long)]
+        r#type: String,
+        /// API key
+        #[arg(long)]
+        api_key: String,
+        /// Base URL (optional)
+        #[arg(long)]
+        base_url: Option<String>,
+    },
+    /// Test provider connectivity
+    Test { name: String },
+    /// Set as default provider
+    SetDefault { name: String },
+    /// Remove a provider
+    Remove { name: String },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ModelsAction {
+    /// List all available models
+    List,
+    /// Get model details
+    Get { model_id: String },
+    /// Show model capabilities
+    Capabilities { model_id: String },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum MemoryAction {
+    /// Search memory
+    Search {
+        /// Search query
+        query: String,
+        /// Maximum results to return
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
+    /// Show memory statistics
+    Stats,
+    /// Clear memory
+    Clear {
+        /// Only clear facts, keep other memories
+        #[arg(long)]
+        facts_only: bool,
+    },
+    /// Compress and optimize memory
+    Compress,
+    /// Delete a specific memory entry
+    Delete {
+        /// Memory entry ID
+        id: String,
+    },
+}
+
+/// Unified plugin subcommands: lifecycle, dev tools, and marketplace.
+///
+/// Note: the legacy hidden `Plugins` variant was removed during the CLI parity
+/// pass — `aleph plugin` is the single entrypoint for both lifecycle and dev.
+#[derive(Subcommand)]
+pub(crate) enum PluginAction {
+    // === Lifecycle (server-connected) ===
+    /// List installed plugins
+    List,
+    /// Install a plugin from source (URL, path, or zip)
+    Install {
+        source: String,
+        /// Installation scope: user or system
+        #[arg(long, default_value = "user")]
+        scope: String,
+    },
+    /// Uninstall a plugin
+    Uninstall {
+        name: String,
+        /// Scope override
+        #[arg(long)]
+        scope: Option<String>,
+        /// Keep plugin data directory
+        #[arg(long)]
+        keep_data: bool,
+    },
+    /// Enable a disabled plugin
+    Enable { name: String },
+    /// Disable a plugin
+    Disable { name: String },
+    /// Check for plugin updates
+    Update,
+    /// Reload all plugins (hot reload)
+    Reload,
+    /// Show detailed info about a specific plugin
+    Info {
+        /// Plugin name or ID
+        name: String,
+    },
+    /// Search for plugins in the registry
+    Search {
+        /// Search query
+        query: String,
+    },
+    /// Call a plugin tool
+    Call {
+        /// Plugin name
+        plugin: String,
+        /// Tool name
+        tool: String,
+        /// JSON params (optional)
+        params: Option<String>,
+    },
+    // === Dev tools (local, no server needed) ===
+    /// Scaffold a new plugin project
+    Init {
+        /// Plugin name
+        name: String,
+        /// Plugin type: nodejs, wasm, or static
+        #[arg(short = 't', long = "type", default_value = "static")]
+        template: String,
+        /// Target directory (defaults to ./<name>)
+        #[arg(short, long)]
+        dir: Option<String>,
+    },
+    /// Validate a plugin directory
+    Validate {
+        /// Plugin directory (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+    },
+    /// Package a plugin for distribution
+    Pack {
+        /// Plugin directory (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+        /// Output file path
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Run plugin diagnostics
+    Doctor,
+    // === Marketplace (P2 placeholder) ===
+    /// Plugin marketplace management
+    Marketplace {
+        #[command(subcommand)]
+        action: MarketplaceAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum MarketplaceAction {
+    /// Add a marketplace source
+    Add { source: String },
+    /// List configured marketplace sources
+    List,
+    /// Update marketplace index (all sources or a specific one)
+    Update { name: Option<String> },
+    /// Remove a marketplace source
+    Remove { name: String },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ServicesAction {
+    /// List background services
+    List {
+        /// Filter by plugin ID
+        #[arg(long)]
+        plugin: Option<String>,
+        /// Filter by state (running, stopped, error)
+        #[arg(long)]
+        state: Option<String>,
+    },
+    /// Get service status
+    Status {
+        /// Plugin ID
+        plugin_id: String,
+        /// Service ID
+        service_id: String,
+    },
+    /// Start a service
+    Start {
+        /// Plugin ID
+        plugin_id: String,
+        /// Service ID
+        service_id: String,
+    },
+    /// Stop a service
+    Stop {
+        /// Plugin ID
+        plugin_id: String,
+        /// Service ID
+        service_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SkillsAction {
+    /// List all skills (file-based and runtime-loaded)
+    List,
+    /// Install a skill from source
+    Install { source: String },
+    /// Reload a markdown skill
+    Reload { name: String },
+    /// Delete/unload a skill
+    Delete { name: String },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SessionAction {
+    /// List all sessions
+    List,
+    /// Create a new session
+    New {
+        /// Session name
+        #[arg(short, long)]
+        name: Option<String>,
+    },
+    /// Delete a session
+    Delete {
+        /// Session key to delete
+        key: String,
+    },
+    /// Show session usage statistics
+    Usage {
+        /// Session key
+        key: String,
+    },
+    /// Compact session (compress history)
+    Compact {
+        /// Session key
+        key: String,
+    },
+    /// Truncate the session message log to the most recent N messages
+    /// (session.truncate; preserves session metadata).
+    Truncate {
+        /// Session key
+        key: String,
+        /// Number of most recent messages to keep
+        #[arg(short = 'n', long, default_value = "20")]
+        keep: usize,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum WorkspaceAction {
+    /// List all workspaces
+    List,
+    /// Create a new workspace
+    Create {
+        /// Workspace name
+        name: String,
+        /// Optional description
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Switch to a workspace
+    Switch {
+        /// Workspace name to switch to
+        name: String,
+    },
+    /// Show the currently active workspace
+    Active,
+    /// Archive a workspace
+    Archive {
+        /// Workspace name to archive
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LogsAction {
+    /// Get current log level
+    Level,
+    /// Set log level (trace, debug, info, warn, error)
+    SetLevel {
+        /// Log level to set
+        level: String,
+    },
+    /// Show log directory path
+    Dir,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TraceAction {
+    /// List recent persisted trace replays
+    List {
+        /// Maximum number of tasks to show
+        #[arg(short, long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Show a structured replay for a persisted task
+    Show {
+        /// Replay task ID
+        task_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum IdentityAction {
+    /// Get current identity/soul
+    Get,
+    /// Set identity from JSON manifest
+    Set {
+        /// Soul manifest as JSON string
+        manifest: String,
+    },
+    /// Clear session identity override
+    Clear,
+    /// List identity sources
+    List,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum VaultAction {
+    /// Show vault status
+    Status,
+    /// Store master key (interactive input)
+    Store,
+    /// Delete master key
+    Delete,
+    /// Verify vault integrity
+    Verify,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SandboxAction {
+    /// Print the active sandbox profile summary and exit
+    Info,
+    /// Run a command under the active sandbox profile
+    Run {
+        /// Network policy: `none`, `all`, or omit for the default
+        #[arg(long, value_name = "POLICY")]
+        network: Option<String>,
+        /// Extra paths to grant write access to (repeatable)
+        #[arg(long = "fs-write", value_name = "PATH")]
+        fs_write: Vec<String>,
+        /// Extra paths to grant read access to (repeatable)
+        #[arg(long = "fs-read", value_name = "PATH")]
+        fs_read: Vec<String>,
+        /// On macOS, stream sandbox denials from `log stream` while the command runs
+        #[arg(long)]
+        log_denials: bool,
+        /// Command and arguments to execute. Use `--` to separate from flags.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum McpAction {
+    /// List pending tool approval requests
+    Pending,
+    /// Approve a tool execution request
+    Approve {
+        /// Request ID
+        request_id: String,
+        /// Reason for approval
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Reject a tool execution request
+    Reject {
+        /// Request ID
+        request_id: String,
+        /// Reason for rejection
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Cancel a pending approval
+    Cancel {
+        /// Request ID
+        request_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ChatControlAction {
+    /// Send a message (non-interactive)
+    Send {
+        /// The message to send
+        message: String,
+        /// Session key
+        #[arg(short, long)]
+        session: Option<String>,
+        /// Enable streaming
+        #[arg(long)]
+        stream: bool,
+        /// Thinking level (none, concise, verbose)
+        #[arg(long)]
+        thinking: Option<String>,
+    },
+    /// Abort a running chat
+    Abort {
+        /// Run ID to abort
+        run_id: String,
+    },
+    /// Show chat history
+    History {
+        /// Session key
+        session_key: String,
+        /// Maximum messages to return
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Clear chat history
+    Clear {
+        /// Session key
+        session_key: String,
+        /// Keep system messages
+        #[arg(long)]
+        keep_system: bool,
+    },
+}
