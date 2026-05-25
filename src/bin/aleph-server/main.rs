@@ -144,6 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::SandboxInitWindows { args: init_args }) => {
             alephcore::sandbox::windows_init::run_init(init_args);
         }
+        Some(Command::BootstrapToken) => return commands::handle_bootstrap_token(),
         other => {
             args.command = other;
         }
