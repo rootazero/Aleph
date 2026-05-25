@@ -289,151 +289,19 @@ impl AgentHarness {
             match inner {
                 Ok(mut output) => {
                     executed_count = executed_count.saturating_add(1);
-
-                    // Layer 3 — per-turn aggregate budget. Record the result
-                    // and, if the running total exceeds the configured cap,
-                    // persist the LIFO-newest non-persisted entries to disk
-                    // via the shared `result_store` and rewrite the in-flight
-                    // `output.value` to the marker the LLM will see. This
-                    // happens BEFORE `emit_event` so the persisted SessionEvent
-                    // matches what the next Think turn will read back.
-                    if let Some(budget) = self.deps.turn_budget.as_ref() {
-                        let text = match &output.value {
-                            serde_json::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        };
-                        let already_persisted = text.starts_with("[Full output persisted: ");
-                        let tokens = crate::context::budget::pressure::estimate_tokens_smart(&text);
-                        let record = crate::tools::turn_budget::TurnResult {
-                            call_id: call.id.clone(),
-                            tool_name: call.name.clone(),
-                            tokens_in_context: tokens,
-                            in_context_text: text,
-                            already_persisted,
-                        };
-                        let spills = budget.record(&budget_turn_id, record);
-                        if !spills.is_empty() {
-                            if let Some(store) = self.deps.result_store.as_ref() {
-                                for spill in spills {
-                                    if spill.call_id != call.id {
-                                        // The spilled entry was recorded on an
-                                        // earlier iteration; the corresponding
-                                        // SessionEvent::ToolResult is already
-                                        // persisted in the session store, so
-                                        // rewriting it post-emit is not
-                                        // possible from here. The marker file
-                                        // is still written for recovery, and
-                                        // cheap_passes will surface it on the
-                                        // next preflight pass.
-                                        let _ = store.persist_if_large(
-                                            &spill.call_id,
-                                            &spill.tool_name,
-                                            &spill.original_text,
-                                            0,
-                                        );
-                                        continue;
-                                    }
-                                    // Same-turn newest spill: rewrite `output`
-                                    // before the SessionEvent is emitted so
-                                    // the LLM sees the marker instead of the
-                                    // full text on its next Think.
-                                    if let Some(marker) = store.persist_if_large(
-                                        &spill.call_id,
-                                        &spill.tool_name,
-                                        &spill.original_text,
-                                        0,
-                                    ) {
-                                        output.value = serde_json::Value::String(marker);
-                                        output.metadata.truncated = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
+                    self.apply_turn_budget(&budget_turn_id, &call, &mut output);
                     tool_call_cache.insert(cache_key.clone(), output.clone());
-                    let output_value = output.value.clone();
-                    let result_event = SessionEvent::ToolResult {
-                        turn_id,
-                        call_id: call.id.clone(),
-                        output,
-                        at: now_ms(),
-                    };
-                    self.deps
-                        .session
-                        .emit_event(session_id, result_event)
-                        .await?;
-                    let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-                    self.emit(
-                        || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
-                            iteration,
-                            call: crate::harness::trace::ToolCallEndEvent {
-                                tool_id: call.id.clone(),
-                                tool_name: call.name.clone(),
-                                input: call.arguments.clone(),
-                                duration_ms: dur_ms,
-                            },
-                            result: crate::tools::runtime::ToolResult::Success {
-                                output: output_value,
-                            },
-                        },
-                    );
-                    self.push_tool_invocation(
-                        call.id.clone(),
-                        call.name.clone(),
-                        dur_ms,
-                        true,
-                        None,
-                    );
+                    self.emit_tool_success(
+                        session_id, turn_id, &call, output, started, iteration,
+                    )
+                    .await?;
                 }
                 Err(e) => {
-                    // Preserve the error's retryability for the trace before
-                    // the variant is collapsed into a flat string.
-                    let retryable = e.is_retryable();
-                    let error_msg = e.to_string();
-                    let error_event = SessionEvent::ToolError {
-                        turn_id,
-                        call_id: call.id.clone(),
-                        error: error_msg.clone(),
-                        at: now_ms(),
-                    };
-                    if let Err(emit_err) =
-                        self.deps.session.emit_event(session_id, error_event).await
-                    {
-                        tracing::warn!(
-                            ?session_id,
-                            call_id = %call.id,
-                            ?emit_err,
-                            "failed to persist ToolError event",
-                        );
-                    }
-                    let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-                    let error_for_timeline = error_msg.clone();
-                    self.emit(
-                        || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
-                            iteration,
-                            call: crate::harness::trace::ToolCallEndEvent {
-                                tool_id: call.id.clone(),
-                                tool_name: call.name.clone(),
-                                input: call.arguments.clone(),
-                                duration_ms: dur_ms,
-                            },
-                            result: crate::tools::runtime::ToolResult::Error {
-                                error: error_msg,
-                                retryable,
-                            },
-                        },
-                    );
-                    self.push_tool_invocation(
-                        call.id.clone(),
-                        call.name.clone(),
-                        dur_ms,
-                        false,
-                        Some(error_for_timeline),
-                    );
                     // Do NOT abort — continue processing remaining tool calls.
                     // The error is persisted to session log; the next Think
                     // turn will see it as tool_result(is_error=true).
+                    self.emit_tool_error(session_id, turn_id, &call, e, started, iteration)
+                        .await;
                 }
             }
 
@@ -639,131 +507,18 @@ impl AgentHarness {
                 }
                 Ok(Ok(mut output)) => {
                     executed_count = executed_count.saturating_add(1);
-
-                    // Layer 3 — per-turn aggregate budget (same logic as
-                    // serial path, just iterated in input order over parallel
-                    // results).
-                    if let Some(budget) = self.deps.turn_budget.as_ref() {
-                        let text = match &output.value {
-                            serde_json::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        };
-                        let already_persisted = text.starts_with("[Full output persisted: ");
-                        let tokens = crate::context::budget::pressure::estimate_tokens_smart(&text);
-                        let record = crate::tools::turn_budget::TurnResult {
-                            call_id: call.id.clone(),
-                            tool_name: call.name.clone(),
-                            tokens_in_context: tokens,
-                            in_context_text: text,
-                            already_persisted,
-                        };
-                        let spills = budget.record(budget_turn_id, record);
-                        if !spills.is_empty() {
-                            if let Some(store) = self.deps.result_store.as_ref() {
-                                for spill in spills {
-                                    if spill.call_id != call.id {
-                                        let _ = store.persist_if_large(
-                                            &spill.call_id,
-                                            &spill.tool_name,
-                                            &spill.original_text,
-                                            0,
-                                        );
-                                        continue;
-                                    }
-                                    if let Some(marker) = store.persist_if_large(
-                                        &spill.call_id,
-                                        &spill.tool_name,
-                                        &spill.original_text,
-                                        0,
-                                    ) {
-                                        output.value = serde_json::Value::String(marker);
-                                        output.metadata.truncated = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    let output_value = output.value.clone();
-                    let result_event = SessionEvent::ToolResult {
-                        turn_id,
-                        call_id: call.id.clone(),
-                        output,
-                        at: now_ms(),
-                    };
-                    self.deps
-                        .session
-                        .emit_event(session_id, result_event)
-                        .await?;
-                    let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-                    self.emit(
-                        || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
-                            iteration,
-                            call: crate::harness::trace::ToolCallEndEvent {
-                                tool_id: call.id.clone(),
-                                tool_name: call.name.clone(),
-                                input: call.arguments.clone(),
-                                duration_ms: dur_ms,
-                            },
-                            result: crate::tools::runtime::ToolResult::Success {
-                                output: output_value,
-                            },
-                        },
-                    );
-                    self.push_tool_invocation(
-                        call.id.clone(),
-                        call.name.clone(),
-                        dur_ms,
-                        true,
-                        None,
-                    );
+                    self.apply_turn_budget(budget_turn_id, call, &mut output);
+                    self.emit_tool_success(
+                        session_id, turn_id, call, output, started, iteration,
+                    )
+                    .await?;
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
                     }
                 }
                 Ok(Err(e)) => {
-                    let retryable = e.is_retryable();
-                    let error_msg = e.to_string();
-                    let error_event = SessionEvent::ToolError {
-                        turn_id,
-                        call_id: call.id.clone(),
-                        error: error_msg.clone(),
-                        at: now_ms(),
-                    };
-                    if let Err(emit_err) =
-                        self.deps.session.emit_event(session_id, error_event).await
-                    {
-                        tracing::warn!(
-                            ?session_id,
-                            call_id = %call.id,
-                            ?emit_err,
-                            "failed to persist ToolError event",
-                        );
-                    }
-                    let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-                    let error_for_timeline = error_msg.clone();
-                    self.emit(
-                        || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
-                            iteration,
-                            call: crate::harness::trace::ToolCallEndEvent {
-                                tool_id: call.id.clone(),
-                                tool_name: call.name.clone(),
-                                input: call.arguments.clone(),
-                                duration_ms: dur_ms,
-                            },
-                            result: crate::tools::runtime::ToolResult::Error {
-                                error: error_msg,
-                                retryable,
-                            },
-                        },
-                    );
-                    self.push_tool_invocation(
-                        call.id.clone(),
-                        call.name.clone(),
-                        dur_ms,
-                        false,
-                        Some(error_for_timeline),
-                    );
+                    self.emit_tool_error(session_id, turn_id, call, e, started, iteration)
+                        .await;
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
                     }
@@ -779,6 +534,171 @@ impl AgentHarness {
         }
 
         Ok(executed_count)
+    }
+}
+
+// =============================================================================
+// Shared helpers — used by both the serial path (`act`) and the parallel
+// fast path (`act_parallel`). Extracted to eliminate ~240 LOC of dual-
+// maintenance risk: fixes to budget-spill semantics or event emission only
+// have to land in one place.
+// =============================================================================
+
+impl AgentHarness {
+    /// Apply Layer-3 turn budget: record this result, persist any spills via
+    /// the shared result store, and rewrite `output.value` to a marker string
+    /// when THIS call's result was the one spilled (so the LLM's next Think
+    /// sees the marker, not the full text). No-op when budget is unset.
+    fn apply_turn_budget(
+        &self,
+        budget_turn_id: &crate::tools::turn_budget::TurnId,
+        call: &NativeToolCall,
+        output: &mut ToolOutput,
+    ) {
+        let Some(budget) = self.deps.turn_budget.as_ref() else {
+            return;
+        };
+        let text = match &output.value {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let already_persisted = text.starts_with("[Full output persisted: ");
+        let tokens = crate::context::budget::pressure::estimate_tokens_smart(&text);
+        let record = crate::tools::turn_budget::TurnResult {
+            call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            tokens_in_context: tokens,
+            in_context_text: text,
+            already_persisted,
+        };
+        let spills = budget.record(budget_turn_id, record);
+        if spills.is_empty() {
+            return;
+        }
+        let Some(store) = self.deps.result_store.as_ref() else {
+            return;
+        };
+        for spill in spills {
+            if spill.call_id != call.id {
+                // Earlier-iteration spill: its SessionEvent::ToolResult is
+                // already persisted, so post-hoc rewrite from here isn't
+                // possible. The marker file is still written for recovery;
+                // cheap_passes surfaces it on the next preflight.
+                let _ = store.persist_if_large(
+                    &spill.call_id,
+                    &spill.tool_name,
+                    &spill.original_text,
+                    0,
+                );
+                continue;
+            }
+            // Same-turn newest spill: rewrite output BEFORE the SessionEvent
+            // is emitted so the LLM sees the marker instead of the full text.
+            if let Some(marker) = store.persist_if_large(
+                &spill.call_id,
+                &spill.tool_name,
+                &spill.original_text,
+                0,
+            ) {
+                output.value = serde_json::Value::String(marker);
+                output.metadata.truncated = true;
+            }
+        }
+    }
+
+    /// Persist a successful tool call: emit `SessionEvent::ToolResult`,
+    /// trace event, and timeline entry.
+    async fn emit_tool_success(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        call: &NativeToolCall,
+        output: ToolOutput,
+        started: Instant,
+        iteration: usize,
+    ) -> Result<(), HarnessError> {
+        let output_value = output.value.clone();
+        let result_event = SessionEvent::ToolResult {
+            turn_id,
+            call_id: call.id.clone(),
+            output,
+            at: now_ms(),
+        };
+        self.deps
+            .session
+            .emit_event(session_id, result_event)
+            .await?;
+        let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+        self.emit(
+            || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                iteration,
+                call: crate::harness::trace::ToolCallEndEvent {
+                    tool_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    input: call.arguments.clone(),
+                    duration_ms: dur_ms,
+                },
+                result: crate::tools::runtime::ToolResult::Success {
+                    output: output_value,
+                },
+            },
+        );
+        self.push_tool_invocation(call.id.clone(), call.name.clone(), dur_ms, true, None);
+        Ok(())
+    }
+
+    /// Persist a failed tool call: emit `SessionEvent::ToolError` (best
+    /// effort — failure to persist logs at WARN, never aborts the batch),
+    /// trace event, timeline entry.
+    async fn emit_tool_error(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        call: &NativeToolCall,
+        e: crate::tools::service::ToolError,
+        started: Instant,
+        iteration: usize,
+    ) {
+        let retryable = e.is_retryable();
+        let error_msg = e.to_string();
+        let error_event = SessionEvent::ToolError {
+            turn_id,
+            call_id: call.id.clone(),
+            error: error_msg.clone(),
+            at: now_ms(),
+        };
+        if let Err(emit_err) = self.deps.session.emit_event(session_id, error_event).await {
+            tracing::warn!(
+                ?session_id,
+                call_id = %call.id,
+                ?emit_err,
+                "failed to persist ToolError event",
+            );
+        }
+        let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+        let error_for_timeline = error_msg.clone();
+        self.emit(
+            || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
+                iteration,
+                call: crate::harness::trace::ToolCallEndEvent {
+                    tool_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    input: call.arguments.clone(),
+                    duration_ms: dur_ms,
+                },
+                result: crate::tools::runtime::ToolResult::Error {
+                    error: error_msg,
+                    retryable,
+                },
+            },
+        );
+        self.push_tool_invocation(
+            call.id.clone(),
+            call.name.clone(),
+            dur_ms,
+            false,
+            Some(error_for_timeline),
+        );
     }
 }
 
