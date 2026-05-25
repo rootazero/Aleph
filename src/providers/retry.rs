@@ -5,6 +5,7 @@
 use crate::config::RetryPolicy;
 use crate::error::{AlephError, Result};
 use crate::tool_metadata::DEFAULT_MAX_RETRIES;
+use rand::Rng;
 use std::future::Future;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -17,6 +18,40 @@ pub const RETRY_MAX_DELAY_WITH_HEADERS_MS: u64 = i32::MAX as u64; // ~24 days (m
 
 /// Initial backoff duration (1 second) (default, used when no policy provided)
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+
+/// Default jitter factor for `retry_with_backoff` — matches `RetryPolicy::default()`.
+/// Equal-jitter shape: each backoff is widened by `[0, base * 0.25]`.
+const DEFAULT_JITTER_FACTOR: f64 = 0.25;
+
+/// Add a random jitter on top of a deterministic backoff duration.
+///
+/// `factor` is the maximum jitter as a fraction of `base` — `0.0` disables
+/// jitter (returns `base` unchanged), `0.25` widens to `[base, base * 1.25]`,
+/// `1.0` widens to `[base, base * 2.0]`. Values are clamped to `[0.0, 1.0]`
+/// — larger factors do not produce wider spread.
+///
+/// Why this exists: concurrent agents that share a rate-limited provider
+/// (e.g. multiple subagents under the same Anthropic key) otherwise retry
+/// in lockstep — a thundering herd that defeats the very rate limit they
+/// just hit. Spreading retries across a window of `factor * base` decorrelates
+/// the storm without ever sleeping *less* than the deterministic backoff,
+/// so the "at least exponential" contract is preserved.
+pub fn apply_jitter(base: Duration, factor: f64) -> Duration {
+    if factor <= 0.0 {
+        return base;
+    }
+    let base_ms = u64::try_from(base.as_millis()).unwrap_or(u64::MAX);
+    if base_ms == 0 {
+        return base;
+    }
+    let factor = factor.min(1.0);
+    let max_extra_ms = ((base_ms as f64) * factor) as u64;
+    if max_extra_ms == 0 {
+        return base;
+    }
+    let extra = rand::thread_rng().gen_range(0..=max_extra_ms);
+    Duration::from_millis(base_ms.saturating_add(extra))
+}
 
 /// Determines if an error is retryable using default policy.
 fn is_retryable(error: &AlephError) -> bool {
@@ -205,6 +240,8 @@ where
                 // Calculate backoff duration (exponential: 1s, 2s, 4s) with overflow protection
                 let backoff_secs = INITIAL_BACKOFF.as_secs_f64() * 2_f64.powi(attempt as i32 - 1);
                 let backoff = Duration::from_secs_f64(backoff_secs.min(30.0));
+                // Spread retry storms across concurrent callers (see `apply_jitter`).
+                let backoff = apply_jitter(backoff, DEFAULT_JITTER_FACTOR);
 
                 warn!(
                     attempt,
@@ -278,6 +315,8 @@ where
                 let backoff_secs =
                     initial_backoff.as_secs_f64() * multiplier.powi(attempt as i32 - 1);
                 let backoff = Duration::from_secs_f64(backoff_secs.min(300.0));
+                // Spread retry storms across concurrent callers (see `apply_jitter`).
+                let backoff = apply_jitter(backoff, policy.jitter_factor);
 
                 warn!(
                     attempt,
@@ -507,5 +546,85 @@ mod tests {
         // Not retryable
         assert!(retryable_reason(&AlephError::authentication("Test", "invalid key")).is_none());
         assert!(retryable_reason(&AlephError::invalid_config("bad config")).is_none());
+    }
+
+    // --- apply_jitter (thundering-herd protection) -----------------------------
+
+    #[test]
+    fn apply_jitter_zero_factor_is_identity() {
+        let d = Duration::from_millis(1000);
+        assert_eq!(apply_jitter(d, 0.0), d);
+    }
+
+    #[test]
+    fn apply_jitter_negative_factor_is_identity() {
+        let d = Duration::from_millis(1000);
+        assert_eq!(apply_jitter(d, -0.5), d);
+    }
+
+    #[test]
+    fn apply_jitter_zero_duration_is_zero() {
+        assert_eq!(apply_jitter(Duration::ZERO, 0.5), Duration::ZERO);
+    }
+
+    #[test]
+    fn apply_jitter_never_below_base() {
+        // 100 trials — every sample must satisfy `result >= base`.
+        let base = Duration::from_millis(500);
+        for _ in 0..100 {
+            let jittered = apply_jitter(base, 0.5);
+            assert!(
+                jittered >= base,
+                "jittered ({:?}) below base ({:?})",
+                jittered,
+                base
+            );
+        }
+    }
+
+    #[test]
+    fn apply_jitter_within_bounded_range() {
+        // factor=1.0 → result lives in [base, 2*base].
+        let base = Duration::from_millis(1000);
+        let upper = base.saturating_mul(2);
+        for _ in 0..100 {
+            let jittered = apply_jitter(base, 1.0);
+            assert!(jittered >= base && jittered <= upper);
+        }
+    }
+
+    #[test]
+    fn apply_jitter_clamps_factor_above_one() {
+        // factor > 1.0 must behave identically to factor=1.0 (no unbounded spread).
+        let base = Duration::from_millis(1000);
+        let upper = base.saturating_mul(2);
+        for _ in 0..50 {
+            let jittered = apply_jitter(base, 10.0);
+            assert!(jittered >= base && jittered <= upper);
+        }
+    }
+
+    #[test]
+    fn apply_jitter_actually_varies() {
+        // Statistical sanity: across 50 trials at factor=0.5 with a 200 ms base,
+        // at least 5 distinct values must appear. A deterministic implementation
+        // would return only 1, so 5 is a generous floor.
+        let base = Duration::from_millis(200);
+        let mut samples = std::collections::HashSet::new();
+        for _ in 0..50 {
+            samples.insert(apply_jitter(base, 0.5));
+        }
+        assert!(
+            samples.len() >= 5,
+            "apply_jitter looks deterministic: {} distinct samples",
+            samples.len()
+        );
+    }
+
+    #[test]
+    fn apply_jitter_tiny_duration_floors_extra_to_zero() {
+        // Base = 1 ms, factor 0.25 → max_extra = 0 (int truncation). Identity.
+        let base = Duration::from_millis(1);
+        assert_eq!(apply_jitter(base, 0.25), base);
     }
 }

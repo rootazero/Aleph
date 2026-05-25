@@ -12,6 +12,13 @@ use tokio_util::sync::CancellationToken;
 /// Maximum delay cap for exponential backoff.
 const MAX_DELAY: Duration = Duration::from_secs(30);
 
+/// Jitter factor for `retry_async`'s backoff sleep — equal-jitter shape,
+/// matches `RetryPolicy::default().jitter_factor`. Concurrent agents that
+/// share a rate-limited provider would otherwise retry in lockstep; the
+/// spread of `[0, base * factor]` decorrelates the storm without ever
+/// shortening the backoff below the deterministic floor.
+const LLM_RETRY_JITTER_FACTOR: f64 = 0.25;
+
 /// Outcome of classifying an error for retry decisions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RetryVerdict {
@@ -380,7 +387,14 @@ where
                     _ => unreachable!(),
                 };
 
-                let delay = backoff_delay(base_delay, attempt, MAX_DELAY);
+                // Spread retry storms across concurrent agents that share a
+                // rate-limited provider (see `retry::apply_jitter`). Floor
+                // remains at the deterministic exponential backoff; ceiling
+                // grows by up to LLM_RETRY_JITTER_FACTOR.
+                let delay = crate::providers::retry::apply_jitter(
+                    backoff_delay(base_delay, attempt, MAX_DELAY),
+                    LLM_RETRY_JITTER_FACTOR,
+                );
                 tracing::warn!(
                     attempt = attempt + 1,
                     delay_ms = delay.as_millis() as u64,

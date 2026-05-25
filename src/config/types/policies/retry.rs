@@ -47,6 +47,19 @@ pub struct RetryPolicy {
     /// Default: true
     #[serde(default = "default_retry_on_network_error")]
     pub retry_on_network_error: bool,
+
+    /// Jitter factor for backoff randomisation in range [0.0, 1.0].
+    ///
+    /// 0.0 disables jitter (deterministic exponential backoff). Positive
+    /// values spread retry storms across concurrent callers: each backoff
+    /// duration is widened by a random amount in `[0, base * factor]` —
+    /// so the floor stays at the computed exponential value and the
+    /// ceiling grows by up to `factor * 100 %`. Hermes-style protection
+    /// against thundering-herd on shared rate-limited providers.
+    ///
+    /// Default: 0.25 (±25 % spread, AWS-recommended equal-jitter shape).
+    #[serde(default = "default_jitter_factor")]
+    pub jitter_factor: f64,
 }
 
 impl Default for RetryPolicy {
@@ -59,6 +72,7 @@ impl Default for RetryPolicy {
             retryable_status_codes: default_retryable_status_codes(),
             retry_on_timeout: default_retry_on_timeout(),
             retry_on_network_error: default_retry_on_network_error(),
+            jitter_factor: default_jitter_factor(),
         }
     }
 }
@@ -89,6 +103,10 @@ fn default_retry_on_timeout() -> bool {
 
 fn default_retry_on_network_error() -> bool {
     true
+}
+
+fn default_jitter_factor() -> f64 {
+    0.25
 }
 
 impl RetryPolicy {
@@ -136,6 +154,24 @@ mod tests {
         assert_eq!(policy.backoff_multiplier, 2.0);
         assert!(policy.retryable_status_codes.contains(&500));
         assert!(policy.retryable_status_codes.contains(&503));
+        // Jitter default — equal-jitter shape, +/-25 %.
+        assert!((policy.jitter_factor - 0.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_jitter_factor_deserialises_legacy_toml() {
+        // Existing config files have no `jitter_factor` key; serde default must fill it.
+        let toml = r#"
+            max_retries = 4
+            initial_backoff_ms = 500
+            backoff_multiplier = 2.0
+            max_backoff_ms = 32000
+            retryable_status_codes = [500]
+            retry_on_timeout = true
+            retry_on_network_error = true
+        "#;
+        let policy: RetryPolicy = toml::from_str(toml).unwrap();
+        assert!((policy.jitter_factor - 0.25).abs() < f64::EPSILON);
     }
 
     #[test]
