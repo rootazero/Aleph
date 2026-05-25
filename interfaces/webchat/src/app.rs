@@ -20,8 +20,10 @@ use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 use crate::views::usage::UsageView;
 // Layout components
+use crate::components::command_palette::CommandPalette;
 use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
 use crate::context::{DashboardContext, DashboardState};
+use crate::state::hotkey::{self as hotkey, HotkeyState};
 use crate::views::chat::ChatState;
 
 #[component]
@@ -47,7 +49,15 @@ fn AppContent() -> impl IntoView {
     // chat view (main area) so they share one session / agent selection.
     provide_context(ChatState::new());
 
-    // Esc key: uncollapse sidebar when collapsed.
+    // Hotkey state — owns the ⌘K command-palette open signal. Installed
+    // *before* the keydown listener below so the listener can read it.
+    let hk = HotkeyState::new();
+    provide_context(hk);
+    hotkey::install(hk);
+
+    // Esc key: uncollapse sidebar when collapsed. Coexists with the
+    // hotkey-installed Esc handler that closes the palette; both only act
+    // when their respective state is "open", so they never conflict.
     {
         use leptos::ev::keydown;
         let mem_for_key = expect_context::<MemoryState>();
@@ -143,6 +153,11 @@ fn AppContent() -> impl IntoView {
                 <main class="flex-1 overflow-y-auto relative">
                     <MainContent />
                 </main>
+
+                // ⌘K / Ctrl+K command palette overlay. Mounted inside <Router>
+                // so it can call `use_navigate()`; the overlay itself sits
+                // above all shell chrome via z-index.
+                <CommandPalette />
             </Router>
 
             // Pairing modal overlays everything when pairing_required is triggered

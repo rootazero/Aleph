@@ -6,6 +6,7 @@ pub mod context;
 pub mod generation;
 pub mod i18n;
 pub mod models;
+pub mod panic_overlay;
 pub mod preset_data;
 pub mod preset_providers;
 pub mod state;
@@ -19,8 +20,9 @@ use wasm_bindgen::prelude::*;
 pub fn main() {
     use leptos::prelude::*;
 
-    // Set up panic hook for better error messages
-    console_error_panic_hook::set_once();
+    // Panic hook: same console output as before (via console_error_panic_hook)
+    // plus a DOM recovery overlay with a Reload button. See panic_overlay.rs.
+    panic_overlay::install();
 
     // Initialize theme from localStorage or system preference
     init_theme();

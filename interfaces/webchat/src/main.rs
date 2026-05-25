@@ -1,7 +1,8 @@
 use aleph_panel::app::*;
+use aleph_panel::panic_overlay;
 use leptos::prelude::*;
 
 fn main() {
-    console_error_panic_hook::set_once();
+    panic_overlay::install();
     mount_to_body(App);
 }

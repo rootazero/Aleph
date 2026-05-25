@@ -3,6 +3,7 @@
 pub mod agents_sidebar;
 pub mod api_key_input;
 pub mod chat_sidebar;
+pub mod command_palette;
 pub mod connection_status;
 pub mod dashboard_sidebar;
 pub mod forms;
