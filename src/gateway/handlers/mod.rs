@@ -55,7 +55,6 @@ pub mod chat;
 pub mod clawhub;
 pub mod commands;
 pub mod config;
-pub mod config_ext;
 pub mod cron;
 pub mod daemon_control;
 pub mod debug;
