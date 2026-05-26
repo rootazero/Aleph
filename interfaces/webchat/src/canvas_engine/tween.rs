@@ -140,76 +140,27 @@ pub fn lerp_node(node_id: &str, from: &Neighborhood, to: &Neighborhood, t: f32) 
 ///
 /// The resulting neighborhood is structurally identical to `to` (same nodes, edges,
 /// clusters), but its `target_positions` map contains lerped Vec3 positions for every
-/// node id that appears in either neighborhood. Used by `NavController::retarget` for
-/// one-shot snapshot capture. Per-frame consumers should use [`tween_into`] instead
-/// to avoid the full `to.clone()`.
+/// node id that appears in either neighborhood. Used by the rAF render loop and by
+/// `NavController::retarget` to snapshot the currently visible frame.
 pub(crate) fn build_interpolated_neighborhood(
     from: &Neighborhood,
     to: &Neighborhood,
     t: f32,
 ) -> Neighborhood {
-    let mut buf = to.clone();
-    tween_positions_into(from, to, t, &mut buf.target_positions);
-    buf
-}
+    let mut all_ids: HashSet<String> = HashSet::new();
+    all_ids.insert(from.center.id.clone());
+    all_ids.insert(to.center.id.clone());
+    all_ids.extend(from.one_hop.iter().map(|n| n.id.clone()));
+    all_ids.extend(from.two_hop.iter().map(|n| n.id.clone()));
+    all_ids.extend(to.one_hop.iter().map(|n| n.id.clone()));
+    all_ids.extend(to.two_hop.iter().map(|n| n.id.clone()));
 
-/// Per-frame interpolation that reuses `buf` instead of cloning `to`. Returns
-/// `buf` as the renderable view.
-///
-/// On first call (or when `to` swaps to a different neighborhood — detected by
-/// comparing center id and ring cardinalities) `buf` is fully reset from `to`.
-/// On subsequent frames of the same animation `buf` keeps its structural fields
-/// and only `target_positions` is rebuilt. For a 50-node neighborhood this
-/// turns ~6 KB/frame allocation into ~0 (HashMap reuse).
-pub(crate) fn tween_into<'b>(
-    from: &Neighborhood,
-    to: &Neighborhood,
-    t: f32,
-    buf: &'b mut Option<Neighborhood>,
-) -> &'b Neighborhood {
-    let needs_reset = match buf.as_ref() {
-        None => true,
-        Some(b) => {
-            b.center.id != to.center.id
-                || b.one_hop.len() != to.one_hop.len()
-                || b.two_hop.len() != to.two_hop.len()
-                || b.orphans.len() != to.orphans.len()
-                || b.edges.len() != to.edges.len()
-                || b.clusters.len() != to.clusters.len()
-        }
-    };
-
-    if needs_reset {
-        *buf = Some(to.clone());
-    }
-
-    // SAFETY of unwrap: we just guaranteed buf is Some.
-    let b = buf.as_mut().expect("buf set above");
-    tween_positions_into(from, to, t, &mut b.target_positions);
-    b
-}
-
-/// Write lerped positions for every id appearing in either neighborhood into `out`.
-/// Reuses the existing map allocation (`clear` keeps capacity).
-fn tween_positions_into(
-    from: &Neighborhood,
-    to: &Neighborhood,
-    t: f32,
-    out: &mut std::collections::HashMap<String, Vec3>,
-) {
-    let mut all_ids: HashSet<&str> = HashSet::new();
-    all_ids.insert(from.center.id.as_str());
-    all_ids.insert(to.center.id.as_str());
-    all_ids.extend(from.one_hop.iter().map(|n| n.id.as_str()));
-    all_ids.extend(from.two_hop.iter().map(|n| n.id.as_str()));
-    all_ids.extend(to.one_hop.iter().map(|n| n.id.as_str()));
-    all_ids.extend(to.two_hop.iter().map(|n| n.id.as_str()));
-
-    out.clear();
+    let mut interp = to.clone();
     for id in all_ids {
-        let r = lerp_node(id, from, to, t);
-        out.insert(id.to_string(), r.pos);
+        let r = lerp_node(&id, from, to, t);
+        interp.target_positions.insert(id, r.pos);
     }
+    interp
 }
 
 #[cfg(test)]
@@ -405,104 +356,5 @@ mod tests {
         // SPRING_C must equal 2*sqrt(SPRING_K) for critical damping (no overshoot).
         // If this fails, update SPRING_C after changing SPRING_K.
         assert!((SPRING_C - 2.0 * SPRING_K.sqrt()).abs() < 1e-12);
-    }
-
-    fn nbhd_with(center_id: &str, one_hop_ids: &[&str]) -> Neighborhood {
-        let mut n = empty_nbhd();
-        n.center = dummy_node(center_id);
-        n.one_hop = one_hop_ids.iter().map(|i| dummy_node(i)).collect();
-        for id in std::iter::once(center_id).chain(one_hop_ids.iter().copied()) {
-            n.target_positions
-                .insert(id.to_string(), Vec3::new(0.0, 0.0, 0.0));
-        }
-        n
-    }
-
-    #[test]
-    fn tween_into_initialises_buf_on_first_call() {
-        let from = nbhd_with("a", &["x"]);
-        let to = nbhd_with("a", &["x"]);
-        let mut buf: Option<Neighborhood> = None;
-        let _ = tween_into(&from, &to, 0.5, &mut buf);
-        let b = buf.as_ref().expect("buf populated after first call");
-        assert_eq!(b.center.id, "a");
-        assert_eq!(b.one_hop.len(), 1);
-        assert!(b.target_positions.contains_key("a"));
-        assert!(b.target_positions.contains_key("x"));
-    }
-
-    #[test]
-    fn tween_into_reuses_buf_for_same_target() {
-        let mut from = nbhd_with("a", &["x"]);
-        let mut to = nbhd_with("a", &["x"]);
-        from.target_positions.insert("x".to_string(), Vec3::new(0.0, 0.0, 0.0));
-        to.target_positions.insert("x".to_string(), Vec3::new(100.0, 0.0, 0.0));
-        let mut buf: Option<Neighborhood> = None;
-
-        let _ = tween_into(&from, &to, 0.0, &mut buf);
-        // Tag the buf so we can detect whether it was rebuilt on the next call.
-        let buf_ptr_before = buf.as_ref().unwrap().center.id.as_str() as *const str;
-        let _ = tween_into(&from, &to, 1.0, &mut buf);
-        let buf_ptr_after = buf.as_ref().unwrap().center.id.as_str() as *const str;
-        assert_eq!(
-            buf_ptr_before, buf_ptr_after,
-            "buf center string allocation should be reused across same-target frames",
-        );
-
-        // Positions advance with t.
-        let p_at_1 = buf.as_ref().unwrap().target_positions.get("x").copied().unwrap();
-        assert!((p_at_1.x - 100.0).abs() < 1e-3, "position should reach to.x at t=1");
-    }
-
-    #[test]
-    fn tween_into_resets_buf_when_target_swaps() {
-        let from = nbhd_with("a", &["x"]);
-        let to1 = nbhd_with("a", &["x"]);
-        let to2 = nbhd_with("b", &["y", "z"]);
-        let mut buf: Option<Neighborhood> = None;
-        let _ = tween_into(&from, &to1, 0.5, &mut buf);
-        let _ = tween_into(&from, &to2, 0.5, &mut buf);
-        let b = buf.as_ref().expect("buf populated");
-        assert_eq!(b.center.id, "b", "buf should reset to new target");
-        assert_eq!(b.one_hop.len(), 2);
-    }
-
-    #[test]
-    fn tween_into_clears_stale_positions() {
-        // First animation references id "x"; second animation drops it.
-        // After the swap, buf must NOT carry a stale position for "x".
-        let from = nbhd_with("a", &["x"]);
-        let to1 = nbhd_with("a", &["x"]);
-        let mut buf: Option<Neighborhood> = None;
-        let _ = tween_into(&from, &to1, 0.5, &mut buf);
-        assert!(buf.as_ref().unwrap().target_positions.contains_key("x"));
-
-        let to2 = nbhd_with("a", &["y"]);
-        let from2 = nbhd_with("a", &["y"]);
-        let _ = tween_into(&from2, &to2, 0.5, &mut buf);
-        let b = buf.as_ref().unwrap();
-        assert!(b.target_positions.contains_key("y"));
-        assert!(
-            !b.target_positions.contains_key("x"),
-            "stale position must be purged after target swap",
-        );
-    }
-
-    #[test]
-    fn build_interpolated_delegates_to_tween_into() {
-        // Backward-compat: build_interpolated_neighborhood must produce the same
-        // positions as tween_into for an equivalent input.
-        let mut from = nbhd_with("c", &["x"]);
-        let mut to = nbhd_with("c", &["x"]);
-        from.target_positions.insert("x".to_string(), Vec3::new(0.0, 0.0, 0.0));
-        to.target_positions.insert("x".to_string(), Vec3::new(80.0, 40.0, 0.0));
-
-        let owned = build_interpolated_neighborhood(&from, &to, 0.25);
-        let mut buf: Option<Neighborhood> = None;
-        let interp = tween_into(&from, &to, 0.25, &mut buf);
-        let a = owned.target_positions.get("x").unwrap();
-        let b = interp.target_positions.get("x").unwrap();
-        assert!((a.x - b.x).abs() < 1e-6);
-        assert!((a.y - b.y).abs() < 1e-6);
     }
 }

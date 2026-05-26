@@ -83,14 +83,6 @@ impl DragState {
         !matches!(self, DragState::Idle)
     }
 
-    /// True only while the user is actively positioning a node post-threshold.
-    /// Excludes `Pressed` (pre-threshold), `SpringBack`, and `Promoting` — those
-    /// are spring-driven animations, not user-controlled positioning, so
-    /// alignment-guide and snap-target affordances should not be shown.
-    pub fn is_dragging(&self) -> bool {
-        matches!(self, DragState::Dragging { .. })
-    }
-
     pub fn active_node_id(&self) -> Option<&str> {
         match self {
             DragState::Idle => None,
@@ -363,35 +355,6 @@ mod tests {
         let mut d = VecDeque::new();
         d.push_back((off, t));
         d
-    }
-
-    #[test]
-    fn is_dragging_false_for_idle_pressed_springback_promoting() {
-        let mut s = DragState::new();
-        assert!(!s.is_dragging(), "Idle should not be dragging");
-        s.press("n1".into(), Vec2::new(0.0, 0.0), 1000.0);
-        assert!(!s.is_dragging(), "Pressed should not be dragging");
-        let sb = DragState::SpringBack {
-            node_id: "n1".into(),
-            spring: Spring2D::new(Vec2::new(50.0, 0.0), Vec2::zero(), Vec2::zero()),
-            start_time_ms: 0.0,
-        };
-        assert!(!sb.is_dragging(), "SpringBack should not be dragging");
-        let p = DragState::Promoting {
-            node_id: "n1".into(),
-            target_node_id: "t".into(),
-            spring: Spring2D::new(Vec2::new(50.0, 0.0), Vec2::zero(), Vec2::zero()),
-            start_time_ms: 0.0,
-        };
-        assert!(!p.is_dragging(), "Promoting should not be dragging");
-    }
-
-    #[test]
-    fn is_dragging_true_only_after_threshold() {
-        let mut s = DragState::new();
-        s.press("n1".into(), Vec2::zero(), 1000.0);
-        s.pointer_move(Vec2::new(10.0, 0.0), 1010.0);
-        assert!(s.is_dragging());
     }
 
     #[test]
