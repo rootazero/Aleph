@@ -35,7 +35,31 @@ impl PromptLayer for SpecialActionsLayer {
             "  **DO NOT** just say 'Task completed'. Write a detailed summary the user can immediately understand.\n",
         );
         output.push_str("- `ask_user`: Call when you need clarification or user decision\n");
-        output.push_str("- `fail`: Call when the task cannot be completed\n\n");
+        output.push_str(
+            "- `fail`: Call ONLY when the GOAL itself cannot be completed in this environment \
+             — never on first-method failure. Before invoking `fail`:\n",
+        );
+        output.push_str(
+            "  1. You MUST have tried at least TWO distinct approaches (different tools, \
+             different sources, different parameters/keywords). For web research this means \
+             climbing the fallback ladder: `search` → `web_fetch` canonical URL → `web_fetch` \
+             alternate source → browser tooling (chrome-devtools / playwright / `autocli`).\n",
+        );
+        output.push_str(
+            "  2. The `summary` field MUST enumerate every method attempted and why each failed \
+             (status code, error class, empty result, etc.) so the user can verify nothing was \
+             skipped.\n",
+        );
+        output.push_str(
+            "  3. Distinguish *method failure* (\"Reuters returned 401\") from *goal failure* \
+             (\"every news source I can reach is offline\"). The former is NOT a `fail` — it is \
+             a routing signal. Switch methods and continue. Only the latter justifies `fail`.\n",
+        );
+        output.push_str(
+            "  4. If iteration budget is the constraint (not goal feasibility), prefer \
+             `complete` with a partial result + explicit list of unfinished items, so the next \
+             scheduled run can pick up. Do NOT call `fail` for budget exhaustion alone.\n\n",
+        );
 
         // Phase 3 self-evolution path α — direct user-correction signaling.
         // The flag_user_correction tool persists a tagged raw_memory row that
@@ -83,6 +107,14 @@ mod tests {
         assert!(out.contains("`ask_user`"));
         assert!(out.contains("`fail`"));
         assert!(out.contains("DO NOT"));
+        // `fail` must require alternative-method exhaustion + enumeration in
+        // the summary. A single 401 from one source must NOT be enough to
+        // justify the `fail` action.
+        assert!(out.contains("ONLY when the GOAL itself cannot be completed"));
+        assert!(out.contains("at least TWO distinct approaches"));
+        assert!(out.contains("fallback ladder"));
+        assert!(out.contains("method failure"));
+        assert!(out.contains("goal failure"));
     }
 
     #[test]

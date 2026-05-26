@@ -54,10 +54,16 @@ impl PromptLayer for ProviderGuidanceLayer {
         };
         match protocol {
             // Claude / Anthropic protocol — native tool_use, extended
-            // thinking, and prompt caching are already well-tuned. No
-            // extra steering needed; emit nothing to keep the prompt
-            // prefix lean.
-            "anthropic" => {}
+            // thinking, and prompt caching are well-tuned, so the heavy
+            // TOOL_USE_ENFORCEMENT block stays off. But Claude *does*
+            // share the early-give-up failure mode when one source
+            // returns 401/403/timeout (Reuters-class incidents observed
+            // on scheduled briefing jobs), so we still emit the
+            // protocol-neutral persistence doctrine.
+            "anthropic" => {
+                output.push_str(TOOL_PERSISTENCE_DOCTRINE);
+                output.push_str("\n\n");
+            }
 
             // OpenAI / Codex / Grok (all reach us via the OpenAI wire
             // protocol). Same failure modes empirically: stops early,
@@ -66,15 +72,19 @@ impl PromptLayer for ProviderGuidanceLayer {
             "openai" => {
                 output.push_str(TOOL_USE_ENFORCEMENT);
                 output.push_str("\n\n");
-                output.push_str(OPENAI_EXECUTION_DISCIPLINE);
+                output.push_str(TOOL_PERSISTENCE_DOCTRINE);
+                output.push_str("\n\n");
+                output.push_str(OPENAI_EXECUTION_DISCIPLINE_TAIL);
                 output.push_str("\n\n");
             }
 
             // Google Gemini / Gemma — adds path-handling, dependency,
             // and parallel-tool-call discipline on top of the tool-use
-            // enforcement baseline.
+            // enforcement + persistence baseline.
             "gemini" => {
                 output.push_str(TOOL_USE_ENFORCEMENT);
+                output.push_str("\n\n");
+                output.push_str(TOOL_PERSISTENCE_DOCTRINE);
                 output.push_str("\n\n");
                 output.push_str(GOOGLE_OPERATIONAL_DIRECTIVES);
                 output.push_str("\n\n");
@@ -82,11 +92,13 @@ impl PromptLayer for ProviderGuidanceLayer {
 
             // Local / open-weight (ollama and anything else that goes
             // through the OpenAI-compatible chat protocol but isn't
-            // matched above) — emit only the baseline tool-use
-            // enforcement. Better to over-steer a small model than
-            // leave it adrift.
+            // matched above) — emit tool-use enforcement plus the
+            // persistence doctrine. Better to over-steer a small model
+            // than leave it adrift.
             _ => {
                 output.push_str(TOOL_USE_ENFORCEMENT);
+                output.push_str("\n\n");
+                output.push_str(TOOL_PERSISTENCE_DOCTRINE);
                 output.push_str("\n\n");
             }
         }
@@ -107,23 +119,45 @@ Keep working until the task is actually complete. Every response should either (
 calls that make progress, or (b) deliver a final result. Responses that only describe intentions \
 without acting are not acceptable.";
 
-/// OpenAI / Codex / Grok — addresses early-stopping, hallucination in
-/// place of tool calls, and "done" claims without verification. Ported
-/// from `OPENAI_MODEL_EXECUTION_GUIDANCE`.
-const OPENAI_EXECUTION_DISCIPLINE: &str = "## Execution Discipline\n\
+/// Protocol-neutral persistence doctrine — emitted to every provider
+/// including Anthropic. Captures the "keep trying alternative tools and
+/// sources" behaviour that every modern LLM benefits from. Refactored out
+/// of the former `OPENAI_EXECUTION_DISCIPLINE` block when a real Anthropic
+/// failure mode (Reuters 401 on scheduled briefing) showed that Claude
+/// also needs the persistence steering.
+const TOOL_PERSISTENCE_DOCTRINE: &str = "## Execution Discipline — Persistence\n\
 \n\
 **Tool persistence**\n\
 - Use tools whenever they improve correctness, completeness, or grounding.\n\
 - Do not stop early when another tool call would materially improve the result.\n\
-- If a tool returns empty or partial results, retry with a different query or strategy before giving up.\n\
+- If a tool returns empty / partial / error results (401, 403, 404, timeout, \
+rate-limit, empty body), retry with a DIFFERENT query, tool, or source before \
+giving up. A single source returning an error is a routing signal, not a \
+verdict on the goal.\n\
+- Distinguish *method failure* (one URL/tool/keyword failed) from *goal failure* \
+(every reasonable alternative has been tried). Only the latter justifies `fail`.\n\
 - Keep calling tools until (1) the task is complete AND (2) you have verified the result.\n\
+\n\
+**Web/external-data fallback ladder** — when fetching online content:\n\
+1. `search` with refined keywords (try synonyms, broader/narrower scope, different engines if configured).\n\
+2. `web_fetch` on a canonical URL of the same resource.\n\
+3. `web_fetch` on an alternate reputable source (BBC, AP, NYT, Wikipedia, mirrors, official feeds, etc.).\n\
+4. Browser-based tools (chrome-devtools MCP, playwright, or the `autocli` skill) for sites that gate API or headless access.\n\
+At least TWO rungs of this ladder must have been attempted before `fail`.\n\
 \n\
 **Mandatory tool use** — NEVER answer these from memory:\n\
 - Arithmetic / hashes / encodings → run them via a tool.\n\
 - Current time, date, timezone → query the system.\n\
 - File contents / sizes / line counts → read the files.\n\
 - System state (OS, CPU, processes, ports) → query the live system.\n\
-- Current facts (weather, news, versions) → search.\n\
+- Current facts (weather, news, versions) → search.";
+
+/// OpenAI / Codex / Grok — tail of the original execution-discipline block.
+/// Holds the "act, don't ask" + "verify before finalizing" directives that
+/// remain OpenAI-family specific (Claude's native tool_use already enforces
+/// these by training). Emitted in addition to TOOL_PERSISTENCE_DOCTRINE for
+/// OpenAI-protocol providers. Ported from `OPENAI_MODEL_EXECUTION_GUIDANCE`.
+const OPENAI_EXECUTION_DISCIPLINE_TAIL: &str = "## Execution Discipline — OpenAI Family\n\
 \n\
 **Act, don't ask** — when a question has an obvious default interpretation, act on it. Only \
 ask for clarification when the ambiguity genuinely changes what tool you would call.\n\
@@ -194,7 +228,11 @@ mod tests {
     }
 
     #[test]
-    fn silent_for_anthropic() {
+    fn anthropic_emits_persistence_doctrine_only() {
+        // Claude doesn't need TOOL_USE_ENFORCEMENT (native tool_use is
+        // well-trained) but DOES need the persistence doctrine — a real
+        // Reuters-401 failure on scheduled briefing showed Claude gives
+        // up on a single source error without trying alternates.
         let layer = ProviderGuidanceLayer;
         let config = PromptConfig::default();
         let tools = vec![];
@@ -203,13 +241,23 @@ mod tests {
         let mut out = String::new();
         layer.inject(&mut out, &input);
         assert!(
-            out.is_empty(),
-            "Anthropic protocol must not emit guidance (Claude is well-behaved)"
+            out.contains("## Execution Discipline — Persistence"),
+            "Anthropic must receive the persistence doctrine"
+        );
+        assert!(out.contains("Tool persistence"));
+        assert!(out.contains("fallback ladder"));
+        assert!(
+            !out.contains("## Tool-Use Enforcement"),
+            "Anthropic should NOT get the heavy tool-use enforcement block"
+        );
+        assert!(
+            !out.contains("## Execution Discipline — OpenAI Family"),
+            "Anthropic should NOT get OpenAI-family-specific tail"
         );
     }
 
     #[test]
-    fn openai_emits_tool_use_and_execution_discipline() {
+    fn openai_emits_tool_use_persistence_and_execution_discipline() {
         let layer = ProviderGuidanceLayer;
         let config = PromptConfig::default();
         let tools = vec![];
@@ -217,13 +265,15 @@ mod tests {
         let mut out = String::new();
         layer.inject(&mut out, &input);
         assert!(out.contains("## Tool-Use Enforcement"));
-        assert!(out.contains("## Execution Discipline"));
+        assert!(out.contains("## Execution Discipline — Persistence"));
+        assert!(out.contains("## Execution Discipline — OpenAI Family"));
         assert!(out.contains("Tool persistence"));
+        assert!(out.contains("Act, don't ask"));
         assert!(!out.contains("Google Model"));
     }
 
     #[test]
-    fn gemini_emits_tool_use_and_google_directives() {
+    fn gemini_emits_tool_use_persistence_and_google_directives() {
         let layer = ProviderGuidanceLayer;
         let config = PromptConfig::default();
         let tools = vec![];
@@ -231,13 +281,17 @@ mod tests {
         let mut out = String::new();
         layer.inject(&mut out, &input);
         assert!(out.contains("## Tool-Use Enforcement"));
+        assert!(out.contains("## Execution Discipline — Persistence"));
         assert!(out.contains("## Google Model Operational Directives"));
         assert!(out.contains("Absolute paths"));
-        assert!(!out.contains("Execution Discipline"));
+        assert!(
+            !out.contains("## Execution Discipline — OpenAI Family"),
+            "Gemini should not get OpenAI-family-specific tail"
+        );
     }
 
     #[test]
-    fn unknown_protocol_falls_back_to_tool_use_baseline() {
+    fn unknown_protocol_falls_back_to_tool_use_plus_persistence() {
         let layer = ProviderGuidanceLayer;
         let config = PromptConfig::default();
         let tools = vec![];
@@ -245,7 +299,8 @@ mod tests {
         let mut out = String::new();
         layer.inject(&mut out, &input);
         assert!(out.contains("## Tool-Use Enforcement"));
-        assert!(!out.contains("## Execution Discipline"));
+        assert!(out.contains("## Execution Discipline — Persistence"));
+        assert!(!out.contains("## Execution Discipline — OpenAI Family"));
         assert!(!out.contains("## Google Model Operational Directives"));
     }
 }

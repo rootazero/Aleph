@@ -58,8 +58,12 @@ pub struct CronConfig {
     /// run as a `RunRequest.max_iterations_override`, overriding the global
     /// `[execution] max_iterations` default (1000) for system-initiated jobs
     /// without affecting interactive sessions. `None` disables the cron
-    /// cap and falls through to the global default. Recommended `Some(20)`
-    /// for tight runaway protection on automated jobs.
+    /// cap and falls through to the global default. Default `Some(40)` —
+    /// raised from `Some(20)` in 2026-05 to give scheduled jobs enough budget
+    /// to climb the web-research fallback ladder (search → web_fetch canonical
+    /// → web_fetch alternate → browser tooling) before exhausting iterations.
+    /// 20 was empirically too tight for briefing-style tasks that need to
+    /// switch sources after a 401/403/timeout from the first one.
     #[serde(default = "default_cron_max_iterations")]
     pub default_max_iterations: Option<u32>,
 }
@@ -93,7 +97,7 @@ fn default_max_concurrent_agents() -> Option<usize> {
 }
 
 fn default_cron_max_iterations() -> Option<u32> {
-    Some(20)
+    Some(40)
 }
 
 impl Default for CronConfig {
