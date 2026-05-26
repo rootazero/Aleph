@@ -188,6 +188,33 @@ fn cache_clear() {
         .clear();
 }
 
+/// Prepend a `[fetch_focus: ...]` marker to the result's content when
+/// the caller supplied a non-empty prompt. The marker sits OUTSIDE the
+/// content-boundary wrap because it comes from the (trusted) LLM tool
+/// call, not from the (untrusted) fetched page.
+///
+/// Long prompts are clipped at 512 chars and newlines are flattened to
+/// spaces — the marker is meant to be a one-liner steering hint, not a
+/// multi-paragraph spec.
+fn apply_focus_prompt(mut result: WebFetchResult, prompt: Option<&str>) -> WebFetchResult {
+    let Some(p) = prompt.map(str::trim).filter(|s| !s.is_empty()) else {
+        return result;
+    };
+    let mut marker = String::with_capacity(p.len() + 32);
+    marker.push_str("[fetch_focus: ");
+    for ch in p.chars().take(512) {
+        if ch == '\n' || ch == '\r' {
+            marker.push(' ');
+        } else {
+            marker.push(ch);
+        }
+    }
+    marker.push_str("]\n\n");
+    marker.push_str(&result.content);
+    result.content = marker;
+    result
+}
+
 /// Arguments for web fetch tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct WebFetchArgs {
@@ -196,6 +223,26 @@ pub struct WebFetchArgs {
     /// Content extraction mode (default: markdown)
     #[serde(default)]
     pub extract_mode: ExtractMode,
+    /// Optional natural-language focus for the fetch.
+    ///
+    /// When set, the prompt is prepended to the returned content as a
+    /// `[fetch_focus: ...]` marker, telling the main agent loop what
+    /// to look for inside the page. This is intentionally NOT a
+    /// secondary-LLM extraction step (the claude-code approach):
+    ///
+    /// * The main agent loop will read this tool's output anyway —
+    ///   forcing a second LLM hop adds latency and cost on every
+    ///   fetch without adding reasoning the main model couldn't do.
+    /// * Aleph's R9 principle ("intelligence lives in the prompt")
+    ///   prefers steering the existing LLM via context over running
+    ///   an extra model. R10 ("thin harness") rules out the
+    ///   provider plumbing this would otherwise require.
+    ///
+    /// If a downstream consumer ever needs an actual condensed
+    /// summary, the right place to add it is at the agent layer, not
+    /// inside the fetch tool — keep tools dumb.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 /// Web fetch result containing extracted content
@@ -295,12 +342,19 @@ impl WebFetchTool {
         // appear even on cache hits so the operator can still trace which
         // URL was requested. The cached path then immediately notifies
         // success with a "(cached)" marker.
+        //
+        // Note: the cache key intentionally does NOT include `args.prompt`
+        // — the focus marker is prepended on the way out (here, and on
+        // cache miss). This means two calls to the same URL with
+        // different prompts share the same cached page body, which is
+        // the right cost/freshness tradeoff for LLM-driven re-fetches.
         let key = cache_key(&args.url, &args.extract_mode);
         if let Some(cached) = cache_lookup(&key) {
             debug!("web_fetch cache hit: {}", args.url);
-            let summary = format!("已获取网页内容 ({} 字符, cached)", cached.content.len());
+            let result = apply_focus_prompt(cached, args.prompt.as_deref());
+            let summary = format!("已获取网页内容 ({} 字符, cached)", result.content.len());
             notify_tool_result(Self::NAME, &summary, true);
-            return Ok(cached);
+            return Ok(result);
         }
 
         info!("Fetching URL: {}", args.url);
@@ -387,14 +441,16 @@ impl WebFetchTool {
             },
         );
 
-        let result = WebFetchResult {
+        // Cache the BARE wrapped result (no focus prompt) so subsequent
+        // fetches with different prompts can share the cached body.
+        let bare_result = WebFetchResult {
             url: args.url,
             title,
             content: wrapped_content,
             extractor,
         };
-        cache_store(key, result.clone());
-        Ok(result)
+        cache_store(key, bare_result.clone());
+        Ok(apply_focus_prompt(bare_result, args.prompt.as_deref()))
     }
 
     /// Extract the page title from <title> tag
@@ -648,6 +704,7 @@ mod tests {
         let args = WebFetchArgs {
             url: "https://example.com".to_string(),
             extract_mode: ExtractMode::Markdown,
+            prompt: None,
         };
 
         // Use fully qualified syntax
@@ -670,6 +727,7 @@ mod tests {
         let args = WebFetchArgs {
             url: "not-a-valid-url".to_string(),
             extract_mode: ExtractMode::Markdown,
+            prompt: None,
         };
 
         // Use fully qualified syntax to avoid ambiguity
@@ -1031,5 +1089,65 @@ mod tests {
             cache_lookup(&looked).is_some(),
             "URLs differing only in case/port/fragment must share a cache entry"
         );
+    }
+
+    // ─── Focus prompt ──────────────────────────────────────────────────
+
+    #[test]
+    fn args_accept_prompt_field_with_back_compat_default() {
+        // Pre-existing TOML/JSON without the prompt key must still parse.
+        let bare: WebFetchArgs =
+            serde_json::from_str(r#"{"url": "https://x.test/"}"#).unwrap();
+        assert_eq!(bare.prompt, None);
+
+        let with_prompt: WebFetchArgs = serde_json::from_str(
+            r#"{"url": "https://x.test/", "prompt": "find the pricing table"}"#,
+        )
+        .unwrap();
+        assert_eq!(with_prompt.prompt.as_deref(), Some("find the pricing table"));
+    }
+
+    #[test]
+    fn apply_focus_prompt_prepends_marker() {
+        let original = dummy_result("https://x.test/", "PAGE BODY");
+        let with_focus = apply_focus_prompt(original, Some("show pricing"));
+        assert!(
+            with_focus.content.starts_with("[fetch_focus: show pricing]\n\n"),
+            "marker not prepended; got: {:?}",
+            with_focus.content
+        );
+        assert!(with_focus.content.ends_with("PAGE BODY"));
+    }
+
+    #[test]
+    fn apply_focus_prompt_is_noop_for_none_or_blank() {
+        let original = dummy_result("https://x.test/", "PAGE");
+        assert_eq!(
+            apply_focus_prompt(original.clone(), None).content,
+            "PAGE",
+        );
+        assert_eq!(
+            apply_focus_prompt(original.clone(), Some("   ")).content,
+            "PAGE",
+            "whitespace-only prompts should not produce a marker"
+        );
+        assert_eq!(apply_focus_prompt(original, Some("")).content, "PAGE");
+    }
+
+    #[test]
+    fn apply_focus_prompt_flattens_newlines_and_clips_length() {
+        let original = dummy_result("https://x.test/", "BODY");
+        let long_multiline = format!("part one\npart two\r\n{}", "x".repeat(600));
+        let out = apply_focus_prompt(original, Some(&long_multiline));
+        // Marker is 1 line — no embedded \n inside the [fetch_focus: ...] segment.
+        let marker_end = out
+            .content
+            .find("]\n\n")
+            .expect("marker terminator should be present");
+        let marker_text = &out.content[..marker_end];
+        assert!(!marker_text[1..].contains('\n'));
+        // Clipped at 512 chars of prompt content.
+        let prompt_text = &marker_text["[fetch_focus: ".len()..];
+        assert!(prompt_text.chars().count() <= 512);
     }
 }
