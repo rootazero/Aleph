@@ -20,6 +20,12 @@ pub struct SearxngProvider {
 struct SearxngResponse {
     #[serde(default)]
     results: Vec<SearxngResult>,
+    /// Engines that failed for this query — SearXNG returns an empty `results`
+    /// array when every engine is suspended/CAPTCHA-blocked, which we surface
+    /// as an error so the LLM doesn't keep trying new queries against a dead
+    /// backend. Shape: `[["engine_name", "reason"], ...]`.
+    #[serde(default)]
+    unresponsive_engines: Vec<(String, String)>,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +78,27 @@ impl SearchProvider for SearxngProvider {
 
         let response = check_status(response, NAME)?;
         let searxng_response: SearxngResponse = parse_json(response, NAME).await?;
+
+        // SearXNG returns `200 OK` with `"results": []` even when every
+        // backend engine is suspended/CAPTCHA-blocked. Silently returning
+        // `Ok(vec![])` causes the calling LLM to assume "no results for
+        // this query" and burn its iteration budget on new keywords against
+        // a broken backend. Promote this to a typed error so the LLM gets
+        // actionable signal ("the search engine itself is broken — switch
+        // providers or stop").
+        if searxng_response.results.is_empty() && !searxng_response.unresponsive_engines.is_empty()
+        {
+            let detail = searxng_response
+                .unresponsive_engines
+                .iter()
+                .map(|(name, reason)| format!("{name}: {reason}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(AlephError::provider(format!(
+                "SearXNG returned 0 results — all engines unresponsive ({detail}). \
+                 Check the SearXNG instance — its engines are rate-limited / CAPTCHA-blocked."
+            )));
+        }
 
         let results = searxng_response
             .results
@@ -136,5 +163,39 @@ mod tests {
     fn test_searxng_provider_accepts_https() {
         let provider = SearxngProvider::new("https://searx.example.com".to_string()).unwrap();
         assert_eq!(provider.base_url, "https://searx.example.com");
+    }
+
+    /// Empty `results` with non-empty `unresponsive_engines` must surface as
+    /// a provider error, not `Ok(vec![])`. Verifies the JSON shape we expect
+    /// from SearXNG — `[["name","reason"], ...]` — round-trips through the
+    /// `Vec<(String, String)>` deserializer.
+    #[test]
+    fn searxng_response_parses_unresponsive_engines() {
+        let body = r#"{
+            "query": "x",
+            "number_of_results": 0,
+            "results": [],
+            "unresponsive_engines": [
+                ["brave", "Suspended: too many requests"],
+                ["duckduckgo", "CAPTCHA"]
+            ]
+        }"#;
+        let parsed: SearxngResponse = serde_json::from_str(body).expect("parses");
+        assert!(parsed.results.is_empty());
+        assert_eq!(parsed.unresponsive_engines.len(), 2);
+        assert_eq!(parsed.unresponsive_engines[0].0, "brave");
+        assert_eq!(parsed.unresponsive_engines[1].1, "CAPTCHA");
+    }
+
+    /// When the body has no `unresponsive_engines` key at all (older SearXNG
+    /// versions, or a genuinely empty result), `#[serde(default)]` must give
+    /// us an empty Vec — otherwise the "treat 0+failures as error" path
+    /// would falsely fire on healthy backends.
+    #[test]
+    fn searxng_response_missing_unresponsive_engines_defaults_empty() {
+        let body = r#"{"query":"x","results":[]}"#;
+        let parsed: SearxngResponse = serde_json::from_str(body).expect("parses");
+        assert!(parsed.results.is_empty());
+        assert!(parsed.unresponsive_engines.is_empty());
     }
 }
