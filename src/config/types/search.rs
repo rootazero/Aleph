@@ -43,6 +43,33 @@ pub struct SearchConfigInternal {
     /// PII scrubbing configuration (migrate from behavior.pii_scrubbing_enabled)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pii: Option<PIIConfig>,
+
+    /// Enable the WebFetch-based SERP scrape fallback (Round-2 feature).
+    ///
+    /// When `true` (default), [`crate::search::SearchRegistry`] will
+    /// scrape no-credential mirrors (DDG Lite, DDG HTML) after every
+    /// configured provider has failed. This rescues the search tool
+    /// during "all paid APIs are simultaneously rate-limited" outages
+    /// without operator intervention.
+    ///
+    /// Set to `false` only in environments where outbound HTTP to
+    /// duckduckgo.com is policy-blocked or the operator wants
+    /// hard-fail behaviour for auditability.
+    ///
+    /// Backward compatible: existing TOML configs without this key
+    /// pick up the default (enabled) on next load.
+    #[serde(default = "default_web_fetch_fallback")]
+    pub web_fetch_fallback: bool,
+}
+
+/// Default for `SearchConfigInternal.web_fetch_fallback` — enabled.
+///
+/// Round-2 chose default-on because the operational pain (search
+/// silently fails until quotas reset) is severe and the privacy
+/// posture (DDG over HTTPS, no API key) is no worse than the existing
+/// DDG provider users already have access to.
+pub fn default_web_fetch_fallback() -> bool {
+    true
 }
 
 pub fn default_search_max_results() -> usize {
@@ -166,6 +193,10 @@ pub struct SearchConfig {
     pub backends: Vec<SearchBackendEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pii: Option<PIIConfig>,
+    /// Mirrors [`SearchConfigInternal::web_fetch_fallback`]. UniFFI
+    /// surface for the panel / mobile clients.
+    #[serde(default = "default_web_fetch_fallback")]
+    pub web_fetch_fallback: bool,
 }
 
 impl From<SearchConfigInternal> for SearchConfig {
@@ -184,6 +215,7 @@ impl From<SearchConfigInternal> for SearchConfig {
             timeout_seconds: config.timeout_seconds,
             backends,
             pii: config.pii,
+            web_fetch_fallback: config.web_fetch_fallback,
         }
     }
 }
@@ -204,6 +236,7 @@ impl From<SearchConfig> for SearchConfigInternal {
             timeout_seconds: config.timeout_seconds,
             backends,
             pii: config.pii,
+            web_fetch_fallback: config.web_fetch_fallback,
         }
     }
 }

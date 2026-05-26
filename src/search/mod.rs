@@ -4,6 +4,7 @@ mod provider;
 pub mod providers;
 mod registry;
 mod result;
+mod web_fetch_fallback;
 /// Search capability implementation
 ///
 /// This module provides real-time web search functionality for Aleph Agent,
@@ -53,6 +54,7 @@ pub use options::{QuotaInfo, SearchOptions};
 pub use provider::SearchProvider;
 pub use registry::SearchRegistry;
 pub use result::SearchResult;
+pub use web_fetch_fallback::WebFetchSerpFallback;
 
 /// Result of testing a search provider connection
 ///

@@ -125,7 +125,12 @@ impl SearchProvider for DuckDuckGoProvider {
 /// - Direct (`https://example.com/`) — current DDG format
 /// - Redirect (`//duckduckgo.com/l/?uddg=ENCODED&...`) — older DDG format
 ///   we still handle defensively by extracting the `uddg` query param.
-fn parse_ddg_html(body: &str, max_results: usize) -> Vec<SearchResult> {
+///
+/// Exposed `pub(crate)` so the WebFetch SERP fallback layer
+/// ([`crate::search::WebFetchSerpFallback`]) can reuse this exact parser
+/// instead of forking a sibling copy — keeps the DDG selector canon
+/// single-sourced.
+pub(crate) fn parse_ddg_html(body: &str, max_results: usize) -> Vec<SearchResult> {
     let doc = Html::parse_document(body);
     // Both `Selector::parse` calls are against compile-time-known strings
     // and will only fail if scraper's selector grammar changes — treat
@@ -168,6 +173,66 @@ fn parse_ddg_html(body: &str, max_results: usize) -> Vec<SearchResult> {
         });
     }
     out
+}
+
+/// Parse DDG's `/lite/` result page (the no-JS endpoint at
+/// `lite.duckduckgo.com`).
+///
+/// The Lite layout is a flat `<table>` with paired result rows: each result
+/// contributes one `<a class="result-link">` (title + url) followed by a
+/// sibling `<td class="result-snippet">` (snippet). Iterating rows in
+/// document order pairs them up — DDG always emits them in matching order.
+///
+/// Layout (verified against today's Lite output):
+///
+/// ```html
+/// <tr><td valign="top">1.</td><td>
+///   <a rel="nofollow" href="https://example.com/" class="result-link">Title</a>
+/// </td></tr>
+/// <tr><td>&nbsp;</td><td class="result-snippet">Snippet text</td></tr>
+/// <tr><td>&nbsp;</td><td><span class="link-text">example.com</span></td></tr>
+/// ```
+///
+/// Exposed `pub(crate)` for the same reason as [`parse_ddg_html`].
+pub(crate) fn parse_ddg_lite_html(body: &str, max_results: usize) -> Vec<SearchResult> {
+    let doc = Html::parse_document(body);
+    let Ok(link_sel) = Selector::parse("a.result-link") else {
+        return Vec::new();
+    };
+    let Ok(snippet_sel) = Selector::parse("td.result-snippet") else {
+        return Vec::new();
+    };
+
+    let titles: Vec<(String, String)> = doc
+        .select(&link_sel)
+        .filter_map(|a| {
+            let url = normalize_ddg_href(a.value().attr("href").unwrap_or_default());
+            if url.is_empty() {
+                return None;
+            }
+            let title = a.text().collect::<String>().trim().to_string();
+            Some((title, url))
+        })
+        .collect();
+
+    let snippets: Vec<String> = doc
+        .select(&snippet_sel)
+        .map(|td| td.text().collect::<String>().trim().to_string())
+        .collect();
+
+    titles
+        .into_iter()
+        .zip(snippets.into_iter().chain(std::iter::repeat(String::new())))
+        .take(max_results)
+        .map(|((title, url), snippet)| SearchResult {
+            title,
+            url,
+            snippet,
+            relevance_score: None,
+            full_content: None,
+            provider: Some(NAME.to_string()),
+        })
+        .collect()
 }
 
 /// Extract the real URL from a DDG href.
@@ -335,5 +400,74 @@ mod tests {
         assert_eq!(normalize_ddg_href("javascript:void(0)"), "");
         assert_eq!(normalize_ddg_href("#fragment"), "");
         assert_eq!(normalize_ddg_href(""), "");
+    }
+
+    /// Real fragment of today's DDG Lite output, verbatim. Used both by
+    /// this provider's own tests and by the fallback layer's tests.
+    #[test]
+    fn parse_ddg_lite_html_pairs_link_and_snippet() {
+        let html = r#"
+        <html><body>
+        <table>
+          <tr><td valign="top">1.</td><td>
+            <a rel="nofollow" href="https://rust-lang.org/" class="result-link">Rust Programming Language</a>
+          </td></tr>
+          <tr><td>&nbsp;</td><td class="result-snippet">A language empowering everyone to build reliable and efficient software.</td></tr>
+          <tr><td>&nbsp;</td><td><span class="link-text">rust-lang.org</span></td></tr>
+          <tr><td valign="top">2.</td><td>
+            <a rel="nofollow" href="https://en.wikipedia.org/wiki/Rust_(programming_language)" class="result-link">Rust (programming language) - Wikipedia</a>
+          </td></tr>
+          <tr><td>&nbsp;</td><td class="result-snippet">Rust is a general-purpose programming language.</td></tr>
+        </table>
+        </body></html>
+        "#;
+        let results = parse_ddg_lite_html(html, 10);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Rust Programming Language");
+        assert_eq!(results[0].url, "https://rust-lang.org/");
+        assert!(results[0].snippet.contains("empowering everyone"));
+        assert_eq!(results[0].provider.as_deref(), Some("duckduckgo"));
+        assert_eq!(results[1].title, "Rust (programming language) - Wikipedia");
+    }
+
+    /// max_results honoured on Lite endpoint too.
+    #[test]
+    fn parse_ddg_lite_html_respects_max_results() {
+        let mut html = String::from("<html><body><table>");
+        for i in 0..15 {
+            html.push_str(&format!(
+                r#"<tr><td>{i}.</td><td>
+                <a class="result-link" href="https://e{i}.test/">T{i}</a></td></tr>
+                <tr><td></td><td class="result-snippet">S{i}</td></tr>"#
+            ));
+        }
+        html.push_str("</table></body></html>");
+        let results = parse_ddg_lite_html(&html, 4);
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[3].title, "T3");
+    }
+
+    /// Empty / malformed Lite page → empty Vec.
+    #[test]
+    fn parse_ddg_lite_html_empty_when_no_results() {
+        assert!(parse_ddg_lite_html("<html><body>No matches.</body></html>", 10).is_empty());
+        assert!(parse_ddg_lite_html("", 10).is_empty());
+    }
+
+    /// Lite endpoint with more titles than snippets — extra titles get empty
+    /// snippets rather than being dropped (defensive against DDG layout drift).
+    #[test]
+    fn parse_ddg_lite_html_pads_missing_snippets() {
+        let html = r#"
+        <table>
+          <tr><td><a class="result-link" href="https://a.test/">A</a></td></tr>
+          <tr><td><a class="result-link" href="https://b.test/">B</a></td></tr>
+          <tr><td class="result-snippet">snippet for A only</td></tr>
+        </table>
+        "#;
+        let results = parse_ddg_lite_html(html, 10);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].snippet, "snippet for A only");
+        assert_eq!(results[1].snippet, "", "missing snippet must not drop the title row");
     }
 }

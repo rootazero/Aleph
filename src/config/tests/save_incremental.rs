@@ -129,6 +129,7 @@ timeout_seconds = 10
                 enabled: true,
                 ..Default::default()
             }),
+            web_fetch_fallback: true,
         }),
         ..Config::default()
     };

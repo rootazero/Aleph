@@ -1,5 +1,7 @@
 use crate::error::{AlephError, Result};
-use crate::search::{ProviderTestResult, SearchOptions, SearchProvider, SearchResult};
+use crate::search::{
+    ProviderTestResult, SearchOptions, SearchProvider, SearchResult, WebFetchSerpFallback,
+};
 use crate::sync_primitives::{Arc, Mutex};
 
 /// Map an `AlephError` returned by a search provider to a short, stable
@@ -34,6 +36,12 @@ pub struct SearchRegistry {
     fallback_providers: Vec<String>,
     /// Cache for provider test results (name -> (result, timestamp))
     test_cache: Arc<Mutex<HashMap<String, (ProviderTestResult, Instant)>>>,
+    /// WebFetch-based SERP scrape fallback. Consulted only after every
+    /// configured provider has failed — typically when the operator's
+    /// IP has hit a simultaneous rate-limit across paid APIs. `None`
+    /// disables this last-resort branch (controlled by
+    /// `SearchConfigInternal.web_fetch_fallback`, default-true).
+    web_fetch_fallback: Option<Arc<WebFetchSerpFallback>>,
 }
 
 impl SearchRegistry {
@@ -44,7 +52,26 @@ impl SearchRegistry {
             default_provider: default_provider.into(),
             fallback_providers: Vec::new(),
             test_cache: Arc::new(Mutex::new(HashMap::new())),
+            web_fetch_fallback: None,
         }
+    }
+
+    /// Install (or replace) the WebFetch-based SERP scrape fallback.
+    ///
+    /// Once installed, [`Self::search`] will attempt the fallback after
+    /// the configured default + fallback_providers chain has fully
+    /// failed. Pass `None` to disable the last-resort branch — e.g. in
+    /// hermetic tests that must not make outbound HTTP under any
+    /// circumstance.
+    pub fn set_web_fetch_fallback(&mut self, fallback: Option<Arc<WebFetchSerpFallback>>) {
+        self.web_fetch_fallback = fallback;
+    }
+
+    /// Returns true if a WebFetch SERP fallback is currently armed.
+    /// Used by the panel / `aleph doctor` to surface the user-visible
+    /// "fallback enabled" indicator without leaking the inner Arc.
+    pub fn has_web_fetch_fallback(&self) -> bool {
+        self.web_fetch_fallback.is_some()
     }
 
     /// Build a SearchRegistry from `[search]` TOML configuration.
@@ -104,6 +131,25 @@ impl SearchRegistry {
         }
         if let Some(ref fallbacks) = cfg.fallback_providers {
             registry.set_fallback_providers(fallbacks.clone());
+        }
+        // Wire WebFetch SERP fallback when the operator hasn't opted
+        // out. The fallback only fires after the configured provider
+        // chain is fully exhausted, so the worst it can do on the
+        // happy path is sit in memory unused (one `reqwest::Client`).
+        if cfg.web_fetch_fallback {
+            match WebFetchSerpFallback::new() {
+                Ok(fb) => {
+                    log::info!(
+                        "[search] WebFetch SERP fallback armed — DDG mirrors will be \
+                         used if every configured provider fails"
+                    );
+                    registry.set_web_fetch_fallback(Some(Arc::new(fb)));
+                }
+                Err(e) => log::warn!(
+                    "[search] failed to construct WebFetch SERP fallback: {e} — \
+                     proceeding without last-resort scrape"
+                ),
+            }
         }
         Some(registry)
     }
@@ -206,6 +252,26 @@ impl SearchRegistry {
                         );
                         errors.push(msg);
                     }
+                }
+            }
+        }
+
+        // LAST-RESORT BRANCH (Round-2): every configured provider has
+        // failed. If the operator hasn't disabled the WebFetch SERP
+        // fallback, try scraping no-credential mirrors before giving
+        // up. This is the difference between "search degrades during
+        // rate-limit storms" and "search hard-fails until quota
+        // resets" — see [`WebFetchSerpFallback`] module docs.
+        if let Some(ref fallback) = self.web_fetch_fallback {
+            log::info!(
+                target: "search",
+                "all configured providers failed; attempting WebFetch SERP fallback"
+            );
+            match fallback.search(query, options).await {
+                Ok(results) => return Ok(results),
+                Err(e) => {
+                    let kind = classify_search_error(&e);
+                    errors.push(format!("web-fetch-fallback [{}] {}", kind, e));
                 }
             }
         }
@@ -509,5 +575,129 @@ mod tests {
 
         // Should only get max_results
         assert_eq!(results.len(), 5);
+    }
+
+    // ─── WebFetch SERP fallback wiring (Round-2) ────────────────────────
+
+    #[tokio::test]
+    async fn fallback_not_consulted_when_primary_succeeds() {
+        // Primary succeeds → fallback must NOT be entered. We assert
+        // this by installing a fallback whose mirrors are all pre-cooled
+        // (so any call would deterministically fail), and confirming
+        // search() still returns success.
+        let mut registry = SearchRegistry::new("primary".to_string());
+        registry.add_provider("primary".to_string(), Arc::new(MockProvider::new("primary", false, 3)));
+
+        let fb = WebFetchSerpFallback::new().expect("construct");
+        // Pre-cool every mirror — any actual call would error.
+        fb.force_cooldown_for("ddg-lite");
+        fb.force_cooldown_for("ddg-html");
+        registry.set_web_fetch_fallback(Some(Arc::new(fb)));
+        assert!(registry.has_web_fetch_fallback());
+
+        let results = registry.search("rust", &SearchOptions::default()).await.unwrap();
+        assert_eq!(results.len(), 3, "primary results should be returned without touching fallback");
+        assert_eq!(results[0].provider, Some("primary".to_string()));
+    }
+
+    #[tokio::test]
+    async fn fallback_error_aggregated_when_all_providers_and_fallback_fail() {
+        // Every provider fails AND fallback mirrors are pre-cooled —
+        // the final aggregate error must include both the provider
+        // failures AND the `web-fetch-fallback` line so operators
+        // know the last-resort branch was actually attempted.
+        let mut registry = SearchRegistry::new("primary".to_string());
+        registry.add_provider("primary".to_string(), Arc::new(MockProvider::new("primary", true, 0)));
+        registry.add_provider("fallback1".to_string(), Arc::new(MockProvider::new("fallback1", true, 0)));
+        registry.set_fallback_providers(vec!["fallback1".to_string()]);
+
+        let fb = WebFetchSerpFallback::new().unwrap();
+        fb.force_cooldown_for("ddg-lite");
+        fb.force_cooldown_for("ddg-html");
+        registry.set_web_fetch_fallback(Some(Arc::new(fb)));
+
+        let err = registry
+            .search("x", &SearchOptions::default())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("All search providers failed"), "missing provider failure prefix: {err}");
+        assert!(err.contains("web-fetch-fallback"), "fallback attempt missing from aggregate: {err}");
+        assert!(err.contains("ddg-lite") || err.contains("ddg-html"), "fallback mirror name missing: {err}");
+    }
+
+    #[test]
+    fn set_web_fetch_fallback_toggles_arm_flag() {
+        let mut registry = SearchRegistry::new("mock".to_string());
+        assert!(!registry.has_web_fetch_fallback());
+        registry.set_web_fetch_fallback(Some(Arc::new(WebFetchSerpFallback::new().unwrap())));
+        assert!(registry.has_web_fetch_fallback());
+        registry.set_web_fetch_fallback(None);
+        assert!(!registry.has_web_fetch_fallback());
+    }
+
+    #[test]
+    fn from_config_arms_fallback_by_default() {
+        use crate::config::types::{SearchBackendConfig, SearchConfigInternal};
+        // A config with no api keys would yield no providers and
+        // from_config returns None — make sure we get a registry by
+        // including DDG (zero-cred provider) so `any_added` is true.
+        let mut backends = HashMap::new();
+        backends.insert(
+            "ddg".to_string(),
+            SearchBackendConfig {
+                provider_type: "duckduckgo".to_string(),
+                api_key: None,
+                base_url: None,
+                engine_id: None,
+                verified: false,
+            },
+        );
+        let cfg = SearchConfigInternal {
+            enabled: true,
+            default_provider: "ddg".to_string(),
+            fallback_providers: None,
+            max_results: 5,
+            timeout_seconds: 10,
+            backends,
+            pii: None,
+            web_fetch_fallback: true,
+        };
+        let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
+        assert!(
+            registry.has_web_fetch_fallback(),
+            "default web_fetch_fallback=true must arm the fallback"
+        );
+    }
+
+    #[test]
+    fn from_config_respects_opt_out() {
+        use crate::config::types::{SearchBackendConfig, SearchConfigInternal};
+        let mut backends = HashMap::new();
+        backends.insert(
+            "ddg".to_string(),
+            SearchBackendConfig {
+                provider_type: "duckduckgo".to_string(),
+                api_key: None,
+                base_url: None,
+                engine_id: None,
+                verified: false,
+            },
+        );
+        let cfg = SearchConfigInternal {
+            enabled: true,
+            default_provider: "ddg".to_string(),
+            fallback_providers: None,
+            max_results: 5,
+            timeout_seconds: 10,
+            backends,
+            pii: None,
+            web_fetch_fallback: false,
+        };
+        let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
+        assert!(
+            !registry.has_web_fetch_fallback(),
+            "web_fetch_fallback=false must leave the registry without a fallback"
+        );
     }
 }
