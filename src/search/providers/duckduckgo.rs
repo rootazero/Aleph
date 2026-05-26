@@ -43,10 +43,31 @@ impl Default for DuckDuckGoProvider {
 #[async_trait]
 impl SearchProvider for DuckDuckGoProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+        let mut params: Vec<(&str, String)> = vec![
+            ("q", query.to_string()),
+            ("kp", options.ddg_kp().to_string()),
+        ];
+        if let Some(region) = options.region.as_deref() {
+            // DDG's `kl` expects a locale like `us-en` / `cn-zh`. If the
+            // caller already supplied a hyphenated locale, pass it through;
+            // otherwise pair the region with `language` when present.
+            let kl = if region.contains('-') {
+                region.to_lowercase()
+            } else if let Some(lang) = options.language.as_deref() {
+                format!("{}-{}", region.to_lowercase(), lang.to_lowercase())
+            } else {
+                region.to_lowercase()
+            };
+            params.push(("kl", kl));
+        }
+        if let Some(df) = options.ddg_df() {
+            params.push(("df", df.to_string()));
+        }
+
         let response = self
             .client
             .get(ENDPOINT)
-            .query(&[("q", query)])
+            .query(&params)
             .header("User-Agent", USER_AGENT)
             .header("Accept", "text/html")
             .timeout(std::time::Duration::from_secs(options.validated_timeout()))

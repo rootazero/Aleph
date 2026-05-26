@@ -77,17 +77,29 @@ impl GoogleProvider {
 #[async_trait]
 impl SearchProvider for GoogleProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
-        // Google CSE API limits num parameter to maximum 10
+        // Google CSE API caps num at 10 regardless of caller's max_results.
         let max_results = options.validated_max_results().min(10);
+        let mut params: Vec<(&str, String)> = vec![
+            ("key", self.api_key.clone()),
+            ("cx", self.engine_id.clone()),
+            ("q", query.to_string()),
+            ("num", max_results.to_string()),
+            ("safe", options.google_safe().to_string()),
+        ];
+        if let Some(lr) = options.google_lr() {
+            params.push(("lr", lr));
+        }
+        if let Some(region) = options.region.as_deref() {
+            // Google takes lowercase country codes for `gl`.
+            params.push(("gl", region.to_lowercase()));
+        }
+        if let Some(restrict) = options.google_date_restrict() {
+            params.push(("dateRestrict", restrict.to_string()));
+        }
         let response = self
             .client
             .get("https://www.googleapis.com/customsearch/v1")
-            .query(&[
-                ("key", self.api_key.as_str()),
-                ("cx", self.engine_id.as_str()),
-                ("q", query),
-                ("num", &max_results.to_string()),
-            ])
+            .query(&params)
             .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await

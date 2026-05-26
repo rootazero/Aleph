@@ -52,14 +52,26 @@ impl BraveProvider {
 #[async_trait]
 impl SearchProvider for BraveProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+        let mut params: Vec<(&str, String)> = vec![
+            ("q", query.to_string()),
+            ("count", options.validated_max_results().to_string()),
+            ("safesearch", options.brave_safesearch().to_string()),
+        ];
+        if let Some(lang) = options.language.as_deref() {
+            params.push(("search_lang", lang.to_string()));
+        }
+        if let Some(region) = options.region.as_deref() {
+            params.push(("country", region.to_string()));
+        }
+        if let Some(freshness) = options.brave_freshness() {
+            params.push(("freshness", freshness.to_string()));
+        }
+
         let response = self
             .client
             .get("https://api.search.brave.com/res/v1/web/search")
             .header("X-Subscription-Token", &self.api_key)
-            .query(&[
-                ("q", query),
-                ("count", &options.validated_max_results().to_string()),
-            ])
+            .query(&params)
             .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await

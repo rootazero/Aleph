@@ -52,14 +52,26 @@ impl BingProvider {
 #[async_trait]
 impl SearchProvider for BingProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+        let mut params: Vec<(&str, String)> = vec![
+            ("q", query.to_string()),
+            ("count", options.validated_max_results().to_string()),
+            ("safeSearch", options.bing_safesearch().to_string()),
+        ];
+        if let Some(lang) = options.language.as_deref() {
+            params.push(("setLang", lang.to_string()));
+        }
+        if let Some(region) = options.region.as_deref() {
+            params.push(("cc", region.to_string()));
+        }
+        if let Some(freshness) = options.bing_freshness() {
+            params.push(("freshness", freshness.to_string()));
+        }
+
         let response = self
             .client
             .get("https://api.bing.microsoft.com/v7.0/search")
             .header("Ocp-Apim-Subscription-Key", &self.api_key)
-            .query(&[
-                ("q", query),
-                ("count", &options.validated_max_results().to_string()),
-            ])
+            .query(&params)
             .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await

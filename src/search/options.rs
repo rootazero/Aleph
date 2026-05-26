@@ -1,28 +1,51 @@
 /// Search options configuration
 ///
-/// This module defines options passed to search providers
+/// This module defines options passed to search providers, plus the
+/// per-provider parameter mappings for the four "rich" fields
+/// (`language`, `region`, `date_range`, `safe_search`). Each provider
+/// expects different field names and value vocabularies for the same
+/// concept — by collecting the mappings here, the per-provider HTTP
+/// builders stay simple (each just calls one helper) and adding a new
+/// provider requires extending this mapping table rather than reverse-
+/// engineering the convention from a sibling provider.
+///
+/// Mapping table (kept in sync with the helpers below):
+///
+/// | field        | Brave         | Bing         | Google CSE   | SearXNG      | Tavily   | DuckDuckGo |
+/// |--------------|---------------|--------------|--------------|--------------|----------|------------|
+/// | language     | search_lang   | setLang      | lr=lang_XX   | language     | —        | —          |
+/// | region       | country       | cc           | gl           | —            | —        | kl         |
+/// | date_range   | freshness     | freshness    | dateRestrict | time_range   | days     | df         |
+/// | safe_search  | safesearch    | safeSearch   | safe         | safesearch   | —        | kp         |
+///
+/// Providers that have no native concept for a field omit it entirely
+/// (the helper returns `None` or the call site simply doesn't push it).
 use serde::{Deserialize, Serialize};
 
-/// Search options passed to providers
+/// Search options passed to providers.
+///
+/// See module-level docs for the per-provider mapping table covering
+/// `language`/`region`/`date_range`/`safe_search`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchOptions {
     /// Language code (ISO 639-1: "en", "zh", "ja", etc.)
-    /// NOTE: Not yet implemented by any provider. Reserved for future use.
+    /// Forwarded to Brave/Bing/Google/SearXNG; ignored by Tavily/Exa/Jina/DDG.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 
     /// Region code (ISO 3166-1 alpha-2: "US", "CN", "JP", etc.)
-    /// NOTE: Not yet implemented by any provider. Reserved for future use.
+    /// Forwarded to Brave/Bing/Google/DDG; ignored by Tavily/SearXNG/Exa/Jina.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
 
-    /// Date range filter ("day", "week", "month", "year")
-    /// NOTE: Not yet implemented by any provider. Reserved for future use.
+    /// Date range filter — one of "day" / "week" / "month" / "year".
+    /// Other values are silently ignored by the per-provider mappers.
+    /// Forwarded to Brave/Bing/Google/SearXNG/Tavily/DDG; ignored elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_range: Option<String>,
 
     /// Enable safe search (adult content filtering)
-    /// NOTE: Not yet implemented by any provider. Reserved for future use.
+    /// Forwarded to Brave/Bing/Google/SearXNG/DDG; ignored by Tavily/Exa/Jina.
     #[serde(default = "default_safe_search")]
     pub safe_search: bool,
 
@@ -83,6 +106,112 @@ impl SearchOptions {
     /// Returns validated max_results, capped at 50 and at least 1
     pub fn validated_max_results(&self) -> usize {
         self.max_results.clamp(1, 50)
+    }
+
+    // ─── Per-provider parameter mappers ────────────────────────────────
+    //
+    // These exist as plain methods on SearchOptions (not free functions
+    // on each provider) so that the full mapping table stays visible in
+    // one file. See the module-level docs for the table.
+
+    /// Brave `freshness` (`pd`/`pw`/`pm`/`py`).
+    pub fn brave_freshness(&self) -> Option<&'static str> {
+        Some(match self.date_range.as_deref()? {
+            "day" => "pd",
+            "week" => "pw",
+            "month" => "pm",
+            "year" => "py",
+            _ => return None,
+        })
+    }
+
+    /// Brave `safesearch` (`off`/`moderate`).
+    pub fn brave_safesearch(&self) -> &'static str {
+        if self.safe_search { "moderate" } else { "off" }
+    }
+
+    /// Bing `freshness` (`Day`/`Week`/`Month`). Bing has no `Year`.
+    pub fn bing_freshness(&self) -> Option<&'static str> {
+        Some(match self.date_range.as_deref()? {
+            "day" => "Day",
+            "week" => "Week",
+            "month" => "Month",
+            _ => return None,
+        })
+    }
+
+    /// Bing `safeSearch` (`Off`/`Moderate`).
+    pub fn bing_safesearch(&self) -> &'static str {
+        if self.safe_search { "Moderate" } else { "Off" }
+    }
+
+    /// Google CSE `dateRestrict` (`d1`/`w1`/`m1`/`y1`).
+    pub fn google_date_restrict(&self) -> Option<&'static str> {
+        Some(match self.date_range.as_deref()? {
+            "day" => "d1",
+            "week" => "w1",
+            "month" => "m1",
+            "year" => "y1",
+            _ => return None,
+        })
+    }
+
+    /// Google CSE `safe` (`active`/`off`).
+    pub fn google_safe(&self) -> &'static str {
+        if self.safe_search { "active" } else { "off" }
+    }
+
+    /// Google CSE `lr` language restrictor — Google requires the
+    /// `lang_` prefix, while SearXNG/Brave/Bing accept the bare code.
+    pub fn google_lr(&self) -> Option<String> {
+        let lang = self.language.as_deref()?;
+        Some(format!("lang_{lang}"))
+    }
+
+    /// SearXNG `time_range` (`day`/`week`/`month`/`year`). Bare token.
+    pub fn searxng_time_range(&self) -> Option<&'static str> {
+        Some(match self.date_range.as_deref()? {
+            "day" => "day",
+            "week" => "week",
+            "month" => "month",
+            "year" => "year",
+            _ => return None,
+        })
+    }
+
+    /// SearXNG `safesearch` (`0`/`1`/`2` for off/moderate/strict).
+    /// We expose only Off vs Moderate today; bumping to Strict requires
+    /// a new SearchOptions field.
+    pub fn searxng_safesearch(&self) -> u8 {
+        if self.safe_search { 1 } else { 0 }
+    }
+
+    /// Tavily `days` integer (1/7/30/365) — Tavily doesn't take a
+    /// freshness token; it takes a "look back N days" int instead.
+    pub fn tavily_days(&self) -> Option<u32> {
+        Some(match self.date_range.as_deref()? {
+            "day" => 1,
+            "week" => 7,
+            "month" => 30,
+            "year" => 365,
+            _ => return None,
+        })
+    }
+
+    /// DuckDuckGo `kp` (`1`=moderate, `-2`=off; strict is `-1`).
+    pub fn ddg_kp(&self) -> &'static str {
+        if self.safe_search { "1" } else { "-2" }
+    }
+
+    /// DuckDuckGo `df` (`d`/`w`/`m`/`y`).
+    pub fn ddg_df(&self) -> Option<&'static str> {
+        Some(match self.date_range.as_deref()? {
+            "day" => "d",
+            "week" => "w",
+            "month" => "m",
+            "year" => "y",
+            _ => return None,
+        })
     }
 }
 
@@ -192,5 +321,95 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(options.validated_max_results(), 10);
+    }
+
+    fn opts_with_range(d: &str) -> SearchOptions {
+        SearchOptions {
+            date_range: Some(d.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn brave_freshness_maps_canonical_tokens() {
+        assert_eq!(opts_with_range("day").brave_freshness(), Some("pd"));
+        assert_eq!(opts_with_range("week").brave_freshness(), Some("pw"));
+        assert_eq!(opts_with_range("month").brave_freshness(), Some("pm"));
+        assert_eq!(opts_with_range("year").brave_freshness(), Some("py"));
+        assert_eq!(opts_with_range("garbage").brave_freshness(), None);
+        assert_eq!(SearchOptions::default().brave_freshness(), None);
+    }
+
+    #[test]
+    fn bing_freshness_has_no_year() {
+        assert_eq!(opts_with_range("day").bing_freshness(), Some("Day"));
+        assert_eq!(opts_with_range("week").bing_freshness(), Some("Week"));
+        assert_eq!(opts_with_range("month").bing_freshness(), Some("Month"));
+        // Bing API has no Year option — must return None, NOT a panic.
+        assert_eq!(opts_with_range("year").bing_freshness(), None);
+    }
+
+    #[test]
+    fn google_date_restrict_uses_N1_suffix() {
+        assert_eq!(opts_with_range("day").google_date_restrict(), Some("d1"));
+        assert_eq!(opts_with_range("week").google_date_restrict(), Some("w1"));
+        assert_eq!(opts_with_range("month").google_date_restrict(), Some("m1"));
+        assert_eq!(opts_with_range("year").google_date_restrict(), Some("y1"));
+    }
+
+    #[test]
+    fn google_lr_prefixes_lang_underscore() {
+        let o = SearchOptions {
+            language: Some("zh".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(o.google_lr().as_deref(), Some("lang_zh"));
+        assert_eq!(SearchOptions::default().google_lr(), None);
+    }
+
+    #[test]
+    fn tavily_days_converts_range_to_integer() {
+        assert_eq!(opts_with_range("day").tavily_days(), Some(1));
+        assert_eq!(opts_with_range("week").tavily_days(), Some(7));
+        assert_eq!(opts_with_range("month").tavily_days(), Some(30));
+        assert_eq!(opts_with_range("year").tavily_days(), Some(365));
+        assert_eq!(opts_with_range("decade").tavily_days(), None);
+    }
+
+    #[test]
+    fn safesearch_helpers_toggle_consistently() {
+        let on = SearchOptions {
+            safe_search: true,
+            ..Default::default()
+        };
+        let off = SearchOptions {
+            safe_search: false,
+            ..Default::default()
+        };
+        assert_eq!(on.brave_safesearch(), "moderate");
+        assert_eq!(off.brave_safesearch(), "off");
+        assert_eq!(on.bing_safesearch(), "Moderate");
+        assert_eq!(off.bing_safesearch(), "Off");
+        assert_eq!(on.google_safe(), "active");
+        assert_eq!(off.google_safe(), "off");
+        assert_eq!(on.searxng_safesearch(), 1);
+        assert_eq!(off.searxng_safesearch(), 0);
+        assert_eq!(on.ddg_kp(), "1");
+        assert_eq!(off.ddg_kp(), "-2");
+    }
+
+    #[test]
+    fn searxng_time_range_passes_through_canonical_tokens() {
+        assert_eq!(opts_with_range("day").searxng_time_range(), Some("day"));
+        assert_eq!(opts_with_range("year").searxng_time_range(), Some("year"));
+        assert_eq!(opts_with_range("century").searxng_time_range(), None);
+    }
+
+    #[test]
+    fn ddg_df_uses_single_letter_codes() {
+        assert_eq!(opts_with_range("day").ddg_df(), Some("d"));
+        assert_eq!(opts_with_range("week").ddg_df(), Some("w"));
+        assert_eq!(opts_with_range("month").ddg_df(), Some("m"));
+        assert_eq!(opts_with_range("year").ddg_df(), Some("y"));
     }
 }

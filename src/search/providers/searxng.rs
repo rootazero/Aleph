@@ -63,14 +63,23 @@ impl SearchProvider for SearxngProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let url = format!("{}/search", self.base_url);
 
+        let mut params: Vec<(&str, String)> = vec![
+            ("q", query.to_string()),
+            ("format", "json".to_string()),
+            ("count", options.validated_max_results().to_string()),
+            ("safesearch", options.searxng_safesearch().to_string()),
+        ];
+        if let Some(lang) = options.language.as_deref() {
+            params.push(("language", lang.to_string()));
+        }
+        if let Some(range) = options.searxng_time_range() {
+            params.push(("time_range", range.to_string()));
+        }
+
         let response = self
             .client
             .get(&url)
-            .query(&[
-                ("q", query),
-                ("format", "json"),
-                ("count", &options.validated_max_results().to_string()),
-            ])
+            .query(&params)
             .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await
