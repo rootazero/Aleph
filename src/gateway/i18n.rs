@@ -3,6 +3,8 @@
 //! Uses the same language codes as the Panel (`en`, `zh-Hans`).
 //! Locale is resolved from `GeneralConfig.language` at runtime.
 
+use crate::orchestrator::dispatch::TerminateReason;
+
 /// Supported locales.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Locale {
@@ -39,12 +41,6 @@ pub enum Msg<'a> {
     ErrServiceUnavailable,
     ErrGeneric {
         detail: &'a str,
-    },
-
-    // --- agent loop exhaustion ---
-    ErrLoopExhausted {
-        iterations: usize,
-        tool_calls: usize,
     },
 
     // --- topic generation prompt (sent to LLM, not shown to user) ---
@@ -100,36 +96,6 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         }
 
         // ============================================================
-        // Agent loop exhaustion
-        // ============================================================
-        (
-            Msg::ErrLoopExhausted {
-                iterations,
-                tool_calls,
-            },
-            Locale::Zh,
-        ) => {
-            format!(
-                "抱歉，我在处理这个请求时用了太多步骤但没能完成（{iterations} 次迭代，{tool_calls} 次工具调用）。\n\
-                 请尝试将任务拆分得更小、更具体，或在配置中调高 `[execution] max_iterations`。"
-            )
-        }
-        (
-            Msg::ErrLoopExhausted {
-                iterations,
-                tool_calls,
-            },
-            Locale::En,
-        ) => {
-            format!(
-                "Sorry, I was unable to complete the task within the allowed limits \
-                 ({iterations} iterations, {tool_calls} tool calls).\n\
-                 Try breaking the task into smaller, more specific steps, \
-                 or raise `[execution] max_iterations` in your config."
-            )
-        }
-
-        // ============================================================
         // Topic generation prompt (sent to LLM, language-adaptive)
         // ============================================================
         (Msg::TopicGenerationPrompt { conversation }, Locale::Zh) => {
@@ -143,6 +109,121 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
                  (under 10 words, no punctuation):\n\n{conversation}"
             )
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Agent loop halt — render a cause-specific message per TerminateReason.
+//
+// Replaces the previous single `ErrLoopExhausted` blob, which always told
+// the user to raise `[execution] max_iterations` — wrong advice for 7 of
+// the 9 cap-style terminate reasons. Each branch now points at the actual
+// root cause (consecutive tool failures, context budget, stall watchdog…)
+// so the user sees actionable guidance instead of a misleading generic.
+// ---------------------------------------------------------------------------
+
+pub fn render_loop_halt(
+    reason: &TerminateReason,
+    iterations: usize,
+    tool_calls: usize,
+    locale: Locale,
+) -> String {
+    match (reason, locale) {
+        (TerminateReason::HitMaxIterations { used }, Locale::Zh) => format!(
+            "抱歉，迭代上限 ({used}) 已用尽（共 {tool_calls} 次工具调用）。\n\
+             如确需更多步骤，请调高 `[execution] max_iterations`，\
+             或将任务拆分得更小、更具体。"
+        ),
+        (TerminateReason::HitMaxIterations { used }, Locale::En) => format!(
+            "Sorry, hit the iteration cap ({used} iterations, {tool_calls} tool calls).\n\
+             If more steps are needed, raise `[execution] max_iterations`, \
+             or break the task into smaller, more specific steps."
+        ),
+
+        (TerminateReason::ConsecutiveFailureCap { consecutive }, Locale::Zh) => format!(
+            "抱歉，连续 {consecutive} 轮工具调用全部失败（共 {iterations} 次迭代，\
+             {tool_calls} 次工具调用）。\n\
+             请检查工具配置或网络可达性。"
+        ),
+        (TerminateReason::ConsecutiveFailureCap { consecutive }, Locale::En) => format!(
+            "Sorry, {consecutive} consecutive turns failed with tool errors \
+             ({iterations} iterations, {tool_calls} tool calls).\n\
+             Please check tool config or network reachability."
+        ),
+
+        (TerminateReason::ContextBudgetExhausted, Locale::Zh) => format!(
+            "抱歉，上下文预算已用尽（{iterations} 次迭代后），无法继续。\n\
+             请精简对话或新开会话。"
+        ),
+        (TerminateReason::ContextBudgetExhausted, Locale::En) => format!(
+            "Sorry, the context budget was exhausted after {iterations} iterations.\n\
+             Please trim the conversation or start a new session."
+        ),
+
+        (TerminateReason::StallTimeout { elapsed_ms }, Locale::Zh) => format!(
+            "抱歉，{elapsed_ms} ms 内无任何进展被熔断（已执行 {iterations} 次迭代，\
+             {tool_calls} 次工具调用）。\n\
+             请检查工具是否阻塞或网络是否中断。"
+        ),
+        (TerminateReason::StallTimeout { elapsed_ms }, Locale::En) => format!(
+            "Sorry, no progress for {elapsed_ms} ms — circuit-broken \
+             ({iterations} iterations, {tool_calls} tool calls completed).\n\
+             Check whether a tool is blocking or the network is stalled."
+        ),
+
+        (TerminateReason::TurnTimeout { phase, elapsed_ms }, Locale::Zh) => format!(
+            "抱歉，单轮 `{phase}` 阶段 {elapsed_ms} ms 超时（已执行 {iterations} 次迭代）。"
+        ),
+        (TerminateReason::TurnTimeout { phase, elapsed_ms }, Locale::En) => format!(
+            "Sorry, single-turn `{phase}` phase timed out at {elapsed_ms} ms \
+             ({iterations} iterations completed)."
+        ),
+
+        (TerminateReason::VerifierVeto { vetos }, Locale::Zh) => format!(
+            "抱歉，被验证器连续否决 {vetos} 次后退出（{iterations} 次迭代）。"
+        ),
+        (TerminateReason::VerifierVeto { vetos }, Locale::En) => format!(
+            "Sorry, exited after {vetos} verifier vetoes ({iterations} iterations)."
+        ),
+
+        (TerminateReason::EmptyResponseExhausted, Locale::Zh) => format!(
+            "抱歉，模型连续返回空响应（{iterations} 次迭代），无法继续。\n\
+             这可能是上游提供商瞬时故障——请稍后重试。"
+        ),
+        (TerminateReason::EmptyResponseExhausted, Locale::En) => format!(
+            "Sorry, the model returned empty responses for {iterations} iterations.\n\
+             This may be an upstream provider issue — please try again later."
+        ),
+
+        (TerminateReason::StopHookHalt { reason }, Locale::Zh) => {
+            format!("抱歉，Stop hook 拦截：{reason}。")
+        }
+        (TerminateReason::StopHookHalt { reason }, Locale::En) => {
+            format!("Sorry, halted by Stop hook: {reason}.")
+        }
+
+        (TerminateReason::MaxOutputTokensExhausted, Locale::Zh) => format!(
+            "抱歉，输出 token 上限耗尽（{iterations} 次迭代，{tool_calls} 次工具调用）。\n\
+             请缩短请求或调高 `max_output_tokens`。"
+        ),
+        (TerminateReason::MaxOutputTokensExhausted, Locale::En) => format!(
+            "Sorry, output token budget exhausted ({iterations} iterations, \
+             {tool_calls} tool calls).\n\
+             Shorten the request or raise `max_output_tokens`."
+        ),
+
+        // Completed and Cancelled should never reach here — callers gate on
+        // `is_hit_limit()`. Fall back to a generic so we never panic in prod.
+        // (`TerminateReason` is `#[non_exhaustive]` for downstream crates but
+        // exhaustive within this crate — a new variant added in dispatch.rs
+        // will force this match to be updated.)
+        (TerminateReason::Completed | TerminateReason::Cancelled, Locale::Zh) => format!(
+            "抱歉，会话提前结束（{iterations} 次迭代，{tool_calls} 次工具调用）。"
+        ),
+        (TerminateReason::Completed | TerminateReason::Cancelled, Locale::En) => format!(
+            "Sorry, the session ended early ({iterations} iterations, \
+             {tool_calls} tool calls)."
+        ),
     }
 }
 
@@ -227,6 +308,128 @@ mod tests {
             Locale::En,
         );
         assert!(msg.contains("New conversation started"));
+    }
+
+    #[test]
+    fn render_loop_halt_hit_max_iterations_names_the_cap() {
+        let msg = render_loop_halt(
+            &TerminateReason::HitMaxIterations { used: 200 },
+            200,
+            42,
+            Locale::En,
+        );
+        assert!(msg.contains("iteration cap"), "{msg}");
+        assert!(msg.contains("200 iterations"), "{msg}");
+        assert!(msg.contains("42 tool calls"), "{msg}");
+        assert!(msg.contains("max_iterations"), "{msg}");
+    }
+
+    #[test]
+    fn render_loop_halt_consecutive_failures_blames_tools_not_iterations() {
+        let msg = render_loop_halt(
+            &TerminateReason::ConsecutiveFailureCap { consecutive: 6 },
+            6,
+            6,
+            Locale::Zh,
+        );
+        // Whole point of the fix: surface the real cause (tool failures /
+        // network) and never point at the iteration cap, which is irrelevant.
+        assert!(msg.contains("连续 6 轮工具调用全部失败"), "{msg}");
+        assert!(msg.contains("工具配置或网络可达性"), "{msg}");
+        assert!(
+            !msg.contains("max_iterations"),
+            "must NOT advise raising max_iterations for ConsecutiveFailureCap: {msg}"
+        );
+    }
+
+    #[test]
+    fn render_loop_halt_consecutive_failures_english_blames_tools_not_iterations() {
+        let msg = render_loop_halt(
+            &TerminateReason::ConsecutiveFailureCap { consecutive: 6 },
+            6,
+            6,
+            Locale::En,
+        );
+        assert!(msg.contains("6 consecutive turns failed"), "{msg}");
+        assert!(msg.contains("tool config or network reachability"), "{msg}");
+        assert!(
+            !msg.contains("max_iterations"),
+            "must NOT advise raising max_iterations for ConsecutiveFailureCap: {msg}"
+        );
+    }
+
+    #[test]
+    fn render_loop_halt_stall_timeout_mentions_elapsed_ms() {
+        let msg = render_loop_halt(
+            &TerminateReason::StallTimeout {
+                elapsed_ms: 30_000,
+            },
+            5,
+            3,
+            Locale::En,
+        );
+        assert!(msg.contains("30000 ms"), "{msg}");
+        assert!(msg.contains("no progress"), "{msg}");
+    }
+
+    #[test]
+    fn render_loop_halt_turn_timeout_names_phase() {
+        let msg = render_loop_halt(
+            &TerminateReason::TurnTimeout {
+                phase: "act".into(),
+                elapsed_ms: 12_000,
+            },
+            8,
+            4,
+            Locale::En,
+        );
+        assert!(msg.contains("`act`"), "{msg}");
+        assert!(msg.contains("12000 ms"), "{msg}");
+    }
+
+    #[test]
+    fn render_loop_halt_context_budget_advises_trim_session() {
+        let msg = render_loop_halt(&TerminateReason::ContextBudgetExhausted, 50, 12, Locale::En);
+        assert!(msg.contains("context budget"), "{msg}");
+        assert!(msg.contains("trim") || msg.contains("new session"), "{msg}");
+    }
+
+    #[test]
+    fn render_loop_halt_max_output_tokens_advises_token_knob() {
+        let msg = render_loop_halt(
+            &TerminateReason::MaxOutputTokensExhausted,
+            3,
+            0,
+            Locale::En,
+        );
+        assert!(msg.contains("max_output_tokens"), "{msg}");
+        assert!(
+            !msg.contains("max_iterations"),
+            "max_output_tokens variant must not point at max_iterations: {msg}"
+        );
+    }
+
+    #[test]
+    fn render_loop_halt_stop_hook_surfaces_reason() {
+        let msg = render_loop_halt(
+            &TerminateReason::StopHookHalt {
+                reason: "policy violation".into(),
+            },
+            2,
+            0,
+            Locale::En,
+        );
+        assert!(msg.contains("policy violation"), "{msg}");
+    }
+
+    #[test]
+    fn render_loop_halt_completed_fallback_does_not_panic() {
+        // Completed/Cancelled should never reach render_loop_halt (caller
+        // gates on is_hit_limit) but if it does we must render a sensible
+        // fallback instead of panicking.
+        let msg = render_loop_halt(&TerminateReason::Completed, 10, 5, Locale::En);
+        assert!(msg.contains("10 iterations"), "{msg}");
+        assert!(msg.contains("5 tool calls"), "{msg}");
     }
 
     #[test]

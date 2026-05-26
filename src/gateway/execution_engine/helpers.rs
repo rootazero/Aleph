@@ -6,8 +6,8 @@
 //!   2. A drain task that forwards `FlowStreamEvent`s through
 //!      `event_drain::emit_flow_event` to the Gateway emitter.
 //!   3. Await of the completion oneshot + mapping of `FlowOutcome` to the
-//!      user-visible response string (including i18n `ErrLoopExhausted`
-//!      parity with the retiring `run_agent_loop` branch).
+//!      user-visible response string (loop-halt branches go through
+//!      `i18n::render_loop_halt`, which dispatches on `terminate_reason`).
 //!
 //! The production `run_agent_loop` wraps this helper inside the provider
 //! fallback retry loop; this module is the inner per-attempt dispatch body.
@@ -21,7 +21,7 @@ use tracing::warn;
 use super::event_drain::{emit_flow_event, DrainState};
 use super::ExecutionError;
 use crate::gateway::event_emitter::EventEmitter;
-use crate::gateway::i18n::{self, Locale, Msg};
+use crate::gateway::i18n::{self, Locale};
 use crate::orchestrator::{
     FlowError, FlowHistoryTurn, FlowInput, FlowOutcome, FlowRequest, FlowStreamEvent, Orchestrator,
 };
@@ -117,8 +117,9 @@ impl From<DispatchFailure> for ExecutionError {
 /// * Awaits the completion oneshot; maps `FlowError` to `ExecutionError::Orchestrator`
 ///   (callers classify `FlowError::Transient` vs `Internal` separately for
 ///   the outer retry loop).
-/// * Maps `FlowOutcome.hit_limit` + empty `final_text` to i18n
-///   `ErrLoopExhausted`; otherwise returns `final_text`.
+/// * Maps `FlowOutcome.hit_limit` + empty `final_text` through
+///   `i18n::render_loop_halt(terminate_reason, ...)`; otherwise returns
+///   `final_text`.
 ///
 /// # Cancellation
 /// `cancel_token.cancel()` is forwarded to the orchestrator by the caller via
@@ -209,13 +210,14 @@ pub async fn run_dispatch_and_drain_classified(
     let _ = drain.await;
     propagate.abort();
 
-    // 5. Map `hit_limit` → i18n `ErrLoopExhausted` (parity with run_agent_loop).
+    // 5. Map `hit_limit` → i18n loop-halt message, dispatched on the rich
+    //    `terminate_reason` so the user gets root-cause-specific advice
+    //    instead of a one-size-fits-all "raise max_iterations" blob.
     let response = if outcome.hit_limit && outcome.final_text.is_empty() {
-        i18n::t(
-            Msg::ErrLoopExhausted {
-                iterations: outcome.iterations as usize,
-                tool_calls: outcome.tool_calls_made as usize,
-            },
+        i18n::render_loop_halt(
+            &outcome.terminate_reason,
+            outcome.iterations as usize,
+            outcome.tool_calls_made as usize,
             locale,
         )
     } else {

@@ -1,8 +1,8 @@
-//! Task 4c integration test 2: hit_limit → i18n ErrLoopExhausted.
+//! Task 4c integration test 2: `hit_limit + empty text` renders the
+//! cause-specific i18n loop-halt message via `render_loop_halt`.
 //!
 //! A `FlowOutcome` with `hit_limit: true` and empty `final_text` must produce
-//! the localized loop-exhausted message, preserving parity with the retiring
-//! `run_loop.rs` branch.
+//! the localized loop-halt message dispatched on `terminate_reason`.
 
 #[path = "gateway_chat_common/mod.rs"]
 mod common;
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use alephcore::gateway::event_emitter::{CollectingEventEmitter, EventEmitter};
 use alephcore::gateway::execution_engine::helpers::run_dispatch_and_drain;
 use alephcore::gateway::i18n::Locale;
-use alephcore::orchestrator::FlowOutcome;
+use alephcore::orchestrator::{FlowOutcome, TerminateReason};
 use tokio_util::sync::CancellationToken;
 
 use common::{basic_request, orchestrator_with_stub, StubHarnessRunner};
@@ -27,6 +27,7 @@ async fn hit_limit_with_empty_text_emits_i18n_message() {
                 tool_calls_made: 17,
                 total_tokens: 0,
                 hit_limit: true,
+                terminate_reason: TerminateReason::HitMaxIterations { used: 42 },
                 ..Default::default()
             };
             let _ = ctx
@@ -52,11 +53,11 @@ async fn hit_limit_with_empty_text_emits_i18n_message() {
     .await
     .expect("dispatch ok");
 
-    // Reference string: i18n `ErrLoopExhausted` for English. Match the stable
-    // marker substring so minor wording tweaks don't break the test.
+    // The HitMaxIterations branch of render_loop_halt names the cap in the
+    // first sentence and surfaces both counters; match the stable markers.
     assert!(
-        response.contains("unable to complete"),
-        "expected i18n loop-exhausted message, got: {response}"
+        response.contains("iteration cap"),
+        "expected hit-max-iterations message, got: {response}"
     );
     assert!(
         response.contains("42 iterations"),

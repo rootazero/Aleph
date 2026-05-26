@@ -24,6 +24,7 @@ pub use deps_builder::{
 
 pub use dispatch::{
     FlowHandle, FlowOutcome, FlowRequest, FlowStreamEvent, HarnessRunner, Orchestrator,
+    TerminateReason,
 };
 pub use errors::FlowError;
 pub use flow_registry::{FlowRegistry, FlowSet};

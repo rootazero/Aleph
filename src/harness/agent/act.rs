@@ -191,6 +191,32 @@ impl AgentHarness {
                 call.name.clone(),
                 super::canonical_json_string(&call.arguments),
             );
+
+            // Cross-batch dedup: refuse identical (tool, args) that already
+            // failed earlier in this run. The synthesized ToolError nudges
+            // the LLM to pivot instead of looping on the same deterministic
+            // failure (sandbox-blocked URL, quota-exhausted API, etc.). The
+            // failure set is cleared whenever any tool succeeds.
+            if self.is_recent_failure(&call.name, &cache_key.1) {
+                tracing::warn!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    "cross-batch dedup: refusing identical repeat of a previously-failed call",
+                );
+                let synthetic = crate::tools::service::ToolError::Execution {
+                    name: call.name.clone(),
+                    cause: "this exact call already failed earlier in the run; \
+                            change inputs or try a different tool"
+                        .to_string(),
+                };
+                self.emit_tool_error(session_id, turn_id, &call, synthetic, started, iteration)
+                    .await;
+                if let Some(ref tracker) = self.stall_tracker {
+                    tracker.record_activity().await;
+                }
+                continue;
+            }
+
             if let Some(cached) = tool_call_cache.get(&cache_key) {
                 tracing::warn!(
                     tool = %call.name,
@@ -291,6 +317,10 @@ impl AgentHarness {
                     executed_count = executed_count.saturating_add(1);
                     self.apply_turn_budget(&budget_turn_id, &call, &mut output);
                     tool_call_cache.insert(cache_key.clone(), output.clone());
+                    // Cross-batch dedup: a single success clears the failure
+                    // set — the LLM has demonstrably pivoted to a working
+                    // strategy.
+                    self.clear_failures();
                     self.emit_tool_success(
                         session_id, turn_id, &call, output, started, iteration,
                     )
@@ -300,6 +330,7 @@ impl AgentHarness {
                     // Do NOT abort — continue processing remaining tool calls.
                     // The error is persisted to session log; the next Think
                     // turn will see it as tool_result(is_error=true).
+                    self.record_failure(call.name.clone(), cache_key.1.clone());
                     self.emit_tool_error(session_id, turn_id, &call, e, started, iteration)
                         .await;
                 }
@@ -392,12 +423,29 @@ impl AgentHarness {
     ) -> Result<usize, HarnessError> {
         let mut executed_count: usize = 0;
 
+        // Cross-batch dedup preflight: index calls whose (tool, args) already
+        // failed earlier in this run. Skipped calls receive a synthetic
+        // ToolError below alongside the normal request-event emission so the
+        // session timeline stays linear. PASS 1 then dispatches ONLY the
+        // surviving calls in parallel, preserving original input order.
+        let canonical_args: Vec<String> = tool_calls
+            .iter()
+            .map(|c| super::canonical_json_string(&c.arguments))
+            .collect();
+        let skip: Vec<bool> = tool_calls
+            .iter()
+            .zip(canonical_args.iter())
+            .map(|(c, args)| self.is_recent_failure(&c.name, args))
+            .collect();
+
         // PASS 0 — serial: notify callback, emit ToolCallStarted trace,
         // emit ToolCallRequested SessionEvent. Resolve effective per-tool
         // wall-clock budget. Capture started Instant for duration metrics.
+        // Skipped calls take the synthetic-error fast path here and are
+        // omitted from PASS 1 dispatch.
         let mut started_at: Vec<Instant> = Vec::with_capacity(tool_calls.len());
         let mut budgets: Vec<Option<std::time::Duration>> = Vec::with_capacity(tool_calls.len());
-        for call in &tool_calls {
+        for (idx, call) in tool_calls.iter().enumerate() {
             callback.on_tool_call(&call.name);
             started_at.push(Instant::now());
             self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallStarted {
@@ -416,6 +464,34 @@ impl AgentHarness {
                 at: now_ms(),
             };
             self.deps.session.emit_event(session_id, requested).await?;
+
+            if skip[idx] {
+                tracing::warn!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    "cross-batch dedup (parallel): refusing identical repeat of a previously-failed call",
+                );
+                let synthetic = crate::tools::service::ToolError::Execution {
+                    name: call.name.clone(),
+                    cause: "this exact call already failed earlier in the run; \
+                            change inputs or try a different tool"
+                        .to_string(),
+                };
+                self.emit_tool_error(
+                    session_id,
+                    turn_id,
+                    call,
+                    synthetic,
+                    started_at[idx],
+                    iteration,
+                )
+                .await;
+                if let Some(ref tracker) = self.stall_tracker {
+                    tracker.record_activity().await;
+                }
+                budgets.push(None);
+                continue;
+            }
 
             let per_tool_budget = self
                 .deps
@@ -441,14 +517,24 @@ impl AgentHarness {
             .max(2);
         type ExecOutcome =
             Result<Result<ToolOutput, crate::tools::service::ToolError>, std::time::Duration>;
-        let mut boxed_futs: Vec<BoxFuture<'static, ExecOutcome>> =
+        // Build per-original-index futures, leaving None at skipped indices
+        // (cross-batch dedup already emitted synthetic ToolError in PASS 0).
+        // Run only the live futures through `.buffered()` and re-assemble
+        // results in original input order via `live_indices`, so PASS 2 keeps
+        // its existing `for (idx, exec_result) in results.iter().enumerate()`
+        // contract against `tool_calls`.
+        let mut boxed_futs_opt: Vec<Option<BoxFuture<'static, ExecOutcome>>> =
             Vec::with_capacity(tool_calls.len());
         // Gap B follow-up — keep one InFlightGuard per call alive for the
         // duration of the whole parallel dispatch. Each guard drops when this
         // Vec goes out of scope after PASS 2 finishes, which is strictly
-        // later than every future in `boxed_futs` resolves.
+        // later than every future resolves.
         let mut in_flight_guards: Vec<crate::tools::in_flight::InFlightGuard> = Vec::new();
         for (idx, call) in tool_calls.iter().enumerate() {
+            if skip[idx] {
+                boxed_futs_opt.push(None);
+                continue;
+            }
             let tools = self.deps.tools.clone();
             let name = call.name.clone();
             let args = call.arguments.clone();
@@ -462,7 +548,7 @@ impl AgentHarness {
             if let Some(reg) = self.deps.in_flight_tool_calls.as_ref() {
                 in_flight_guards.push(reg.register(&call.id, &call.name, call_cancel.clone()));
             }
-            boxed_futs.push(Box::pin(async move {
+            boxed_futs_opt.push(Some(Box::pin(async move {
                 let exec_fut = tools.execute_with_cancel(&name, args, call_cancel);
                 match budget {
                     Some(b) => match tokio::time::timeout(b, exec_fut).await {
@@ -471,12 +557,26 @@ impl AgentHarness {
                     },
                     None => Ok(exec_fut.await),
                 }
-            }));
+            })));
         }
-        let results: Vec<ExecOutcome> = stream::iter(boxed_futs)
+        let live_indices: Vec<usize> = boxed_futs_opt
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| f.as_ref().map(|_| i))
+            .collect();
+        let live_futs: Vec<BoxFuture<'static, ExecOutcome>> =
+            boxed_futs_opt.into_iter().flatten().collect();
+        let live_results: Vec<ExecOutcome> = stream::iter(live_futs)
             .buffered(parallelism)
             .collect()
             .await;
+        // Reassemble per-original-index results. `None` slots are skipped
+        // calls — already emitted as synthetic errors in PASS 0; PASS 2 below
+        // ignores them via the same `skip[idx]` flag.
+        let mut results: Vec<Option<ExecOutcome>> = (0..tool_calls.len()).map(|_| None).collect();
+        for (live_idx, exec) in live_results.into_iter().enumerate() {
+            results[live_indices[live_idx]] = Some(exec);
+        }
         // PASS 1 complete — every future has resolved, so the in-flight
         // registry entries are no longer cancellable in any meaningful sense.
         // Drop the guards now (vs end-of-function) so `tools.cancel_call`
@@ -489,8 +589,13 @@ impl AgentHarness {
         // ToolResult/ToolError, trace, push timeline entry. The first
         // timeout encountered is remembered and bubbled up at the end so
         // later already-completed results still reach the session log.
+        // Skipped indices (cross-batch dedup hits, already errored in PASS 0)
+        // are passed through with no further action.
         let mut first_stall: Option<(String, std::time::Duration)> = None;
-        for (idx, exec_result) in results.into_iter().enumerate() {
+        for (idx, exec_slot) in results.into_iter().enumerate() {
+            let Some(exec_result) = exec_slot else {
+                continue; // PASS-0 dedup-rejected; already emitted synthetic error.
+            };
             let call = &tool_calls[idx];
             let started = started_at[idx];
             match exec_result {
@@ -508,6 +613,9 @@ impl AgentHarness {
                 Ok(Ok(mut output)) => {
                     executed_count = executed_count.saturating_add(1);
                     self.apply_turn_budget(budget_turn_id, call, &mut output);
+                    // Cross-batch dedup: any success clears the failure set —
+                    // the LLM has demonstrably pivoted to a working strategy.
+                    self.clear_failures();
                     self.emit_tool_success(
                         session_id, turn_id, call, output, started, iteration,
                     )
@@ -517,6 +625,9 @@ impl AgentHarness {
                     }
                 }
                 Ok(Err(e)) => {
+                    // Cross-batch dedup: record the (tool, args) signature so
+                    // the next turn refuses an identical repeat.
+                    self.record_failure(call.name.clone(), canonical_args[idx].clone());
                     self.emit_tool_error(session_id, turn_id, call, e, started, iteration)
                         .await;
                     if let Some(ref tracker) = self.stall_tracker {

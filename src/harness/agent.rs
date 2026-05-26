@@ -103,6 +103,15 @@ pub struct AgentHarness {
     /// run; equals the child id when a `SplitSession` directive caused the
     /// loop to switch sessions mid-run. `None` until `run()` completes.
     final_session_id: Mutex<Option<SessionId>>,
+    /// Cross-batch dedup: `(tool_name, canonical_args)` signatures whose last
+    /// attempt in this run produced a `ToolError`. Consulted by `act()` /
+    /// `act_parallel()` at preflight — identical repeats are rejected with a
+    /// synthetic `ToolError::Execution` instead of re-running. Cleared
+    /// whenever any tool call in a turn succeeds (LLM has made progress).
+    /// Prevents the pathological loop where the model keeps re-issuing the
+    /// same deterministically-failing call (e.g. `web_fetch` against a
+    /// sandbox-blocked URL or a quota-exhausted API).
+    pub(super) recent_failures: Mutex<std::collections::HashSet<(String, String)>>,
 }
 
 impl AgentHarness {
@@ -121,7 +130,38 @@ impl AgentHarness {
             token_breakdown: Mutex::new(TokenBreakdown::default()),
             started_at: OnceLock::new(),
             final_session_id: Mutex::new(None),
+            recent_failures: Mutex::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// Cross-batch dedup probe. `true` when an identical `(tool_name,
+    /// canonical_args)` already failed earlier in this run AND no later
+    /// success has cleared the set.
+    pub(super) fn is_recent_failure(&self, name: &str, canonical_args: &str) -> bool {
+        self.recent_failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&(name.to_string(), canonical_args.to_string()))
+    }
+
+    /// Record a `(tool, args)` that just failed. Subsequent identical calls
+    /// in later turns will be preflight-rejected.
+    pub(super) fn record_failure(&self, name: String, canonical_args: String) {
+        self.recent_failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert((name, canonical_args));
+    }
+
+    /// Clear the failure set. Called whenever any tool call in a turn
+    /// succeeds — successful progress is the LLM's signal that it has
+    /// pivoted, and we don't want to keep blocking historical failures
+    /// indefinitely.
+    pub(super) fn clear_failures(&self) {
+        self.recent_failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     /// `true` if a budget directive forced an early exit during this run.

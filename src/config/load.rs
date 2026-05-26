@@ -89,6 +89,12 @@ impl Config {
             ))
         })?;
 
+        // Bridge: `[security.ssrf]` is the user-facing TOML path (managed by
+        // the Panel security_config admin), but `WebFetchTool` reads from
+        // `Config.ssrf`. Without this copy, `[security.ssrf].allowed_hosts`
+        // is silently dead — Panel saves it, code never honours it.
+        Self::apply_security_ssrf_overrides(&mut config, &contents);
+
         debug!(
             path = %path.display(),
             providers_count = config.providers.len(),
@@ -217,6 +223,153 @@ impl Config {
         debug!(
             user_rules_count = self.rules.len(),
             "Processing user-defined routing rules (AI-first mode)"
+        );
+    }
+
+    /// Mirror `[security.ssrf]` fields into `Config.ssrf` so that the Panel-
+    /// managed allowlist actually feeds `WebFetchTool`. Reads the raw TOML
+    /// because the strongly-typed `SecurityConfig` schema lives in the
+    /// gateway layer and we do not want a reverse dep from `config` →
+    /// `gateway`.
+    fn apply_security_ssrf_overrides(config: &mut Config, raw_toml: &str) {
+        let Ok(table) = raw_toml.parse::<toml::Table>() else {
+            return;
+        };
+        let Some(security) = table.get("security").and_then(|v| v.as_table()) else {
+            return;
+        };
+        let Some(ssrf) = security.get("ssrf").and_then(|v| v.as_table()) else {
+            return;
+        };
+
+        if let Some(v) = ssrf.get("enabled").and_then(|v| v.as_bool()) {
+            config.ssrf.enabled = v;
+        }
+        if let Some(v) = ssrf
+            .get("allow_tool_private_network")
+            .and_then(|v| v.as_bool())
+        {
+            config.ssrf.allow_private_network = v;
+        }
+        if let Some(v) = ssrf.get("max_redirects").and_then(|v| v.as_integer()) {
+            if let Ok(n) = u8::try_from(v.clamp(0, u8::MAX as i64)) {
+                config.ssrf.max_redirects = n;
+            }
+        }
+        if let Some(arr) = ssrf.get("allowed_hosts").and_then(|v| v.as_array()) {
+            config.ssrf.allowed_hosts = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+        }
+        if let Some(arr) = ssrf.get("blocked_hosts").and_then(|v| v.as_array()) {
+            config.ssrf.blocked_hosts = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+        }
+    }
+}
+
+#[cfg(test)]
+mod ssrf_bridge_tests {
+    use super::*;
+
+    fn load_with_toml(toml_str: &str) -> Config {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, toml_str).expect("write");
+        Config::load_from_file(&path).expect("load")
+    }
+
+    #[test]
+    fn security_ssrf_allowed_hosts_lands_in_config_ssrf() {
+        let cfg = load_with_toml(
+            r#"
+[security.ssrf]
+allowed_hosts = ["*.reuters.com", "api.example.com"]
+"#,
+        );
+        assert_eq!(
+            cfg.ssrf.allowed_hosts,
+            vec!["*.reuters.com".to_string(), "api.example.com".to_string()],
+            "bridge must copy security.ssrf.allowed_hosts → Config.ssrf.allowed_hosts"
+        );
+    }
+
+    #[test]
+    fn security_ssrf_blocked_hosts_lands_in_config_ssrf() {
+        let cfg = load_with_toml(
+            r#"
+[security.ssrf]
+blocked_hosts = ["bad.example.com"]
+"#,
+        );
+        assert_eq!(cfg.ssrf.blocked_hosts, vec!["bad.example.com".to_string()]);
+    }
+
+    #[test]
+    fn security_ssrf_allow_tool_private_network_lands_in_config_ssrf() {
+        let cfg = load_with_toml(
+            r#"
+[security.ssrf]
+allow_tool_private_network = true
+"#,
+        );
+        assert!(cfg.ssrf.allow_private_network);
+    }
+
+    #[test]
+    fn security_ssrf_max_redirects_lands_in_config_ssrf() {
+        let cfg = load_with_toml(
+            r#"
+[security.ssrf]
+max_redirects = 2
+"#,
+        );
+        assert_eq!(cfg.ssrf.max_redirects, 2);
+    }
+
+    #[test]
+    fn missing_security_ssrf_leaves_defaults_untouched() {
+        let cfg = load_with_toml("");
+        assert!(cfg.ssrf.enabled, "default enabled");
+        assert!(cfg.ssrf.allowed_hosts.is_empty(), "default allowlist empty");
+        assert_eq!(cfg.ssrf.max_redirects, 5, "default max_redirects");
+    }
+
+    #[test]
+    fn root_level_ssrf_block_still_works_for_backwards_compat() {
+        // [ssrf] at root was the pre-bridge configuration path. Confirm we
+        // didn't break it — `Config.ssrf` should still deserialize directly.
+        let cfg = load_with_toml(
+            r#"
+[ssrf]
+allowed_hosts = ["legacy.example.com"]
+"#,
+        );
+        assert_eq!(
+            cfg.ssrf.allowed_hosts,
+            vec!["legacy.example.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn security_ssrf_overrides_root_ssrf_when_both_present() {
+        // If both [ssrf] and [security.ssrf] exist, the Panel-managed
+        // [security.ssrf] wins (it is the user-facing path).
+        let cfg = load_with_toml(
+            r#"
+[ssrf]
+allowed_hosts = ["root.example.com"]
+
+[security.ssrf]
+allowed_hosts = ["panel.example.com"]
+"#,
+        );
+        assert_eq!(
+            cfg.ssrf.allowed_hosts,
+            vec!["panel.example.com".to_string()]
         );
     }
 }
