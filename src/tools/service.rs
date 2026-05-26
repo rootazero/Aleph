@@ -38,8 +38,29 @@ pub enum ToolError {
 }
 
 impl ToolError {
+    /// Whether `tools::retry::execute_with_one_shot_backoff` should
+    /// re-run this call (subject to per-tool idempotence). Unchanged
+    /// from earlier semantics — `Timeout` / `Transport` are the only
+    /// variants the in-process retry layer will respin without LLM
+    /// intervention.
+    ///
+    /// For richer, prompt-side classification (rate-limited,
+    /// unauthorized, blocked-by-policy, …) see [`Self::kind`].
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::Timeout { .. } | Self::Transport { .. })
+    }
+
+    /// Coarse, stable taxonomy used to render the LLM-facing routing
+    /// hint in `SessionEvent::ToolError`. Delegates to
+    /// [`crate::tools::error_kind::classify_tool_error`].
+    ///
+    /// This is a strict superset of `is_retryable` — every transient
+    /// variant returns a `kind()` whose `is_transient()` is `true`,
+    /// but the kind further distinguishes "switch source"
+    /// (Unauthorized/BlockedByPolicy) from "switch tool"
+    /// (Timeout/Transport).
+    pub fn kind(&self) -> crate::tools::error_kind::ToolErrorKind {
+        crate::tools::error_kind::classify_tool_error(self)
     }
 }
 

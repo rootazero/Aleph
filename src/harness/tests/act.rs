@@ -430,6 +430,105 @@ async fn act_tool_failure_returns_harness_tool_error() {
     assert!(has_tool_error, "a ToolError event must have been emitted");
 }
 
+/// The persisted `SessionEvent::ToolError.error` must carry the
+/// fallback-registry persistence hint so the LLM sees a structured
+/// routing signal in its next turn (same channel claude-code uses for
+/// `is_error: true` tool_results). The hint is single-line, names the
+/// classified error kind, recommends concrete alternative tools when
+/// available, and ends with the `doctrine=...` reminder anchoring
+/// rule 13 of `thinker::layers::guidelines`.
+#[tokio::test]
+async fn act_tool_error_event_carries_persistence_hint() {
+    let tool_calls = vec![NativeToolCall {
+        thought_signature: None,
+        id: "c1".into(),
+        name: "web_fetch".into(),
+        arguments: serde_json::json!({"url": "https://reuters.com/x"}),
+    }];
+
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("fetch")]);
+    let tools = ScriptedTools::new(vec![Err(ToolError::Execution {
+        name: "web_fetch".into(),
+        // 401 will classify as Unauthorized; the registry should
+        // suggest alternate sources via search / autocli.
+        cause: "HTTP 401 Unauthorized from reuters.com".into(),
+    })]);
+
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools,
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::with_tool_calls("fetching…", tool_calls),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("run_turn ok");
+    assert_eq!(
+        state,
+        TurnState::Continue,
+        "tool failure must keep the loop alive — the persistence hint is consumed next turn"
+    );
+
+    let events = session.snapshot().await;
+    let recorded = events
+        .iter()
+        .find_map(|r| match &r.event {
+            SessionEvent::ToolError { error, .. } => Some(error.clone()),
+            _ => None,
+        })
+        .expect("a ToolError event must have been emitted");
+
+    // Original cause survives intact (don't lose information when
+    // appending the hint).
+    assert!(
+        recorded.contains("401"),
+        "original 401 must survive in the recorded error: {recorded}"
+    );
+    // Structured kind label.
+    assert!(
+        recorded.contains("kind=unauthorized"),
+        "kind label must match classifier: {recorded}"
+    );
+    // Tool name explicit (so the model doesn't have to correlate
+    // call_id ↔ tool_name from earlier events).
+    assert!(
+        recorded.contains("tool=web_fetch"),
+        "tool name must appear in hint: {recorded}"
+    );
+    // Registry-driven suggestion present for `web_fetch + Unauthorized`.
+    assert!(
+        recorded.contains("alternate source"),
+        "registry suggestion missing: {recorded}"
+    );
+    // Doctrine anchor — rule 13 reminder.
+    assert!(
+        recorded.contains("doctrine=ladder_must_be_climbed_before_fail"),
+        "doctrine reminder must be present: {recorded}"
+    );
+}
+
 /// Seed a session with a prior completed tool turn, then assert that the
 /// next Think pass reconstructs the assistant tool_use message and the
 /// tool_result with the real tool name.

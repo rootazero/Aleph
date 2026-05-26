@@ -771,7 +771,17 @@ impl AgentHarness {
         iteration: usize,
     ) {
         let retryable = e.is_retryable();
-        let error_msg = e.to_string();
+        // Compose the LLM-facing error body: the upstream `to_string()`
+        // followed by a single-line persistence hint that names the
+        // error kind, recommends concrete alternative tools, and
+        // reminds the model the ladder must be climbed before invoking
+        // `fail` (rule 13 of `thinker::layers::guidelines`). The hint
+        // travels through `SessionEvent::ToolError.error` and is
+        // surfaced to the model as `tool_result(is_error=true)` in the
+        // very next Think turn — same channel claude-code uses, no
+        // new wiring required.
+        let hint = crate::tools::fallback_registry::render_persistence_hint(&e, &call.name);
+        let error_msg = format!("{}{}", e, hint);
         let error_event = SessionEvent::ToolError {
             turn_id,
             call_id: call.id.clone(),
