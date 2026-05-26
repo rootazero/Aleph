@@ -1,0 +1,172 @@
+use crate::error::{AlephError, Result};
+use crate::search::providers::base::{build_client, check_status, parse_json};
+use crate::search::{SearchOptions, SearchProvider, SearchResult};
+use async_trait::async_trait;
+use reqwest::Client;
+use serde::Deserialize;
+
+/// Jina AI search provider (`s.jina.ai`)
+///
+/// Free credits on signup (1M tokens). Returns LLM-ready snippets that are
+/// already de-deduplicated and ranked. The endpoint requires `Authorization:
+/// Bearer <api_key>` and a couple of opt-in headers to keep payloads small
+/// (we don't need full-page markdown for ranking, just snippets).
+const NAME: &str = "jina";
+const ENDPOINT: &str = "https://s.jina.ai/";
+
+#[derive(Debug)]
+pub struct JinaProvider {
+    api_key: String,
+    client: Client,
+}
+
+#[derive(Deserialize)]
+struct JinaResponse {
+    /// `data` is `null` on error envelopes — keep it Option to avoid hard
+    /// failure on Jina's quota / auth error JSON.
+    #[serde(default)]
+    data: Option<Vec<JinaResult>>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct JinaResult {
+    title: String,
+    url: String,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+impl JinaProvider {
+    pub fn new(api_key: impl Into<String>) -> Result<Self> {
+        let api_key = api_key.into();
+        if api_key.is_empty() {
+            return Err(AlephError::invalid_config("Jina API key is required"));
+        }
+        Ok(Self {
+            api_key,
+            client: build_client()?,
+        })
+    }
+}
+
+#[async_trait]
+impl SearchProvider for JinaProvider {
+    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+        // s.jina.ai takes the query as the path segment — let reqwest's
+        // query() handle percent-encoding via a single ?q= parameter is also
+        // accepted by the API and avoids manual encoding.
+        let response = self
+            .client
+            .get(ENDPOINT)
+            .header("Accept", "application/json")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            // `no-content` skips full-page markdown extraction — we only
+            // need title/url/snippet for LLM ranking and the no-content
+            // mode is dramatically cheaper on Jina credits.
+            .header("X-Respond-With", "no-content")
+            .query(&[("q", query)])
+            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
+            .send()
+            .await
+            .map_err(|e| AlephError::network(e.to_string()))?;
+
+        let response = check_status(response, NAME)?;
+        let jina_response: JinaResponse = parse_json(response, NAME).await?;
+
+        let data = jina_response.data.unwrap_or_default();
+        if data.is_empty() {
+            // Surface Jina's own error message when present — quota /
+            // rate-limit envelopes return `data: null` with a `message`
+            // field. Treating these as `Ok(vec![])` would silently waste
+            // LLM iterations exactly like the SearXNG dead-engine case.
+            if let Some(msg) = jina_response.message {
+                return Err(AlephError::provider(format!(
+                    "Jina returned 0 results — {msg}"
+                )));
+            }
+            return Ok(Vec::new());
+        }
+
+        let results = data
+            .into_iter()
+            .take(options.validated_max_results())
+            .map(|r| SearchResult {
+                title: r.title,
+                url: r.url,
+                snippet: r.description.unwrap_or_default(),
+                published_date: None,
+                relevance_score: None,
+                source_type: None,
+                full_content: None,
+                provider: Some(NAME.to_string()),
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    fn name(&self) -> &str {
+        NAME
+    }
+
+    fn is_available(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jina_provider_creation_requires_key() {
+        let provider = JinaProvider::new("jina_test_key").unwrap();
+        assert_eq!(provider.name(), "jina");
+        assert!(provider.is_available());
+    }
+
+    #[test]
+    fn jina_provider_rejects_empty_key() {
+        assert!(JinaProvider::new("").is_err());
+    }
+
+    /// Success envelope round-trips through the structs with the fields we
+    /// actually care about (title/url/description) and ignores everything
+    /// else Jina might add later.
+    #[test]
+    fn jina_response_parses_success_envelope() {
+        let body = r#"{
+            "code": 200,
+            "status": 20000,
+            "data": [
+                {"title": "Foo", "url": "https://foo.test", "description": "snippet here", "extra": "ignored"},
+                {"title": "Bar", "url": "https://bar.test"}
+            ]
+        }"#;
+        let parsed: JinaResponse = serde_json::from_str(body).expect("parses");
+        let data = parsed.data.expect("data present");
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0].title, "Foo");
+        assert_eq!(data[0].description.as_deref(), Some("snippet here"));
+        assert!(data[1].description.is_none());
+    }
+
+    /// Quota / rate-limit error envelope: `data: null` plus a `message`.
+    /// We need both `None` data AND access to the message so the caller
+    /// can promote it to a typed error.
+    #[test]
+    fn jina_response_parses_error_envelope() {
+        let body = r#"{
+            "data": null,
+            "code": 429,
+            "name": "RateLimitError",
+            "status": 42900,
+            "message": "Rate limit exceeded for your free tier"
+        }"#;
+        let parsed: JinaResponse = serde_json::from_str(body).expect("parses");
+        assert!(parsed.data.is_none());
+        assert_eq!(parsed.message.as_deref(), Some("Rate limit exceeded for your free tier"));
+    }
+}

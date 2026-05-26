@@ -85,6 +85,33 @@ impl SearchRegistry {
                         }
                     }
                 }
+                "jina" => {
+                    let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
+                        log::warn!(
+                            "search backend '{name}' (jina) skipped: no api_key in vault"
+                        );
+                        continue;
+                    };
+                    match crate::search::providers::JinaProvider::new(key.to_string()) {
+                        Ok(p) => Arc::new(p),
+                        Err(e) => {
+                            log::warn!("search backend '{name}' (jina) construct failed: {e}");
+                            continue;
+                        }
+                    }
+                }
+                "duckduckgo" => {
+                    // DDG html-scrape needs no key or base_url.
+                    match crate::search::providers::DuckDuckGoProvider::new() {
+                        Ok(p) => Arc::new(p),
+                        Err(e) => {
+                            log::warn!(
+                                "search backend '{name}' (duckduckgo) construct failed: {e}"
+                            );
+                            continue;
+                        }
+                    }
+                }
                 other => {
                     log::warn!(
                         "search backend '{name}' has unknown provider_type '{other}', skipped"

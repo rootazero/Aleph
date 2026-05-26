@@ -1,15 +1,19 @@
 pub mod base;
 pub mod bing;
 pub mod brave;
+pub mod duckduckgo;
 pub mod exa;
 pub mod google;
+pub mod jina;
 pub mod searxng;
 pub mod tavily;
 
 // Re-exports
 pub use bing::BingProvider;
 pub use brave::BraveProvider;
+pub use duckduckgo::DuckDuckGoProvider;
 pub use exa::ExaProvider;
 pub use google::GoogleProvider;
+pub use jina::JinaProvider;
 pub use searxng::SearxngProvider;
 pub use tavily::TavilyProvider;
