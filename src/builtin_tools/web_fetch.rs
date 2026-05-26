@@ -9,11 +9,15 @@ use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use crate::tools::AlephTool;
 use async_trait::async_trait;
+use lru::LruCache;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use schemars::JsonSchema;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroUsize;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
 /// Content extraction mode
@@ -67,6 +71,122 @@ static RE_SR_CLASSES: Lazy<Regex> = Lazy::new(|| {
     .expect("valid regex")
 });
 static RE_STRIP_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").expect("valid regex"));
+
+// ---------------------------------------------------------------------------
+// URL fetch cache (inspired by claude-code's WebFetchTool LRU)
+// ---------------------------------------------------------------------------
+//
+// Aleph-server is a long-running daemon; the same URL is frequently re-asked
+// across a single agent loop (e.g. an LLM that re-reads a doc page in 3
+// different sub-steps). Caching the parsed result avoids hammering the
+// upstream + paying repeat extract cost. Sized by entry count (not bytes)
+// for simplicity — each entry's body is already capped at ~10 KB after
+// markdown extraction, so 256 entries is < 3 MB worst case.
+//
+// Key is (canonical-URL, extract_mode) because the same URL fetched as
+// Markdown vs Text yields different content.
+//
+// Invalidation is purely TTL-based (15 min); we don't honour HTTP
+// Cache-Control because most LLM-driven re-fetches are within seconds of
+// each other and a 15-min ceiling is the right blast radius.
+
+const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+const CACHE_CAPACITY: usize = 256;
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct CacheKey {
+    /// Canonical URL: lowercased scheme+host, default port stripped,
+    /// fragment removed. Path and query preserved verbatim.
+    url: String,
+    extract_mode: ExtractModeKey,
+}
+
+/// Discriminant-only copy of `ExtractMode` so it can be cheaply used as
+/// part of the cache key without coupling to its serde-aware definition.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum ExtractModeKey {
+    Markdown,
+    Text,
+}
+
+impl From<&ExtractMode> for ExtractModeKey {
+    fn from(m: &ExtractMode) -> Self {
+        match m {
+            ExtractMode::Markdown => Self::Markdown,
+            ExtractMode::Text => Self::Text,
+        }
+    }
+}
+
+struct CacheEntry {
+    result: WebFetchResult,
+    inserted_at: Instant,
+}
+
+static URL_CACHE: Lazy<Mutex<LruCache<CacheKey, CacheEntry>>> = Lazy::new(|| {
+    Mutex::new(LruCache::new(
+        NonZeroUsize::new(CACHE_CAPACITY).expect("CACHE_CAPACITY > 0"),
+    ))
+});
+
+/// Best-effort URL canonicalisation. Falls back to the raw URL if `url`
+/// can't parse it (e.g. caller already sent something the SSRF layer
+/// will reject anyway). Lowercasing the host + dropping fragment +
+/// default-port-stripping covers >95% of "same URL different string"
+/// cases without inviting more aggressive normalisation bugs.
+fn canonicalize_url(raw: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(raw) else {
+        return raw.to_string();
+    };
+    parsed.set_fragment(None);
+    // `url` lowercases scheme and host on parse already; default ports
+    // are normalised by calling set_port(None) when the port equals
+    // the scheme's default.
+    if matches!(
+        (parsed.scheme(), parsed.port()),
+        ("http", Some(80)) | ("https", Some(443)) | ("ws", Some(80)) | ("wss", Some(443))
+    ) {
+        let _ = parsed.set_port(None);
+    }
+    parsed.to_string()
+}
+
+fn cache_key(url: &str, mode: &ExtractMode) -> CacheKey {
+    CacheKey {
+        url: canonicalize_url(url),
+        extract_mode: ExtractModeKey::from(mode),
+    }
+}
+
+fn cache_lookup(key: &CacheKey) -> Option<WebFetchResult> {
+    let mut guard = URL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    // `LruCache::get` mutates recency, so we need &mut.
+    let entry = guard.get(key)?;
+    if entry.inserted_at.elapsed() > CACHE_TTL {
+        guard.pop(key);
+        return None;
+    }
+    Some(entry.result.clone())
+}
+
+fn cache_store(key: CacheKey, result: WebFetchResult) {
+    let mut guard = URL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    guard.put(
+        key,
+        CacheEntry {
+            result,
+            inserted_at: Instant::now(),
+        },
+    );
+}
+
+#[cfg(test)]
+fn cache_clear() {
+    URL_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+}
 
 /// Arguments for web fetch tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -170,6 +290,19 @@ impl WebFetchTool {
         let url_display = crate::utils::text_format::truncate_text(&args.url, 50);
         notify_tool_start(Self::NAME, &format!("获取网页: {}", url_display));
 
+        // Cache lookup BEFORE notify_tool_start would otherwise be cleaner
+        // semantically, but we want the "fetching ..." progress notice to
+        // appear even on cache hits so the operator can still trace which
+        // URL was requested. The cached path then immediately notifies
+        // success with a "(cached)" marker.
+        let key = cache_key(&args.url, &args.extract_mode);
+        if let Some(cached) = cache_lookup(&key) {
+            debug!("web_fetch cache hit: {}", args.url);
+            let summary = format!("已获取网页内容 ({} 字符, cached)", cached.content.len());
+            notify_tool_result(Self::NAME, &summary, true);
+            return Ok(cached);
+        }
+
         info!("Fetching URL: {}", args.url);
 
         // SSRF-protected fetch with DNS pinning
@@ -254,12 +387,14 @@ impl WebFetchTool {
             },
         );
 
-        Ok(WebFetchResult {
+        let result = WebFetchResult {
             url: args.url,
             title,
             content: wrapped_content,
             extractor,
-        })
+        };
+        cache_store(key, result.clone());
+        Ok(result)
     }
 
     /// Extract the page title from <title> tag
@@ -803,5 +938,98 @@ mod tests {
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["extractor"], "readability");
+    }
+
+    // ─── URL cache ─────────────────────────────────────────────────────
+
+    fn dummy_result(url: &str, content: &str) -> WebFetchResult {
+        WebFetchResult {
+            url: url.to_string(),
+            title: None,
+            content: content.to_string(),
+            extractor: Extractor::Selector,
+        }
+    }
+
+    #[test]
+    fn canonicalize_url_strips_default_port_and_fragment() {
+        assert_eq!(
+            canonicalize_url("HTTPS://Example.COM:443/path?q=1#frag"),
+            "https://example.com/path?q=1"
+        );
+        assert_eq!(
+            canonicalize_url("http://example.com:80/"),
+            "http://example.com/"
+        );
+        assert_eq!(
+            canonicalize_url("https://example.com:8443/"),
+            "https://example.com:8443/"
+        );
+        // Junk URLs pass through unchanged so the SSRF layer can reject them.
+        assert_eq!(canonicalize_url("not-a-url"), "not-a-url");
+    }
+
+    #[test]
+    fn cache_key_distinguishes_extract_modes() {
+        let k1 = cache_key("https://example.com/", &ExtractMode::Markdown);
+        let k2 = cache_key("https://example.com/", &ExtractMode::Text);
+        assert_ne!(
+            k1, k2,
+            "same URL with different extract modes must be separate cache entries"
+        );
+    }
+
+    #[test]
+    fn cache_lookup_returns_stored_entry() {
+        cache_clear();
+        let key = cache_key("https://cache-test.invalid/a", &ExtractMode::Markdown);
+        assert!(cache_lookup(&key).is_none(), "fresh cache should miss");
+
+        cache_store(key.clone(), dummy_result("https://cache-test.invalid/a", "hi"));
+        let got = cache_lookup(&key).expect("should hit");
+        assert_eq!(got.content, "hi");
+    }
+
+    #[test]
+    fn cache_lookup_returns_none_for_expired_entry() {
+        cache_clear();
+        let key = cache_key("https://cache-test.invalid/b", &ExtractMode::Markdown);
+        // Direct insert with an `inserted_at` in the past — bypass
+        // `cache_store` so the test doesn't have to actually wait 15
+        // minutes for the TTL to elapse.
+        {
+            let mut guard = URL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            guard.put(
+                key.clone(),
+                CacheEntry {
+                    result: dummy_result("https://cache-test.invalid/b", "stale"),
+                    inserted_at: Instant::now()
+                        .checked_sub(CACHE_TTL + Duration::from_secs(1))
+                        .expect("Instant arithmetic"),
+                },
+            );
+        }
+        assert!(
+            cache_lookup(&key).is_none(),
+            "expired entry must be reported as a miss"
+        );
+        // And evicted.
+        let guard = URL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(guard.peek(&key).is_none(), "expired entry must be evicted");
+    }
+
+    #[test]
+    fn cache_key_normalises_url_for_hit() {
+        cache_clear();
+        let stored = cache_key("HTTPS://Example.com:443/path", &ExtractMode::Markdown);
+        cache_store(stored, dummy_result("https://example.com/path", "ok"));
+
+        // Caller requests the same URL with a different surface form —
+        // canonicalisation should bring them to the same cache slot.
+        let looked = cache_key("https://example.com/path#frag", &ExtractMode::Markdown);
+        assert!(
+            cache_lookup(&looked).is_some(),
+            "URLs differing only in case/port/fragment must share a cache entry"
+        );
     }
 }
