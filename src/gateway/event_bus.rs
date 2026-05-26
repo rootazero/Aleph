@@ -281,12 +281,19 @@ impl TopicFilter {
 
     /// Add a pattern-only subscription (no field predicates) to the filter.
     pub fn add_pattern(&mut self, pattern: impl Into<String>) {
-        self.subscriptions
-            .push(TopicSubscription::pattern_only(pattern));
+        self.add_subscription(TopicSubscription::pattern_only(pattern));
     }
 
     /// Add a full subscription entry (pattern + optional predicates).
+    /// Idempotent: skip if an exact-match (same pattern + same `where_clause`)
+    /// is already present. Clients sometimes re-call `events.subscribe` from
+    /// reconnect handlers / re-rendered Effects; without this dedup the
+    /// pattern list grows unbounded and every matching event ends up
+    /// dispatched N times to the same connection.
     pub fn add_subscription(&mut self, subscription: TopicSubscription) {
+        if self.subscriptions.iter().any(|s| s == &subscription) {
+            return;
+        }
         self.subscriptions.push(subscription);
     }
 
@@ -654,5 +661,38 @@ mod tests {
         // Absent field deserializes back to None via #[serde(default)].
         let back: TopicEvent = serde_json::from_str(&json).unwrap();
         assert!(back.state_version.is_none());
+    }
+
+    #[test]
+    fn add_pattern_dedups_repeat_calls() {
+        let mut f = TopicFilter::with_patterns(vec![]);
+        f.add_pattern("stream.session_updated");
+        f.add_pattern("stream.session_updated");
+        f.add_pattern("stream.session_updated");
+        assert_eq!(f.patterns(), vec!["stream.session_updated".to_string()]);
+    }
+
+    #[test]
+    fn add_subscription_dedups_pattern_plus_where_clause() {
+        let mut f = TopicFilter::with_patterns(vec![]);
+        let sub_a = TopicSubscription {
+            pattern: "tools.changed".into(),
+            where_clause: vec![FieldPredicate {
+                field: "scope".into(),
+                equals: serde_json::json!("extension"),
+            }],
+        };
+        let sub_b_same = sub_a.clone();
+        let sub_c_diff_where = TopicSubscription {
+            pattern: "tools.changed".into(),
+            where_clause: vec![FieldPredicate {
+                field: "scope".into(),
+                equals: serde_json::json!("mcp"),
+            }],
+        };
+        f.add_subscription(sub_a);
+        f.add_subscription(sub_b_same);   // dropped — exact dup
+        f.add_subscription(sub_c_diff_where); // kept — different predicate
+        assert_eq!(f.subscriptions().len(), 2);
     }
 }
