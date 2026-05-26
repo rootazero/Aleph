@@ -7,6 +7,19 @@
 //! Extracted from `start/mod.rs` to keep the orchestrator under 500 lines.
 //! Contains the complex agent engine setup: provider registry creation,
 //! tool registry, task routing, and handler wiring.
+//!
+//! ## Layout
+//! - [`coord_stores`] — `coord.db` + `teams.db` SQLite store initialization
+//! - [`generation_init`] — generation provider registry + hot-reload
+//! - this module — orchestration + signature
+
+mod coord_stores;
+mod generation_init;
+
+use coord_stores::{
+    build_team_components, init_coord_and_snapshot, init_team_store, init_teams_evolution_stores,
+};
+use generation_init::init_generation_registry;
 
 use alephcore::sync_primitives::{Arc, RwLock};
 
@@ -25,7 +38,6 @@ use alephcore::gateway::{
 use alephcore::ProviderRegistry;
 
 use crate::server_init::{handle_chat_send_with_engine, handle_run_with_engine};
-use alephcore::generation::{providers as gen_providers, GenerationProviderRegistry};
 use alephcore::providers::adapter::RequestPayload;
 use alephcore::providers::message::UnifiedMessage;
 
@@ -155,404 +167,33 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // state.db == no historical usage to aggregate).
     let mut state_db_out: Option<Arc<alephcore::resilience::StateDatabase>> = None;
 
-    // Create coord task store (SQLite-backed task/team coordination for swarm tools).
-    // Created unconditionally so it is available regardless of AI provider availability.
-    //
-    // Also constructs the sibling `SqliteSnapshotStore` from the same
-    // connection handle — it operates on `coord_team_snapshots` in the same
-    // DB file and must share the tokio Mutex<Connection> to avoid the SQLite
-    // "database is locked" hazard that two independent connections would hit.
-    let (coord_store, snapshot_store): (
-        Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
-        Option<Arc<alephcore::teams::SqliteSnapshotStore>>,
-    ) = {
-        use alephcore::agents::swarm::tasks::store::SqliteCoordTaskStore;
-        use alephcore::teams::SqliteSnapshotStore;
-        use alephcore::utils::paths::get_data_dir;
+    // Coord + snapshot stores (single shared connection to coord.db).
+    let (coord_store, snapshot_store) = init_coord_and_snapshot(event_bus.clone(), daemon).await;
 
-        match get_data_dir() {
-            Ok(dir) => {
-                let db_path = dir.join("coord.db");
-                match alephcore::utils::sqlite_open::open_sqlite_safe(&db_path) {
-                    Ok(conn) => {
-                        let concrete = Arc::new(
-                            SqliteCoordTaskStore::new(conn).with_event_bus(event_bus.clone()),
-                        );
-                        // Run schema migration inline (already inside async context)
-                        match concrete.migrate().await {
-                            Ok(()) => {
-                                if !daemon {
-                                    println!("  Coord task store initialized (SQLite)");
-                                }
-                                let snap = Arc::new(SqliteSnapshotStore::new_from_shared(
-                                    concrete.connection_handle(),
-                                ));
-                                let trait_obj = Arc::clone(&concrete)
-                                    as Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>;
-                                (Some(trait_obj), Some(snap))
-                            }
-                            Err(e) => {
-                                if !daemon {
-                                    eprintln!("Warning: Coord task store migration failed: {}. Task coordination tools disabled.", e);
-                                }
-                                (None, None)
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        if !daemon {
-                            eprintln!(
-                                "Warning: Failed to open coord.db: {}. Task coordination tools disabled.",
-                                e
-                            );
-                        }
-                        (None, None)
-                    }
-                }
-            }
-            Err(e) => {
-                if !daemon {
-                    eprintln!(
-                        "Warning: Failed to resolve data directory: {}. Task coordination tools disabled.",
-                        e
-                    );
-                }
-                tracing::warn!(error = %e, "Failed to resolve data directory; task coordination tools disabled");
-                (None, None)
-            }
-        }
-    };
+    // Team store (teams.db).
+    let team_store = init_team_store(daemon).await;
 
-    // Create team store (SQLite-backed team management for team tools).
-    let team_store: Option<Arc<dyn alephcore::teams::TeamStore>> = {
-        use alephcore::teams::SqliteTeamStore;
-        use alephcore::utils::paths::get_data_dir;
+    // Teams-evolution stores (artifact / event log / message / session, all on teams.db).
+    let (artifact_store, event_store, message_store, team_session_store) =
+        init_teams_evolution_stores(daemon).await;
 
-        match get_data_dir() {
-            Ok(dir) => {
-                let db_path = dir.join("teams.db");
-                match alephcore::utils::sqlite_open::open_sqlite_safe(&db_path) {
-                    Ok(conn) => {
-                        let store = Arc::new(SqliteTeamStore::new(conn));
-                        match store.migrate().await {
-                            Ok(()) => {
-                                if !daemon {
-                                    println!("  Team store initialized (SQLite)");
-                                }
-                                Some(store as Arc<dyn alephcore::teams::TeamStore>)
-                            }
-                            Err(e) => {
-                                if !daemon {
-                                    eprintln!("Warning: Team store migration failed: {}. Team management tools disabled.", e);
-                                }
-                                None
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        if !daemon {
-                            eprintln!(
-                                "Warning: Failed to open teams.db: {}. Team management tools disabled.",
-                                e
-                            );
-                        }
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                if !daemon {
-                    eprintln!(
-                        "Warning: Failed to resolve data directory: {}. Team management tools disabled.",
-                        e
-                    );
-                }
-                tracing::warn!(error = %e, "Failed to resolve data directory; team management tools disabled");
-                None
-            }
-        }
-    };
+    // Higher-level team components derived from the four stores above.
+    let (message_router, inbox, session_coordinator, agent_message_bus) = build_team_components(
+        &message_store,
+        &event_store,
+        &team_session_store,
+        &artifact_store,
+    );
 
-    // Create teams evolution stores (artifact, event log, message, session) sharing the same DB file.
-    // These stores power the team messaging, inbox, session coordination, and artifact tools.
-    #[allow(clippy::type_complexity)]
-    let (artifact_store, event_store, message_store, team_session_store): (
-        Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
-        Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
-        Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
-        Option<Arc<dyn alephcore::teams::sessions::SessionStore>>,
-    ) = {
-        use alephcore::teams::artifacts::SqliteArtifactStore;
-        use alephcore::teams::events::SqliteEventLogStore;
-        use alephcore::teams::messages::SqliteMessageStore;
-        use alephcore::teams::sessions::SqliteSessionStore;
-        use alephcore::utils::paths::get_data_dir;
-
-        match get_data_dir() {
-            Ok(dir) => {
-                let db_path = dir.join("teams.db");
-
-                // Helper: open connection, create store, migrate. Returns None on failure.
-                macro_rules! init_store {
-                    ($store_ty:ident, $trait_ty:ty, $label:expr, $db:expr) => {{
-                        match alephcore::utils::sqlite_open::open_sqlite_safe(&$db) {
-                            Ok(conn) => {
-                                let store = Arc::new($store_ty::new(conn));
-                                match store.migrate().await {
-                                    Ok(()) => {
-                                        if !daemon {
-                                            println!("  {} initialized (SQLite)", $label);
-                                        }
-                                        Some(store as Arc<$trait_ty>)
-                                    }
-                                    Err(e) => {
-                                        if !daemon {
-                                            eprintln!(
-                                                "Warning: {} migration failed: {}. Related tools disabled.",
-                                                $label, e
-                                            );
-                                        }
-                                        None
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                if !daemon {
-                                    eprintln!(
-                                        "Warning: Failed to open teams.db for {}: {}. Related tools disabled.",
-                                        $label, e
-                                    );
-                                }
-                                None
-                            }
-                        }
-                    }};
-                }
-
-                let artifact_store: Option<Arc<SqliteArtifactStore>> =
-                    match alephcore::utils::sqlite_open::open_sqlite_safe(&db_path) {
-                        Ok(conn) => {
-                            let store = Arc::new(SqliteArtifactStore::new(conn));
-                            match store.migrate().await {
-                                Ok(()) => {
-                                    if !daemon {
-                                        println!("  Artifact store initialized (SQLite)");
-                                    }
-                                    Some(store as Arc<SqliteArtifactStore>)
-                                }
-                                Err(e) => {
-                                    if !daemon {
-                                        eprintln!(
-                                        "Warning: Artifact store migration failed: {}. Related tools disabled.",
-                                        e
-                                    );
-                                    }
-                                    None
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            if !daemon {
-                                eprintln!(
-                                "Warning: Failed to open teams.db for Artifact store: {}. Related tools disabled.",
-                                e
-                            );
-                            }
-                            None
-                        }
-                    };
-                let ev = init_store!(
-                    SqliteEventLogStore,
-                    dyn alephcore::teams::events::EventLogStore,
-                    "Event log store",
-                    db_path
-                );
-                let m = init_store!(
-                    SqliteMessageStore,
-                    dyn alephcore::teams::messages::MessageStore,
-                    "Message store",
-                    db_path
-                );
-                let s = init_store!(
-                    SqliteSessionStore,
-                    dyn alephcore::teams::sessions::SessionStore,
-                    "Session store",
-                    db_path
-                );
-                let artifact_store_trait: Option<
-                    Arc<dyn alephcore::teams::artifacts::ArtifactStore>,
-                > = artifact_store
-                    .as_ref()
-                    .map(|s| Arc::clone(s) as Arc<dyn alephcore::teams::artifacts::ArtifactStore>);
-                (artifact_store_trait, ev, m, s)
-            }
-            Err(e) => {
-                if !daemon {
-                    eprintln!(
-                        "Warning: Failed to resolve data directory: {}. Team sub-stores disabled.",
-                        e
-                    );
-                }
-                tracing::warn!(error = %e, "Failed to resolve data directory; team sub-stores disabled");
-                (None, None, None, None)
-            }
-        }
-    };
-
-    // Build higher-level team components from the stores above.
-    let message_router: Option<Arc<alephcore::teams::messages::MessageRouter>> =
-        match (message_store.as_ref(), event_store.as_ref()) {
-            (Some(ms), Some(es)) => {
-                use alephcore::teams::messages::{EscalationRule, MessageRouter};
-                Some(Arc::new(MessageRouter::new(
-                    ms.clone(),
-                    es.clone(),
-                    EscalationRule::default(),
-                    None,
-                )))
-            }
-            _ => None,
-        };
-
-    let inbox: Option<Arc<alephcore::teams::messages::Inbox>> =
-        match (message_store.as_ref(), event_store.as_ref()) {
-            (Some(ms), Some(es)) => {
-                use alephcore::teams::messages::Inbox;
-                Some(Arc::new(Inbox::new(ms.clone(), es.clone())))
-            }
-            _ => None,
-        };
-
-    let session_coordinator: Option<Arc<alephcore::teams::sessions::SessionCoordinator>> = match (
-        team_session_store.as_ref(),
-        message_router.as_ref(),
-        event_store.as_ref(),
-        artifact_store.as_ref(),
-    ) {
-        (Some(ss), Some(mr), Some(es), Some(a_s)) => {
-            use alephcore::teams::sessions::SessionCoordinator;
-            Some(Arc::new(SessionCoordinator::new(
-                ss.clone(),
-                mr.clone(),
-                es.clone(),
-                a_s.clone(),
-            )))
-        }
-        _ => None,
-    };
-
-    // AgentMessageBus — in-process agent-to-agent event channel.
-    // `task_update` publishes ImportantEvents here; `task_wait` subscribes.
-    let agent_message_bus: Option<Arc<alephcore::agents::swarm::AgentMessageBus>> =
-        Some(Arc::new(alephcore::agents::swarm::AgentMessageBus::new()));
-
-    // Build generation provider registry (independent of chat AI provider)
-    let generation_registry = {
-        let mut registry = GenerationProviderRegistry::new();
-        for (name, mut provider_cfg, gen_type) in app_config.generation.merged_providers() {
-            if !provider_cfg.enabled {
-                continue;
-            }
-            // Resolve API key from vault if not in config
-            if provider_cfg
-                .api_key
-                .as_ref()
-                .map(|k| k.is_empty())
-                .unwrap_or(true)
-            {
-                if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{}", name)) {
-                    provider_cfg.api_key = Some(secret.expose().to_string());
-                }
-            }
-            if provider_cfg
-                .api_key
-                .as_ref()
-                .map(|k| k.is_empty())
-                .unwrap_or(true)
-            {
-                continue;
-            }
-            match gen_providers::create_provider(&name, &provider_cfg, gen_type) {
-                Ok(provider) => {
-                    if registry.register(name.clone(), provider).is_ok() {
-                        tracing::info!(provider = %name, gen_type = ?gen_type, "Registered generation provider");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(provider = %name, error = %e, "Skip generation provider");
-                }
-            }
-        }
-        if !registry.is_empty() && !daemon {
-            println!("  Generation providers: {} registered", registry.len());
-        }
-        Arc::new(RwLock::new(registry))
-    };
-
-    // Hot-reload: rebuild generation registry when Panel updates providers
-    {
-        let gen_reg = generation_registry.clone();
-        let config_handle = app_config_arc.clone();
-        let vault = shared_token_mgr.clone();
-        let mut rx = event_bus.subscribe();
-
-        tokio::spawn(async move {
-            while let Ok(event_json) = rx.recv().await {
-                let is_gen_event = serde_json::from_str::<serde_json::Value>(&event_json)
-                    .ok()
-                    .and_then(|v| v.get("topic")?.as_str().map(|s| s.to_string()))
-                    == Some("config.generation.providers.changed".to_string());
-                if !is_gen_event {
-                    continue;
-                }
-
-                // Snapshot merged providers (drop read guard before creating providers)
-                let merged_snapshot = {
-                    let cfg = config_handle.read().await;
-                    cfg.generation.merged_providers()
-                };
-
-                let mut new_registry = GenerationProviderRegistry::new();
-                for (name, mut provider_cfg, gen_type) in merged_snapshot {
-                    if !provider_cfg.enabled {
-                        continue;
-                    }
-                    // Resolve API key from vault (RPC handlers store keys in vault, not config)
-                    if provider_cfg.api_key.is_none() {
-                        if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
-                            provider_cfg.api_key = Some(secret.expose().to_string());
-                        }
-                    }
-                    if provider_cfg
-                        .api_key
-                        .as_ref()
-                        .map(|k| k.is_empty())
-                        .unwrap_or(true)
-                    {
-                        continue;
-                    }
-                    match gen_providers::create_provider(&name, &provider_cfg, gen_type) {
-                        Ok(provider) => {
-                            new_registry.register(name.clone(), provider).ok();
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                provider = %name, error = %e,
-                                "Skip generation provider on reload"
-                            );
-                        }
-                    }
-                }
-
-                let mut guard = gen_reg.write().unwrap_or_else(|e| e.into_inner());
-                *guard = new_registry;
-                tracing::info!(
-                    "Generation provider registry reloaded ({} providers)",
-                    guard.len()
-                );
-            }
-        });
-    }
+    // Generation provider registry (TTS / image / video) — independent of
+    // the chat AI provider. Also spawns the panel hot-reload subscriber.
+    let generation_registry = init_generation_registry(
+        app_config,
+        app_config_arc.clone(),
+        event_bus.clone(),
+        shared_token_mgr.clone(),
+        daemon,
+    );
 
     // Build MultiProviderRegistry: register ALL configured providers.
     //

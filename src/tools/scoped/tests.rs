@@ -1,0 +1,1052 @@
+use super::*;
+use crate::extension::hooks::HookExecutor;
+use crate::extension::{HookAction, HookConfig, HookEvent, HookKind, HookPriority};
+use crate::sync_primitives::Arc as StdArc;
+use crate::tools::refresh::ToolRefreshSource;
+use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
+use serde_json::{json, Value};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+// -------------------------------------------------------------------------
+// Stubs
+// -------------------------------------------------------------------------
+
+/// Noop tool service stub used as `parent_tools` for SubagentTool in tests.
+struct NoopParentTools;
+
+#[async_trait::async_trait]
+impl ToolService for NoopParentTools {
+    async fn execute(&self, _name: &str, _input: Value) -> Result<ToolOutput, ToolError> {
+        Err(ToolError::NotFound {
+            name: "test".into(),
+        })
+    }
+    async fn list(&self) -> Vec<ToolDefinition> {
+        vec![]
+    }
+    async fn describe(&self, _: &str) -> Option<ToolDefinition> {
+        None
+    }
+    fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
+        Arc::from([])
+    }
+}
+
+fn in_mem_session() -> Arc<dyn crate::session::service::SessionService> {
+    use crate::session::in_process::InProcessActorSessionService;
+    use crate::session::store::{
+        migrate_add_session_events, SessionEventStore, SqliteEventStore,
+    };
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    migrate_add_session_events(&conn).unwrap();
+    let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+    Arc::new(InProcessActorSessionService::new(store))
+}
+
+struct StubTool {
+    tool_name: &'static str,
+}
+
+#[async_trait::async_trait]
+impl LoopTool for StubTool {
+    fn name(&self) -> &str {
+        self.tool_name
+    }
+    fn description(&self) -> &str {
+        "stub"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success {
+            output: json!({ "tool": self.tool_name }),
+        }
+    }
+}
+
+fn make_registry(names: &[&'static str]) -> Arc<LoopToolRegistry> {
+    let mut r = LoopToolRegistry::new();
+    for &name in names {
+        r.register(Box::new(StubTool { tool_name: name }));
+    }
+    Arc::new(r)
+}
+
+// Stub refresh source that records whether fetch was called.
+struct StubRefresh {
+    has_changes: AtomicBool,
+    fetched: StdArc<AtomicBool>,
+}
+
+impl StubRefresh {
+    fn new(has_changes: bool, fetched: StdArc<AtomicBool>) -> Self {
+        Self {
+            has_changes: AtomicBool::new(has_changes),
+            fetched,
+        }
+    }
+}
+
+impl ToolRefreshSource for StubRefresh {
+    fn poll_changes(&self) -> bool {
+        self.has_changes.load(Ordering::Acquire)
+    }
+    fn fetch_tools(&self) -> Vec<Box<dyn LoopTool>> {
+        self.fetched.store(true, Ordering::Release);
+        vec![]
+    }
+}
+
+// Stub hook decorator that counts calls.
+struct StubHook {
+    before_count: StdArc<AtomicUsize>,
+    after_count: StdArc<AtomicUsize>,
+}
+
+impl ToolHookDecorator for StubHook {
+    fn before_execute(&self, _name: &str, _input: &Value) {
+        self.before_count.fetch_add(1, Ordering::Relaxed);
+    }
+    fn after_execute(&self, _name: &str, _output: &Result<ToolOutput, ToolError>) {
+        self.after_count.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+// -------------------------------------------------------------------------
+// Test 1: list filters by allowed set
+// -------------------------------------------------------------------------
+#[tokio::test]
+async fn list_filters_by_allowed_set() {
+    let registry = make_registry(&["read_file", "write_file"]);
+    let allowed = ["read_file".to_string()].into_iter().collect();
+    let svc = ScopedToolService::new(registry, allowed);
+
+    let defs = svc.list().await;
+    assert_eq!(defs.len(), 1);
+    assert_eq!(defs[0].name, "read_file");
+}
+
+// -------------------------------------------------------------------------
+// Test 1b: definition rewriter mutates description and schema
+// -------------------------------------------------------------------------
+
+/// Rewriter that prepends an "[AGENT-A]" marker and stamps a custom
+/// `x-agent` field into the schema. Lets us assert the rewriter's
+/// output reaches the LLM-facing path (both `list()` and the
+/// `metadata_schema()` cache).
+struct StampingRewriter;
+impl ToolDefinitionRewriter for StampingRewriter {
+    fn rewrite(&self, def: &mut ToolDefinition) {
+        def.description = format!("[AGENT-A] {}", def.description);
+        if let Some(obj) = def.input_schema.as_object_mut() {
+            obj.insert("x-agent".into(), json!("agent-a"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn list_applies_definition_rewriter() {
+    let registry = make_registry(&["read_file"]);
+    let svc = ScopedToolService::new(registry, std::collections::BTreeSet::new())
+        .with_definition_rewriter(Arc::new(StampingRewriter));
+
+    let defs = svc.list().await;
+    assert_eq!(defs.len(), 1);
+    assert_eq!(defs[0].description, "[AGENT-A] stub");
+    assert_eq!(
+        defs[0].input_schema.get("x-agent"),
+        Some(&json!("agent-a"))
+    );
+}
+
+#[tokio::test]
+async fn describe_applies_definition_rewriter() {
+    let registry = make_registry(&["read_file"]);
+    let svc = ScopedToolService::new(registry, std::collections::BTreeSet::new())
+        .with_definition_rewriter(Arc::new(StampingRewriter));
+
+    let def = svc.describe("read_file").await.expect("present");
+    assert_eq!(def.description, "[AGENT-A] stub");
+}
+
+#[test]
+fn metadata_schema_reflects_rewriter_after_cache_bump() {
+    // metadata_schema() caches its output; assert the bump-generation
+    // helper actually re-runs the rewriter chain so callers can opt-in
+    // to a fresh pass without rebuilding the whole service.
+    let registry = make_registry(&["read_file"]);
+    let svc = ScopedToolService::new(registry, std::collections::BTreeSet::new())
+        .with_definition_rewriter(Arc::new(StampingRewriter));
+
+    let first = svc.metadata_schema();
+    assert_eq!(first[0].description, "[AGENT-A] stub");
+
+    // A second call without bumping → cache hit, same Arc.
+    let second = svc.metadata_schema();
+    assert!(Arc::ptr_eq(&first, &second), "expected cached identity");
+
+    // After an explicit bump the schema is recomputed (rewriter runs
+    // again). Identity differs from the first; content stays correct.
+    svc.bump_cache_generation();
+    let third = svc.metadata_schema();
+    assert!(!Arc::ptr_eq(&first, &third), "cache must invalidate");
+    assert_eq!(third[0].description, "[AGENT-A] stub");
+}
+
+// -------------------------------------------------------------------------
+// Test 2: list includes subagent tool when set
+// -------------------------------------------------------------------------
+#[tokio::test]
+async fn list_includes_subagent_tool_when_set() {
+    use crate::agents::background_tracker::BackgroundAgentTracker;
+    use crate::agents::AgentRegistry;
+    use crate::harness::chain_context::ChainContext;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::AiProvider;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct MockProvider;
+    impl AiProvider for MockProvider {
+        fn process<'a>(
+            &'a self,
+            _p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
+        }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
+    let chain = ChainContext::new();
+    let registry_arc = Arc::new(AgentRegistry::with_builtins());
+    let tracker = Arc::new(BackgroundAgentTracker::new());
+    let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
+        provider,
+        chain,
+        registry_arc,
+        tracker,
+        in_mem_session(),
+        Arc::new(NoopParentTools),
+        Arc::new(crate::sandbox::NoopSandbox),
+    ));
+
+    let registry = make_registry(&["read_file"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_subagent_tool(st);
+
+    let defs = svc.list().await;
+    let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+    assert!(
+        names.contains(&"subagent"),
+        "subagent must be in list; got: {:?}",
+        names
+    );
+}
+
+// -------------------------------------------------------------------------
+// Test 2b: subagent survives a non-empty allow set (production path).
+//
+// Regression for the gateway run_loop wiring: `allowed_names` is built
+// from the builtin tool registry's tool definitions, which never contains
+// "subagent" (SubagentTool is attached on top of the registry). Before
+// the is_allowed exemption, list / describe / execute / metadata_schema
+// all silently dropped subagent whenever the allow set was non-empty —
+// i.e. every real LLM-facing call.
+// -------------------------------------------------------------------------
+#[tokio::test]
+async fn subagent_survives_non_empty_allow_set() {
+    use crate::agents::background_tracker::BackgroundAgentTracker;
+    use crate::agents::AgentRegistry;
+    use crate::harness::chain_context::ChainContext;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::AiProvider;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct MockProvider;
+    impl AiProvider for MockProvider {
+        fn process<'a>(
+            &'a self,
+            _p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
+        }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
+    let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
+        provider,
+        ChainContext::new(),
+        Arc::new(AgentRegistry::with_builtins()),
+        Arc::new(BackgroundAgentTracker::new()),
+        in_mem_session(),
+        Arc::new(NoopParentTools),
+        Arc::new(crate::sandbox::NoopSandbox),
+    ));
+
+    // Production-shaped allow set: only registry-known tool names, no
+    // "subagent" entry — exactly what gateway run_loop produces.
+    let registry = make_registry(&["read_file", "write_file"]);
+    let allowed: BTreeSet<String> = ["read_file".into(), "write_file".into()].into();
+    let svc = ScopedToolService::new(registry, allowed).with_subagent_tool(st);
+
+    // (1) list() exposes subagent
+    let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+    assert!(
+        names.iter().any(|n| n == "subagent"),
+        "list() must expose subagent under non-empty allow set; got {:?}",
+        names
+    );
+
+    // (2) describe() returns subagent (used when LLM probes the schema)
+    assert!(
+        svc.describe("subagent").await.is_some(),
+        "describe(subagent) must return Some under non-empty allow set"
+    );
+
+    // (3) metadata_schema (LLM-facing) includes subagent
+    let schema_names: Vec<String> = svc
+        .metadata_schema()
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert!(
+        schema_names.iter().any(|n| n == "subagent"),
+        "metadata_schema must include subagent; got {:?}",
+        schema_names
+    );
+
+    // (4) execute("subagent", …) is not rejected as NotFound by the
+    //     allow-filter (mock provider lets the call complete).
+    let result = svc.execute("subagent", json!({ "task": "ping" })).await;
+    assert!(
+        !matches!(&result, Err(ToolError::NotFound { name }) if name == "subagent"),
+        "execute(subagent) must not be NotFound under non-empty allow set; got {:?}",
+        result
+    );
+}
+
+// -------------------------------------------------------------------------
+// Test 3: list triggers refresh on first call (when poll_changes is true)
+// -------------------------------------------------------------------------
+#[tokio::test]
+async fn list_triggers_refresh_on_first_call() {
+    let fetched = StdArc::new(AtomicBool::new(false));
+    let refresh = Arc::new(StubRefresh::new(true, StdArc::clone(&fetched)));
+
+    let registry = make_registry(&["tool_a"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_refresh(refresh);
+
+    svc.list().await;
+    assert!(
+        fetched.load(Ordering::Acquire),
+        "fetch_tools must be called when poll_changes returns true"
+    );
+}
+
+// -------------------------------------------------------------------------
+// Test 4: execute routes to subagent tool by name
+// -------------------------------------------------------------------------
+#[tokio::test]
+async fn execute_routes_to_subagent_tool_by_name() {
+    use crate::agents::background_tracker::BackgroundAgentTracker;
+    use crate::agents::AgentRegistry;
+    use crate::harness::chain_context::ChainContext;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::AiProvider;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct MockProvider;
+    impl AiProvider for MockProvider {
+        fn process<'a>(
+            &'a self,
+            _p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            Box::pin(async { Ok(ProviderResponse::text_only("subagent result".into())) })
+        }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
+    let chain = ChainContext::new();
+    let registry_arc = Arc::new(AgentRegistry::with_builtins());
+    let tracker = Arc::new(BackgroundAgentTracker::new());
+    let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
+        provider,
+        chain,
+        registry_arc,
+        tracker,
+        in_mem_session(),
+        Arc::new(NoopParentTools),
+        Arc::new(crate::sandbox::NoopSandbox),
+    ));
+
+    // Registry has NO "subagent" tool — proves routing goes to st, not inner
+    let registry = make_registry(&["read_file"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_subagent_tool(st);
+
+    // A valid subagent call; the mock provider returns "subagent result"
+    let result = svc
+        .execute("subagent", json!({ "task": "do something" }))
+        .await;
+    assert!(
+        result.is_ok(),
+        "subagent execute should succeed; got: {:?}",
+        result.err()
+    );
+}
+
+// -------------------------------------------------------------------------
+// Test 5: execute applies hook decorator (both before and after fire)
+// -------------------------------------------------------------------------
+#[tokio::test]
+async fn execute_applies_hook_decorator() {
+    let before = StdArc::new(AtomicUsize::new(0));
+    let after = StdArc::new(AtomicUsize::new(0));
+    let hook = Arc::new(StubHook {
+        before_count: StdArc::clone(&before),
+        after_count: StdArc::clone(&after),
+    });
+
+    let registry = make_registry(&["read_file"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_hook_decorator(hook);
+
+    let _ = svc.execute("read_file", json!({})).await;
+
+    assert_eq!(
+        before.load(Ordering::Relaxed),
+        1,
+        "before_execute must fire once"
+    );
+    assert_eq!(
+        after.load(Ordering::Relaxed),
+        1,
+        "after_execute must fire once"
+    );
+}
+
+// -------------------------------------------------------------------------
+// Test 6: describe returns from filtered set (allowed / not-allowed)
+// -------------------------------------------------------------------------
+#[tokio::test]
+async fn describe_returns_from_filtered_set() {
+    let registry = make_registry(&["read_file", "write_file"]);
+    let allowed = ["read_file".to_string()].into_iter().collect();
+    let svc = ScopedToolService::new(registry, allowed);
+
+    // Allowed tool: should return Some
+    let def = svc.describe("read_file").await;
+    assert!(def.is_some(), "read_file is allowed, must be found");
+    assert_eq!(def.unwrap().name, "read_file");
+
+    // Not-in-allowed tool: must return None
+    let def = svc.describe("write_file").await;
+    assert!(def.is_none(), "write_file is not in allowed set");
+
+    // Totally unknown tool: must return None
+    let def = svc.describe("nonexistent").await;
+    assert!(def.is_none(), "unknown tool must return None");
+}
+
+// -------------------------------------------------------------------------
+// Test 7: metadata_schema caches when no refresh signal
+// -------------------------------------------------------------------------
+
+#[test]
+fn scoped_metadata_schema_caches_when_no_refresh_signal() {
+    let registry = make_registry(&["a", "b"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+    let s1 = svc.metadata_schema();
+    let s2 = svc.metadata_schema();
+    assert!(
+        Arc::ptr_eq(&s1, &s2),
+        "without refresh signal cache should hold across calls"
+    );
+    assert_eq!(s1.len(), 2);
+}
+
+// -------------------------------------------------------------------------
+// Test 8: metadata_schema respects allowed filter
+// -------------------------------------------------------------------------
+
+#[test]
+fn scoped_metadata_schema_respects_allowed_filter() {
+    let registry = make_registry(&["a", "b"]);
+    let mut allowed = BTreeSet::new();
+    allowed.insert("a".to_string());
+    let svc = ScopedToolService::new(registry, allowed);
+    let s = svc.metadata_schema();
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].name, "a");
+}
+
+// Health gate tests
+// -------------------------------------------------------------------------
+
+use crate::tool_metadata::{HealthReason, ProbeResult, ToolHealthProbe};
+use std::borrow::Cow;
+
+struct AlwaysDead;
+
+#[async_trait::async_trait]
+impl ToolHealthProbe for AlwaysDead {
+    async fn probe(&self) -> ProbeResult {
+        ProbeResult::Unhealthy {
+            reason: HealthReason::DependencyDown(Cow::Borrowed("test fixture")),
+            retry_after: None,
+        }
+    }
+}
+
+// -------------------------------------------------------------------------
+// Extension HookExecutor wiring
+// -------------------------------------------------------------------------
+
+/// Capturing tool that echoes the input value it actually receives, so
+/// tests can assert on hook-rewritten input flowing into the underlying
+/// tool implementation.
+struct EchoTool;
+
+#[async_trait::async_trait]
+impl LoopTool for EchoTool {
+    fn name(&self) -> &str {
+        "echo"
+    }
+    fn description(&self) -> &str {
+        "echoes input"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success { output: input }
+    }
+}
+
+fn echo_registry() -> Arc<LoopToolRegistry> {
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(EchoTool));
+    Arc::new(r)
+}
+
+fn make_command_hook(event: HookEvent, kind: HookKind, command: &str) -> HookConfig {
+    HookConfig {
+        event,
+        kind,
+        priority: HookPriority::Normal,
+        matcher: None,
+        actions: vec![HookAction::Command {
+            command: command.to_string(),
+        }],
+        plugin_name: "test".to_string(),
+        plugin_root: PathBuf::from("/tmp"),
+        handler: None,
+        timeout_secs: None,
+    }
+}
+
+/// `apply_layer_two` always stringifies tool output (`Value::String`).
+/// Tests that care about the structured shape parse it back here.
+fn parse_tool_output(value: &Value) -> Value {
+    match value {
+        Value::String(s) => serde_json::from_str(s).unwrap_or_else(|_| value.clone()),
+        other => other.clone(),
+    }
+}
+
+#[tokio::test]
+async fn before_tool_hook_block_returns_execution_error() {
+    let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        "echo 'block: blocked by policy'",
+    )]));
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_hook_executor(executor, "test-session");
+
+    match svc.execute("echo", json!({})).await {
+        Err(ToolError::Execution { name, cause }) => {
+            assert_eq!(name, "echo");
+            assert!(
+                cause.contains("blocked by policy"),
+                "unexpected cause: {cause}"
+            );
+        }
+        other => panic!("expected Execution error from block hook, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn before_tool_hook_deny_returns_permission_denied() {
+    let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        "echo 'deny: hard policy stop'",
+    )]));
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_hook_executor(executor, "test-session");
+
+    match svc.execute("echo", json!({})).await {
+        Err(ToolError::PermissionDenied { name, reason }) => {
+            assert_eq!(name, "echo");
+            assert!(
+                reason.contains("hard policy stop"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected PermissionDenied from deny hook, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn before_tool_hook_update_input_rewrites_args() {
+    // Hook rewrites the tool input to a fixed JSON value. The EchoTool
+    // returns whatever input it receives, so we can assert by reading the
+    // tool output.
+    let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        r#"echo 'update_input: {"path":"/etc/hosts","force":true}'"#,
+    )]));
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_hook_executor(executor, "test-session");
+
+    let output = svc
+        .execute("echo", json!({ "path": "/tmp/original" }))
+        .await
+        .expect("execute should succeed when hook only rewrites input");
+    // Layer 2 stringifies tool output; parse it back to inspect fields.
+    let parsed = parse_tool_output(&output.value);
+    assert_eq!(parsed["path"], json!("/etc/hosts"));
+    assert_eq!(parsed["force"], json!(true));
+}
+
+#[tokio::test]
+async fn before_tool_hook_context_wraps_tool_output_for_llm() {
+    // BeforeToolCall hook emits `context:` lines. Historically these
+    // landed in `HookResult.additional_contexts` but nothing consumed
+    // them — the LLM never saw them. This test guards the wiring fix
+    // (scoped.rs wraps them as `<system-reminder>` blocks on the tool
+    // output value so they reach the model next turn).
+    let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        "echo 'context: file auto-formatted'\necho 'context: lint passed'",
+    )]));
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_hook_executor(executor, "test-session");
+
+    let output = svc
+        .execute("echo", json!({ "path": "/tmp/x" }))
+        .await
+        .expect("execute should succeed");
+    let s = output
+        .value
+        .as_str()
+        .expect("hook contexts wrap result as a string");
+    assert!(s.contains("<system-reminder>"), "missing reminder wrapper: {s}");
+    assert!(s.contains("file auto-formatted"), "missing context line: {s}");
+    assert!(s.contains("lint passed"), "missing context line: {s}");
+}
+
+#[tokio::test]
+async fn after_tool_hook_observer_fires_on_success() {
+    // Observer writes the tool name to a tempfile so we can prove it
+    // fired with the right context. Run inside a per-test tempdir to
+    // avoid interference when tests run in parallel.
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let marker = dir.path().join("after.flag");
+    let marker_str = marker.to_string_lossy().to_string();
+    let cmd = format!(r#"printf '%s' "$TOOL_NAME" > '{marker_str}'"#);
+    let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+        HookEvent::AfterToolCall,
+        HookKind::Observer,
+        &cmd,
+    )]));
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
+        .with_hook_executor(executor, "test-session");
+
+    let _ = svc
+        .execute("echo", json!({}))
+        .await
+        .expect("execute should succeed");
+
+    let contents = std::fs::read_to_string(&marker).expect("observer must have written marker");
+    assert_eq!(contents.trim(), "echo");
+}
+
+#[tokio::test]
+async fn after_tool_failure_hook_fires_when_tool_errors() {
+    // Construct a registry with a tool that always errors.
+    struct ErrTool;
+    #[async_trait::async_trait]
+    impl LoopTool for ErrTool {
+        fn name(&self) -> &str {
+            "boom"
+        }
+        fn description(&self) -> &str {
+            "always errors"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+            LoopToolResult::Error {
+                error: "kaboom".to_string(),
+                retryable: false,
+            }
+        }
+    }
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(ErrTool));
+    let registry = Arc::new(r);
+
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let marker = dir.path().join("fail.flag");
+    let marker_str = marker.to_string_lossy().to_string();
+    let cmd = format!(r#"printf '%s' "$TOOL_NAME" > '{marker_str}'"#);
+    let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+        HookEvent::AfterToolCallFailure,
+        HookKind::Observer,
+        &cmd,
+    )]));
+    let svc = ScopedToolService::new(registry, BTreeSet::new())
+        .with_hook_executor(executor, "test-session");
+
+    let err = svc
+        .execute("boom", json!({}))
+        .await
+        .expect_err("tool returns error");
+    assert!(matches!(err, ToolError::Execution { .. }));
+
+    let contents =
+        std::fs::read_to_string(&marker).expect("failure observer must have written marker");
+    assert_eq!(contents.trim(), "boom");
+}
+
+#[tokio::test]
+async fn no_hooks_means_no_change_in_behaviour() {
+    // Sanity: without `.with_hook_executor`, ScopedToolService behaves
+    // identically to before (regression guard).
+    let svc = ScopedToolService::new(echo_registry(), BTreeSet::new());
+    let out = svc
+        .execute("echo", json!({ "k": "v" }))
+        .await
+        .expect("execute succeeds");
+    // Layer 2 stringifies tool output; parse it back to compare structurally.
+    assert_eq!(parse_tool_output(&out.value), json!({ "k": "v" }));
+}
+
+#[tokio::test]
+async fn list_strips_unhealthy_tools() {
+    let registry = make_registry(&["alive", "dead"]);
+    let health = Arc::new(ToolHealthCache::new());
+    health.register_probe("dead", Arc::new(AlwaysDead));
+    health.refresh("dead").await;
+    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_health(health);
+    let defs = svc.list().await;
+    let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+    assert!(names.contains(&"alive"));
+    assert!(!names.contains(&"dead"), "got: {names:?}");
+}
+
+#[test]
+fn metadata_schema_strips_unhealthy_tools_and_invalidates_on_flip() {
+    // Driven sync from outside an async runtime — populate the cache via
+    // a small block_on island.
+    let registry = make_registry(&["alive", "dead"]);
+    let health = Arc::new(ToolHealthCache::new());
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        health.register_probe("dead", Arc::new(AlwaysDead));
+        health.refresh("dead").await;
+    });
+    let svc =
+        ScopedToolService::new(registry, BTreeSet::new()).with_health(Arc::clone(&health));
+
+    let s1 = svc.metadata_schema();
+    let names: Vec<&str> = s1.iter().map(|d| d.name.as_str()).collect();
+    assert!(names.contains(&"alive"));
+    assert!(!names.contains(&"dead"), "first call should strip dead");
+
+    // Flip "dead" healthy via invalidation; the schema cache must
+    // invalidate so the next call surfaces "dead" again.
+    health.invalidate_all();
+    let s2 = svc.metadata_schema();
+    assert!(
+        !Arc::ptr_eq(&s1, &s2),
+        "cache must rotate when health generation flips"
+    );
+    let names2: Vec<&str> = s2.iter().map(|d| d.name.as_str()).collect();
+    assert!(
+        names2.contains(&"dead"),
+        "after invalidation, dead reappears; got: {names2:?}"
+    );
+}
+
+// -------------------------------------------------------------------------
+// CRITICAL-1 — describe() populates per-tool budget + idempotency metadata
+// from the static tables, so the harness's per-tool wall-clock budget can
+// actually fire (it was always `None` while metadata was hardcoded default).
+// -------------------------------------------------------------------------
+#[tokio::test]
+async fn describe_populates_builtin_budget_metadata() {
+    // `memory_search` is in both BUILTIN_TOOL_BUDGETS_MS (5_000ms) and
+    // IDEMPOTENT_BUILTIN_TOOLS.
+    let registry = make_registry(&["memory_search"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+    let def = svc.describe("memory_search").await.expect("tool present");
+    assert_eq!(def.metadata.max_duration_ms, Some(5_000));
+    assert!(def.metadata.idempotent);
+}
+
+#[tokio::test]
+async fn describe_leaves_metadata_default_for_unbudgeted_tool() {
+    // A tool absent from both tables keeps the legacy `None` budget so it
+    // inherits the harness-wide turn_timeout fallback.
+    let registry = make_registry(&["some_custom_tool"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+    let def = svc
+        .describe("some_custom_tool")
+        .await
+        .expect("tool present");
+    assert_eq!(def.metadata.max_duration_ms, None);
+    assert!(!def.metadata.idempotent);
+}
+
+// -------------------------------------------------------------------------
+// is_call_concurrent_safe — opencode-parity dispatch query
+// -------------------------------------------------------------------------
+
+/// A LoopTool that always reports false for parallel safety, for tests
+/// that need to see the harness route around the fast path.
+struct UnsafeStubTool;
+
+#[async_trait::async_trait]
+impl LoopTool for UnsafeStubTool {
+    fn name(&self) -> &str {
+        "unsafe_tool"
+    }
+    fn description(&self) -> &str {
+        "stub that mutates shared state"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success {
+            output: json!({"ok": true}),
+        }
+    }
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn is_call_concurrent_safe_defaults_true_for_safe_stub_tool() {
+    // `StubTool` doesn't override `is_concurrent_safe`, so the trait
+    // default (true) flows through the registry → ScopedToolService
+    // chain.
+    let registry = make_registry(&["safe_tool"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+    assert!(svc.is_call_concurrent_safe("safe_tool", &json!({})).await);
+}
+
+#[tokio::test]
+async fn is_call_concurrent_safe_honors_unsafe_tool_override() {
+    // Hand-rolled unsafe tool — propagates `false` through the same
+    // chain.
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(UnsafeStubTool));
+    let registry = Arc::new(r);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+    assert!(!svc.is_call_concurrent_safe("unsafe_tool", &json!({})).await);
+}
+
+#[tokio::test]
+async fn is_call_concurrent_safe_returns_false_for_unknown_tool() {
+    // Conservative default — the harness must not parallel-dispatch a
+    // tool it cannot find a definition for.
+    let registry = make_registry(&[]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+    assert!(!svc.is_call_concurrent_safe("nope", &json!({})).await);
+}
+
+#[tokio::test]
+async fn is_call_concurrent_safe_returns_false_for_disallowed_tool() {
+    // Tools outside the allow list are conservatively unsafe — the
+    // harness's parallel fast-path scan should never see them as
+    // candidates.
+    let registry = make_registry(&["safe_tool", "other"]);
+    let mut allowed = BTreeSet::new();
+    allowed.insert("other".to_string());
+    let svc = ScopedToolService::new(registry, allowed);
+    assert!(!svc.is_call_concurrent_safe("safe_tool", &json!({})).await);
+    assert!(svc.is_call_concurrent_safe("other", &json!({})).await);
+}
+
+#[tokio::test]
+async fn list_propagates_concurrent_safe_flag_from_inner_tool() {
+    // The metadata view served to gateway / inspection APIs should
+    // surface the inner LoopTool's static parallel-safety hint.
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(StubTool {
+        tool_name: "safe_tool",
+    }));
+    r.register(Box::new(UnsafeStubTool));
+    let registry = Arc::new(r);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+    let defs = svc.list().await;
+    let safe = defs
+        .iter()
+        .find(|d| d.name == "safe_tool")
+        .expect("safe_tool listed");
+    let unsafe_def = defs
+        .iter()
+        .find(|d| d.name == "unsafe_tool")
+        .expect("unsafe_tool listed");
+    assert!(safe.metadata.concurrent_safe);
+    assert!(!unsafe_def.metadata.concurrent_safe);
+}
+
+// -------------------------------------------------------------------------
+// execute_with_cancel — opencode-parity AbortSignal end-to-end
+// -------------------------------------------------------------------------
+
+/// LoopTool that sleeps 5s on every call. Used to prove the cancel token
+/// propagates from `ScopedToolService::execute_with_cancel` → `LoopToolRegistry`
+/// → the resolved `LoopTool::execute` without ever firing the inner sleep.
+struct SlowLoopTool;
+
+#[async_trait::async_trait]
+impl LoopTool for SlowLoopTool {
+    fn name(&self) -> &str {
+        "slow_tool"
+    }
+    fn description(&self) -> &str {
+        "sleeps forever"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, cancel: CancellationToken) -> LoopToolResult {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => LoopToolResult::Error {
+                error: "cancelled cooperatively".into(),
+                retryable: false,
+            },
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => LoopToolResult::Success {
+                output: json!({"slept": true}),
+            },
+        }
+    }
+}
+
+#[tokio::test]
+async fn execute_with_cancel_short_circuits_inner_loop_tool() {
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(SlowLoopTool));
+    let registry = Arc::new(r);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+
+    let cancel = CancellationToken::new();
+    let cancel_for_spawn = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancel_for_spawn.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let result = svc
+        .execute_with_cancel("slow_tool", json!({}), cancel)
+        .await;
+    let elapsed = started.elapsed();
+
+    // Must short-circuit well below the 5s inner sleep — cooperatively
+    // via the tool's own `select!`, not via wrapper drop.
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "expected cancel to abort fast; took {elapsed:?}"
+    );
+    let err = result.expect_err("cancelled call should surface a ToolError");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cancelled"),
+        "expected cancellation error, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn execute_with_cancel_runs_to_completion_when_token_never_fires() {
+    // Sanity check: when the caller passes a never-fired token, the
+    // tool's own `select!` lets it complete normally — i.e. the cancel
+    // arm is biased but does not preempt a fresh token.
+    struct InstantTool;
+    #[async_trait::async_trait]
+    impl LoopTool for InstantTool {
+        fn name(&self) -> &str {
+            "instant"
+        }
+        fn description(&self) -> &str {
+            "returns immediately"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+            LoopToolResult::Success {
+                output: json!({"ok": true}),
+            }
+        }
+    }
+
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(InstantTool));
+    let registry = Arc::new(r);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+
+    let out = svc
+        .execute_with_cancel("instant", json!({}), CancellationToken::new())
+        .await
+        .expect("never-fired token should let the tool complete");
+    // ScopedToolService routes the inner JSON through `apply_layer_two`,
+    // which can re-render the value as a JSON-encoded string for token
+    // accounting. Accept either representation — what we care about
+    // here is that the call ran to completion rather than being cancelled.
+    let matches = match &out.value {
+        serde_json::Value::Object(_) => out.value == json!({"ok": true}),
+        serde_json::Value::String(s) => {
+            serde_json::from_str::<Value>(s).ok() == Some(json!({"ok": true}))
+        }
+        _ => false,
+    };
+    assert!(matches, "unexpected output shape: {:?}", out.value);
+}
+

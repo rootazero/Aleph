@@ -1,0 +1,194 @@
+//! Schema migration for the swarm task store.
+//!
+//! Sync function over `&rusqlite::Connection` so the caller owns the
+//! `tokio::sync::Mutex` lock acquisition (see [`super::SqliteCoordTaskStore::migrate`]).
+//!
+//! Also handles legacy schema cleanup: earlier versions stored team data
+//! in `coord_teams` / `coord_team_members` tables inside this database and
+//! added a `FOREIGN KEY (team_id) REFERENCES coord_teams(id)` on
+//! `coord_tasks`.  Team management has since moved to a separate `teams.db`
+//! via `TeamStore`, so the FK now causes inserts to fail.  When the legacy
+//! tables are detected we rebuild `coord_tasks` without the stale FK.
+
+use rusqlite::Connection;
+
+use super::helpers::db_err;
+
+pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(db_err)?;
+
+    // --- Legacy schema migration -------------------------------------------
+    // Detect old `coord_teams` table whose FK on `coord_tasks.team_id`
+    // blocks inserts (teams now live in teams.db).
+    let has_legacy: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='coord_teams'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0i64)
+        > 0;
+
+    if has_legacy {
+        // Must disable FK checks while we recreate the table, otherwise
+        // the data copy itself could trip the stale constraint.
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")
+            .map_err(db_err)?;
+
+        conn.execute_batch(
+            r#"
+            BEGIN;
+
+            -- Rebuild coord_tasks without the stale FK to coord_teams
+            CREATE TABLE coord_tasks_new (
+                id TEXT PRIMARY KEY,
+                team_id TEXT,
+                subject TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                owner TEXT,
+                priority TEXT NOT NULL DEFAULT 'normal',
+                result TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                started_at INTEGER,
+                completed_at INTEGER
+            );
+            INSERT INTO coord_tasks_new SELECT * FROM coord_tasks;
+            DROP TABLE coord_tasks;
+            ALTER TABLE coord_tasks_new RENAME TO coord_tasks;
+
+            -- Drop legacy team tables that are no longer used
+            DROP TABLE IF EXISTS coord_team_members;
+            DROP TABLE IF EXISTS coord_teams;
+
+            COMMIT;
+            "#,
+        )
+        .map_err(db_err)?;
+
+        // Re-enable FK enforcement
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(db_err)?;
+
+        tracing::info!("coord_tasks: migrated away from legacy coord_teams FK");
+    }
+
+    // --- Standard schema ---------------------------------------------------
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS coord_tasks (
+            id TEXT PRIMARY KEY,
+            team_id TEXT,
+            subject TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            owner TEXT,
+            priority TEXT NOT NULL DEFAULT 'normal',
+            result TEXT,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            started_at INTEGER,
+            completed_at INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS coord_task_dependencies (
+            task_id TEXT NOT NULL,
+            depends_on TEXT NOT NULL,
+            PRIMARY KEY (task_id, depends_on),
+            FOREIGN KEY (task_id) REFERENCES coord_tasks(id) ON DELETE CASCADE,
+            FOREIGN KEY (depends_on) REFERENCES coord_tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_coord_tasks_team_status ON coord_tasks(team_id, status);
+        CREATE INDEX IF NOT EXISTS idx_coord_tasks_owner ON coord_tasks(owner);
+        "#,
+    )
+    .map_err(db_err)?;
+
+    // --- Add task locking columns (idempotent) ---
+    let has_locked_by: bool = conn
+        .prepare("SELECT locked_by FROM coord_tasks LIMIT 0")
+        .is_ok();
+    if !has_locked_by {
+        conn.execute_batch(
+            "ALTER TABLE coord_tasks ADD COLUMN locked_by TEXT;\
+             ALTER TABLE coord_tasks ADD COLUMN locked_at INTEGER;",
+        )
+        .map_err(db_err)?;
+    }
+
+    // --- Per-attempt run history (additive) ---
+    // Captures each dispatcher claim so the panel drawer can show what
+    // each attempt did, even after the task itself reaches a terminal
+    // state. Older databases get the table at first migration.
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS coord_task_runs (
+            id         TEXT PRIMARY KEY,
+            task_id    TEXT NOT NULL,
+            agent_id   TEXT NOT NULL,
+            started_at INTEGER NOT NULL,
+            ended_at   INTEGER,
+            status     TEXT NOT NULL,
+            summary    TEXT,
+            error      TEXT,
+            FOREIGN KEY (task_id) REFERENCES coord_tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_coord_task_runs_task
+            ON coord_task_runs(task_id, started_at);
+        "#,
+    )
+    .map_err(db_err)?;
+
+    // --- Per-task comments (additive) ---
+    // Free-text handoff notes; permanent (no TTL) so they survive across
+    // retries. MessageStore is intentionally not reused — it carries
+    // inbox/TTL semantics that don't fit a comment thread.
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS coord_task_comments (
+            id         TEXT PRIMARY KEY,
+            task_id    TEXT NOT NULL,
+            author     TEXT NOT NULL,
+            body       TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES coord_tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_coord_task_comments_task
+            ON coord_task_comments(task_id, created_at);
+        "#,
+    )
+    .map_err(db_err)?;
+
+    // --- Team snapshots (additive) ---
+    // Point-in-time JSON bundles of a team's config + members + tasks +
+    // recent events. Stored here (not teams.db) so the snapshot read path
+    // shares one DB lock with the bulk content (tasks). Restore is
+    // dry-run by default in the tool layer.
+    //
+    // Inspired by ClawTeam's SnapshotManager. No FK to coord_tasks —
+    // snapshots are deliberately decoupled from current task lifecycle
+    // (deleting a task must not delete historical snapshots referencing it).
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS coord_team_snapshots (
+            id         TEXT PRIMARY KEY,
+            team_id    TEXT NOT NULL,
+            tag        TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            payload    TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_coord_team_snapshots_team
+            ON coord_team_snapshots(team_id, created_at DESC);
+        "#,
+    )
+    .map_err(db_err)?;
+
+    Ok(())
+}

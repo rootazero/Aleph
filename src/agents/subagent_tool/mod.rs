@@ -1,0 +1,244 @@
+//! SubagentTool — delegates tasks to a temporary child harness.
+//!
+//! When the parent agent needs to run a complex sub-task autonomously,
+//! it calls the `subagent` tool. `AgentRuntime::execute_via_harness` spawns a
+//! fresh `AgentHarness` (via `subagent_spawner`) with its parent tool service
+//! wrapped by `AllowlistToolService`. SubAgent-mode agents are denied
+//! invocation of this tool via `AgentDef::is_tool_allowed` (recursion
+//! guard); see `agents/types.rs` for the rule.
+//!
+//! Supports agent role selection via `agent_type`, optional context
+//! injection via `context_summary`, and background execution via
+//! `run_in_background`.
+//!
+//! ## Layout
+//! - [`types`] — `SubagentAction` / `RunArgs` / `BatchTask`
+//! - [`parse`] — JSON → `SubagentAction`
+//! - [`spawn`] — `cancel_for_child*` + `spawn_background` + `build_runtime`
+//! - [`loop_tool`] — `impl LoopTool for SubagentTool` (execute pipeline)
+//! - this module — `SubagentTool` struct + `new` + every `with_*` builder
+
+mod loop_tool;
+mod parse;
+mod spawn;
+mod types;
+
+#[cfg(test)]
+mod tests;
+
+use std::collections::HashMap;
+
+use tokio_util::sync::CancellationToken;
+
+use crate::agents::background_tracker::BackgroundAgentTracker;
+use crate::agents::teammates::TeammateManager;
+use crate::agents::AgentRegistry;
+use crate::providers::AiProvider;
+use crate::sandbox::Sandbox;
+use crate::session::service::SessionService;
+use crate::sync_primitives::Arc;
+use crate::teams::messages::inbox::Inbox;
+use crate::teams::messages::router::MessageRouter;
+use crate::tools::service::ToolService;
+
+use types::DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+
+// =============================================================================
+// SubagentTool struct
+// =============================================================================
+
+/// A LoopTool that delegates tasks to a temporary AgentLoop.
+pub struct SubagentTool {
+    pub(super) provider: Arc<dyn AiProvider>,
+    pub(super) chain: crate::harness::chain_context::ChainContext,
+    pub(super) agent_registry: Arc<AgentRegistry>,
+    pub(super) background_tracker: Arc<BackgroundAgentTracker>,
+    /// Shared session actor threaded to child `AgentRuntime` instances.
+    pub(super) session: Arc<dyn SessionService>,
+    /// Parent tool service; the harness decorates it with an allowlist.
+    pub(super) parent_tools: Arc<dyn ToolService>,
+    /// Shared sandbox passed to child harnesses.
+    pub(super) sandbox: Arc<dyn Sandbox>,
+    /// Optional teammate manager for auto team creation/registration.
+    pub(super) teammate_manager: Option<Arc<TeammateManager>>,
+    /// Optional message router for send_message actions.
+    pub(super) message_router: Option<Arc<MessageRouter>>,
+    /// Optional inbox for read_inbox actions.
+    pub(super) inbox: Option<Arc<Inbox>>,
+    /// Identifies the calling agent (default: "primary").
+    pub(super) parent_agent_id: String,
+    /// Spec 1 G2 — threaded into child `AgentRuntime`s so the spawner emits
+    /// `RawMemory(Delegation)` after each successful local subagent run.
+    pub(super) raw_memory_writer:
+        Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    /// Optional capture-filter registry threaded with the writer.
+    pub(super) capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    /// Parent session id stamped onto emitted Delegation rows. `None` leaves
+    /// the row untagged for session-level lookups.
+    pub(super) parent_session_id: Option<String>,
+    /// Stage F (P2) — parent trace sink threaded into background subagent
+    /// runtimes wrapped by ForwardingTraceSink for progress observation.
+    /// Sync subagents do NOT receive this wrapper (Stage A inheritance suffices).
+    pub(super) trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+    /// A2 — shared concurrency cap; one per tool instance (= per agent run).
+    pub(super) subagent_semaphore: Arc<tokio::sync::Semaphore>,
+    /// A3 — parent run's cancellation token. Each spawn path derives a
+    /// `child_token()` so a cancelled parent stops its subagents.
+    pub(super) parent_cancel: Option<CancellationToken>,
+    /// B2 — global plugin registry, threaded into each AgentRuntime.
+    pub(super) plugin_registry: Option<Arc<crate::extension::registry::PluginRegistry>>,
+    /// B3 — stall watchdog config inherited by subagents.
+    pub(super) stall_config: Option<crate::harness::StallConfig>,
+    /// B3 — consecutive-failure cap inherited by subagents.
+    pub(super) consecutive_failure_cap: Option<usize>,
+    /// B3 — per-turn wall-clock timeout inherited by subagents.
+    pub(super) turn_timeout: Option<std::time::Duration>,
+    /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
+    /// map (the `new()` default) means every subagent uses `provider`.
+    pub(super) provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
+}
+
+impl SubagentTool {
+    /// Create a new SubagentTool.
+    ///
+    /// - `provider`: the AI provider for the sub-agent's LLM calls
+    /// - `chain`: the parent's chain context for depth tracking
+    /// - `agent_registry`: registry of available agent definitions
+    /// - `background_tracker`: tracker for background sub-agent tasks
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        provider: Arc<dyn AiProvider>,
+        chain: crate::harness::chain_context::ChainContext,
+        agent_registry: Arc<AgentRegistry>,
+        background_tracker: Arc<BackgroundAgentTracker>,
+        session: Arc<dyn SessionService>,
+        parent_tools: Arc<dyn ToolService>,
+        sandbox: Arc<dyn Sandbox>,
+    ) -> Self {
+        Self {
+            provider,
+            chain,
+            agent_registry,
+            background_tracker,
+            session,
+            parent_tools,
+            sandbox,
+            teammate_manager: None,
+            message_router: None,
+            inbox: None,
+            parent_agent_id: "primary".to_string(),
+            raw_memory_writer: None,
+            capture_registry: None,
+            parent_session_id: None,
+            trace_sink: None,
+            subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+            )),
+            parent_cancel: None,
+            plugin_registry: None,
+            stall_config: None,
+            consecutive_failure_cap: None,
+            turn_timeout: None,
+            provider_overrides: HashMap::new(),
+        }
+    }
+
+    /// Phase 3 — wire the per-`provider_hint` override registry. A subagent
+    /// whose `AgentDef.provider_hint` matches a key runs on that provider.
+    pub fn with_provider_overrides(
+        mut self,
+        overrides: HashMap<String, Arc<dyn AiProvider>>,
+    ) -> Self {
+        self.provider_overrides = overrides;
+        self
+    }
+
+    /// B2 — wire the global plugin registry for per-agent MCP scope.
+    pub fn with_plugin_registry(
+        mut self,
+        registry: Arc<crate::extension::registry::PluginRegistry>,
+    ) -> Self {
+        self.plugin_registry = Some(registry);
+        self
+    }
+
+    /// B3 — wire the stall watchdog config inherited by subagents.
+    pub fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
+        self.stall_config = Some(config);
+        self
+    }
+
+    /// B3 — wire the consecutive-failure cap inherited by subagents.
+    pub fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
+        self.consecutive_failure_cap = Some(cap);
+        self
+    }
+
+    /// B3 — wire the per-turn wall-clock timeout inherited by subagents.
+    pub fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.turn_timeout = Some(timeout);
+        self
+    }
+
+    /// Set the teammate manager for auto team creation/registration.
+    pub fn with_teammate_manager(mut self, mgr: Arc<TeammateManager>) -> Self {
+        self.teammate_manager = Some(mgr);
+        self
+    }
+
+    /// Set the message router for send_message actions.
+    pub fn with_message_router(mut self, router: Arc<MessageRouter>) -> Self {
+        self.message_router = Some(router);
+        self
+    }
+
+    /// Set the inbox for read_inbox actions.
+    pub fn with_inbox(mut self, inbox: Arc<Inbox>) -> Self {
+        self.inbox = Some(inbox);
+        self
+    }
+
+    /// Set the parent agent id (identifies the calling agent).
+    pub fn with_parent_agent_id(mut self, id: impl Into<String>) -> Self {
+        self.parent_agent_id = id.into();
+        self
+    }
+
+    /// Spec 1 G2 — wire the raw-memory writer for delegation hook emit.
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) -> Self {
+        self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    /// Spec 1 G2 — wire an optional capture-filter registry alongside the writer.
+    pub fn with_capture_registry(
+        mut self,
+        registry: Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+    ) -> Self {
+        self.capture_registry = Some(registry);
+        self
+    }
+
+    /// Spec 1 G2 — set the parent session id stamped onto Delegation rows.
+    pub fn with_parent_session_id(mut self, sid: impl Into<String>) -> Self {
+        self.parent_session_id = Some(sid.into());
+        self
+    }
+
+    /// Stage F (P2) — thread the parent trace sink so background subagents can
+    /// be observed via ForwardingTraceSink. Only wired on the background path.
+    pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
+        self.trace_sink = Some(sink);
+        self
+    }
+
+    /// A3 — wire the parent run's cancellation token so spawned subagents
+    /// stop when the parent is cancelled.
+    pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
+        self.parent_cancel = Some(token);
+        self
+    }
+}

@@ -1,0 +1,333 @@
+//! ScopedToolService — bridges LoopToolRegistry + SubagentTool to ToolService.
+//!
+//! Adapts the Gateway-side `LoopToolRegistry` (with optional SubagentTool,
+//! ToolRefreshSource, and hook decorator) to the `ToolService` trait consumed
+//! by `AgentHarness`. This is a read-only adapter; it does not modify the
+//! underlying registry.
+//!
+//! ## Layout
+//! - [`traits`] — public extension points (`ToolDefinitionRewriter`, `ToolHookDecorator`)
+//! - [`builder`] — `new` + every `with_*` + small shape/helper utilities
+//! - [`dispatch`] — execute pipeline (`execute_inner` + hook seams + Layer-2 + sanitize)
+//! - this module — `ScopedToolService` struct + `ToolService` trait impl
+
+mod builder;
+mod dispatch;
+mod traits;
+
+#[cfg(test)]
+mod tests;
+
+pub use traits::{ToolDefinitionRewriter, ToolHookDecorator};
+
+use std::collections::BTreeSet;
+
+use arc_swap::ArcSwap;
+use async_trait::async_trait;
+use serde_json::Value;
+use tokio_util::sync::CancellationToken;
+
+use crate::agents::subagent_tool::SubagentTool;
+use crate::extension::hooks::HookExecutor;
+use crate::sandbox::exec_approval::gate::ApprovalRequester;
+use crate::session::events::ToolOutput;
+use crate::sync_primitives::Arc;
+use crate::tool_metadata::ToolHealthCache;
+use crate::tools::refresh::ToolRefreshSource;
+use crate::tools::runtime::{LoopTool, LoopToolRegistry};
+use crate::tools::service::{
+    to_metadata_form, ToolDefinition, ToolError, ToolService, ToolSource,
+};
+
+// =============================================================================
+// ScopedToolService
+// =============================================================================
+
+/// Adapts a `LoopToolRegistry` snapshot to the `ToolService` consumer trait.
+///
+/// Construction:
+/// ```text
+/// ScopedToolService::new(registry, allowed)
+///     .with_subagent_tool(tool)
+///     .with_refresh(refresh_source)
+///     .with_hook_decorator(decorator)
+/// ```
+///
+/// `allowed` is a set of permitted tool names. Empty = allow-all.
+pub struct ScopedToolService {
+    pub(super) inner: Arc<LoopToolRegistry>,
+    pub(super) allowed: BTreeSet<String>,
+    pub(super) subagent_tool: Option<Arc<SubagentTool>>,
+    pub(super) refresh: Option<Arc<dyn ToolRefreshSource>>,
+    pub(super) hook_decorator: Option<Arc<dyn ToolHookDecorator>>,
+    /// Extension-shipped hook executor. Fires `BeforeToolCall` interceptors
+    /// (block/deny/ask/update_input) and `AfterToolCall`/`AfterToolCallFailure`
+    /// observers around every tool execution. `None` = no extension hooks.
+    pub(super) hook_executor: Option<Arc<HookExecutor>>,
+    /// Session identifier surfaced into `HookContext` for extension hooks
+    /// (env var `SESSION_ID`, log correlation). Empty string when unset.
+    pub(super) hook_session_id: String,
+    /// Tool names that require user confirmation before they execute.
+    pub(super) confirm_tools: BTreeSet<String>,
+    /// Transport used to obtain that confirmation. `None` = no approval
+    /// channel wired, so confirm-required tools fail closed (denied).
+    pub(super) approval_requester: Option<Arc<dyn ApprovalRequester>>,
+    /// Routing context of the agent turn this service serves. When set,
+    /// `execute()` scopes it into the `TURN_CONTEXT` task-local so HITL tools
+    /// (sandbox escalation, `requires_confirmation`, `ask_user`) can route a
+    /// prompt back to the originating channel.
+    pub(super) turn_context: Option<crate::tools::turn_context::TurnContext>,
+    /// Layer 2 of the tool-result budget: persists oversized outputs to
+    /// disk and replaces them with a compact marker before they enter
+    /// the conversation history.
+    pub(super) result_store: Option<Arc<crate::tools::result_store::ToolResultStore>>,
+    pub(super) schema_cache: ArcSwap<Option<(u64, Arc<[crate::tool_metadata::ToolDefinition]>)>>,
+    pub(super) cache_generation: std::sync::atomic::AtomicU64,
+    /// Optional runtime health cache. When set, `list()` and
+    /// `metadata_schema()` strip tools whose probe reports Unhealthy
+    /// (and the entry hasn't expired) so the LLM never sees a tool whose
+    /// dependencies are dead.
+    pub(super) health: Option<Arc<ToolHealthCache>>,
+    /// Last observed health-cache generation. Bumping this on a generation
+    /// drift invalidates the `schema_cache`, so a tool flipping
+    /// healthy↔unhealthy retransmits to the LLM on the next turn.
+    pub(super) last_health_generation: std::sync::atomic::AtomicU64,
+    /// Request-time tool definition rewriters. Applied per tool in
+    /// attachment order from `list()` and (on cache miss) from
+    /// `metadata_schema()`. See [`ToolDefinitionRewriter`].
+    pub(super) definition_rewriters: Vec<Arc<dyn ToolDefinitionRewriter>>,
+}
+
+// =============================================================================
+// ToolService trait impl
+// =============================================================================
+
+#[async_trait]
+impl ToolService for ScopedToolService {
+    async fn list(&self) -> Vec<ToolDefinition> {
+        // Trigger refresh poll if a source is configured.
+        if let Some(ref refresh) = self.refresh {
+            if refresh.poll_changes() {
+                // Refresh signals that tools changed externally. The registry
+                // is shared via Arc so callers needing live data swap it; here
+                // we just acknowledge the signal without mutating our snapshot.
+                let _ = refresh.fetch_tools();
+            }
+        }
+
+        // Take a single health snapshot so the filter is consistent across
+        // every tool in this list call.
+        let health_snap = self.health.as_ref().map(|h| h.snapshot());
+
+        let mut defs: Vec<ToolDefinition> = self
+            .inner
+            .tool_definitions()
+            .into_iter()
+            .map(|d| {
+                let metadata = Self::builtin_metadata(&d.name, d.concurrent_safe);
+                ToolDefinition {
+                    name: d.name,
+                    description: d.description,
+                    input_schema: d.parameters,
+                    source: ToolSource::Builtin,
+                    metadata,
+                }
+            })
+            .collect();
+
+        // Append subagent tool if configured.
+        if let Some(ref st) = self.subagent_tool {
+            defs.push(Self::subagent_definition(st.as_ref()));
+        }
+
+        // Apply allowed-set filter. `is_allowed` exempts the attached
+        // subagent so it survives the retain even when `allowed` is non-empty
+        // and doesn't list "subagent" (which it never does — see is_allowed).
+        if !self.allowed.is_empty() {
+            defs.retain(|d| self.is_allowed(&d.name));
+        }
+
+        // Health gate: strip any tool whose probe reports a non-expired
+        // Unhealthy. Tools without a registered probe pass through (the
+        // snapshot reports them healthy by default).
+        if let Some(snap) = &health_snap {
+            defs.retain(|d| snap.is_healthy(&d.name));
+        }
+
+        // Request-time rewriter pass: extensions / host code may rewrite
+        // descriptions or schemas without touching the underlying
+        // registry entry. Runs after gating so removed tools are not
+        // visited.
+        self.apply_definition_rewriters(&mut defs);
+
+        defs
+    }
+
+    async fn describe(&self, name: &str) -> Option<ToolDefinition> {
+        // Enforce allowed filter first.
+        if !self.is_allowed(name) {
+            return None;
+        }
+
+        // Check subagent tool.
+        let mut def = if let Some(ref st) = self.subagent_tool {
+            if st.name() == name {
+                Some(Self::subagent_definition(st.as_ref()))
+            } else {
+                self.inner.get(name).map(Self::loop_tool_to_definition)
+            }
+        } else {
+            self.inner.get(name).map(Self::loop_tool_to_definition)
+        };
+
+        // Honor request-time rewriters so a `describe()` consumer (per-tool
+        // budget probe, single-tool catalogue refresh) sees the same
+        // definition that `list()` / `metadata_schema()` would publish.
+        if let Some(ref mut d) = def {
+            self.apply_definition_rewriters(std::slice::from_mut(d));
+        }
+        def
+    }
+
+    async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
+        // Backward-compat shim: callers that don't have a CancellationToken
+        // get a never-fired one. The real per-call cancel is plumbed via
+        // `execute_with_cancel` from the harness Act phase.
+        self.execute_with_cancel(name, input, CancellationToken::new())
+            .await
+    }
+
+    async fn execute_with_cancel(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        use tracing::Instrument;
+
+        // Per-call span mirrors opencode's `Effect.withSpan("Tool.execute", …)`.
+        // Attributes mirror its `tool.name` / `session.id` / `tool.call_id`
+        // contract; `tool.idempotent` is Aleph's extra (drives the one-shot
+        // retry gate). Span lives across the whole dispatch — confirm gate,
+        // pre-/post-hooks, retry, layer-2 budget — so downstream tracing
+        // consumers see a single span tree per LLM tool call.
+        let idempotent = crate::tools::retry::is_idempotent_builtin_name(name);
+        let span = tracing::info_span!(
+            "tool.execute",
+            "tool.name" = %name,
+            "tool.idempotent" = idempotent,
+            "session.id" = %self.hook_session_id,
+        );
+
+        // Scope the turn's routing context so HITL tools (sandbox escalation,
+        // `requires_confirmation`, `ask_user`) can reach the originating
+        // channel. Scoped here — the immediate caller of every tool's
+        // `execute` — so it stays visible without crossing a `tokio::spawn`.
+        let fut = async move {
+            match self.turn_context.clone() {
+                Some(turn) => {
+                    crate::tools::turn_context::TURN_CONTEXT
+                        .scope(turn, self.execute_inner(name, input, cancel))
+                        .await
+                }
+                None => self.execute_inner(name, input, cancel).await,
+            }
+        };
+        fut.instrument(span).await
+    }
+
+    async fn is_call_concurrent_safe(&self, name: &str, input: &Value) -> bool {
+        // Subagent dispatch spawns nested LLM turns and shares the workspace —
+        // never parallel-safe with anything else in the batch.
+        if let Some(ref st) = self.subagent_tool {
+            if st.name() == name {
+                return false;
+            }
+        }
+        // Allowed-set filter gates this just like execute(); an opaque "not
+        // allowed" tool is conservatively unsafe.
+        if !self.is_allowed(name) {
+            return false;
+        }
+        // Confirmation-gated tools require user approval — they must be
+        // routed through the serial path so the prompt is visible in input
+        // order; never run them in parallel.
+        if self.confirm_tools.contains(name) {
+            return false;
+        }
+        self.inner
+            .is_call_concurrent_safe(name, input)
+            .unwrap_or(false)
+    }
+
+    fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
+        use std::sync::atomic::Ordering;
+
+        // Bump generation if the refresh source signals external changes.
+        if let Some(ref refresh) = self.refresh {
+            if refresh.poll_changes() {
+                let _ = refresh.fetch_tools();
+                self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        // Bump generation if the health cache rotated (a probe flipped
+        // healthy↔unhealthy or `invalidate_all` fired). This keeps the
+        // metadata schema cache aligned with the same gating snapshot
+        // that `list()` sees.
+        if let Some(health) = &self.health {
+            let live_gen = health.generation();
+            let prev = self.last_health_generation.swap(live_gen, Ordering::AcqRel);
+            if prev != live_gen {
+                self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        let gen_now = self.cache_generation.load(Ordering::Acquire);
+
+        // Cache hit?
+        if let Some(ref cached) = **self.schema_cache.load() {
+            if cached.0 == gen_now {
+                return Arc::clone(&cached.1);
+            }
+        }
+
+        // Take a snapshot for filter application — same as list().
+        let health_snap = self.health.as_ref().map(|h| h.snapshot());
+
+        // Cache miss: rebuild loop-side defs (matching list() body), then convert.
+        let mut defs: Vec<ToolDefinition> = self
+            .inner
+            .tool_definitions()
+            .into_iter()
+            .map(|d| {
+                let metadata = Self::builtin_metadata(&d.name, d.concurrent_safe);
+                ToolDefinition {
+                    name: d.name,
+                    description: d.description,
+                    input_schema: d.parameters,
+                    source: ToolSource::Builtin,
+                    metadata,
+                }
+            })
+            .collect();
+        if let Some(ref st) = self.subagent_tool {
+            defs.push(Self::subagent_definition(st.as_ref()));
+        }
+        if !self.allowed.is_empty() {
+            // Mirror list() — subagent is exempt from allow-filter via is_allowed.
+            defs.retain(|d| self.is_allowed(&d.name));
+        }
+        if let Some(snap) = &health_snap {
+            defs.retain(|d| snap.is_healthy(&d.name));
+        }
+        // Mirror `list()`: rewriters run after gating, before the
+        // metadata-form conversion. Cached output reflects the rewrite,
+        // so subsequent O(1) hits don't re-pay the cost.
+        self.apply_definition_rewriters(&mut defs);
+        let schema = to_metadata_form(&defs);
+        self.schema_cache
+            .store(Arc::new(Some((gen_now, Arc::clone(&schema)))));
+        schema
+    }
+}

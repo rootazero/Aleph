@@ -7,15 +7,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::cli::Args;
-use crate::daemon::{expand_path, remove_pid_file};
+use crate::daemon::expand_path;
 
 use alephcore::gateway::pairing_store::SqlitePairingStore;
 use alephcore::gateway::router::AgentRouter;
+use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::GatewayServer;
-use alephcore::gateway::{
-    can_create_provider_from_env, create_provider_registry_from_env,
-    GatewayConfig as FullGatewayConfig, SessionManager,
-};
+use alephcore::gateway::{can_create_provider_from_env, create_provider_registry_from_env};
 use alephcore::group_chat::{GroupChatExecutor, GroupChatOrchestrator};
 use alephcore::tasks::cron::executor::build_cron_executor_fn;
 use alephcore::tasks::cron::service::catchup::run_startup_catchup;
@@ -31,355 +29,18 @@ use builder::*;
 mod orchestrator_init;
 use orchestrator_init::initialize_orchestrator;
 
-// ── Subsystem initializer functions ──────────────────────────────────────────
-// Each function handles one cohesive initialization concern, extracted from
-// start_server() to keep the orchestrator function under 100 lines.
+mod helpers;
+use helpers::{
+    build_http_provider, build_sqlite_session_service, initialize_extension_manager,
+    initialize_session_store, initialize_tracing, load_gateway_config, print_startup_banner,
+    setup_graceful_shutdown, validate_bind_address,
+};
 
-/// Validate that the bind address is available, or exit if not.
-fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let addr: SocketAddr = format!("{}:{}", args.bind, args.port)
-        .parse()
-        .map_err(|e| format!("Invalid address: {}", e))?;
-    if !args.force {
-        if let Err(e) = std::net::TcpListener::bind(addr) {
-            eprintln!("Error: Cannot bind to {}: {}", addr, e);
-            eprintln!("Hint: Use --force to attempt to start anyway, or choose a different port with --port");
-            std::process::exit(1);
-        }
-    }
-    Ok(())
-}
+mod runtime_warmup;
+use runtime_warmup::runtime_startup_warmup;
 
-/// Print the startup banner and available method list to stdout.
-fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
-    println!(
-        "PII filtering engine initialized (enabled: {})",
-        full_config.privacy.pii_filtering
-    );
-    println!("╔═══════════════════════════════════════════════╗");
-    println!(
-        "║         Aleph Gateway v{}           ║",
-        env!("ALEPH_VERSION")
-    );
-    println!("╠═══════════════════════════════════════════════╣");
-    println!("║  WebSocket: ws://{}          ║", addr);
-    println!("║  Protocol:  JSON-RPC 2.0                      ║");
-    println!("╚═══════════════════════════════════════════════╝");
-    println!();
-    println!("Available methods:");
-    println!("  - health    : Check server health status");
-    println!("  - echo      : Echo back parameters (testing)");
-    println!("  - version   : Get server version info");
-    println!("  - agent.run : Execute agent request with streaming");
-    println!();
-    println!(
-        "Agents: {:?}",
-        full_config.agents.keys().collect::<Vec<_>>()
-    );
-    println!();
-}
+// ── (subsystem initializer helpers extracted to start/helpers.rs) ────────────
 
-/// Initialize the tracing subscriber with file + console logging.
-///
-/// Uses `aleph_logging::init_component_logging` which provides:
-/// - Console output with PII scrubbing
-/// - File output to `~/.aleph/logs/aleph-server.log.YYYY-MM-DD`
-/// - Daily rotation and 7-day retention
-fn initialize_tracing(args: &Args) {
-    let filter = format!("aleph_server={0},alephcore={0}", args.log_level);
-    if let Err(e) = aleph_logging::init_component_logging("server", 7, &filter) {
-        eprintln!(
-            "Warning: Failed to initialize file logging: {}. Falling back to console only.",
-            e
-        );
-        use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(true)
-                    .with_thread_ids(false)
-                    .with_file(false)
-                    .with_line_number(false),
-            )
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&filter)),
-            )
-            .init();
-    }
-}
-
-/// Load gateway configuration, apply CLI overrides, and return resolved values.
-/// Returns (full_config, final_bind, final_port, final_max_connections).
-fn load_gateway_config(args: &Args) -> (FullGatewayConfig, String, u16, usize) {
-    let full_config = match &args.config {
-        Some(config_path) => {
-            let path = expand_path(&config_path.to_string_lossy());
-            match FullGatewayConfig::load(&path) {
-                Ok(cfg) => {
-                    if !args.daemon {
-                        println!("Loaded config from: {}", path.display());
-                    }
-                    cfg
-                }
-                Err(e) => {
-                    eprintln!("Error loading config from {}: {}", path.display(), e);
-                    std::process::exit(1);
-                }
-            }
-        }
-        None => match FullGatewayConfig::load_default() {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                if !args.daemon {
-                    eprintln!("Warning: {}, using defaults", e);
-                }
-                FullGatewayConfig::default()
-            }
-        },
-    };
-
-    // CLI args override config file settings
-    let final_bind = if args.bind != "127.0.0.1" {
-        args.bind.clone()
-    } else {
-        full_config.gateway.host.clone()
-    };
-    let final_port = if args.port != 18790 {
-        args.port
-    } else {
-        full_config.gateway.port
-    };
-    let final_max_connections = if args.max_connections != 1000 {
-        args.max_connections
-    } else {
-        full_config.gateway.max_connections
-    };
-
-    (full_config, final_bind, final_port, final_max_connections)
-}
-
-use alephcore::gateway::session_store::SessionStore;
-
-/// Initialize the session store backend based on configuration.
-/// Defaults to SQLite; "file" enables the JSON/JSONL file backend.
-/// Returns the trait object and an optional owned SessionManager for SQLite
-/// so the caller can attach raw-memory writer and event bus before wrapping.
-async fn initialize_session_store(
-    daemon: bool,
-    backend: &str,
-    event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
-) -> (Arc<dyn SessionStore>, Option<SessionManager>) {
-    match backend {
-        "file" => {
-            let config =
-                alephcore::gateway::session_store::file_backend::FileSessionStoreConfig::default();
-            match alephcore::gateway::session_store::file_backend::FileSessionStore::new(config) {
-                Ok(mut store) => {
-                    store = store.with_event_bus(event_bus.clone());
-                    if alephcore::gateway::session_store::migration::migration_needed(
-                        &store.config().base_dir,
-                    ) {
-                        if !daemon {
-                            println!("Migrating legacy SQLite sessions to file backend ...");
-                        }
-                        if let Err(e) =
-                            alephcore::gateway::session_store::migration::export_legacy_messages(
-                                &store,
-                            )
-                            .await
-                        {
-                            eprintln!("Warning: Session migration failed: {}", e);
-                        }
-                    }
-                    if !daemon {
-                        println!("Session store initialized (file backend)");
-                    }
-                    (Arc::new(store), None)
-                }
-                Err(e) => {
-                    eprintln!("Error: Failed to initialize file session store: {}", e);
-                    std::process::exit(1);
-                }
-            }
-        }
-        _ => {
-            // SQLite default
-            let sm = match SessionManager::with_defaults() {
-                Ok(sm) => sm,
-                Err(e) => {
-                    eprintln!(
-                        "Error: Failed to initialize SQLite session store: {}. Sessions are required.",
-                        e
-                    );
-                    std::process::exit(1);
-                }
-            };
-            if !daemon {
-                println!("Session store initialized (SQLite backend)");
-            }
-            let dyn_store: Arc<dyn SessionStore> = Arc::new(sm.clone());
-            (dyn_store, Some(sm))
-        }
-    }
-}
-
-/// Build a `SessionService` backed by the same SQLite file that the
-/// SessionManager uses.
-///
-/// Phase 1 dual-write wiring: opens a **dedicated** connection to the
-/// sessions DB, runs the `session_events` migration, and returns an
-/// `InProcessActorSessionService` around a `SqliteEventStore`. Uses a
-/// separate connection (not the one owned by `SessionManager`) because
-/// `SessionManager` and `SqliteEventStore` use different `Mutex` types.
-/// Reconciling them is out of scope for Task 9 and will be revisited in Phase 6.
-///
-/// Returns `None` on any failure (non-fatal — dual-write simply stays
-/// off for this run; the legacy `messages` table remains authoritative).
-fn build_sqlite_session_service(
-    db_path: &std::path::Path,
-) -> Option<(
-    Arc<dyn alephcore::session::service::SessionService>,
-    Arc<dyn alephcore::session::store::SessionEventStore>,
-)> {
-    let conn = match alephcore::utils::sqlite_open::open_sqlite_safe(db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(
-                path = ?db_path,
-                error = %e,
-                "Phase 1 dual-write: failed to open session_events connection; \
-                 mirroring disabled"
-            );
-            return None;
-        }
-    };
-    if let Err(e) = alephcore::session::store::migrate_add_session_events(&conn) {
-        tracing::warn!(
-            error = %e,
-            "Phase 1 dual-write: session_events migration failed; mirroring disabled"
-        );
-        return None;
-    }
-    let store: Arc<dyn alephcore::session::store::SessionEventStore> =
-        Arc::new(alephcore::session::store::SqliteEventStore::new(conn));
-    let service: Arc<dyn alephcore::session::service::SessionService> =
-        Arc::new(alephcore::session::in_process::InProcessActorSessionService::new(store.clone()));
-    Some((service, store))
-}
-
-/// Initialize the ExtensionManager for the plugin system.
-async fn initialize_extension_manager(daemon: bool) {
-    // Migrate old single-dir layout and update official skills
-    let aleph_home = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(".aleph");
-    alephcore::bundled::extract_bundled_content(&aleph_home);
-
-    match alephcore::extension::ExtensionManager::with_defaults().await {
-        Ok(extension_manager) => {
-            // SkillSystem is now always initialized; load_all() will init it
-            // with discovered skill directories automatically.
-
-            let manager = Arc::new(extension_manager);
-            if let Err(_existing) = alephcore::gateway::init_extension_manager(manager) {
-                if !daemon {
-                    println!("Extension manager already initialized");
-                }
-            } else if !daemon {
-                println!("Extension manager initialized");
-            }
-        }
-        Err(e) => {
-            if !daemon {
-                eprintln!("Warning: Failed to initialize extension manager: {}. Plugin tools will be unavailable.", e);
-            }
-        }
-    }
-}
-
-/// Spawn Ctrl-C and SIGTERM handlers; return the oneshot receiver for run_until_shutdown.
-fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
-    use alephcore::gateway::shutdown_forensics::snapshot_shutdown_context;
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let pid_file = args.pid_file.clone();
-    let daemon_mode = args.daemon;
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        // Forensics: capture context before tearing anything down. Skip
-        // `with_parent_command` here — the Ctrl-C path is the interactive
-        // case where the operator already knows who sent it.
-        let ctx = snapshot_shutdown_context("ctrl_c", None, false);
-        tracing::warn!("{}", ctx.as_log_line());
-        if !daemon_mode {
-            println!("\nShutting down gateway...");
-        }
-        remove_pid_file(&pid_file);
-        if let Err(e) = shutdown_tx.send(()) {
-            tracing::warn!("Failed to send shutdown signal: {:?}", e);
-        }
-    });
-
-    #[cfg(unix)]
-    {
-        let pid_file_term = args.pid_file.clone();
-        tokio::spawn(async move {
-            use tokio::signal::unix::{signal, SignalKind};
-            if let Ok(mut stream) = signal(SignalKind::terminate()) {
-                stream.recv().await;
-                // Forensics: include parent command — SIGTERM usually comes
-                // from launchd / systemd / supervisor scripts and the parent
-                // PID is the diagnostic clue we want.
-                let ctx = snapshot_shutdown_context("SIGTERM", Some(15), true);
-                tracing::warn!("{}", ctx.as_log_line());
-                remove_pid_file(&pid_file_term);
-                std::process::exit(0);
-            }
-        });
-    }
-
-    shutdown_rx
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Build an `HttpProvider` from a provider name and config.
-///
-/// Mirrors the logic of `providers::create_provider` but returns the concrete
-/// `HttpProvider` type (needed for `stream_raw()` in the passthrough path).
-fn build_http_provider(
-    name: &str,
-    config: &alephcore::ProviderConfig,
-) -> Result<alephcore::providers::http_provider::HttpProvider, Box<dyn std::error::Error>> {
-    use alephcore::providers::http_provider::HttpProvider;
-    use alephcore::providers::presets;
-    use alephcore::providers::protocols::ProtocolRegistry;
-
-    let mut cfg = config.clone();
-    let name_lower = name.to_lowercase();
-
-    // Apply preset
-    if let Some(preset) = presets::get_preset(&name_lower) {
-        if cfg.base_url.is_none() || cfg.base_url.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
-            cfg.base_url = Some(preset.base_url.to_string());
-        }
-        if cfg.protocol.is_none() {
-            cfg.protocol = Some(preset.protocol.to_string());
-        }
-    }
-
-    let protocol_name = cfg.protocol();
-    let registry = ProtocolRegistry::global();
-    if registry.list_protocols().is_empty() {
-        registry.register_builtin();
-    }
-    let adapter = registry
-        .get(&protocol_name)
-        .ok_or_else(|| format!("Unknown protocol: '{}'", protocol_name))?;
-
-    HttpProvider::new(name.to_string(), cfg, adapter).map_err(|e| e.into())
-}
 
 /// Start the gateway server
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
@@ -1784,8 +1445,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             let executor_fn = build_cron_executor_fn(
                 Arc::clone(exec_adapter),
                 Arc::clone(registry),
-                cron_channel_cell,
+                cron_channel_cell.clone(),
+                // D2: thread the cron-default iteration cap so each job's
+                // RunRequest carries it as max_iterations_override.
+                cron_state.config.default_max_iterations,
             );
+            let alert_dispatcher_fn =
+                alephcore::tasks::cron::executor::build_cron_alert_dispatcher_fn(
+                    cron_channel_cell,
+                );
 
             let cron_config = cron_state.config.clone();
             tokio::spawn(async move {
@@ -1813,8 +1481,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     }
                     Err(e) => tracing::error!("Cron startup catchup failed: {}", e),
                 }
-                // Start timer loop (runs until shutdown)
-                run_timer_loop(cron_state, executor_fn).await;
+                // Start timer loop (runs until shutdown). D4: pass the
+                // alert dispatcher so failure alerts produced by phase3
+                // are actually delivered instead of dropped on the floor.
+                run_timer_loop(cron_state, executor_fn, Some(alert_dispatcher_fn)).await;
             });
 
             if !args.daemon {
@@ -2473,87 +2143,3 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-/// Non-blocking startup probe. Populates ~/.aleph/runtimes/ledger.json so
-/// the Panel shows accurate runtime state the moment it connects. Never installs.
-async fn runtime_startup_warmup() {
-    use alephcore::runtimes::{
-        self, ledger::CapabilityEntry, CapabilityLedger, CapabilityStatus, SPECS,
-    };
-    use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::RwLock;
-
-    let runtimes_dir = match runtimes::get_runtimes_dir() {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!(error = %e, "runtime warmup skipped: cannot resolve runtimes dir");
-            return;
-        }
-    };
-    if let Err(e) = std::fs::create_dir_all(&runtimes_dir) {
-        tracing::warn!(error = %e, "runtime warmup skipped: cannot create runtimes dir");
-        return;
-    }
-    let ledger_path = runtimes_dir.join("ledger.json");
-    let ledger = Arc::new(RwLock::new(CapabilityLedger::load_or_create(ledger_path)));
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default();
-
-    let mut missing = Vec::new();
-    for spec in SPECS {
-        let result = runtimes::probe::probe(spec.name);
-        let mut g = ledger.write().await;
-        if result.found {
-            g.update(CapabilityEntry {
-                name: spec.name.into(),
-                bin_path: result.bin_path.unwrap_or_default(),
-                version: result.version.unwrap_or_default(),
-                status: CapabilityStatus::Ready,
-                source: result.source,
-                last_probed: now,
-            });
-        } else if runtimes::supported_on_current_os(spec.name) {
-            g.update_status(spec.name, CapabilityStatus::Missing);
-            missing.push(spec.name);
-        }
-    }
-    if let Err(e) = ledger.write().await.persist() {
-        tracing::warn!("Failed to persist runtime ledger: {}", e);
-    }
-    if missing.is_empty() {
-        tracing::info!("runtime warmup: all capabilities ready");
-    } else {
-        tracing::warn!(
-            missing = ?missing,
-            "runtime capabilities missing — browser / python tools will fail until installed. \
-             Run 'aleph-server bootstrap-runtime' or open Panel → Settings → Runtime.",
-        );
-    }
-}
-
-#[cfg(test)]
-mod warmup_tests {
-    use super::runtime_startup_warmup;
-    use tempfile::TempDir;
-
-    #[tokio::test]
-    async fn test_warmup_runs_and_persists_ledger() {
-        let dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", dir.path());
-
-        runtime_startup_warmup().await;
-
-        let ledger_path = dir.path().join(".aleph/runtimes/ledger.json");
-        assert!(
-            ledger_path.exists(),
-            "ledger must be persisted at {}",
-            ledger_path.display()
-        );
-        let content = std::fs::read_to_string(&ledger_path).unwrap();
-        let _: serde_json::Value =
-            serde_json::from_str(&content).expect("ledger must be valid JSON");
-    }
-}

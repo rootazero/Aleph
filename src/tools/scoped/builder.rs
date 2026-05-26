@@ -1,0 +1,273 @@
+//! Construction / builder helpers + small definition-shape utilities for
+//! [`ScopedToolService`].
+//!
+//! Lives alongside [`super`] so the trait impl in `mod.rs` and the dispatch
+//! body in [`super::dispatch`] can share these inherent helpers.
+
+use std::collections::BTreeSet;
+
+use serde_json::Value;
+
+use crate::agents::subagent_tool::SubagentTool;
+use crate::extension::hooks::HookExecutor;
+use crate::sandbox::exec_approval::gate::ApprovalRequester;
+use crate::session::events::ToolOutput;
+use crate::sync_primitives::Arc;
+use crate::tool_metadata::ToolHealthCache;
+use crate::tools::refresh::ToolRefreshSource;
+use crate::tools::runtime::{LoopTool, LoopToolRegistry};
+use crate::tools::service::{
+    ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource,
+};
+
+use super::traits::{ToolDefinitionRewriter, ToolHookDecorator};
+use super::ScopedToolService;
+
+impl ScopedToolService {
+    /// Create a new `ScopedToolService`.
+    ///
+    /// `allowed` — set of tool names visible through this service. Empty = allow all.
+    pub fn new(inner: Arc<LoopToolRegistry>, allowed: BTreeSet<String>) -> Self {
+        Self {
+            inner,
+            allowed,
+            subagent_tool: None,
+            refresh: None,
+            hook_decorator: None,
+            hook_executor: None,
+            hook_session_id: String::new(),
+            confirm_tools: BTreeSet::new(),
+            approval_requester: None,
+            turn_context: None,
+            result_store: None,
+            schema_cache: arc_swap::ArcSwap::from_pointee(None),
+            cache_generation: std::sync::atomic::AtomicU64::new(0),
+            health: None,
+            last_health_generation: std::sync::atomic::AtomicU64::new(0),
+            definition_rewriters: Vec::new(),
+        }
+    }
+
+    /// Attach a [`ToolDefinitionRewriter`]. Rewriters run in attachment
+    /// order on every `list()` / `metadata_schema()` build (the latter
+    /// only on cache miss; call [`Self::bump_cache_generation`] when
+    /// external state that the rewriter consults has changed).
+    pub fn with_definition_rewriter(
+        mut self,
+        rewriter: Arc<dyn ToolDefinitionRewriter>,
+    ) -> Self {
+        self.definition_rewriters.push(rewriter);
+        self
+    }
+
+    /// Invalidate the cached `metadata_schema()` output so the next call
+    /// re-runs the rewriter chain. Use this when external state that a
+    /// rewriter reads (e.g. an agent's permission set, an extension's
+    /// description override) has changed since the last build.
+    pub fn bump_cache_generation(&self) {
+        self.cache_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Apply every attached [`ToolDefinitionRewriter`] to each `def` in
+    /// `defs`. No-op when no rewriters are attached.
+    pub(super) fn apply_definition_rewriters(&self, defs: &mut [ToolDefinition]) {
+        if self.definition_rewriters.is_empty() {
+            return;
+        }
+        for def in defs.iter_mut() {
+            for rewriter in &self.definition_rewriters {
+                rewriter.rewrite(def);
+            }
+        }
+    }
+
+    /// Attach the tool catalog's runtime health cache.
+    ///
+    /// When set, `list()` and `metadata_schema()` consult the cache and
+    /// silently strip any tool whose registered probe reports a non-expired
+    /// `Unhealthy`. Cache-key drift on the underlying health generation is
+    /// detected on every read so a flip propagates within one turn.
+    pub fn with_health(mut self, health: Arc<ToolHealthCache>) -> Self {
+        self.health = Some(health);
+        self
+    }
+
+    /// Attach a Layer 2 result store. When the underlying tool returns a
+    /// result whose token estimate exceeds the tool's `max_result_tokens`,
+    /// the full text is written to `~/.aleph/data/tool_results/<sess>/...`
+    /// and the LLM sees `[Full output persisted: <path> (<n> tokens, <tool>)]`
+    /// instead. Without a store wired the service falls back to head+tail
+    /// truncation when the budget is exceeded.
+    pub fn with_result_store(
+        mut self,
+        store: Arc<crate::tools::result_store::ToolResultStore>,
+    ) -> Self {
+        self.result_store = Some(store);
+        self
+    }
+
+    /// Require user confirmation for the named tools before they execute.
+    ///
+    /// When a tool in `confirm_tools` is invoked, `execute()` first routes a
+    /// confirmation request through `requester`; the tool runs only on an
+    /// `Approved` outcome. With no requester wired, confirm-required tools
+    /// fail closed.
+    pub fn with_confirmation(
+        mut self,
+        confirm_tools: BTreeSet<String>,
+        requester: Arc<dyn ApprovalRequester>,
+    ) -> Self {
+        self.confirm_tools = confirm_tools;
+        self.approval_requester = Some(requester);
+        self
+    }
+
+    /// Attach the routing context of the agent turn this service serves.
+    ///
+    /// `execute()` scopes it into the `TURN_CONTEXT` task-local for the
+    /// duration of every tool call, letting HITL tools route a prompt back to
+    /// the originating channel.
+    pub fn with_turn_context(mut self, ctx: crate::tools::turn_context::TurnContext) -> Self {
+        self.turn_context = Some(ctx);
+        self
+    }
+
+    /// Attach a `SubagentTool` that will appear in listings and can be executed.
+    pub fn with_subagent_tool(mut self, tool: Arc<SubagentTool>) -> Self {
+        self.subagent_tool = Some(tool);
+        self
+    }
+
+    /// Attach a refresh source. `list()` will trigger a poll on each call.
+    ///
+    /// Note: because `LoopToolRegistry` is shared via `Arc`, callers that need
+    /// live refresh should rebuild the registry externally and swap the `Arc`.
+    /// This hook is provided for compatibility with the plan interface.
+    pub fn with_refresh(mut self, refresh: Arc<dyn ToolRefreshSource>) -> Self {
+        self.refresh = Some(refresh);
+        self
+    }
+
+    /// Attach a hook decorator for observing tool execution.
+    pub fn with_hook_decorator(mut self, hook: Arc<dyn ToolHookDecorator>) -> Self {
+        self.hook_decorator = Some(hook);
+        self
+    }
+
+    /// Attach an extension-shipped `HookExecutor`. Wires `BeforeToolCall`
+    /// interceptors (block / deny / ask / update_input) and
+    /// `AfterToolCall` / `AfterToolCallFailure` observers around every tool
+    /// dispatch. `session_id` flows into `HookContext` so command hooks see
+    /// the `$SESSION_ID` variable.
+    ///
+    /// Inert when `executor.hook_count() == 0`; callers can pass a snapshot
+    /// without first counting.
+    pub fn with_hook_executor(
+        mut self,
+        executor: Arc<HookExecutor>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.hook_executor = Some(executor);
+        self.hook_session_id = session_id.into();
+        self
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers (shared with the trait impl in mod.rs and dispatch.rs)
+    // -------------------------------------------------------------------------
+
+    pub(super) fn is_allowed(&self, name: &str) -> bool {
+        // Attached SubagentTool always passes the allow filter. It is appended
+        // to listings independently of `allowed` (which is derived from the
+        // builtin tool registry — subagent isn't registered there), so without
+        // this exception `list()` / `metadata_schema()` / `execute()` would
+        // hide subagent from the LLM whenever a non-empty allow set was
+        // configured (i.e. every real gateway path).
+        if self
+            .subagent_tool
+            .as_ref()
+            .is_some_and(|st| st.name() == name)
+        {
+            return true;
+        }
+        self.allowed.is_empty() || self.allowed.contains(name)
+    }
+
+    /// Build `ToolDefinitionMetadata` for a built-in loop tool from the
+    /// static budget + idempotency tables — the same data
+    /// `BuiltinHandler::definition()` surfaces through the handler path.
+    /// `ScopedToolService` is the harness's production `ToolService`, so
+    /// without this the per-tool wall-clock budget consulted by `act.rs`
+    /// via `describe()` would always be `None` and never fire.
+    ///
+    /// `concurrent_safe` flows through from the inner
+    /// [`crate::tools::runtime::ToolDefinition::concurrent_safe`] so the
+    /// harness can advertise / inspect parallel-safety per tool. The
+    /// authoritative per-call dispatch decision still goes through
+    /// [`crate::tools::service::ToolService::is_call_concurrent_safe`].
+    pub(super) fn builtin_metadata(name: &str, concurrent_safe: bool) -> ToolDefinitionMetadata {
+        ToolDefinitionMetadata {
+            idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
+            max_duration_ms: crate::tools::budget::builtin_tool_budget_ms(name),
+            concurrent_safe,
+            ..ToolDefinitionMetadata::default()
+        }
+    }
+
+    pub(super) fn loop_tool_to_definition(tool: &dyn LoopTool) -> ToolDefinition {
+        let name = tool.name();
+        let concurrent_safe = tool.is_concurrent_safe(&Value::Null);
+        ToolDefinition {
+            name: name.to_string(),
+            description: tool.description().to_string(),
+            input_schema: tool.schema(),
+            source: ToolSource::Builtin,
+            metadata: Self::builtin_metadata(name, concurrent_safe),
+        }
+    }
+
+    pub(super) fn subagent_definition(tool: &SubagentTool) -> ToolDefinition {
+        ToolDefinition {
+            name: tool.name().to_string(),
+            description: tool.description().to_string(),
+            input_schema: tool.schema(),
+            source: ToolSource::Builtin,
+            metadata: ToolDefinitionMetadata::default(),
+        }
+    }
+
+    pub(super) fn tool_result_to_output(
+        name: &str,
+        result: crate::tools::runtime::ToolResult,
+    ) -> Result<ToolOutput, ToolError> {
+        use crate::session::events::ToolOutputMetadata;
+        use crate::tools::runtime::ToolResult;
+        match result {
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+                Ok(ToolOutput {
+                    value: output,
+                    metadata: ToolOutputMetadata::default(),
+                })
+            }
+            // Map `retryable=true` to `ToolError::Transport` so the
+            // one-shot retry helper (which keys off `ToolError::is_retryable`,
+            // currently `true` for `Timeout` / `Transport` only) actually
+            // fires. Semantically the LoopTool layer reports "this is a
+            // transient failure that may succeed if tried again"; `Transport`
+            // is the best-fitting carrier in the public `ToolError` enum
+            // without expanding its variant set.
+            ToolResult::Error {
+                error,
+                retryable: true,
+            } => Err(ToolError::Transport {
+                name: name.to_string(),
+                cause: error,
+            }),
+            ToolResult::Error { error, .. } => Err(ToolError::Execution {
+                name: name.to_string(),
+                cause: error,
+            }),
+        }
+    }
+}

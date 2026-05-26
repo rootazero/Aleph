@@ -1,0 +1,122 @@
+//! Row decoding + DAG-derived status helpers.
+//!
+//! These translate raw `rusqlite::Row`s and parent-status data into the
+//! domain types defined in [`super::super`]. `Blocked` is never stored — it
+//! is derived here at query time from unresolved dependency edges.
+
+use rusqlite::{params, Connection, OptionalExtension};
+
+use super::super::{CoordTask, CoordTaskId, CoordTaskStatus, Priority};
+
+/// Read a task row from a rusqlite Row. Caller must ensure column order matches.
+pub(super) fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CoordTask> {
+    let status_str: String = row.get(4)?;
+    let priority_str: String = row.get(6)?;
+    let result_val: Option<String> = row.get(7)?;
+    let metadata_str: String = row.get(8)?;
+
+    let status = CoordTaskStatus::from_stored(&status_str).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown task status: {}", status_str),
+            )),
+        )
+    })?;
+    let priority = Priority::from_stored(&priority_str).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            6,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown task priority: {}", priority_str),
+            )),
+        )
+    })?;
+
+    Ok(CoordTask {
+        id: row.get(0)?,
+        team_id: row.get(1)?,
+        subject: row.get(2)?,
+        description: row.get(3)?,
+        status,
+        owner: row.get(5)?,
+        priority,
+        result: result_val,
+        metadata: serde_json::from_str(&metadata_str).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                8,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid metadata JSON: {}", e),
+                )),
+            )
+        })?,
+        dependencies: Vec::new(),
+        created_at: row.get(9)?,
+        started_at: row.get(10)?,
+        completed_at: row.get(11)?,
+        locked_by: row.get(12)?,
+        locked_at: row.get(13)?,
+    })
+}
+
+/// Load dependency list for a task.
+pub(super) fn load_dependencies(
+    conn: &Connection,
+    task_id: &str,
+) -> rusqlite::Result<Vec<CoordTaskId>> {
+    let mut stmt =
+        conn.prepare_cached("SELECT depends_on FROM coord_task_dependencies WHERE task_id = ?1")?;
+    let rows = stmt.query_map(params![task_id], |row| row.get(0))?;
+    rows.collect()
+}
+
+/// Determine if a pending task should display as Blocked (has unresolved deps).
+pub(super) fn has_unresolved_deps(conn: &Connection, task_id: &str) -> rusqlite::Result<bool> {
+    let blocked: bool = conn.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM coord_task_dependencies d
+            JOIN coord_tasks dep ON dep.id = d.depends_on
+            WHERE d.task_id = ?1 AND dep.status != 'completed'
+        )
+        "#,
+        params![task_id],
+        |row| row.get(0),
+    )?;
+    Ok(blocked)
+}
+
+/// Derive the effective status for a task (Blocked is computed, not stored).
+pub(super) fn derive_status(
+    conn: &Connection,
+    task_id: &str,
+    stored: CoordTaskStatus,
+) -> rusqlite::Result<CoordTaskStatus> {
+    if stored == CoordTaskStatus::Pending && has_unresolved_deps(conn, task_id)? {
+        Ok(CoordTaskStatus::Blocked)
+    } else {
+        Ok(stored)
+    }
+}
+
+/// Fully load a task including dependencies and derived status.
+pub(super) fn load_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Option<CoordTask>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, team_id, subject, description, status, owner, priority, result, metadata, created_at, started_at, completed_at, locked_by, locked_at FROM coord_tasks WHERE id = ?1",
+    )?;
+    let task_opt: Option<CoordTask> = stmt.query_row(params![task_id], read_task_row).optional()?;
+
+    match task_opt {
+        Some(mut task) => {
+            task.dependencies = load_dependencies(conn, &task.id)?;
+            task.status = derive_status(conn, &task.id, task.status)?;
+            Ok(Some(task))
+        }
+        None => Ok(None),
+    }
+}
