@@ -26,7 +26,10 @@ use crate::canvas_engine::adapter::{
 use crate::canvas_engine::interaction::CanvasEvent;
 use crate::canvas_engine::markdown_excerpt::render_excerpt;
 use crate::canvas_engine::navigation::{NavController, RETARGET_DURATION_MS};
-use crate::canvas_engine::prefetch::PrefetchCache;
+use crate::canvas_engine::prefetch::{
+    try_acquire_in_flight, InFlightSet, PrefetchCache, HOVER_DEBOUNCE_MS, MAX_IN_FLIGHT,
+};
+use gloo_timers::callback::Timeout;
 use leptos::callback::Callback;
 
 use crate::context::DashboardState;
@@ -142,6 +145,23 @@ fn RadialCanvasView() -> impl IntoView {
     let nav = Rc::new(RefCell::new(NavController::new()));
     let prefetch = Rc::new(RefCell::new(PrefetchCache::<GraphNeighborsResponse>::new()));
 
+    // Bounded in-flight tracker: dedup per-id + ≤MAX_IN_FLIGHT concurrent RPCs.
+    // Without this, a hover-skim across 50 nodes spawned 50 parallel
+    // `graph.neighbors` calls (one per pointer frame).
+    let in_flight = Rc::new(RefCell::new(InFlightSet::new(MAX_IN_FLIGHT)));
+
+    // Raw hover intent — written by the (Send+Sync) on_event callback on every
+    // HoverNode transition. A separate Effect (below) reads this, manages a
+    // 150ms gloo Timeout, and only writes `prefetch_request` once the dwell
+    // threshold is met. Stored as RwSignal so on_event (write) and the Effect
+    // (read) can both reach it without sharing a non-Send Rc.
+    let hover_intent: RwSignal<Option<String>> = RwSignal::new(None);
+
+    // Outstanding hover debounce timer. Cleared / replaced inside the hover
+    // Effect; `None` means no pending dwell. Held in an Rc so the Effect
+    // closure can cancel-on-replace across runs.
+    let pending_hover_timer: Rc<RefCell<Option<Timeout>>> = Rc::new(RefCell::new(None));
+
     // Non-reactive detail-response cache; keyed by node id.
     let detail_cache: Rc<RefCell<PrefetchCache<NoteDetailResponse>>> =
         Rc::new(RefCell::new(PrefetchCache::<NoteDetailResponse>::new()));
@@ -224,6 +244,8 @@ fn RadialCanvasView() -> impl IntoView {
     let gs_reset = graph_state.clone();
     let prefetch_reset = prefetch.clone();
     let detail_cache_reset = detail_cache.clone();
+    let in_flight_reset = in_flight.clone();
+    let pending_hover_timer_reset = pending_hover_timer.clone();
     Effect::new(move |prev: Option<String>| {
         let current = agent_id.get();
         if let Some(p) = prev.as_ref() {
@@ -244,6 +266,10 @@ fn RadialCanvasView() -> impl IntoView {
                 *nav_reset.borrow_mut() = NavController::new();
                 *prefetch_reset.borrow_mut() = PrefetchCache::<GraphNeighborsResponse>::new();
                 *detail_cache_reset.borrow_mut() = PrefetchCache::<NoteDetailResponse>::new();
+                *in_flight_reset.borrow_mut() = InFlightSet::new(MAX_IN_FLIGHT);
+                // Cancel any pending hover-debounce timer on agent switch.
+                *pending_hover_timer_reset.borrow_mut() = None;
+                hover_intent.set(None);
                 {
                     let mut gs = gs_reset.borrow_mut();
                     gs.nodes.clear();
@@ -456,9 +482,45 @@ fn RadialCanvasView() -> impl IntoView {
     });
 
     // -----------------------------------------------------------------------
+    // Hover debounce Effect: HOVER_DEBOUNCE_MS dwell gate.
+    //
+    // `hover_intent` mirrors the raw `CanvasEvent::HoverNode` transitions
+    // (edge-triggered: changes only when the hovered node changes). This
+    // Effect translates "pointer landed on node X" into "pointer has rested on
+    // node X for ≥HOVER_DEBOUNCE_MS, schedule a prefetch" by arming a
+    // gloo_timers::Timeout and writing `prefetch_request` only when the timer
+    // fires. Re-arms (= cancels previous, starts new) on each hover change, so
+    // skimming across nodes never reaches the fire path.
+    // -----------------------------------------------------------------------
+    let pending_hover_timer_e = pending_hover_timer.clone();
+    Effect::new(move || {
+        let target = hover_intent.get();
+        // Drop any pending timer; replacing the Option cancels the underlying
+        // gloo Timeout via Drop.
+        *pending_hover_timer_e.borrow_mut() = None;
+        let Some(id) = target else { return };
+        let id_for_timer = id.clone();
+        let timer = Timeout::new(HOVER_DEBOUNCE_MS as u32, move || {
+            prefetch_request.set(Some(id_for_timer));
+        });
+        *pending_hover_timer_e.borrow_mut() = Some(timer);
+    });
+
+    // -----------------------------------------------------------------------
     // Effect 4: hover prefetch — background-fetch when pointer dwells on a node
+    //
+    // Guarded by InFlightSet: at most MAX_IN_FLIGHT concurrent fetches, and a
+    // single in-flight per id (no parallel RPC for the same target). The guard
+    // is moved into the spawned future and freed by RAII on completion / error
+    // / panic.
+    //
+    // TODO(memory-events): once the gateway publishes `memory.note.changed`
+    // (server emits `MemoryEvent::NoteDeleted` but the topic is not yet
+    // bridged), subscribe here and call `prefetch.invalidate(id)` so edits
+    // bust the cache before the 90s TTL expires.
     // -----------------------------------------------------------------------
     let prefetch_e4 = prefetch.clone();
+    let in_flight_e4 = in_flight.clone();
     Effect::new(move || {
         let Some(id) = prefetch_request.get() else {
             return;
@@ -469,10 +531,17 @@ fn RadialCanvasView() -> impl IntoView {
         if prefetch_e4.borrow().has(&id, now) {
             return;
         }
-        let agent = agent_id.get();
 
+        // Concurrency cap + per-id de-dup. None means: already in flight, or
+        // we'd exceed MAX_IN_FLIGHT. Both cases drop this prefetch silently.
+        let Some(guard) = try_acquire_in_flight(&in_flight_e4, &id) else {
+            return;
+        };
+
+        let agent = agent_id.get();
         let prefetch_inner = prefetch_e4.clone();
         spawn_local(async move {
+            let _g = guard; // released on future completion
             match GraphApi::neighbors(&state, &agent, &id, 3, 200).await {
                 Ok(resp) => {
                     prefetch_inner.borrow_mut().put(id, resp, now);
@@ -541,18 +610,16 @@ fn RadialCanvasView() -> impl IntoView {
             active_request.set(Some(id));
         }
         CanvasEvent::HoverNode(hovered_id) => {
-            // Hover prefetch: debounce then kick off a background fetch into the prefetch cache.
-            // The debouncer lives inside CanvasInteractionState; we drive it here via now_ms().
-            // on_pointer_move returns Some(PrefetchNeighbor(id)) when the threshold is met.
-            let now = now_ms();
-            let intent = {
-                // We can't capture `interaction` (Rc<RefCell<_>>) in a Callback::new (Send+Sync),
-                // so we keep a local RwSignal<Option<String>> as the intent channel for prefetch.
-                // Writes here; an Effect below reads and fires the async fetch.
-                prefetch_request.set(hovered_id)
-            };
-            let _ = intent;
-            let _ = now;
+            // Edge-triggered: `HoverNode` only fires on transition (see
+            // graph_canvas.rs hit-test). The dwell-threshold work happens in
+            // the hover-debounce Effect below, which reads this signal and
+            // schedules a 150ms `gloo_timers::callback::Timeout`.
+            //
+            // We only write `Copy` signals here because the `on_event`
+            // callback is wrapped in `Callback::new` (Send + Sync). The
+            // `Rc<RefCell<Option<Timeout>>>` lives outside this callback in
+            // the Effect's capture set, where Send is not required.
+            hover_intent.set(hovered_id);
         }
         _ => {}
     };
