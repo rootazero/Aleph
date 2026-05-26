@@ -462,22 +462,36 @@ impl Config {
                     ));
                 }
 
-                // Validate each backend configuration
-                // NOTE: api_key is #[serde(skip)] and injected from vault at runtime,
-                // so we cannot validate it here. API key presence is checked after
-                // vault injection in the startup sequence.
+                // Validate each backend configuration.
+                //
+                // NOTE: api_key is `#[serde(skip)]` and injected from the
+                // vault at runtime, so it cannot be validated here. The
+                // known `provider_type` set is sourced from
+                // `ProviderFactoryRegistry::with_defaults()` so adding a
+                // new provider does not require keeping a second allowlist
+                // in sync.
+                //
+                // Per-provider structural prerequisites that can be checked
+                // *before* vault injection (e.g. `engine_id` for Google,
+                // `base_url` for SearXNG) are still enforced here as hard
+                // errors — they're typos in TOML, not missing secrets.
+                let factory_registry =
+                    crate::search::ProviderFactoryRegistry::with_defaults();
+                let known_types = factory_registry.known_provider_types();
                 for (backend_name, backend_config) in &search_config.backends {
                     let provider_type = backend_config.provider_type.as_str();
 
+                    if !known_types.contains(&provider_type) {
+                        warn!(
+                            backend = %backend_name,
+                            provider_type = %provider_type,
+                            known = ?known_types,
+                            "Unknown search provider type (no factory registered)"
+                        );
+                    }
+
                     match provider_type {
-                        "tavily" | "brave" | "bing" | "exa" | "jina" => {
-                            // api_key validated after vault injection
-                        }
-                        "duckduckgo" => {
-                            // No api_key, no base_url — html-scrape fallback.
-                        }
                         "google" => {
-                            // api_key validated after vault injection
                             if backend_config.engine_id.is_none() {
                                 error!(backend = %backend_name, "Google backend requires engine_id");
                                 return Err(AlephError::invalid_config(format!(
@@ -496,11 +510,9 @@ impl Config {
                             }
                         }
                         _ => {
-                            warn!(
-                                backend = %backend_name,
-                                provider_type = %provider_type,
-                                "Unknown search provider type"
-                            );
+                            // All other providers: api_key (or no
+                            // credentials) is validated post-vault injection
+                            // by the provider factory at registry-build time.
                         }
                     }
 

@@ -98,9 +98,7 @@ impl SearchProvider for TavilyProvider {
                 title: r.title,
                 url: r.url,
                 snippet: r.content,
-                published_date: None,
                 relevance_score: r.score,
-                source_type: None,
                 full_content: r.raw_content,
                 provider: Some(NAME.to_string()),
             })
@@ -115,6 +113,37 @@ impl SearchProvider for TavilyProvider {
 
     fn is_available(&self) -> bool {
         !self.api_key.is_empty()
+    }
+}
+
+
+/// Factory entry for the search provider registry.
+///
+/// Co-located with the concrete provider so adding a new search
+/// backend is a single-file change (provider + factory) plus one
+/// registration line in `ProviderFactoryRegistry::with_defaults`.
+pub struct TavilyFactory;
+
+impl crate::search::ProviderFactory for TavilyFactory {
+    fn provider_type(&self) -> &'static str {
+        NAME
+    }
+    fn build(
+        &self,
+        name: &str,
+        backend: &crate::config::types::SearchBackendConfig,
+    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>> {
+        let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
+            log::warn!("search backend '{name}' ({}) skipped: no api_key in vault", NAME);
+            return Ok(None);
+        };
+        match TavilyProvider::new(key.to_string()) {
+            Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
+            Err(e) => {
+                log::warn!("search backend '{name}' ({}) construct failed: {e}", NAME);
+                Ok(None)
+            }
+        }
     }
 }
 

@@ -19,19 +19,10 @@ pub struct SearchResult {
     /// Snippet/summary of the content
     pub snippet: String,
 
-    /// Publication date (Unix timestamp)
-    /// Optional because not all providers return this
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub published_date: Option<i64>,
-
     /// Relevance score (0.0 - 1.0)
     /// Tavily provides this natively; others may compute it
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relevance_score: Option<f32>,
-
-    /// Source type (article, video, forum, etc.)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_type: Option<String>,
 
     /// Full content (only for Tavily deep search)
     /// WARNING: Can be very large, use sparingly
@@ -54,9 +45,7 @@ impl SearchResult {
             title: title.into(),
             url: url.into(),
             snippet: snippet.into(),
-            published_date: None,
             relevance_score: None,
-            source_type: None,
             full_content: None,
             provider: None,
         }
@@ -88,7 +77,6 @@ mod tests {
         assert_eq!(result.title, "Test Title");
         assert_eq!(result.url, "https://example.com");
         assert_eq!(result.snippet, "Test snippet");
-        assert!(result.published_date.is_none());
         assert!(result.provider.is_none());
     }
 
@@ -106,15 +94,34 @@ mod tests {
         assert_eq!(result, deserialized);
     }
 
+    /// Deserializing legacy JSON that still contains the deprecated
+    /// `published_date` / `source_type` fields must succeed (we don't
+    /// `deny_unknown_fields`), preserving wire-level back-compat.
+    #[test]
+    fn test_search_result_ignores_legacy_fields() {
+        let legacy_json = r#"{
+            "title": "Test",
+            "url": "https://test.com",
+            "snippet": "Snippet",
+            "published_date": 1704067200,
+            "source_type": "article",
+            "relevance_score": 0.5,
+            "provider": "tavily"
+        }"#;
+
+        let parsed: SearchResult = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(parsed.title, "Test");
+        assert_eq!(parsed.relevance_score, Some(0.5));
+        assert_eq!(parsed.provider.as_deref(), Some("tavily"));
+    }
+
     #[test]
     fn test_search_result_with_optional_fields() {
         let result = SearchResult {
             title: "Test".to_string(),
             url: "https://test.com".to_string(),
             snippet: "Test snippet".to_string(),
-            published_date: Some(1704067200),
             relevance_score: Some(0.95),
-            source_type: Some("article".to_string()),
             full_content: None,
             provider: Some("tavily".to_string()),
         };

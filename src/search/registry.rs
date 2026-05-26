@@ -32,17 +32,27 @@ impl SearchRegistry {
 
     /// Build a SearchRegistry from `[search]` TOML configuration.
     ///
-    /// Walks `config.backends` and instantiates the concrete provider for
-    /// each `provider_type` ("tavily", "searxng"). Returns `None` if the
-    /// config is `None`, search is disabled, or no usable backend was
-    /// successfully constructed — caller should then leave
-    /// `BuiltinToolConfig.search_registry = None` and the `search` tool
-    /// falls back to its legacy TAVILY_API_KEY path.
-    ///
-    /// Unknown `provider_type` values are skipped with a warning instead of
-    /// aborting the whole load — a typo in one backend should not nuke the
-    /// rest of the registry.
+    /// Walks `config.backends` and asks the default [`crate::search::ProviderFactoryRegistry`]
+    /// to construct each backend; unknown `provider_type` values and
+    /// missing credentials are skipped with a warning rather than aborting
+    /// the load. Returns `None` when the config is `None`, search is
+    /// disabled, or no usable backend was constructed — caller should
+    /// then leave `BuiltinToolConfig.search_registry = None` and the
+    /// `search` tool falls back to its legacy TAVILY_API_KEY path.
     pub fn from_config(config: Option<&crate::config::types::SearchConfigInternal>) -> Option<Self> {
+        Self::from_config_with_factories(
+            config,
+            &crate::search::ProviderFactoryRegistry::with_defaults(),
+        )
+    }
+
+    /// Same as [`SearchRegistry::from_config`] but with an injectable factory
+    /// table — exposed so tests can build a registry around a controlled
+    /// provider set without depending on the global factory list.
+    pub fn from_config_with_factories(
+        config: Option<&crate::config::types::SearchConfigInternal>,
+        factories: &crate::search::ProviderFactoryRegistry,
+    ) -> Option<Self> {
         let cfg = config?;
         if !cfg.enabled {
             return None;
@@ -50,77 +60,23 @@ impl SearchRegistry {
         let mut registry = Self::new(cfg.default_provider.clone());
         let mut any_added = false;
         for (name, backend) in &cfg.backends {
-            let provider: Arc<dyn SearchProvider> = match backend.provider_type.as_str() {
-                "tavily" => {
-                    // api_key is populated from the vault at runtime; an
-                    // unconfigured Tavily backend is skipped rather than
-                    // constructed with empty string (which the provider
-                    // would reject anyway).
-                    let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
-                        log::warn!(
-                            "search backend '{name}' (tavily) skipped: no api_key in vault"
-                        );
-                        continue;
-                    };
-                    match crate::search::providers::TavilyProvider::new(key.to_string()) {
-                        Ok(p) => Arc::new(p),
-                        Err(e) => {
-                            log::warn!("search backend '{name}' (tavily) construct failed: {e}");
-                            continue;
-                        }
-                    }
+            match factories.build(name, backend) {
+                Ok(Some(provider)) => {
+                    registry.add_provider(name.clone(), provider);
+                    any_added = true;
                 }
-                "searxng" => {
-                    let Some(base) = backend.base_url.as_deref().filter(|s| !s.is_empty()) else {
-                        log::warn!(
-                            "search backend '{name}' (searxng) skipped: base_url missing"
-                        );
-                        continue;
-                    };
-                    match crate::search::providers::SearxngProvider::new(base.to_string()) {
-                        Ok(p) => Arc::new(p),
-                        Err(e) => {
-                            log::warn!("search backend '{name}' (searxng) construct failed: {e}");
-                            continue;
-                        }
-                    }
+                Ok(None) => {
+                    // Factory chose to skip (missing credentials, unknown
+                    // provider_type, etc.) — already logged at WARN by
+                    // either the factory itself or `ProviderFactoryRegistry::build`.
                 }
-                "jina" => {
-                    let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
-                        log::warn!(
-                            "search backend '{name}' (jina) skipped: no api_key in vault"
-                        );
-                        continue;
-                    };
-                    match crate::search::providers::JinaProvider::new(key.to_string()) {
-                        Ok(p) => Arc::new(p),
-                        Err(e) => {
-                            log::warn!("search backend '{name}' (jina) construct failed: {e}");
-                            continue;
-                        }
-                    }
-                }
-                "duckduckgo" => {
-                    // DDG html-scrape needs no key or base_url.
-                    match crate::search::providers::DuckDuckGoProvider::new() {
-                        Ok(p) => Arc::new(p),
-                        Err(e) => {
-                            log::warn!(
-                                "search backend '{name}' (duckduckgo) construct failed: {e}"
-                            );
-                            continue;
-                        }
-                    }
-                }
-                other => {
+                Err(e) => {
                     log::warn!(
-                        "search backend '{name}' has unknown provider_type '{other}', skipped"
+                        "search backend '{name}' ({}) hard-construct failed: {e}",
+                        backend.provider_type
                     );
-                    continue;
                 }
-            };
-            registry.add_provider(name.clone(), provider);
-            any_added = true;
+            }
         }
         if !any_added {
             log::warn!(
@@ -356,9 +312,7 @@ mod tests {
                     url: format!("https://example.com/{}", i + 1),
                     snippet: format!("Snippet for result {}", i + 1),
                     full_content: None,
-                    source_type: None,
                     provider: Some(self.name.clone()),
-                    published_date: None,
                     relevance_score: Some(1.0 - (i as f32 * 0.1)),
                 });
             }

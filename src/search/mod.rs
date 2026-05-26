@@ -1,3 +1,4 @@
+mod factory;
 mod options;
 mod provider;
 pub mod providers;
@@ -47,6 +48,7 @@ mod result;
 /// }
 /// ```
 // Re-exports
+pub use factory::{ProviderFactory, ProviderFactoryRegistry};
 pub use options::{QuotaInfo, SearchOptions};
 pub use provider::SearchProvider;
 pub use registry::SearchRegistry;

@@ -141,9 +141,7 @@ fn parse_ddg_html(body: &str, max_results: usize) -> Vec<SearchResult> {
             title,
             url,
             snippet,
-            published_date: None,
             relevance_score: None,
-            source_type: None,
             full_content: None,
             provider: Some(NAME.to_string()),
         });
@@ -191,6 +189,33 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+
+/// Factory entry for the search provider registry.
+///
+/// Co-located with the concrete provider so adding a new search
+/// backend is a single-file change (provider + factory) plus one
+/// registration line in `ProviderFactoryRegistry::with_defaults`.
+pub struct DuckDuckGoFactory;
+
+impl crate::search::ProviderFactory for DuckDuckGoFactory {
+    fn provider_type(&self) -> &'static str {
+        NAME
+    }
+    fn build(
+        &self,
+        name: &str,
+        _backend: &crate::config::types::SearchBackendConfig,
+    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>> {
+        match DuckDuckGoProvider::new() {
+            Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
+            Err(e) => {
+                log::warn!("search backend '{name}' ({}) construct failed: {e}", NAME);
+                Ok(None)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
