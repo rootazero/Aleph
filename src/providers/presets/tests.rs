@@ -1,0 +1,286 @@
+use super::*;
+
+
+#[test]
+fn test_presets_contain_known_vendors() {
+    // OpenAI-compatible (original)
+    assert!(PRESETS.contains_key("deepseek"));
+    assert!(PRESETS.contains_key("moonshot"));
+    assert!(PRESETS.contains_key("doubao"));
+    assert!(PRESETS.contains_key("siliconflow"));
+    assert!(PRESETS.contains_key("zhipu"));
+    assert!(PRESETS.contains_key("glm"));
+    assert!(PRESETS.contains_key("minimax"));
+    assert!(PRESETS.contains_key("openai"));
+
+    // Native protocols
+    assert!(PRESETS.contains_key("claude"));
+    assert!(PRESETS.contains_key("gemini"));
+
+    // Tier 1: High-priority OpenAI-compatible
+    assert!(PRESETS.contains_key("groq"));
+    assert!(PRESETS.contains_key("together"));
+    assert!(PRESETS.contains_key("perplexity"));
+    assert!(PRESETS.contains_key("mistral"));
+
+    // Tier 2: Medium-priority OpenAI-compatible
+    assert!(PRESETS.contains_key("cohere"));
+    assert!(PRESETS.contains_key("fireworks"));
+    assert!(PRESETS.contains_key("anyscale"));
+    assert!(PRESETS.contains_key("replicate"));
+
+    // Tier 3: Specialized/Regional OpenAI-compatible
+    assert!(PRESETS.contains_key("openrouter"));
+    assert!(PRESETS.contains_key("lepton"));
+    assert!(PRESETS.contains_key("hyperbolic"));
+
+    // Phase B (openclaw parity)
+    assert!(PRESETS.contains_key("cerebras"));
+    assert!(PRESETS.contains_key("stepfun"));
+    assert!(PRESETS.contains_key("huggingface"));
+    assert!(PRESETS.contains_key("vertex-anthropic"));
+    assert!(PRESETS.contains_key("azure-openai"));
+    assert!(PRESETS.contains_key("xai"));
+    assert!(PRESETS.contains_key("grok"));
+    assert!(PRESETS.contains_key("qwen"));
+    assert!(PRESETS.contains_key("dashscope"));
+    assert!(PRESETS.contains_key("baichuan"));
+    assert!(PRESETS.contains_key("hunyuan"));
+    assert!(PRESETS.contains_key("spark"));
+}
+
+#[test]
+fn test_phase_b_aliases_share_target() {
+    // xai / grok point to the same endpoint
+    let xai = get_preset("xai").unwrap();
+    let grok = get_preset("grok").unwrap();
+    assert_eq!(xai.base_url, grok.base_url);
+
+    // qwen / dashscope point to the same endpoint
+    let qwen = get_preset("qwen").unwrap();
+    let dashscope = get_preset("dashscope").unwrap();
+    assert_eq!(qwen.base_url, dashscope.base_url);
+}
+
+#[test]
+fn test_vertex_anthropic_uses_anthropic_protocol() {
+    let p = get_preset("vertex-anthropic").unwrap();
+    assert_eq!(p.protocol, "anthropic");
+    assert!(p.base_url.contains("aiplatform.googleapis.com"));
+}
+
+#[test]
+fn test_presets_have_valid_protocol() {
+    let valid_protocols = ["openai", "openai-responses", "anthropic", "gemini", "codex"];
+    for (name, preset) in PRESETS.iter() {
+        assert!(
+            valid_protocols.contains(&preset.protocol),
+            "Preset '{}' uses invalid protocol '{}'",
+            name,
+            preset.protocol
+        );
+    }
+}
+
+#[test]
+fn test_get_preset_case_insensitive() {
+    assert!(get_preset("DeepSeek").is_some());
+    assert!(get_preset("MOONSHOT").is_some());
+    assert!(get_preset("doubao").is_some());
+}
+
+#[test]
+fn test_kimi_alias() {
+    let moonshot = get_preset("moonshot").unwrap();
+    let kimi = get_preset("kimi").unwrap();
+    assert_eq!(moonshot.base_url, kimi.base_url);
+    assert_eq!(moonshot.protocol, "openai");
+}
+
+#[test]
+fn test_kimi_for_coding_preset_distinct_from_moonshot() {
+    let coding = get_preset("kimi-for-coding").unwrap();
+    let coding_alias = get_preset("kimi-coding").unwrap();
+    let moonshot = get_preset("moonshot").unwrap();
+
+    assert_eq!(coding.base_url, "https://api.kimi.com/coding/v1");
+    assert_eq!(coding.protocol, "anthropic");
+    assert_eq!(coding.base_url, coding_alias.base_url);
+    assert_ne!(coding.base_url, moonshot.base_url);
+    assert_ne!(coding.protocol, moonshot.protocol);
+}
+
+#[test]
+fn test_technical_aliases_removed() {
+    // These should NOT exist
+    assert!(get_preset("anthropic").is_none());
+    assert!(get_preset("google").is_none());
+}
+
+#[test]
+fn test_brand_names_retained() {
+    // These should exist
+    assert!(get_preset("claude").is_some());
+    assert!(get_preset("gemini").is_some());
+    assert!(get_preset("kimi").is_some());
+    assert!(get_preset("moonshot").is_some());
+}
+
+// =========================================================================
+// get_merged_preset tests
+// =========================================================================
+
+#[test]
+fn test_openrouter_preset_uses_responses() {
+    let preset = get_preset("openrouter");
+    assert!(preset.is_some());
+    let p = preset.unwrap();
+    assert_eq!(p.protocol, "openai-responses");
+    assert_eq!(p.base_url, "https://openrouter.ai/api");
+}
+
+#[test]
+fn test_get_merged_preset_builtin_only() {
+    let overrides = crate::config::presets_override::PresetsOverride::default();
+    let preset = get_merged_preset("openai", &overrides).unwrap();
+    assert_eq!(preset.base_url, "https://api.openai.com/v1");
+    assert_eq!(preset.protocol, "openai");
+    assert_eq!(preset.color, "#10a37f");
+    assert_eq!(preset.default_model, "gpt-4o");
+}
+
+#[test]
+fn test_get_merged_preset_with_override() {
+    let mut overrides = crate::config::presets_override::PresetsOverride::default();
+    overrides.providers.insert(
+        "openai".to_string(),
+        crate::config::presets_override::PartialProviderPreset {
+            base_url: Some("https://custom-openai.example.com/v1".to_string()),
+            default_model: Some("gpt-5".to_string()),
+            enabled: true,
+            ..Default::default()
+        },
+    );
+
+    let preset = get_merged_preset("openai", &overrides).unwrap();
+    assert_eq!(preset.base_url, "https://custom-openai.example.com/v1");
+    assert_eq!(preset.default_model, "gpt-5");
+    // Non-overridden fields fall back to built-in
+    assert_eq!(preset.protocol, "openai");
+    assert_eq!(preset.color, "#10a37f");
+}
+
+#[test]
+fn test_get_merged_preset_disabled() {
+    let mut overrides = crate::config::presets_override::PresetsOverride::default();
+    overrides.providers.insert(
+        "openai".to_string(),
+        crate::config::presets_override::PartialProviderPreset {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+
+    assert!(get_merged_preset("openai", &overrides).is_none());
+}
+
+#[test]
+fn test_get_merged_preset_new_provider() {
+    let mut overrides = crate::config::presets_override::PresetsOverride::default();
+    overrides.providers.insert(
+        "my-custom-llm".to_string(),
+        crate::config::presets_override::PartialProviderPreset {
+            base_url: Some("https://my-llm.example.com/v1".to_string()),
+            protocol: Some("openai".to_string()),
+            color: Some("#abcdef".to_string()),
+            default_model: Some("my-model-v1".to_string()),
+            enabled: true,
+            ..Default::default()
+        },
+    );
+
+    let preset = get_merged_preset("my-custom-llm", &overrides).unwrap();
+    assert_eq!(preset.base_url, "https://my-llm.example.com/v1");
+    assert_eq!(preset.protocol, "openai");
+    assert_eq!(preset.color, "#abcdef");
+    assert_eq!(preset.default_model, "my-model-v1");
+}
+
+#[test]
+fn test_get_merged_preset_alias_lookup() {
+    let mut overrides = crate::config::presets_override::PresetsOverride::default();
+    overrides.providers.insert(
+        "my-provider".to_string(),
+        crate::config::presets_override::PartialProviderPreset {
+            base_url: Some("https://alias-test.example.com/v1".to_string()),
+            aliases: vec!["alias-one".to_string(), "alias-two".to_string()],
+            enabled: true,
+            ..Default::default()
+        },
+    );
+
+    // Look up by alias — no built-in exists for "alias-one"
+    let preset = get_merged_preset("alias-one", &overrides).unwrap();
+    assert_eq!(preset.base_url, "https://alias-test.example.com/v1");
+}
+
+#[test]
+fn test_get_merged_preset_case_insensitive() {
+    let overrides = crate::config::presets_override::PresetsOverride::default();
+    let preset = get_merged_preset("OpenAI", &overrides).unwrap();
+    assert_eq!(preset.base_url, "https://api.openai.com/v1");
+}
+
+#[test]
+fn test_get_merged_preset_not_found() {
+    let overrides = crate::config::presets_override::PresetsOverride::default();
+    assert!(get_merged_preset("nonexistent-provider", &overrides).is_none());
+}
+
+#[test]
+fn test_provider_metadata_lookup() {
+    let meta = provider_metadata("DeepSeek").expect("deepseek metadata present");
+    assert_eq!(meta.display_name, "DeepSeek");
+    assert!(meta.supports(Modality::Chat));
+    assert!(!meta.supports(Modality::Image));
+    // Missing entries return None.
+    assert!(provider_metadata("nonexistent").is_none());
+}
+
+#[test]
+fn test_presets_by_modality_chat_includes_all() {
+    // Every shipped preset is chat-capable today.
+    let chat = presets_by_modality(Modality::Chat);
+    assert_eq!(chat.len(), PRESETS.len());
+    assert!(chat.contains(&"openai"));
+    assert!(chat.contains(&"claude"));
+    assert!(chat.contains(&"gemini"));
+    // Should be sorted.
+    let mut sorted = chat.clone();
+    sorted.sort_unstable();
+    assert_eq!(chat, sorted);
+}
+
+#[test]
+fn test_presets_by_modality_image_currently_empty() {
+    // No chat preset declares Image yet — generation lives in the
+    // separate generation layer (see Phase A in generation/presets).
+    assert!(presets_by_modality(Modality::Image).is_empty());
+    assert!(presets_by_modality(Modality::Video).is_empty());
+}
+
+#[test]
+fn test_get_merged_preset_new_provider_no_base_url() {
+    let mut overrides = crate::config::presets_override::PresetsOverride::default();
+    overrides.providers.insert(
+        "incomplete-provider".to_string(),
+        crate::config::presets_override::PartialProviderPreset {
+            // Missing base_url — partial_to_provider_preset returns None
+            protocol: Some("openai".to_string()),
+            enabled: true,
+            ..Default::default()
+        },
+    );
+
+    assert!(get_merged_preset("incomplete-provider", &overrides).is_none());
+}
