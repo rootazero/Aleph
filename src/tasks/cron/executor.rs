@@ -183,6 +183,48 @@ async fn execute_cron_job(
             // Extract final response from collected events
             let final_response = extract_final_response(&collector).await;
 
+            // P3: when the harness reports
+            // `BudgetExhaustedPartialResult`, persist the partial text
+            // to the carry-over file so the next firing of this job
+            // resumes from where we left off. We use the stable label
+            // exposed via `RunSummary.terminate_reason` rather than the
+            // typed enum because cron only sees the gateway-side wire
+            // form. The label is single-source from
+            // `TerminateReason::as_static_str()`.
+            if let Some(label) = extract_terminate_reason(&collector).await {
+                if label
+                    == crate::orchestrator::dispatch::BUDGET_PARTIAL_RESULT_LABEL
+                {
+                    if let Some(ref text) = final_response {
+                        let record = crate::tasks::cron::carryover::CarryOver::new(
+                            text.clone(),
+                            // The granular cap (max_iterations / context_budget /
+                            // max_output_tokens) is not exposed via RunSummary
+                            // today; store the umbrella label so the next run
+                            // gets a faithful tag even if the underlying cap
+                            // changes between firings.
+                            label.clone(),
+                        );
+                        if let Err(e) =
+                            crate::tasks::cron::carryover::write(&snapshot.id, &record)
+                        {
+                            warn!(
+                                job_id = %snapshot.id,
+                                error = %e,
+                                "failed to persist cron carryover; \
+                                 next firing will start without resume context",
+                            );
+                        } else {
+                            info!(
+                                job_id = %snapshot.id,
+                                "cron job hit budget cap with partial result; \
+                                 wrote carryover for next run",
+                            );
+                        }
+                    }
+                }
+            }
+
             // Deliver response to source channel if available
             let delivery_status = if let (Some(ref ch_id), Some(ref conv_id)) =
                 (&deliver_channel, &deliver_conversation)
@@ -299,7 +341,12 @@ async fn execute_cron_job(
     }
 }
 
-/// Build the final prompt string, injecting cron context header.
+/// Build the final prompt string, injecting cron context header and
+/// (if present) the previous run's `BudgetExhaustedPartialResult` carry-over.
+///
+/// The carry-over prefix is wrapped in `<carryover reason=...>` tags so
+/// the LLM recognises it as harness-supplied resume context, not a fresh
+/// instruction from the user.
 fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
     let mut parts = Vec::new();
 
@@ -314,6 +361,39 @@ fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
         );
     }
 
+    // P3: pick up partial work from the previous BudgetExhaustedPartialResult
+    // run, if any. `read` returns Ok(None) for the common "no prior partial"
+    // case; surface IO errors as warnings rather than blocking the run — a
+    // broken carry-over file should not break the job.
+    match crate::tasks::cron::carryover::read(&snapshot.id) {
+        Ok(Some(record)) => {
+            let prefix = crate::tasks::cron::carryover::render_prefix(&record);
+            if !prefix.is_empty() {
+                parts.push(prefix);
+            }
+            // One-shot consumption: clear so a single carry-over only
+            // resumes the next run, not every subsequent firing. If the
+            // resumed run ITSELF caps out, the executor writes a fresh
+            // carry-over post-run.
+            if let Err(e) = crate::tasks::cron::carryover::clear(&snapshot.id) {
+                warn!(
+                    job_id = %snapshot.id,
+                    error = %e,
+                    "failed to clear cron carryover after read; \
+                     next firing may re-inject the same partial",
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            warn!(
+                job_id = %snapshot.id,
+                error = %e,
+                "failed to read cron carryover; proceeding without resume context",
+            );
+        }
+    }
+
     parts.push(String::new()); // blank line separator
     parts.push(snapshot.prompt.clone());
 
@@ -326,6 +406,22 @@ fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
 /// tags, etc.) and falls back to concatenated `ResponseChunk` deltas when the
 /// `RunSummary.final_response` is empty after sanitization (e.g. when the last
 /// LLM turn was purely a completion-protocol confirmation).
+/// Extract the harness's `terminate_reason` static label from the
+/// collected events, if any `RunComplete` event was observed. Used by
+/// the P3 carry-over write path to distinguish a `BudgetExhausted` exit
+/// from a clean `Completed` run.
+async fn extract_terminate_reason(collector: &CollectingEventEmitter) -> Option<String> {
+    let events = collector.events().await;
+    for event in events.iter().rev() {
+        if let StreamEvent::RunComplete { ref summary, .. } = event {
+            if let Some(ref label) = summary.terminate_reason {
+                return Some(label.clone());
+            }
+        }
+    }
+    None
+}
+
 async fn extract_final_response(collector: &CollectingEventEmitter) -> Option<String> {
     let events = collector.events().await;
 

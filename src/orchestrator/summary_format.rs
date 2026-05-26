@@ -245,6 +245,9 @@ fn humanize_terminate(r: &TerminateReason) -> String {
         TerminateReason::StopHookHalt { reason } => format!("Stop hook halt: {reason}"),
         TerminateReason::MaxOutputTokensExhausted => "Max output tokens exhausted".into(),
         TerminateReason::Cancelled => "Cancelled".into(),
+        TerminateReason::BudgetExhaustedPartialResult { reason, .. } => {
+            format!("Budget exhausted ({reason}) — partial result preserved for resume")
+        }
     }
 }
 

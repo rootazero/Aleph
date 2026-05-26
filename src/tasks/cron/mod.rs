@@ -27,6 +27,7 @@
 //! - `webhook_target` — Webhook delivery target
 
 pub mod alert;
+pub mod carryover;
 pub mod chain;
 pub mod config;
 pub mod executor;

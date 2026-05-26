@@ -537,7 +537,24 @@ impl HarnessRunner for AgentHarnessRunner {
         // P2: pull the rich signals from harness accessors. The harness loop
         // recorded the precise terminate cause, per-tool timeline, and
         // per-component token breakdown — no second session read needed.
-        let terminate_reason = harness.terminate_reason();
+        //
+        // P3: budget-cap → PartialResult escalation. When a budget cap
+        // (max_iterations / context_budget / max_output_tokens) fired
+        // AFTER the run already produced useful text, upgrade the
+        // bare cap variant to `BudgetExhaustedPartialResult` so the
+        // cron carry-over path (or any future resume consumer) can pick
+        // up where the run left off. Runs that capped without any
+        // partial text keep the bare variant and observe no behaviour
+        // change — see `escalate_partial_result` docs.
+        let raw_terminate_reason = harness.terminate_reason();
+        let terminate_reason = crate::orchestrator::dispatch::escalate_partial_result(
+            raw_terminate_reason,
+            if final_text.is_empty() {
+                None
+            } else {
+                Some(final_text.as_str())
+            },
+        );
         let token_breakdown = harness.token_breakdown();
         // Cost task: best-effort estimate against the static price table.
         // `None` when the run produced no tokens (no LLM call observed) —

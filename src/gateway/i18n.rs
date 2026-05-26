@@ -212,6 +212,28 @@ pub fn render_loop_halt(
              Shorten the request or raise `max_output_tokens`."
         ),
 
+        // BudgetExhaustedPartialResult is the partial-result escalation
+        // of a budget cap. The user-facing message highlights that the
+        // partial work has been preserved for the next run (cron resume).
+        // `reason` carries the underlying cap label ("hit_max_iterations",
+        // "context_budget_exhausted", "max_output_tokens_exhausted") for
+        // diagnostic surfacing.
+        (
+            TerminateReason::BudgetExhaustedPartialResult { reason, .. },
+            Locale::Zh,
+        ) => format!(
+            "抱歉，预算已用尽（{reason}），但已保留部分结果供下次续跑\
+             （{iterations} 次迭代，{tool_calls} 次工具调用）。"
+        ),
+        (
+            TerminateReason::BudgetExhaustedPartialResult { reason, .. },
+            Locale::En,
+        ) => format!(
+            "Sorry, the budget was exhausted ({reason}); partial result \
+             preserved for resume ({iterations} iterations, \
+             {tool_calls} tool calls)."
+        ),
+
         // Completed and Cancelled should never reach here — callers gate on
         // `is_hit_limit()`. Fall back to a generic so we never panic in prod.
         // (`TerminateReason` is `#[non_exhaustive]` for downstream crates but

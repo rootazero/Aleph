@@ -156,6 +156,24 @@ pub enum TerminateReason {
     MaxOutputTokensExhausted,
     /// `CancellationToken` fired before the loop reached `Done`.
     Cancelled,
+    /// A budget cap (`HitMaxIterations` / `ContextBudgetExhausted` /
+    /// `MaxOutputTokensExhausted`) fired AFTER the model already emitted
+    /// useful partial text in this run. The harness preserves the
+    /// partial via `partial_summary` so downstream consumers (cron
+    /// carry-over, CLI resume hints) can pick the run back up next
+    /// time. `reason` is the stable token of the underlying cap
+    /// (`"hit_max_iterations"`, `"context_budget_exhausted"`,
+    /// `"max_output_tokens_exhausted"`), so existing dashboards that
+    /// branch on the bare label keep working.
+    ///
+    /// Emission is policy-gated in
+    /// [`escalate_partial_result`] — when there is no partial text the
+    /// harness keeps emitting the bare variant, preserving prior
+    /// behaviour byte-for-byte.
+    BudgetExhaustedPartialResult {
+        reason: String,
+        partial_summary: String,
+    },
 }
 
 impl TerminateReason {
@@ -180,7 +198,58 @@ impl TerminateReason {
             Self::StopHookHalt { .. } => "stop_hook_halt",
             Self::MaxOutputTokensExhausted => "max_output_tokens_exhausted",
             Self::Cancelled => "cancelled",
+            Self::BudgetExhaustedPartialResult { .. } => "budget_exhausted_partial_result",
         }
+    }
+}
+
+/// Stable label that downstream consumers (cron carry-over, log
+/// filters, metric dashboards) recognise as "this run produced partial
+/// work that should be carried forward". Lives outside the enum so
+/// non-Rust consumers (TOML / panel JS) can grep the string without
+/// depending on the Rust binding.
+pub const BUDGET_PARTIAL_RESULT_LABEL: &str = "budget_exhausted_partial_result";
+
+/// Escalate a bare budget-cap reason to
+/// [`TerminateReason::BudgetExhaustedPartialResult`] when the run
+/// produced any useful final text. Non-budget reasons and runs with no
+/// partial output pass through unchanged.
+///
+/// Called once in `harness_bridge::run_outcome` just after
+/// `harness.terminate_reason()` so the policy lives in one place
+/// rather than at each of the 4 emit sites inside the harness loop.
+///
+/// Why this can't live inside the harness loop:
+/// the partial-text inspection happens AFTER `final_text` extraction
+/// (which itself reads back the session log post-loop), so by the time
+/// we know "is there partial text?" the harness has already returned
+/// and only the orchestrator sees both signals.
+pub fn escalate_partial_result(reason: TerminateReason, partial: Option<&str>) -> TerminateReason {
+    let Some(text) = partial else {
+        return reason;
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return reason;
+    }
+    let base_label = reason.as_static_str();
+    match reason {
+        TerminateReason::HitMaxIterations { .. }
+        | TerminateReason::ContextBudgetExhausted
+        | TerminateReason::MaxOutputTokensExhausted => {
+            TerminateReason::BudgetExhaustedPartialResult {
+                reason: base_label.to_string(),
+                partial_summary: trimmed.to_string(),
+            }
+        }
+        // Every other terminate reason is either a clean exit
+        // (`Completed`), a structural failure (`StallTimeout`,
+        // `TurnTimeout`, `ConsecutiveFailureCap`, `VerifierVeto`,
+        // `EmptyResponseExhausted`), a permanent halt (`StopHookHalt`),
+        // an externally-driven stop (`Cancelled`), or already a
+        // PartialResult — none should be re-classified as "partial,
+        // resume me later".
+        other => other,
     }
 }
 
@@ -640,6 +709,100 @@ mod outcome_tests {
             "verifier_veto"
         );
         assert_eq!(TerminateReason::Cancelled.as_static_str(), "cancelled");
+        assert_eq!(
+            TerminateReason::BudgetExhaustedPartialResult {
+                reason: "hit_max_iterations".into(),
+                partial_summary: "x".into(),
+            }
+            .as_static_str(),
+            BUDGET_PARTIAL_RESULT_LABEL,
+        );
+    }
+
+    #[test]
+    fn budget_partial_result_is_hit_limit() {
+        assert!(TerminateReason::BudgetExhaustedPartialResult {
+            reason: "hit_max_iterations".into(),
+            partial_summary: "did some work".into(),
+        }
+        .is_hit_limit());
+    }
+
+    #[test]
+    fn escalate_partial_result_upgrades_max_iterations_when_partial_present() {
+        let raw = TerminateReason::HitMaxIterations { used: 40 };
+        let escalated = escalate_partial_result(raw, Some("I gathered three sources."));
+        match escalated {
+            TerminateReason::BudgetExhaustedPartialResult {
+                reason,
+                partial_summary,
+            } => {
+                assert_eq!(reason, "hit_max_iterations");
+                assert_eq!(partial_summary, "I gathered three sources.");
+            }
+            other => panic!("expected PartialResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn escalate_partial_result_upgrades_context_budget_and_max_output_tokens() {
+        for raw in [
+            TerminateReason::ContextBudgetExhausted,
+            TerminateReason::MaxOutputTokensExhausted,
+        ] {
+            let label = raw.as_static_str().to_string();
+            let escalated = escalate_partial_result(raw, Some("partial text"));
+            match escalated {
+                TerminateReason::BudgetExhaustedPartialResult { reason, .. } => {
+                    assert_eq!(reason, label);
+                }
+                other => panic!("expected PartialResult, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn escalate_partial_result_passes_through_when_no_partial_text() {
+        let raw = TerminateReason::HitMaxIterations { used: 40 };
+        assert_eq!(
+            escalate_partial_result(raw, None),
+            TerminateReason::HitMaxIterations { used: 40 },
+        );
+        let raw = TerminateReason::HitMaxIterations { used: 40 };
+        assert_eq!(
+            escalate_partial_result(raw, Some("   \n\t  ")),
+            TerminateReason::HitMaxIterations { used: 40 },
+            "whitespace-only partial is treated as no partial",
+        );
+    }
+
+    #[test]
+    fn escalate_partial_result_passes_through_non_budget_reasons() {
+        // Cancelled / StallTimeout / VerifierVeto / Completed must NEVER
+        // be re-classified as PartialResult — they are not budget caps.
+        let cases = [
+            TerminateReason::Completed,
+            TerminateReason::Cancelled,
+            TerminateReason::StallTimeout { elapsed_ms: 30_000 },
+            TerminateReason::VerifierVeto { vetos: 3 },
+            TerminateReason::ConsecutiveFailureCap { consecutive: 5 },
+            TerminateReason::EmptyResponseExhausted,
+            TerminateReason::StopHookHalt {
+                reason: "policy".into(),
+            },
+            TerminateReason::TurnTimeout {
+                phase: "act".into(),
+                elapsed_ms: 60_000,
+            },
+        ];
+        for r in cases {
+            let label = r.as_static_str();
+            let escalated = escalate_partial_result(r.clone(), Some("nontrivial partial"));
+            assert_eq!(
+                escalated, r,
+                "{label} must pass through unchanged",
+            );
+        }
     }
 
     #[test]
