@@ -612,12 +612,12 @@ html.translucent { --aleph-canvas-base: transparent; }
     radial-gradient(ellipse 56% 46% at 14% 114%, var(--aleph-glow-a),   transparent 66%),
     radial-gradient(ellipse 50% 42% at 94% 118%, var(--aleph-glow-b),   transparent 64%),
     radial-gradient(ellipse 82% 50% at 50% -14%, var(--aleph-glow-top), transparent 72%);
-  will-change: transform;
-  animation: aleph-drift 26s var(--ease-spring) infinite alternate;
-}
-@keyframes aleph-drift {
-  from { transform: translate3d(0, 0, 0)        scale(1);    }
-  to   { transform: translate3d(2.6%, -2.2%, 0) scale(1.12); }
+  /* `aleph-drift` infinite alternate was here. Removed: at 60 Hz it
+   * paid an 8-13% CPU/GPU tax (KeyframeInterpolation + per-frame
+   * GraphicsLayerCA::recursiveCommitChanges on a viewport-sized
+   * composited layer) for a 2.6% / 26 s translate that's visually
+   * imperceptible. Static gradient is the same look without the cost.
+   */
 }
 
 /* --- Glossy sidebar — a soft, accent-tinted column (Codex) --- */
@@ -683,11 +683,8 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
       color-mix(in oklch, var(--color-primary) 52%, oklch(0.6 0.13 250)));
   box-shadow: 0 12px 36px color-mix(in oklch, var(--color-primary) 42%, transparent),
               inset 0 1px 2px oklch(1 0 0 / 0.55);
-  animation: aleph-breathe 5.6s var(--ease-spring) infinite alternate;
-}
-@keyframes aleph-breathe {
-  from { transform: translateY(0)    scale(1);     }
-  to   { transform: translateY(-6px) scale(1.045); }
+  /* `aleph-breathe` infinite alternate dropped — same 60 Hz keyframe
+   * cost as `aleph-drift`. Orb still renders, just doesn't bob. */
 }
 .aleph-hero-title {
   background-image: linear-gradient(110deg,
@@ -698,10 +695,10 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: aleph-shimmer 9s linear infinite;
-}
-@keyframes aleph-shimmer {
-  to { background-position: 220% center; }
+  /* `aleph-shimmer` infinite dropped — 220 % background-position
+   * scroll forced per-frame text re-paint. Title keeps its gradient,
+   * just doesn't shimmer.
+   */
 }
 
 /* Staggered entrance for the hero. */
