@@ -8,13 +8,14 @@ use wasm_bindgen::JsCast;
 
 use leptos::callback::Callback;
 
+use crate::canvas_engine::align_guides::guides_for_drag;
 use crate::canvas_engine::drag::{DragState, ReleaseOutcome};
 use crate::canvas_engine::edge_curve::{bezier_point, bezier_tangent, edge_control_point,
     DEFAULT_SAG};
 use crate::canvas_engine::interaction::{CanvasEvent, InteractionState};
 use crate::canvas_engine::navigation::NavController;
-use crate::canvas_engine::renderer::draw_neighborhood;
-use crate::canvas_engine::tween::build_interpolated_neighborhood;
+use crate::canvas_engine::renderer::{draw_align_guides, draw_neighborhood};
+use crate::canvas_engine::tween::tween_into;
 use crate::canvas_engine::types::*;
 use crate::canvas_engine::viewport::Viewport;
 use crate::views::canvas::edge_label::EdgeLabel;
@@ -118,6 +119,13 @@ pub fn GraphCanvas(
     // Pointer events feed it; the rAF loop ticks it; the renderer reads its overlay.
     let drag_state: Rc<RefCell<DragState>> = Rc::new(RefCell::new(DragState::new()));
     let last_frame_ms: Rc<Cell<f64>> = Rc::new(Cell::new(0.0));
+
+    // Reusable buffer for animation interpolation. Lives across rAF frames so
+    // `tween_into` can mutate `target_positions` in place rather than cloning
+    // the whole `Neighborhood` (~6 KB for 50 nodes) every frame. Reset
+    // automatically when the animation target changes (different center id or
+    // ring cardinality).
+    let tween_buf: Rc<RefCell<Option<Neighborhood>>> = Rc::new(RefCell::new(None));
 
     // DOM overlay signals (Task 4.5): published each rAF tick so NodeCard overlays stay in sync.
     // node_screen_pos: maps node id → per-node screen position signal.
@@ -233,6 +241,7 @@ pub fn GraphCanvas(
         // Build the rAF loop
         let gs_render = gs.clone();
         let nav_render = nav.clone();
+        let tween_buf_inner = tween_buf.clone();
         let raf_h_inner = raf_h.clone();
         let raf_c_inner = raf_c.clone();
         let drag_state_inner = drag_state.clone();
@@ -489,9 +498,12 @@ pub fn GraphCanvas(
                 match nav_state {
                     NavState::Active { neighborhood, .. } => {
                         let center_radius = note_radius(neighborhood.center.edge_count);
-                        let overlay = drag_state_inner
-                            .borrow()
-                            .overlay_snapshot(Vec2::zero(), center_radius);
+                        // Read drag state once; both overlay and is_dragging come from
+                        // the same RefCell borrow to avoid a torn snapshot.
+                        let (overlay, dragging) = {
+                            let ds = drag_state_inner.borrow();
+                            (ds.overlay_snapshot(Vec2::zero(), center_radius), ds.is_dragging())
+                        };
                         draw_neighborhood(
                             &ctx,
                             &viewport,
@@ -501,6 +513,15 @@ pub fn GraphCanvas(
                             hovered.as_deref(),
                             overlay.as_ref(),
                         );
+                        // Alignment guides: only during active positioning, never during
+                        // springback/promote (those are animations, not user-controlled).
+                        if dragging {
+                            if let Some(o) = overlay.as_ref() {
+                                let guides =
+                                    guides_for_drag(o.position, &neighborhood, &o.node_id);
+                                draw_align_guides(&ctx, &viewport, &guides);
+                            }
+                        }
                     }
                     NavState::Animating {
                         from_neighborhood,
@@ -509,23 +530,34 @@ pub fn GraphCanvas(
                         ..
                     } => {
                         let center_radius = note_radius(to_neighborhood.center.edge_count);
-                        let interp = build_interpolated_neighborhood(
+                        let (overlay, dragging) = {
+                            let ds = drag_state_inner.borrow();
+                            (ds.overlay_snapshot(Vec2::zero(), center_radius), ds.is_dragging())
+                        };
+                        let mut buf = tween_buf_inner.borrow_mut();
+                        let interp = tween_into(
                             &from_neighborhood,
                             &to_neighborhood,
                             t,
+                            &mut buf,
                         );
-                        let overlay = drag_state_inner
-                            .borrow()
-                            .overlay_snapshot(Vec2::zero(), center_radius);
                         draw_neighborhood(
                             &ctx,
                             &viewport,
-                            &interp,
+                            interp,
                             drag,
                             selected.as_deref(),
                             hovered.as_deref(),
                             overlay.as_ref(),
                         );
+                        // Guides anchor to the interpolated neighborhood (what the user
+                        // currently sees), not the final snap target.
+                        if dragging {
+                            if let Some(o) = overlay.as_ref() {
+                                let guides = guides_for_drag(o.position, interp, &o.node_id);
+                                draw_align_guides(&ctx, &viewport, &guides);
+                            }
+                        }
                     }
                     NavState::Loading { .. } => {
                         draw_placeholder(&ctx, &viewport, "Loading…");

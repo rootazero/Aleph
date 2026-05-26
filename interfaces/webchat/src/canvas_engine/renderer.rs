@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use wasm_bindgen::JsValue;
 use web_sys::CanvasRenderingContext2d;
 
@@ -5,6 +7,35 @@ use super::types::*;
 use super::viewport::Viewport;
 use crate::canvas_engine::drag::DragOverlay;
 use crate::canvas_engine::edge_curve::{edge_control_point, hop_style, HopLayer, DEFAULT_SAG};
+
+/// Screen-space margin used to keep slightly-off-canvas elements visible
+/// (covers drift wobble + label glyph descenders + parallax drift).
+const NODE_CULL_MARGIN_PX: f64 = 64.0;
+/// Screen margin for edge AABB culling — must cover the maximum Bézier sag.
+/// `DEFAULT_SAG = 0.12` of chord length so at screen-scale 1.0 a 1000 px edge
+/// bows out 120 px. We pick 128 px so even long edges at scale ~1.0 pass.
+const EDGE_CULL_MARGIN_PX: f64 = 128.0;
+/// Screen margin for cluster bbox culling — covers outline + label height.
+const CLUSTER_CULL_MARGIN_PX: f64 = 16.0;
+
+/// Zero-allocation RGBA(a) string formatter reused across many color-stop /
+/// fill-style calls within one drawing function. `wasm-bindgen` copies the
+/// `&str` into a JS string on each call, so the same buffer can be rewritten
+/// between stops without aliasing the JS side. Saves ~75% of `format!`
+/// allocations in the edge gradient hot path.
+struct RgbaBuf(String);
+
+impl RgbaBuf {
+    fn new() -> Self {
+        Self(String::with_capacity(32))
+    }
+
+    fn rgba(&mut self, rgb: &str, alpha: f64) -> &str {
+        self.0.clear();
+        let _ = write!(&mut self.0, "rgba({rgb},{alpha:.3})");
+        &self.0
+    }
+}
 
 /// Idle drift amplitude (pixels). Each node oscillates within this radius around its
 /// resolved (target) position. Spec §6.1, Q4 = "B / breathing" feel.
@@ -108,19 +139,22 @@ pub fn draw_neighborhood(
     // 2. Layer 0: Orphans (deepest, behind everything else).
     //    Dim clustered dots for nodes outside the current connected component.
     //    Click to re-center.
-    draw_orphan_ring(ctx, &nbhd.orphans, drag, selected, hovered);
+    draw_orphan_ring(ctx, viewport, &nbhd.orphans, drag, selected, hovered);
 
     // 2. Layer A: 2-hop (back) — edges only; node circles are now DOM NodeCard overlays
     for n in &nbhd.two_hop {
-        draw_edges_for_node(ctx, n, nbhd, drag, node_drag, selected, hovered);
+        draw_edges_for_node(ctx, viewport, n, nbhd, drag, node_drag, selected, hovered);
     }
 
     // 3. Layer B: 1-hop + clusters — edges only; node circles are DOM NodeCard overlays
     for c in &nbhd.clusters {
+        if !cluster_is_visible(viewport, c, drag) {
+            continue;
+        }
         draw_cluster(ctx, c, drag, selected, hovered);
     }
     for n in &nbhd.one_hop {
-        draw_edges_for_node(ctx, n, nbhd, drag, node_drag, selected, hovered);
+        draw_edges_for_node(ctx, viewport, n, nbhd, drag, node_drag, selected, hovered);
     }
 
     // Draw the dragged node last (on top of clusters / other 1-hop nodes)
@@ -137,6 +171,50 @@ pub fn draw_neighborhood(
     ctx.restore();
 }
 
+/// Draw alignment guides on top of the rendered neighborhood during an active
+/// drag. Guides span the full canvas in the perpendicular axis so the user can
+/// visually compare against any candidate, even off-screen ones.
+///
+/// MUST be called AFTER [`draw_neighborhood`] has restored the canvas context —
+/// guides render in screen-space coordinates, not the world-space transform
+/// used by neighborhood drawing.
+pub fn draw_align_guides(
+    ctx: &CanvasRenderingContext2d,
+    viewport: &Viewport,
+    guides: &[crate::canvas_engine::align_guides::GuideLine],
+) {
+    use crate::canvas_engine::align_guides::Axis;
+    if guides.is_empty() {
+        return;
+    }
+    ctx.save();
+    // Gold semi-transparent — matches the promote-glow palette (252,211,77)
+    // so the user reads guides + glow as the same affordance system. Alpha 0.65
+    // is high enough to read against the dark bg but low enough to never fully
+    // obscure underlying node strokes.
+    ctx.set_stroke_style_str("rgba(252,211,77,0.65)");
+    ctx.set_line_width(1.0);
+    for g in guides {
+        ctx.begin_path();
+        match g.axis {
+            Axis::Vertical => {
+                // Project the shared x coordinate to screen, draw top→bottom.
+                let s = viewport.world_to_screen(Vec2::new(g.world_coord, 0.0));
+                ctx.move_to(s.x, 0.0);
+                ctx.line_to(s.x, viewport.height);
+            }
+            Axis::Horizontal => {
+                // Project the shared y coordinate to screen, draw left→right.
+                let s = viewport.world_to_screen(Vec2::new(0.0, g.world_coord));
+                ctx.move_to(0.0, s.y);
+                ctx.line_to(viewport.width, s.y);
+            }
+        }
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
 fn paint_background(ctx: &CanvasRenderingContext2d, viewport: &Viewport) {
     // Solid dark fill; CanvasGradient feature not enabled in this build.
     // T14/T15 can add a proper radial gradient once the feature is wired.
@@ -149,6 +227,7 @@ fn paint_background(ctx: &CanvasRenderingContext2d, viewport: &Viewport) {
 /// and reveals the label so the user can tell what they're about to recenter on.
 fn draw_orphan_ring(
     ctx: &CanvasRenderingContext2d,
+    viewport: &Viewport,
     orphans: &[CanvasNode],
     drag: (f32, f32),
     selected: Option<&str>,
@@ -170,6 +249,12 @@ fn draw_orphan_ring(
         let cx = n.position.x + off.0 as f64 + drift.x;
         let cy = n.position.y + off.1 as f64 + drift.y;
         let r = n.radius;
+        // Viewport cull: skip orphans fully outside the visible area (with margin
+        // for drift wobble + hovered label height). Saves arc + fill + (rare)
+        // text-render JS boundary crossings per dot.
+        if !viewport.is_visible(Vec2::new(cx, cy), NODE_CULL_MARGIN_PX) {
+            continue;
+        }
 
         let is_selected = selected.map(|s| s == n.id).unwrap_or(false);
         let is_hovered = hovered.map(|h| h == n.id).unwrap_or(false);
@@ -205,6 +290,27 @@ fn draw_orphan_ring(
     }
 }
 
+/// Compute the cluster's world-space AABB for viewport culling. Mirrors the
+/// drawing computation in `draw_cluster` so both stay in sync.
+fn cluster_world_aabb(c: &ClusterNode, drag: (f32, f32)) -> (Vec2, Vec2) {
+    let attrs = depth_attrs(c.z);
+    let off = crate::canvas_engine::viewport::parallax_offset(c.z, drag.0, drag.1);
+    let cx = (c.world_pos.x as f32 + off.0) as f64;
+    let cy = (c.world_pos.y as f32 + off.1) as f64;
+    let r = (c.radius * attrs.scale) as f64;
+    let w = r * 2.4;
+    let h = r * 1.6;
+    (
+        Vec2::new(cx - w / 2.0, cy - h / 2.0),
+        Vec2::new(cx + w / 2.0, cy + h / 2.0),
+    )
+}
+
+fn cluster_is_visible(viewport: &Viewport, c: &ClusterNode, drag: (f32, f32)) -> bool {
+    let (min, max) = cluster_world_aabb(c, drag);
+    viewport.is_world_rect_visible(min, max, CLUSTER_CULL_MARGIN_PX)
+}
+
 fn draw_cluster(
     ctx: &CanvasRenderingContext2d,
     c: &ClusterNode,
@@ -228,9 +334,11 @@ fn draw_cluster(
     let is_selected = selected.map(|s| s == c.id).unwrap_or(false);
     let is_hovered = hovered.map(|h| h == c.id).unwrap_or(false);
 
+    let mut buf = RgbaBuf::new();
+
     // 1. Shadow ellipse
     let shadow_alpha = 0.25 * attrs.opacity as f64;
-    ctx.set_fill_style_str(&format!("rgba(0,0,0,{shadow_alpha:.3})"));
+    ctx.set_fill_style_str(buf.rgba("0,0,0", shadow_alpha));
     ctx.begin_path();
     let shadow_y = cy + attrs.shadow_offset_y as f64;
     let _ = ctx.ellipse(
@@ -246,14 +354,14 @@ fn draw_cluster(
 
     // 2. Body: rounded rect with purple tint
     let body_alpha = 0.30 * attrs.opacity as f64;
-    ctx.set_fill_style_str(&format!("rgba(124,58,237,{body_alpha:.3})"));
+    ctx.set_fill_style_str(buf.rgba("124,58,237", body_alpha));
     ctx.begin_path();
     rounded_rect(ctx, x, y, w, h, corner_r);
     ctx.fill();
 
     // 3. Stroke
     let stroke_alpha = attrs.opacity as f64;
-    ctx.set_stroke_style_str(&format!("rgba(167,139,250,{stroke_alpha:.3})"));
+    ctx.set_stroke_style_str(buf.rgba("167,139,250", stroke_alpha));
     ctx.set_line_width(2.0);
     ctx.begin_path();
     rounded_rect(ctx, x, y, w, h, corner_r);
@@ -280,7 +388,7 @@ fn draw_cluster(
     let count = c.member_ids.len();
     let label = format!("\u{1F4DA} +{count} {}", c.kind);
     let label_alpha = attrs.opacity as f64;
-    ctx.set_fill_style_str(&format!("rgba(226,232,240,{label_alpha:.3})"));
+    ctx.set_fill_style_str(buf.rgba("226,232,240", label_alpha));
     ctx.set_font("11px sans-serif");
     ctx.set_text_align("center");
     ctx.set_text_baseline("middle");
@@ -289,6 +397,7 @@ fn draw_cluster(
 
 fn draw_edges_for_node(
     ctx: &CanvasRenderingContext2d,
+    viewport: &Viewport,
     n: &CanvasNode,
     nbhd: &Neighborhood,
     drag: (f32, f32),
@@ -307,6 +416,9 @@ fn draw_edges_for_node(
             nbhd.two_hop.get(off).map(|x| x.id.as_str())
         }
     };
+
+    // RGBA scratch buffer reused across all gradient stops in this call.
+    let mut rgba = RgbaBuf::new();
 
     // Highlight anchor: selected takes priority over hovered.
     let highlight_anchor: Option<&str> = selected.or(hovered);
@@ -358,6 +470,16 @@ fn draw_edges_for_node(
                 None => continue,
             };
 
+            // Viewport cull: skip edges whose chord AABB is fully outside the
+            // visible region (with margin for Bézier sag). Avoids the expensive
+            // create_linear_gradient + 4 add_color_stop JS calls per off-screen
+            // edge — the dominant cost for clipped neighborhoods.
+            let from_world = Vec2::new(from_pos.0 as f64, from_pos.1 as f64);
+            let to_world = Vec2::new(to_pos.0 as f64, to_pos.1 as f64);
+            if !viewport.is_segment_visible(from_world, to_world, EDGE_CULL_MARGIN_PX) {
+                continue;
+            }
+
             // Hop layer: if either endpoint is in two_hop (idx > one_hop.len()), it's Two.
             let layer = if e.from_idx > nbhd.one_hop.len() || e.to_idx > nbhd.one_hop.len() {
                 HopLayer::Two
@@ -403,10 +525,10 @@ fn draw_edges_for_node(
                 to_pos.0 as f64,
                 to_pos.1 as f64,
             );
-            let _ = grad.add_color_stop(0.00, &format!("rgba({color_rgb},0.000)"));
-            let _ = grad.add_color_stop(0.15, &format!("rgba({color_rgb},{effective_alpha:.3})"));
-            let _ = grad.add_color_stop(0.85, &format!("rgba({color_rgb},{effective_alpha:.3})"));
-            let _ = grad.add_color_stop(1.00, &format!("rgba({color_rgb},0.000)"));
+            let _ = grad.add_color_stop(0.00, rgba.rgba(color_rgb, 0.0));
+            let _ = grad.add_color_stop(0.15, rgba.rgba(color_rgb, effective_alpha));
+            let _ = grad.add_color_stop(0.85, rgba.rgba(color_rgb, effective_alpha));
+            let _ = grad.add_color_stop(1.00, rgba.rgba(color_rgb, 0.0));
             ctx.set_stroke_style_canvas_gradient(&grad);
             ctx.set_line_width(effective_width);
 
@@ -513,7 +635,8 @@ fn draw_dragged_node(ctx: &CanvasRenderingContext2d, n: &CanvasNode, overlay: &D
 
     // Glow ring (only when promote-imminent — alpha grows as overlay nears center)
     if overlay.glow_alpha > 0.01 {
-        ctx.set_stroke_style_str(&format!("rgba(252,211,77,{:.3})", overlay.glow_alpha));
+        let mut buf = RgbaBuf::new();
+        ctx.set_stroke_style_str(buf.rgba("252,211,77", overlay.glow_alpha));
         ctx.set_line_width(3.0);
         ctx.begin_path();
         let _ = ctx.arc(cx, cy, r + 6.0, 0.0, TAU);

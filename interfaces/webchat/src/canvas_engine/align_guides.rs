@@ -7,7 +7,7 @@
 //! Reference: `/Volumes/TBU4/Github/tldraw/` shape-aligning UX. The numbers
 //! match tldraw's defaults (4 px world snap, single guide per axis).
 
-use crate::canvas_engine::types::Vec2;
+use crate::canvas_engine::types::{Neighborhood, Vec2};
 
 /// World-space distance within which two nodes are considered aligned.
 /// 4 px in world units; the renderer scales by viewport zoom for drawing.
@@ -85,6 +85,35 @@ pub fn detect_guides(
         });
     }
     out
+}
+
+/// Adapter that pulls candidate anchors out of a [`Neighborhood`] and runs
+/// [`detect_guides`] against the dragged node's current world position.
+///
+/// Anchors use `CanvasNode::position` (the resolved layout position, drift-free)
+/// so guides do not jitter per frame as idle drift offsets the visible dots.
+/// The dragged node is excluded from candidates by id.
+pub fn guides_for_drag(
+    drag_pos: Vec2,
+    nbhd: &Neighborhood,
+    dragged_id: &str,
+) -> Vec<GuideLine> {
+    let cap = 1 + nbhd.one_hop.len() + nbhd.two_hop.len();
+    let mut candidates: Vec<(String, Vec2)> = Vec::with_capacity(cap);
+    if nbhd.center.id != dragged_id {
+        candidates.push((nbhd.center.id.clone(), nbhd.center.position));
+    }
+    for n in &nbhd.one_hop {
+        if n.id != dragged_id {
+            candidates.push((n.id.clone(), n.position));
+        }
+    }
+    for n in &nbhd.two_hop {
+        if n.id != dragged_id {
+            candidates.push((n.id.clone(), n.position));
+        }
+    }
+    detect_guides(drag_pos, &candidates, SNAP_THRESHOLD)
 }
 
 /// Apply the detected guides to a position, returning the snapped result.
@@ -195,6 +224,86 @@ mod tests {
         let snapped = snap_to_guides(p, &[]);
         assert_eq!(snapped.x, p.x);
         assert_eq!(snapped.y, p.y);
+    }
+
+    fn mk_node(id: &str, x: f64, y: f64) -> crate::canvas_engine::types::CanvasNode {
+        crate::canvas_engine::types::CanvasNode {
+            id: id.into(),
+            name: id.into(),
+            category: String::new(),
+            color: crate::canvas_engine::types::Color { r: 0, g: 0, b: 0 },
+            radius: 6.0,
+            position: Vec2::new(x, y),
+            velocity: Vec2::zero(),
+            z: 0.0,
+            hop: 1,
+            decay_score: 1.0,
+            edge_count: 0,
+        }
+    }
+
+    fn mk_nbhd(
+        center: crate::canvas_engine::types::CanvasNode,
+        one_hop: Vec<crate::canvas_engine::types::CanvasNode>,
+        two_hop: Vec<crate::canvas_engine::types::CanvasNode>,
+    ) -> Neighborhood {
+        Neighborhood {
+            center,
+            one_hop,
+            two_hop,
+            orphans: Vec::new(),
+            clusters: Vec::new(),
+            edges: Vec::new(),
+            target_positions: std::collections::HashMap::new(),
+            fetched_at_ms: 0.0,
+        }
+    }
+
+    #[test]
+    fn guides_for_drag_excludes_dragged_node() {
+        // Dragged node at (100,50) — if its own position is treated as a candidate
+        // the helper would self-match with delta=0, producing 2 spurious guides.
+        let nbhd = mk_nbhd(
+            mk_node("center", 0.0, 0.0),
+            vec![mk_node("dragged", 100.0, 50.0)],
+            vec![],
+        );
+        let guides = guides_for_drag(Vec2::new(100.0, 50.0), &nbhd, "dragged");
+        // No other candidate within threshold of (100,50) → empty guides.
+        assert!(
+            guides.is_empty(),
+            "self-match should be filtered; got {} guides",
+            guides.len()
+        );
+    }
+
+    #[test]
+    fn guides_for_drag_includes_center_and_two_hop() {
+        let nbhd = mk_nbhd(
+            mk_node("center", 100.0, 0.0), // vertical match @ drag.x=100
+            vec![mk_node("dragged", 200.0, 200.0)],
+            vec![mk_node("far", 999.0, 50.5)], // horizontal match @ drag.y=50
+        );
+        let guides = guides_for_drag(Vec2::new(100.0, 50.0), &nbhd, "dragged");
+        assert_eq!(guides.len(), 2, "expected one guide per axis");
+        let anchors: std::collections::HashSet<_> =
+            guides.iter().map(|g| g.anchor_id.clone()).collect();
+        assert!(anchors.contains("center"));
+        assert!(anchors.contains("far"));
+    }
+
+    #[test]
+    fn guides_for_drag_skips_when_dragged_is_center() {
+        let nbhd = mk_nbhd(
+            mk_node("dragged", 100.0, 50.0),
+            vec![mk_node("anchor", 102.0, 80.0)],
+            vec![],
+        );
+        let guides = guides_for_drag(Vec2::new(100.0, 50.0), &nbhd, "dragged");
+        // Center filtered out; anchor at x=102 within threshold → vertical guide.
+        assert_eq!(guides.len(), 1);
+        assert_eq!(guides[0].anchor_id, "anchor");
+        assert_eq!(guides[0].axis, Axis::Vertical);
     }
 
     #[test]

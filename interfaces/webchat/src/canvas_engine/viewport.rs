@@ -68,6 +68,48 @@ impl Viewport {
             && screen.y <= self.height + margin
     }
 
+    /// World-space AABB visibility test. `min_world` and `max_world` are the
+    /// inclusive corners of the bounding box in world coordinates. `screen_margin`
+    /// is added on every side after projection so callers don't need to convert
+    /// pixel paddings into world units.
+    pub fn is_world_rect_visible(
+        &self,
+        min_world: Vec2,
+        max_world: Vec2,
+        screen_margin: f64,
+    ) -> bool {
+        let a = self.world_to_screen(min_world);
+        let b = self.world_to_screen(max_world);
+        let (sx_min, sx_max) = if a.x <= b.x { (a.x, b.x) } else { (b.x, a.x) };
+        let (sy_min, sy_max) = if a.y <= b.y { (a.y, b.y) } else { (b.y, a.y) };
+        sx_max >= -screen_margin
+            && sx_min <= self.width + screen_margin
+            && sy_max >= -screen_margin
+            && sy_min <= self.height + screen_margin
+    }
+
+    /// Conservative segment-vs-viewport intersection test. Uses the chord's
+    /// AABB so it never false-rejects a visible segment — a curved edge whose
+    /// control point bows further out should pass `screen_margin` ≥ expected
+    /// sag. False-positives are acceptable (caller still pays full draw cost
+    /// only when the segment truly lies inside).
+    pub fn is_segment_visible(
+        &self,
+        from_world: Vec2,
+        to_world: Vec2,
+        screen_margin: f64,
+    ) -> bool {
+        let min = Vec2 {
+            x: from_world.x.min(to_world.x),
+            y: from_world.y.min(to_world.y),
+        };
+        let max = Vec2 {
+            x: from_world.x.max(to_world.x),
+            y: from_world.y.max(to_world.y),
+        };
+        self.is_world_rect_visible(min, max, screen_margin)
+    }
+
     /// Scale + recentre so all `nodes` fit inside the canvas with `padding_pct`
     /// extra margin on every side. No-op for an empty slice. `padding_pct` is a
     /// fraction (0.10 = 10 %).
@@ -178,6 +220,85 @@ mod parallax_tests {
         // bbox = 200×200, padded to 220×220 → scale ≤ min(800/220, 600/220) ≈ 2.727.
         assert!(v.scale <= 2.728, "scale too large: {}", v.scale);
         assert!(v.scale >= 0.2);
+    }
+
+    #[test]
+    fn world_rect_visible_inside_viewport_returns_true() {
+        let v = Viewport::new(800.0, 600.0);
+        assert!(v.is_world_rect_visible(
+            Vec2::new(-50.0, -50.0),
+            Vec2::new(50.0, 50.0),
+            0.0,
+        ));
+    }
+
+    #[test]
+    fn world_rect_visible_outside_viewport_returns_false() {
+        let v = Viewport::new(800.0, 600.0);
+        // Box centered at world (5000, 5000) — far beyond canvas center (400, 300)
+        // even after default scale 1.0. With zero margin, not visible.
+        assert!(!v.is_world_rect_visible(
+            Vec2::new(4900.0, 4900.0),
+            Vec2::new(5100.0, 5100.0),
+            0.0,
+        ));
+    }
+
+    #[test]
+    fn world_rect_visible_partial_overlap_returns_true() {
+        let v = Viewport::new(800.0, 600.0);
+        // Box straddling the right edge of the viewport.
+        assert!(v.is_world_rect_visible(
+            Vec2::new(380.0, 0.0),
+            Vec2::new(500.0, 50.0),
+            0.0,
+        ));
+    }
+
+    #[test]
+    fn world_rect_visible_handles_inverted_corners() {
+        // Caller may pass (max, min) accidentally; helper must not reject a real
+        // visible rect just because corners are swapped.
+        let v = Viewport::new(800.0, 600.0);
+        assert!(v.is_world_rect_visible(
+            Vec2::new(50.0, 50.0),
+            Vec2::new(-50.0, -50.0),
+            0.0,
+        ));
+    }
+
+    #[test]
+    fn world_rect_margin_extends_visibility() {
+        let v = Viewport::new(800.0, 600.0);
+        // Single point just outside right edge in screen space; with no margin
+        // it is not visible, with 100px margin it is.
+        let out = Vec2::new(450.0, 0.0); // screen x = 850 at scale 1.0
+        assert!(!v.is_world_rect_visible(out, out, 0.0));
+        assert!(v.is_world_rect_visible(out, out, 100.0));
+    }
+
+    #[test]
+    fn segment_visible_both_endpoints_outside_but_crossing() {
+        let v = Viewport::new(800.0, 600.0);
+        // World (-500, 300) and (500, 300) → screen (-100, 600) and (900, 600) at
+        // default viewport (offset 400,300; scale 1). The chord crosses the
+        // visible region.
+        assert!(v.is_segment_visible(
+            Vec2::new(-500.0, 300.0),
+            Vec2::new(500.0, 300.0),
+            0.0,
+        ));
+    }
+
+    #[test]
+    fn segment_visible_both_endpoints_far_above_skipped() {
+        let v = Viewport::new(800.0, 600.0);
+        // Both endpoints far above the canvas in screen space.
+        assert!(!v.is_segment_visible(
+            Vec2::new(-500.0, -5000.0),
+            Vec2::new(500.0, -5000.0),
+            0.0,
+        ));
     }
 
     #[test]
