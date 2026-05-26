@@ -163,6 +163,22 @@ pub(crate) fn build_prompt(
         }
     }
 
+    // P2: run-level tool-failure aggregator. Returns `Some(text)` only
+    // when ≥ SUMMARY_THRESHOLD failures have accumulated in the tail
+    // window — below that, each error's own persistence_hint is enough
+    // and the aggregate would be noise. Wrapped in `<system-reminder>`
+    // by the renderer, so this looks like a synthetic harness signal to
+    // the model rather than a fresh user turn.
+    //
+    // Computed from `events[tail_start..]` so it stays scoped to what
+    // the model already sees in this turn's context — never persisted,
+    // recomputed fresh every Think.
+    if let Some(summary) =
+        crate::tools::attempt_summary::render_run_summary(&events[tail_start..])
+    {
+        messages.push(UnifiedMessage::user(&summary));
+    }
+
     messages
 }
 
@@ -491,6 +507,119 @@ mod tests {
             "synthetic user message must not be re-wrapped; got: {user_text}",
         );
         assert_eq!(user_text, "[verifier veto] something");
+    }
+
+    /// P2: when ≥3 tool errors accumulate in the tail window,
+    /// `build_prompt` MUST append a trailing user message carrying the
+    /// run-level failure summary (wrapped in `<system-reminder>`). This
+    /// is computed transient from session events — never persisted, so
+    /// the session log stays a faithful record while the LLM still sees
+    /// aggregate guidance ahead of its next Think.
+    #[test]
+    fn p2_appends_attempt_summary_when_threshold_crossed() {
+        let turn = uuid::Uuid::new_v4();
+        let mut events: Vec<SessionEventRecord> = vec![mk_record(SessionEvent::UserMessage {
+            turn_id: turn,
+            content: MessageContent {
+                text: "find news on X".into(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+            synthetic: false,
+        })];
+        // 3 search calls all rate-limited
+        for i in 0..3 {
+            let cid = format!("call_{i}");
+            events.push(mk_record(SessionEvent::ToolCallRequested {
+                turn_id: turn,
+                call_id: cid.clone(),
+                name: "search".into(),
+                input: json!({"q": "X"}),
+                at: now_ms(),
+            }));
+            events.push(mk_record(SessionEvent::ToolError {
+                turn_id: turn,
+                call_id: cid,
+                error: "HTTP 429 rate limit exceeded".into(),
+                at: now_ms(),
+            }));
+        }
+
+        let messages = build_prompt(&events, 0);
+
+        // Last message must be the synthetic summary user message.
+        let last = messages.last().expect("at least one message");
+        let last_text = match last {
+            crate::providers::message::UnifiedMessage::User { content } => {
+                content.first().and_then(|b| match b {
+                    ContentBlock::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        }
+        .expect("trailing user text present");
+        assert!(
+            last_text.contains("<system-reminder>"),
+            "summary must be wrapped in system-reminder; got: {last_text}",
+        );
+        assert!(
+            last_text.contains("(3 failures)"),
+            "summary must report total count; got: {last_text}",
+        );
+        assert!(
+            last_text.contains("search × 3 (rate_limited)"),
+            "summary must group by (tool, kind); got: {last_text}",
+        );
+    }
+
+    /// P2: below the threshold (2 failures), no summary is appended —
+    /// each error's own persistence_hint is sufficient and the aggregate
+    /// would be noise.
+    #[test]
+    fn p2_no_summary_below_threshold() {
+        let turn = uuid::Uuid::new_v4();
+        let mut events: Vec<SessionEventRecord> = vec![mk_record(SessionEvent::UserMessage {
+            turn_id: turn,
+            content: MessageContent {
+                text: "first".into(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+            synthetic: false,
+        })];
+        for i in 0..2 {
+            let cid = format!("call_{i}");
+            events.push(mk_record(SessionEvent::ToolCallRequested {
+                turn_id: turn,
+                call_id: cid.clone(),
+                name: "search".into(),
+                input: json!({}),
+                at: now_ms(),
+            }));
+            events.push(mk_record(SessionEvent::ToolError {
+                turn_id: turn,
+                call_id: cid,
+                error: "HTTP 429".into(),
+                at: now_ms(),
+            }));
+        }
+
+        let messages = build_prompt(&events, 0);
+        let trailing_summary = messages.iter().rev().any(|m| match m {
+            crate::providers::message::UnifiedMessage::User { content } => content.iter().any(|b| {
+                matches!(b, ContentBlock::Text { text, .. } if text.contains("<system-reminder>") && text.contains("Tool attempt summary"))
+            }),
+            _ => false,
+        });
+        assert!(
+            !trailing_summary,
+            "no summary should be appended when failures < threshold",
+        );
     }
 
     /// G2: the conversation-opening user message (tail_start == 0) is the

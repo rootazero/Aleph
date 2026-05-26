@@ -32,6 +32,7 @@
 //! ```
 
 pub mod adapters;
+pub mod attempt_summary;
 pub mod budget;
 pub mod context;
 pub mod error_kind;
