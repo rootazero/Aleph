@@ -374,6 +374,7 @@ impl ResumeCoordinator {
             sandbox_override: None,
             workspace_override,
             max_iterations_override: None,
+            model_override: None,
         };
 
         let collector = Arc::new(CollectingEventEmitter::new());

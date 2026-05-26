@@ -280,6 +280,16 @@ pub(in crate::commands::start) fn register_config_handlers(
         providers::handle_needs_setup,
         config
     );
+    // Chat-window provider/model picker — joins built-in chat presets with
+    // per-user credential state so the panel can render a credential-aware
+    // selector without round-tripping through providers.list + catalog.
+    register_handler!(
+        server,
+        "providers.catalog",
+        providers::handle_catalog,
+        config,
+        shared_token_mgr
+    );
 
     // Routing rules
     register_handler!(

@@ -65,6 +65,11 @@ pub struct AgentRunParams {
     /// See `gateway/handlers/chat.rs` for the user-facing flow.
     #[serde(default)]
     pub project_root: Option<String>,
+    /// Per-turn model override forwarded from `chat.send`. Lights up the
+    /// chat-window model picker — see
+    /// [`crate::gateway::model_override::ModelOverride`].
+    #[serde(default)]
+    pub model_override: Option<crate::gateway::model_override::ModelOverride>,
 }
 
 fn default_stream() -> bool {
@@ -229,6 +234,7 @@ impl AgentRunManager {
             sandbox_override: None,
             workspace_override,
             max_iterations_override: None,
+            model_override: params.model_override,
         };
 
         let emitter: Arc<dyn EventEmitter + Send + Sync> =
@@ -551,6 +557,7 @@ mod tests {
             attachments: vec![],
             agent_id: None,
             project_root: None,
+            model_override: None,
         };
 
         let result = manager.start_run(params).await.unwrap();
@@ -576,6 +583,7 @@ mod tests {
             attachments: vec![],
             agent_id: None,
             project_root: None,
+            model_override: None,
         };
 
         let result = manager.start_run(params).await.unwrap();

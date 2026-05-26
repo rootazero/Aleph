@@ -479,11 +479,41 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         loop {
             attempt += 1;
 
-            // Resolve model with health-aware fallback
-            let resolved = self
-                .provider_registry
-                .resolve_with_fallback(&agent.config().model, &agent.config().fallback_models)
-                .map_err(|e| ExecutionError::Failed(e.to_string()))?;
+            // Resolve model with health-aware fallback.
+            //
+            // When the chat-window model picker stamped a per-turn override,
+            // we short-circuit the fallback chain: `Qualified { provider,
+            // model }` pins both (matches openclaw's `chatModelOverrides`
+            // qualified branch); `Raw { model }` lets the registry pick the
+            // provider via its model-name heuristic and still skips fallback
+            // (user explicitly chose this model — silent failover would be
+            // surprising). When `model_override` is `None`, we fall back to
+            // the agent's configured default + its declared fallback chain.
+            let resolved = match request.model_override.as_ref() {
+                Some(override_) => {
+                    use crate::providers::health::ResolvedModel;
+                    let provider_name = match override_.provider() {
+                        Some(p) => p.to_string(),
+                        None => self
+                            .provider_registry
+                            .get(override_.model())
+                            .map(|prov| prov.name().to_string())
+                            .unwrap_or_else(|| {
+                                self.provider_registry.default_provider().name().to_string()
+                            }),
+                    };
+                    ResolvedModel {
+                        provider_name,
+                        model: override_.model().to_string(),
+                        is_fallback: false,
+                        original_model: override_.model().to_string(),
+                    }
+                }
+                None => self
+                    .provider_registry
+                    .resolve_with_fallback(&agent.config().model, &agent.config().fallback_models)
+                    .map_err(|e| ExecutionError::Failed(e.to_string()))?,
+            };
 
             if resolved.is_fallback {
                 info!(

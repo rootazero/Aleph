@@ -140,3 +140,115 @@ async fn test_handle_get_injects_api_key_from_vault() {
     assert_eq!(provider["api_key"], "test-toapis-key");
     assert_eq!(provider["has_api_key"], true);
 }
+
+// ============================================================================
+// providers.catalog — chat-window picker join of presets + credentials.
+// ============================================================================
+
+fn catalog_request(view: Option<&str>) -> JsonRpcRequest {
+    let params = view.map(|v| json!({ "view": v }));
+    JsonRpcRequest::with_id("providers.catalog", params, json!(1))
+}
+
+fn items_array(response: &crate::gateway::protocol::JsonRpcResponse) -> Vec<serde_json::Value> {
+    response
+        .result
+        .as_ref()
+        .and_then(|v| v.get("items"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn catalog_all_view_lists_every_chat_preset() {
+    let config = Arc::new(RwLock::new(Config::default()));
+    let vault = test_vault();
+    let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
+    assert!(response.is_success());
+    let items = items_array(&response);
+    assert!(
+        items.len() >= 20,
+        "expected ≥20 chat presets, got {}",
+        items.len()
+    );
+    let ids: Vec<&str> = items
+        .iter()
+        .filter_map(|e| e.get("id").and_then(|v| v.as_str()))
+        .collect();
+    for required in ["openai", "claude", "deepseek", "qwen", "gemini"] {
+        assert!(ids.contains(&required), "missing chat preset {required}");
+    }
+}
+
+#[tokio::test]
+async fn catalog_configured_view_filters_empty_config_to_empty() {
+    let config = Arc::new(RwLock::new(Config::default()));
+    let vault = test_vault();
+    let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
+    assert!(response.is_success());
+    let items = items_array(&response);
+    assert!(
+        items.is_empty(),
+        "configured view on empty config should be empty"
+    );
+}
+
+#[tokio::test]
+async fn catalog_default_view_is_configured() {
+    let config = Arc::new(RwLock::new(Config::default()));
+    let vault = test_vault();
+    let response = handle_catalog(catalog_request(None), config, vault).await;
+    assert!(response.is_success());
+    assert!(
+        items_array(&response).is_empty(),
+        "omitting `view` must mirror 'configured'"
+    );
+}
+
+#[tokio::test]
+async fn catalog_configured_view_returns_verified_enabled_entry() {
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("gpt-4o");
+    cfg.enabled = true;
+    cfg.verified = true;
+    config.providers.insert("openai".to_string(), cfg);
+    let config = Arc::new(RwLock::new(config));
+    let vault = test_vault();
+
+    let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
+    let items = items_array(&response);
+    assert_eq!(items.len(), 1);
+    let entry = &items[0];
+    assert_eq!(entry["id"], "openai");
+    assert_eq!(entry["verified"], true);
+    assert_eq!(entry["enabled"], true);
+    // User-extended model list flows through.
+    let models = entry["models"].as_array().unwrap();
+    assert_eq!(models[0], "gpt-4o");
+}
+
+#[tokio::test]
+async fn catalog_entries_carry_modalities_default_model() {
+    let config = Arc::new(RwLock::new(Config::default()));
+    let vault = test_vault();
+    let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
+    for item in items_array(&response) {
+        assert!(item.get("id").and_then(|v| v.as_str()).is_some());
+        assert!(item.get("display_name").and_then(|v| v.as_str()).is_some());
+        assert!(item.get("default_model").and_then(|v| v.as_str()).is_some());
+        assert!(item.get("protocol").and_then(|v| v.as_str()).is_some());
+        let mods = item.get("modalities").and_then(|v| v.as_array()).unwrap();
+        assert!(mods.iter().any(|m| m.as_str() == Some("chat")));
+    }
+}
+
+#[tokio::test]
+async fn catalog_unknown_view_treats_as_all() {
+    let config = Arc::new(RwLock::new(Config::default()));
+    let vault = test_vault();
+    let response = handle_catalog(catalog_request(Some("nonsense")), config, vault).await;
+    let items = items_array(&response);
+    // Unknown view → fall through to "all", returning every preset.
+    assert!(items.len() >= 20);
+}

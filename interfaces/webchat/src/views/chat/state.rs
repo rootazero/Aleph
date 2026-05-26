@@ -189,6 +189,18 @@ pub struct ChatState {
     /// composer's "进入项目工作 ▾" chip so the user always sees which
     /// folder they're operating against.
     pub active_project_name: RwSignal<Option<String>>,
+    /// User-selected per-turn model override (chat-window picker).
+    ///
+    /// `None` means "use the agent's configured default + fallback chain"
+    /// — equivalent to openclaw's empty session model row. When `Some`, the
+    /// composer attaches it to `chat.send.model_override`; the daemon
+    /// short-circuits the resolver and pins the requested model.
+    ///
+    /// Selection is **session-sticky on the client**: it persists across
+    /// turns within the panel session but resets on page reload (the
+    /// server-side `preferred_model` persistence is a follow-up). Picker
+    /// component owns reads/writes through this signal.
+    pub selected_model: RwSignal<Option<crate::api::providers::ModelOverride>>,
     /// Monotonic counter for generating unique user message IDs.
     next_msg_id: RwSignal<u64>,
 }
@@ -215,6 +227,7 @@ impl ChatState {
             retry_pulse: RwSignal::new(0),
             active_project_root: RwSignal::new(None),
             active_project_name: RwSignal::new(None),
+            selected_model: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),
         }
     }

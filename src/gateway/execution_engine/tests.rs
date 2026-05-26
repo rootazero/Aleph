@@ -84,6 +84,7 @@ async fn test_simple_execution_engine_basic() {
         sandbox_override: None,
         workspace_override: None,
             max_iterations_override: None,
+            model_override: None,
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -133,6 +134,7 @@ async fn test_simple_execution_engine_run() {
         sandbox_override: None,
         workspace_override: None,
             max_iterations_override: None,
+            model_override: None,
     };
 
     // This should succeed and complete quickly

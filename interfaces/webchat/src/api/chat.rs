@@ -54,6 +54,7 @@ impl ChatApi {
         attachments: Vec<ChatAttachment>,
         agent_id: Option<&str>,
         project_root: Option<&str>,
+        model_override: Option<&crate::api::providers::ModelOverride>,
     ) -> Result<ChatSendResponse, String> {
         let attachments_json: Vec<Value> = attachments
             .iter()
@@ -74,6 +75,7 @@ impl ChatApi {
             "attachments": attachments_json,
             "agent_id": agent_id,
             "project_root": project_root,
+            "model_override": model_override,
         });
         let result = state.rpc_call("chat.send", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())

@@ -331,6 +331,7 @@ pub async fn handle(
         sandbox_override: None,
         workspace_override: None,
             max_iterations_override: None,
+            model_override: None,
     };
 
     let is_streaming = req.stream.unwrap_or(false);

@@ -54,6 +54,12 @@ pub struct SendParams {
     /// non-existent directories are rejected by the gateway handler.
     #[serde(default)]
     pub project_root: Option<String>,
+    /// Per-turn model override sent by the chat-window model picker.
+    /// When `None`, the gateway falls back to the agent's configured
+    /// model + its fallback chain. See
+    /// [`crate::gateway::model_override::ModelOverride`].
+    #[serde(default)]
+    pub model_override: Option<crate::gateway::model_override::ModelOverride>,
 }
 
 fn default_stream() -> bool {
@@ -154,6 +160,7 @@ pub async fn handle_send(
         attachments: params.attachments,
         agent_id: params.agent_id,
         project_root: params.project_root,
+        model_override: params.model_override,
     };
 
     // Start the run

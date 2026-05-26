@@ -685,12 +685,16 @@ fn InputArea() -> impl IntoView {
         let session_key = chat.session_key.get();
         let agent_id = chat.agent_id.get();
         let project_root = chat.active_project_root.get();
+        // Chat-window picker — forward the per-turn model override stamped on
+        // ChatState so the daemon's run loop short-circuits its fallback chain.
+        let model_override = chat.selected_model.get();
         let dash = dashboard;
         spawn_local(async move {
             let sk = session_key.as_deref();
             let aid = agent_id.as_deref();
             let pr = project_root.as_deref();
-            match ChatApi::send(&dash, &text, sk, api_attachments, aid, pr).await {
+            let mo = model_override.as_ref();
+            match ChatApi::send(&dash, &text, sk, api_attachments, aid, pr, mo).await {
                 Ok(resp) => {
                     chat.session_key.set(Some(resp.session_key));
                 }
@@ -1219,11 +1223,12 @@ fn InputArea() -> impl IntoView {
                 })
             }}
 
-            // Project picker — sits directly above the composer so the
-            // dropdown can flip upward (composer lives at the bottom of the
-            // viewport; downward menu would clip).
-            <div class="aleph-project-row px-1 pb-1">
+            // Project + model row — both pickers sit directly above the
+            // composer so their dropdowns flip upward (the composer lives at
+            // the viewport bottom; a downward menu would clip).
+            <div class="aleph-project-row flex items-center gap-2 px-1 pb-1">
                 <ProjectMenu />
+                <crate::components::model_picker::ModelPicker />
             </div>
 
             // Compact single-row composer — paperclip | textarea | send,

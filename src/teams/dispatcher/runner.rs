@@ -127,6 +127,7 @@ pub async fn execute_member_task(
         sandbox_override,
         workspace_override: inherited_workspace,
             max_iterations_override: None,
+            model_override: None,
     };
 
     let execution_adapter = Arc::clone(context.execution_adapter());

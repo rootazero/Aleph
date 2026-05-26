@@ -248,6 +248,7 @@ impl InboundMessageRouter {
             sandbox_override: None,
             workspace_override: None,
             max_iterations_override: None,
+            model_override: None,
         };
 
         if !request.attachments.is_empty() {

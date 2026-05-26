@@ -75,6 +75,81 @@ pub struct OAuthStatus {
     pub error: Option<String>,
 }
 
+/// One catalog row returned by `providers.catalog`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CatalogEntry {
+    pub id: String,
+    pub display_name: String,
+    pub default_model: String,
+    pub base_url: String,
+    pub protocol: String,
+    pub color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub modalities: Vec<String>,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub has_api_key: bool,
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+/// Filter applied by the chat-window picker when querying the catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogView {
+    /// Verified, enabled providers (default — what the picker shows).
+    Configured,
+    /// API key present (verified or not) — useful for "add a key" hints.
+    Available,
+    /// Every chat-capable preset, regardless of credential state.
+    All,
+}
+
+impl CatalogView {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Available => "available",
+            Self::All => "all",
+        }
+    }
+}
+
+/// Wire form of [`crate::api::chat::ChatApi::send`]'s `model_override` —
+/// mirrors `src/gateway/model_override::ModelOverride` byte-for-byte.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ModelOverride {
+    /// Pin both provider and model — skips fallback chain on the server.
+    Qualified { provider: String, model: String },
+    /// Send only the model id; server resolves the provider.
+    Raw { model: String },
+}
+
+impl ModelOverride {
+    pub fn model(&self) -> &str {
+        match self {
+            Self::Qualified { model, .. } => model,
+            Self::Raw { model } => model,
+        }
+    }
+
+    pub fn provider(&self) -> Option<&str> {
+        match self {
+            Self::Qualified { provider, .. } => Some(provider),
+            Self::Raw { .. } => None,
+        }
+    }
+}
+
 pub struct ProvidersApi;
 
 impl ProvidersApi {
@@ -89,6 +164,22 @@ impl ProvidersApi {
             .and_then(|providers| {
                 serde_json::from_value(providers.clone())
                     .map_err(|e| format!("Failed to parse providers: {}", e))
+            })
+    }
+
+    /// Chat-window model picker — fetch the credential-aware catalog.
+    pub async fn catalog(
+        state: &DashboardState,
+        view: CatalogView,
+    ) -> Result<Vec<CatalogEntry>, String> {
+        let params = serde_json::json!({ "view": view.as_str() });
+        let result = state.rpc_call("providers.catalog", params).await?;
+        result
+            .get("items")
+            .ok_or_else(|| "Invalid response: missing items".to_string())
+            .and_then(|items| {
+                serde_json::from_value(items.clone())
+                    .map_err(|e| format!("Failed to parse catalog: {}", e))
             })
     }
 

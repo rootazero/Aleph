@@ -682,3 +682,92 @@ async fn set_default_provider_inner(
     info!(name = %params.name, "Default provider set");
     JsonRpcResponse::success(request.id.clone(), json!({ "ok": true }))
 }
+
+// ============================================================================
+// Catalog (chat-side picker)
+// ============================================================================
+
+/// `providers.catalog` — return the chat-side provider/model catalog joined
+/// with per-user credential state. Drives the chat-window model picker.
+///
+/// Equivalent in shape to openclaw's `models.list { view }`. Aleph's Rust
+/// implementation differs in two ways:
+/// 1. Catalogue data is read directly from compile-time `Lazy<HashMap>`
+///    constants — no async I/O on the hot path, no TTL cache, no
+///    generation counter required.
+/// 2. Credential filtering uses the already-populated
+///    `config.providers[name].{verified, api_key}` fields, eliminating
+///    openclaw's parallel `auth checker` round-trip.
+pub async fn handle_catalog(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
+    use crate::providers::catalog;
+    use crate::providers::metadata::Modality;
+    use crate::providers::presets as chat_presets;
+
+    let params: CatalogParams = match request.params {
+        Some(ref v) if !v.is_null() => match serde_json::from_value(v.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("invalid params: {e}"),
+                )
+            }
+        },
+        _ => CatalogParams::default(),
+    };
+
+    let config_guard = config.read().await;
+    let default_provider = config_guard.general.default_provider.clone();
+
+    let entries = catalog::presets_for_modality(Modality::Chat);
+    let view = params.view.as_deref().unwrap_or("configured");
+
+    let items: Vec<CatalogEntryView> = entries
+        .into_iter()
+        .filter_map(|entry| {
+            // Built-in template (always present for chat entries returned by catalog::presets_for_modality).
+            let preset = chat_presets::get_preset(entry.name)?;
+            let meta = entry.metadata;
+            let cfg = config_guard.providers.get(entry.name);
+            let api_key = resolve_api_key(entry.name, &vault);
+            let has_api_key = api_key.is_some() || cfg.and_then(|c| c.api_key.as_ref()).is_some();
+            let verified = cfg.map(|c| c.verified).unwrap_or(false);
+            let enabled = cfg.map(|c| c.enabled).unwrap_or(false);
+            let models = cfg.map(|c| c.models.clone()).unwrap_or_default();
+
+            Some(CatalogEntryView {
+                id: entry.name.to_string(),
+                display_name: meta
+                    .map(|m| m.display_name.to_string())
+                    .unwrap_or_else(|| entry.name.to_string()),
+                default_model: preset.default_model.to_string(),
+                base_url: preset.base_url.to_string(),
+                protocol: preset.protocol.to_string(),
+                color: preset.color.to_string(),
+                homepage: meta.and_then(|m| m.homepage.map(String::from)),
+                notes: meta.and_then(|m| m.notes.map(String::from)),
+                modalities: meta
+                    .map(|m| m.modalities.iter().map(|x| x.as_str().to_string()).collect())
+                    .unwrap_or_else(|| vec!["chat".to_string()]),
+                models,
+                has_api_key,
+                verified,
+                enabled,
+                is_default: default_provider.as_deref() == Some(entry.name),
+            })
+        })
+        .filter(|item| match view {
+            "configured" => item.verified && item.enabled,
+            "available" => item.has_api_key,
+            _ => true, // "all" or unrecognised — return everything chat-capable
+        })
+        .collect();
+
+    JsonRpcResponse::success(request.id, json!({ "items": items }))
+}
+

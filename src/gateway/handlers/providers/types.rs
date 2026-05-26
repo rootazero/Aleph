@@ -107,3 +107,48 @@ pub struct TestParams {
 pub struct SetDefaultParams {
     pub name: String,
 }
+
+/// Parameters for providers.catalog
+///
+/// Mirrors openclaw's `models.list { view }` shape so the panel chat-window
+/// model picker can ask either "what is usable right now" or "what could be
+/// usable if I added a key".
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CatalogParams {
+    /// Filter mode:
+    /// * `configured` (default) — credentials present **and** verified
+    /// * `available`            — credentials present (verified or not)
+    /// * `all`                  — every chat preset, even uncredentialed
+    #[serde(default)]
+    pub view: Option<String>,
+}
+
+/// One row in the chat-side provider/model catalog returned to the panel.
+///
+/// The fields are a flat join of:
+/// * `chat_presets::PRESETS[name]`             (built-in template — protocol/url/color)
+/// * `chat_presets::PRESET_METADATA[name]`     (display strings, modalities, homepage)
+/// * `config.providers[name]` if configured    (user-extended models list, key state)
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogEntryView {
+    /// Preset id (also the canonical config key).
+    pub id: String,
+    pub display_name: String,
+    pub default_model: String,
+    pub base_url: String,
+    pub protocol: String,
+    pub color: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    pub modalities: Vec<String>,
+    /// User-extended model list (from `config.providers[name].models`). May
+    /// be empty when the provider is not yet configured — in that case fall
+    /// back to `default_model` for picker display.
+    pub models: Vec<String>,
+    pub has_api_key: bool,
+    pub verified: bool,
+    pub enabled: bool,
+    pub is_default: bool,
+}

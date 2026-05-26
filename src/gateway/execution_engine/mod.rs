@@ -110,6 +110,12 @@ pub struct RunRequest {
     /// wall-clock timeout fires. `None` falls through to the legacy
     /// resolution chain.
     pub max_iterations_override: Option<u32>,
+    /// Chat-window picker — per-turn model override. When `Some`, the
+    /// run_loop short-circuits `provider_registry.resolve_with_fallback`
+    /// and pins the requested (provider, model) pair (Qualified) or the
+    /// requested model with auto-resolved provider (Raw). `None` keeps the
+    /// agent's configured default + fallback chain.
+    pub model_override: Option<crate::gateway::model_override::ModelOverride>,
 }
 
 impl std::fmt::Debug for RunRequest {

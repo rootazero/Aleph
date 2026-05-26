@@ -158,6 +158,7 @@ async fn execute_cron_job(
         sandbox_override: None,
         workspace_override: None,
         max_iterations_override,
+        model_override: None,
     };
 
     let collector = Arc::new(CollectingEventEmitter::new());
