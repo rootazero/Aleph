@@ -1,6 +1,23 @@
 use crate::error::{AlephError, Result};
 use crate::search::{ProviderTestResult, SearchOptions, SearchProvider, SearchResult};
 use crate::sync_primitives::{Arc, Mutex};
+
+/// Map an `AlephError` returned by a search provider to a short, stable
+/// kind label used for structured log output. Lets ops grep the search
+/// log by failure mode (`kind=auth`, `kind=rate-limit`, ...) without
+/// having to parse free-form error messages.
+pub(super) fn classify_search_error(e: &AlephError) -> &'static str {
+    match e {
+        AlephError::AuthenticationError { .. } => "auth",
+        AlephError::RateLimitError { .. } => "rate-limit",
+        AlephError::Timeout { .. } => "timeout",
+        AlephError::NetworkError { .. } => "network",
+        AlephError::Cancelled => "cancelled",
+        AlephError::Validation(_) | AlephError::InvalidConfig { .. } => "config",
+        AlephError::ProviderError { .. } => "provider",
+        _ => "other",
+    }
+}
 /// Search provider registry and router
 ///
 /// This module manages multiple search providers and routes requests
@@ -132,8 +149,18 @@ impl SearchRegistry {
                 match provider.search(query, options).await {
                     Ok(results) => return Ok(results),
                     Err(e) => {
-                        let msg = format!("Provider '{}' failed: {}", self.default_provider, e);
-                        log::warn!("{}", msg);
+                        let kind = classify_search_error(&e);
+                        let msg = format!(
+                            "Provider '{}' [{}] failed: {}",
+                            self.default_provider, kind, e
+                        );
+                        log::warn!(
+                            target: "search",
+                            "provider={} kind={} {}",
+                            self.default_provider,
+                            kind,
+                            e
+                        );
                         errors.push(msg);
                     }
                 }
@@ -165,8 +192,18 @@ impl SearchRegistry {
                         return Ok(results);
                     }
                     Err(e) => {
-                        let msg = format!("Provider '{}' failed: {}", provider_name, e);
-                        log::warn!("{}", msg);
+                        let kind = classify_search_error(&e);
+                        let msg = format!(
+                            "Provider '{}' [{}] failed: {}",
+                            provider_name, kind, e
+                        );
+                        log::warn!(
+                            target: "search",
+                            "provider={} kind={} {}",
+                            provider_name,
+                            kind,
+                            e
+                        );
                         errors.push(msg);
                     }
                 }
@@ -272,6 +309,27 @@ impl SearchRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classify_search_error_covers_observable_kinds() {
+        let cases: &[(AlephError, &'static str)] = &[
+            (
+                AlephError::authentication("brave", "bad token"),
+                "auth",
+            ),
+            (AlephError::rate_limit("429 too many"), "rate-limit"),
+            (AlephError::network("dns failure"), "network"),
+            (AlephError::provider("5xx upstream"), "provider"),
+            (AlephError::Cancelled, "cancelled"),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(
+                classify_search_error(err),
+                *expected,
+                "wrong kind for: {err}",
+            );
+        }
+    }
 
     /// Mock provider for testing
     struct MockProvider {
