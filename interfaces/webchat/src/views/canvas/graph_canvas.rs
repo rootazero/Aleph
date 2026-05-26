@@ -210,6 +210,29 @@ pub fn GraphCanvas(
 
         let canvas_for_resize = canvas.clone();
         let closure: Closure<dyn FnMut()> = Closure::new(move || {
+            // Visibility pause: MainContent (app.rs) keeps every top-level
+            // view mounted and toggles `display:none` for inactive tabs, so
+            // `on_cleanup` never fires when the user navigates away from
+            // Memory. Without this guard the rAF chain keeps ticking at
+            // ~60 Hz on a hidden canvas (nav.tick + render + signal
+            // publish), burning ~10% CPU/GPU. `offset_width == 0` is the
+            // canonical "any ancestor is display:none" signal. Skip the
+            // whole frame body but keep the chain alive so resume is
+            // instant when the view is shown again.
+            if canvas_for_resize.offset_width() == 0
+                || canvas_for_resize.offset_height() == 0
+            {
+                if let Some(window) = web_sys::window() {
+                    if let Some(closure) = raf_c_inner.borrow().as_ref() {
+                        let id = window
+                            .request_animation_frame(closure.as_ref().unchecked_ref())
+                            .unwrap_or(0);
+                        *raf_h_inner.borrow_mut() = Some(id);
+                    }
+                }
+                return;
+            }
+
             let mut state = gs_render.borrow_mut();
             if !state.is_running {
                 return;
@@ -695,11 +718,15 @@ pub fn GraphCanvas(
         state.viewport.zoom_at(screen, delta);
     };
 
-    // The rAF render loop self-terminates via the `is_running` flag.
-    // When the parent CanvasView is hidden (display:none), the canvas element
-    // is still alive but the loop checks `is_running` every frame.
-    // Explicit cleanup is not needed because Leptos on_cleanup requires Send
-    // which Rc<RefCell<_>> does not satisfy on multi-threaded targets.
+    // The rAF chain is leaked on purpose: the parent <MainContent> keeps
+    // <CanvasView /> mounted (only toggles display:none) so `on_cleanup`
+    // does not fire on route change. The closure's own visibility guard
+    // (offset_width == 0 → return) does the heavy lifting: zero per-frame
+    // work when hidden, instant resume when shown.
+    //
+    // NB: wasm32 is single-threaded so on_cleanup IS available — the
+    // historical `Send` excuse was wrong. The real reason we skip it is
+    // that unmount never happens with the current routing pattern.
 
     let on_mouseleave = move |_ev: web_sys::MouseEvent| {
         // Hard-cancel any in-flight drag without spring-back animation (spec §6.3).
