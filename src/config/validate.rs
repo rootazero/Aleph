@@ -470,8 +470,11 @@ impl Config {
                     let provider_type = backend_config.provider_type.as_str();
 
                     match provider_type {
-                        "tavily" | "brave" | "bing" | "exa" => {
+                        "tavily" | "brave" | "bing" | "exa" | "jina" => {
                             // api_key validated after vault injection
+                        }
+                        "duckduckgo" => {
+                            // No api_key, no base_url — html-scrape fallback.
                         }
                         "google" => {
                             // api_key validated after vault injection
