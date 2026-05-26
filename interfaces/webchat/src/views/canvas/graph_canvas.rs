@@ -148,10 +148,20 @@ pub fn GraphCanvas(
     let drag_state_for_mu = drag_state.clone();
     let drag_state_for_leave = drag_state.clone();
 
+    // Visibility flag: drives the rAF closure's pause/resume decision.
+    // Default true so the first frames render while IntersectionObserver
+    // attaches. Updated asynchronously by the IntersectionObserver callback
+    // when the canvas's bounding box appears/disappears (`display:none`
+    // ancestor → empty box → not intersecting). Cell, not RefCell, because
+    // the read in the rAF closure must not contend with the observer's
+    // write.
+    let is_visible: Rc<Cell<bool>> = Rc::new(Cell::new(true));
+
     // Start render loop after mount
     let gs = graph_state.clone();
     let raf_h = raf_handle.clone();
     let raf_c = raf_closure.clone();
+    let is_visible_for_effect = is_visible.clone();
 
     Effect::new(move || {
         let Some(canvas_el) = canvas_ref.get() else {
@@ -159,6 +169,34 @@ pub fn GraphCanvas(
         };
 
         let canvas: web_sys::HtmlCanvasElement = canvas_el.into();
+
+        // Attach IntersectionObserver to flip `is_visible` without forcing
+        // synchronous layout. `offset_width`/`getBoundingClientRect` would
+        // each trigger updateLayoutIfDimensionsOutOfDate → resolveStyle
+        // → updateCompositingLayers — at 60 Hz that costs more than the
+        // render loop it was supposed to skip. IntersectionObserver
+        // dispatches asynchronously off the layout pipeline.
+        let is_visible_obs = is_visible_for_effect.clone();
+        let observer_cb: Closure<dyn FnMut(js_sys::Array)> =
+            Closure::new(move |entries: js_sys::Array| {
+                if let Some(entry_val) = entries.get(0).dyn_into::<
+                    web_sys::IntersectionObserverEntry,
+                >()
+                .ok()
+                {
+                    is_visible_obs.set(entry_val.is_intersecting());
+                }
+            });
+        if let Ok(observer) = web_sys::IntersectionObserver::new(
+            observer_cb.as_ref().unchecked_ref(),
+        ) {
+            observer.observe(&canvas);
+        }
+        // Leak the observer callback for the panel's lifetime — same
+        // pattern as the rAF closure. Since the parent never unmounts us
+        // (display:none keep-alive in MainContent), there is no cleanup
+        // hook to disconnect cleanly.
+        observer_cb.forget();
 
         // Initial canvas size — rAF loop will resize dynamically from parent
         let (w, h) = canvas
@@ -209,19 +247,18 @@ pub fn GraphCanvas(
         let edge_label_state_inner = edge_label_state;
 
         let canvas_for_resize = canvas.clone();
+        let is_visible_for_raf = is_visible.clone();
         let closure: Closure<dyn FnMut()> = Closure::new(move || {
             // Visibility pause: MainContent (app.rs) keeps every top-level
             // view mounted and toggles `display:none` for inactive tabs, so
             // `on_cleanup` never fires when the user navigates away from
             // Memory. Without this guard the rAF chain keeps ticking at
             // ~60 Hz on a hidden canvas (nav.tick + render + signal
-            // publish), burning ~10% CPU/GPU. `offset_width == 0` is the
-            // canonical "any ancestor is display:none" signal. Skip the
-            // whole frame body but keep the chain alive so resume is
-            // instant when the view is shown again.
-            if canvas_for_resize.offset_width() == 0
-                || canvas_for_resize.offset_height() == 0
-            {
+            // publish), burning ~10% CPU/GPU. The flag is set
+            // asynchronously by an IntersectionObserver attached above —
+            // see the long comment there for why we don't poll layout
+            // here.
+            if !is_visible_for_raf.get() {
                 if let Some(window) = web_sys::window() {
                     if let Some(closure) = raf_c_inner.borrow().as_ref() {
                         let id = window
