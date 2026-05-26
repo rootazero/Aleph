@@ -30,6 +30,84 @@ impl SearchRegistry {
         }
     }
 
+    /// Build a SearchRegistry from `[search]` TOML configuration.
+    ///
+    /// Walks `config.backends` and instantiates the concrete provider for
+    /// each `provider_type` ("tavily", "searxng"). Returns `None` if the
+    /// config is `None`, search is disabled, or no usable backend was
+    /// successfully constructed — caller should then leave
+    /// `BuiltinToolConfig.search_registry = None` and the `search` tool
+    /// falls back to its legacy TAVILY_API_KEY path.
+    ///
+    /// Unknown `provider_type` values are skipped with a warning instead of
+    /// aborting the whole load — a typo in one backend should not nuke the
+    /// rest of the registry.
+    pub fn from_config(config: Option<&crate::config::types::SearchConfigInternal>) -> Option<Self> {
+        let cfg = config?;
+        if !cfg.enabled {
+            return None;
+        }
+        let mut registry = Self::new(cfg.default_provider.clone());
+        let mut any_added = false;
+        for (name, backend) in &cfg.backends {
+            let provider: Arc<dyn SearchProvider> = match backend.provider_type.as_str() {
+                "tavily" => {
+                    // api_key is populated from the vault at runtime; an
+                    // unconfigured Tavily backend is skipped rather than
+                    // constructed with empty string (which the provider
+                    // would reject anyway).
+                    let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
+                        log::warn!(
+                            "search backend '{name}' (tavily) skipped: no api_key in vault"
+                        );
+                        continue;
+                    };
+                    match crate::search::providers::TavilyProvider::new(key.to_string()) {
+                        Ok(p) => Arc::new(p),
+                        Err(e) => {
+                            log::warn!("search backend '{name}' (tavily) construct failed: {e}");
+                            continue;
+                        }
+                    }
+                }
+                "searxng" => {
+                    let Some(base) = backend.base_url.as_deref().filter(|s| !s.is_empty()) else {
+                        log::warn!(
+                            "search backend '{name}' (searxng) skipped: base_url missing"
+                        );
+                        continue;
+                    };
+                    match crate::search::providers::SearxngProvider::new(base.to_string()) {
+                        Ok(p) => Arc::new(p),
+                        Err(e) => {
+                            log::warn!("search backend '{name}' (searxng) construct failed: {e}");
+                            continue;
+                        }
+                    }
+                }
+                other => {
+                    log::warn!(
+                        "search backend '{name}' has unknown provider_type '{other}', skipped"
+                    );
+                    continue;
+                }
+            };
+            registry.add_provider(name.clone(), provider);
+            any_added = true;
+        }
+        if !any_added {
+            log::warn!(
+                "[search] block parsed but no provider was constructable — \
+                 search tool will fall back to TAVILY_API_KEY env var"
+            );
+            return None;
+        }
+        if let Some(ref fallbacks) = cfg.fallback_providers {
+            registry.set_fallback_providers(fallbacks.clone());
+        }
+        Some(registry)
+    }
+
     /// Add a provider to the registry
     ///
     /// Invalidates any cached test results for this provider name

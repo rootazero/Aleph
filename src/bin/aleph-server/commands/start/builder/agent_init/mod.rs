@@ -379,12 +379,22 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         };
 
-        // Extract Tavily API key from search config
+        // Extract Tavily API key from search config (legacy fallback for the
+        // case where SearchRegistry can't be built — keeps the old behaviour).
         let tavily_api_key = app_config
             .search
             .as_ref()
             .and_then(|s| s.backends.get(&s.default_provider))
             .and_then(|b| b.api_key.clone());
+
+        // Build a SearchRegistry from `[search]` config so non-Tavily backends
+        // (SearXNG, Brave, etc.) actually reach the `search` builtin tool.
+        // Without this, the user can configure `[search.backends.searxng]` all
+        // they want but `SearchTool` falls back to TAVILY_API_KEY env and
+        // reports "No search provider configured" at runtime.
+        let search_registry =
+            alephcore::search::SearchRegistry::from_config(app_config.search.as_ref())
+                .map(Arc::new);
 
         // Create agent registry before tool config so agent management tools can use it
         let agent_registry = Arc::new(AgentRegistry::new());
@@ -449,6 +459,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             memory_db: Some(memory_db.clone()),
             embedder,
             tavily_api_key,
+            search_registry: search_registry.clone(),
             agent_registry: Some(agent_registry.clone()),
             workspace_manager: workspace_manager.clone(),
             event_bus: Some(event_bus.clone()),
@@ -491,6 +502,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             profile_synthesizer: profile_synth.clone(),
             // Phase 3 Task 8: sandbox for exec-class tools.
             sandbox: sandbox.clone(),
+            // Without the live Config arc, BuiltinToolRegistry constructor at
+            // executor/builtin_registry/builder/constructor.rs:50 falls back to
+            // SsrfPolicy::default() (enabled=true) for WebFetchTool — making
+            // `[security.ssrf]` settings (including enabled=false and the
+            // allowed_hosts bridge) silently dead. Plumb it through so
+            // user-facing SSRF config actually reaches web_fetch.
+            config: Some(app_config_arc.clone()),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
