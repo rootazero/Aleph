@@ -148,6 +148,10 @@ pub struct CronJobUpdates {
     pub schedule_kind: Option<ScheduleKind>,
     pub tags: Option<Vec<String>>,
     pub timezone: Option<String>,
+    /// Per-job timeout override. Outer `Some` indicates an explicit action:
+    /// inner `Some(ms)` sets the override; inner `None` clears it. Outer
+    /// `None` means leave the field unchanged.
+    pub timeout_ms: Option<Option<i64>>,
 }
 
 /// Apply partial updates to an existing job. Recomputes next run time.
@@ -181,6 +185,9 @@ pub fn update_job<C: Clock>(
     }
     if let Some(timezone) = updates.timezone {
         job.timezone = Some(timezone);
+    }
+    if let Some(timeout_action) = updates.timeout_ms {
+        job.timeout_ms = timeout_action;
     }
 
     job.updated_at = clock.now_ms();
@@ -350,6 +357,63 @@ mod tests {
         let updated = store.get_job("updatable").unwrap();
         assert_eq!(updated.name, "Updated Name");
         assert_eq!(updated.prompt, "new prompt");
+    }
+
+    /// D1: timeout_ms update supports three actions — set / clear / no-op.
+    #[test]
+    fn update_job_timeout_ms_action() {
+        let mut store = make_store();
+        let clock = FakeClock::new(1_000_000);
+
+        let job = make_test_job("timeout-job");
+        add_job(&mut store, job, &clock);
+        assert!(store.get_job("timeout-job").unwrap().timeout_ms.is_none());
+
+        // SET: outer Some(Some(n)) installs an override.
+        update_job(
+            &mut store,
+            "timeout-job",
+            CronJobUpdates {
+                timeout_ms: Some(Some(600_000)),
+                ..Default::default()
+            },
+            &clock,
+        )
+        .unwrap();
+        assert_eq!(
+            store.get_job("timeout-job").unwrap().timeout_ms,
+            Some(600_000)
+        );
+
+        // NO-OP: outer None must NOT overwrite the existing override.
+        update_job(
+            &mut store,
+            "timeout-job",
+            CronJobUpdates {
+                name: Some("new name".to_string()),
+                ..Default::default()
+            },
+            &clock,
+        )
+        .unwrap();
+        assert_eq!(
+            store.get_job("timeout-job").unwrap().timeout_ms,
+            Some(600_000),
+            "no-op must preserve existing override"
+        );
+
+        // CLEAR: outer Some(None) removes the override.
+        update_job(
+            &mut store,
+            "timeout-job",
+            CronJobUpdates {
+                timeout_ms: Some(None),
+                ..Default::default()
+            },
+            &clock,
+        )
+        .unwrap();
+        assert!(store.get_job("timeout-job").unwrap().timeout_ms.is_none());
     }
 
     #[test]

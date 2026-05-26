@@ -242,6 +242,8 @@ pub(crate) fn build_update_body(
     tags_csv: Option<&str>,
     enable: bool,
     disable: bool,
+    timeout_secs: Option<u64>,
+    clear_timeout: bool,
 ) -> Result<Value, CliError> {
     let mut body = serde_json::Map::new();
     body.insert("job_id".into(), Value::String(job_id.into()));
@@ -284,6 +286,22 @@ pub(crate) fn build_update_body(
     } else if disable {
         body.insert("enabled".into(), Value::Bool(false));
     }
+    // timeout override: --clear-timeout sends Null; --timeout-secs N sends N*1000;
+    // both absent sends nothing (server treats as no-op).
+    if clear_timeout {
+        body.insert("timeout_ms".into(), Value::Null);
+    } else if let Some(secs) = timeout_secs {
+        let ms = i64::try_from(secs)
+            .ok()
+            .and_then(|s| s.checked_mul(1000))
+            .ok_or_else(|| CliError::Other(format!("--timeout-secs {secs} overflows i64 ms")))?;
+        if ms <= 0 {
+            return Err(CliError::Other(
+                "--timeout-secs must be > 0 (use --clear-timeout to remove)".to_string(),
+            ));
+        }
+        body.insert("timeout_ms".into(), Value::Number(ms.into()));
+    }
     Ok(Value::Object(body))
 }
 
@@ -300,6 +318,8 @@ pub async fn update(
     tags_csv: Option<&str>,
     enable: bool,
     disable: bool,
+    timeout_secs: Option<u64>,
+    clear_timeout: bool,
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
@@ -314,6 +334,8 @@ pub async fn update(
         tags_csv,
         enable,
         disable,
+        timeout_secs,
+        clear_timeout,
     )?;
 
     let (client, _events) = AlephClient::connect(server_url).await?;
@@ -439,7 +461,7 @@ mod tests {
     #[test]
     fn update_body_skips_unset_fields() {
         let body = build_update_body(
-            "id-1", None, None, None, None, None, None, None, false, false,
+            "id-1", None, None, None, None, None, None, None, false, false, None, false,
         )
         .unwrap();
         let obj = body.as_object().unwrap();
@@ -452,7 +474,7 @@ mod tests {
         // clap normally prevents this via conflicts_with, but unit-test the
         // builder's defensive behaviour: enable=true wins.
         let body = build_update_body(
-            "id-1", None, None, None, None, None, None, None, true, true,
+            "id-1", None, None, None, None, None, None, None, true, true, None, false,
         )
         .unwrap();
         assert_eq!(body["enabled"], true);
@@ -461,7 +483,7 @@ mod tests {
     #[test]
     fn update_body_disable_emits_false() {
         let body = build_update_body(
-            "id-1", None, None, None, None, None, None, None, false, true,
+            "id-1", None, None, None, None, None, None, None, false, true, None, false,
         )
         .unwrap();
         assert_eq!(body["enabled"], false);
@@ -480,9 +502,63 @@ mod tests {
             None,
             false,
             false,
+            None,
+            false,
         )
         .unwrap();
         assert_eq!(body["schedule_kind"]["kind"], "cron");
         assert_eq!(body["schedule_kind"]["expr"], "0 0 * * *");
+    }
+
+    /// D1: --timeout-secs N emits timeout_ms as N*1000.
+    #[test]
+    fn update_body_timeout_secs_emits_ms() {
+        let body = build_update_body(
+            "id-1", None, None, None, None, None, None, None, false, false, Some(600), false,
+        )
+        .unwrap();
+        assert_eq!(body["timeout_ms"], 600_000);
+    }
+
+    /// D1: --clear-timeout emits an explicit null.
+    #[test]
+    fn update_body_clear_timeout_emits_null() {
+        let body = build_update_body(
+            "id-1", None, None, None, None, None, None, None, false, false, None, true,
+        )
+        .unwrap();
+        assert!(body["timeout_ms"].is_null());
+        assert!(body.as_object().unwrap().contains_key("timeout_ms"));
+    }
+
+    /// D1: neither flag → field absent.
+    #[test]
+    fn update_body_no_timeout_flag_omits_field() {
+        let body = build_update_body(
+            "id-1", None, None, None, None, None, None, None, false, false, None, false,
+        )
+        .unwrap();
+        assert!(!body.as_object().unwrap().contains_key("timeout_ms"));
+    }
+
+    /// D1: rejects timeout_secs that would overflow i64 ms.
+    #[test]
+    fn update_body_timeout_secs_overflow_rejected() {
+        let err = build_update_body(
+            "id-1",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            Some(u64::MAX),
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("overflows"));
     }
 }

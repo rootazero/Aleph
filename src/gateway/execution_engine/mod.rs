@@ -102,6 +102,14 @@ pub struct RunRequest {
     /// the engine; the gateway handler that constructs `RunRequest` is
     /// responsible for trust + existence checks.
     pub workspace_override: Option<PathBuf>,
+    /// D2: per-run Think→Act iteration cap override. When `Some(n>0)`, this
+    /// wins over both `FlowOverrides.max_iterations` and the boot-time
+    /// `[execution] max_iterations` default. Cron-driven runs set this from
+    /// `CronConfig::default_max_iterations` so a single misbehaving job
+    /// can't burn the much-larger global cap (default 1000) before the
+    /// wall-clock timeout fires. `None` falls through to the legacy
+    /// resolution chain.
+    pub max_iterations_override: Option<u32>,
 }
 
 impl std::fmt::Debug for RunRequest {

@@ -303,6 +303,11 @@ pub struct FlowRequest {
     /// directory rather than `~/.aleph/workspaces/{agent_id}/`. `None`
     /// keeps the legacy agent-workspace behaviour.
     pub workspace_override: Option<std::path::PathBuf>,
+    /// D2: per-run override that wins over both `FlowOverrides.max_iterations`
+    /// and the boot-time `[execution] max_iterations` default. Forwarded
+    /// by `Orchestrator::dispatch` into `HarnessRunner::run` so cron-driven
+    /// flows can cap themselves tightly without lowering the global default.
+    pub max_iterations_override: Option<u32>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -393,6 +398,10 @@ pub trait HarnessRunner: Send + Sync {
         trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
         interaction_manifest: Option<crate::thinker::interaction::InteractionManifest>,
         workspace_override: Option<std::path::PathBuf>,
+        // D2: highest-priority cap. `Some(n>0)` overrides both the per-flow
+        // preset and the boot-time default; `None` or `Some(0)` is "unset"
+        // and falls through to the legacy resolution chain.
+        max_iterations_override: Option<u32>,
     ) -> Result<FlowOutcome, FlowError>;
 }
 
@@ -516,6 +525,7 @@ impl Orchestrator {
         let trace_sink = req.trace_sink.clone();
         let interaction_manifest = req.interaction_manifest.clone();
         let workspace_override = req.workspace_override.clone();
+        let max_iterations_override = req.max_iterations_override;
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -534,6 +544,7 @@ impl Orchestrator {
                     trace_sink,
                     interaction_manifest,
                     workspace_override,
+                    max_iterations_override,
                 )
                 .await;
             // `done_tx.send` returns Err only when `done_rx` was dropped by the

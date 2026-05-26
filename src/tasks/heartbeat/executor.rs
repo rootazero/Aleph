@@ -146,6 +146,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sandbox_override: None,
             workspace_override: None,
+            max_iterations_override: None,
         };
 
         // Collect events (no user-facing emitter): the L2 agent declares its

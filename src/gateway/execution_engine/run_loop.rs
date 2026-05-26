@@ -731,6 +731,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // `HarnessRunner::run` and lands on the `RunStarted` marker
                 // for resume parity.
                 workspace_override: request.workspace_override.clone(),
+                // D2: forward the per-run iteration cap override so the
+                // harness bridge can apply it as the highest-priority layer
+                // in `resolve_max_iterations`.
+                max_iterations_override: request.max_iterations_override,
             };
 
             // Dispatch via the orchestrator

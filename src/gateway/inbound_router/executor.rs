@@ -247,6 +247,7 @@ impl InboundMessageRouter {
             pending_media: pending_media.clone(),
             sandbox_override: None,
             workspace_override: None,
+            max_iterations_override: None,
         };
 
         if !request.attachments.is_empty() {

@@ -261,6 +261,7 @@ impl SessionScheduler {
             pending_media: pending_media.clone(),
             sandbox_override: None,
             workspace_override: None,
+            max_iterations_override: None,
         };
 
         info!(
@@ -538,6 +539,7 @@ async fn execute_next(
         pending_media: pending_media.clone(),
         sandbox_override: None,
         workspace_override: None,
+            max_iterations_override: None,
     };
 
     info!(

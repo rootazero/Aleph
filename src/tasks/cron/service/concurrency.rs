@@ -90,7 +90,7 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
             source_conversation_id: job.source_conversation_id.clone(),
             prompt: resolve_job_prompt(job, clock),
             model: None,
-            timeout_ms: Some(default_timeout_ms),
+            timeout_ms: Some(job.timeout_ms.unwrap_or(default_timeout_ms)),
             delivery: job.delivery_config.clone(),
             session_target: job.session_target.clone(),
             marked_at: now,
@@ -138,7 +138,7 @@ pub async fn phase1_mark_manual<C: Clock>(
         source_conversation_id: job.source_conversation_id.clone(),
         prompt: resolve_job_prompt(job, clock),
         model: None,
-        timeout_ms: Some(default_timeout_ms),
+        timeout_ms: Some(job.timeout_ms.unwrap_or(default_timeout_ms)),
         delivery: job.delivery_config.clone(),
         session_target: job.session_target.clone(),
         marked_at: now,
@@ -170,6 +170,7 @@ pub async fn phase3_writeback<C: Clock>(
     store: &Arc<tokio::sync::Mutex<CronStore>>,
     clock: &C,
     results: &[(String, ExecutionResult)],
+    notify_on_failure_default: bool,
 ) -> Result<Vec<PendingAlert>, String> {
     let mut guard = store.lock().await;
 
@@ -352,7 +353,27 @@ pub async fn phase3_writeback<C: Clock>(
         let Some(job) = guard.get_job_mut(job_id) else {
             continue;
         };
-        let Some(alert_cfg) = job.failure_alert.clone() else {
+        // D4: when no explicit `failure_alert` is configured but the job has
+        // a delivery channel + conversation, synthesize a sane default so
+        // failures aren't silently dropped (which previously required users
+        // to opt in to alerting per job).
+        let alert_cfg = job.failure_alert.clone().or_else(|| {
+            if !notify_on_failure_default {
+                return None;
+            }
+            let channel = job.source_channel_id.clone()?;
+            let chat_id = job.source_conversation_id.clone()?;
+            Some(crate::tasks::cron::config::FailureAlertConfig {
+                after: 1,
+                cooldown_ms: 3_600_000,
+                target: crate::tasks::cron::config::DeliveryTargetConfig::Gateway {
+                    channel,
+                    chat_id,
+                    format: None,
+                },
+            })
+        });
+        let Some(alert_cfg) = alert_cfg else {
             continue;
         };
         let hint = result.retry_hint.unwrap_or_else(RetryHint::permanent);
@@ -563,7 +584,7 @@ mod tests {
         let result = make_execution_result(RunStatus::Ok);
         let results = vec![("completed-job".to_string(), result)];
 
-        phase3_writeback(&store, &clock, &results).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false).await.unwrap();
 
         let guard = store.lock().await;
         let job = guard.get_job("completed-job").unwrap();
@@ -589,7 +610,7 @@ mod tests {
         let results = vec![("deleted-job".to_string(), result)];
 
         // Should not error, just warn
-        let outcome = phase3_writeback(&store, &clock, &results).await;
+        let outcome = phase3_writeback(&store, &clock, &results, false).await;
         assert!(outcome.is_ok(), "should gracefully handle deleted jobs");
     }
 
@@ -612,7 +633,7 @@ mod tests {
         let result = make_execution_result(RunStatus::Error);
         let results = vec![("error-job".to_string(), result)];
 
-        phase3_writeback(&store, &clock, &results).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false).await.unwrap();
 
         let guard = store.lock().await;
         let job = guard.get_job("error-job").unwrap();
@@ -640,7 +661,7 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
-        phase3_writeback(&store, &clock, &results).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false).await.unwrap();
 
         let guard = store.lock().await;
         let b = guard.get_job("job-b").unwrap();
@@ -669,7 +690,7 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Error))];
-        phase3_writeback(&store, &clock, &results).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false).await.unwrap();
 
         let guard = store.lock().await;
         let b = guard.get_job("job-b").unwrap();
@@ -698,7 +719,7 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Error))];
-        phase3_writeback(&store, &clock, &results).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false).await.unwrap();
 
         let guard = store.lock().await;
         let b = guard.get_job("job-b").unwrap();
@@ -729,7 +750,7 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
-        phase3_writeback(&store, &clock, &results).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false).await.unwrap();
 
         let guard = store.lock().await;
         let b = guard.get_job("job-b").unwrap();
@@ -759,7 +780,7 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
-        phase3_writeback(&store, &clock, &results).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false).await.unwrap();
 
         let guard = store.lock().await;
         let b = guard.get_job("job-b").unwrap();
@@ -785,7 +806,7 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
-        let outcome = phase3_writeback(&store, &clock, &results).await;
+        let outcome = phase3_writeback(&store, &clock, &results, false).await;
         assert!(
             outcome.is_ok(),
             "a chain target that no longer exists must not error"
@@ -943,7 +964,7 @@ mod tests {
         }
 
         let results = vec![("oneshot".to_string(), make_execution_result(RunStatus::Ok))];
-        phase3_writeback(&store, &clock, &results).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false).await.unwrap();
 
         let guard = store.lock().await;
         assert!(
@@ -979,7 +1000,7 @@ mod tests {
         }
 
         let results = vec![("keep".to_string(), make_execution_result(RunStatus::Ok))];
-        phase3_writeback(&store, &clock, &results).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false).await.unwrap();
 
         let guard = store.lock().await;
         let job = guard.get_job("keep").expect("job should be kept");
@@ -1007,7 +1028,7 @@ mod tests {
         }
 
         let results = vec![("flaky".to_string(), make_execution_result(RunStatus::Error))];
-        phase3_writeback(&store, &clock, &results).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false).await.unwrap();
 
         let guard = store.lock().await;
         let job = guard.get_job("flaky").unwrap();
@@ -1018,5 +1039,193 @@ mod tests {
             "backoff not applied: next={next}, expected >= {}",
             1_100_000 + 300_000
         );
+    }
+
+    /// D1: per-job `timeout_ms` override beats the configured default
+    /// when set; when `None`, the snapshot inherits the default.
+    #[tokio::test]
+    async fn phase1_per_job_timeout_override_beats_default() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_000_000);
+
+        // Job A overrides timeout to 10 minutes; Job B inherits default.
+        {
+            let mut guard = store.lock().await;
+
+            let mut job_a = make_test_job("override-job");
+            job_a.created_at = 900_000;
+            job_a.timeout_ms = Some(600_000);
+            add_job(&mut guard, job_a, &clock);
+            let ja = guard.get_job_mut("override-job").unwrap();
+            ja.state.next_run_at_ms = Some(950_000);
+
+            let mut job_b = make_test_job("default-job");
+            job_b.created_at = 900_000;
+            add_job(&mut guard, job_b, &clock);
+            let jb = guard.get_job_mut("default-job").unwrap();
+            jb.state.next_run_at_ms = Some(950_000);
+
+            guard.persist().unwrap();
+        }
+
+        let snapshots = phase1_mark_due_jobs(&store, &clock, TEST_TIMEOUT_MS)
+            .await
+            .unwrap();
+        assert_eq!(snapshots.len(), 2);
+
+        let by_id: std::collections::HashMap<_, _> = snapshots
+            .iter()
+            .map(|s| (s.id.clone(), s.timeout_ms))
+            .collect();
+        assert_eq!(
+            by_id.get("override-job"),
+            Some(&Some(600_000)),
+            "per-job override must reach the snapshot"
+        );
+        assert_eq!(
+            by_id.get("default-job"),
+            Some(&Some(TEST_TIMEOUT_MS)),
+            "jobs without override inherit the configured default"
+        );
+    }
+
+    /// D4: when `notify_on_failure_default` is true and the job has a
+    /// source channel + conversation but no explicit `failure_alert`,
+    /// phase3 synthesizes a Gateway-target alert from those fields.
+    #[tokio::test]
+    async fn phase3_synthesizes_default_alert_for_channel_jobs() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("silent-failer");
+            job.source_channel_id = Some("AlephzBot".to_string());
+            job.source_conversation_id = Some("123456".to_string());
+            assert!(job.failure_alert.is_none());
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("silent-failer").unwrap();
+            j.state.running_at_ms = Some(1_000_000);
+            guard.persist().unwrap();
+        }
+
+        let result = ExecutionResult {
+            status: RunStatus::Timeout,
+            error: Some("timeout".to_string()),
+            // Permanent hint to bypass the `after` threshold for this test —
+            // the assertion is about *synthesis*, not the cooldown policy.
+            retry_hint: Some(crate::tasks::shared::retry_hint::RetryHint::permanent()),
+            ..make_execution_result(RunStatus::Timeout)
+        };
+        let alerts = phase3_writeback(
+            &store,
+            &clock,
+            &[("silent-failer".to_string(), result)],
+            true, // notify_on_failure_default
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(alerts.len(), 1, "default alert must be synthesized");
+        let alert = &alerts[0];
+        assert_eq!(alert.job_id, "silent-failer");
+        match &alert.target {
+            crate::tasks::cron::config::DeliveryTargetConfig::Gateway { channel, chat_id, .. } => {
+                assert_eq!(channel, "AlephzBot");
+                assert_eq!(chat_id, "123456");
+            }
+            other => panic!("expected Gateway target, got {other:?}"),
+        }
+    }
+
+    /// D4: when `notify_on_failure_default` is false, no alert is synthesized
+    /// even if the job has a source channel — preserves legacy opt-in-only.
+    #[tokio::test]
+    async fn phase3_default_alert_off_preserves_silent_behaviour() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("silent-by-config");
+            job.source_channel_id = Some("AlephzBot".to_string());
+            job.source_conversation_id = Some("123456".to_string());
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("silent-by-config").unwrap();
+            j.state.running_at_ms = Some(1_000_000);
+            guard.persist().unwrap();
+        }
+
+        let result = ExecutionResult {
+            status: RunStatus::Timeout,
+            retry_hint: Some(crate::tasks::shared::retry_hint::RetryHint::permanent()),
+            ..make_execution_result(RunStatus::Timeout)
+        };
+        let alerts = phase3_writeback(
+            &store,
+            &clock,
+            &[("silent-by-config".to_string(), result)],
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(
+            alerts.is_empty(),
+            "notify_on_failure_default=false must not synthesize"
+        );
+    }
+
+    /// D4: jobs without source_channel never get a synthesized default
+    /// (no channel to deliver to).
+    #[tokio::test]
+    async fn phase3_default_alert_requires_source_channel() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let job = make_test_job("no-channel");
+            assert!(job.source_channel_id.is_none());
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("no-channel").unwrap();
+            j.state.running_at_ms = Some(1_000_000);
+            guard.persist().unwrap();
+        }
+
+        let result = ExecutionResult {
+            status: RunStatus::Error,
+            retry_hint: Some(crate::tasks::shared::retry_hint::RetryHint::permanent()),
+            ..make_execution_result(RunStatus::Error)
+        };
+        let alerts = phase3_writeback(
+            &store,
+            &clock,
+            &[("no-channel".to_string(), result)],
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(
+            alerts.is_empty(),
+            "no synthesis without source_channel_id+conversation_id"
+        );
+    }
+
+    /// D1: per-job override also applies on the manual-trigger path.
+    #[tokio::test]
+    async fn phase1_manual_honours_per_job_timeout_override() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_000_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("manual-override");
+            job.created_at = 900_000;
+            job.timeout_ms = Some(900_000);
+            add_job(&mut guard, job, &clock);
+            guard.persist().unwrap();
+        }
+
+        let snapshot = phase1_mark_manual(&store, &clock, "manual-override", TEST_TIMEOUT_MS)
+            .await
+            .unwrap()
+            .expect("manual snapshot");
+        assert_eq!(snapshot.timeout_ms, Some(900_000));
     }
 }

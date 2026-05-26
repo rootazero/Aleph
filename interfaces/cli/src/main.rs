@@ -447,6 +447,8 @@ async fn dispatch_cron(
             tags,
             enable,
             disable,
+            timeout_secs,
+            clear_timeout,
         } => {
             cron_cmd::update(
                 server_url,
@@ -460,6 +462,8 @@ async fn dispatch_cron(
                 tags.as_deref(),
                 enable,
                 disable,
+                timeout_secs,
+                clear_timeout,
                 config,
                 json,
             )

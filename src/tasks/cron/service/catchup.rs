@@ -89,7 +89,7 @@ pub async fn run_startup_catchup<C: Clock>(
     // Phase 1: Clear stale running markers
     for job in guard.jobs_mut().iter_mut() {
         if let Some(running_at) = job.state.running_at_ms {
-            let stale_threshold = DEFAULT_STALE_THRESHOLD_MS.max(job.timeout_ms() * 2);
+            let stale_threshold = DEFAULT_STALE_THRESHOLD_MS.max(job.effective_timeout_ms() * 2);
             if now.saturating_sub(running_at) > stale_threshold {
                 job.state.running_at_ms = None;
                 report.stale_markers_cleared += 1;

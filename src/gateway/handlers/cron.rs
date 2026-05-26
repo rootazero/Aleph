@@ -53,6 +53,7 @@ fn job_view_to_json(view: &CronJobView) -> Value {
         // Config fields
         "delivery_config": view.delivery_config,
         "failure_alert": view.failure_alert,
+        "timeout_ms": view.timeout_ms,
     })
 }
 
@@ -193,6 +194,21 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
             job.session_target = target;
         }
     }
+    if let Some(tv) = params.get("timeout_ms") {
+        match tv {
+            Value::Null => {} // explicit null at create == default (no override)
+            Value::Number(n) if n.as_i64().is_some_and(|v| v > 0) => {
+                job.timeout_ms = Some(n.as_i64().unwrap());
+            }
+            _ => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    "timeout_ms must be a positive integer (ms)",
+                );
+            }
+        }
+    }
 
     let service = cron.lock().await;
     match service.add_job(job).await {
@@ -255,6 +271,24 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
     }
     if let Some(tz) = params.get("timezone").and_then(|v| v.as_str()) {
         updates.timezone = Some(tz.to_string());
+    }
+    // timeout_ms tri-state: absent = no-op, Null = clear, positive integer = set.
+    // Negative / zero / non-integer values are rejected to avoid silent no-ops
+    // that look like a successful update.
+    if let Some(tv) = params.get("timeout_ms") {
+        match tv {
+            Value::Null => updates.timeout_ms = Some(None),
+            Value::Number(n) if n.as_i64().is_some_and(|v| v > 0) => {
+                updates.timeout_ms = Some(Some(n.as_i64().unwrap()));
+            }
+            _ => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    "timeout_ms must be a positive integer (ms) or null to clear",
+                );
+            }
+        }
     }
 
     let service = cron.lock().await;

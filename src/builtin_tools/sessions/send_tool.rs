@@ -338,6 +338,7 @@ impl SessionsSendTool {
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sandbox_override: None,
             workspace_override: inherited_workspace.clone(),
+            max_iterations_override: None,
         };
 
         // Get execution adapter
@@ -418,6 +419,7 @@ impl SessionsSendTool {
                                 pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
                                 sandbox_override: None,
                                 workspace_override: inherited_workspace.clone(),
+            max_iterations_override: None,
                             };
                             let continue_emitter: Arc<
                                 dyn crate::gateway::event_emitter::EventEmitter + Send + Sync,

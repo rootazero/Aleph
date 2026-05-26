@@ -181,6 +181,7 @@ impl HarnessRunner for AgentHarnessRunner {
         trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
         interaction_manifest: Option<crate::thinker::InteractionManifest>,
         workspace_override: Option<std::path::PathBuf>,
+        max_iterations_override: Option<u32>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -234,8 +235,11 @@ impl HarnessRunner for AgentHarnessRunner {
         // (`SessionBudgetLayer` surfaces it to the LLM) and `HarnessDeps`
         // below (where it enforces the cap on the loop). Computing in
         // one place avoids the two consumers drifting.
-        let resolved_max_iterations =
-            resolve_max_iterations(spec.overrides.max_iterations, self.default_max_iterations);
+        let resolved_max_iterations = resolve_max_iterations(
+            max_iterations_override,
+            spec.overrides.max_iterations,
+            self.default_max_iterations,
+        );
 
         // Step 5b (BUG-2/BUG-3 fix, Phase 6 follow-up): assemble the system
         // prompt from per-agent curated memory + hybrid retrieval before the
@@ -863,15 +867,23 @@ pub(crate) const FALLBACK_MAX_ITERATIONS: usize = 200;
 
 /// Resolve the hard per-run iteration cap for the harness loop.
 ///
-/// A positive `FlowOverrides.max_iterations` (per-flow preset override) wins;
-/// otherwise the boot-time `default` (from `[execution] max_iterations`)
-/// applies. A zero on either input is treated as "unset" so a misconfigured
-/// `0` can never leave the loop uncapped — it falls through to
-/// [`FALLBACK_MAX_ITERATIONS`].
-fn resolve_max_iterations(flow_override: Option<u32>, default: usize) -> usize {
-    flow_override
-        .map(|n| n as usize)
-        .filter(|&n| n > 0)
+/// D2 precedence (highest → lowest, first positive value wins):
+/// 1. `runtime_override` — `FlowRequest.max_iterations_override` (cron jobs
+///    set this so a single misbehaving job can't burn the global cap).
+/// 2. `flow_override` — `FlowOverrides.max_iterations` (per-flow preset).
+/// 3. `default` — boot-time `[execution] max_iterations` (1000 default).
+///
+/// A zero on any input is treated as "unset" so a misconfigured `0` can
+/// never leave the loop uncapped — it falls through to the next layer,
+/// and ultimately to [`FALLBACK_MAX_ITERATIONS`].
+fn resolve_max_iterations(
+    runtime_override: Option<u32>,
+    flow_override: Option<u32>,
+    default: usize,
+) -> usize {
+    let positive_or_none = |n: Option<u32>| n.map(|n| n as usize).filter(|&n| n > 0);
+    positive_or_none(runtime_override)
+        .or_else(|| positive_or_none(flow_override))
         .or(Some(default).filter(|&n| n > 0))
         .unwrap_or(FALLBACK_MAX_ITERATIONS)
 }
@@ -1297,24 +1309,24 @@ mod tests {
 
     #[test]
     fn resolve_max_iterations_uses_default_when_no_override() {
-        assert_eq!(super::resolve_max_iterations(None, 200), 200);
+        assert_eq!(super::resolve_max_iterations(None, None, 200), 200);
     }
 
     #[test]
     fn resolve_max_iterations_flow_override_wins() {
-        assert_eq!(super::resolve_max_iterations(Some(50), 200), 50);
+        assert_eq!(super::resolve_max_iterations(None, Some(50), 200), 50);
     }
 
     #[test]
     fn resolve_max_iterations_treats_zero_override_as_unset() {
-        assert_eq!(super::resolve_max_iterations(Some(0), 200), 200);
+        assert_eq!(super::resolve_max_iterations(None, Some(0), 200), 200);
     }
 
     #[test]
     fn resolve_max_iterations_falls_back_when_default_is_zero() {
         // Misconfigured `[execution] max_iterations = 0` must still cap.
         assert_eq!(
-            super::resolve_max_iterations(None, 0),
+            super::resolve_max_iterations(None, None, 0),
             super::FALLBACK_MAX_ITERATIONS
         );
     }
@@ -1322,8 +1334,32 @@ mod tests {
     #[test]
     fn resolve_max_iterations_never_returns_zero() {
         assert_eq!(
-            super::resolve_max_iterations(Some(0), 0),
+            super::resolve_max_iterations(None, Some(0), 0),
             super::FALLBACK_MAX_ITERATIONS
+        );
+    }
+
+    /// D2: runtime override is the highest-priority layer — beats both
+    /// flow override and default. Zero on runtime layer falls through.
+    #[test]
+    fn resolve_max_iterations_runtime_override_wins_over_flow_override() {
+        assert_eq!(
+            super::resolve_max_iterations(Some(20), Some(50), 200),
+            20
+        );
+    }
+
+    #[test]
+    fn resolve_max_iterations_runtime_override_wins_over_default() {
+        assert_eq!(super::resolve_max_iterations(Some(20), None, 200), 20);
+    }
+
+    #[test]
+    fn resolve_max_iterations_zero_runtime_falls_through_to_flow() {
+        assert_eq!(
+            super::resolve_max_iterations(Some(0), Some(50), 200),
+            50,
+            "0 runtime override is 'unset' — flow override applies"
         );
     }
 

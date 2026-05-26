@@ -145,6 +145,7 @@ mod tests {
                 _trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
                 _interaction_manifest: Option<crate::thinker::InteractionManifest>,
                 _workspace_override: Option<std::path::PathBuf>,
+            _max_iterations_override: Option<u32>,
             ) -> Result<
                 crate::orchestrator::dispatch::FlowOutcome,
                 crate::orchestrator::errors::FlowError,

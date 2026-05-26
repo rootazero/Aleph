@@ -87,6 +87,7 @@ impl FlowRunTool {
             // Subagent sub-flow inherits the parent's project root via the
             // surrounding RunRequest path (see send_tool / teams dispatcher).
             workspace_override: None,
+            max_iterations_override: None,
         };
         let handle = self.orchestrator.dispatch(req).await?;
         let outcome = handle

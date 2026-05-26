@@ -402,11 +402,19 @@ impl AiProvider for FailoverProvider {
                             }
                             Err(e) => match decide(&e, attempt, self.config.max_retries) {
                                 Decision::RetrySame(delay) => {
+                                    // D3: jitter the backoff so concurrent agents
+                                    // hitting the same overloaded provider don't
+                                    // retry in lockstep and reignite the spike.
+                                    // Equal-jitter shape via `apply_jitter`.
+                                    let jittered = crate::providers::retry::apply_jitter(
+                                        delay, 0.25,
+                                    );
                                     tracing::warn!(
                                         provider = %cand.name, model = ?model, attempt,
+                                        delay_ms = jittered.as_millis() as u64,
                                         error = %e, "failover: transient, retrying in place",
                                     );
-                                    tokio::time::sleep(delay).await;
+                                    tokio::time::sleep(jittered).await;
                                     attempt += 1;
                                     continue;
                                 }

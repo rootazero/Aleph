@@ -238,6 +238,7 @@ where
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
         workspace_override,
+        max_iterations_override: None,
     };
 
     // Spawn execution task
@@ -464,6 +465,7 @@ where
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
         workspace_override: project_root_for_run.clone(),
+        max_iterations_override: None,
     };
 
     // Spawn execution task

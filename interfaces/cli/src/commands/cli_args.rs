@@ -398,6 +398,13 @@ pub(crate) enum CronAction {
         /// Disable the job
         #[arg(long)]
         disable: bool,
+        /// Override the per-job execution timeout (seconds). Positive sets the
+        /// override; conflicts with --clear-timeout. Omit both to leave as-is.
+        #[arg(long, value_name = "SECS", conflicts_with = "clear_timeout")]
+        timeout_secs: Option<u64>,
+        /// Clear the per-job execution timeout override (revert to default).
+        #[arg(long)]
+        clear_timeout: bool,
     },
     /// Delete a cron job permanently
     Delete {

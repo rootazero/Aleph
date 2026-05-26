@@ -12,13 +12,26 @@ use tracing::{debug, error, info};
 use crate::sync_primitives::Arc;
 
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, SessionTarget};
-use crate::tasks::cron::service::concurrency::{phase1_mark_due_jobs, phase3_writeback};
+use crate::tasks::cron::service::concurrency::{phase1_mark_due_jobs, phase3_writeback, PendingAlert};
 use crate::tasks::cron::service::state::ServiceState;
 use crate::tasks::shared::clock::Clock;
 
 /// Executor function type: takes a snapshot and returns an execution result.
 pub type JobExecutorFn =
     Arc<dyn Fn(JobSnapshot) -> Pin<Box<dyn Future<Output = ExecutionResult> + Send>> + Send + Sync>;
+
+/// Dispatcher for failure alerts produced by `phase3_writeback`.
+///
+/// Wired by the daemon's startup glue (`build_cron_alert_dispatcher_fn`) so
+/// `PendingAlert`s actually reach the delivery pipeline — without this hook
+/// the alerts are dropped on the floor, which is the pre-D4 silent-failure
+/// bug. Callers without a dispatcher (e.g. unit tests for the timer loop)
+/// pass `None`.
+pub type AlertDispatcherFn = Arc<
+    dyn Fn(Vec<PendingAlert>) -> Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// RAII guard that clears the `is_running` flag on drop.
 ///
@@ -40,7 +53,11 @@ impl<'a, C: Clock> Drop for RunningGuard<'a, C> {
 /// 2. Skip if `is_running` (re-entrancy guard)
 /// 3. Call `on_timer_tick`
 /// 4. Clear `is_running`
-pub async fn run_timer_loop<C: Clock>(state: Arc<ServiceState<C>>, executor: JobExecutorFn) {
+pub async fn run_timer_loop<C: Clock>(
+    state: Arc<ServiceState<C>>,
+    executor: JobExecutorFn,
+    alert_dispatcher: Option<AlertDispatcherFn>,
+) {
     let interval_secs = state.config.check_interval_secs.min(60);
 
     info!(interval_secs, "cron timer loop started");
@@ -62,7 +79,7 @@ pub async fn run_timer_loop<C: Clock>(state: Arc<ServiceState<C>>, executor: Job
         state.set_running(true);
         let _guard = RunningGuard { state: &state };
 
-        if let Err(e) = on_timer_tick(&state, &executor).await {
+        if let Err(e) = on_timer_tick(&state, &executor, alert_dispatcher.as_ref()).await {
             error!(error = %e, "cron timer tick failed");
         }
 
@@ -74,6 +91,7 @@ pub async fn run_timer_loop<C: Clock>(state: Arc<ServiceState<C>>, executor: Job
 pub async fn on_timer_tick<C: Clock>(
     state: &Arc<ServiceState<C>>,
     executor: &JobExecutorFn,
+    alert_dispatcher: Option<&AlertDispatcherFn>,
 ) -> Result<(), String> {
     // Phase 1: mark due jobs. The configured per-job timeout is threaded
     // into each snapshot so it reaches the executor (C5).
@@ -125,9 +143,27 @@ pub async fn on_timer_tick<C: Clock>(
         }
     }
 
-    // Phase 3: writeback all results
+    // Phase 3: writeback all results. The returned `PendingAlert`s must be
+    // dispatched here — phase3 is intentionally I/O-free beyond SQLite.
     if !all_results.is_empty() {
-        phase3_writeback(&state.store, state.clock.as_ref(), &all_results).await?;
+        let notify_default = state.config.notify_on_failure_default;
+        let alerts = phase3_writeback(
+            &state.store,
+            state.clock.as_ref(),
+            &all_results,
+            notify_default,
+        )
+        .await?;
+        if !alerts.is_empty() {
+            if let Some(disp) = alert_dispatcher {
+                disp(alerts).await;
+            } else {
+                debug!(
+                    count = all_results.len(),
+                    "cron: failure alerts produced but no dispatcher wired; dropping"
+                );
+            }
+        }
     }
 
     Ok(())

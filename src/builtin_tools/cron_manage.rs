@@ -435,6 +435,7 @@ impl AlephTool for CronManageTool {
                     schedule_kind: args.schedule.map(ScheduleKind::from),
                     tags: None,
                     timezone: None,
+                    timeout_ms: None,
                 };
 
                 service.update_job(&id, updates).await.map_err(|e| {

@@ -90,6 +90,17 @@ pub fn classify_exhausted(raw: &str) -> RetryVerdict {
 
     let msg = raw.to_lowercase();
 
+    // D3: "overloaded" beats 429 here as well (see `classify`). After local
+    // retries have been exhausted, escalate transient overload to Fallback —
+    // the local backoff didn't help, so a sibling provider is the next bet.
+    let account_patterns = ["account", "organization", "billing", "quota exceeded"];
+    let is_account_scoped = account_patterns.iter().any(|p| msg.contains(p));
+    if !is_account_scoped && (msg.contains("overloaded") || msg.contains("529")) {
+        return RetryVerdict::Fallback {
+            reason: format!("provider overloaded after retries: {raw}"),
+        };
+    }
+
     // 429 rate limit → classify as model-specific (Fallback) vs account-wide (Fatal).
     if msg.contains("429") || msg.contains("rate limit") || msg.contains("rate_limit") {
         return classify_rate_limit(raw);
@@ -227,15 +238,22 @@ pub fn classify_http_error(
 ) -> RetryVerdict {
     match status {
         429 => {
-            let delay = resolve_retry_delay(headers, 0, Duration::from_millis(300), MAX_DELAY);
             let msg = error_text.to_lowercase();
             let account_patterns = ["account", "organization", "billing", "quota exceeded"];
             if account_patterns.iter().any(|p| msg.contains(p)) {
-                RetryVerdict::Fatal
-            } else {
-                RetryVerdict::Fallback {
-                    reason: format!("rate limited (retry after {}s)", delay.as_secs()),
-                }
+                return RetryVerdict::Fatal;
+            }
+            // D3: 429 with "overloaded" body (kimi-via-anthropic conflates
+            // overload with rate_limit_error) → Retry with backoff so we
+            // ride out a transient spike before giving up on the provider.
+            if msg.contains("overloaded") {
+                let delay =
+                    resolve_retry_delay(headers, 0, Duration::from_secs(2), MAX_DELAY);
+                return RetryVerdict::Retry { delay };
+            }
+            let delay = resolve_retry_delay(headers, 0, Duration::from_millis(300), MAX_DELAY);
+            RetryVerdict::Fallback {
+                reason: format!("rate limited (retry after {}s)", delay.as_secs()),
             }
         }
         529 => {
@@ -313,17 +331,26 @@ pub fn classify(raw: &str) -> RetryVerdict {
         };
     }
 
+    // D3: "overloaded" / 529 must beat the 429 branch because some providers
+    // (notably kimi-via-anthropic-protocol) return HTTP 429 with the body
+    // `{"type":"rate_limit_error","message":"... engine is currently
+    // overloaded ..."}`. Treating that as Fallback skips the local backoff +
+    // jitter retry that would have ridden out the transient spike. Account /
+    // org / quota errors keep their Fatal verdict even if the message text
+    // happens to mention overload, since switching providers can't help.
+    let account_patterns = ["account", "organization", "billing", "quota exceeded"];
+    let is_account_scoped = account_patterns.iter().any(|p| msg.contains(p));
+
+    if !is_account_scoped && (msg.contains("overloaded") || msg.contains("529")) {
+        let delay = extract_retry_after_str(raw).unwrap_or(Duration::from_secs(2));
+        return RetryVerdict::Retry { delay };
+    }
+
     // Rate-limit (429) → classify as model-specific vs account-wide.
     // Model-specific limits benefit from switching providers (Fallback);
     // account-wide limits propagate immediately (Fatal).
     if msg.contains("429") || msg.contains("rate limit") || msg.contains("rate_limit") {
         return classify_rate_limit(raw);
-    }
-
-    // Overloaded (529) → retryable with server-guided or default 2s backoff
-    if msg.contains("529") || msg.contains("overloaded") {
-        let delay = extract_retry_after_str(raw).unwrap_or(Duration::from_secs(2));
-        return RetryVerdict::Retry { delay };
     }
 
     // Transient network errors → 300 ms base
@@ -471,6 +498,47 @@ mod tests {
             RetryVerdict::Retry {
                 delay: Duration::from_secs(2)
             }
+        );
+    }
+
+    /// D3: kimi-via-anthropic conflates overloaded → rate_limit_error so the
+    /// wire error reads `429 ... rate_limit_error ... engine overloaded`.
+    /// Pre-D3 this returned `Fallback` (no retry, switch provider). Post-D3:
+    /// `Retry` so we ride out the transient spike with backoff + jitter on
+    /// the same provider.
+    #[test]
+    fn test_classify_kimi_overloaded_429_is_retry() {
+        let err = anyhow::anyhow!(
+            "Rate limit error: Anthropic API rate limited (429): \
+             {{\"error\":{{\"type\":\"rate_limit_error\",\
+             \"message\":\"The engine is currently overloaded, please try again later\"}},\
+             \"type\":\"error\"}}"
+        );
+        assert!(
+            matches!(classify_error(&err), RetryVerdict::Retry { .. }),
+            "kimi-shaped 429+overloaded must be Retry (transient), got {:?}",
+            classify_error(&err)
+        );
+    }
+
+    /// D3: a 429 that BOTH names an account quota AND mentions overload is
+    /// still Fatal — account-wide limits can't be ridden out, and switching
+    /// providers won't help either.
+    #[test]
+    fn test_classify_account_429_overloaded_still_fatal() {
+        let err = anyhow::anyhow!("429 account quota exceeded; server overloaded");
+        assert_eq!(classify_error(&err), RetryVerdict::Fatal);
+    }
+
+    /// D3: classify_http_error mirrors the same precedence change.
+    #[test]
+    fn test_classify_http_429_overloaded_is_retry() {
+        let headers = reqwest::header::HeaderMap::new();
+        let body = "{\"error\":{\"type\":\"rate_limit_error\",\"message\":\"engine is currently overloaded, please try again later\"},\"type\":\"error\"}";
+        let verdict = classify_http_error(429, &headers, body);
+        assert!(
+            matches!(verdict, RetryVerdict::Retry { .. }),
+            "429+overloaded body must yield Retry, got {verdict:?}"
         );
     }
 

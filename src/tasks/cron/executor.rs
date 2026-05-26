@@ -20,23 +20,68 @@ use crate::tasks::cron::config::{
     DeliveryStatus, ErrorReason, ExecutionResult, JobSnapshot, RunStatus, SessionTarget,
     TriggerSource,
 };
-use crate::tasks::cron::service::timer::JobExecutorFn;
+use crate::tasks::cron::config::DeliveryTargetConfig;
+use crate::tasks::cron::service::concurrency::PendingAlert;
+use crate::tasks::cron::service::timer::{AlertDispatcherFn, JobExecutorFn};
 use crate::tasks::shared::retry_hint::{classify, RetryHint};
 
 /// Deferred channel registry reference — set after channels are initialized.
 pub type ChannelRegistryCell = Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>;
 
 /// Build a `JobExecutorFn` closure that captures execution dependencies.
+///
+/// `default_max_iterations` is the cron-wide Think→Act cap (see
+/// `CronConfig::default_max_iterations`) applied as
+/// `RunRequest.max_iterations_override` so cron-driven runs are bounded
+/// independently of the global `[execution] max_iterations` (default 1000).
+/// `None` defers to the global default — useful for tests or deployments
+/// that want no cron-specific tightening.
 pub fn build_cron_executor_fn(
     execution_adapter: Arc<dyn ExecutionAdapter>,
     agent_registry: Arc<AgentRegistry>,
     channel_registry_cell: ChannelRegistryCell,
+    default_max_iterations: Option<u32>,
 ) -> JobExecutorFn {
     Arc::new(move |snapshot: JobSnapshot| {
         let adapter = Arc::clone(&execution_adapter);
         let registry = Arc::clone(&agent_registry);
         let ch_cell = Arc::clone(&channel_registry_cell);
-        Box::pin(async move { execute_cron_job(adapter, registry, ch_cell, snapshot).await })
+        let max_iter = default_max_iterations;
+        Box::pin(async move {
+            execute_cron_job(adapter, registry, ch_cell, snapshot, max_iter).await
+        })
+    })
+}
+
+/// Build the alert dispatcher used by `run_timer_loop` to actually deliver
+/// `PendingAlert`s. Reuses `deliver_to_channel` for Gateway targets so cron
+/// alerts and cron success messages share the same delivery path. Non-Gateway
+/// targets (Webhook/Memory) are logged but not yet implemented at this layer.
+pub fn build_cron_alert_dispatcher_fn(
+    channel_registry_cell: ChannelRegistryCell,
+) -> AlertDispatcherFn {
+    Arc::new(move |alerts: Vec<PendingAlert>| {
+        let cell = Arc::clone(&channel_registry_cell);
+        Box::pin(async move {
+            for alert in alerts {
+                match &alert.target {
+                    DeliveryTargetConfig::Gateway {
+                        channel, chat_id, ..
+                    } => {
+                        let body = format!("⚠️ {}: {}", alert.job_name, alert.message);
+                        let _ =
+                            deliver_to_channel(&cell, channel, chat_id, &body, &alert.job_id).await;
+                    }
+                    other => {
+                        warn!(
+                            job_id = %alert.job_id,
+                            target = ?other,
+                            "cron alert target not supported by dispatcher; alert dropped"
+                        );
+                    }
+                }
+            }
+        })
     })
 }
 
@@ -45,6 +90,7 @@ async fn execute_cron_job(
     registry: Arc<AgentRegistry>,
     channel_registry_cell: ChannelRegistryCell,
     snapshot: JobSnapshot,
+    max_iterations_override: Option<u32>,
 ) -> ExecutionResult {
     let started_at = chrono::Utc::now().timestamp_millis();
 
@@ -111,6 +157,7 @@ async fn execute_cron_job(
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
         workspace_override: None,
+        max_iterations_override,
     };
 
     let collector = Arc::new(CollectingEventEmitter::new());

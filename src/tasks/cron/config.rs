@@ -45,6 +45,23 @@ pub struct CronConfig {
     /// Stagger interval (ms) between catchup jobs
     #[serde(default)]
     pub catchup_stagger_ms: Option<i64>,
+
+    /// D4: when `true`, jobs that lack an explicit `failure_alert` config but
+    /// do have a `source_channel_id` + `source_conversation_id` get a
+    /// default alert (after=1, cooldown=1h, target=source channel) so
+    /// timeouts / errors don't fail silently in the channel that triggered
+    /// the job. Set to `false` to keep the legacy opt-in-only behaviour.
+    #[serde(default = "default_true")]
+    pub notify_on_failure_default: bool,
+
+    /// D2: cron-default Think→Act iteration cap. Applies to every cron-driven
+    /// run as a `RunRequest.max_iterations_override`, overriding the global
+    /// `[execution] max_iterations` default (1000) for system-initiated jobs
+    /// without affecting interactive sessions. `None` disables the cron
+    /// cap and falls through to the global default. Recommended `Some(20)`
+    /// for tight runaway protection on automated jobs.
+    #[serde(default = "default_cron_max_iterations")]
+    pub default_max_iterations: Option<u32>,
 }
 
 fn default_true() -> bool {
@@ -75,6 +92,10 @@ fn default_max_concurrent_agents() -> Option<usize> {
     Some(2)
 }
 
+fn default_cron_max_iterations() -> Option<u32> {
+    Some(20)
+}
+
 impl Default for CronConfig {
     fn default() -> Self {
         Self {
@@ -87,6 +108,8 @@ impl Default for CronConfig {
             max_concurrent_agents: Some(2),
             max_missed_jobs_per_restart: None,
             catchup_stagger_ms: None,
+            notify_on_failure_default: true,
+            default_max_iterations: default_cron_max_iterations(),
         }
     }
 }
@@ -359,6 +382,18 @@ pub struct CronJob {
     #[serde(default)]
     pub context_vars: Option<String>,
 
+    /// Per-job execution timeout override (in milliseconds).
+    ///
+    /// When `Some`, this overrides `CronConfig::job_timeout_secs` for this
+    /// specific job. The override is threaded into `JobSnapshot.timeout_ms`
+    /// by `phase1_mark_due_jobs` and reaches the executor's wall-clock
+    /// `timeout_secs`. Use this for jobs whose normal completion window
+    /// exceeds the global default (e.g. long-running research tasks).
+    ///
+    /// `None` falls back to the configured default.
+    #[serde(default)]
+    pub timeout_ms: Option<i64>,
+
     /// Runtime state
     #[serde(default)]
     pub state: JobStateV2,
@@ -393,17 +428,20 @@ impl CronJob {
             failure_alert: None,
             prompt_template: None,
             context_vars: None,
+            timeout_ms: None,
             state: JobStateV2::default(),
         }
     }
 
-    /// Fallback per-job execution timeout in milliseconds (5 minutes).
+    /// Effective per-job execution timeout in milliseconds.
     ///
-    /// Matches `CronConfig::job_timeout_secs`'s default. The timer loop threads
-    /// the *configured* timeout into each `JobSnapshot`, so this constant only
-    /// serves as the baseline for the catchup stale-marker threshold.
-    pub fn timeout_ms(&self) -> i64 {
-        300_000
+    /// Returns this job's `timeout_ms` override when set, else falls back to
+    /// the 5-minute baseline (matches `CronConfig::job_timeout_secs`'s default).
+    /// Used by the catchup stale-marker threshold; runtime execution gets the
+    /// timeout via `JobSnapshot.timeout_ms` threaded by `phase1_mark_due_jobs`,
+    /// which honours the per-job override against the *configured* default.
+    pub fn effective_timeout_ms(&self) -> i64 {
+        self.timeout_ms.unwrap_or(300_000)
     }
 
     /// Construct a generic `DeliveryPayload` from this job and its output.
@@ -485,6 +523,7 @@ pub struct CronJobView {
     pub state: JobStateV2,
     pub delivery_config: Option<DeliveryConfig>,
     pub failure_alert: Option<FailureAlertConfig>,
+    pub timeout_ms: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -505,6 +544,7 @@ impl From<&CronJob> for CronJobView {
             state: job.state.clone(),
             delivery_config: job.delivery_config.clone(),
             failure_alert: job.failure_alert.clone(),
+            timeout_ms: job.timeout_ms,
             created_at: job.created_at,
             updated_at: job.updated_at,
         }
@@ -800,7 +840,12 @@ mod tests {
         assert!(job.enabled);
         assert_eq!(job.schedule_kind, kind);
         assert_eq!(job.session_target, SessionTarget::Isolated);
-        assert_eq!(job.timeout_ms(), 300_000);
+        assert!(job.timeout_ms.is_none(), "new jobs have no timeout override");
+        assert_eq!(job.effective_timeout_ms(), 300_000);
+
+        let mut overridden = job.clone();
+        overridden.timeout_ms = Some(600_000);
+        assert_eq!(overridden.effective_timeout_ms(), 600_000);
         // Timestamps should be recent (within last second, in ms)
         let now = chrono::Utc::now().timestamp_millis();
         assert!((now - job.created_at).abs() < 1000);

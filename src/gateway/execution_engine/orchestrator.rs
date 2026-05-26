@@ -47,6 +47,7 @@ where
             interaction_manifest: None,
             sandbox_override: None,
             workspace_override: None,
+            max_iterations_override: None,
         };
 
         let handle = orchestrator

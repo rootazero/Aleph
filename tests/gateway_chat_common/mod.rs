@@ -137,6 +137,7 @@ impl HarnessRunner for StubHarnessRunner {
         trace_sink: Option<Arc<dyn alephcore::harness::TraceSink>>,
         _interaction_manifest: Option<alephcore::thinker::InteractionManifest>,
         _workspace_override: Option<std::path::PathBuf>,
+        _max_iterations_override: Option<u32>,
     ) -> Result<FlowOutcome, FlowError> {
         let ctx = StubContext {
             session_key,
@@ -233,5 +234,6 @@ pub fn basic_request() -> FlowRequest {
         interaction_manifest: None,
         sandbox_override: None,
         workspace_override: None,
+        max_iterations_override: None,
     }
 }
