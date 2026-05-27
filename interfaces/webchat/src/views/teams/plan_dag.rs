@@ -288,3 +288,108 @@ fn render_dag(
         </svg>
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(id: &str, deps: &[&str]) -> CoordTaskDto {
+        CoordTaskDto {
+            id: id.into(),
+            team_id: None,
+            subject: id.into(),
+            description: String::new(),
+            status: "pending".into(),
+            owner: None,
+            priority: "normal".into(),
+            result: None,
+            dependencies: deps.iter().map(|s| (*s).into()).collect(),
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
+    #[test]
+    fn empty_input_returns_empty() {
+        let depths = compute_depths(&[]);
+        assert!(depths.is_empty());
+    }
+
+    #[test]
+    fn single_root_task_has_depth_zero() {
+        let tasks = vec![task("a", &[])];
+        let depths = compute_depths(&tasks);
+        assert_eq!(depths.get("a"), Some(&0));
+    }
+
+    #[test]
+    fn linear_chain_increments_depth() {
+        // a → b → c
+        let tasks = vec![
+            task("a", &[]),
+            task("b", &["a"]),
+            task("c", &["b"]),
+        ];
+        let depths = compute_depths(&tasks);
+        assert_eq!(depths.get("a"), Some(&0));
+        assert_eq!(depths.get("b"), Some(&1));
+        assert_eq!(depths.get("c"), Some(&2));
+    }
+
+    #[test]
+    fn diamond_takes_max_dep_depth() {
+        // a → {b, c} → d
+        let tasks = vec![
+            task("a", &[]),
+            task("b", &["a"]),
+            task("c", &["a"]),
+            task("d", &["b", "c"]),
+        ];
+        let depths = compute_depths(&tasks);
+        assert_eq!(depths.get("a"), Some(&0));
+        assert_eq!(depths.get("b"), Some(&1));
+        assert_eq!(depths.get("c"), Some(&1));
+        assert_eq!(depths.get("d"), Some(&2));
+    }
+
+    #[test]
+    fn unresolved_dep_treated_as_root() {
+        // b's dep "ghost" not in the task list — render as root rather than drop.
+        let tasks = vec![task("b", &["ghost"])];
+        let depths = compute_depths(&tasks);
+        assert_eq!(depths.get("b"), Some(&0));
+    }
+
+    #[test]
+    fn order_independent_for_acyclic_input() {
+        // Same DAG, declared in reverse order — depths must match the
+        // forward-order test above (the iterative pass must converge
+        // regardless of source ordering).
+        let tasks = vec![
+            task("c", &["b"]),
+            task("b", &["a"]),
+            task("a", &[]),
+        ];
+        let depths = compute_depths(&tasks);
+        assert_eq!(depths.get("a"), Some(&0));
+        assert_eq!(depths.get("b"), Some(&1));
+        assert_eq!(depths.get("c"), Some(&2));
+    }
+
+    #[test]
+    fn cycle_terminates_with_bounded_depths() {
+        // a ↔ b: an unresolvable cycle. compute_depths must still
+        // terminate (the n+1 outer-loop cap is the guard) and produce
+        // finite depths for every node.
+        let tasks = vec![
+            task("a", &["b"]),
+            task("b", &["a"]),
+        ];
+        let depths = compute_depths(&tasks);
+        assert!(depths.contains_key("a"));
+        assert!(depths.contains_key("b"));
+        // n+1 passes × +1 increment per pass ⇒ ceiling well under 16.
+        assert!(depths.values().all(|&d| d < 16));
+    }
+}
