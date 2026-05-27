@@ -676,6 +676,12 @@ impl super::DesktopTool {
                     message: None,
                 }))
             }
+            "wait_visual" => {
+                let region = args.region.clone();
+                let output =
+                    super::wait_visual::run_wait_visual(screen, args.timeout_ms, region).await;
+                Ok(Some(output))
+            }
             _ => Ok(None),
         }
     }

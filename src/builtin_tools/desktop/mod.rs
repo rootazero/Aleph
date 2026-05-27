@@ -7,6 +7,7 @@ mod perm;
 mod safety;
 pub mod session_lock;
 mod types;
+mod wait_visual;
 
 #[cfg(test)]
 mod tests;
@@ -272,7 +273,7 @@ impl DesktopTool {
 fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
     match args.action.as_str() {
         "screenshot" | "ocr" | "window_list" | "cursor_position" | "clipboard_read"
-        | "screen_record" | "focus_window" | "display_list" => None,
+        | "screen_record" | "focus_window" | "display_list" | "wait_visual" => None,
 
         "click" | "double_click" | "hover" | "mouse_button" => Some((
             ActionType::DesktopClick,
@@ -410,6 +411,7 @@ Actions:
 - display_list: List all connected displays with resolution and scale info.
 - batch: Execute multiple actions sequentially. Requires actions array.
 - paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text.
+- wait_visual: Wait until the screen settles. Polls screenshots and returns when two consecutive captures match, or after `timeout_ms` (default 5000, max 60000). Use after navigation or clicks that trigger animation. Returns `{stable: bool, polls, elapsed_ms}` — `stable=false` means timeout, not failure.
 
 Examples:
 {"action":"click","x":500,"y":300}
@@ -424,6 +426,8 @@ Examples:
 {"action":"display_list"}
 {"action":"batch","actions":[{"action":"click","x":100,"y":200},{"action":"type_text","text":"hello"}]}
 {"action":"paste","text":"line1\nline2\nline3"}
+{"action":"wait_visual","timeout_ms":3000}
+{"action":"wait_visual","timeout_ms":8000,"region":{"x":0,"y":0,"width":1280,"height":800}}
 {"action":"screenshot","format":"jpeg","quality":0.9,"max_width":1920}"#;
 
     type Args = DesktopArgs;

@@ -133,6 +133,10 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_height: Option<u32>,
 
+    /// Timeout in milliseconds for wait_visual (default 5000, max 60000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+
     /// Batch action list (only for action="batch").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<DesktopBatchAction>,
@@ -256,6 +260,10 @@ pub struct DesktopBatchAction {
     /// Max screenshot height in pixels (scale down if taller).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_height: Option<u32>,
+
+    /// Timeout in milliseconds for wait_visual (default 5000, max 60000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 impl From<&DesktopBatchAction> for DesktopArgs {
@@ -287,6 +295,7 @@ impl From<&DesktopBatchAction> for DesktopArgs {
             quality: b.quality,
             max_width: b.max_width,
             max_height: b.max_height,
+            timeout_ms: b.timeout_ms,
             actions: Vec::new(),
         }
     }
