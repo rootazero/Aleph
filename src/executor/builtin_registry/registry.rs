@@ -261,6 +261,14 @@ pub struct BuiltinToolRegistry {
     /// StateDatabase; both are populated alongside the other team-coord
     /// stores in the boot path).
     pub(crate) team_usage_tool: Option<crate::builtin_tools::team::TeamUsageTool>,
+    /// ACP-backed team member management (optional — requires TeamStore).
+    /// Lets agents attach external coding CLIs (Claude Code, Codex, ...) as
+    /// first-class team members via `team_acp_member`.
+    pub(crate) team_acp_member_tool: Option<crate::builtin_tools::team::TeamAcpMemberTool>,
+    /// Step-level workflow review (Phase C — openteams parity). Optional
+    /// because it requires a CoordTaskStore.
+    pub(crate) workflow_step_review_tool:
+        Option<crate::builtin_tools::team::WorkflowStepReviewTool>,
     /// Team messaging tools (optional — require MessageRouter / Inbox)
     pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
     pub(crate) inbox_read_tool: Option<crate::builtin_tools::team::InboxReadTool>,
@@ -1033,6 +1041,20 @@ impl ToolRegistry for BuiltinToolRegistry {
             "task_comment" => Box::pin(async move {
                 let tool = self.task_comment_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("task_comment not available: no CoordTaskStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "team_acp_member" => Box::pin(async move {
+                let tool = self.team_acp_member_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("team_acp_member not available: no TeamStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "workflow_step_review" => Box::pin(async move {
+                let tool = self.workflow_step_review_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "workflow_step_review not available: no CoordTaskStore configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),

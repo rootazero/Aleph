@@ -26,7 +26,9 @@ use crate::teams::artifacts::ArtifactStore;
 use crate::teams::context::TeamInboxContextProvider;
 use crate::teams::store::TeamStore;
 
-pub use runner::{execute_member_task, MemberRunOutcome, MemberRunStatus};
+pub use runner::{
+    execute_member_task, MemberDispatchTarget, MemberRunOutcome, MemberRunStatus,
+};
 pub use schedule::{is_dispatcher_managed, MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
 
 /// Tunables for the dispatcher loop.

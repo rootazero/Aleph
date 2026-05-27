@@ -777,6 +777,57 @@ impl BuiltinToolRegistry {
             None
         };
 
+        // Build team_acp_member when TeamStore is present. The tool itself
+        // does not need the ACP manager — it only mutates membership; the
+        // dispatcher is the one that consumes the routing fields at task
+        // run time.
+        let team_acp_member_tool = if let Some(ref team_store) = config.team_store {
+            use crate::builtin_tools::team::TeamAcpMemberTool;
+            let tool = TeamAcpMemberTool::new(Arc::clone(team_store));
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered team_acp_member tool");
+            Some(tool)
+        } else {
+            None
+        };
+
+        // Build workflow_step_review when CoordTaskStore is present. Lets
+        // a lead agent (or panel user via RPC) approve / reject / retry /
+        // skip individual workflow steps without touching the dispatcher
+        // mid-flight.
+        let workflow_step_review_tool = if let Some(ref coord_store) = config.coord_task_store {
+            use crate::builtin_tools::team::WorkflowStepReviewTool;
+            let tool =
+                WorkflowStepReviewTool::new(Arc::clone(coord_store), current_agent_id.clone());
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered workflow_step_review tool");
+            Some(tool)
+        } else {
+            None
+        };
+
         // Add team_digest tool (if EventLogStore + TeamStore are available)
         let team_digest_tool = if let (Some(ref event_store), Some(ref team_store)) =
             (&config.event_store, &config.team_store)
@@ -1389,6 +1440,8 @@ impl BuiltinToolRegistry {
             team_from_template_tool,
             team_snapshot_tool,
             team_usage_tool,
+            team_acp_member_tool,
+            workflow_step_review_tool,
             message_send_tool,
             inbox_read_tool,
             plan_submit_tool,

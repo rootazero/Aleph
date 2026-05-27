@@ -411,6 +411,7 @@ impl AlephTool for TeamCreateTool {
                 team_id: team.id.clone(),
                 agent_id: leader_id.clone(),
                 role: "leader".to_string(),
+                ..Default::default()
             })
             .await?;
 
@@ -422,6 +423,7 @@ impl AlephTool for TeamCreateTool {
                     team_id: team.id.clone(),
                     agent_id: agent_id.clone(),
                     role: role.clone(),
+                    ..Default::default()
                 })
                 .await?;
 

@@ -28,6 +28,53 @@ use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::router::SessionKey;
 use crate::sandbox::{worktree as worktree_mod, Sandbox, WorktreeHandle, WorktreeSandbox};
 use crate::sync_primitives::Arc;
+use crate::teams::types::{TeamMember, TeamMemberKind};
+
+/// Where a team member task is dispatched. Built by the caller (dispatcher
+/// or `team_delegate`) by inspecting the resolved [`TeamMember`].
+#[derive(Debug, Clone)]
+pub enum MemberDispatchTarget {
+    /// Resolve `agent_id` against the in-process agent registry and run
+    /// through the full Orchestrator → Harness path.
+    Agent { agent_id: String },
+    /// Route via the ACP adapter pool (external coding CLI: Claude Code,
+    /// Codex, ...). `agent_id` is kept for logging / DB linkage; routing
+    /// uses `harness_id` + `cwd` + optional `session_name`.
+    AcpSession {
+        agent_id: String,
+        harness_id: String,
+        cwd: String,
+        session_name: Option<String>,
+    },
+}
+
+impl MemberDispatchTarget {
+    /// The canonical agent_id string used for run records, locks, and
+    /// `coord_tasks.owner` regardless of dispatch backend.
+    pub fn agent_id(&self) -> &str {
+        match self {
+            Self::Agent { agent_id } => agent_id,
+            Self::AcpSession { agent_id, .. } => agent_id,
+        }
+    }
+
+    /// Build a target from a resolved team member row. Returns `None` for
+    /// an `AcpSession` row missing required routing fields — caller should
+    /// treat that as a fail-fast configuration error.
+    pub fn from_member(member: &TeamMember) -> Option<Self> {
+        match member.kind {
+            TeamMemberKind::Agent => Some(Self::Agent {
+                agent_id: member.agent_id.clone(),
+            }),
+            TeamMemberKind::AcpSession => Some(Self::AcpSession {
+                agent_id: member.agent_id.clone(),
+                harness_id: member.acp_harness_id.clone()?,
+                cwd: member.acp_cwd.clone()?,
+                session_name: member.acp_session_name.clone(),
+            }),
+        }
+    }
+}
 
 /// Terminal status of a member task run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,24 +98,53 @@ pub struct MemberRunOutcome {
     pub error: Option<String>,
 }
 
-/// Execute `task_text` as agent `agent_id` (within `team_id`), scoped to a
-/// task-specific session, bounded by `timeout_secs`. `isolate_workspace`
-/// requests a per-task git worktree (best-effort — non-git environments fall
-/// back to no isolation with a single warn log).
+/// Execute `task_text` as the resolved [`MemberDispatchTarget`] (within
+/// `team_id`), scoped to a task-specific session, bounded by `timeout_secs`.
+/// `isolate_workspace` requests a per-task git worktree (best-effort —
+/// non-git environments fall back to no isolation with a single warn log).
 ///
-/// The agent runs the full Orchestrator → Harness path via the execution
-/// adapter. On timeout the spawned execution is aborted to free resources.
+/// - **Agent target**: runs the full Orchestrator → Harness path via the
+///   execution adapter. On timeout the spawned execution is aborted.
+/// - **AcpSession target**: routes through `AcpAdapterManager::prompt_named`
+///   so an external coding CLI (Claude Code, Codex, ...) handles the work.
+///   The `cwd` from the target is authoritative — workspace isolation does
+///   not apply.
+///
 /// On return — happy path, error, or timeout — the worktree handle (if any)
 /// is cleaned up via `WorktreeHandle::cleanup` or its `Drop` safety-net.
 pub async fn execute_member_task(
     context: &GatewayContext,
-    agent_id: &str,
+    target: &MemberDispatchTarget,
     team_id: &str,
     task_id: &str,
     task_text: String,
     timeout_secs: u64,
     isolate_workspace: bool,
 ) -> MemberRunOutcome {
+    // ACP-backed members short-circuit through the adapter pool — they
+    // never visit the in-process registry, never take a worktree handle.
+    if let MemberDispatchTarget::AcpSession {
+        agent_id,
+        harness_id,
+        cwd,
+        session_name,
+    } = target
+    {
+        return execute_acp_member_task(
+            context,
+            agent_id,
+            harness_id,
+            cwd,
+            session_name.as_deref(),
+            team_id,
+            task_id,
+            task_text,
+            timeout_secs,
+        )
+        .await;
+    }
+
+    let agent_id = target.agent_id();
     // Resolve the target agent up front — an unknown owner is an explicit
     // failure, never a silent no-op.
     let agent_registry = context.agent_registry();
@@ -241,6 +317,81 @@ async fn provision_worktree(team_id: &str, task_id: &str) -> Option<WorktreeHand
     }
 }
 
+/// Dispatch a task to an ACP-backed external coding CLI session.
+///
+/// Returns a [`MemberRunOutcome`] mirroring the in-process path so the
+/// dispatcher's outcome-recording logic stays uniform. Missing
+/// [`AcpAdapterManager`] in the gateway context is a configuration error
+/// (`acp.enabled = false` but a team has an `AcpSession` member) and is
+/// surfaced as `MemberRunStatus::Failed`, never silently dropped.
+#[allow(clippy::too_many_arguments)]
+async fn execute_acp_member_task(
+    context: &GatewayContext,
+    agent_id: &str,
+    harness_id: &str,
+    cwd: &str,
+    session_name: Option<&str>,
+    team_id: &str,
+    task_id: &str,
+    task_text: String,
+    timeout_secs: u64,
+) -> MemberRunOutcome {
+    let manager = match context.acp_manager() {
+        Some(m) => Arc::clone(m),
+        None => {
+            return MemberRunOutcome {
+                status: MemberRunStatus::Failed,
+                reply: None,
+                error: Some(format!(
+                    "ACP member '{agent_id}' cannot run: acp manager not configured"
+                )),
+            };
+        }
+    };
+
+    tracing::info!(
+        team_id = team_id,
+        task_id = task_id,
+        agent_id = agent_id,
+        harness_id = harness_id,
+        cwd = cwd,
+        session_name = ?session_name,
+        "team_dispatcher: routing task to ACP session"
+    );
+
+    let prompt_fut = async move {
+        manager
+            .prompt_named(
+                harness_id,
+                &task_text,
+                cwd,
+                session_name,
+                None,  // use harness default mode
+                true,  // reuse session for team continuity
+                None,  // streaming callback wired in B2/follow-up
+            )
+            .await
+    };
+
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), prompt_fut).await {
+        Ok(Ok(reply)) => MemberRunOutcome {
+            status: MemberRunStatus::Completed,
+            reply: Some(reply),
+            error: None,
+        },
+        Ok(Err(e)) => MemberRunOutcome {
+            status: MemberRunStatus::Failed,
+            reply: None,
+            error: Some(format!("ACP session error: {e}")),
+        },
+        Err(_) => MemberRunOutcome {
+            status: MemberRunStatus::Timeout,
+            reply: None,
+            error: Some(format!("ACP session timed out after {timeout_secs}s")),
+        },
+    }
+}
+
 /// Fetch the last assistant reply from an agent's session.
 async fn fetch_last_reply(
     agent: &crate::gateway::agent_instance::AgentInstance,
@@ -261,6 +412,72 @@ async fn fetch_last_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::teams::types::{TeamMember, TeamMemberKind};
+
+    fn agent_member() -> TeamMember {
+        TeamMember {
+            team_id: "t1".into(),
+            agent_id: "reviewer".into(),
+            role: "reviewer".into(),
+            joined_at: 0,
+            kind: TeamMemberKind::Agent,
+            acp_harness_id: None,
+            acp_cwd: None,
+            acp_session_name: None,
+        }
+    }
+
+    fn acp_member(name: Option<&str>) -> TeamMember {
+        TeamMember {
+            team_id: "t1".into(),
+            agent_id: format!(
+                "acp:claude_code:/work/proj{}",
+                name.map(|n| format!(":{n}")).unwrap_or_default()
+            ),
+            role: "reviewer".into(),
+            joined_at: 0,
+            kind: TeamMemberKind::AcpSession,
+            acp_harness_id: Some("claude_code".into()),
+            acp_cwd: Some("/work/proj".into()),
+            acp_session_name: name.map(String::from),
+        }
+    }
+
+    #[test]
+    fn dispatch_target_from_agent_member() {
+        let m = agent_member();
+        let t = MemberDispatchTarget::from_member(&m).expect("agent must resolve");
+        match t {
+            MemberDispatchTarget::Agent { agent_id } => assert_eq!(agent_id, "reviewer"),
+            MemberDispatchTarget::AcpSession { .. } => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn dispatch_target_from_acp_member_named() {
+        let m = acp_member(Some("review-bot"));
+        let t = MemberDispatchTarget::from_member(&m).expect("acp must resolve");
+        match t {
+            MemberDispatchTarget::AcpSession {
+                harness_id,
+                cwd,
+                session_name,
+                ..
+            } => {
+                assert_eq!(harness_id, "claude_code");
+                assert_eq!(cwd, "/work/proj");
+                assert_eq!(session_name.as_deref(), Some("review-bot"));
+            }
+            MemberDispatchTarget::Agent { .. } => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn dispatch_target_acp_missing_routing_returns_none() {
+        let mut m = acp_member(None);
+        m.acp_harness_id = None; // simulate corrupt DB row
+        assert!(MemberDispatchTarget::from_member(&m).is_none());
+    }
 
     /// Env-var escape hatch must short-circuit before any git plumbing
     /// touches disk. Belt-and-suspenders for ops who want to fall back to

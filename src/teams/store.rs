@@ -9,7 +9,9 @@ use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
-use super::types::{NewTeam, NewTeamMember, Team, TeamMember, TeamStatus, TeamSummary};
+use super::types::{
+    NewTeam, NewTeamMember, Team, TeamMember, TeamMemberKind, TeamStatus, TeamSummary,
+};
 use crate::error::AlephError;
 
 // ---------------------------------------------------------------------------
@@ -20,6 +22,18 @@ impl rusqlite::types::FromSql for TeamStatus {
     fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = value.as_str()?;
         s.parse::<TeamStatus>().map_err(|e| {
+            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })
+    }
+}
+
+impl rusqlite::types::FromSql for TeamMemberKind {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = value.as_str()?;
+        s.parse::<TeamMemberKind>().map_err(|e| {
             rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 e,
@@ -140,8 +154,46 @@ impl SqliteTeamStore {
         )
         .map_err(db_err)?;
 
+        // Additive migration: ACP-backed team member columns.
+        // Older databases without these columns get them backfilled with
+        // `kind = 'agent'` (default) so all existing rows continue to route
+        // through the in-process registry.
+        add_column_if_missing(&conn, "team_members", "kind", "TEXT NOT NULL DEFAULT 'agent'")?;
+        add_column_if_missing(&conn, "team_members", "acp_harness_id", "TEXT")?;
+        add_column_if_missing(&conn, "team_members", "acp_cwd", "TEXT")?;
+        add_column_if_missing(&conn, "team_members", "acp_session_name", "TEXT")?;
+
         Ok(())
     }
+}
+
+/// Add a column to a table only if it does not already exist.
+///
+/// Idempotent on SQLite where `ALTER TABLE ... ADD COLUMN` raises on
+/// duplicate columns. Inspected via `PRAGMA table_info` to avoid relying
+/// on error string matching.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    type_decl: &str,
+) -> crate::error::Result<()> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(db_err)?;
+    let exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(db_err)?
+        .filter_map(Result::ok)
+        .any(|name| name == column);
+    if !exists {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {type_decl}"),
+            [],
+        )
+        .map_err(db_err)?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +218,10 @@ fn read_member_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamMember> {
         agent_id: row.get(1)?,
         role: row.get(2)?,
         joined_at: row.get(3)?,
+        kind: row.get(4).unwrap_or(TeamMemberKind::Agent),
+        acp_harness_id: row.get(5).ok(),
+        acp_cwd: row.get(6).ok(),
+        acp_session_name: row.get(7).ok(),
     })
 }
 
@@ -340,15 +396,33 @@ impl TeamStore for SqliteTeamStore {
         }
 
         let now = now_epoch();
+        let kind_str = input.kind.as_str();
 
         let affected = conn
             .execute(
                 r#"
-            INSERT INTO team_members (team_id, agent_id, role, joined_at)
-            VALUES (?1, ?2, ?3, ?4)
-            ON CONFLICT (team_id, agent_id) DO UPDATE SET role = excluded.role
+            INSERT INTO team_members (
+                team_id, agent_id, role, joined_at,
+                kind, acp_harness_id, acp_cwd, acp_session_name
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT (team_id, agent_id) DO UPDATE SET
+                role = excluded.role,
+                kind = excluded.kind,
+                acp_harness_id = excluded.acp_harness_id,
+                acp_cwd = excluded.acp_cwd,
+                acp_session_name = excluded.acp_session_name
             "#,
-                params![input.team_id, input.agent_id, input.role, now],
+                params![
+                    input.team_id,
+                    input.agent_id,
+                    input.role,
+                    now,
+                    kind_str,
+                    input.acp_harness_id,
+                    input.acp_cwd,
+                    input.acp_session_name,
+                ],
             )
             .map_err(db_err)?;
 
@@ -356,7 +430,7 @@ impl TeamStore for SqliteTeamStore {
             // Already a member — return the existing record
             let member = conn
                 .prepare_cached(
-                    "SELECT team_id, agent_id, role, joined_at FROM team_members WHERE team_id = ?1 AND agent_id = ?2",
+                    "SELECT team_id, agent_id, role, joined_at, kind, acp_harness_id, acp_cwd, acp_session_name FROM team_members WHERE team_id = ?1 AND agent_id = ?2",
                 )
                 .map_err(db_err)?
                 .query_row(params![input.team_id, input.agent_id], read_member_row)
@@ -369,6 +443,10 @@ impl TeamStore for SqliteTeamStore {
             agent_id: input.agent_id,
             role: input.role,
             joined_at: now,
+            kind: input.kind,
+            acp_harness_id: input.acp_harness_id,
+            acp_cwd: input.acp_cwd,
+            acp_session_name: input.acp_session_name,
         })
     }
 
@@ -377,7 +455,7 @@ impl TeamStore for SqliteTeamStore {
 
         let members = conn
             .prepare_cached(
-                "SELECT team_id, agent_id, role, joined_at FROM team_members WHERE team_id = ?1 ORDER BY joined_at ASC",
+                "SELECT team_id, agent_id, role, joined_at, kind, acp_harness_id, acp_cwd, acp_session_name FROM team_members WHERE team_id = ?1 ORDER BY joined_at ASC",
             )
             .map_err(db_err)?
             .query_map(params![team_id], read_member_row)
@@ -648,6 +726,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_acp_member_round_trip() {
+        let store = setup_store().await;
+
+        let team = store
+            .create_team(NewTeam {
+                name: "AcpRing".into(),
+                description: "".into(),
+                leader_id: "leader-a".into(),
+            })
+            .await
+            .unwrap();
+
+        let m = store
+            .add_member(NewTeamMember::for_acp_session(
+                team.id.clone(),
+                "claude_code",
+                "/work/proj",
+                Some("review-bot".into()),
+                "reviewer",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(m.kind, TeamMemberKind::AcpSession);
+        assert_eq!(m.acp_harness_id.as_deref(), Some("claude_code"));
+        assert_eq!(m.acp_cwd.as_deref(), Some("/work/proj"));
+        assert_eq!(m.acp_session_name.as_deref(), Some("review-bot"));
+        assert_eq!(m.agent_id, "acp:claude_code:/work/proj:review-bot");
+
+        let members = store.get_members(&team.id).await.unwrap();
+        let fetched = members
+            .iter()
+            .find(|x| x.kind == TeamMemberKind::AcpSession)
+            .expect("acp member present");
+        assert_eq!(fetched.agent_id, m.agent_id);
+        assert_eq!(fetched.acp_harness_id, m.acp_harness_id);
+
+        let plain = store
+            .add_member(NewTeamMember::for_agent(
+                team.id.clone(),
+                "leader-a",
+                "leader",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(plain.kind, TeamMemberKind::Agent);
+        assert!(plain.acp_harness_id.is_none());
+    }
+
+    #[tokio::test]
     async fn test_remove_member() {
         let store = setup_store().await;
 
@@ -666,6 +794,7 @@ mod tests {
                 team_id: team.id.clone(),
                 agent_id: "member-1".into(),
                 role: "worker".into(),
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -674,6 +803,7 @@ mod tests {
                 team_id: team.id.clone(),
                 agent_id: "member-2".into(),
                 role: "reviewer".into(),
+                ..Default::default()
             })
             .await
             .unwrap();

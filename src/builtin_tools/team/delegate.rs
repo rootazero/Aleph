@@ -20,7 +20,7 @@ use crate::error::{AlephError, Result};
 use crate::gateway::context::GatewayContext;
 use crate::sync_primitives::Arc;
 use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact, TaskStatus};
-use crate::teams::dispatcher::{execute_member_task, MemberRunStatus};
+use crate::teams::dispatcher::{execute_member_task, MemberDispatchTarget, MemberRunStatus};
 use crate::teams::TeamStore;
 use crate::tools::AlephTool;
 
@@ -198,12 +198,23 @@ impl AlephTool for TeamDelegateTool {
 
         // 1. Verify the agent is a member of the team.
         let members = self.store.get_members(&args.team_id).await?;
-        if !members.iter().any(|m| m.agent_id == args.agent_id) {
-            return Err(AlephError::other(format!(
-                "Agent '{}' is not a member of team '{}'",
-                args.agent_id, args.team_id
-            )));
-        }
+        let member = members
+            .iter()
+            .find(|m| m.agent_id == args.agent_id)
+            .ok_or_else(|| {
+                AlephError::other(format!(
+                    "Agent '{}' is not a member of team '{}'",
+                    args.agent_id, args.team_id
+                ))
+            })?;
+        // Build the dispatch target up front so we surface ACP routing
+        // misconfiguration before creating a task row.
+        let target = MemberDispatchTarget::from_member(member).ok_or_else(|| {
+            AlephError::other(format!(
+                "Member '{}' has kind=AcpSession but is missing routing fields",
+                args.agent_id
+            ))
+        })?;
 
         // 2. Create the task record. No `managed_by` flag is set — the
         //    autonomous dispatcher must not pick up a task that `team_delegate`
@@ -249,7 +260,7 @@ impl AlephTool for TeamDelegateTool {
         // pass `false` and keep behaviour identical to pre-G2.
         let outcome = execute_member_task(
             context,
-            &args.agent_id,
+            &target,
             &args.team_id,
             &task.id,
             args.task.clone(),

@@ -29,4 +29,7 @@ pub use snapshots::{
     SqliteSnapshotStore, TeamSnapshotPayload,
 };
 pub use store::{SqliteTeamStore, TeamStore};
-pub use types::{NewTeam, NewTeamMember, Team, TeamId, TeamMember, TeamStatus, TeamSummary};
+pub use types::{
+    acp_member_id, NewTeam, NewTeamMember, Team, TeamId, TeamMember, TeamMemberKind, TeamStatus,
+    TeamSummary,
+};

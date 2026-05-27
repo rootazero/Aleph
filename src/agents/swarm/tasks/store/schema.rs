@@ -143,6 +143,13 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
     )
     .map_err(db_err)?;
 
+    // Phase C — step-level review fields on the per-attempt history.
+    // Additive: existing dbs get NULL on these columns, matching the
+    // "no review recorded" semantic. Idempotent via PRAGMA introspection.
+    add_column_if_missing(conn, "coord_task_runs", "review_verdict", "TEXT")?;
+    add_column_if_missing(conn, "coord_task_runs", "reviewer_kind", "TEXT")?;
+    add_column_if_missing(conn, "coord_task_runs", "reviewer_id", "TEXT")?;
+
     // --- Per-task comments (additive) ---
     // Free-text handoff notes; permanent (no TTL) so they survive across
     // retries. MessageStore is intentionally not reused — it carries
@@ -190,5 +197,34 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
     )
     .map_err(db_err)?;
 
+    Ok(())
+}
+
+/// Idempotently add a column to an existing table.
+///
+/// SQLite raises on duplicate columns, so we inspect `PRAGMA table_info`
+/// first instead of relying on error-string matching. Used by Phase C
+/// (step-review fields) and any future additive migration.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    type_decl: &str,
+) -> crate::error::Result<()> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(db_err)?;
+    let exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(db_err)?
+        .filter_map(Result::ok)
+        .any(|name| name == column);
+    if !exists {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {type_decl}"),
+            [],
+        )
+        .map_err(db_err)?;
+    }
     Ok(())
 }

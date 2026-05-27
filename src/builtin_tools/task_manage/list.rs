@@ -87,9 +87,11 @@ fn format_task_board(tasks: &[CoordTask]) -> String {
             CoordTaskStatus::Pending => "○",
             CoordTaskStatus::Blocked => "◌",
             CoordTaskStatus::InProgress => "◉",
+            CoordTaskStatus::WaitingReview => "◐",
             CoordTaskStatus::Completed => "●",
             CoordTaskStatus::Failed => "✗",
             CoordTaskStatus::Cancelled => "⊘",
+            CoordTaskStatus::Skipped => "⤳",
         };
         lines.push(format!(
             "{} {} [{}]{}{} — {}",

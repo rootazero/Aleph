@@ -218,6 +218,45 @@ pub(in crate::commands::start) fn register_teams_handlers(
         coord_store
     );
 
+    // Phase C — step-level workflow review RPCs. Panel calls these from
+    // the workflow-graph drawer; the lead agent can also drive them via
+    // the workflow_step_review builtin tool (R8).
+    register_handler!(
+        server,
+        "teams.workflow.approve_step",
+        teams::handle_workflow_approve_step,
+        coord_store
+    );
+    register_handler!(
+        server,
+        "teams.workflow.reject_step",
+        teams::handle_workflow_reject_step,
+        coord_store
+    );
+    register_handler!(
+        server,
+        "teams.workflow.retry_step",
+        teams::handle_workflow_retry_step,
+        coord_store
+    );
+
+    // ACP-backed team member operations — attach an external coding CLI
+    // session (Claude Code, Codex, ...) as a first-class team member so
+    // the autonomous dispatcher can route tasks to it.
+    register_handler!(server, "teams.acp_member.add", teams::handle_acp_member_add, store);
+    register_handler!(
+        server,
+        "teams.acp_member.remove",
+        teams::handle_acp_member_remove,
+        store
+    );
+    register_handler!(
+        server,
+        "teams.acp_member.list",
+        teams::handle_acp_member_list,
+        store
+    );
+
     // Event timeline RPC is best-effort: only wired when event_store was
     // constructed at boot. Without it, the placeholder in handlers/mod.rs
     // surfaces a clear "store unavailable" error.

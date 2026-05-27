@@ -370,6 +370,7 @@ async fn test_context_injection_shows_inbox_summary() {
             team_id: team.id.clone(),
             agent_id: agent_id.into(),
             role: "explorer".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -674,6 +675,7 @@ async fn test_broadcast_pattern() {
             team_id: team.id.clone(),
             agent_id: "leader".into(),
             role: "leader".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -682,6 +684,7 @@ async fn test_broadcast_pattern() {
             team_id: team.id.clone(),
             agent_id: "worker-1".into(),
             role: "worker".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -690,6 +693,7 @@ async fn test_broadcast_pattern() {
             team_id: team.id.clone(),
             agent_id: "worker-2".into(),
             role: "worker".into(),
+            ..Default::default()
         })
         .await
         .unwrap();

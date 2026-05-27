@@ -52,6 +52,7 @@ async fn capture_and_get_roundtrip() {
             team_id: team.id.clone(),
             agent_id: "leader".into(),
             role: "leader".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -60,6 +61,7 @@ async fn capture_and_get_roundtrip() {
             team_id: team.id.clone(),
             agent_id: "worker".into(),
             role: "worker".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -106,6 +108,7 @@ async fn list_returns_newest_first() {
             team_id: team.id.clone(),
             agent_id: "leader".into(),
             role: "leader".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -148,6 +151,7 @@ async fn dry_run_restore_reports_diff_without_mutating() {
             team_id: team.id.clone(),
             agent_id: "leader".into(),
             role: "leader".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -232,6 +236,7 @@ async fn live_restore_adds_missing_tasks_and_members() {
             team_id: team.id.clone(),
             agent_id: "leader".into(),
             role: "leader".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -240,6 +245,7 @@ async fn live_restore_adds_missing_tasks_and_members() {
             team_id: team.id.clone(),
             agent_id: "snap-only".into(),
             role: "worker".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -324,6 +330,7 @@ async fn delete_snapshot_is_idempotent() {
             team_id: team.id.clone(),
             agent_id: "leader".into(),
             role: "leader".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -392,6 +399,7 @@ async fn add_leader(teams: &SqliteTeamStore, team_id: &str) -> TeamMember {
             team_id: team_id.into(),
             agent_id: "leader".into(),
             role: "leader".into(),
+            ..Default::default()
         })
         .await
         .unwrap()

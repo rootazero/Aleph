@@ -10,6 +10,7 @@ use super::agent_instance::AgentRegistry;
 use super::execution_adapter::ExecutionAdapter;
 use super::inter_agent_policy::AgentToAgentPolicy;
 use super::session_store::SessionStore;
+use crate::acp::manager::AcpAdapterManager;
 
 /// Gateway context containing references to core components.
 ///
@@ -49,6 +50,12 @@ pub struct GatewayContext {
 
     /// Policy controlling agent-to-agent communication
     a2a_policy: Arc<AgentToAgentPolicy>,
+
+    /// Optional ACP adapter pool — present when `acp.enabled = true` in
+    /// app config. Lets the team dispatcher route tasks owned by an
+    /// `AcpSession` team member to an external coding CLI (Claude Code,
+    /// Codex, ...) instead of the in-process registry.
+    acp_manager: Option<Arc<AcpAdapterManager>>,
 }
 
 impl GatewayContext {
@@ -71,7 +78,19 @@ impl GatewayContext {
             agent_registry,
             execution_adapter,
             a2a_policy,
+            acp_manager: None,
         }
+    }
+
+    /// Builder-style setter for the optional ACP adapter pool.
+    ///
+    /// Backward-compatible: `GatewayContext::new(...)` continues to produce
+    /// a context with `acp_manager = None` so existing tests/call-sites
+    /// don't need updating. Production startup chains this after `new()`
+    /// when `acp.enabled = true`.
+    pub fn with_acp_manager(mut self, acp_manager: Arc<AcpAdapterManager>) -> Self {
+        self.acp_manager = Some(acp_manager);
+        self
     }
 
     /// Get a reference to the session store.
@@ -92,6 +111,11 @@ impl GatewayContext {
     /// Get a reference to the A2A policy.
     pub fn a2a_policy(&self) -> &Arc<AgentToAgentPolicy> {
         &self.a2a_policy
+    }
+
+    /// Get a reference to the ACP adapter pool, if configured.
+    pub fn acp_manager(&self) -> Option<&Arc<AcpAdapterManager>> {
+        self.acp_manager.as_ref()
     }
 }
 

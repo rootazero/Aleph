@@ -165,6 +165,7 @@ pub async fn materialize_template(
             team_id: team.id.clone(),
             agent_id: leader_id.clone(),
             role: leader_role,
+            ..Default::default()
         })
         .await
         .map_err(|e| TeamTemplateError::Materialize(format!("add_member(leader) failed: {e}")))?;
@@ -176,6 +177,7 @@ pub async fn materialize_template(
                 team_id: team.id.clone(),
                 agent_id: agent_id.clone(),
                 role,
+                ..Default::default()
             })
             .await
             .map_err(|e| TeamTemplateError::Materialize(format!("add_member failed: {e}")))?;

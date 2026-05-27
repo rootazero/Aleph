@@ -233,7 +233,8 @@ pub async fn restore_snapshot(
             .await?;
     }
 
-    // 2. Members.
+    // 2. Members. Preserve `kind` and ACP routing fields so external CLI
+    // members survive snapshot/restore round-trips.
     for agent_id in &members_to_add {
         let snap_m = snap_member_ids[agent_id];
         team_store
@@ -241,6 +242,10 @@ pub async fn restore_snapshot(
                 team_id: team_id.clone(),
                 agent_id: agent_id.clone(),
                 role: snap_m.role.clone(),
+                kind: snap_m.kind.clone(),
+                acp_harness_id: snap_m.acp_harness_id.clone(),
+                acp_cwd: snap_m.acp_cwd.clone(),
+                acp_session_name: snap_m.acp_session_name.clone(),
             })
             .await?;
     }

@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use tokio::sync::OwnedSemaphorePermit;
 
 use super::handoff::build_handoff_context;
-use super::runner::{execute_member_task, MemberRunStatus};
+use super::runner::{execute_member_task, MemberDispatchTarget, MemberRunStatus};
 use super::TeamDispatcher;
 use crate::agents::swarm::tasks::{
     CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate, TaskRunStatus,
@@ -18,6 +18,7 @@ use crate::agents::swarm::tasks::{
 use crate::sync_primitives::Arc;
 use crate::teams::artifacts::{ArtifactType, NewArtifact, TaskStatus};
 use crate::teams::context::InboxContextProvider;
+use crate::teams::types::TeamMemberKind;
 
 /// Task metadata key marking a task as managed by the autonomous dispatcher.
 ///
@@ -160,15 +161,17 @@ impl TeamDispatcher {
                 None => continue, // unreachable: select_schedulable requires an owner
             };
 
-            // Fail fast on an unknown owner instead of leaving the task stuck.
-            if self.context.agent_registry().get(&owner).await.is_none() {
-                self.fail_task(
-                    &task,
-                    &format!("Owner agent '{owner}' not found in registry"),
-                )
-                .await;
-                continue;
-            }
+            // Resolve the owner against the team's member roster so we
+            // know whether to route in-process (Agent) or via ACP. A
+            // task with no team_id or an unknown owner is a configuration
+            // error and force-fails the task — never silently stalls.
+            let dispatch_target = match self.resolve_dispatch_target(&task, &owner).await {
+                Ok(t) => t,
+                Err(reason) => {
+                    self.fail_task(&task, &reason).await;
+                    continue;
+                }
+            };
 
             // Atomic claim — loses harmlessly to a racing claimer.
             if let Err(e) = self.coord_store.acquire_lock(&task.id, &owner).await {
@@ -195,8 +198,56 @@ impl TeamDispatcher {
             self.running.lock().await.insert(task.id.clone());
             let dispatcher = Arc::clone(self);
             tokio::spawn(async move {
-                dispatcher.run_task(task, owner, permit).await;
+                dispatcher.run_task(task, owner, dispatch_target, permit).await;
             });
+        }
+    }
+
+    /// Resolve a task's `owner` string to a [`MemberDispatchTarget`].
+    ///
+    /// - For an `Agent` kind we re-check the registry so missing in-process
+    ///   agents still fail fast (preserving the pre-A2 behaviour).
+    /// - For an `AcpSession` kind we trust the team_members row and skip
+    ///   the registry check entirely — the ACP runner validates the
+    ///   harness id when it tries to spawn.
+    /// - Missing team or member rows surface as a fail-task reason so the
+    ///   task does not loop forever.
+    async fn resolve_dispatch_target(
+        &self,
+        task: &CoordTask,
+        owner: &str,
+    ) -> Result<MemberDispatchTarget, String> {
+        let team_id = task
+            .team_id
+            .as_deref()
+            .ok_or_else(|| format!("task '{}' has no team_id", task.id))?;
+
+        let members = self
+            .team_store
+            .get_members(team_id)
+            .await
+            .map_err(|e| format!("team_store.get_members failed: {e}"))?;
+        let member = members
+            .iter()
+            .find(|m| m.agent_id == owner)
+            .ok_or_else(|| format!("owner '{owner}' is not a member of team '{team_id}'"))?;
+
+        match member.kind {
+            TeamMemberKind::Agent => {
+                if self.context.agent_registry().get(owner).await.is_none() {
+                    return Err(format!("Owner agent '{owner}' not found in registry"));
+                }
+                Ok(MemberDispatchTarget::Agent {
+                    agent_id: owner.to_string(),
+                })
+            }
+            TeamMemberKind::AcpSession => MemberDispatchTarget::from_member(member).ok_or_else(
+                || {
+                    format!(
+                        "ACP member '{owner}' is missing required routing fields (harness_id/cwd)"
+                    )
+                },
+            ),
         }
     }
 
@@ -321,6 +372,7 @@ impl TeamDispatcher {
         self: Arc<Self>,
         task: CoordTask,
         owner: String,
+        target: MemberDispatchTarget,
         _permit: OwnedSemaphorePermit,
     ) {
         let task_id = task.id.clone();
@@ -345,18 +397,18 @@ impl TeamDispatcher {
                 String::new()
             });
 
-        // G2 — autonomous dispatch runs members in parallel. Wrap each task
-        // in its own git worktree to keep their indices from colliding.
-        // Best-effort: non-git environments and any provision failure fall
-        // back to the pre-G2 shared-tree behaviour with a logged warning.
+        // ACP members never get a per-task worktree — the external CLI
+        // process owns its own cwd. Only in-process agents benefit from
+        // git worktree isolation.
+        let isolate = matches!(target, MemberDispatchTarget::Agent { .. });
         let outcome = execute_member_task(
             &self.context,
-            &owner,
+            &target,
             &team_id,
             &task_id,
             input,
             self.config.task_timeout_secs,
-            true,
+            isolate,
         )
         .await;
 

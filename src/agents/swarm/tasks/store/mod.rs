@@ -25,8 +25,114 @@ use tokio::sync::Mutex;
 
 use super::{
     CoordTask, CoordTaskComment, CoordTaskFilter, CoordTaskId, CoordTaskRun, CoordTaskStatus,
-    CoordTaskStore, CoordTaskUpdate, NewCoordTask, TaskRunStatus,
+    CoordTaskStore, CoordTaskUpdate, NewCoordTask, ReviewVerdict, ReviewerKind, TaskRunStatus,
 };
+
+#[cfg(test)]
+mod review_tests {
+    use super::SqliteCoordTaskStore;
+    use crate::agents::swarm::tasks::{
+        CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority, ReviewVerdict,
+        ReviewerKind, TaskRunStatus,
+    };
+
+    async fn make_store() -> SqliteCoordTaskStore {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let store = SqliteCoordTaskStore::new(conn);
+        store.migrate().await.unwrap();
+        store
+    }
+
+    #[tokio::test]
+    async fn record_run_review_stamps_latest_finished_run() {
+        let store = make_store().await;
+        let task = store
+            .create_task(NewCoordTask {
+                team_id: Some("t1".into()),
+                subject: "review-me".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: Vec::new(),
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        let run_id = store
+            .start_task_run(&task.id, "worker")
+            .await
+            .unwrap();
+        store
+            .finish_task_run(&run_id, TaskRunStatus::Completed, Some("ok".into()), None)
+            .await
+            .unwrap();
+
+        store
+            .record_run_review(
+                &task.id,
+                ReviewVerdict::Approved,
+                ReviewerKind::User,
+                Some("alice"),
+            )
+            .await
+            .unwrap();
+
+        let runs = store.list_task_runs(&task.id).await.unwrap();
+        let last = runs.last().expect("at least one run");
+        assert_eq!(last.review_verdict, Some(ReviewVerdict::Approved));
+        assert_eq!(last.reviewer_kind, Some(ReviewerKind::User));
+        assert_eq!(last.reviewer_id.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn skipped_satisfies_dependency_at_query_time() {
+        let store = make_store().await;
+        let parent = store
+            .create_task(NewCoordTask {
+                team_id: Some("t1".into()),
+                subject: "parent".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: Vec::new(),
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let child = store
+            .create_task(NewCoordTask {
+                team_id: Some("t1".into()),
+                subject: "child".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![parent.id.clone()],
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Child sees Blocked while parent is Pending.
+        let pending_child = store.get_task(&child.id).await.unwrap().unwrap();
+        assert_eq!(pending_child.status, CoordTaskStatus::Blocked);
+
+        // Mark parent as Skipped — child should become Pending (unblocked).
+        store
+            .update_task(
+                &parent.id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Skipped),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let unblocked_child = store.get_task(&child.id).await.unwrap().unwrap();
+        assert_eq!(unblocked_child.status, CoordTaskStatus::Pending);
+    }
+}
 
 use helpers::{db_err, now_epoch, summarize};
 use row_decode::{load_dependencies, load_task, read_task_row};
@@ -351,6 +457,8 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             CoordTaskStatus::Completed => "completed",
             CoordTaskStatus::Failed => "failed",
             CoordTaskStatus::Cancelled => "cancelled",
+            CoordTaskStatus::WaitingReview => "waiting_review",
+            CoordTaskStatus::Skipped => "skipped",
             _ => "updated",
         };
         self.emit_task_topic(&task, verb).await;
@@ -409,7 +517,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
                 t.id, t.team_id, t.subject, t.description, t.status, t.owner,
                 t.priority, t.result, t.metadata, t.created_at, t.started_at,
                 t.completed_at, t.locked_by, t.locked_at,
-                COALESCE(SUM(CASE WHEN dep.status IS NOT NULL AND dep.status != 'completed' THEN 1 ELSE 0 END), 0) AS unresolved_parents,
+                COALESCE(SUM(CASE WHEN dep.status IS NOT NULL AND dep.status NOT IN ('completed', 'skipped') THEN 1 ELSE 0 END), 0) AS unresolved_parents,
                 GROUP_CONCAT(d.depends_on) AS dep_ids
             FROM coord_tasks t
             LEFT JOIN coord_task_dependencies d ON d.task_id = t.id
@@ -502,7 +610,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
                   AND NOT EXISTS (
                     SELECT 1 FROM coord_task_dependencies d2
                     JOIN coord_tasks dep ON dep.id = d2.depends_on
-                    WHERE d2.task_id = t.id AND dep.status != 'completed'
+                    WHERE d2.task_id = t.id AND dep.status NOT IN ('completed', 'skipped')
                   )
                 "#,
             )
@@ -657,7 +765,8 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         let conn = self.conn.lock().await;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, task_id, agent_id, started_at, ended_at, status, summary, error \
+                "SELECT id, task_id, agent_id, started_at, ended_at, status, summary, error, \
+                        review_verdict, reviewer_kind, reviewer_id \
                  FROM coord_task_runs WHERE task_id = ?1 ORDER BY started_at ASC",
             )
             .map_err(db_err)?;
@@ -674,6 +783,8 @@ impl CoordTaskStore for SqliteCoordTaskStore {
                         )),
                     )
                 })?;
+                let review_verdict: Option<String> = row.get(8).ok();
+                let reviewer_kind: Option<String> = row.get(9).ok();
                 Ok(CoordTaskRun {
                     id: row.get(0)?,
                     task_id: row.get(1)?,
@@ -683,6 +794,13 @@ impl CoordTaskStore for SqliteCoordTaskStore {
                     status,
                     summary: row.get(6)?,
                     error: row.get(7)?,
+                    review_verdict: review_verdict
+                        .as_deref()
+                        .and_then(ReviewVerdict::from_stored),
+                    reviewer_kind: reviewer_kind
+                        .as_deref()
+                        .and_then(ReviewerKind::from_stored),
+                    reviewer_id: row.get(10).ok(),
                 })
             })
             .map_err(db_err)?;
@@ -691,6 +809,47 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             runs.push(r.map_err(db_err)?);
         }
         Ok(runs)
+    }
+
+    async fn record_run_review(
+        &self,
+        task_id: &str,
+        verdict: ReviewVerdict,
+        reviewer_kind: ReviewerKind,
+        reviewer_id: Option<&str>,
+    ) -> crate::error::Result<()> {
+        let conn = self.conn.lock().await;
+        // Stamp the most recent completed run for this task. We choose the
+        // latest-by-started_at row that has already ended — a still-running
+        // attempt cannot be reviewed.
+        let affected = conn
+            .execute(
+                r#"
+                UPDATE coord_task_runs
+                SET review_verdict = ?1,
+                    reviewer_kind  = ?2,
+                    reviewer_id    = ?3
+                WHERE id = (
+                    SELECT id FROM coord_task_runs
+                    WHERE task_id = ?4 AND ended_at IS NOT NULL
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                )
+                "#,
+                params![
+                    verdict.as_str(),
+                    reviewer_kind.as_str(),
+                    reviewer_id,
+                    task_id,
+                ],
+            )
+            .map_err(db_err)?;
+        if affected == 0 {
+            return Err(db_err(format!(
+                "no finished run to review for task {task_id}"
+            )));
+        }
+        Ok(())
     }
 
     // --- Comments ----------------------------------------------------------

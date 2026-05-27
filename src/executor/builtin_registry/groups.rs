@@ -157,6 +157,8 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "task_list",
             "task_wait",
             "task_comment",
+            "team_acp_member",
+            "workflow_step_review",
             "task_submit",
             "task_read_artifact",
             "session_collaborate",

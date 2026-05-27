@@ -63,6 +63,11 @@ impl Priority {
 ///
 /// `Blocked` is **derived dynamically** at query time when a task has
 /// unresolved dependencies — it is never stored in the database.
+///
+/// `WaitingReview` and `Skipped` are openteams-parity additions (Phase C):
+/// a finished run that needs human/lead-agent approval before downstream
+/// tasks unblock, and a manual "not-needed" marker that still counts as
+/// satisfied for dependency resolution.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoordTaskStatus {
@@ -70,9 +75,17 @@ pub enum CoordTaskStatus {
     Pending,
     Blocked,
     InProgress,
+    /// The run finished but a reviewer must approve before downstream
+    /// dependents unblock. Set by the dispatcher when `lead_review_required`
+    /// is true on the task metadata or by an explicit
+    /// `teams.workflow.set_pending_review` call.
+    WaitingReview,
     Completed,
     Failed,
     Cancelled,
+    /// Manually marked as not-required. Treated as "satisfied" for
+    /// dependency resolution (downstream tasks unblock).
+    Skipped,
 }
 
 impl CoordTaskStatus {
@@ -81,9 +94,11 @@ impl CoordTaskStatus {
             Self::Pending => "pending",
             Self::Blocked => "blocked",
             Self::InProgress => "in_progress",
+            Self::WaitingReview => "waiting_review",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
+            Self::Skipped => "skipped",
         }
     }
 
@@ -96,11 +111,21 @@ impl CoordTaskStatus {
             "pending" => Some(Self::Pending),
             // "blocked" is never stored — it is derived at query time
             "in_progress" => Some(Self::InProgress),
+            "waiting_review" => Some(Self::WaitingReview),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),
             "cancelled" => Some(Self::Cancelled),
+            "skipped" => Some(Self::Skipped),
             _ => None,
         }
+    }
+
+    /// Whether this status satisfies a downstream dependency — i.e. a
+    /// task whose blocked_by set contains a task with this status no
+    /// longer waits on it. Completed and Skipped both satisfy; all
+    /// other statuses (including Failed) leave the dependent blocked.
+    pub fn satisfies_dependency(&self) -> bool {
+        matches!(self, Self::Completed | Self::Skipped)
     }
 }
 
@@ -206,6 +231,60 @@ impl TaskRunStatus {
     }
 }
 
+/// Reviewer category for a step-level approval decision (Phase C).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewerKind {
+    /// Approved/rejected by a human via the panel UI.
+    User,
+    /// Approved/rejected by the team's leader agent (programmatic review).
+    LeadAgent,
+    /// Auto-approved by policy (e.g. lead_review_required = false).
+    Auto,
+}
+
+/// Verdict of a step review (Phase C).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewVerdict {
+    Approved,
+    Rejected,
+}
+
+impl ReviewerKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::LeadAgent => "lead_agent",
+            Self::Auto => "auto",
+        }
+    }
+    pub fn from_stored(s: &str) -> Option<Self> {
+        match s {
+            "user" => Some(Self::User),
+            "lead_agent" => Some(Self::LeadAgent),
+            "auto" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+}
+
+impl ReviewVerdict {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+        }
+    }
+    pub fn from_stored(s: &str) -> Option<Self> {
+        match s {
+            "approved" => Some(Self::Approved),
+            "rejected" => Some(Self::Rejected),
+            _ => None,
+        }
+    }
+}
+
 /// One execution attempt of a [`CoordTask`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoordTaskRun {
@@ -217,6 +296,15 @@ pub struct CoordTaskRun {
     pub status: TaskRunStatus,
     pub summary: Option<String>,
     pub error: Option<String>,
+    /// Phase C — step review verdict captured against this attempt. `None`
+    /// until a reviewer acts via `teams.workflow.approve_step` /
+    /// `reject_step`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_verdict: Option<ReviewVerdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_kind: Option<ReviewerKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +386,20 @@ pub trait CoordTaskStore: Send + Sync {
     /// List all runs for a task, oldest first.
     async fn list_task_runs(&self, _task_id: &str) -> crate::error::Result<Vec<CoordTaskRun>> {
         Ok(Vec::new())
+    }
+
+    /// Record a step-level review verdict against the most recent
+    /// completed run of `task_id`. Phase C (workflow parity). Default
+    /// impl is a no-op so back-ends that don't support reviews fail
+    /// gracefully — callers should still check via `list_task_runs`.
+    async fn record_run_review(
+        &self,
+        _task_id: &str,
+        _verdict: ReviewVerdict,
+        _reviewer_kind: ReviewerKind,
+        _reviewer_id: Option<&str>,
+    ) -> crate::error::Result<()> {
+        Ok(())
     }
 
     // --- Comments ---

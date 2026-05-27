@@ -76,13 +76,18 @@ pub(super) fn load_dependencies(
 }
 
 /// Determine if a pending task should display as Blocked (has unresolved deps).
+///
+/// A dep is "satisfied" when its status is one of (completed, skipped).
+/// Skipped was added in Phase C (workflow parity); it means an operator
+/// (lead agent / user) decided the step is not required, so downstream
+/// tasks should still unblock.
 pub(super) fn has_unresolved_deps(conn: &Connection, task_id: &str) -> rusqlite::Result<bool> {
     let blocked: bool = conn.query_row(
         r#"
         SELECT EXISTS(
             SELECT 1 FROM coord_task_dependencies d
             JOIN coord_tasks dep ON dep.id = d.depends_on
-            WHERE d.task_id = ?1 AND dep.status != 'completed'
+            WHERE d.task_id = ?1 AND dep.status NOT IN ('completed', 'skipped')
         )
         "#,
         params![task_id],

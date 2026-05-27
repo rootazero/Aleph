@@ -1346,12 +1346,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             use alephcore::gateway::inter_agent_policy::AgentToAgentPolicy;
 
             let a2a_policy = Arc::new(AgentToAgentPolicy::default());
-            let gateway_ctx = Arc::new(GatewayContext::new(
+            let mut gateway_ctx_inner = GatewayContext::new(
                 session_store.clone(),
                 agent_registry,
                 engine_arc,
                 a2a_policy,
-            ));
+            );
+            // Wire the optional ACP adapter pool so the team dispatcher can
+            // route tasks owned by AcpSession members through external CLIs.
+            if let Some(ref acp) = acp_manager {
+                gateway_ctx_inner = gateway_ctx_inner.with_acp_manager(Arc::clone(acp));
+            }
+            let gateway_ctx = Arc::new(gateway_ctx_inner);
 
             // Autonomous team dispatcher — drives the coordination-task DAG to
             // completion. Constructed here because it needs the GatewayContext

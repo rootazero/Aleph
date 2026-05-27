@@ -60,6 +60,7 @@ impl TeammateManager {
                 team_id: team_id.to_string(),
                 agent_id: agent_name.to_string(),
                 role: role.to_string(),
+                ..Default::default()
             })
             .await?;
 

@@ -208,6 +208,7 @@ mod tests {
             team_id: team.id.clone(),
             agent_id: "analyst".into(),
             role: "data analyst".into(),
+            ..Default::default()
         })
         .await
         .unwrap();

@@ -555,6 +555,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Append a free-text handoff note to a coordination task — survives retries and is visible in the kanban drawer",
         requires_config: true,
     },
+    BuiltinToolDefinition {
+        name: "team_acp_member",
+        description: "Attach / detach / list external coding CLI sessions (Claude Code, Codex, Gemini CLI) as ACP-backed team members",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "workflow_step_review",
+        description: "Approve / reject / retry / skip a single workflow step. Lead-agent step control between dependent tasks (openteams parity).",
+        requires_config: true,
+    },
     // Task artifact tools — require ArtifactStore
     BuiltinToolDefinition {
         name: "task_submit",
@@ -777,6 +787,8 @@ pub fn create_tool_boxed(
         | "team_from_template"
         | "team_snapshot"
         | "team_usage"
+        | "team_acp_member"
+        | "workflow_step_review"
         | "message_send"
         | "inbox_read"
         | "plan_submit"

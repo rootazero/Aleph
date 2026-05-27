@@ -1,5 +1,6 @@
 //! Team management tools.
 
+pub mod acp_member;
 mod create;
 mod delegate;
 mod disband;
@@ -22,7 +23,11 @@ pub mod task_read_artifact;
 pub mod task_submit;
 mod team_digest;
 pub mod usage;
+pub mod workflow_step;
 
+pub use acp_member::{
+    TeamAcpMemberArgs, TeamAcpMemberOutput, TeamAcpMemberTool,
+};
 pub use create::{
     CreateAgentSpec, EnrolledMember, MemberSpec, TeamCreateArgs, TeamCreateOutput, TeamCreateTool,
 };
@@ -56,3 +61,6 @@ pub use task_read_artifact::{TaskReadArtifactArgs, TaskReadArtifactOutput, TaskR
 pub use task_submit::{TaskSubmitArgs, TaskSubmitOutput, TaskSubmitTool};
 pub use team_digest::{TeamDigestArgs, TeamDigestOutput, TeamDigestTool};
 pub use usage::{TeamUsageArgs, TeamUsageOutput, TeamUsageTool, UsageTotal};
+pub use workflow_step::{
+    WorkflowStepReviewArgs, WorkflowStepReviewOutput, WorkflowStepReviewTool,
+};
