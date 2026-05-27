@@ -126,9 +126,6 @@ impl ToolRenderer for DefaultJsonRenderer {
                     )>{status.clone()}</span>
                     <span class="text-text-tertiary">"duration: " {duration}</span>
                 </div>
-                <p class="text-xs text-text-tertiary italic mt-2">
-                    "Payload capture not yet wired — see WorkspaceState follow-up."
-                </p>
             </div>
         }
         .into_any()
@@ -175,9 +172,6 @@ impl ToolRenderer for CodeToolRenderer {
                     <span class="font-mono">"$"</span>
                     <span>{name.clone()}</span>
                 </div>
-                <div class="rounded-md border border-border bg-surface-sunken p-3 font-mono text-xs text-text-secondary">
-                    "// command + output capture pending payload wiring"
-                </div>
                 <div class="flex gap-3 text-xs">
                     <span class=move || format!(
                         "px-2 py-0.5 rounded-md font-mono {}",
@@ -223,10 +217,6 @@ impl ToolRenderer for SearchToolRenderer {
                     </svg>
                     <span>{name.clone()}</span>
                 </div>
-                <p class="text-xs text-text-tertiary italic">
-                    "Results panel pending payload wiring — once tool outputs "
-                    "are captured, hits land here in a clickable list."
-                </p>
                 <span class=move || format!(
                     "self-start px-2 py-0.5 rounded-md font-mono text-xs {}",
                     status_pill_class(&status)

@@ -562,9 +562,22 @@ pub fn GraphCanvas(
         *raf_c.borrow_mut() = Some(closure);
     });
 
-    // Mouse event handlers
+    // Pointer event handlers (mouse / pen / single-touch unified).
+    // Using PointerEvent + setPointerCapture so drag survives when the
+    // pointer leaves the canvas rect mid-gesture — a long-standing
+    // bug under the legacy MouseEvent path where mouseup never fired
+    // off-canvas, leaving the drag controller wedged in "pressed".
     let gs_down = graph_state.clone();
-    let on_mousedown = move |ev: web_sys::MouseEvent| {
+    let on_pointerdown = move |ev: web_sys::PointerEvent| {
+        // Capture pointer so all subsequent move/up events route to this
+        // element even if the pointer travels outside the canvas rect.
+        // Best-effort: pointer capture not being granted is non-fatal.
+        if let Some(target) = ev.target() {
+            if let Ok(el) = target.dyn_into::<web_sys::Element>() {
+                let _ = el.set_pointer_capture(ev.pointer_id());
+            }
+        }
+
         let mut state = gs_down.borrow_mut();
         let screen = Vec2::new(ev.offset_x() as f64, ev.offset_y() as f64);
 
@@ -612,7 +625,7 @@ pub fn GraphCanvas(
     };
 
     let gs_move = graph_state.clone();
-    let on_mousemove = move |ev: web_sys::MouseEvent| {
+    let on_pointermove = move |ev: web_sys::PointerEvent| {
         let mut state = gs_move.borrow_mut();
         let screen = Vec2::new(ev.offset_x() as f64, ev.offset_y() as f64);
 
@@ -654,7 +667,15 @@ pub fn GraphCanvas(
     };
 
     let gs_up = graph_state.clone();
-    let on_mouseup = move |ev: web_sys::MouseEvent| {
+    let on_pointerup = move |ev: web_sys::PointerEvent| {
+        // Release the pointer capture acquired in on_pointerdown. Safe
+        // even if no capture was granted — releasePointerCapture is a
+        // no-op for non-captured pointers per spec.
+        if let Some(target) = ev.target() {
+            if let Ok(el) = target.clone().dyn_into::<web_sys::Element>() {
+                let _ = el.release_pointer_capture(ev.pointer_id());
+            }
+        }
         // Elastic-drag release: process through DragState if a drag is active.
         // Click  → SelectNode (re-uses existing intent path for breadcrumb/fetch).
         // Promote→ deferred until tick() emits target on tween completion.
@@ -751,8 +772,56 @@ pub fn GraphCanvas(
         ev.prevent_default();
         let mut state = gs_wheel.borrow_mut();
         let screen = Vec2::new(ev.offset_x() as f64, ev.offset_y() as f64);
-        let delta = -ev.delta_y() * 0.001;
+
+        // Normalize delta across deltaMode (0=pixel, 1=line, 2=page).
+        // Pre-Pointer code assumed pixel mode and used a flat 0.001 factor;
+        // Firefox/Chrome on Linux still emit DELTA_LINE for legacy mice,
+        // so a fixed factor causes wildly different zoom speeds depending
+        // on browser+OS combo.
+        let line_height_px = 16.0_f64;
+        let pixel_dy = match ev.delta_mode() {
+            1 => ev.delta_y() * line_height_px,
+            2 => ev.delta_y() * line_height_px * 16.0,
+            _ => ev.delta_y(),
+        };
+
+        // macOS trackpad pinch-zoom synthesizes wheel events with
+        // ctrlKey=true (a Webkit convention since adopted everywhere).
+        // Amplify the factor so pinch-zoom feels responsive vs scroll-zoom.
+        let factor = if ev.ctrl_key() { 0.01 } else { 0.0015 };
+        let delta = -pixel_dy * factor;
         state.viewport.zoom_at(screen, delta);
+    };
+
+    // Keyboard zoom: Cmd/Ctrl + [+ | - | 0]. Canvas needs `tabindex="0"`
+    // to receive focus and keydown events — set in the view! below.
+    // Cmd+0 resets to scale=1 and recentres the offset, matching the
+    // viewport's initial state from Viewport::new().
+    let gs_key = graph_state.clone();
+    let on_keydown = move |ev: web_sys::KeyboardEvent| {
+        if !(ev.ctrl_key() || ev.meta_key()) {
+            return;
+        }
+        let key = ev.key();
+        let mut state = gs_key.borrow_mut();
+        let center = Vec2::new(state.viewport.width / 2.0, state.viewport.height / 2.0);
+        match key.as_str() {
+            "=" | "+" => {
+                ev.prevent_default();
+                state.viewport.zoom_at(center, 0.2);
+            }
+            "-" | "_" => {
+                ev.prevent_default();
+                state.viewport.zoom_at(center, -0.2);
+            }
+            "0" => {
+                ev.prevent_default();
+                state.viewport.scale = 1.0;
+                state.viewport.offset = center;
+                state.drag_offset = (0.0, 0.0);
+            }
+            _ => {}
+        }
     };
 
     // The rAF chain is leaked on purpose: the parent <MainContent> keeps
@@ -765,8 +834,11 @@ pub fn GraphCanvas(
     // historical `Send` excuse was wrong. The real reason we skip it is
     // that unmount never happens with the current routing pattern.
 
-    let on_mouseleave = move |_ev: web_sys::MouseEvent| {
-        // Hard-cancel any in-flight drag without spring-back animation (spec §6.3).
+    // pointercancel fires when the system aborts the gesture (e.g. another
+    // gesture took over, scroll chaining kicked in, pen lifted on touchpad).
+    // Treat it as a hard drag-cancel — same semantics as the prior
+    // mouseleave path (spec §6.3) but driven by the proper Pointer event.
+    let on_pointercancel = move |_ev: web_sys::PointerEvent| {
         drag_state_for_leave.borrow_mut().cancel();
     };
 
@@ -774,13 +846,15 @@ pub fn GraphCanvas(
         <div class="relative w-full h-full">
             <canvas
                 node_ref=canvas_ref
-                class="w-full h-full block"
-                style="cursor: grab;"
-                on:mousedown=on_mousedown
-                on:mousemove=on_mousemove
-                on:mouseup=on_mouseup
-                on:mouseleave=on_mouseleave
+                class="w-full h-full block focus:outline-none"
+                style="cursor: grab; touch-action: none;"
+                tabindex="0"
+                on:pointerdown=on_pointerdown
+                on:pointermove=on_pointermove
+                on:pointerup=on_pointerup
+                on:pointercancel=on_pointercancel
                 on:wheel=on_wheel
+                on:keydown=on_keydown
             />
             // DOM overlay: NodeCard components positioned over each visible node.
             // pointer-events-none on the wrapper so mouse events fall through to the canvas;

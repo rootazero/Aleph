@@ -9,6 +9,7 @@ pub mod connection_status;
 pub mod dashboard_sidebar;
 pub mod directory_browser;
 pub mod forms;
+pub mod json_viewer;
 pub mod layout_toggle;
 pub mod layouts;
 pub mod markdown;

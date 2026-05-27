@@ -12,6 +12,7 @@
 //! `LayoutMode::Split` is set, the panel slides in as a flex sibling of
 //! the chat surface.
 
+use crate::components::json_viewer::JsonViewer;
 use crate::components::markdown::MarkdownRenderer;
 use crate::components::tool_renderer::ToolRendererRegistry;
 use crate::state::layout::{LayoutMode, ToolPayload, WorkspaceContent, WorkspaceState};
@@ -167,49 +168,45 @@ fn ToolDetailView(run_id: String, tool_id: String) -> impl IntoView {
     }
 }
 
-/// Args + result JSON dump for a tool call. Hidden entirely when the
-/// payload hasn't been captured yet (no flicker between renderer chip
-/// and pending payload).
+/// Args + result hierarchical viewer for a tool call. Hidden entirely
+/// when the payload hasn't been captured yet (no flicker between
+/// renderer chip and pending payload).
+///
+/// Renders through [`JsonViewer`] for collapsible / type-coloured /
+/// per-node copy UX. Was previously a flat `<pre>{pretty_json(...)}</pre>`
+/// dump; see Round-2 panel refactor.
 #[component]
 fn PayloadBlock(payload: Option<ToolPayload>) -> impl IntoView {
     let Some(p) = payload else {
         return view! { <span /> }.into_any();
     };
-    let args_pretty = p
-        .args
-        .as_ref()
-        .map(pretty_json)
-        .unwrap_or_else(|| "—".to_string());
-    let result_pretty = p
-        .result
-        .as_ref()
-        .map(pretty_json)
-        .unwrap_or_else(|| "—".to_string());
     view! {
         <div class="flex flex-col gap-2 text-xs">
             <details class="rounded-md border border-border/60 bg-surface-sunken/60" open=true>
                 <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">
                     "input"
                 </summary>
-                <pre class="px-3 py-2 overflow-x-auto font-mono text-text-secondary whitespace-pre-wrap break-words">
-                    {args_pretty}
-                </pre>
+                <div class="px-3 py-2 overflow-x-auto">
+                    {match p.args {
+                        Some(v) => view! { <JsonViewer value=v /> }.into_any(),
+                        None => view! { <span class="text-text-tertiary italic">"—"</span> }.into_any(),
+                    }}
+                </div>
             </details>
             <details class="rounded-md border border-border/60 bg-surface-sunken/60" open=true>
                 <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">
                     "result"
                 </summary>
-                <pre class="px-3 py-2 overflow-x-auto font-mono text-text-secondary whitespace-pre-wrap break-words">
-                    {result_pretty}
-                </pre>
+                <div class="px-3 py-2 overflow-x-auto">
+                    {match p.result {
+                        Some(v) => view! { <JsonViewer value=v /> }.into_any(),
+                        None => view! { <span class="text-text-tertiary italic">"—"</span> }.into_any(),
+                    }}
+                </div>
             </details>
         </div>
     }
     .into_any()
-}
-
-fn pretty_json(v: &serde_json::Value) -> String {
-    serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string())
 }
 
 /// Reactive lookup against `ChatState.messages`. The assistant message
