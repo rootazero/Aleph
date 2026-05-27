@@ -161,6 +161,7 @@ pub(in crate::commands::start) fn register_heartbeat_handlers(
 
 // ─── register_teams_handlers ─────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) fn register_teams_handlers(
     server: &mut GatewayServer,
     store: &Arc<dyn alephcore::teams::TeamStore>,
@@ -168,6 +169,7 @@ pub(in crate::commands::start) fn register_teams_handlers(
     event_store: Option<&Arc<dyn alephcore::teams::events::EventLogStore>>,
     snapshot_store: Option<&Arc<alephcore::teams::SqliteSnapshotStore>>,
     state_db: Option<&Arc<alephcore::resilience::StateDatabase>>,
+    artifact_store: Option<&Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
 ) {
     use alephcore::gateway::handlers::teams;
 
@@ -237,6 +239,48 @@ pub(in crate::commands::start) fn register_teams_handlers(
         server,
         "teams.workflow.retry_step",
         teams::handle_workflow_retry_step,
+        coord_store
+    );
+
+    // R3 — task-level control surface. Pause/resume/retry/skip operate on
+    // any task state (admin-context), complementing the reviewer-context
+    // workflow.* family. See `team_task_control` builtin for the
+    // LLM-facing equivalent.
+    register_handler!(server, "teams.task.pause", teams::handle_task_pause, coord_store);
+    register_handler!(server, "teams.task.resume", teams::handle_task_resume, coord_store);
+    register_handler!(server, "teams.task.retry", teams::handle_task_retry, coord_store);
+    register_handler!(server, "teams.task.skip", teams::handle_task_skip, coord_store);
+
+    // R3 — teams.task.trace: unified audit timeline aggregating runs +
+    // comments + events + artifacts in one round-trip. Both optional
+    // stores degrade to empty arrays when unavailable rather than
+    // erroring (best-effort observability). Done by hand because the
+    // register_handler! macro is fixed to 1-3 mandatory Arcs — here we
+    // need two Option<Arc<_>> contexts.
+    {
+        let cs = Arc::clone(coord_store);
+        let es = event_store.cloned();
+        let ar = artifact_store.cloned();
+        server.handlers_mut().register("teams.task.trace", move |req| {
+            let cs = Arc::clone(&cs);
+            let es = es.clone();
+            let ar = ar.clone();
+            async move { teams::handle_task_trace(req, cs, es, ar).await }
+        });
+    }
+
+    // R3 — exit journal read surface. Write is via the
+    // `task_exit_journal` builtin tool (LLM-self-called).
+    register_handler!(
+        server,
+        "teams.task.journal.get",
+        teams::handle_task_journal_get,
+        coord_store
+    );
+    register_handler!(
+        server,
+        "teams.task.journal.list",
+        teams::handle_task_journal_list,
         coord_store
     );
 

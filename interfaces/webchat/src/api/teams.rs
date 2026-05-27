@@ -322,6 +322,80 @@ impl TeamsApi {
         serde_json::from_value(v).map_err(|e| e.to_string())
     }
 
+    // --- R3: task-level control + unified trace + exit journal -------------
+
+    /// teams.task.pause — suspend a task; dispatcher will not claim it.
+    pub async fn task_pause(state: &DashboardState, task_id: &str) -> Result<(), String> {
+        state
+            .rpc_call("teams.task.pause", json!({ "task_id": task_id }))
+            .await
+            .map(|_| ())
+    }
+
+    /// teams.task.resume — return a paused task to pending.
+    pub async fn task_resume(state: &DashboardState, task_id: &str) -> Result<(), String> {
+        state
+            .rpc_call("teams.task.resume", json!({ "task_id": task_id }))
+            .await
+            .map(|_| ())
+    }
+
+    /// teams.task.retry — hard-retry from any non-pending state.
+    pub async fn task_retry(state: &DashboardState, task_id: &str) -> Result<(), String> {
+        state
+            .rpc_call("teams.task.retry", json!({ "task_id": task_id }))
+            .await
+            .map(|_| ())
+    }
+
+    /// teams.task.skip — mark a task as not required.
+    pub async fn task_skip(state: &DashboardState, task_id: &str) -> Result<(), String> {
+        state
+            .rpc_call("teams.task.skip", json!({ "task_id": task_id }))
+            .await
+            .map(|_| ())
+    }
+
+    /// teams.task.trace — unified audit timeline (task + runs + comments
+    /// + events + artifacts + journal) in one round-trip. Returns the
+    /// raw JSON envelope; callers cherry-pick the fields they render.
+    pub async fn task_trace(state: &DashboardState, task_id: &str) -> Result<Value, String> {
+        state
+            .rpc_call("teams.task.trace", json!({ "task_id": task_id }))
+            .await
+    }
+
+    /// teams.task.journal.get — fetch the exit journal for a task, or
+    /// `Ok(None)` if no journal has been written yet.
+    pub async fn task_journal_get(
+        state: &DashboardState,
+        task_id: &str,
+    ) -> Result<Option<TaskExitJournalDto>, String> {
+        let result = state
+            .rpc_call("teams.task.journal.get", json!({ "task_id": task_id }))
+            .await?;
+        let v = result.get("journal").cloned().unwrap_or(Value::Null);
+        if v.is_null() {
+            return Ok(None);
+        }
+        serde_json::from_value(v).map(Some).map_err(|e| e.to_string())
+    }
+
+    /// teams.task.journal.list — all journals for a team, newest first.
+    pub async fn task_journal_list(
+        state: &DashboardState,
+        team_id: &str,
+    ) -> Result<Vec<TaskExitJournalDto>, String> {
+        let result = state
+            .rpc_call("teams.task.journal.list", json!({ "team_id": team_id }))
+            .await?;
+        let v = result
+            .get("journals")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+        serde_json::from_value(v).map_err(|e| e.to_string())
+    }
+
     /// teams.usage — per-team provider token aggregation (F5).
     /// `since`/`until` are optional epoch seconds; both omitted ⇒ all-time.
     pub async fn usage(
@@ -432,4 +506,21 @@ pub struct TaskEventDto {
     pub payload: Value,
     /// RFC3339 timestamp.
     pub timestamp: String,
+}
+
+/// R3 — `TaskExitJournal` mirror DTO.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TaskExitJournalDto {
+    pub task_id: String,
+    pub agent_id: String,
+    pub summary: String,
+    #[serde(default)]
+    pub decisions: Vec<String>,
+    #[serde(default)]
+    pub artifacts_ref: Vec<String>,
+    #[serde(default)]
+    pub next_steps: Vec<String>,
+    #[serde(default)]
+    pub confidence: Option<u8>,
+    pub created_at: u64,
 }

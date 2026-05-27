@@ -197,6 +197,31 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
     )
     .map_err(db_err)?;
 
+    // --- Exit journals (R3 — ClawTeam parity) ---
+    // One journal per task (PRIMARY KEY on task_id). UPSERT lets an agent
+    // rewrite its journal during retries — only the latest snapshot is
+    // canonical. Older runs are preserved in `coord_task_runs`.
+    //
+    // List-fields (decisions / artifacts_ref / next_steps) are stored as
+    // JSON arrays of strings. SQLite has no native array; we serialise +
+    // parse at the store boundary so the public type stays Rust-native.
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS coord_task_journals (
+            task_id        TEXT PRIMARY KEY,
+            agent_id       TEXT NOT NULL,
+            summary        TEXT NOT NULL,
+            decisions      TEXT NOT NULL DEFAULT '[]',
+            artifacts_ref  TEXT NOT NULL DEFAULT '[]',
+            next_steps     TEXT NOT NULL DEFAULT '[]',
+            confidence     INTEGER,
+            created_at     INTEGER NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES coord_tasks(id) ON DELETE CASCADE
+        );
+        "#,
+    )
+    .map_err(db_err)?;
+
     Ok(())
 }
 

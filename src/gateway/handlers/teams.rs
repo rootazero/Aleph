@@ -586,6 +586,165 @@ pub async fn handle_list_task_events(
 }
 
 // =============================================================================
+// teams.task.trace — unified audit timeline (R3 T2)
+// =============================================================================
+//
+// One RPC, one fetch, one wire payload. Aggregates everything needed to
+// replay a single task's decision chain:
+//
+//   { task, runs[], comments[], events[], artifacts[] }
+//
+// Each sub-list is already individually addressable via list_task_runs /
+// list_task_comments / list_task_events / artifact RPCs. The trace
+// endpoint is the convenience-store: the panel's Replay view calls this
+// once per drawer-open instead of fan-out 4 RPCs.
+//
+// Notes:
+// - Missing optional stores (event_store / artifact_store) yield empty
+//   arrays — never an error. The trace is best-effort observability.
+// - All four sub-lists are sorted oldest-first so the panel can merge
+//   them into a single timeline by `ts` without per-list sort logic.
+
+/// Handle teams.task.trace — return the unified audit timeline for one task.
+pub async fn handle_task_trace(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+    event_store: Option<Arc<dyn crate::teams::events::EventLogStore>>,
+    artifact_store: Option<Arc<dyn crate::teams::artifacts::ArtifactStore>>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.task.trace request");
+
+    let params: TaskIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    let task = match coord_store.get_task(&params.task_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                RESOURCE_NOT_FOUND,
+                format!("Task '{}' not found", params.task_id),
+            )
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to load task '{}': {e}", params.task_id),
+            )
+        }
+    };
+
+    let runs = coord_store
+        .list_task_runs(&params.task_id)
+        .await
+        .unwrap_or_default();
+
+    let comments = coord_store
+        .list_task_comments(&params.task_id)
+        .await
+        .unwrap_or_default();
+
+    let events = if let (Some(store), Some(team_id)) = (&event_store, task.team_id.as_deref()) {
+        match store.get_events(team_id, None, None).await {
+            Ok(all) => all
+                .into_iter()
+                .filter(|e| {
+                    e.payload
+                        .get("task_id")
+                        .and_then(|v| v.as_str())
+                        .map(|tid| tid == params.task_id)
+                        .unwrap_or(false)
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
+    let artifacts = if let Some(store) = &artifact_store {
+        store
+            .get_artifacts_for_task(&params.task_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // R3 T3 — fold exit journal into the trace if present. None ⇒ field
+    // present but null, so panel can distinguish "no journal yet" from
+    // "store unavailable".
+    let journal = coord_store
+        .get_task_journal(&params.task_id)
+        .await
+        .unwrap_or(None);
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "task": task,
+            "runs": runs,
+            "comments": comments,
+            "events": events,
+            "artifacts": artifacts,
+            "journal": journal,
+        }),
+    )
+}
+
+// =============================================================================
+// teams.task.journal.{get,list} — R3 T3 read surface for exit journals
+// =============================================================================
+
+/// teams.task.journal.get — fetch the journal for one task, or null.
+pub async fn handle_task_journal_get(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.task.journal.get request");
+    let params: TaskIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match coord_store.get_task_journal(&params.task_id).await {
+        Ok(journal) => JsonRpcResponse::success(request.id, json!({ "journal": journal })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to load journal for task '{}': {e}", params.task_id),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TeamJournalListParams {
+    pub team_id: String,
+}
+
+/// teams.task.journal.list — list all journals for a team, newest first.
+pub async fn handle_task_journal_list(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.task.journal.list request");
+    let params: TeamJournalListParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match coord_store.list_team_journals(&params.team_id).await {
+        Ok(journals) => JsonRpcResponse::success(request.id, json!({ "journals": journals })),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to list journals for team '{}': {e}", params.team_id),
+        ),
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -1102,6 +1261,239 @@ pub async fn handle_workflow_retry_step(
     // have expired naturally or never been acquired).
     let _ = coord_store.release_lock(&params.task_id, "").await;
     JsonRpcResponse::success(request.id, json!({ "status": "pending" }))
+}
+
+// =============================================================================
+// Task-level Control (R3 — pause / resume / retry / skip)
+// =============================================================================
+//
+// These complement `teams.workflow.{approve,reject,retry}_step` which are
+// reviewer-context handlers (require a finished run). The task-control
+// surface here is admin-context: it works on ANY task state, lets an
+// operator suspend a still-pending task before it runs, resume it, or
+// hard-retry a terminal task (Completed / Failed / Cancelled / Skipped /
+// WaitingReview) without going through the review flow.
+//
+// Wiring choice: we expose these as `teams.task.*` RPCs and the
+// `team_task_control` builtin tool (R8 — everything is a tool). The
+// dispatcher needs no changes — it only claims tasks with status
+// 'pending', so Paused tasks are naturally skipped.
+//
+// `TaskIdParams` is already defined above (used by list_task_runs /
+// list_task_comments / list_task_events). We reuse it.
+
+/// teams.task.pause — manually suspend a task so the dispatcher will not
+/// claim it. Valid from Pending or WaitingReview. InProgress is rejected
+/// because the in-flight run is unsafe to silently abandon — use
+/// `teams.task.skip` or wait for the run to finish.
+pub async fn handle_task_pause(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.task.pause request");
+    let params: TaskIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let current = match coord_store.get_task(&params.task_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                RESOURCE_NOT_FOUND,
+                format!("Task '{}' not found", params.task_id),
+            )
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to fetch task: {e}"),
+            )
+        }
+    };
+    match current.status {
+        CoordTaskStatus::Pending
+        | CoordTaskStatus::Blocked
+        | CoordTaskStatus::WaitingReview => {}
+        CoordTaskStatus::Paused => {
+            return JsonRpcResponse::success(request.id, json!({ "status": "paused" }));
+        }
+        _ => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!(
+                    "Cannot pause task in status '{}' — only pending/blocked/waiting_review may be paused",
+                    current.status
+                ),
+            )
+        }
+    }
+    if let Err(e) = coord_store
+        .update_task(
+            &params.task_id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Paused),
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to pause task: {e}"),
+        );
+    }
+    JsonRpcResponse::success(request.id, json!({ "status": "paused" }))
+}
+
+/// teams.task.resume — undo a Paused state, returning the task to Pending
+/// so the dispatcher can pick it up on the next tick.
+pub async fn handle_task_resume(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.task.resume request");
+    let params: TaskIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let current = match coord_store.get_task(&params.task_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                RESOURCE_NOT_FOUND,
+                format!("Task '{}' not found", params.task_id),
+            )
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to fetch task: {e}"),
+            )
+        }
+    };
+    if current.status != CoordTaskStatus::Paused {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!(
+                "Cannot resume task in status '{}' — only paused tasks may be resumed",
+                current.status
+            ),
+        );
+    }
+    if let Err(e) = coord_store
+        .update_task(
+            &params.task_id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Pending),
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to resume task: {e}"),
+        );
+    }
+    JsonRpcResponse::success(request.id, json!({ "status": "pending" }))
+}
+
+/// teams.task.retry — hard-retry a terminal task. Unlike
+/// `teams.workflow.retry_step` (which is review-context), this works for
+/// any non-Pending status. Clears `result`, releases any stale lock, and
+/// resets status to Pending. Prior `coord_task_runs` history is
+/// preserved — a fresh attempt is started on next dispatcher tick.
+pub async fn handle_task_retry(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.task.retry request");
+    let params: TaskIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let current = match coord_store.get_task(&params.task_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                RESOURCE_NOT_FOUND,
+                format!("Task '{}' not found", params.task_id),
+            )
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to fetch task: {e}"),
+            )
+        }
+    };
+    if matches!(current.status, CoordTaskStatus::InProgress) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "Cannot retry an in-progress task — cancel it first".to_string(),
+        );
+    }
+    if let Err(e) = coord_store
+        .update_task(
+            &params.task_id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Pending),
+                result: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to retry task: {e}"),
+        );
+    }
+    let _ = coord_store.release_lock(&params.task_id, "").await;
+    JsonRpcResponse::success(request.id, json!({ "status": "pending" }))
+}
+
+/// teams.task.skip — admin-context skip. Equivalent to the reviewer
+/// `workflow_step_review` skip but works without requiring a finished
+/// run. Marks the task as Skipped so downstream dependents unblock.
+pub async fn handle_task_skip(
+    request: JsonRpcRequest,
+    coord_store: Arc<dyn CoordTaskStore>,
+) -> JsonRpcResponse {
+    debug!("Handling teams.task.skip request");
+    let params: TaskIdParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = coord_store
+        .update_task(
+            &params.task_id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Skipped),
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to skip task: {e}"),
+        );
+    }
+    JsonRpcResponse::success(request.id, json!({ "status": "skipped" }))
 }
 
 #[derive(Debug, Deserialize)]

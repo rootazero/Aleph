@@ -68,6 +68,11 @@ impl Priority {
 /// a finished run that needs human/lead-agent approval before downstream
 /// tasks unblock, and a manual "not-needed" marker that still counts as
 /// satisfied for dependency resolution.
+///
+/// `Paused` is a R3 task-level control state. The dispatcher only claims
+/// tasks with `status = 'pending'`, so a paused task is naturally skipped
+/// without any conditional in the scheduler. Downstream dependents stay
+/// blocked because Paused does NOT satisfy dependencies.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoordTaskStatus {
@@ -86,6 +91,9 @@ pub enum CoordTaskStatus {
     /// Manually marked as not-required. Treated as "satisfied" for
     /// dependency resolution (downstream tasks unblock).
     Skipped,
+    /// Manually paused. Dispatcher does not claim until resumed.
+    /// Does NOT satisfy downstream dependency — dependents stay blocked.
+    Paused,
 }
 
 impl CoordTaskStatus {
@@ -99,6 +107,7 @@ impl CoordTaskStatus {
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
             Self::Skipped => "skipped",
+            Self::Paused => "paused",
         }
     }
 
@@ -116,6 +125,7 @@ impl CoordTaskStatus {
             "failed" => Some(Self::Failed),
             "cancelled" => Some(Self::Cancelled),
             "skipped" => Some(Self::Skipped),
+            "paused" => Some(Self::Paused),
             _ => None,
         }
     }
@@ -324,6 +334,58 @@ pub struct CoordTaskComment {
 }
 
 // ---------------------------------------------------------------------------
+// TaskExitJournal — R3 exit journal (ClawTeam parity)
+// ---------------------------------------------------------------------------
+
+/// Structured "end-of-task" summary written by the executing agent.
+///
+/// ClawTeam parity: when an agent finishes work it is expected to write a
+/// terse, machine-readable record of what it did, what it decided, what
+/// artifacts it produced, and what next steps remain. The journal is
+/// surfaced in the unified trace API so the panel's replay view can
+/// render a one-glance decision summary instead of forcing reviewers to
+/// scroll the raw run/event stream.
+///
+/// One journal per task (UPSERT semantics): an agent may rewrite its
+/// journal between retries — only the latest version is canonical. Older
+/// runs are preserved via `coord_task_runs`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskExitJournal {
+    /// FK back to coord_tasks.id. Unique — one journal per task.
+    pub task_id: CoordTaskId,
+    /// Agent that authored this journal (typically the task owner).
+    pub agent_id: String,
+    /// Required free-text summary of what was accomplished.
+    pub summary: String,
+    /// Optional list of decisions made (free-text bullets). JSON array
+    /// of strings, stored serialised.
+    pub decisions: Vec<String>,
+    /// Optional list of artifact references. Strings are flexible:
+    /// artifact-IDs, file paths, URLs, anchor terms — whatever the
+    /// reviewer needs to find the output.
+    pub artifacts_ref: Vec<String>,
+    /// Optional list of next-step recommendations.
+    pub next_steps: Vec<String>,
+    /// Self-rated confidence 0–100. None means agent did not estimate.
+    pub confidence: Option<u8>,
+    /// Wall-clock when this journal was last written.
+    pub created_at: u64,
+}
+
+/// Input shape used by [`CoordTaskStore::upsert_task_journal`]. Mirrors
+/// `TaskExitJournal` but omits `created_at` (server-stamped).
+#[derive(Debug, Clone)]
+pub struct NewTaskExitJournal {
+    pub task_id: CoordTaskId,
+    pub agent_id: String,
+    pub summary: String,
+    pub decisions: Vec<String>,
+    pub artifacts_ref: Vec<String>,
+    pub next_steps: Vec<String>,
+    pub confidence: Option<u8>,
+}
+
+// ---------------------------------------------------------------------------
 // CoordTaskStore trait
 // ---------------------------------------------------------------------------
 
@@ -422,6 +484,38 @@ pub trait CoordTaskStore: Send + Sync {
         &self,
         _task_id: &str,
     ) -> crate::error::Result<Vec<CoordTaskComment>> {
+        Ok(Vec::new())
+    }
+
+    // --- Exit Journal (R3) ---
+    // ClawTeam parity. The executing agent calls `upsert_task_journal`
+    // when it finishes; reviewers read via `get_task_journal`. Default
+    // impls are no-ops/empty so backends without journal support degrade
+    // gracefully — the trace API still works, journal field is just None.
+
+    async fn upsert_task_journal(
+        &self,
+        _input: NewTaskExitJournal,
+    ) -> crate::error::Result<TaskExitJournal> {
+        Err(crate::error::AlephError::ConfigError {
+            message: "CoordTaskStore: upsert_task_journal not implemented".into(),
+            suggestion: None,
+        })
+    }
+
+    async fn get_task_journal(
+        &self,
+        _task_id: &str,
+    ) -> crate::error::Result<Option<TaskExitJournal>> {
+        Ok(None)
+    }
+
+    /// List journals for a team, newest first. Used by the panel's
+    /// team-level replay overview ("which tasks have a journal?").
+    async fn list_team_journals(
+        &self,
+        _team_id: &str,
+    ) -> crate::error::Result<Vec<TaskExitJournal>> {
         Ok(Vec::new())
     }
 }

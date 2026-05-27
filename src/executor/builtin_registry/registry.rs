@@ -273,6 +273,17 @@ pub struct BuiltinToolRegistry {
     /// because it requires a CoordTaskStore.
     pub(crate) workflow_step_review_tool:
         Option<crate::builtin_tools::team::WorkflowStepReviewTool>,
+    /// Admin-context task control (R3 — ClawTeam parity). Pause/resume/
+    /// retry/skip without going through reviewer flow. Optional —
+    /// requires a CoordTaskStore.
+    pub(crate) team_task_control_tool:
+        Option<crate::builtin_tools::team::TeamTaskControlTool>,
+    /// Exit-journal tool (R3 — ClawTeam parity). The executing agent
+    /// calls this on task wrap-up to leave a structured summary that
+    /// feeds the unified trace + replay UI. Optional — requires a
+    /// CoordTaskStore.
+    pub(crate) task_exit_journal_tool:
+        Option<crate::builtin_tools::team::TaskExitJournalTool>,
     /// Team messaging tools (optional — require MessageRouter / Inbox)
     pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
     pub(crate) inbox_read_tool: Option<crate::builtin_tools::team::InboxReadTool>,
@@ -1066,6 +1077,22 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let tool = self.workflow_step_review_tool.as_ref().ok_or_else(|| {
                     AlephError::tool(
                         "workflow_step_review not available: no CoordTaskStore configured",
+                    )
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "team_task_control" => Box::pin(async move {
+                let tool = self.team_task_control_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "team_task_control not available: no CoordTaskStore configured",
+                    )
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "task_exit_journal" => Box::pin(async move {
+                let tool = self.task_exit_journal_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "task_exit_journal not available: no CoordTaskStore configured",
                     )
                 })?;
                 tool.call_json(arguments).await

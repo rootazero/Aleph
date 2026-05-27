@@ -107,6 +107,19 @@ pub struct TeamTemplate {
     /// Optional default goal used when the caller leaves `goal` unset.
     #[serde(default)]
     pub default_goal: Option<String>,
+    /// Optional team-level strategy prompt — folded into every member's
+    /// SOUL.md as a `## Team Strategy` section during materialization.
+    ///
+    /// R3 (ClawTeam parity): lets a template encode the collaboration
+    /// mode (plan-then-act, parallel-debate, review-loop, ...) once at
+    /// the team scope instead of repeating it on every member's
+    /// `prompt_addendum`. Per R7/R10 this is **pure prompt injection** —
+    /// the dispatcher never branches on strategy.
+    ///
+    /// Supports `{goal}`/`{team_name}`/`{leader}` substitution like
+    /// other prompt fields.
+    #[serde(default)]
+    pub strategy: Option<String>,
     /// Leader spec (required — every team has exactly one leader).
     pub leader: TemplateLeader,
     /// Worker members (zero or more).
@@ -195,6 +208,7 @@ mod tests {
             name: "t".into(),
             description: String::new(),
             default_goal: None,
+            strategy: None,
             leader: TemplateLeader {
                 id: "lead".into(),
                 name: None,

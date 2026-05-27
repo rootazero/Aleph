@@ -19,6 +19,8 @@ pub mod session_turn;
 pub mod snapshot;
 mod status;
 pub mod task_comment;
+pub mod task_control;
+pub mod task_exit_journal;
 pub mod task_read_artifact;
 pub mod task_submit;
 mod team_digest;
@@ -57,6 +59,10 @@ pub use snapshot::{
 };
 pub use status::{MemberInfo, TaskInfo, TeamStatusArgs, TeamStatusOutput, TeamStatusTool};
 pub use task_comment::{TaskCommentArgs, TaskCommentOutput, TaskCommentTool};
+pub use task_control::{TeamTaskControlArgs, TeamTaskControlOutput, TeamTaskControlTool};
+pub use task_exit_journal::{
+    TaskExitJournalArgs, TaskExitJournalOutput, TaskExitJournalTool,
+};
 pub use task_read_artifact::{TaskReadArtifactArgs, TaskReadArtifactOutput, TaskReadArtifactTool};
 pub use task_submit::{TaskSubmitArgs, TaskSubmitOutput, TaskSubmitTool};
 pub use team_digest::{TeamDigestArgs, TeamDigestOutput, TeamDigestTool};

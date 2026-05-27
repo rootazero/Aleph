@@ -170,6 +170,19 @@ pub async fn materialize_template(
         .await
         .map_err(|e| TeamTemplateError::Materialize(format!("add_member(leader) failed: {e}")))?;
 
+    // --- 4b. R3 — inject team-level strategy prompt into all members ----
+    // Strategy is a *team-wide* addendum that complements the per-member
+    // role addendum. Pure prompt injection: dispatcher does not read it
+    // (R7/R10 — intelligence lives in prompt). Idempotent: if SOUL.md
+    // already contains `## Team Strategy`, we skip.
+    if let Some(strategy) = tpl.strategy.as_deref().filter(|s| !s.trim().is_empty()) {
+        let rendered = substitute(strategy, &vars);
+        inject_strategy_prompt(deps, &leader_id, &rendered).await;
+        for agent_id in &enrolled_members {
+            inject_strategy_prompt(deps, agent_id, &rendered).await;
+        }
+    }
+
     for (m, agent_id) in tpl.members.iter().zip(enrolled_members.iter()) {
         let role = m.role.clone().unwrap_or_default();
         deps.team_store
@@ -443,6 +456,34 @@ async fn provision_member(
     Ok(member.id.clone())
 }
 
+/// Append a team-strategy section to an existing agent's SOUL.md,
+/// idempotently. R3 (ClawTeam parity): team-scope counterpart of
+/// [`inject_role_prompt`]. Same I/O pattern; different section heading
+/// so the two can coexist in one SOUL.md without ambiguity.
+async fn inject_strategy_prompt(deps: &MaterializeDeps, agent_id: &str, body: &str) {
+    let Some(instance) = deps.registry.get(agent_id).await else {
+        return;
+    };
+    let soul_path = instance.agent_dir().join("SOUL.md");
+    let section = format!("\n\n---\n\n## Team Strategy\n\n{body}\n");
+    let result = if soul_path.exists() {
+        let existing = tokio::fs::read_to_string(&soul_path).await.unwrap_or_default();
+        if existing.contains("## Team Strategy") {
+            return;
+        }
+        tokio::fs::write(&soul_path, format!("{existing}{section}")).await
+    } else {
+        tokio::fs::write(&soul_path, section.trim_start_matches('\n')).await
+    };
+    if let Err(e) = result {
+        warn!(
+            path = %soul_path.display(),
+            error = %e,
+            "team_template: failed to inject strategy prompt into SOUL.md"
+        );
+    }
+}
+
 /// Append a role prompt section to an existing agent's SOUL.md, idempotently.
 async fn inject_role_prompt(
     deps: &MaterializeDeps,
@@ -502,6 +543,7 @@ mod tests {
             name: "t".into(),
             description: "{goal} demo".into(),
             default_goal: Some("default goal".into()),
+            strategy: None,
             leader: TemplateLeader {
                 id: LEADER_SELF_ID.into(),
                 name: Some("Lead".into()),

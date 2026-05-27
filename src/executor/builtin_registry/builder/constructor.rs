@@ -831,6 +831,55 @@ impl BuiltinToolRegistry {
             None
         };
 
+        // Build team_task_control when CoordTaskStore is present. Admin-
+        // context complement of workflow_step_review (pause/resume/retry/skip
+        // without requiring a finished run). R3 — ClawTeam task-control parity.
+        let team_task_control_tool = if let Some(ref coord_store) = config.coord_task_store {
+            use crate::builtin_tools::team::TeamTaskControlTool;
+            let tool = TeamTaskControlTool::new(Arc::clone(coord_store));
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered team_task_control tool");
+            Some(tool)
+        } else {
+            None
+        };
+
+        // Build task_exit_journal when CoordTaskStore is present. R3 —
+        // ClawTeam parity. Agent self-call on task wrap-up; output feeds
+        // trace + replay UI.
+        let task_exit_journal_tool = if let Some(ref coord_store) = config.coord_task_store {
+            use crate::builtin_tools::team::TaskExitJournalTool;
+            let tool =
+                TaskExitJournalTool::new(Arc::clone(coord_store), current_agent_id.clone());
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered task_exit_journal tool");
+            Some(tool)
+        } else {
+            None
+        };
+
         // Add team_digest tool (if EventLogStore + TeamStore are available)
         let team_digest_tool = if let (Some(ref event_store), Some(ref team_store)) =
             (&config.event_store, &config.team_store)
@@ -1447,6 +1496,8 @@ impl BuiltinToolRegistry {
             team_usage_tool,
             team_acp_member_tool,
             workflow_step_review_tool,
+            team_task_control_tool,
+            task_exit_journal_tool,
             message_send_tool,
             inbox_read_tool,
             plan_submit_tool,

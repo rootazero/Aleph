@@ -82,6 +82,10 @@ pub(in crate::commands::start) struct AgentHandlersResult {
         Option<std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>>,
     /// Event log store for team event logging
     pub event_store: Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
+    /// Artifact store for teams.task.trace and team artifact tools (R3).
+    /// Trait-object handle is what gateway handlers consume; the concrete
+    /// `SqliteArtifactStore` is still used internally by tool wiring.
+    pub artifact_store: Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
     /// Message router for the TeamNotifier event handler
     pub message_router: Option<Arc<alephcore::teams::messages::MessageRouter>>,
     /// OnceLock handle shared with the real ExecutionEngine. Boot code calls
@@ -1982,6 +1986,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         state_db: state_db_out,
         command_handler: command_handler_out,
         event_store: event_store.clone(),
+        // Concrete Arc<SqliteArtifactStore> upcast to the trait object so
+        // `register_teams_handlers` can consume it without knowing the
+        // concrete impl. SqliteArtifactStore impls ArtifactStore.
+        artifact_store: artifact_store.clone().map(|s| s as Arc<dyn alephcore::teams::artifacts::ArtifactStore>),
         message_router: message_router.clone(),
         orchestrator_cell: orch_cell_out,
         memory_context_provider: mcp_for_orchestrator,
