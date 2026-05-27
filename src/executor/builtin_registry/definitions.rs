@@ -479,6 +479,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     BuiltinToolDefinition {
+        name: "team_member_add",
+        description: "Add a member to an existing team (leader only). Accepts native agent IDs OR ACP harness refs like 'acp:claude-code' or 'acp:codex/backend' to bring external CLI agents (Claude Code / Codex / Gemini CLI / …) into the shared team session.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
         name: "team_member_remove",
         description: "Remove a member from a team (leader only, cannot remove self)",
         requires_config: true,
@@ -501,6 +506,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "team_usage",
         description: "Aggregate LLM provider token usage for a team over an optional time window. Returns the team total plus a per-agent breakdown. Cost is not computed — tokens are factual, cost is a rate-card concern.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "team_workflow_canvas",
+        description: "Convert between a team's CoordTask DAG and an Obsidian-compatible JSON Canvas document. action='export' renders the team's tasks as a canvas; action='import' materializes a canvas into coord-tasks (dry_run=true previews without writing).",
         requires_config: true,
     },
     // Team messaging tools — require MessageRouter / Inbox
@@ -795,12 +805,14 @@ pub fn create_tool_boxed(
         | "team_delegate"
         | "team_status"
         | "team_disband"
+        | "team_member_add"
         | "team_member_remove"
         | "team_digest"
         | "team_from_template"
         | "team_snapshot"
         | "team_usage"
         | "team_acp_member"
+        | "team_workflow_canvas"
         | "workflow_step_review"
         | "message_send"
         | "inbox_read"

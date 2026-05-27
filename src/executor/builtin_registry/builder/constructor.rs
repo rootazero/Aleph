@@ -621,6 +621,7 @@ impl BuiltinToolRegistry {
             team_delegate_tool,
             team_status_tool,
             team_disband_tool,
+            team_member_add_tool,
             team_member_remove_tool,
             team_from_template_tool,
         ) = if let (Some(ref store), Some(ref coord_store)) =
@@ -628,7 +629,7 @@ impl BuiltinToolRegistry {
         {
             use crate::builtin_tools::team::{
                 TeamCreateTool, TeamDelegateTool, TeamDisbandTool, TeamFromTemplateTool,
-                TeamMemberRemoveTool, TeamStatusTool,
+                TeamMemberAddTool, TeamMemberRemoveTool, TeamStatusTool,
             };
 
             let agent_registry = config
@@ -666,6 +667,11 @@ impl BuiltinToolRegistry {
                 config.session_store.clone(),
                 config.event_store.clone(),
             );
+            let member_add = TeamMemberAddTool::new(
+                Arc::clone(store),
+                Arc::clone(&agent_registry),
+                current_agent_id.clone(),
+            );
             let member_remove =
                 TeamMemberRemoveTool::new(Arc::clone(store), current_agent_id.clone());
 
@@ -689,6 +695,7 @@ impl BuiltinToolRegistry {
                     delegate.definition(),
                     status.definition(),
                     disband.definition(),
+                    member_add.definition(),
                     member_remove.definition(),
                     from_template.definition(),
                 ];
@@ -704,17 +711,18 @@ impl BuiltinToolRegistry {
                 }
             }
 
-            info!("Registered team management tools (team_create, team_delegate, team_status, team_disband, team_member_remove, team_from_template)");
+            info!("Registered team management tools (team_create, team_delegate, team_status, team_disband, team_member_add, team_member_remove, team_from_template)");
             (
                 Some(create),
                 Some(delegate),
                 Some(status),
                 Some(disband),
+                Some(member_add),
                 Some(member_remove),
                 Some(from_template),
             )
         } else {
-            (None, None, None, None, None, None)
+            (None, None, None, None, None, None, None)
         };
 
         // Build team_snapshot when TeamStore + CoordTaskStore + SqliteSnapshotStore
@@ -800,6 +808,30 @@ impl BuiltinToolRegistry {
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered team_acp_member tool");
+            Some(tool)
+        } else {
+            None
+        };
+
+        // Build team_workflow_canvas when CoordTaskStore is present. Powers
+        // the DAG ↔ JSON Canvas bridge so the LLM can produce / read plan
+        // diagrams without leaving conversation (R8).
+        let team_workflow_canvas_tool = if let Some(ref coord_store) = config.coord_task_store {
+            use crate::builtin_tools::team::TeamWorkflowCanvasTool;
+            let tool = TeamWorkflowCanvasTool::new(Arc::clone(coord_store));
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered team_workflow_canvas tool");
             Some(tool)
         } else {
             None
@@ -1489,12 +1521,14 @@ impl BuiltinToolRegistry {
             team_delegate_tool,
             team_status_tool,
             team_disband_tool,
+            team_member_add_tool,
             team_member_remove_tool,
             team_digest_tool,
             team_from_template_tool,
             team_snapshot_tool,
             team_usage_tool,
             team_acp_member_tool,
+            team_workflow_canvas_tool,
             workflow_step_review_tool,
             team_task_control_tool,
             task_exit_journal_tool,

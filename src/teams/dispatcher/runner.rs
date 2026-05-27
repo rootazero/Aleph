@@ -123,6 +123,9 @@ pub async fn execute_member_task(
 ) -> MemberRunOutcome {
     // ACP-backed members short-circuit through the adapter pool — they
     // never visit the in-process registry, never take a worktree handle.
+    // Note: teams-r2 WIP's legacy `agent_id="acp:<harness>"` prefix path
+    // is intentionally retired here — main's structured
+    // `MemberDispatchTarget::AcpSession` is the single source of truth.
     if let MemberDispatchTarget::AcpSession {
         agent_id,
         harness_id,

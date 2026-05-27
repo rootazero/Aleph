@@ -251,6 +251,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) team_delegate_tool: Option<crate::builtin_tools::team::TeamDelegateTool>,
     pub(crate) team_status_tool: Option<crate::builtin_tools::team::TeamStatusTool>,
     pub(crate) team_disband_tool: Option<crate::builtin_tools::team::TeamDisbandTool>,
+    pub(crate) team_member_add_tool: Option<crate::builtin_tools::team::TeamMemberAddTool>,
     pub(crate) team_member_remove_tool: Option<crate::builtin_tools::team::TeamMemberRemoveTool>,
     pub(crate) team_digest_tool: Option<crate::builtin_tools::team::TeamDigestTool>,
     /// One-shot team instantiation from a TOML blueprint (optional — requires
@@ -269,6 +270,9 @@ pub struct BuiltinToolRegistry {
     /// Lets agents attach external coding CLIs (Claude Code, Codex, ...) as
     /// first-class team members via `team_acp_member`.
     pub(crate) team_acp_member_tool: Option<crate::builtin_tools::team::TeamAcpMemberTool>,
+    /// Workflow ↔ JSON Canvas bridge (optional — requires CoordTaskStore).
+    pub(crate) team_workflow_canvas_tool:
+        Option<crate::builtin_tools::team::TeamWorkflowCanvasTool>,
     /// Step-level workflow review (Phase C — openteams parity). Optional
     /// because it requires a CoordTaskStore.
     pub(crate) workflow_step_review_tool:
@@ -1073,6 +1077,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
+            "team_workflow_canvas" => Box::pin(async move {
+                let tool = self.team_workflow_canvas_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "team_workflow_canvas not available: no CoordTaskStore configured",
+                    )
+                })?;
+                tool.call_json(arguments).await
+            }),
             "workflow_step_review" => Box::pin(async move {
                 let tool = self.workflow_step_review_tool.as_ref().ok_or_else(|| {
                     AlephError::tool(
@@ -1129,6 +1141,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
+            "team_member_add" => Box::pin(async move {
+                let tool = self.team_member_add_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("team_member_add not available: no TeamStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
             "team_member_remove" => Box::pin(async move {
                 let tool = self.team_member_remove_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("team_member_remove not available: no TeamStore configured")
@@ -1165,7 +1183,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
-
             // Team messaging tools
             "message_send" => Box::pin(async move {
                 let tool = self.message_send_tool.as_ref().ok_or_else(|| {

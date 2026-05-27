@@ -10,6 +10,7 @@
 //! by creating `coord_tasks` rows with `blocked_by` edges. The dispatcher only
 //! mechanically executes what the DAG already says is runnable.
 
+pub mod acp_bridge;
 pub mod handoff;
 pub mod runner;
 pub mod schedule;
@@ -26,6 +27,7 @@ use crate::teams::artifacts::ArtifactStore;
 use crate::teams::context::TeamInboxContextProvider;
 use crate::teams::store::TeamStore;
 
+pub use acp_bridge::{AcpMemberRef, ACP_MEMBER_PREFIX};
 pub use runner::{
     execute_member_task, MemberDispatchTarget, MemberRunOutcome, MemberRunStatus,
 };

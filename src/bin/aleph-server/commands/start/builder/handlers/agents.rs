@@ -219,6 +219,18 @@ pub(in crate::commands::start) fn register_teams_handlers(
         teams::handle_list_task_comments,
         coord_store
     );
+    register_handler!(
+        server,
+        "teams.workflow.export_canvas",
+        teams::handle_workflow_export_canvas,
+        coord_store
+    );
+    register_handler!(
+        server,
+        "teams.workflow.import_canvas",
+        teams::handle_workflow_import_canvas,
+        coord_store
+    );
 
     // Phase C — step-level workflow review RPCs. Panel calls these from
     // the workflow-graph drawer; the lead agent can also drive them via

@@ -53,8 +53,9 @@ pub struct GatewayContext {
 
     /// Optional ACP adapter pool — present when `acp.enabled = true` in
     /// app config. Lets the team dispatcher route tasks owned by an
-    /// `AcpSession` team member to an external coding CLI (Claude Code,
-    /// Codex, ...) instead of the in-process registry.
+    /// `AcpSession` team member (or legacy `agent_id="acp:<harness>"`
+    /// prefix from teams-r2 WIP) to an external coding CLI (Claude Code,
+    /// Codex, Gemini CLI, …) instead of the in-process registry.
     acp_manager: Option<Arc<AcpAdapterManager>>,
 }
 
@@ -114,6 +115,7 @@ impl GatewayContext {
     }
 
     /// Get a reference to the ACP adapter pool, if configured.
+    /// Returns `None` for the test / minimal setups that don't run ACP.
     pub fn acp_manager(&self) -> Option<&Arc<AcpAdapterManager>> {
         self.acp_manager.as_ref()
     }
@@ -126,6 +128,7 @@ impl std::fmt::Debug for GatewayContext {
             .field("agent_registry", &"Arc<AgentRegistry>")
             .field("execution_adapter", &"Arc<dyn ExecutionAdapter>")
             .field("a2a_policy", &self.a2a_policy)
+            .field("acp_manager", &self.acp_manager.as_ref().map(|_| "<Arc<AcpAdapterManager>>"))
             .finish()
     }
 }

@@ -1358,6 +1358,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             );
             // Wire the optional ACP adapter pool so the team dispatcher can
             // route tasks owned by AcpSession members through external CLIs.
+            // Supports both structured `TeamMember.kind=AcpSession` (main) and
+            // legacy `agent_id="acp:<harness>"` prefix (teams-r2 WIP) paths.
             if let Some(ref acp) = acp_manager {
                 gateway_ctx_inner = gateway_ctx_inner.with_acp_manager(Arc::clone(acp));
             }

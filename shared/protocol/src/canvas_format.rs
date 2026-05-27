@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Nodes are stored in ascending z-order (first = bottom, last = top), matching
 /// the spec; conversion helpers in the panel preserve that order.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct Document {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<Node>,
@@ -27,7 +27,7 @@ pub struct Document {
 }
 
 /// Generic fields shared by every node variant.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct NodeCommon {
     pub id: String,
     pub x: i64,
@@ -39,7 +39,7 @@ pub struct NodeCommon {
 }
 
 /// One of four canvas node types, tagged by the `"type"` field.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Node {
     Text {
@@ -93,7 +93,7 @@ impl Node {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum BackgroundStyle {
     Cover,
@@ -105,7 +105,7 @@ pub enum BackgroundStyle {
 ///
 /// Field naming matches the spec verbatim (`fromNode`, `toSide`, …) via serde
 /// renames; Rust-side names are snake_case.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct Edge {
     pub id: String,
     #[serde(rename = "fromNode")]
@@ -126,7 +126,7 @@ pub struct Edge {
     pub label: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     Top,
@@ -135,7 +135,7 @@ pub enum Side {
     Left,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EndShape {
     None,

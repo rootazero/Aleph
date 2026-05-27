@@ -9,6 +9,7 @@ pub mod inbox_read;
 pub mod lifecycle_idle;
 pub mod lifecycle_request_shutdown;
 pub mod lifecycle_resolve_shutdown;
+mod member_add;
 mod member_remove;
 pub mod message_send;
 pub mod plan_resolve;
@@ -25,6 +26,7 @@ pub mod task_read_artifact;
 pub mod task_submit;
 mod team_digest;
 pub mod usage;
+pub mod workflow_canvas;
 pub mod workflow_step;
 
 pub use acp_member::{
@@ -44,6 +46,7 @@ pub use lifecycle_request_shutdown::{
 pub use lifecycle_resolve_shutdown::{
     LifecycleResolveShutdownArgs, LifecycleResolveShutdownOutput, LifecycleResolveShutdownTool,
 };
+pub use member_add::{TeamMemberAddArgs, TeamMemberAddOutput, TeamMemberAddTool};
 pub use member_remove::{TeamMemberRemoveArgs, TeamMemberRemoveOutput, TeamMemberRemoveTool};
 pub use message_send::{MessageSendArgs, MessageSendOutput, MessageSendTool};
 pub use plan_resolve::{PlanResolveArgs, PlanResolveOutput, PlanResolveTool};
@@ -67,6 +70,9 @@ pub use task_read_artifact::{TaskReadArtifactArgs, TaskReadArtifactOutput, TaskR
 pub use task_submit::{TaskSubmitArgs, TaskSubmitOutput, TaskSubmitTool};
 pub use team_digest::{TeamDigestArgs, TeamDigestOutput, TeamDigestTool};
 pub use usage::{TeamUsageArgs, TeamUsageOutput, TeamUsageTool, UsageTotal};
+pub use workflow_canvas::{
+    TeamWorkflowCanvasArgs, TeamWorkflowCanvasOutput, TeamWorkflowCanvasTool, WorkflowCanvasAction,
+};
 pub use workflow_step::{
     WorkflowStepReviewArgs, WorkflowStepReviewOutput, WorkflowStepReviewTool,
 };

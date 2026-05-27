@@ -16,6 +16,7 @@ pub mod snapshots;
 pub mod store;
 pub mod templates;
 pub mod types;
+pub mod workflow_canvas;
 
 #[cfg(test)]
 pub mod integration_tests;

@@ -159,6 +159,14 @@ impl TeamCreateTool {
     /// template is injected into the agent's system prompt.
     async fn resolve_member(&self, spec: &MemberSpec) -> Result<String> {
         if let Some(ref agent_id) = spec.agent_id {
+            // ACP harness members (`acp:claude-code`, `acp:codex/backend`, …)
+            // are external CLI processes routed via `AcpAdapterManager` — they
+            // do not have an `AgentInstance` in the registry. Accept the ID
+            // as-is; the dispatcher's ACP bridge resolves it at run time.
+            if crate::teams::dispatcher::AcpMemberRef::parse(agent_id).is_some() {
+                return Ok(agent_id.clone());
+            }
+
             let instance = self.registry.get(agent_id).await.ok_or_else(|| {
                 AlephError::other(format!("Agent '{}' not found in registry", agent_id))
             })?;
