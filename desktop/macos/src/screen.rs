@@ -241,6 +241,10 @@ impl MacOSScreen {
             width: rpc.width,
             height: rpc.height,
             format: "png".to_string(),
+            // Bridge protocol does not surface DPR yet — leave None until the
+            // Swift `CaptureResult` is extended. Caller can still resolve
+            // scale_factor via `display_list()` if needed.
+            scale_factor: None,
         })
     }
 

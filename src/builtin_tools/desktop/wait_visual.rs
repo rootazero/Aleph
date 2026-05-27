@@ -154,6 +154,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 format: "png".to_string(),
+                scale_factor: None,
             })
         }
 

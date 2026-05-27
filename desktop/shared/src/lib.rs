@@ -17,6 +17,7 @@
 pub mod action;
 pub mod automation_types;
 pub mod bridge;
+pub mod coord;
 pub mod error;
 pub mod media_types;
 pub mod native_screen;
@@ -28,6 +29,7 @@ pub mod screen_types;
 pub mod system_types;
 pub mod traits;
 
+pub use coord::{CoordinateSpace, Point};
 pub use error::{DesktopError, Result};
 pub use native_screen::NativeScreen;
 
@@ -75,6 +77,12 @@ pub struct Screenshot {
     pub height: u32,
     /// Image format (always "png").
     pub format: String,
+    /// Display backing-scale factor (e.g. 2.0 for Retina). Lets the model
+    /// reason in logical points or normalized coords without losing pixel
+    /// fidelity. `serde(default)` keeps the wire format back-compatible:
+    /// older bridges that omit the field deserialize to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_factor: Option<f64>,
 }
 
 /// Result of an OCR operation on a screenshot.

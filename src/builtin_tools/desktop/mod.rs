@@ -1,8 +1,10 @@
 //! Desktop tool — sees and controls the desktop via the platform-native
 //! `desktop/*` capability layer.
 
+mod action_script;
 mod ax;
 mod browser_operator;
+mod coord_resolve;
 mod gui_locate;
 mod native;
 mod perm;
@@ -152,7 +154,18 @@ impl DesktopTool {
                 break;
             }
 
-            let sub_args: DesktopArgs = batch_action.into();
+            let mut sub_args: DesktopArgs = batch_action.into();
+
+            // Inherit batch-level coord_space when the sub-action does not
+            // override. This makes `{action:"batch", coord_space:"normalized",
+            // actions:[{action:"click",x:500,y:500}]}` work as the obvious
+            // reader would expect.
+            if sub_args.coord_space.is_none() {
+                sub_args.coord_space = args.coord_space.clone();
+            }
+            if sub_args.coord_factors.is_none() {
+                sub_args.coord_factors = args.coord_factors;
+            }
 
             // Prevent nested batch. The type system already prevents an
             // inner DesktopBatchAction from carrying its own actions list,
@@ -434,20 +447,60 @@ Examples:
 {"action":"paste","text":"line1\nline2\nline3"}
 {"action":"wait_visual","timeout_ms":3000}
 {"action":"wait_visual","timeout_ms":8000,"region":{"x":0,"y":0,"width":1280,"height":800}}
-{"action":"screenshot","format":"jpeg","quality":0.9,"max_width":1920}"#;
+{"action":"screenshot","format":"jpeg","quality":0.9,"max_width":1920}
+
+Coordinate space — by default, `x` / `y` / `start_x` / `end_x` / `region` are pixels (top-left origin). To use UI-TARS-style normalized [0, 1000] × [0, 1000] coordinates that scale to any display, set `coord_space:"normalized"` (and optionally `coord_factors:[w,h]` to override the 1000×1000 default). The runtime rescales against the primary display (or `display_id`) before dispatch.
+
+{"action":"click","coord_space":"normalized","x":500,"y":500}
+{"action":"batch","coord_space":"normalized","actions":[{"action":"click","x":300,"y":400},{"action":"type_text","text":"hi"}]}
+
+Pythonic action script — UI-TARS-finetuned models can emit `script` containing one or more `Action: ...` lines instead of JSON. Supported verbs: click, left_double, right_single, drag, hover, type, hotkey, scroll, wait, finished, call_user. Box formats `(x,y)`, `[x1,y1,x2,y2]`, `<point>x y</point>`, `<bbox>x1 y1 x2 y2</bbox>` all parse. Inherits `coord_space` / `coord_factors` from the same call.
+
+{"action":"script","coord_space":"normalized","script":"Thought: open menu\nAction: click(start_box='(500,30)')"}
+{"action":"script","coord_space":"normalized","script":"type(content='hello\\n'); wait(); click(start_box='[100,200,300,400]')"}"#;
 
     type Args = DesktopArgs;
     type Output = DesktopOutput;
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // 0. Unconditional safety hard-block (sits below the approval policy).
+    async fn call(&self, mut args: Self::Args) -> Result<Self::Output> {
+        // 0. UI-TARS script expansion. When the caller (or model) sends a
+        //    Pythonic action script, transparently rewrite into a batch so
+        //    the rest of the pipeline (approval, safety, dispatch) handles
+        //    each sub-action through the same path as JSON tool-calls.
+        if args.script.is_some() {
+            let script = args.script.take().unwrap_or_default();
+            match action_script::parse_action_script(&script) {
+                Ok(actions) => {
+                    args.actions = actions;
+                    args.action = "batch".to_string();
+                }
+                Err(e) => {
+                    return Ok(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("action script parse error: {e}")),
+                    });
+                }
+            }
+        }
+
+        // 1. Unconditional safety hard-block (sits below the approval policy).
         if let Some(out) = check_hard_block(&args) {
             return Ok(out);
         }
 
+        // 2. Normalize coordinate space for leaf actions. Batches defer per
+        //    sub-action so each one inherits the batch-level `coord_space`
+        //    via `execute_batch` and rescales against its own display.
+        if args.action != "batch" {
+            if let Some(ref platform) = self.platform {
+                coord_resolve::maybe_normalize(&mut args, platform).await?;
+            }
+        }
+
         let is_mutating = classify_approval(&args).is_some();
 
-        // 1. Approval check
+        // 3. Approval check
         if let Some((action_type, target)) = classify_approval(&args) {
             if let Some(out) = self
                 .check_approval(action_type, &args.action, &target)
@@ -457,26 +510,26 @@ Examples:
             }
         }
 
-        // 2. Session lock (mutating actions only)
+        // 4. Session lock (mutating actions only)
         if is_mutating {
             if let Err(out) = self.acquire_lock() {
                 return Ok(out);
             }
         }
 
-        // 3. Escape abort check (mutating actions only)
+        // 5. Escape abort check (mutating actions only)
         if is_mutating {
             if let Err(out) = self.check_escape() {
                 return Ok(out);
             }
         }
 
-        // 4. Handle batch at this level (needs recursive self.call())
+        // 6. Handle batch at this level (needs recursive self.call())
         if args.action == "batch" {
             return self.execute_batch(&args).await;
         }
 
-        // 5. Execute via platform
+        // 7. Execute via platform
         if let Some(ref platform) = self.platform {
             if let Some(output) = self.call_via_platform(platform, &args).await? {
                 return Ok(output);

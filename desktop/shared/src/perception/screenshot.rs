@@ -62,6 +62,7 @@ pub fn take_screenshot(region: Option<&ScreenRegion>) -> Result<Screenshot> {
         width,
         height,
         format: "png".to_string(),
+        scale_factor: None,
     })
 }
 
@@ -178,6 +179,7 @@ pub fn take_screenshot_display(
         width,
         height,
         format: "png".to_string(),
+        scale_factor: None,
     })
 }
 
@@ -268,6 +270,7 @@ pub fn process_screenshot(
         width,
         height,
         format: out_format.to_string(),
+        scale_factor: None,
     })
 }
 
@@ -351,6 +354,7 @@ fn jpeg_screenshot(bytes: Vec<u8>, width: u32, height: u32) -> Screenshot {
         width,
         height,
         format: "jpeg".to_string(),
+        scale_factor: None,
     }
 }
 

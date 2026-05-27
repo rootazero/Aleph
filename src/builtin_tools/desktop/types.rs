@@ -140,6 +140,33 @@ pub struct DesktopArgs {
     /// Batch action list (only for action="batch").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<DesktopBatchAction>,
+
+    // ── Coordinate space (UI-TARS parity) ─────────────────────────
+    //
+    // When omitted, all `x`/`y`/`start_x`/`start_y`/`end_x`/`end_y`/`region`
+    // fields are taken as pixel coordinates (Aleph's historical default).
+    // When `coord_space="normalized"`, those fields live in `[0, factor_w] ×
+    // [0, factor_h]` (default factor 1000×1000, matching UI-TARS V1.0/V1.5)
+    // and are rescaled to pixels against the primary display at dispatch.
+    //
+    // Pythonic action script — set when the model emits text in UI-TARS
+    // format like `click(start_box='(500,500)')` instead of JSON.
+    //
+    /// Coordinate space: "pixel" (default) or "normalized".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coord_space: Option<String>,
+
+    /// Normalized factor `[factor_w, factor_h]`. Default `[1000, 1000]`.
+    /// Ignored when `coord_space != "normalized"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coord_factors: Option<[u32; 2]>,
+
+    /// UI-TARS-style action script, e.g.
+    /// `Thought: ...\nAction: click(start_box='(500,500)')`. When present,
+    /// the parser expands into a sequential batch. Other action fields are
+    /// ignored; `action` may be set to "script" or left as any string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
 }
 
 /// A single sub-action inside a `batch` operation.
@@ -264,6 +291,17 @@ pub struct DesktopBatchAction {
     /// Timeout in milliseconds for wait_visual (default 5000, max 60000).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+
+    /// Coordinate space for this sub-action. Falls back to the enclosing
+    /// `DesktopArgs.coord_space` when omitted (set by the dispatcher
+    /// before invocation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coord_space: Option<String>,
+
+    /// Normalized factor `[factor_w, factor_h]`. Falls back to the enclosing
+    /// batch's `coord_factors` when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coord_factors: Option<[u32; 2]>,
 }
 
 impl From<&DesktopBatchAction> for DesktopArgs {
@@ -297,6 +335,9 @@ impl From<&DesktopBatchAction> for DesktopArgs {
             max_height: b.max_height,
             timeout_ms: b.timeout_ms,
             actions: Vec::new(),
+            coord_space: b.coord_space.clone(),
+            coord_factors: b.coord_factors,
+            script: None,
         }
     }
 }
