@@ -1350,6 +1350,18 @@ pub async fn handle_usage(
         total_cache_creation = total_cache_creation.saturating_add(row.cache_creation_tokens);
         total_reasoning = total_reasoning.saturating_add(row.reasoning_tokens);
     }
+    // Reuse the per-row method so the rollup denominator matches what each
+    // AgentUsageTotal would report on its own.
+    let cache_hit_ratio = AgentUsageTotal {
+        agent_id: String::new(),
+        call_count: total_calls,
+        input_tokens: total_input,
+        output_tokens: total_output,
+        cache_read_tokens: total_cache_read,
+        cache_creation_tokens: total_cache_creation,
+        reasoning_tokens: total_reasoning,
+    }
+    .cache_hit_ratio();
 
     JsonRpcResponse::success(
         request.id,
@@ -1365,6 +1377,7 @@ pub async fn handle_usage(
                 "cache_read_tokens": total_cache_read,
                 "cache_creation_tokens": total_cache_creation,
                 "reasoning_tokens": total_reasoning,
+                "cache_hit_ratio": cache_hit_ratio,
             },
             "per_agent": per_agent,
         }),
@@ -1651,8 +1664,73 @@ mod usage_handler_tests {
         // outputs = input/2 each → 50 + 100 + 25 = 175
         assert_eq!(result["total"]["output_tokens"].as_u64().unwrap(), 175);
         assert_eq!(result["total"]["call_count"].as_u64().unwrap(), 3);
+        // Seed rows carry cache_read = None → 0, with non-zero input → ratio 0.0
+        // (distinguishable from "no data" None).
+        assert_eq!(result["total"]["cache_hit_ratio"].as_f64().unwrap(), 0.0);
         let per_agent = result["per_agent"].as_array().unwrap();
         assert_eq!(per_agent.len(), 2, "outsider must not appear");
+    }
+
+    /// Seed rows with real cache_read counts so the team-level cache_hit_ratio
+    /// surfaces a non-zero number on the wire. Locks in the per-row vs. rollup
+    /// denominator parity claimed by the comment above `handle_usage`.
+    #[tokio::test]
+    async fn usage_reports_cache_hit_ratio_when_cache_reads_present() {
+        let teams_conn = Connection::open_in_memory().unwrap();
+        let teams = Arc::new(SqliteTeamStore::new(teams_conn));
+        teams.migrate().await.unwrap();
+        let team = teams
+            .create_team(NewTeam {
+                name: "Cached".into(),
+                description: "ratio test".into(),
+                leader_id: "leader".into(),
+            })
+            .await
+            .unwrap();
+        teams
+            .add_member(NewTeamMember {
+                team_id: team.id.clone(),
+                agent_id: "leader".into(),
+                role: "leader".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let db = Arc::new(StateDatabase::in_memory().unwrap());
+        let _ = db
+            .insert_agent_task(&AgentTask::new("t1", "s", "coder", "x", RiskLevel::Low))
+            .await;
+        // OpenAI/DeepSeek shape: input is the total and includes the cached
+        // portion. ratio = 80 / 100 = 0.8 per row, also at the rollup.
+        db.insert_trace(&TaskTrace {
+            id: 0,
+            task_id: "t1".into(),
+            step_index: 0,
+            event: AgentTraceEvent::ProviderUsage {
+                agent_id: "leader".into(),
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_read_tokens: Some(80),
+                cache_creation_tokens: None,
+                thinking_tokens: None,
+            },
+            timestamp: 1000,
+        })
+        .await
+        .unwrap();
+
+        let teams_arc: Arc<dyn TeamStore> = teams;
+        let resp = handle_usage(
+            req("teams.usage", json!({ "team_id": team.id })),
+            teams_arc,
+            db.clone(),
+        )
+        .await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        let ratio = resp.result.as_ref().unwrap()["total"]["cache_hit_ratio"]
+            .as_f64()
+            .expect("ratio must be a number");
+        assert!((ratio - 0.8).abs() < 1e-9, "expected 0.8, got {ratio}");
     }
 
     #[tokio::test]

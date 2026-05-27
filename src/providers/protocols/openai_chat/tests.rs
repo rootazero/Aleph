@@ -71,6 +71,53 @@ fn openai_chat_usage_handles_missing_details() {
     assert_eq!(usage_delta.thinking_tokens, None);
 }
 
+/// DeepSeek emits cache stats at the top level of `usage` (no
+/// `prompt_tokens_details` envelope). The parser must surface
+/// `prompt_cache_hit_tokens` as `cache_read_tokens`, otherwise every
+/// DeepSeek call looks like a cold miss to downstream metering.
+#[test]
+fn openai_chat_usage_reads_deepseek_top_level_cache_hit_field() {
+    let json_line = r#"{"id":"chatcmpl-x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":34,"prompt_cache_hit_tokens":96,"prompt_cache_miss_tokens":24,"total_tokens":154}}"#;
+    let mut collected: std::collections::VecDeque<
+        crate::providers::Result<crate::providers::ProviderDelta>,
+    > = Default::default();
+    let mut tracker = crate::providers::delta::IndexIdTracker::default();
+    super::sse::parse_chat_sse_event(json_line, &mut tracker, &mut collected);
+
+    let usage = collected
+        .iter()
+        .find_map(|res| match res {
+            Ok(crate::providers::ProviderDelta::Usage(u)) => Some(u),
+            _ => None,
+        })
+        .expect("usage delta should be emitted for DeepSeek-shaped payload");
+    assert_eq!(usage.input_tokens, 120);
+    assert_eq!(usage.output_tokens, 34);
+    assert_eq!(usage.cache_read_tokens, Some(96));
+    assert_eq!(usage.cache_creation_tokens, None);
+}
+
+/// When both shapes are present (defensive: a proxy might transcode),
+/// the OpenAI nested form wins to preserve existing behaviour.
+#[test]
+fn openai_chat_usage_prefers_openai_nested_over_deepseek_top_level() {
+    let json_line = r#"{"id":"chatcmpl-x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":34,"prompt_tokens_details":{"cached_tokens":50},"prompt_cache_hit_tokens":96}}"#;
+    let mut collected: std::collections::VecDeque<
+        crate::providers::Result<crate::providers::ProviderDelta>,
+    > = Default::default();
+    let mut tracker = crate::providers::delta::IndexIdTracker::default();
+    super::sse::parse_chat_sse_event(json_line, &mut tracker, &mut collected);
+
+    let usage = collected
+        .iter()
+        .find_map(|res| match res {
+            Ok(crate::providers::ProviderDelta::Usage(u)) => Some(u),
+            _ => None,
+        })
+        .expect("usage delta should be emitted");
+    assert_eq!(usage.cache_read_tokens, Some(50));
+}
+
 #[test]
 fn test_build_endpoint_default() {
     let config = ProviderConfig::test_config("gpt-4o");

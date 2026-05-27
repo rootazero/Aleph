@@ -46,6 +46,14 @@ pub struct UsageTotal {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub reasoning_tokens: u64,
+    /// Share of prompt tokens served from the provider's prompt cache, in
+    /// `[0.0, 1.0]`. `None` when no usage was observed at all; `Some(0.0)`
+    /// when input occurred but no cache reads were reported. Computed with
+    /// the same cross-protocol denominator logic as
+    /// `AgentUsageTotal::cache_hit_ratio`, so OpenAI/DeepSeek-shape and
+    /// Anthropic-shape rollups produce comparable numbers.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cache_hit_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -156,6 +164,19 @@ impl AlephTool for TeamUsageTool {
             total.reasoning_tokens =
                 total.reasoning_tokens.saturating_add(row.reasoning_tokens);
         }
+        // Derive ratio after the sum so the rollup denominator matches the
+        // per-agent rows. Reusing the per-row formula keeps OpenAI/DeepSeek
+        // and Anthropic shapes consistent at both layers.
+        total.cache_hit_ratio = AgentUsageTotal {
+            agent_id: String::new(),
+            call_count: total.call_count,
+            input_tokens: total.input_tokens,
+            output_tokens: total.output_tokens,
+            cache_read_tokens: total.cache_read_tokens,
+            cache_creation_tokens: total.cache_creation_tokens,
+            reasoning_tokens: total.reasoning_tokens,
+        }
+        .cache_hit_ratio();
 
         Ok(TeamUsageOutput {
             team_id: args.team_id,

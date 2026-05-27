@@ -323,6 +323,46 @@ pub struct TokenUsage {
     pub cost: Option<TokenCost>,
 }
 
+impl TokenUsage {
+    /// Share of input tokens served from the prompt cache, in `[0.0, 1.0]`.
+    ///
+    /// Returns `None` when no cache information is available (`cache_read_tokens`
+    /// is `None`) or when both prompt counters are zero. `Some(0.0)` indicates an
+    /// observed cold miss, distinct from "provider didn't report cache stats".
+    ///
+    /// Cross-protocol semantics:
+    /// - **OpenAI / DeepSeek / Volcengine** report `prompt_tokens` as the *total*,
+    ///   with the cached subset surfaced separately. Here `input_tokens` already
+    ///   includes `cache_read_tokens`, so the denominator is `input_tokens`.
+    /// - **Anthropic** reports `input_tokens` as the *non-cached* portion only,
+    ///   alongside a disjoint `cache_read_input_tokens`. Here the denominator
+    ///   becomes `input_tokens + cache_read_tokens`.
+    ///
+    /// The branch detects which convention applies from the magnitudes: when
+    /// `cache_read_tokens > input_tokens` the inputs are clearly disjoint
+    /// (Anthropic), otherwise they are treated as overlapping (OpenAI-family).
+    pub fn cache_hit_ratio(&self) -> Option<f64> {
+        let cache_read = self.cache_read_tokens?;
+        if cache_read == 0 {
+            // Reported, but no hits this turn — distinguishable from "unknown".
+            return Some(0.0);
+        }
+        let cache_read = u64::from(cache_read);
+        let input = u64::from(self.input_tokens);
+        let total_prompt = if cache_read > input {
+            // Anthropic shape: input excludes the cached portion.
+            input.saturating_add(cache_read)
+        } else {
+            // OpenAI / DeepSeek shape: input already includes the cached portion.
+            input
+        };
+        if total_prompt == 0 {
+            return None;
+        }
+        Some(cache_read as f64 / total_prompt as f64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +472,75 @@ mod tests {
             cost: None,
         };
         assert_eq!(usage.cache_creation_tokens, Some(20));
+    }
+
+    /// OpenAI / DeepSeek shape: `input_tokens` is the total prompt size and
+    /// `cache_read_tokens` is a subset. Ratio uses input as denominator.
+    #[test]
+    fn cache_hit_ratio_openai_shape() {
+        let usage = TokenUsage {
+            input_tokens: 100,
+            cache_read_tokens: Some(80),
+            ..Default::default()
+        };
+        let ratio = usage.cache_hit_ratio().expect("ratio present");
+        assert!((ratio - 0.8).abs() < 1e-9, "expected 0.8, got {ratio}");
+    }
+
+    /// Anthropic shape: `input_tokens` excludes the cached portion so it can be
+    /// smaller than `cache_read_tokens`. Denominator becomes the sum.
+    #[test]
+    fn cache_hit_ratio_anthropic_shape() {
+        let usage = TokenUsage {
+            input_tokens: 20,
+            cache_read_tokens: Some(80),
+            ..Default::default()
+        };
+        let ratio = usage.cache_hit_ratio().expect("ratio present");
+        assert!((ratio - 0.8).abs() < 1e-9, "expected 0.8, got {ratio}");
+    }
+
+    /// 100% hit on OpenAI shape: input==cache_read.
+    #[test]
+    fn cache_hit_ratio_full_hit_openai_shape() {
+        let usage = TokenUsage {
+            input_tokens: 100,
+            cache_read_tokens: Some(100),
+            ..Default::default()
+        };
+        assert_eq!(usage.cache_hit_ratio(), Some(1.0));
+    }
+
+    /// Reported zero hits is distinct from "provider did not report cache".
+    #[test]
+    fn cache_hit_ratio_zero_hits_returns_some_zero() {
+        let usage = TokenUsage {
+            input_tokens: 50,
+            cache_read_tokens: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(usage.cache_hit_ratio(), Some(0.0));
+    }
+
+    /// Provider that doesn't report cache stats at all yields None.
+    #[test]
+    fn cache_hit_ratio_unknown_when_field_absent() {
+        let usage = TokenUsage {
+            input_tokens: 50,
+            cache_read_tokens: None,
+            ..Default::default()
+        };
+        assert_eq!(usage.cache_hit_ratio(), None);
+    }
+
+    /// Defensive: both counters zero must not divide by zero.
+    #[test]
+    fn cache_hit_ratio_handles_empty_prompt() {
+        let usage = TokenUsage {
+            input_tokens: 0,
+            cache_read_tokens: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(usage.cache_hit_ratio(), Some(0.0));
     }
 }

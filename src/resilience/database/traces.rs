@@ -28,6 +28,34 @@ pub struct AgentUsageTotal {
     pub reasoning_tokens: u64,
 }
 
+impl AgentUsageTotal {
+    /// Cumulative cache-hit ratio across every `ProviderUsage` event that
+    /// contributed to this rollup. `None` when no cached input was ever
+    /// observed (cumulative cache_read == 0 AND input == 0); `Some(0.0)`
+    /// when input was non-zero but no cache reads occurred. See
+    /// [`crate::providers::adapter::TokenUsage::cache_hit_ratio`] for the
+    /// per-call counterpart and the cross-protocol denominator logic.
+    pub fn cache_hit_ratio(&self) -> Option<f64> {
+        if self.cache_read_tokens == 0 && self.input_tokens == 0 {
+            return None;
+        }
+        if self.cache_read_tokens == 0 {
+            return Some(0.0);
+        }
+        let total_prompt = if self.cache_read_tokens > self.input_tokens {
+            // Anthropic-style protocols dominate the rollup: disjoint sum.
+            self.input_tokens.saturating_add(self.cache_read_tokens)
+        } else {
+            // OpenAI-family: input_tokens already includes cache_read.
+            self.input_tokens
+        };
+        if total_prompt == 0 {
+            return None;
+        }
+        Some(self.cache_read_tokens as f64 / total_prompt as f64)
+    }
+}
+
 /// Construct TaskTrace from a rusqlite row.
 /// Expected column order: id, task_id, step_index, event_kind, event_json, timestamp
 fn task_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskTrace> {
@@ -724,5 +752,55 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].call_count, 1);
         assert_eq!(rows[0].input_tokens, 100);
+    }
+
+    /// Rollup ratio matches the per-call formula across both protocol shapes.
+    #[test]
+    fn agent_usage_total_cache_hit_ratio_openai_shape() {
+        let total = AgentUsageTotal {
+            agent_id: "alice".into(),
+            call_count: 5,
+            input_tokens: 1_000,
+            output_tokens: 200,
+            cache_read_tokens: 800,
+            cache_creation_tokens: 50,
+            reasoning_tokens: 0,
+        };
+        let ratio = total.cache_hit_ratio().expect("ratio present");
+        assert!((ratio - 0.8).abs() < 1e-9, "expected 0.8, got {ratio}");
+    }
+
+    #[test]
+    fn agent_usage_total_cache_hit_ratio_anthropic_shape() {
+        let total = AgentUsageTotal {
+            agent_id: "alice".into(),
+            call_count: 5,
+            input_tokens: 100,
+            output_tokens: 200,
+            cache_read_tokens: 400,
+            ..Default::default()
+        };
+        let ratio = total.cache_hit_ratio().expect("ratio present");
+        assert!((ratio - 0.8).abs() < 1e-9, "expected 0.8, got {ratio}");
+    }
+
+    #[test]
+    fn agent_usage_total_cache_hit_ratio_zero_when_no_hits_but_input() {
+        let total = AgentUsageTotal {
+            agent_id: "alice".into(),
+            call_count: 1,
+            input_tokens: 100,
+            ..Default::default()
+        };
+        assert_eq!(total.cache_hit_ratio(), Some(0.0));
+    }
+
+    #[test]
+    fn agent_usage_total_cache_hit_ratio_none_when_empty() {
+        let total = AgentUsageTotal {
+            agent_id: "alice".into(),
+            ..Default::default()
+        };
+        assert_eq!(total.cache_hit_ratio(), None);
     }
 }

@@ -50,10 +50,19 @@ pub(crate) fn parse_chat_sse_event(
             .and_then(|t| t.as_u64())
             .and_then(|t| t.try_into().ok())
             .unwrap_or(0);
+        // Cache-hit tokens. Two payload shapes coexist on the chat/completions
+        // protocol:
+        //   • OpenAI / Volcengine / Moonshot: nested `prompt_tokens_details.cached_tokens`.
+        //   • DeepSeek: top-level `prompt_cache_hit_tokens` (and a sibling
+        //     `prompt_cache_miss_tokens`). DeepSeek omits `prompt_tokens_details`.
+        // Read OpenAI shape first; fall back to DeepSeek shape so `cache_read_tokens`
+        // stays populated for either origin and downstream metering sees real numbers
+        // instead of silent `None`s.
         let cache_read_tokens = usage
             .get("prompt_tokens_details")
             .and_then(|d| d.get("cached_tokens"))
             .and_then(|t| t.as_u64())
+            .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(|t| t.as_u64()))
             .and_then(|t| t.try_into().ok());
         let thinking_tokens = usage
             .get("completion_tokens_details")

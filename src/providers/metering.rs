@@ -56,6 +56,7 @@ impl AiProvider for MeteringProvider {
                     output_tokens = usage.output_tokens,
                     cache_read_tokens = ?usage.cache_read_tokens,
                     cache_creation_tokens = ?usage.cache_creation_tokens,
+                    cache_hit_ratio = ?usage.cache_hit_ratio(),
                     thinking_tokens = ?usage.thinking_tokens,
                     "LLM call completed"
                 );
