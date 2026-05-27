@@ -2,6 +2,7 @@
 
 use super::state::{ChatState, ModelInfo};
 use crate::context::{DashboardState, GatewayEvent};
+use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -19,9 +20,15 @@ fn append_reasoning(chat: ChatState, summary: &str) {
     });
 }
 
-/// Subscribe to `run.*` events and dispatch to ChatState.
+/// Subscribe to `run.*` events and dispatch to ChatState. Tool args/results
+/// are mirrored into [`WorkspaceState::tool_payloads`] so the workspace
+/// pane can render real invocation details without an extra round-trip.
 /// Returns the subscription ID for cleanup.
-pub fn subscribe_run_events(dashboard: &DashboardState, chat: ChatState) -> usize {
+pub fn subscribe_run_events(
+    dashboard: &DashboardState,
+    chat: ChatState,
+    workspace: WorkspaceState,
+) -> usize {
     let trace_runs = Arc::new(Mutex::new(HashSet::<String>::new()));
     dashboard.subscribe_events(move |event: GatewayEvent| {
         if !event.topic.starts_with("run.") {
@@ -87,6 +94,16 @@ pub fn subscribe_run_events(dashboard: &DashboardState, chat: ChatState) -> usiz
                             .and_then(|t| t.as_str())
                             .unwrap_or("tool");
                         chat.update_tool(run_id, tool_id, tool_name, "running", None);
+                        // Capture args/input for the workspace pane. Schema
+                        // varies by tool kind — try the two known keys.
+                        if !tool_id.is_empty() {
+                            let args = call
+                                .and_then(|c| c.get("input").or_else(|| c.get("args")))
+                                .cloned();
+                            if let Some(args) = args {
+                                workspace.record_tool_args(run_id, tool_id, args);
+                            }
+                        }
                     }
                     "tool_call_completed" => {
                         let call = trace_event.get("call");
@@ -110,6 +127,11 @@ pub fn subscribe_run_events(dashboard: &DashboardState, chat: ChatState) -> usiz
                             "completed"
                         };
                         chat.update_tool(run_id, tool_id, tool_name, status, duration);
+                        // Mirror the result into workspace state so the
+                        // tool-detail view can show actual output.
+                        if !tool_id.is_empty() {
+                            workspace.record_tool_result(run_id, tool_id, result.clone());
+                        }
                     }
                     "tool_summary" => {
                         if let Some(summary) = trace_event.get("summary").and_then(|s| s.as_str()) {

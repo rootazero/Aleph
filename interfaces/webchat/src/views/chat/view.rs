@@ -10,6 +10,7 @@ use super::messages::MessageList;
 use super::state::{ChatState, PendingAttachment};
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
+use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
@@ -21,9 +22,10 @@ pub fn ChatView() -> impl IntoView {
     // ChatState is provided once at the app root so the chat sidebar
     // (left column) and this view share one session / agent selection.
     let chat = expect_context::<ChatState>();
+    let workspace = expect_context::<WorkspaceState>();
 
     // Subscribe to run.* events directly (no Effect — this is a one-shot mount action)
-    let sub_id = subscribe_run_events(&dashboard, chat);
+    let sub_id = subscribe_run_events(&dashboard, chat, workspace);
 
     // Tell the Gateway to start forwarding stream.* events
     // (backend publishes events with method "stream.run_accepted", "stream.response_chunk", etc.)

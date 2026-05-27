@@ -14,7 +14,7 @@
 
 use crate::components::markdown::MarkdownRenderer;
 use crate::components::tool_renderer::ToolRendererRegistry;
-use crate::state::layout::{LayoutMode, WorkspaceContent, WorkspaceState};
+use crate::state::layout::{LayoutMode, ToolPayload, WorkspaceContent, WorkspaceState};
 use crate::views::chat::state::{ChatState, ToolCallEntry};
 use leptos::prelude::*;
 
@@ -128,29 +128,88 @@ fn WorkspaceEmptyHero() -> impl IntoView {
 #[component]
 fn ToolDetailView(run_id: String, tool_id: String) -> impl IntoView {
     let chat = expect_context::<ChatState>();
+    let workspace = expect_context::<WorkspaceState>();
     let registry = expect_context::<ToolRendererRegistry>();
-    let run_id_for_lookup = run_id.clone();
-    let tool_id_for_lookup = tool_id.clone();
+    let run_id_for_entry = run_id.clone();
+    let tool_id_for_entry = tool_id.clone();
+    let run_id_for_payload = run_id.clone();
+    let tool_id_for_payload = tool_id.clone();
 
     let entry = Memo::new(move |_| {
-        find_tool_entry(&chat, &run_id_for_lookup, &tool_id_for_lookup)
+        find_tool_entry(&chat, &run_id_for_entry, &tool_id_for_entry)
+    });
+    let payload = Memo::new(move |_| {
+        workspace.get_tool_payload(&run_id_for_payload, &tool_id_for_payload)
     });
 
+    let run_id_for_missing = run_id.clone();
+    let tool_id_for_missing = tool_id.clone();
     move || match entry.get() {
-        Some(e) => registry.render(&e),
+        Some(e) => view! {
+            <div class="flex flex-col gap-3">
+                {registry.render(&e)}
+                <PayloadBlock payload=payload.get() />
+            </div>
+        }
+        .into_any(),
         None => view! {
             <div class="flex flex-col gap-2 text-sm text-text-tertiary">
                 <p>"Tool call no longer in session memory."</p>
                 <p class="text-xs">
-                    "run: " <code class="font-mono">{run_id.clone()}</code>
+                    "run: " <code class="font-mono">{run_id_for_missing.clone()}</code>
                 </p>
                 <p class="text-xs">
-                    "tool: " <code class="font-mono">{tool_id.clone()}</code>
+                    "tool: " <code class="font-mono">{tool_id_for_missing.clone()}</code>
                 </p>
             </div>
         }
         .into_any(),
     }
+}
+
+/// Args + result JSON dump for a tool call. Hidden entirely when the
+/// payload hasn't been captured yet (no flicker between renderer chip
+/// and pending payload).
+#[component]
+fn PayloadBlock(payload: Option<ToolPayload>) -> impl IntoView {
+    let Some(p) = payload else {
+        return view! { <span /> }.into_any();
+    };
+    let args_pretty = p
+        .args
+        .as_ref()
+        .map(pretty_json)
+        .unwrap_or_else(|| "—".to_string());
+    let result_pretty = p
+        .result
+        .as_ref()
+        .map(pretty_json)
+        .unwrap_or_else(|| "—".to_string());
+    view! {
+        <div class="flex flex-col gap-2 text-xs">
+            <details class="rounded-md border border-border/60 bg-surface-sunken/60" open=true>
+                <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">
+                    "input"
+                </summary>
+                <pre class="px-3 py-2 overflow-x-auto font-mono text-text-secondary whitespace-pre-wrap break-words">
+                    {args_pretty}
+                </pre>
+            </details>
+            <details class="rounded-md border border-border/60 bg-surface-sunken/60" open=true>
+                <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">
+                    "result"
+                </summary>
+                <pre class="px-3 py-2 overflow-x-auto font-mono text-text-secondary whitespace-pre-wrap break-words">
+                    {result_pretty}
+                </pre>
+            </details>
+        </div>
+    }
+    .into_any()
+}
+
+fn pretty_json(v: &serde_json::Value) -> String {
+    serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string())
 }
 
 /// Reactive lookup against `ChatState.messages`. The assistant message

@@ -17,9 +17,22 @@
 
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// `localStorage` key for the chat/workspace split toggle.
 const LAYOUT_MODE_KEY: &str = "aleph.panel.layout_mode";
+
+/// Captured invocation payload for one tool call.
+///
+/// Populated incrementally — `args` lands on `tool_call_started`, `result`
+/// on `tool_call_completed`. Stored under `(run_id, tool_id)` so the
+/// workspace pane can look it up by reference from a chip click without
+/// the events stream having to round-trip through ChatState.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ToolPayload {
+    pub args: Option<serde_json::Value>,
+    pub result: Option<serde_json::Value>,
+}
 
 /// Top-level layout mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +105,10 @@ impl Default for WorkspaceContent {
 pub struct WorkspaceState {
     pub mode: RwSignal<LayoutMode>,
     pub content: RwSignal<WorkspaceContent>,
+    /// Captured tool-call args + results keyed by `(run_id, tool_id)`.
+    /// Populated by `events::subscribe_run_events` so the workspace pane
+    /// can show real payloads without rewriting the existing chunk path.
+    pub tool_payloads: RwSignal<HashMap<(String, String), ToolPayload>>,
 }
 
 impl Default for WorkspaceState {
@@ -108,6 +125,7 @@ impl WorkspaceState {
         Self {
             mode: RwSignal::new(hydrated),
             content: RwSignal::new(WorkspaceContent::default()),
+            tool_payloads: RwSignal::new(HashMap::new()),
         }
     }
 
@@ -140,6 +158,33 @@ impl WorkspaceState {
     /// Reset content to `Empty` (close-pane semantic without changing mode).
     pub fn clear_content(&self) {
         self.content.set(WorkspaceContent::Empty);
+    }
+
+    /// Record the input/args of a tool call. Idempotent — repeated calls
+    /// for the same `(run_id, tool_id)` overwrite, matching the events
+    /// stream's append-or-update semantics.
+    pub fn record_tool_args(&self, run_id: &str, tool_id: &str, args: serde_json::Value) {
+        let key = (run_id.to_string(), tool_id.to_string());
+        self.tool_payloads.update(|m| {
+            let entry = m.entry(key).or_default();
+            entry.args = Some(args);
+        });
+    }
+
+    /// Record the result of a tool call.
+    pub fn record_tool_result(&self, run_id: &str, tool_id: &str, result: serde_json::Value) {
+        let key = (run_id.to_string(), tool_id.to_string());
+        self.tool_payloads.update(|m| {
+            let entry = m.entry(key).or_default();
+            entry.result = Some(result);
+        });
+    }
+
+    /// Lookup the payload for a tool call. Reactive — clones the value so
+    /// the borrow on the RwSignal is released before render.
+    pub fn get_tool_payload(&self, run_id: &str, tool_id: &str) -> Option<ToolPayload> {
+        let key = (run_id.to_string(), tool_id.to_string());
+        self.tool_payloads.with(|m| m.get(&key).cloned())
     }
 }
 
@@ -179,5 +224,21 @@ mod tests {
     fn toggle_alternates_between_modes() {
         assert_eq!(LayoutMode::ChatOnly.toggled(), LayoutMode::Split);
         assert_eq!(LayoutMode::Split.toggled(), LayoutMode::ChatOnly);
+    }
+
+    #[test]
+    fn tool_payload_merges_args_and_result_independently() {
+        let p1 = ToolPayload {
+            args: Some(serde_json::json!({"q": "rust"})),
+            result: None,
+        };
+        let p2 = ToolPayload {
+            args: p1.args.clone(),
+            result: Some(serde_json::json!({"ok": true})),
+        };
+        // record_tool_args then record_tool_result accretes both fields.
+        assert_ne!(p1, p2);
+        assert_eq!(p1.args, p2.args);
+        assert!(p1.result.is_none() && p2.result.is_some());
     }
 }
