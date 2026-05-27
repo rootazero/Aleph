@@ -4,11 +4,17 @@
 //! with hermes-style declarative aliases. `PRESETS` is lazily expanded so
 //! every alias also resolves through the same `HashMap` shape that older
 //! call sites already depend on (catalog, helpers, override merge, RPCs).
+//!
+//! Phase 2 entropy reduction: the legacy `PRESET_METADATA` parallel map has
+//! been folded into `ProviderPreset` itself (modalities + homepage fields).
+//! The `PRESET_METADATA` re-export below is now a derived `Lazy<HashMap>`
+//! over `PROFILES` so historical readers keep working.
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
 use super::ProviderPreset;
+use crate::providers::metadata::ProviderMetadata;
 
 /// Canonical provider profiles. Each `aliases` entry will also be inserted
 /// into `PRESETS` at lazy init, so `get_preset("kimi")` returns the same
@@ -19,6 +25,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         "openai",
         ProviderPreset::new("https://api.openai.com/v1", "openai", "#10a37f", "gpt-4o")
             .with_display("OpenAI")
+            .with_homepage("https://platform.openai.com")
             .with_signup("https://platform.openai.com/api-keys")
             .with_aux_model("gpt-4o-mini")
             .with_fallback_models(&["gpt-4o", "gpt-4o-mini", "o3-mini", "o1-mini"]),
@@ -27,6 +34,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         "chatgpt",
         ProviderPreset::new("https://chatgpt.com", "codex", "#10a37f", "gpt-5.4")
             .with_display("ChatGPT (Codex Login)")
+            .with_homepage("https://chatgpt.com")
             .with_signup("https://chatgpt.com")
             .with_description("OAuth login, Codex Responses protocol")
             .no_health_check(),
@@ -40,6 +48,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "gpt-4o",
         )
         .with_display("Azure OpenAI")
+        .with_homepage("https://learn.microsoft.com/azure/ai-services/openai")
         .with_signup("https://portal.azure.com")
         .with_description("Override base_url with your Azure resource")
         .no_health_check(),
@@ -54,6 +63,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "claude-sonnet-4-5-20250514",
         )
         .with_display("Anthropic Claude")
+        .with_homepage("https://docs.anthropic.com")
         .with_signup("https://console.anthropic.com/settings/keys")
         .with_aux_model("claude-haiku-4-5-20251001")
         .with_models_url("https://api.anthropic.com/v1/models")
@@ -73,6 +83,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         )
         .with_aliases(&["bedrock"])
         .with_display("Amazon Bedrock")
+        .with_homepage("https://docs.aws.amazon.com/bedrock")
         .with_signup("https://console.aws.amazon.com/bedrock")
         .with_description("Anthropic protocol; override base_url per region")
         .no_health_check(),
@@ -86,6 +97,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "claude-sonnet-4@20250514",
         )
         .with_display("Vertex AI — Anthropic")
+        .with_homepage("https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude")
         .with_signup("https://console.cloud.google.com")
         .with_description("Claude via GCP Vertex; region-specific base URL")
         .no_health_check(),
@@ -100,6 +112,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "gemini-2.5-flash",
         )
         .with_display("Google Gemini")
+        .with_homepage("https://ai.google.dev")
         .with_signup("https://aistudio.google.com/app/apikey")
         .with_aux_model("gemini-2.5-flash-lite")
         .with_fallback_models(&[
@@ -113,6 +126,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         "deepseek",
         ProviderPreset::new("https://api.deepseek.com", "openai", "#0066cc", "deepseek-chat")
             .with_display("DeepSeek")
+            .with_homepage("https://platform.deepseek.com")
             .with_signup("https://platform.deepseek.com/api_keys")
             .with_aux_model("deepseek-chat")
             .with_fallback_models(&["deepseek-chat", "deepseek-reasoner"]),
@@ -127,6 +141,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         )
         .with_aliases(&["kimi"])
         .with_display("Moonshot / Kimi")
+        .with_homepage("https://platform.moonshot.ai")
         .with_signup("https://platform.moonshot.ai/console/api-keys")
         .with_fallback_models(&["kimi-k2-0905-preview", "moonshot-v1-128k", "moonshot-v1-32k"]),
     ),
@@ -140,6 +155,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         )
         .with_aliases(&["kimi-coding"])
         .with_display("Kimi for Coding")
+        .with_homepage("https://platform.moonshot.ai")
         .with_signup("https://platform.moonshot.ai")
         .with_description("Anthropic-protocol endpoint for IDE agents")
         // Server manages temperature — sending one returns a fixed-value error.
@@ -156,6 +172,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         )
         .with_aliases(&["volcengine", "ark"])
         .with_display("Volcengine Doubao")
+        .with_homepage("https://www.volcengine.com/product/ark")
         .with_signup("https://console.volcengine.com/ark"),
     ),
     (
@@ -167,6 +184,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "deepseek-ai/DeepSeek-V3",
         )
         .with_display("SiliconFlow")
+        .with_homepage("https://siliconflow.cn")
         .with_signup("https://cloud.siliconflow.cn/account/ak"),
     ),
     (
@@ -179,6 +197,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         )
         .with_aliases(&["glm"])
         .with_display("Zhipu GLM")
+        .with_homepage("https://open.bigmodel.cn")
         .with_signup("https://bigmodel.cn/usercenter/apikeys"),
     ),
     (
@@ -190,6 +209,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "MiniMax-M2.5",
         )
         .with_display("MiniMax")
+        .with_homepage("https://www.minimax.io")
         .with_signup("https://www.minimax.io"),
     ),
     (
@@ -202,6 +222,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         )
         .with_aliases(&["dashscope"])
         .with_display("Qwen / 通义")
+        .with_homepage("https://help.aliyun.com/zh/dashscope")
         .with_signup("https://bailian.console.aliyun.com")
         .with_description("Alibaba DashScope OpenAI-compatible endpoint")
         .with_fallback_models(&["qwen-max-2025-01-25", "qwen-plus", "qwen-turbo"]),
@@ -215,6 +236,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "Baichuan4",
         )
         .with_display("Baichuan / 百川")
+        .with_homepage("https://platform.baichuan-ai.com")
         .with_signup("https://platform.baichuan-ai.com"),
     ),
     (
@@ -226,6 +248,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "hunyuan-pro",
         )
         .with_display("Hunyuan / 腾讯混元")
+        .with_homepage("https://cloud.tencent.com/document/product/1729")
         .with_signup("https://cloud.tencent.com/product/hunyuan"),
     ),
     (
@@ -237,18 +260,21 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "4.0Ultra",
         )
         .with_display("Spark / 讯飞星火")
+        .with_homepage("https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html")
         .with_description("V4 Ultra OpenAI-compatible endpoint"),
     ),
     (
         "stepfun",
         ProviderPreset::new("https://api.stepfun.com/v1", "openai", "#0ea5e9", "step-1-8k")
             .with_display("Stepfun")
+            .with_homepage("https://stepfun.com")
             .with_signup("https://platform.stepfun.com"),
     ),
     (
         "t8star",
         ProviderPreset::new("https://api.t8star.cn/v1", "openai", "#f59e0b", "")
             .with_display("T8Star")
+            .with_homepage("https://t8star.cn")
             .with_description("OpenAI-compatible aggregator"),
     ),
     // ─── Western specialty / inference ────────────────────────────────────────
@@ -261,6 +287,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "llama-3.3-70b-versatile",
         )
         .with_display("Groq")
+        .with_homepage("https://groq.com")
         .with_signup("https://console.groq.com/keys")
         .with_description("Ultra-fast LPU inference")
         .with_fallback_models(&["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]),
@@ -269,6 +296,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         "cerebras",
         ProviderPreset::new("https://api.cerebras.ai/v1", "openai", "#f97316", "llama-3.3-70b")
             .with_display("Cerebras")
+            .with_homepage("https://cerebras.ai")
             .with_signup("https://cloud.cerebras.ai")
             .with_description("Ultra-fast Llama inference"),
     ),
@@ -276,12 +304,14 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         "together",
         ProviderPreset::new("https://api.together.xyz/v1", "openai", "#6366f1", "")
             .with_display("Together.ai")
+            .with_homepage("https://www.together.ai")
             .with_signup("https://api.together.xyz/settings/api-keys"),
     ),
     (
         "perplexity",
         ProviderPreset::new("https://api.perplexity.ai", "openai", "#20808d", "")
             .with_display("Perplexity")
+            .with_homepage("https://docs.perplexity.ai")
             .with_signup("https://www.perplexity.ai/settings/api")
             .with_description("Search-augmented LLMs"),
     ),
@@ -289,29 +319,34 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         "mistral",
         ProviderPreset::new("https://api.mistral.ai/v1", "openai", "#ff7000", "")
             .with_display("Mistral AI")
+            .with_homepage("https://docs.mistral.ai")
             .with_signup("https://console.mistral.ai/api-keys"),
     ),
     (
         "cohere",
         ProviderPreset::new("https://api.cohere.ai/v1", "openai", "#39594d", "")
             .with_display("Cohere")
+            .with_homepage("https://docs.cohere.com")
             .with_signup("https://dashboard.cohere.com/api-keys"),
     ),
     (
         "fireworks",
         ProviderPreset::new("https://api.fireworks.ai/inference/v1", "openai", "#ff6b35", "")
             .with_display("Fireworks.ai")
+            .with_homepage("https://fireworks.ai")
             .with_signup("https://fireworks.ai/account/api-keys"),
     ),
     (
         "anyscale",
         ProviderPreset::new("https://api.endpoints.anyscale.com/v1", "openai", "#00d4aa", "")
-            .with_display("Anyscale"),
+            .with_display("Anyscale")
+            .with_homepage("https://www.anyscale.com"),
     ),
     (
         "replicate",
         ProviderPreset::new("https://api.replicate.com/v1", "openai", "#0c0c0d", "")
             .with_display("Replicate")
+            .with_homepage("https://replicate.com")
             .with_signup("https://replicate.com/account/api-tokens")
             .with_description("Hosting; image/video via generation layer"),
     ),
@@ -325,6 +360,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         )
         .with_aliases(&["or"])
         .with_display("OpenRouter")
+        .with_homepage("https://openrouter.ai")
         .with_signup("https://openrouter.ai/keys")
         .with_description("Multi-model router")
         .with_fallback_models(&[
@@ -336,12 +372,14 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     (
         "lepton",
         ProviderPreset::new("https://api.lepton.ai/api/v1", "openai", "#4f46e5", "")
-            .with_display("Lepton AI"),
+            .with_display("Lepton AI")
+            .with_homepage("https://www.lepton.ai"),
     ),
     (
         "hyperbolic",
         ProviderPreset::new("https://api.hyperbolic.xyz/v1", "openai", "#8b5cf6", "")
-            .with_display("Hyperbolic"),
+            .with_display("Hyperbolic")
+            .with_homepage("https://hyperbolic.xyz"),
     ),
     (
         "huggingface",
@@ -352,6 +390,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "meta-llama/Llama-3.3-70B-Instruct",
         )
         .with_display("HuggingFace Inference")
+        .with_homepage("https://huggingface.co/docs/api-inference")
         .with_signup("https://huggingface.co/settings/tokens")
         .with_description("Routes to community-hosted open models"),
     ),
@@ -361,6 +400,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         ProviderPreset::new("https://api.x.ai/v1", "openai", "#000000", "grok-4-0709")
             .with_aliases(&["grok"])
             .with_display("xAI Grok")
+            .with_homepage("https://docs.x.ai")
             .with_signup("https://console.x.ai")
             .with_fallback_models(&["grok-4-0709", "grok-3-mini"]),
     ),
@@ -375,6 +415,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         )
         .with_aliases(&["workers-ai"])
         .with_display("Cloudflare Workers AI")
+        .with_homepage("https://developers.cloudflare.com/workers-ai")
         .with_signup("https://dash.cloudflare.com/?to=/:account/ai")
         .with_description("Set account id in base_url"),
     ),
@@ -387,6 +428,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "meta-llama/Llama-3.3-70B-Instruct",
         )
         .with_display("DeepInfra")
+        .with_homepage("https://deepinfra.com/docs")
         .with_signup("https://deepinfra.com/dash/api_keys")
         .with_description("Open-model inference, OpenAI-compatible"),
     ),
@@ -400,6 +442,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         )
         .with_aliases(&["copilot"])
         .with_display("GitHub Copilot")
+        .with_homepage("https://docs.github.com/copilot")
         .with_signup("https://github.com/settings/copilot")
         .with_description("Requires Copilot subscription token"),
     ),
@@ -407,6 +450,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         "lmstudio",
         ProviderPreset::new("http://localhost:1234/v1", "openai", "#7c3aed", "local-model")
             .with_display("LM Studio (Local)")
+            .with_homepage("https://lmstudio.ai")
             .with_signup("https://lmstudio.ai")
             .with_description("Local OpenAI-compatible server (default :1234)"),
     ),
@@ -414,6 +458,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         "litellm",
         ProviderPreset::new("http://localhost:4000", "openai", "#22c55e", "gpt-4o")
             .with_display("LiteLLM Proxy")
+            .with_homepage("https://docs.litellm.ai")
             .with_signup("https://docs.litellm.ai")
             .with_description("Drop-in proxy for any LLM backend"),
     ),
@@ -427,6 +472,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         )
         .with_aliases(&["nvidia"])
         .with_display("NVIDIA NIM")
+        .with_homepage("https://docs.nvidia.com/nim")
         .with_signup("https://build.nvidia.com")
         .with_description("NGC-hosted inference catalog"),
     ),
@@ -439,6 +485,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "inflection_3_pi",
         )
         .with_display("Inflection AI (Pi)")
+        .with_homepage("https://developers.inflection.ai")
         .with_signup("https://developers.inflection.ai"),
     ),
     (
@@ -450,6 +497,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "meta-llama/llama-3.3-70b-instruct",
         )
         .with_display("Novita AI")
+        .with_homepage("https://novita.ai/docs")
         .with_signup("https://novita.ai/settings/key-management")
         .with_description("Serverless open-model inference"),
     ),
@@ -462,6 +510,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "deepseek-ai/DeepSeek-V3-0324",
         )
         .with_display("Chutes")
+        .with_homepage("https://chutes.ai")
         .with_signup("https://chutes.ai")
         .with_description("Bittensor-backed open inference"),
     ),
@@ -475,6 +524,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "gpt-4o",
         )
         .with_display("Cloudflare AI Gateway")
+        .with_homepage("https://developers.cloudflare.com/ai-gateway")
         .with_signup("https://dash.cloudflare.com/?to=/:account/ai/ai-gateway")
         .with_description("OpenAI-compatible AI gateway with cache + analytics")
         .no_health_check(),
@@ -488,6 +538,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "gpt-4o",
         )
         .with_display("Azure AI Foundry")
+        .with_homepage("https://learn.microsoft.com/azure/ai-foundry")
         .with_signup("https://ai.azure.com")
         .with_description("Azure AI Foundry inference (models endpoint)")
         .no_health_check(),
@@ -501,6 +552,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "deepseek-ai/DeepSeek-V3",
         )
         .with_display("GMI Cloud")
+        .with_homepage("https://www.gmicloud.ai")
         .with_signup("https://www.gmicloud.ai")
         .with_description("Multi-model direct API"),
     ),
@@ -513,6 +565,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "Hermes-3-Llama-3.1-70B",
         )
         .with_display("Nous Research")
+        .with_homepage("https://nousresearch.com")
         .with_signup("https://portal.nousresearch.com")
         .with_description("Hermes models from Nous Research"),
     ),
@@ -525,6 +578,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "glm-4.6",
         )
         .with_display("Z.ai (Zhipu international)")
+        .with_homepage("https://z.ai")
         .with_signup("https://z.ai")
         .with_description("International gateway for Zhipu / GLM models"),
     ),
@@ -537,6 +591,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "llama3.3:70b",
         )
         .with_display("Ollama Cloud")
+        .with_homepage("https://ollama.com")
         .with_signup("https://ollama.com")
         .with_description("Cloud-hosted Ollama (vs. local default)"),
     ),
@@ -551,6 +606,34 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         for alias in preset.aliases {
             m.insert(*alias, *preset);
         }
+    }
+    m
+});
+
+/// Backwards-compatible `ProviderMetadata` view derived from `PROFILES`.
+///
+/// Historically this lived in `metadata.rs` as a hand-maintained parallel
+/// map. Phase 2 collapses it: every field comes from the matching preset.
+///
+/// * `display_name` ← `preset.display_name`, fallback to canonical name
+/// * `modalities`   ← `preset.modalities` (defaults to `&[Modality::Chat]`)
+/// * `homepage`     ← `preset.homepage`
+/// * `notes`        ← `preset.description`
+///
+/// Only canonical names are inserted — aliases share the canonical entry's
+/// metadata via `provider_metadata()` which lower-cases its input.
+pub static PRESET_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = Lazy::new(|| {
+    let mut m: HashMap<&'static str, ProviderMetadata> = HashMap::with_capacity(PROFILES.len());
+    for (name, preset) in PROFILES {
+        m.insert(
+            *name,
+            ProviderMetadata {
+                display_name: preset.display_name.unwrap_or(name),
+                modalities: preset.modalities,
+                homepage: preset.homepage,
+                notes: preset.description,
+            },
+        );
     }
     m
 });

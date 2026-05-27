@@ -10,14 +10,12 @@
 
 use crate::providers::metadata::{Modality, ProviderMetadata};
 
-mod metadata;
 mod registry;
 
 #[cfg(test)]
 mod tests;
 
-pub use metadata::PRESET_METADATA;
-pub use registry::PRESETS;
+pub use registry::{PRESETS, PRESET_METADATA};
 
 /// Temperature handling for providers with non-standard expectations.
 ///
@@ -74,7 +72,19 @@ pub struct ProviderPreset {
     pub temperature_policy: Option<TemperaturePolicy>,
     /// Whether `/models` probing is safe (some providers 404 or rate-limit).
     pub supports_health_check: bool,
+    /// Modalities this preset can serve. Defaults to `&[Modality::Chat]`.
+    /// Chat is the dominant modality for `src/providers/`; multi-modal entries
+    /// (e.g. providers that also expose image/video) opt in via
+    /// `.with_modalities(&[..])`.
+    pub modalities: &'static [Modality],
+    /// Vendor docs / landing page URL. Distinct from `signup_url` which
+    /// points at the API-key creation flow.
+    pub homepage: Option<&'static str>,
 }
+
+/// Default modality for chat-side presets — used when no override is set.
+/// Exposed for the const fn ctor so we keep a single literal of this slice.
+const DEFAULT_CHAT_MODALITIES: &[Modality] = &[Modality::Chat];
 
 impl Default for ProviderPreset {
     fn default() -> Self {
@@ -92,6 +102,8 @@ impl Default for ProviderPreset {
             description: None,
             temperature_policy: None,
             supports_health_check: true,
+            modalities: DEFAULT_CHAT_MODALITIES,
+            homepage: None,
         }
     }
 }
@@ -118,6 +130,8 @@ impl ProviderPreset {
             description: None,
             temperature_policy: None,
             supports_health_check: true,
+            modalities: DEFAULT_CHAT_MODALITIES,
+            homepage: None,
         }
     }
 
@@ -166,6 +180,16 @@ impl ProviderPreset {
         self
     }
 
+    pub const fn with_homepage(mut self, url: &'static str) -> Self {
+        self.homepage = Some(url);
+        self
+    }
+
+    pub const fn with_modalities(mut self, modalities: &'static [Modality]) -> Self {
+        self.modalities = modalities;
+        self
+    }
+
     /// Resolve aux model, falling back to `default_model` when unset.
     pub fn aux_model(&self) -> &'static str {
         self.default_aux_model.unwrap_or(self.default_model)
@@ -182,26 +206,23 @@ impl ProviderPreset {
 
 /// Look up rich metadata for a preset by name (case-insensitive).
 ///
-/// Returns `None` if the preset has no metadata entry — callers can still
-/// treat it as a chat-only provider for routing purposes.
+/// Returns `None` only when the preset itself is unknown — every existing
+/// preset now derives its metadata from its own `ProviderPreset` fields
+/// (display_name / description / homepage / modalities), so the parallel
+/// `PRESET_METADATA` map is just a cached view onto the same data.
 pub fn provider_metadata(name: &str) -> Option<&'static ProviderMetadata> {
     PRESET_METADATA.get(name.to_lowercase().as_str())
 }
 
 /// All preset names (sorted) that serve the requested modality.
 ///
-/// Presets without an explicit metadata entry are treated as `Chat`-only,
-/// matching the historical default — this keeps backward compatibility
-/// while letting new multimodal entries opt in via [`PRESET_METADATA`].
+/// Reads directly from `preset.modalities` — opt-out of the chat default
+/// is via `.with_modalities(&[..])` at the registry level.
 pub fn presets_by_modality(modality: Modality) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = PRESETS
-        .keys()
-        .copied()
-        .filter(|name| match PRESET_METADATA.get(*name) {
-            Some(meta) => meta.supports(modality),
-            // Default assumption for entries without metadata: chat-only.
-            None => modality == Modality::Chat,
-        })
+        .iter()
+        .filter(|(_, preset)| preset.modalities.contains(&modality))
+        .map(|(name, _)| *name)
         .collect();
     out.sort_unstable();
     out

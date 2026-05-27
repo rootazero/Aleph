@@ -730,9 +730,11 @@ pub async fn handle_catalog(
     let items: Vec<CatalogEntryView> = entries
         .into_iter()
         .filter_map(|entry| {
-            // Built-in template (always present for chat entries returned by catalog::presets_for_modality).
+            // Built-in template (always present for chat entries returned by
+            // catalog::presets_for_modality). Phase 2 folded
+            // display_name/modalities/homepage/notes into the preset itself,
+            // so this is the single source of truth — no metadata-map fallback.
             let preset = chat_presets::get_preset(entry.name)?;
-            let meta = entry.metadata;
             let cfg = config_guard.providers.get(entry.name);
             let api_key = resolve_api_key(entry.name, &vault);
             let has_api_key = api_key.is_some() || cfg.and_then(|c| c.api_key.as_ref()).is_some();
@@ -740,18 +742,10 @@ pub async fn handle_catalog(
             let enabled = cfg.map(|c| c.enabled).unwrap_or(false);
             let models = cfg.map(|c| c.models.clone()).unwrap_or_default();
 
-            // Prefer preset-level display_name (hermes-parity field) over
-            // legacy PRESET_METADATA so newly-added presets work without
-            // having to maintain a parallel metadata entry.
             let display_name = preset
                 .display_name
                 .map(String::from)
-                .or_else(|| meta.map(|m| m.display_name.to_string()))
                 .unwrap_or_else(|| entry.name.to_string());
-            let notes = preset
-                .description
-                .map(String::from)
-                .or_else(|| meta.and_then(|m| m.notes.map(String::from)));
 
             Some(CatalogEntryView {
                 id: entry.name.to_string(),
@@ -760,8 +754,8 @@ pub async fn handle_catalog(
                 base_url: preset.base_url.to_string(),
                 protocol: preset.protocol.to_string(),
                 color: preset.color.to_string(),
-                homepage: meta.and_then(|m| m.homepage.map(String::from)),
-                notes,
+                homepage: preset.homepage.map(String::from),
+                notes: preset.description.map(String::from),
                 signup_url: preset.signup_url.map(String::from),
                 fallback_models: preset
                     .fallback_models
@@ -770,9 +764,11 @@ pub async fn handle_catalog(
                     .collect(),
                 default_aux_model: preset.default_aux_model.map(String::from),
                 aliases: preset.aliases.iter().map(|s| s.to_string()).collect(),
-                modalities: meta
-                    .map(|m| m.modalities.iter().map(|x| x.as_str().to_string()).collect())
-                    .unwrap_or_else(|| vec!["chat".to_string()]),
+                modalities: preset
+                    .modalities
+                    .iter()
+                    .map(|m| m.as_str().to_string())
+                    .collect(),
                 models,
                 has_api_key,
                 verified,
