@@ -2,6 +2,7 @@
 //! `desktop/*` capability layer.
 
 mod ax;
+mod browser_operator;
 mod gui_locate;
 mod native;
 mod perm;
@@ -17,6 +18,9 @@ pub use ax::{
     DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
     DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopAxSnapshot,
     DesktopAxSnapshotArgs,
+};
+pub use browser_operator::{
+    BrowserOperatorMode, DesktopBrowserOperator, DesktopBrowserOperatorArgs,
 };
 pub use gui_locate::{DesktopGuiLocate, DesktopGuiLocateArgs};
 pub use perm::{DesktopCheckPermissions, DesktopCheckPermissionsArgs};

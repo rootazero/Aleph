@@ -159,6 +159,7 @@ impl BuiltinToolRegistry {
             .with_platform(Arc::clone(&desktop_platform));
         let desktop_gui_locate_tool = crate::builtin_tools::DesktopGuiLocate::new()
             .with_platform(Arc::clone(&desktop_platform));
+        let desktop_browser_operator_tool = crate::builtin_tools::DesktopBrowserOperator::new();
         let desktop_check_permissions_tool = crate::builtin_tools::DesktopCheckPermissions::new()
             .with_platform(Arc::clone(&desktop_platform));
 
@@ -1312,6 +1313,7 @@ impl BuiltinToolRegistry {
             desktop_ax_query_by_role_tool,
             desktop_ax_snapshot_tool,
             desktop_gui_locate_tool,
+            desktop_browser_operator_tool,
             desktop_check_permissions_tool,
             pim_tool,
             system_tool,

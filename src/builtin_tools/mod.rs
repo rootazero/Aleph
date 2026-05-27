@@ -118,10 +118,11 @@ pub use config_guide::{
 };
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
 pub use desktop::{
-    DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
-    DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopAxSnapshot,
-    DesktopAxSnapshotArgs, DesktopCheckPermissions, DesktopCheckPermissionsArgs, DesktopGuiLocate,
-    DesktopGuiLocateArgs, DesktopOutput, DesktopTool,
+    BrowserOperatorMode, DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs,
+    DesktopAxQueryFocused, DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs,
+    DesktopAxSnapshot, DesktopAxSnapshotArgs, DesktopBrowserOperator, DesktopBrowserOperatorArgs,
+    DesktopCheckPermissions, DesktopCheckPermissionsArgs, DesktopGuiLocate, DesktopGuiLocateArgs,
+    DesktopOutput, DesktopTool,
 };
 pub use error::ToolError;
 pub use file_ops::{
