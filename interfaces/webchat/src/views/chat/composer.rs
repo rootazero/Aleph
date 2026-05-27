@@ -708,11 +708,17 @@ pub(super) fn InputArea() -> impl IntoView {
             // (Shift+Enter); items-end keeps the side buttons pinned to the
             // composer's bottom edge as the textarea grows.
             <div class="aleph-composer flex items-end gap-2 px-3 py-1.5">
-                // Hidden file input
+                // Hidden file input. `accept` is a *hint* — the OS picker
+                // defaults to showing images, common video formats, plain
+                // text / markdown / pdf / json. The user can still switch
+                // to "All files" in the picker if they need a niche type;
+                // this just keeps the default view focused on what models
+                // most commonly consume.
                 <input
                     type="file"
                     multiple=true
                     class="hidden"
+                    accept="image/*,video/mp4,video/webm,video/quicktime,text/*,application/pdf,application/json,.md,.csv"
                     node_ref=file_input_ref
                     on:change=on_file_change
                 />
@@ -745,6 +751,29 @@ pub(super) fn InputArea() -> impl IntoView {
                     }
                     on:keydown=on_keydown
                 />
+
+                // Clear-draft button — visible only when there is text to
+                // clear. Resets the textarea + palette state in one click
+                // (a long, half-written prompt is annoying to wipe via
+                // ⌘A + Backspace, especially on mobile). Attachments are
+                // left alone — each chip has its own ✕.
+                <Show when=move || !input_text.get().trim().is_empty()>
+                    <button
+                        class="w-8 h-8 rounded-full text-text-tertiary hover:text-text-primary
+                               hover:bg-surface-sunken flex items-center justify-center
+                               transition-colors flex-shrink-0"
+                        title=move || t_string!(i18n, chat.clear).to_string()
+                        on:click=move |_| {
+                            input_text.set(String::new());
+                            show_palette.set(false);
+                            current_namespace.set(None);
+                        }
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+                        </svg>
+                    </button>
+                </Show>
 
                 // Abort button (when running)
                 <Show when=move || chat.active_run_id.get().is_some()>

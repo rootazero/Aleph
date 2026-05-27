@@ -131,7 +131,8 @@
     "send_placeholder": "发送消息...",
     "attach": "附加文件",
     "stop": "停止",
-    "remove": "移除"
+    "remove": "移除",
+    "clear": "清空草稿"
   },
   "memory": {
     "title": "记忆库",
