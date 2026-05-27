@@ -1,18 +1,22 @@
 //! Teams Tab (top-level panel mode).
 //!
-//! Houses three sub-views:
+//! Houses four sub-views:
 //! - Overview: existing collapsible team-cards list (migrated from /dashboard/teams)
 //! - Kanban: 5-column task board over CoordTask
+//! - Replay: R3 unified audit timeline (runs + comments + events + artifacts
+//!   + exit journal) per task — the read-side surface of the `task_exit_journal`
+//!   builtin tool and `teams.task.trace` RPC.
 //! - Workers: live ACP harness session pool (acpx-parity Phase 2) —
 //!   surfaces external coding agents (Claude Code / Codex / Gemini /
 //!   custom) as first-class workers visible to humans.
 //!
-//! A small sidebar lets the user pick between the three sub-views and
-//! select the active team for the kanban.
+//! A small sidebar lets the user pick between the four sub-views and
+//! select the active team for the kanban / replay panes.
 
 pub mod components;
 pub mod kanban;
 pub mod overview;
+pub mod replay;
 pub mod workers;
 
 use crate::api::teams::{TeamSummary, TeamsApi};
@@ -26,6 +30,7 @@ use leptos::task::spawn_local;
 pub enum TeamsSubTab {
     Overview,
     Kanban,
+    Replay,
     Workers,
 }
 
@@ -74,6 +79,7 @@ pub fn TeamsView() -> impl IntoView {
             {move || match tab_state.sub_tab.get() {
                 TeamsSubTab::Overview => view! { <overview::OverviewView /> }.into_any(),
                 TeamsSubTab::Kanban => view! { <kanban::KanbanView /> }.into_any(),
+                TeamsSubTab::Replay => view! { <replay::ReplayView /> }.into_any(),
                 TeamsSubTab::Workers => view! { <workers::WorkersView /> }.into_any(),
             }}
         </div>
@@ -103,6 +109,11 @@ pub fn TeamsSidebar() -> impl IntoView {
                     label=Signal::derive(move || t_string!(i18n, teams.subtab.kanban).to_string())
                     current=tab_state.sub_tab
                     target=TeamsSubTab::Kanban
+                />
+                <SubTabButton
+                    label=Signal::derive(|| "Replay".to_string())
+                    current=tab_state.sub_tab
+                    target=TeamsSubTab::Replay
                 />
                 <SubTabButton
                     label=Signal::derive(|| "ACP Workers".to_string())
