@@ -474,6 +474,7 @@ aliases = ["doubao", "ark"]
             provider_type: "openai",
             default_model: "dall-e-3",
             base_url: Some("https://api.openai.com"),
+            ..Default::default()
         };
         let partial = PartialGenerationPreset {
             provider_type: Some("custom".to_string()),
@@ -494,6 +495,7 @@ aliases = ["doubao", "ark"]
             provider_type: "openai",
             default_model: "dall-e-3",
             base_url: Some("https://api.openai.com"),
+            ..Default::default()
         };
         let partial = PartialGenerationPreset::default();
 
@@ -509,6 +511,7 @@ aliases = ["doubao", "ark"]
             provider_type: "google",
             default_model: "imagen-3",
             base_url: None,
+            ..Default::default()
         };
         let partial = PartialGenerationPreset::default();
 

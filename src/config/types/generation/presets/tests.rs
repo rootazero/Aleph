@@ -216,3 +216,82 @@ fn test_get_merged_generation_preset_audio_override() {
     assert_eq!(preset.provider_type, "elevenlabs"); // from builtin
     assert_eq!(preset.default_model, "eleven_turbo_v2"); // overridden
 }
+
+// =========================================================================
+// hermes-parity field tests (Phase 2.3)
+// =========================================================================
+
+#[test]
+fn high_value_generation_presets_have_display_name() {
+    // Every shipped preset must carry a panel-ready display name. The
+    // derived metadata falls back to canonical name if missing, but a
+    // human-friendly label is the desired baseline.
+    for name in [
+        "openai-dalle",
+        "google-imagen",
+        "stability-ai",
+        "fal",
+        "elevenlabs",
+        "openai-tts",
+        "suno",
+        "bfl-flux",
+    ] {
+        let p = get_preset(name).unwrap_or_else(|| panic!("missing preset {name}"));
+        assert!(
+            p.display_name.is_some(),
+            "{name} should declare a panel display_name"
+        );
+    }
+}
+
+#[test]
+fn high_value_generation_presets_have_homepage_and_signup() {
+    for name in ["openai-dalle", "stability-ai", "elevenlabs", "fal", "deepgram-tts"] {
+        let p = get_preset(name).unwrap_or_else(|| panic!("missing preset {name}"));
+        assert!(p.homepage.is_some(), "{name} should declare a homepage");
+        assert!(
+            p.signup_url.is_some(),
+            "{name} should declare a signup_url for the CTA"
+        );
+    }
+}
+
+#[test]
+fn presets_must_declare_at_least_one_modality() {
+    // Catch the omission case: a preset without modalities is invisible
+    // to `generation_presets_by_modality()`. All shipped entries today
+    // declare exactly one modality (or the multi-modality replicate/fal).
+    for (name, preset) in PRESETS.iter() {
+        assert!(
+            !preset.modalities.is_empty(),
+            "preset {name} ships without any modality — invisible to routing"
+        );
+    }
+}
+
+#[test]
+fn generation_metadata_display_name_falls_back_to_canonical() {
+    // The derived metadata uses preset.display_name.unwrap_or(name);
+    // we don't ship any without display_name today, but the fallback
+    // is the design — assert at least one entry round-trips cleanly.
+    let m = generation_metadata("openai-dalle").unwrap();
+    assert_eq!(m.display_name, "OpenAI DALL-E");
+}
+
+#[test]
+fn const_builder_chains_compose_correctly() {
+    let p = GenerationPreset::new("foo", "model-x", Some("https://example.com"))
+        .with_modalities(&[Modality::Image])
+        .with_display("Foo")
+        .with_description("desc")
+        .with_homepage("https://docs.foo")
+        .with_signup("https://signup.foo");
+    assert_eq!(p.provider_type, "foo");
+    assert_eq!(p.default_model, "model-x");
+    assert_eq!(p.base_url, Some("https://example.com"));
+    assert_eq!(p.display_name, Some("Foo"));
+    assert_eq!(p.description, Some("desc"));
+    assert_eq!(p.homepage, Some("https://docs.foo"));
+    assert_eq!(p.signup_url, Some("https://signup.foo"));
+    assert_eq!(p.modalities, &[Modality::Image]);
+}

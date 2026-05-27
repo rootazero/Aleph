@@ -1,27 +1,113 @@
 //! Generation provider presets registry
 //!
-//! Contains default configurations for known generation providers (image, video, audio, speech).
+//! Contains default configurations for known generation providers (image,
+//! video, audio, speech). Follows the same hermes-parity shape as the chat
+//! preset registry in `src/providers/presets/`:
+//! * `PROFILES` is the single source of truth (const slice).
+//! * `PRESETS` is a `Lazy<HashMap>` for backwards-compatible lookups.
+//! * `GENERATION_METADATA` is a derived `Lazy<HashMap>` over the same
+//!   `PROFILES` — folding the parallel metadata map (Phase 2 entropy).
 
 use crate::providers::metadata::{Modality, ProviderMetadata};
 
-mod metadata;
 mod registry;
 
 #[cfg(test)]
 mod tests;
 
-pub use metadata::GENERATION_METADATA;
-pub use registry::PRESETS;
+pub use registry::{GENERATION_METADATA, PRESETS};
 
-/// Generation provider preset configuration
-#[derive(Debug, Clone)]
+/// Generation provider preset configuration.
+///
+/// The first three fields (provider_type / default_model / base_url) are
+/// required and used by the factory to instantiate the right provider.
+/// The remaining fields are hermes-parity opt-in metadata; defaults are
+/// safe (no aliases, chat-modality-less, no homepage) and entries opt in
+/// via the `with_*` const builders.
+#[derive(Debug, Clone, Copy)]
 pub struct GenerationPreset {
+    // ── Required identity / routing ──────────────────────────────────────────
     /// Provider type identifier (e.g., "openai", "stability")
     pub provider_type: &'static str,
     /// Default model for the provider
     pub default_model: &'static str,
     /// Default base URL (None means provider-specific SDK default)
     pub base_url: Option<&'static str>,
+
+    // ── hermes-parity extensions (opt-in, zero-cost defaults) ────────────────
+    /// Modalities this preset can serve. Defaults to empty (callers must
+    /// opt in via `.with_modalities(&[..])`) — unlike chat presets,
+    /// generation presets cover heterogeneous modalities (image / video /
+    /// music / speech / transcription) with no single sensible default.
+    pub modalities: &'static [Modality],
+    /// Human-friendly display name; falls back to canonical preset name.
+    pub display_name: Option<&'static str>,
+    /// One-line description shown alongside display_name.
+    pub description: Option<&'static str>,
+    /// Vendor docs / landing URL.
+    pub homepage: Option<&'static str>,
+    /// Vendor signup / API-key flow URL.
+    pub signup_url: Option<&'static str>,
+}
+
+impl Default for GenerationPreset {
+    fn default() -> Self {
+        Self {
+            provider_type: "",
+            default_model: "",
+            base_url: None,
+            modalities: &[],
+            display_name: None,
+            description: None,
+            homepage: None,
+            signup_url: None,
+        }
+    }
+}
+
+impl GenerationPreset {
+    /// Const factory for the required three-tuple; extensions stay defaulted.
+    pub const fn new(
+        provider_type: &'static str,
+        default_model: &'static str,
+        base_url: Option<&'static str>,
+    ) -> Self {
+        Self {
+            provider_type,
+            default_model,
+            base_url,
+            modalities: &[],
+            display_name: None,
+            description: None,
+            homepage: None,
+            signup_url: None,
+        }
+    }
+
+    pub const fn with_modalities(mut self, modalities: &'static [Modality]) -> Self {
+        self.modalities = modalities;
+        self
+    }
+
+    pub const fn with_display(mut self, name: &'static str) -> Self {
+        self.display_name = Some(name);
+        self
+    }
+
+    pub const fn with_description(mut self, desc: &'static str) -> Self {
+        self.description = Some(desc);
+        self
+    }
+
+    pub const fn with_homepage(mut self, url: &'static str) -> Self {
+        self.homepage = Some(url);
+        self
+    }
+
+    pub const fn with_signup(mut self, url: &'static str) -> Self {
+        self.signup_url = Some(url);
+        self
+    }
 }
 
 /// Look up rich metadata for a generation preset by name.
@@ -31,18 +117,14 @@ pub fn generation_metadata(name: &str) -> Option<&'static ProviderMetadata> {
 
 /// All generation preset names (sorted) that serve the requested modality.
 ///
-/// Presets without a metadata entry are excluded — generation providers
-/// must opt in explicitly (unlike chat, which defaults to `Chat`-only).
+/// Reads directly from `preset.modalities`. Presets that don't declare any
+/// modality (default state) are excluded — generation presets must opt in
+/// explicitly (unlike chat presets, which default to `Modality::Chat`).
 pub fn generation_presets_by_modality(modality: Modality) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = PRESETS
-        .keys()
-        .copied()
-        .filter(|name| {
-            GENERATION_METADATA
-                .get(*name)
-                .map(|m| m.supports(modality))
-                .unwrap_or(false)
-        })
+        .iter()
+        .filter(|(_, preset)| preset.modalities.contains(&modality))
+        .map(|(name, _)| *name)
         .collect();
     out.sort_unstable();
     out

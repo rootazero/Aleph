@@ -638,18 +638,23 @@ pub async fn handle_test_connection(
 
 /// `generation_providers.list_presets` — return the authoritative preset
 /// catalogue (id, provider_type, default_model, base_url, display_name,
-/// modalities, homepage, notes) joined from `PRESETS` + `GENERATION_METADATA`.
+/// modalities, homepage, notes, signup_url) read off the unified
+/// `GenerationPreset` (Phase 2 fold removed the parallel metadata map).
 ///
 /// Stateless. Panel consumes this to render the preset-card grid; the panel
 /// no longer keeps a parallel hard-coded registry. Entries without metadata
-/// are skipped (modality unknown ⇒ can't decide which category tab to show).
+/// (i.e. zero declared modalities) are skipped — `modality unknown` means
+/// the catalog can't decide which category tab to show.
 pub async fn handle_list_presets(request: JsonRpcRequest) -> JsonRpcResponse {
     let mut items: Vec<serde_json::Value> = PRESETS
         .iter()
         .filter_map(|(id, preset)| {
             let meta = generation_metadata(id)?;
+            if preset.modalities.is_empty() {
+                return None;
+            }
             let modalities: Vec<&'static str> =
-                meta.modalities.iter().map(|m| m.as_str()).collect();
+                preset.modalities.iter().map(|m| m.as_str()).collect();
             Some(serde_json::json!({
                 "id": id,
                 "provider_type": preset.provider_type,
@@ -659,6 +664,7 @@ pub async fn handle_list_presets(request: JsonRpcRequest) -> JsonRpcResponse {
                 "modalities": modalities,
                 "homepage": meta.homepage,
                 "notes": meta.notes,
+                "signup_url": preset.signup_url,
             }))
         })
         .collect();
