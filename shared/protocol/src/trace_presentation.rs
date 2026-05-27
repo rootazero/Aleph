@@ -408,6 +408,30 @@ pub fn present_agent_trace_event(
             /* observability passthrough — no presentation */
             None
         }
+
+        AgentTraceEvent::ReactiveCompactionAttempted {
+            token_gap,
+            succeeded,
+        } => {
+            let status = if *succeeded {
+                AgentTracePresentationStatus::Success
+            } else {
+                AgentTracePresentationStatus::Failed
+            };
+            let gap = token_gap
+                .map(|g| format!(" (gap={g}t)"))
+                .unwrap_or_default();
+            Some(AgentTracePresentation {
+                kind: event.kind().into(),
+                status,
+                content: format!(
+                    "reactive compaction {}{}",
+                    if *succeeded { "rescued" } else { "exhausted" },
+                    gap,
+                ),
+                duration_ms: None,
+            })
+        }
     }
 }
 

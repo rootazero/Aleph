@@ -154,6 +154,13 @@ pub enum TerminateReason {
     /// distinct from `Completed` (clean exit) and `EmptyResponseExhausted`
     /// (no content at all).
     MaxOutputTokensExhausted,
+    /// The provider returned a context-window overflow (`prompt_too_long`
+    /// / 413) and the harness attempted reactive compaction, but either
+    /// the rescue retry still overflowed or no compactor was wired. The
+    /// `RetryVerdict::CompactAndRetry` path used to leak into
+    /// `HarnessError::Llm` before this variant existed — see the wiring
+    /// in `harness::agent::think::try_reactive_compact_and_retry`.
+    ReactiveCompactExhausted,
     /// `CancellationToken` fired before the loop reached `Done`.
     Cancelled,
     /// A budget cap (`HitMaxIterations` / `ContextBudgetExhausted` /
@@ -197,6 +204,7 @@ impl TerminateReason {
             Self::EmptyResponseExhausted => "empty_response_exhausted",
             Self::StopHookHalt { .. } => "stop_hook_halt",
             Self::MaxOutputTokensExhausted => "max_output_tokens_exhausted",
+            Self::ReactiveCompactExhausted => "reactive_compact_exhausted",
             Self::Cancelled => "cancelled",
             Self::BudgetExhaustedPartialResult { .. } => "budget_exhausted_partial_result",
         }

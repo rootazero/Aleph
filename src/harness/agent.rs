@@ -22,7 +22,7 @@
 //!   * `guardrails.rs` — `apply_input_guardrail`, `apply_tool_call_guardrail`
 //!   * `prompt.rs` — `build_prompt` (sync per-turn message assembler)
 
-use crate::sync_primitives::{AtomicBool, AtomicU64, Mutex, Ordering};
+use crate::sync_primitives::{AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -112,6 +112,16 @@ pub struct AgentHarness {
     /// same deterministically-failing call (e.g. `web_fetch` against a
     /// sandbox-blocked URL or a quota-exhausted API).
     pub(super) recent_failures: Mutex<std::collections::HashSet<(String, String)>>,
+    /// Counter for reactive-compaction rescue attempts (claude-code parity,
+    /// query.ts:1092). When a provider returns `prompt_too_long` / 413, the
+    /// harness consults [`crate::providers::llm_retry::classify`]; on the
+    /// `CompactAndRetry` verdict it calls `context_compactor` and retries
+    /// the LLM call ONCE per run. The atomic is bumped *before* the rescue
+    /// attempt so concurrent paths cannot race past the cap. Capped at
+    /// `MAX_REACTIVE_COMPACT_ATTEMPTS` (1) — repeated overflows after
+    /// summarisation indicate fundamentally oversized input rather than a
+    /// recoverable burst. R10-safe: pure round scheduling, no policy choice.
+    pub(super) reactive_compact_attempts: AtomicU32,
 }
 
 impl AgentHarness {
@@ -131,7 +141,27 @@ impl AgentHarness {
             started_at: OnceLock::new(),
             final_session_id: Mutex::new(None),
             recent_failures: Mutex::new(std::collections::HashSet::new()),
+            reactive_compact_attempts: AtomicU32::new(0),
         }
+    }
+
+    /// Atomically reserve one reactive-compaction rescue slot. Returns
+    /// `true` exactly once per run (the cap is
+    /// `MAX_REACTIVE_COMPACT_ATTEMPTS = 1`); subsequent callers see `false`
+    /// and must surface the original provider error. `compare_exchange` so
+    /// concurrent paths cannot both reserve under high concurrency.
+    pub(super) fn try_reserve_reactive_compact(&self) -> bool {
+        self.reactive_compact_attempts
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Test-only: read the rescue counter without mutating it. Returns the
+    /// number of attempts reserved by `try_reserve_reactive_compact` (0 or
+    /// 1 in the current cap regime).
+    #[cfg(test)]
+    pub(super) fn reactive_compact_attempts_for_tests(&self) -> u32 {
+        self.reactive_compact_attempts.load(Ordering::Acquire)
     }
 
     /// Cross-batch dedup probe. `true` when an identical `(tool_name,

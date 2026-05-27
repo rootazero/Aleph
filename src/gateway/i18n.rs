@@ -234,6 +234,16 @@ pub fn render_loop_halt(
              {tool_calls} tool calls)."
         ),
 
+        (TerminateReason::ReactiveCompactExhausted, Locale::Zh) => format!(
+            "抱歉，上下文已超出窗口，自动压缩后仍无法恢复（{iterations} 次迭代）。\n\
+             请精简历史或新开会话。"
+        ),
+        (TerminateReason::ReactiveCompactExhausted, Locale::En) => format!(
+            "Sorry, the prompt exceeded the model's context window and reactive \
+             compaction did not recover it ({iterations} iterations).\n\
+             Trim the conversation history or start a new session."
+        ),
+
         // Completed and Cancelled should never reach here — callers gate on
         // `is_hit_limit()`. Fall back to a generic so we never panic in prod.
         // (`TerminateReason` is `#[non_exhaustive]` for downstream crates but

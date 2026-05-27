@@ -153,6 +153,34 @@ fn estimate_tool_schema_tokens(
         .sum()
 }
 
+/// Build a fresh `RequestPayload` borrowing the current message vec, system
+/// prompt, and tool schema. Extracted to a free function (was a stack-local
+/// closure capturing `&messages`) so the reactive-compaction rescue can take
+/// `&mut messages` between consecutive LLM calls without NLL conflicts. The
+/// returned payload's references stay alive only for the duration of the
+/// awaited `.process()` call; once dropped, `messages` is freely mutable
+/// again.
+fn build_request_payload<'a>(
+    system_prompt: Option<&'a str>,
+    messages: &'a [UnifiedMessage],
+    tools_ref: Option<&'a [crate::tool_metadata::ToolDefinition]>,
+) -> RequestPayload<'a> {
+    match system_prompt {
+        Some(sp) => RequestPayload::new(messages)
+            .with_system(Some(sp))
+            .with_tools(tools_ref),
+        None => RequestPayload::new(messages).with_tools(tools_ref),
+    }
+}
+
+/// Hard cap on reactive-compaction rescue attempts per harness run. The
+/// classifier yielded `CompactAndRetry { token_gap }` and the harness ran
+/// `context_compactor.compact()` on the local message vec; one retry is
+/// enough — repeated overflows after summarisation mean the input is
+/// fundamentally too large rather than a recoverable burst. Mirrors
+/// claude-code's "already attempted" single-shot guard (query.ts:1092).
+const MAX_REACTIVE_COMPACT_ATTEMPTS: u32 = 1;
+
 impl AgentHarness {
     /// Internal turn execution with pre-computed counters to avoid O(n²)
     /// event-log scans in the outer loop.
@@ -433,14 +461,12 @@ impl AgentHarness {
                 Some(metadata_tools.as_ref())
             };
 
-        // Build the request fresh on each call — H3's empty-response retry
-        // re-issues it, and `RequestPayload` is a cheap borrow of `messages`.
-        let build_payload = || match self.deps.system_prompt.as_deref() {
-            Some(sp) => RequestPayload::new(&messages)
-                .with_system(Some(sp))
-                .with_tools(tools_ref),
-            None => RequestPayload::new(&messages).with_tools(tools_ref),
-        };
+        // The request payload is rebuilt fresh on each call — H3's
+        // empty-response retry re-issues it, and the rescue helper may
+        // mutate `messages` via the compactor between calls. The dedicated
+        // `build_request_payload` free function (above) avoids the
+        // closure-borrows-messages NLL conflict that would otherwise block
+        // `&mut messages` inside `try_reactive_compact_and_retry`.
 
         self.emit(|| crate::harness::trace::LoopTraceEvent::TurnStateEntered {
             iteration: iterations,
@@ -452,16 +478,31 @@ impl AgentHarness {
         // breaker — lives inside `deps.llm` itself (`providers::FailoverProvider`),
         // so the harness simply propagates whatever error survives it.
         let started = std::time::Instant::now();
+        let payload = build_request_payload(
+            self.deps.system_prompt.as_deref(),
+            &messages,
+            tools_ref,
+        );
         let mut response = match self
-            .race_llm_call(
-                self.deps.llm.process(build_payload()),
-                parent_cancel,
-                started,
-            )
+            .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
             .await?
         {
             Ok(r) => r,
-            Err(primary_err) => return Err(HarnessError::Llm(primary_err)),
+            Err(primary_err) => {
+                // Reactive-compaction rescue (Phase A): when the classifier
+                // tags the error as `CompactAndRetry`, summarise `messages`
+                // and retry once. Returns `Err(HarnessError::Llm)` when the
+                // verdict is anything else (transparent passthrough).
+                self.try_reactive_compact_and_retry(
+                    primary_err,
+                    session_id,
+                    &mut messages,
+                    tools_ref,
+                    parent_cancel,
+                    started,
+                )
+                .await?
+            }
         };
 
         // 3a. Empty-response guard (H3). A response with no text, no
@@ -478,16 +519,31 @@ impl AgentHarness {
                 empty_retries,
                 "provider returned an empty response; retrying",
             );
+            let retry_payload = build_request_payload(
+                self.deps.system_prompt.as_deref(),
+                &messages,
+                tools_ref,
+            );
             response = match self
                 .race_llm_call(
-                    self.deps.llm.process(build_payload()),
+                    self.deps.llm.process(retry_payload),
                     parent_cancel,
                     started,
                 )
                 .await?
             {
                 Ok(r) => r,
-                Err(primary_err) => return Err(HarnessError::Llm(primary_err)),
+                Err(primary_err) => {
+                    self.try_reactive_compact_and_retry(
+                        primary_err,
+                        session_id,
+                        &mut messages,
+                        tools_ref,
+                        parent_cancel,
+                        started,
+                    )
+                    .await?
+                }
             };
         }
         if is_empty_response(&response) {
@@ -527,20 +583,31 @@ impl AgentHarness {
                 messages.push(UnifiedMessage::assistant(partial));
             }
             messages.push(UnifiedMessage::user(MAX_OUTPUT_TOKENS_RESUME_NUDGE));
-            // Inline payload construction — see comment above for why this
-            // doesn't reuse `build_payload`.
-            let payload = match self.deps.system_prompt.as_deref() {
-                Some(sp) => RequestPayload::new(&messages)
-                    .with_system(Some(sp))
-                    .with_tools(tools_ref),
-                None => RequestPayload::new(&messages).with_tools(tools_ref),
-            };
+            let payload = build_request_payload(
+                self.deps.system_prompt.as_deref(),
+                &messages,
+                tools_ref,
+            );
             response = match self
                 .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
                 .await?
             {
                 Ok(r) => r,
-                Err(primary_err) => return Err(HarnessError::Llm(primary_err)),
+                Err(primary_err) => {
+                    // Even mid-recovery, a `prompt_too_long` may slip
+                    // through after the resume nudge — rescue applies the
+                    // same way; on non-overflow errors the helper returns
+                    // the wrapped error unchanged.
+                    self.try_reactive_compact_and_retry(
+                        primary_err,
+                        session_id,
+                        &mut messages,
+                        tools_ref,
+                        parent_cancel,
+                        started,
+                    )
+                    .await?
+                }
             };
         }
         if matches!(
@@ -808,6 +875,143 @@ impl AgentHarness {
             metrics: metrics_for_trace,
         });
         result
+    }
+
+    /// Reactive-compaction rescue (Phase A — claude-code parity,
+    /// query.ts:1092-1162; codex `mid-turn auto-compact` parity).
+    ///
+    /// When the LLM call returned a provider error, classify it via
+    /// [`crate::providers::llm_retry::classify`]. If the verdict is
+    /// `RetryVerdict::CompactAndRetry { token_gap }`, run
+    /// `context_compactor.compact()` on the in-flight `messages` vec and
+    /// retry the LLM call ONCE. On any other verdict — or if the
+    /// compactor is not wired, the rescue cap is already exhausted, the
+    /// compactor itself fails, or the retried call still errors — return
+    /// the wrapped error so the caller surfaces it.
+    ///
+    /// This closes the dead wire flagged at `failover.rs:183` ("the
+    /// harness context-compactor owns this recovery path") — before this
+    /// helper existed the verdict was generated but no harness path
+    /// consumed it.
+    ///
+    /// R10 discipline: the helper is **scaffolding** — it picks no policy
+    /// and makes no judgements. The decision to retry is fully encoded in
+    /// the classifier verdict; the helper just dispatches the
+    /// pre-existing compactor on the pre-existing message vec and emits
+    /// one trace event for observability.
+    async fn try_reactive_compact_and_retry(
+        &self,
+        primary_err: crate::error::AlephError,
+        session_id: &SessionId,
+        messages: &mut Vec<UnifiedMessage>,
+        tools_ref: Option<&[crate::tool_metadata::ToolDefinition]>,
+        parent_cancel: &CancellationToken,
+        started: std::time::Instant,
+    ) -> Result<ProviderResponse, HarnessError> {
+        use crate::providers::llm_retry::{classify, RetryVerdict};
+
+        // 1. Classify. Anything that isn't `CompactAndRetry` is a clean
+        //    pass-through — preserve the original error so the orchestrator
+        //    sees identical pre-rescue semantics.
+        let token_gap = match classify(&primary_err.to_string()) {
+            RetryVerdict::CompactAndRetry { token_gap } => token_gap,
+            _ => return Err(HarnessError::Llm(primary_err)),
+        };
+
+        // 2. The compactor must be wired AND we must still have a rescue
+        //    slot. `try_reserve_reactive_compact` is a one-shot
+        //    `compare_exchange` so concurrent paths can never both rescue.
+        let Some(compactor) = self.deps.context_compactor.as_ref() else {
+            self.emit(|| crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                token_gap,
+                succeeded: false,
+            });
+            self.set_terminate_reason(
+                crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+            );
+            return Err(HarnessError::Llm(primary_err));
+        };
+        if !self.try_reserve_reactive_compact() {
+            tracing::warn!(
+                ?session_id,
+                MAX_REACTIVE_COMPACT_ATTEMPTS,
+                "reactive-compaction rescue cap reached; surfacing original error",
+            );
+            self.emit(|| crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                token_gap,
+                succeeded: false,
+            });
+            self.set_terminate_reason(
+                crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+            );
+            return Err(HarnessError::Llm(primary_err));
+        }
+
+        // 3. Run the compactor on the in-flight message vec. Failure here
+        //    is fail-soft: the original provider error is what the user
+        //    needs to see, the compactor's own error is secondary noise.
+        tracing::warn!(
+            ?session_id,
+            ?token_gap,
+            "provider hit context overflow; running reactive compaction",
+        );
+        let session_id_str = session_id.to_string();
+        if let Err(e) = compactor
+            .compact(messages, 0, Some(session_id_str.as_str()))
+            .await
+        {
+            tracing::warn!(
+                ?session_id,
+                error = %e,
+                "reactive compactor failed; surfacing original provider error",
+            );
+            self.emit(|| crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                token_gap,
+                succeeded: false,
+            });
+            self.set_terminate_reason(
+                crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+            );
+            return Err(HarnessError::Llm(primary_err));
+        }
+
+        // 4. Retry the LLM call once with the summarised history.
+        let payload = build_request_payload(
+            self.deps.system_prompt.as_deref(),
+            messages,
+            tools_ref,
+        );
+        match self
+            .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
+            .await?
+        {
+            Ok(resp) => {
+                self.emit(|| {
+                    crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                        token_gap,
+                        succeeded: true,
+                    }
+                });
+                Ok(resp)
+            }
+            Err(retry_err) => {
+                tracing::warn!(
+                    ?session_id,
+                    error = %retry_err,
+                    "reactive-compaction retry still failed; surfacing retry error",
+                );
+                self.emit(|| {
+                    crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                        token_gap,
+                        succeeded: false,
+                    }
+                });
+                self.set_terminate_reason(
+                    crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
+                );
+                Err(HarnessError::Llm(retry_err))
+            }
+        }
     }
 
     /// Race a single LLM call against `parent_cancel` and the optional

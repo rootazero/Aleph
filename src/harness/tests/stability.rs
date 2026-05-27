@@ -336,6 +336,7 @@ async fn recording_sink_captures_full_lifecycle() {
             LoopTraceEvent::McpScopeAttached { .. } => "McpScopeAttached",
             LoopTraceEvent::McpScopeCleaned { .. } => "McpScopeCleaned",
             LoopTraceEvent::ProviderUsage { .. } => "ProviderUsage",
+            LoopTraceEvent::ReactiveCompactionAttempted { .. } => "ReactiveCompactionAttempted",
         })
         .collect();
     // 2 turns: tool turn + final text turn. Then SessionCompleted.

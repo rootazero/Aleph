@@ -105,6 +105,18 @@ pub enum LoopTraceEvent {
         cache_creation_tokens: Option<u32>,
         thinking_tokens: Option<u32>,
     },
+    /// Harness attempted reactive compaction in response to a provider
+    /// `prompt_too_long` / 413 error and retried the LLM call once with a
+    /// summarised history. `token_gap` is the reported overflow when the
+    /// provider error string carried one (often `None` for non-Anthropic
+    /// providers). `succeeded` is `true` when the retry produced a usable
+    /// response; `false` when the compactor was not wired, the rescue
+    /// attempt cap was hit, or the retried call still errored. Pairs with
+    /// [`crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted`].
+    ReactiveCompactionAttempted {
+        token_gap: Option<usize>,
+        succeeded: bool,
+    },
 }
 
 /// Kind of text stream
@@ -317,6 +329,13 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                 cache_read_tokens,
                 cache_creation_tokens,
                 thinking_tokens,
+            },
+            LoopTraceEvent::ReactiveCompactionAttempted {
+                token_gap,
+                succeeded,
+            } => aleph_protocol::AgentTraceEvent::ReactiveCompactionAttempted {
+                token_gap,
+                succeeded,
             },
         }
     }

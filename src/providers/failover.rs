@@ -179,7 +179,11 @@ fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
     let can_retry = attempt < max_retries;
 
     match classify_exhausted(&msg) {
-        // 413 — the harness context-compactor owns this recovery path.
+        // 413 — the harness owns this recovery path via
+        // `AgentHarness::try_reactive_compact_and_retry` (see
+        // `harness::agent::think`). The failover layer stops so the
+        // verdict reaches the harness intact instead of being swallowed
+        // by sibling-provider attempts that would hit the same overflow.
         RetryVerdict::CompactAndRetry { .. } => Decision::Stop,
         RetryVerdict::Fallback { reason } => {
             if reason.starts_with("model not found") {

@@ -310,6 +310,16 @@ pub enum AgentTraceEvent {
         cache_creation_tokens: Option<u32>,
         thinking_tokens: Option<u32>,
     },
+    /// Reactive-compaction rescue fired in response to a provider
+    /// `prompt_too_long` / 413 error. `token_gap` is the reported overflow
+    /// when the error carried one; `succeeded` is `true` only if the
+    /// post-compaction retry produced a usable response. See
+    /// `harness::agent::think::try_reactive_compact_and_retry`.
+    ReactiveCompactionAttempted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_gap: Option<usize>,
+        succeeded: bool,
+    },
 }
 
 impl AgentTraceEvent {
@@ -328,6 +338,7 @@ impl AgentTraceEvent {
             Self::McpScopeAttached { .. } => "mcp_scope_attached",
             Self::McpScopeCleaned { .. } => "mcp_scope_cleaned",
             Self::ProviderUsage { .. } => "provider_usage",
+            Self::ReactiveCompactionAttempted { .. } => "reactive_compaction_attempted",
         }
     }
 }

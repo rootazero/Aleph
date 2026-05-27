@@ -25,6 +25,7 @@ mod tests {
     mod driver;
     mod guardrails;
     mod prompt;
+    mod reactive_compaction;
     mod stability;
     mod task10_wiring;
     mod think;
