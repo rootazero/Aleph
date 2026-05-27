@@ -5,12 +5,14 @@
 
 pub mod aggregator;
 pub mod inbox;
+pub mod mentions;
 pub mod router;
 pub mod store;
 pub mod types;
 
 pub use aggregator::{Aggregator, AggregatorConfig};
 pub use inbox::Inbox;
+pub use mentions::{extract_mentions, MENTION_ALL};
 pub use router::{EscalationRule, MessageRouter, SendRequest};
 pub use store::{MessageStore, SqliteMessageStore};
 pub use types::{MessageType, NewMessage, Recipient, RecipientRole, TeamMessage};
