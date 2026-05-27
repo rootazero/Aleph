@@ -1,8 +1,10 @@
 //! Teams Tab (top-level panel mode).
 //!
-//! Houses four sub-views:
+//! Houses five sub-views:
 //! - Overview: existing collapsible team-cards list (migrated from /dashboard/teams)
 //! - Kanban: 5-column task board over CoordTask
+//! - Plan: read-only layered DAG of CoordTask dependencies — visualises
+//!   the same tasks the Kanban edits, ordered by `dependencies` depth.
 //! - Replay: R3 unified audit timeline (runs + comments + events + artifacts
 //!   + exit journal) per task — the read-side surface of the `task_exit_journal`
 //!   builtin tool and `teams.task.trace` RPC.
@@ -10,12 +12,13 @@
 //!   surfaces external coding agents (Claude Code / Codex / Gemini /
 //!   custom) as first-class workers visible to humans.
 //!
-//! A small sidebar lets the user pick between the four sub-views and
-//! select the active team for the kanban / replay panes.
+//! A small sidebar lets the user pick between the five sub-views and
+//! select the active team for the kanban / plan / replay panes.
 
 pub mod components;
 pub mod kanban;
 pub mod overview;
+pub mod plan_dag;
 pub mod replay;
 pub mod workers;
 
@@ -30,6 +33,7 @@ use leptos::task::spawn_local;
 pub enum TeamsSubTab {
     Overview,
     Kanban,
+    Plan,
     Replay,
     Workers,
 }
@@ -79,6 +83,7 @@ pub fn TeamsView() -> impl IntoView {
             {move || match tab_state.sub_tab.get() {
                 TeamsSubTab::Overview => view! { <overview::OverviewView /> }.into_any(),
                 TeamsSubTab::Kanban => view! { <kanban::KanbanView /> }.into_any(),
+                TeamsSubTab::Plan => view! { <plan_dag::PlanDagView /> }.into_any(),
                 TeamsSubTab::Replay => view! { <replay::ReplayView /> }.into_any(),
                 TeamsSubTab::Workers => view! { <workers::WorkersView /> }.into_any(),
             }}
@@ -109,6 +114,11 @@ pub fn TeamsSidebar() -> impl IntoView {
                     label=Signal::derive(move || t_string!(i18n, teams.subtab.kanban).to_string())
                     current=tab_state.sub_tab
                     target=TeamsSubTab::Kanban
+                />
+                <SubTabButton
+                    label=Signal::derive(|| "Plan".to_string())
+                    current=tab_state.sub_tab
+                    target=TeamsSubTab::Plan
                 />
                 <SubTabButton
                     label=Signal::derive(|| "Replay".to_string())
