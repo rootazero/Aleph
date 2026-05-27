@@ -58,12 +58,16 @@ pub struct CronConfig {
     /// run as a `RunRequest.max_iterations_override`, overriding the global
     /// `[execution] max_iterations` default (1000) for system-initiated jobs
     /// without affecting interactive sessions. `None` disables the cron
-    /// cap and falls through to the global default. Default `Some(40)` —
-    /// raised from `Some(20)` in 2026-05 to give scheduled jobs enough budget
-    /// to climb the web-research fallback ladder (search → web_fetch canonical
-    /// → web_fetch alternate → browser tooling) before exhausting iterations.
-    /// 20 was empirically too tight for briefing-style tasks that need to
-    /// switch sources after a 401/403/timeout from the first one.
+    /// cap and falls through to the global default. Default `Some(200)` —
+    /// raised from `Some(40)` in 2026-05-27 because 40 was still too tight
+    /// for real-world briefing tasks: a single web-research run that has to
+    /// (a) climb the fallback ladder (`search` → `web_fetch` canonical →
+    /// `web_fetch` alternate → browser tooling) AND (b) cross-reference
+    /// 3-5 sources AND (c) assemble a structured report can easily burn
+    /// 60-120 tool calls before producing useful output. `200` keeps a hard
+    /// guardrail for runaway loops while honouring the project doctrine
+    /// that Aleph is a 24/7 background daemon — scheduled jobs should
+    /// silently persevere in the background rather than fold early.
     #[serde(default = "default_cron_max_iterations")]
     pub default_max_iterations: Option<u32>,
 }
@@ -85,7 +89,16 @@ fn default_max_concurrent() -> usize {
 }
 
 fn default_job_timeout() -> u64 {
-    300 // 5 minutes
+    // 15 minutes. Coupled to `default_cron_max_iterations = Some(200)`:
+    // a 200-iter run averaging ~3s/turn lands around 10 min, so 15 min
+    // gives ~50% headroom before wall-clock kills the job. Raised from
+    // 300s (5 min) in 2026-05-27 alongside the iter-cap bump — 5 min
+    // was the choke point that fired BEFORE the iter-cap during the
+    // fallback-ladder + multi-source-synthesis runs that the iter-cap
+    // bump targets. Per-job overrides via `CronJob.timeout_ms` remain
+    // the escape hatch for either tighter (ping/heartbeat jobs) or
+    // looser (deep research) budgets.
+    900
 }
 
 fn default_history_retention() -> u32 {
@@ -97,7 +110,7 @@ fn default_max_concurrent_agents() -> Option<usize> {
 }
 
 fn default_cron_max_iterations() -> Option<u32> {
-    Some(40)
+    Some(200)
 }
 
 impl Default for CronConfig {
@@ -107,7 +120,7 @@ impl Default for CronConfig {
             db_path: default_db_path(),
             check_interval_secs: 60,
             max_concurrent_jobs: 5,
-            job_timeout_secs: 300,
+            job_timeout_secs: 900,
             history_retention_days: 30,
             max_concurrent_agents: Some(2),
             max_missed_jobs_per_restart: None,
@@ -440,12 +453,12 @@ impl CronJob {
     /// Effective per-job execution timeout in milliseconds.
     ///
     /// Returns this job's `timeout_ms` override when set, else falls back to
-    /// the 5-minute baseline (matches `CronConfig::job_timeout_secs`'s default).
+    /// the 15-minute baseline (matches `CronConfig::job_timeout_secs`'s default).
     /// Used by the catchup stale-marker threshold; runtime execution gets the
     /// timeout via `JobSnapshot.timeout_ms` threaded by `phase1_mark_due_jobs`,
     /// which honours the per-job override against the *configured* default.
     pub fn effective_timeout_ms(&self) -> i64 {
-        self.timeout_ms.unwrap_or(300_000)
+        self.timeout_ms.unwrap_or(900_000)
     }
 
     /// Construct a generic `DeliveryPayload` from this job and its output.
@@ -694,6 +707,21 @@ mod tests {
         assert_eq!(config.check_interval_secs, 60);
         assert_eq!(config.max_concurrent_jobs, 5);
         assert_eq!(config.max_concurrent_agents, Some(2));
+        // The 24/7-daemon perseverance contract: scheduled jobs get a
+        // generous iter cap AND wall-clock budget so the prompt-driven
+        // fallback ladder (search → web_fetch alt → browser) can actually
+        // play out before the job is killed. Lowering either of these
+        // below the values asserted here re-introduces the early-fold
+        // bug fixed in 2026-05-27 — touch with intent.
+        assert_eq!(
+            config.default_max_iterations,
+            Some(200),
+            "cron iter cap is the 24/7-daemon perseverance contract"
+        );
+        assert_eq!(
+            config.job_timeout_secs, 900,
+            "cron wall-clock must outlive the iter cap"
+        );
     }
 
     #[test]
@@ -845,7 +873,7 @@ mod tests {
         assert_eq!(job.schedule_kind, kind);
         assert_eq!(job.session_target, SessionTarget::Isolated);
         assert!(job.timeout_ms.is_none(), "new jobs have no timeout override");
-        assert_eq!(job.effective_timeout_ms(), 300_000);
+        assert_eq!(job.effective_timeout_ms(), 900_000);
 
         let mut overridden = job.clone();
         overridden.timeout_ms = Some(600_000);
