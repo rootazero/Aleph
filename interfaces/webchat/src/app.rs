@@ -25,8 +25,10 @@ use crate::components::command_palette::CommandPalette;
 use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
 use crate::components::notification_center::NotificationCenter;
 use crate::components::service_blocking_gate::ServiceBlockingGate;
+use crate::components::tool_renderer::ToolRendererRegistry;
 use crate::context::{DashboardContext, DashboardState};
 use crate::state::hotkey::{self as hotkey, HotkeyState};
+use crate::state::layout::WorkspaceState;
 use crate::state::notifications::NotificationsState;
 use crate::views::chat::ChatState;
 
@@ -52,6 +54,16 @@ fn AppContent() -> impl IntoView {
     // Chat state lives above both the chat sidebar (left column) and the
     // chat view (main area) so they share one session / agent selection.
     provide_context(ChatState::new());
+
+    // Workspace pane state — UI-TARS-parity. ChatOnly is the default so
+    // legacy users see zero UI change; the LayoutToggle in the composer
+    // opens Split mode on demand. Persisted in localStorage.
+    provide_context(WorkspaceState::new());
+
+    // Tool-renderer dispatch table. Built once with the default palette
+    // (code / search / json-fallback); future renderers register by
+    // extending the constructor.
+    provide_context(ToolRendererRegistry::with_builtins());
 
     // Hotkey state — owns the ⌘K command-palette open signal. Installed
     // *before* the keydown listener below so the listener can read it.

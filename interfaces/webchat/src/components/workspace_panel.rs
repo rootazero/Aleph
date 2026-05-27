@@ -1,0 +1,207 @@
+//! Workspace pane — the right-side surface that opens when
+//! [`LayoutMode::Split`] is active.
+//!
+//! Decides what to render based on [`WorkspaceContent`]:
+//!
+//! - `Empty`     — hero placeholder
+//! - `ToolDetail` — looks the tool entry up in `ChatState.messages` and
+//!                  dispatches it through the [`ToolRendererRegistry`]
+//! - `Notes`     — read-only markdown preview of the freeform scratchpad
+//!
+//! Mount is conditional in `app.rs`: only when chat mode is active AND
+//! `LayoutMode::Split` is set, the panel slides in as a flex sibling of
+//! the chat surface.
+
+use crate::components::markdown::MarkdownRenderer;
+use crate::components::tool_renderer::ToolRendererRegistry;
+use crate::state::layout::{LayoutMode, WorkspaceContent, WorkspaceState};
+use crate::views::chat::state::{ChatState, ToolCallEntry};
+use leptos::prelude::*;
+
+/// Workspace pane root. Renders nothing when [`LayoutMode::ChatOnly`].
+#[component]
+pub fn WorkspacePanel() -> impl IntoView {
+    let workspace = expect_context::<WorkspaceState>();
+
+    view! {
+        <Show when=move || workspace.mode.get() == LayoutMode::Split>
+            <aside class="aleph-workspace-pane flex flex-col h-full
+                           border-l border-border bg-surface-base/40
+                           min-w-[280px] basis-[66%] shrink overflow-hidden">
+                <WorkspaceHeader />
+                <div class="flex-1 overflow-y-auto px-4 py-3">
+                    <WorkspaceBody />
+                </div>
+            </aside>
+        </Show>
+    }
+}
+
+/// Sticky header — title chip + close button (collapses Split → ChatOnly).
+#[component]
+fn WorkspaceHeader() -> impl IntoView {
+    let workspace = expect_context::<WorkspaceState>();
+    view! {
+        <div class="flex items-center justify-between gap-2 px-4 py-2
+                    border-b border-border/60">
+            <div class="flex items-center gap-2 text-xs uppercase
+                        tracking-wider text-text-tertiary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5"
+                     viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/>
+                    <line x1="9" y1="3" x2="9" y2="21"/>
+                </svg>
+                <span>"Workspace"</span>
+                <span class="text-text-tertiary/60">
+                    {move || workspace_content_label(&workspace.content.get())}
+                </span>
+            </div>
+            <button
+                class="p-1 rounded-md text-text-tertiary hover:text-text-primary
+                       hover:bg-surface-sunken transition-colors"
+                title="Close workspace pane"
+                on:click=move |_| workspace.set_layout(LayoutMode::ChatOnly)
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5"
+                     viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+                </svg>
+            </button>
+        </div>
+    }
+}
+
+fn workspace_content_label(content: &WorkspaceContent) -> &'static str {
+    match content {
+        WorkspaceContent::Empty => "· idle",
+        WorkspaceContent::ToolDetail { .. } => "· tool detail",
+        WorkspaceContent::Notes(_) => "· notes",
+    }
+}
+
+#[component]
+fn WorkspaceBody() -> impl IntoView {
+    let workspace = expect_context::<WorkspaceState>();
+    move || match workspace.content.get() {
+        WorkspaceContent::Empty => view! { <WorkspaceEmptyHero /> }.into_any(),
+        WorkspaceContent::ToolDetail { run_id, tool_id } => view! {
+            <ToolDetailView run_id=run_id tool_id=tool_id />
+        }
+        .into_any(),
+        WorkspaceContent::Notes(text) => view! {
+            <div class="prose-aleph max-w-none">
+                <MarkdownRenderer content=text />
+            </div>
+        }
+        .into_any(),
+    }
+}
+
+/// Idle placeholder — invites the user to click a tool chip.
+#[component]
+fn WorkspaceEmptyHero() -> impl IntoView {
+    view! {
+        <div class="h-full flex flex-col items-center justify-center
+                    text-center text-text-tertiary gap-3 py-12 px-6">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-10 h-10 opacity-50"
+                 viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <line x1="9" y1="3" x2="9" y2="21"/>
+                <path d="M14 8h4"/>
+                <path d="M14 12h4"/>
+                <path d="M14 16h4"/>
+            </svg>
+            <p class="text-sm font-medium text-text-secondary">"Workspace pane"</p>
+            <p class="text-xs max-w-[24ch] leading-relaxed">
+                "Click any tool chip in the chat to inspect its call here. "
+                "Switch back to single-column with the toggle in the composer."
+            </p>
+        </div>
+    }
+}
+
+/// Look the tool entry up in `ChatState.messages` and dispatch through
+/// the renderer registry. Falls back to a "not found" notice if the
+/// referenced run / tool_id has been evicted (e.g. user cleared chat).
+#[component]
+fn ToolDetailView(run_id: String, tool_id: String) -> impl IntoView {
+    let chat = expect_context::<ChatState>();
+    let registry = expect_context::<ToolRendererRegistry>();
+    let run_id_for_lookup = run_id.clone();
+    let tool_id_for_lookup = tool_id.clone();
+
+    let entry = Memo::new(move |_| {
+        find_tool_entry(&chat, &run_id_for_lookup, &tool_id_for_lookup)
+    });
+
+    move || match entry.get() {
+        Some(e) => registry.render(&e),
+        None => view! {
+            <div class="flex flex-col gap-2 text-sm text-text-tertiary">
+                <p>"Tool call no longer in session memory."</p>
+                <p class="text-xs">
+                    "run: " <code class="font-mono">{run_id.clone()}</code>
+                </p>
+                <p class="text-xs">
+                    "tool: " <code class="font-mono">{tool_id.clone()}</code>
+                </p>
+            </div>
+        }
+        .into_any(),
+    }
+}
+
+/// Reactive lookup against `ChatState.messages`. The assistant message
+/// for a run is named `assistant-{run_id}`, but for resilience we
+/// fall-through and scan all messages if the canonical id is absent.
+fn find_tool_entry(chat: &ChatState, run_id: &str, tool_id: &str) -> Option<ToolCallEntry> {
+    let messages = chat.messages.get();
+    let canonical_id = format!("assistant-{run_id}");
+    if let Some(msg) = messages.iter().find(|m| m.id == canonical_id) {
+        if let Some(found) = msg.tool_calls.iter().find(|t| t.tool_id == tool_id) {
+            return Some(found.clone());
+        }
+    }
+    messages
+        .iter()
+        .flat_map(|m| m.tool_calls.iter())
+        .find(|t| t.tool_id == tool_id)
+        .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::views::chat::state::ChatMessage;
+
+    fn msg_with_tools(id: &str, tools: Vec<ToolCallEntry>) -> ChatMessage {
+        ChatMessage {
+            id: id.into(),
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: tools,
+            is_streaming: false,
+            is_intermediate: false,
+            error: None,
+            model_info: None,
+        }
+    }
+
+    #[test]
+    fn workspace_content_label_uses_stable_tokens() {
+        assert_eq!(workspace_content_label(&WorkspaceContent::Empty), "· idle");
+        assert_eq!(
+            workspace_content_label(&WorkspaceContent::ToolDetail {
+                run_id: "r".into(),
+                tool_id: "t".into()
+            }),
+            "· tool detail"
+        );
+        assert_eq!(
+            workspace_content_label(&WorkspaceContent::Notes("hi".into())),
+            "· notes"
+        );
+    }
+}

@@ -9,6 +9,7 @@ pub mod connection_status;
 pub mod dashboard_sidebar;
 pub mod directory_browser;
 pub mod forms;
+pub mod layout_toggle;
 pub mod layouts;
 pub mod markdown;
 pub mod mode_sidebar;
@@ -19,7 +20,9 @@ pub mod service_blocking_gate;
 pub mod settings_sidebar;
 pub mod sidebar;
 pub mod theme_toggle;
+pub mod tool_renderer;
 pub mod ui;
+pub mod workspace_panel;
 
 // Re-export layout components
 pub use mode_sidebar::{ModeSidebar, PanelMode};

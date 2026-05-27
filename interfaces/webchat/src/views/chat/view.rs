@@ -8,6 +8,7 @@ use super::composer::InputArea;
 use super::events::subscribe_run_events;
 use super::messages::MessageList;
 use super::state::{ChatState, PendingAttachment};
+use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -91,17 +92,23 @@ pub fn ChatView() -> impl IntoView {
     };
 
     view! {
-        // Transparent — the shell's light-field shows through.
+        // Transparent — the shell's light-field shows through. Outer flex
+        // row hosts the chat surface + optional workspace pane sibling.
         <div
-            class="relative flex flex-col h-full"
+            class="relative flex h-full"
             on:dragover=on_dragover
             on:dragleave=on_dragleave
             on:drop=on_drop
         >
-            // Message list (scrollable) — or the welcome hero when empty
-            <MessageList />
-            // Input area (pinned to bottom)
-            <InputArea />
+            // Chat surface — collapses to 33% when workspace pane is open.
+            <div class="flex flex-col flex-1 min-w-0 h-full">
+                // Message list (scrollable) — or the welcome hero when empty
+                <MessageList />
+                // Input area (pinned to bottom)
+                <InputArea />
+            </div>
+            // Workspace pane — renders only when LayoutMode::Split.
+            <WorkspacePanel />
             // Drop overlay — only visible while a file is hovering.
             <Show when=move || chat.is_dragging_files.get()>
                 <div class="absolute inset-0 z-30 pointer-events-none

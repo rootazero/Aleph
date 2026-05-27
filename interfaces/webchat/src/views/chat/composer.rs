@@ -691,10 +691,14 @@ pub(super) fn InputArea() -> impl IntoView {
 
             // Project + model row — both pickers sit directly above the
             // composer so their dropdowns flip upward (the composer lives at
-            // the viewport bottom; a downward menu would clip).
+            // the viewport bottom; a downward menu would clip). The trailing
+            // LayoutToggle opens / closes the right-hand workspace pane.
             <div class="aleph-project-row flex items-center gap-2 px-1 pb-1">
                 <ProjectMenu />
                 <crate::components::model_picker::ModelPicker />
+                <div class="ml-auto">
+                    <crate::components::layout_toggle::LayoutToggle />
+                </div>
             </div>
 
             // Compact single-row composer — paperclip | textarea | send,

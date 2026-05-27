@@ -7,6 +7,7 @@
 use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState};
 use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
 use crate::i18n::*;
+use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
 
 /// Welcome hero — shown in the message area while a conversation is empty.
@@ -191,6 +192,17 @@ fn SendErrorBanner() -> impl IntoView {
     }
 }
 
+/// Strip the `assistant-` prefix from a message id to recover the run id.
+/// Matches the convention used by [`ChatState::start_assistant_message`].
+/// Returns the original id unchanged when no prefix matches (e.g. user
+/// messages, which never have tool calls anyway).
+fn run_id_from_message_id(message_id: &str) -> String {
+    message_id
+        .strip_prefix("assistant-")
+        .map(str::to_string)
+        .unwrap_or_else(|| message_id.to_string())
+}
+
 /// Single message bubble.
 #[component]
 fn MessageBubble(message: ChatMessage) -> impl IntoView {
@@ -213,8 +225,16 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
         "max-w-[80%] rounded-2xl px-4 py-3 bg-surface-raised text-text-primary"
     };
 
+    // Tool chips are clickable when WorkspaceState is provided: clicking
+    // any chip opens the workspace pane in Split mode and dispatches the
+    // call through the ToolRendererRegistry. Without WorkspaceState (e.g.
+    // storybook), they degrade to static badges.
+    let workspace = use_context::<WorkspaceState>();
+    let message_run_id = run_id_from_message_id(&message.id);
     let tool_calls_view = if has_tools {
         let tools = message.tool_calls.clone();
+        let workspace = workspace;
+        let run_id_for_chips = message_run_id.clone();
         Some(view! {
             <div class="mb-2 space-y-1">
                 {tools.into_iter().map(|tc| {
@@ -233,12 +253,32 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
                     let duration_text = tc.duration_ms
                         .map(|d| format!(" ({d}ms)"))
                         .unwrap_or_default();
+                    let tool_name = tc.tool_name.clone();
+                    let tool_id = tc.tool_id.clone();
+                    let run_for_click = run_id_for_chips.clone();
+                    let on_click = move |_ev: web_sys::MouseEvent| {
+                        if let Some(ws) = workspace {
+                            ws.show_tool(run_for_click.clone(), tool_id.clone());
+                        }
+                    };
+                    let clickable = workspace.is_some();
+                    let chip_class = if clickable {
+                        "flex items-center gap-2 text-xs font-mono cursor-pointer
+                         hover:bg-surface-sunken/60 rounded px-1 py-0.5 transition-colors"
+                    } else {
+                        "flex items-center gap-2 text-xs font-mono"
+                    };
                     view! {
-                        <div class="flex items-center gap-2 text-xs font-mono">
+                        <div
+                            class=chip_class
+                            on:click=on_click
+                            role=move || if clickable { "button" } else { "" }
+                            title=move || if clickable { "Inspect in workspace" } else { "" }
+                        >
                             <span class=status_color>
                                 {status_icon}
                             </span>
-                            <span class="text-text-secondary">{tc.tool_name.clone()}</span>
+                            <span class="text-text-secondary">{tool_name}</span>
                             <span class="text-text-tertiary">{duration_text}</span>
                         </div>
                     }
