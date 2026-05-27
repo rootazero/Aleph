@@ -2,6 +2,7 @@
 //! `desktop/*` capability layer.
 
 mod ax;
+mod gui_locate;
 mod native;
 mod perm;
 mod safety;
@@ -17,6 +18,7 @@ pub use ax::{
     DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopAxSnapshot,
     DesktopAxSnapshotArgs,
 };
+pub use gui_locate::{DesktopGuiLocate, DesktopGuiLocateArgs};
 pub use perm::{DesktopCheckPermissions, DesktopCheckPermissionsArgs};
 pub use types::{DesktopArgs, DesktopOutput};
 

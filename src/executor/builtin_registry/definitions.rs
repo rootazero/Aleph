@@ -28,7 +28,8 @@ use crate::builtin_tools::browser_tools::{
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
     BashExecTool, CodeExecTool, DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree,
-    ApplyPatchTool, DesktopAxSnapshot, DesktopCheckPermissions, DesktopTool, FileEditTool,
+    ApplyPatchTool, DesktopAxSnapshot, DesktopCheckPermissions, DesktopGuiLocate, DesktopTool,
+    FileEditTool,
     FileOpsTool,
     FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool,
     SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
@@ -157,6 +158,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "desktop_ax_snapshot",
         description: "Snapshot an app's interactable UI as a flat indexed element list with pre-computed click centers (set-of-marks GUI targeting)",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "desktop_gui_locate",
+        description: "Resolve a human-readable on-screen target (e.g. \"Send\", \"Login button\") into clickable pixel coordinates via AX tree fuzzy match + OCR fallback",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -712,6 +718,7 @@ pub fn create_tool_boxed(
         "desktop_ax_query_tree" => Some(Box::new(DesktopAxQueryTree::new())),
         "desktop_ax_query_by_role" => Some(Box::new(DesktopAxQueryByRole::new())),
         "desktop_ax_snapshot" => Some(Box::new(DesktopAxSnapshot::new())),
+        "desktop_gui_locate" => Some(Box::new(DesktopGuiLocate::new())),
         "desktop_check_permissions" => Some(Box::new(DesktopCheckPermissions::new())),
         "vault_store" => config
             .and_then(|c| c.shared_token_manager.as_ref())

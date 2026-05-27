@@ -120,8 +120,8 @@ pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTo
 pub use desktop::{
     DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
     DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopAxSnapshot,
-    DesktopAxSnapshotArgs, DesktopCheckPermissions, DesktopCheckPermissionsArgs, DesktopOutput,
-    DesktopTool,
+    DesktopAxSnapshotArgs, DesktopCheckPermissions, DesktopCheckPermissionsArgs, DesktopGuiLocate,
+    DesktopGuiLocateArgs, DesktopOutput, DesktopTool,
 };
 pub use error::ToolError;
 pub use file_ops::{
