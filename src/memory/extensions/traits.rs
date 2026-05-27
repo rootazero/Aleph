@@ -2,7 +2,10 @@
 
 use crate::error::AlephError;
 use crate::memory::assembler::envelope::MemoryEnvelope;
-use crate::memory::extensions::types::{CaptureCtx, CaptureDecision, ProduceCtx, RetrieveCtx};
+use crate::memory::extensions::types::{
+    CaptureCtx, CaptureDecision, DelegationCtx, PreCompressCtx, ProduceCtx, RetrieveCtx,
+    SessionSwitchCtx,
+};
 use crate::memory::store::raw_memory::RawMemory;
 use async_trait::async_trait;
 
@@ -34,6 +37,32 @@ pub trait MemoryExtension: Send + Sync {
     /// Produce raw memories on the caller's schedule.
     async fn produce(&self, _ctx: &ProduceCtx) -> Result<Vec<RawMemory>, AlephError> {
         Ok(vec![])
+    }
+
+    /// Notified when the agent's session id rotates mid-process — `/resume`,
+    /// `/branch`, `/reset`, `/new`, or context compression. Extensions that
+    /// cache per-session state (counters, accumulated turn buffers, document
+    /// ids) should refresh or clear it here so subsequent writes land in the
+    /// new session's record. Use [`SessionSwitchCtx::reset`] to detect
+    /// genuinely-new conversations.
+    async fn on_session_switch(&self, _ctx: &SessionSwitchCtx) -> Result<(), AlephError> {
+        Ok(())
+    }
+
+    /// Notified just **before** context compression discards old messages.
+    /// Return non-empty text to contribute to the compression summary prompt
+    /// so the compressor preserves extension-extracted insights. Empty string
+    /// (the default) means no contribution.
+    async fn on_pre_compress(&self, _ctx: &PreCompressCtx) -> Result<String, AlephError> {
+        Ok(String::new())
+    }
+
+    /// Notified on the PARENT agent when a subagent run finishes. Lets
+    /// extensions observe what was delegated and what came back. The subagent
+    /// itself does not get its own extension session (the parent owns the
+    /// memory writes). For full transcripts, query by `child_session_id`.
+    async fn on_delegation(&self, _ctx: &DelegationCtx) -> Result<(), AlephError> {
+        Ok(())
     }
 }
 

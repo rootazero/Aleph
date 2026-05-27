@@ -4,7 +4,10 @@
 use crate::error::AlephError;
 use crate::memory::assembler::envelope::{EnvelopeItem, MemoryEnvelope};
 use crate::memory::extensions::traits::MemoryExtension;
-use crate::memory::extensions::types::{CaptureCtx, CaptureDecision, ProduceCtx, RetrieveCtx};
+use crate::memory::extensions::types::{
+    CaptureCtx, CaptureDecision, DelegationCtx, PreCompressCtx, ProduceCtx, RetrieveCtx,
+    SessionSwitchCtx,
+};
 use crate::memory::store::raw_memory::RawMemory;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -116,6 +119,48 @@ impl MemoryExtension for McpMemoryExtension {
                     .map_err(|e| AlephError::other(format!("malformed raw_memory: {e}")))
             })
             .collect()
+    }
+
+    async fn on_session_switch(&self, ctx: &SessionSwitchCtx) -> Result<(), AlephError> {
+        let args = json!({
+            "agent_id": ctx.agent_id,
+            "new_session_id": ctx.new_session_id,
+            "parent_session_id": ctx.parent_session_id,
+            "reason": ctx.reason,
+            "reset": ctx.reset(),
+        });
+        // Acknowledge errors but don't try to parse — this is notify-only.
+        let _ = self.caller.call("memory.on_session_switch", args).await?;
+        Ok(())
+    }
+
+    async fn on_pre_compress(&self, ctx: &PreCompressCtx) -> Result<String, AlephError> {
+        let args = json!({
+            "agent_id": ctx.agent_id,
+            "session_id": ctx.session_id,
+            "messages_count": ctx.messages_count,
+            "oldest_at": ctx.oldest_at,
+            "newest_at": ctx.newest_at,
+        });
+        let resp = self.caller.call("memory.on_pre_compress", args).await?;
+        // Response shape: { "text": "..." } — optional. Empty string ≡ no contribution.
+        Ok(resp
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string())
+    }
+
+    async fn on_delegation(&self, ctx: &DelegationCtx) -> Result<(), AlephError> {
+        let args = json!({
+            "agent_id": ctx.agent_id,
+            "parent_session_id": ctx.parent_session_id,
+            "child_session_id": ctx.child_session_id,
+            "task": ctx.task,
+            "result_summary": ctx.result_summary,
+        });
+        let _ = self.caller.call("memory.on_delegation", args).await?;
+        Ok(())
     }
 }
 
@@ -278,5 +323,82 @@ mod tests {
         let before = env.slots.len();
         ext.on_retrieve(&ctx, &mut env).await.unwrap();
         assert_eq!(env.slots.len(), before, "no slots added or removed");
+    }
+
+    use crate::memory::extensions::types::{
+        DelegationCtx, PreCompressCtx, SessionSwitchCtx, SessionSwitchReason,
+    };
+
+    #[tokio::test]
+    async fn on_session_switch_notify_returns_ok() {
+        let caller = Arc::new(CannedCaller::new(vec![(
+            "memory.on_session_switch",
+            json!({}),
+        )]));
+        let ext = McpMemoryExtension::new("t", caller);
+        let ctx = SessionSwitchCtx {
+            agent_id: "a".into(),
+            namespace: NamespaceScope::Owner,
+            new_session_id: "s2".into(),
+            parent_session_id: Some("s1".into()),
+            reason: SessionSwitchReason::Branch,
+        };
+        ext.on_session_switch(&ctx).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn on_pre_compress_returns_text_field_when_present() {
+        let caller = Arc::new(CannedCaller::new(vec![(
+            "memory.on_pre_compress",
+            json!({"text": "extension contribution"}),
+        )]));
+        let ext = McpMemoryExtension::new("t", caller);
+        let ctx = PreCompressCtx {
+            agent_id: "a".into(),
+            namespace: NamespaceScope::Owner,
+            session_id: Some("s".into()),
+            messages_count: 5,
+            oldest_at: None,
+            newest_at: None,
+        };
+        let out = ext.on_pre_compress(&ctx).await.unwrap();
+        assert_eq!(out, "extension contribution");
+    }
+
+    #[tokio::test]
+    async fn on_pre_compress_missing_text_field_returns_empty() {
+        let caller = Arc::new(CannedCaller::new(vec![(
+            "memory.on_pre_compress",
+            json!({}),
+        )]));
+        let ext = McpMemoryExtension::new("t", caller);
+        let ctx = PreCompressCtx {
+            agent_id: "a".into(),
+            namespace: NamespaceScope::Owner,
+            session_id: None,
+            messages_count: 0,
+            oldest_at: None,
+            newest_at: None,
+        };
+        let out = ext.on_pre_compress(&ctx).await.unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn on_delegation_notify_returns_ok() {
+        let caller = Arc::new(CannedCaller::new(vec![(
+            "memory.on_delegation",
+            json!({}),
+        )]));
+        let ext = McpMemoryExtension::new("t", caller);
+        let ctx = DelegationCtx {
+            agent_id: "a".into(),
+            namespace: NamespaceScope::Owner,
+            parent_session_id: "p".into(),
+            child_session_id: "c".into(),
+            task: "do thing".into(),
+            result_summary: "did thing".into(),
+        };
+        ext.on_delegation(&ctx).await.unwrap();
     }
 }

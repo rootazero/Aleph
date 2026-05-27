@@ -41,6 +41,7 @@ pub mod session_compactor;
 pub mod session_resume;
 pub mod session_search_summary;
 pub mod store;
+pub mod streaming_scrubber;
 pub mod tool_signal_sink;
 pub mod transcript_indexer;
 // workspace has been moved to gateway::agent_env (AgentEnvStore, SQLite-backed)
@@ -95,6 +96,7 @@ pub use namespace::NamespaceScope;
 pub use retrieval::MemoryRetrieval;
 pub use ripple::{RippleConfig, RippleResult, RippleTask};
 pub use scratchpad::{ScratchpadConfig, ScratchpadManager, SessionHistory};
+pub use streaming_scrubber::{StreamingContextScrubber, DEFAULT_CLOSE_TAG, DEFAULT_OPEN_TAG};
 pub use transcript_indexer::{
     SemanticChunkConfig, SemanticChunker, TranscriptIndexer, TranscriptIndexerConfig,
 };

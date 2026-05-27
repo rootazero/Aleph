@@ -3,7 +3,10 @@
 use crate::error::AlephError;
 use crate::memory::assembler::envelope::MemoryEnvelope;
 use crate::memory::extensions::traits::MemoryExtension;
-use crate::memory::extensions::types::{CaptureCtx, CaptureDecision, ProduceCtx, RetrieveCtx};
+use crate::memory::extensions::types::{
+    CaptureCtx, CaptureDecision, DelegationCtx, PreCompressCtx, ProduceCtx, RetrieveCtx,
+    SessionSwitchCtx,
+};
 use crate::memory::store::raw_memory::RawMemory;
 use crate::sync_primitives::{Arc, RwLock};
 use std::time::Duration;
@@ -13,6 +16,16 @@ use tracing::warn;
 pub const ON_RETRIEVE_TIMEOUT: Duration = Duration::from_secs(2);
 pub const ON_CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
 pub const PRODUCE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Session switch fires on the synchronous hot path (`/resume`, `/branch`,
+/// compress). Keep it short — extensions should refresh cached state, not do
+/// heavy work.
+pub const ON_SESSION_SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
+/// Pre-compress runs inside the compression pipeline; extensions may do
+/// modest LLM-free extraction, but should not call external services.
+pub const ON_PRE_COMPRESS_TIMEOUT: Duration = Duration::from_secs(5);
+/// Delegation fires on subagent completion; the parent has already received
+/// the result. Extensions may persist annotations but should not block.
+pub const ON_DELEGATION_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Registry for memory extension hooks with interior mutability.
 ///
@@ -148,6 +161,66 @@ impl MemoryExtensionRegistry {
             out.push((name, result));
         }
         out
+    }
+
+    /// on_session_switch: sequential broadcast. Failures and timeouts are
+    /// logged and skipped — they never block a session rotation.
+    ///
+    /// **Wire-point TODO**: `cli /resume`, `/branch`, `/reset`, `/new`, and
+    /// `session_compactor` should call this immediately after rewriting
+    /// `session_id`, so extensions can refresh cached per-session state.
+    pub async fn dispatch_on_session_switch(&self, ctx: &SessionSwitchCtx) {
+        for ext in self.snapshot() {
+            let name = ext.name().to_string();
+            match timeout(ON_SESSION_SWITCH_TIMEOUT, ext.on_session_switch(ctx)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => warn!("memory extension '{name}' on_session_switch failed: {e}"),
+                Err(_) => warn!("memory extension '{name}' on_session_switch timed out"),
+            }
+        }
+    }
+
+    /// on_pre_compress: sequential broadcast. Returns each extension's
+    /// contribution joined with a blank line. An empty result means no
+    /// extension contributed — callers should treat that as "no extra
+    /// summary context", not a failure.
+    ///
+    /// **Wire-point TODO**: `CompressionService::compress_default_notes`
+    /// should call this BEFORE the LLM extract step and append the returned
+    /// text to the compression prompt context.
+    pub async fn dispatch_on_pre_compress(&self, ctx: &PreCompressCtx) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for ext in self.snapshot() {
+            let name = ext.name().to_string();
+            match timeout(ON_PRE_COMPRESS_TIMEOUT, ext.on_pre_compress(ctx)).await {
+                Ok(Ok(s)) => {
+                    let trimmed = s.trim();
+                    if !trimmed.is_empty() {
+                        parts.push(trimmed.to_string());
+                    }
+                }
+                Ok(Err(e)) => warn!("memory extension '{name}' on_pre_compress failed: {e}"),
+                Err(_) => warn!("memory extension '{name}' on_pre_compress timed out"),
+            }
+        }
+        parts.join("\n\n")
+    }
+
+    /// on_delegation: sequential broadcast. Fires on parent-side completion
+    /// of a subagent run. Failures/timeouts are logged and skipped.
+    ///
+    /// **Wire-point TODO**: `SubagentTool` (or whatever orchestrates child
+    /// runs) should call this with a trimmed `result_summary` after the
+    /// child run completes.
+    pub async fn dispatch_on_delegation(&self, ctx: &DelegationCtx) {
+        for ext in self.snapshot() {
+            let name = ext.name().to_string();
+            match timeout(ON_DELEGATION_TIMEOUT, ext.on_delegation(ctx)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => warn!("memory extension '{name}' on_delegation failed: {e}"),
+                Err(_) => warn!("memory extension '{name}' on_delegation timed out"),
+            }
+        }
     }
 }
 
@@ -365,5 +438,233 @@ mod tests {
         assert_eq!(first.1.as_ref().unwrap().len(), 1);
         let second = out.iter().find(|(n, _)| n == "test.noop").unwrap();
         assert_eq!(second.1.as_ref().unwrap().len(), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // hermes-parity hook tests: on_session_switch / on_pre_compress /
+    // on_delegation. Each verifies (a) the default no-op extension
+    // behaviour, (b) custom override invocation, and (c) failure/timeout
+    // isolation (one extension never blocks the next).
+    // ------------------------------------------------------------------
+
+    use super::super::types::{
+        DelegationCtx, PreCompressCtx, SessionSwitchCtx, SessionSwitchReason,
+    };
+    use crate::sync_primitives::Mutex;
+
+    struct RecordSwitchExt {
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+    #[async_trait]
+    impl MemoryExtension for RecordSwitchExt {
+        fn name(&self) -> &str {
+            "test.record_switch"
+        }
+        async fn on_session_switch(&self, ctx: &SessionSwitchCtx) -> Result<(), AlephError> {
+            self.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(ctx.new_session_id.clone());
+            Ok(())
+        }
+    }
+
+    struct FailingSwitchExt;
+    #[async_trait]
+    impl MemoryExtension for FailingSwitchExt {
+        fn name(&self) -> &str {
+            "test.fail_switch"
+        }
+        async fn on_session_switch(&self, _ctx: &SessionSwitchCtx) -> Result<(), AlephError> {
+            Err(AlephError::other("boom"))
+        }
+    }
+
+    struct SlowSwitchExt;
+    #[async_trait]
+    impl MemoryExtension for SlowSwitchExt {
+        fn name(&self) -> &str {
+            "test.slow_switch"
+        }
+        async fn on_session_switch(&self, _ctx: &SessionSwitchCtx) -> Result<(), AlephError> {
+            // Sleep for longer than ON_SESSION_SWITCH_TIMEOUT.
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            Ok(())
+        }
+    }
+
+    struct PreCompressContribExt {
+        text: &'static str,
+    }
+    #[async_trait]
+    impl MemoryExtension for PreCompressContribExt {
+        fn name(&self) -> &str {
+            "test.pre_compress_contrib"
+        }
+        async fn on_pre_compress(&self, _ctx: &PreCompressCtx) -> Result<String, AlephError> {
+            Ok(self.text.to_string())
+        }
+    }
+
+    struct FailingPreCompressExt;
+    #[async_trait]
+    impl MemoryExtension for FailingPreCompressExt {
+        fn name(&self) -> &str {
+            "test.fail_pre_compress"
+        }
+        async fn on_pre_compress(&self, _ctx: &PreCompressCtx) -> Result<String, AlephError> {
+            Err(AlephError::other("nope"))
+        }
+    }
+
+    struct RecordDelegationExt {
+        seen: Arc<Mutex<Vec<(String, String)>>>,
+    }
+    #[async_trait]
+    impl MemoryExtension for RecordDelegationExt {
+        fn name(&self) -> &str {
+            "test.record_delegation"
+        }
+        async fn on_delegation(&self, ctx: &DelegationCtx) -> Result<(), AlephError> {
+            self.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((ctx.task.clone(), ctx.result_summary.clone()));
+            Ok(())
+        }
+    }
+
+    fn switch_ctx(new_sid: &str) -> SessionSwitchCtx {
+        SessionSwitchCtx {
+            agent_id: "a".into(),
+            namespace: NamespaceScope::Owner,
+            new_session_id: new_sid.into(),
+            parent_session_id: None,
+            reason: SessionSwitchReason::Resume,
+        }
+    }
+
+    fn pre_compress_ctx() -> PreCompressCtx {
+        PreCompressCtx {
+            agent_id: "a".into(),
+            namespace: NamespaceScope::Owner,
+            session_id: Some("s".into()),
+            messages_count: 12,
+            oldest_at: None,
+            newest_at: None,
+        }
+    }
+
+    fn delegation_ctx(task: &str, result: &str) -> DelegationCtx {
+        DelegationCtx {
+            agent_id: "a".into(),
+            namespace: NamespaceScope::Owner,
+            parent_session_id: "p".into(),
+            child_session_id: "c".into(),
+            task: task.into(),
+            result_summary: result.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_registry_on_session_switch_is_noop() {
+        let reg = MemoryExtensionRegistry::new();
+        // Must complete without panicking; no return value to inspect.
+        reg.dispatch_on_session_switch(&switch_ctx("s1")).await;
+    }
+
+    #[tokio::test]
+    async fn on_session_switch_broadcast_records_new_id() {
+        let reg = MemoryExtensionRegistry::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        reg.register(Arc::new(RecordSwitchExt { seen: seen.clone() }));
+        reg.dispatch_on_session_switch(&switch_ctx("s42")).await;
+        let observed = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(observed, vec!["s42".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn on_session_switch_failure_does_not_block_other_extensions() {
+        let reg = MemoryExtensionRegistry::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        reg.register(Arc::new(FailingSwitchExt));
+        reg.register(Arc::new(RecordSwitchExt { seen: seen.clone() }));
+        reg.dispatch_on_session_switch(&switch_ctx("s99")).await;
+        let observed = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(
+            observed,
+            vec!["s99".to_string()],
+            "failing extension must not prevent later extensions from running"
+        );
+    }
+
+    #[tokio::test]
+    async fn on_session_switch_slow_extension_times_out_without_blocking_others() {
+        let reg = MemoryExtensionRegistry::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        reg.register(Arc::new(SlowSwitchExt));
+        reg.register(Arc::new(RecordSwitchExt { seen: seen.clone() }));
+        let start = std::time::Instant::now();
+        reg.dispatch_on_session_switch(&switch_ctx("s_timeout"))
+            .await;
+        let elapsed = start.elapsed();
+        // Should finish in roughly ON_SESSION_SWITCH_TIMEOUT (1s), not the
+        // 3s the slow extension wanted. Allow generous slack for CI.
+        assert!(
+            elapsed < Duration::from_millis(2500),
+            "session_switch must respect timeout; elapsed={:?}",
+            elapsed
+        );
+        let observed = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(observed, vec!["s_timeout".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn empty_registry_on_pre_compress_returns_empty_string() {
+        let reg = MemoryExtensionRegistry::new();
+        let out = reg.dispatch_on_pre_compress(&pre_compress_ctx()).await;
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn on_pre_compress_joins_non_empty_contributions() {
+        let reg = MemoryExtensionRegistry::new();
+        reg.register(Arc::new(PreCompressContribExt { text: "  one  " }));
+        reg.register(Arc::new(PreCompressContribExt { text: "" }));
+        reg.register(Arc::new(PreCompressContribExt { text: "two" }));
+        let out = reg.dispatch_on_pre_compress(&pre_compress_ctx()).await;
+        assert_eq!(
+            out, "one\n\ntwo",
+            "empty contributions must be dropped; non-empty joined by blank line"
+        );
+    }
+
+    #[tokio::test]
+    async fn on_pre_compress_failure_does_not_drop_other_contribs() {
+        let reg = MemoryExtensionRegistry::new();
+        reg.register(Arc::new(FailingPreCompressExt));
+        reg.register(Arc::new(PreCompressContribExt { text: "kept" }));
+        let out = reg.dispatch_on_pre_compress(&pre_compress_ctx()).await;
+        assert_eq!(out, "kept");
+    }
+
+    #[tokio::test]
+    async fn empty_registry_on_delegation_is_noop() {
+        let reg = MemoryExtensionRegistry::new();
+        reg.dispatch_on_delegation(&delegation_ctx("t", "r")).await;
+    }
+
+    #[tokio::test]
+    async fn on_delegation_broadcast_records_task_result() {
+        let reg = MemoryExtensionRegistry::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        reg.register(Arc::new(RecordDelegationExt { seen: seen.clone() }));
+        reg.dispatch_on_delegation(&delegation_ctx("ship it", "shipped"))
+            .await;
+        let observed = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(
+            observed,
+            vec![("ship it".to_string(), "shipped".to_string())]
+        );
     }
 }
