@@ -36,9 +36,29 @@
 //! — env var → `~/.aleph` → `./` last resort.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
+
+/// Carry-over files older than this are reclaimed by the sweeper.
+///
+/// Much longer than the 7-day tool-result retention because carry-overs
+/// encode *user-meaningful in-flight work* — a sparsely-scheduled monthly
+/// job that always hits its budget should still find its previous
+/// partial waiting for it, not get garbage-collected silently. 30 days
+/// gives a wide safety margin for typical cron cadences (hourly →
+/// monthly) without letting truly stale state accumulate indefinitely.
+pub const DEFAULT_CARRYOVER_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// How often the periodic sweeper wakes up to scan for stale files.
+///
+/// Carry-overs are written at most a few per job per day; an hourly sweep
+/// (the tool-result cadence) would be 6× more frequent than necessary.
+/// 6 hours keeps the daemon overhead negligible while still bounding the
+/// "stale file lingers past expiry" window to a fraction of the retention.
+pub const DEFAULT_CARRYOVER_SWEEP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// On-disk shape of a single job's carry-over record.
 ///
@@ -197,6 +217,152 @@ pub fn render_prefix(record: &CarryOver) -> String {
     )
 }
 
+// =============================================================================
+// Periodic sweeper — reclaim carry-over files older than retention.
+//
+// Modeled on [`crate::tools::result_store::sweep_stale_tool_result_dirs`]
+// but operating on FILES (one per job) rather than directories (one per
+// session). Decision is based on file mtime, which the atomic-rename in
+// [`write_at`] resets on every fresh write — so a long-running job that
+// keeps re-saving partials always stays fresh.
+// =============================================================================
+
+/// Sweep stale carry-over files under `dir`. Returns the number of files
+/// removed. Errors on individual entries are logged at WARN and skipped
+/// so a single permission denial cannot stall the sweep.
+///
+/// Empty / missing directory is a no-op (returns 0) — first-boot and
+/// freshly-cleaned production both hit this path normally.
+///
+/// Decision is by **file mtime** (last write), not `saved_at_ms` inside
+/// the JSON. The two should agree because [`write_at`] performs an
+/// atomic rename, which gives the destination file a fresh mtime at
+/// each write. Reading mtime is cheaper than deserialising every file
+/// just to compare timestamps, and the sweep prefers false negatives
+/// (skip removal) over false positives (kill live state).
+pub fn sweep_stale_carryovers(dir: &Path, cutoff: Duration) -> usize {
+    let entries = match fs::read_dir(dir) {
+        Ok(it) => it,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
+        Err(e) => {
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %e,
+                "carryover sweep: read_dir failed",
+            );
+            return 0;
+        }
+    };
+    let now = SystemTime::now();
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // Layout: one .json file per job. Skip directories so a stray
+        // user-placed folder never gets purged, and skip leftover .tmp
+        // files (a write that crashed mid-rename) — leave those for an
+        // operator to inspect.
+        let is_file = entry.file_type().map(|ft| ft.is_file()).unwrap_or(false);
+        if !is_file {
+            continue;
+        }
+        let is_json = path
+            .extension()
+            .map(|ext| ext == "json")
+            .unwrap_or(false);
+        if !is_json {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .map(|mtime| now.duration_since(mtime).unwrap_or(Duration::ZERO) >= cutoff)
+            .unwrap_or(false);
+        if !stale {
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(e) => tracing::warn!(
+                file = %path.display(),
+                error = %e,
+                "carryover sweep: remove_file failed",
+            ),
+        }
+    }
+    removed
+}
+
+/// Spawn a background Tokio task that periodically calls
+/// [`sweep_stale_carryovers`] on `dir`.
+///
+/// Fire-and-forget: the task is detached. No-op when no Tokio runtime
+/// is current — keeps non-async test harnesses from panicking.
+///
+/// Callers that want one-shot deterministic GC (admin CLI, test
+/// fixtures) should invoke [`sweep_stale_carryovers`] directly.
+pub fn spawn_periodic_carryover_sweeper(
+    dir: PathBuf,
+    retention: Duration,
+    interval: Duration,
+) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        tracing::debug!(
+            dir = %dir.display(),
+            "carryover sweeper not spawned: no Tokio runtime",
+        );
+        return;
+    }
+    tokio::spawn(async move {
+        // Match the tool-result sweeper: skip the first immediate tick
+        // so service boot doesn't block on a synchronous fs walk.
+        let mut ticker = tokio::time::interval(interval);
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let dir = dir.clone();
+            let removed = tokio::task::spawn_blocking(move || {
+                sweep_stale_carryovers(&dir, retention)
+            })
+            .await
+            .unwrap_or(0);
+            if removed > 0 {
+                tracing::info!(
+                    removed,
+                    "carryover sweeper reclaimed stale cron carry-over files",
+                );
+            }
+        }
+    });
+}
+
+/// Process-wide guard so repeated [`CronService::new`] calls (the
+/// sweeper bootstrap point — see [`mod@crate::tasks::cron`]) cannot
+/// spawn duplicate sweeper tasks. Mirrors the
+/// [`crate::tools::result_store::set_global_tool_result_store`] pattern.
+static CARRYOVER_SWEEPER_INSTALLED: OnceLock<()> = OnceLock::new();
+
+/// Bootstrap a single global carry-over sweeper rooted at the
+/// production [`carryover_dir`]. Safe to call from every
+/// `CronService::new` — second and later invocations are no-ops thanks
+/// to the [`OnceLock`] guard.
+///
+/// Returns `true` when the sweeper was actually installed by this call,
+/// `false` when it had already been installed. Useful for test
+/// assertions; production code can ignore the return.
+pub fn bootstrap_global_carryover_sweeper() -> bool {
+    let mut installed = false;
+    CARRYOVER_SWEEPER_INSTALLED.get_or_init(|| {
+        spawn_periodic_carryover_sweeper(
+            carryover_dir(),
+            DEFAULT_CARRYOVER_RETENTION,
+            DEFAULT_CARRYOVER_SWEEP_INTERVAL,
+        );
+        installed = true;
+    });
+    installed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +453,123 @@ mod tests {
             !entries.iter().any(|n| n.ends_with(".tmp")),
             "tmp file must be renamed away, entries={entries:?}",
         );
+    }
+
+    // ── Sweeper tests ─────────────────────────────────────────────────
+
+    /// Move `path`'s mtime backwards by `delta` so the sweeper sees it
+    /// as stale without actually waiting `delta` real seconds. Uses
+    /// `filetime`, the same crate the production tool-result sweeper
+    /// uses for its own retention tests.
+    fn backdate(path: &Path, delta: Duration) {
+        let target = SystemTime::now()
+            .checked_sub(delta)
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let target_ft = filetime::FileTime::from_system_time(target);
+        // atime == mtime keeps behaviour predictable on filesystems
+        // that don't auto-update atime.
+        filetime::set_file_times(path, target_ft, target_ft).unwrap();
+    }
+
+    #[test]
+    fn sweep_removes_files_older_than_cutoff() {
+        let dir = TempDir::new().unwrap();
+        let rec = CarryOver::new("fresh", "y");
+        write_at(dir.path(), "fresh_job", &rec).unwrap();
+        write_at(dir.path(), "stale_job", &rec).unwrap();
+        // Backdate one file to 60 days old; cutoff is 30 days.
+        backdate(
+            &carryover_path_at(dir.path(), "stale_job"),
+            Duration::from_secs(60 * 24 * 60 * 60),
+        );
+        let removed = sweep_stale_carryovers(dir.path(), DEFAULT_CARRYOVER_RETENTION);
+        assert_eq!(removed, 1);
+        assert!(read_at(dir.path(), "fresh_job").unwrap().is_some());
+        assert!(read_at(dir.path(), "stale_job").unwrap().is_none());
+    }
+
+    #[test]
+    fn sweep_on_empty_dir_is_zero_no_error() {
+        let dir = TempDir::new().unwrap();
+        let removed = sweep_stale_carryovers(dir.path(), DEFAULT_CARRYOVER_RETENTION);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn sweep_on_missing_dir_is_zero_no_error() {
+        let missing = std::path::PathBuf::from("/tmp/aleph-carryover-does-not-exist-zzz");
+        let removed = sweep_stale_carryovers(&missing, DEFAULT_CARRYOVER_RETENTION);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn sweep_ignores_directories_and_tmp_files() {
+        let dir = TempDir::new().unwrap();
+        // Make a subdirectory (looks like a stale file by mtime).
+        let subdir = dir.path().join("intruder");
+        std::fs::create_dir(&subdir).unwrap();
+        // Leftover .tmp from a crashed write — should be left alone.
+        let tmp = dir.path().join("crashed.json.tmp");
+        std::fs::write(&tmp, b"partial").unwrap();
+        // A real stale .json.
+        let rec = CarryOver::new("x", "y");
+        write_at(dir.path(), "real_job", &rec).unwrap();
+        backdate(
+            &carryover_path_at(dir.path(), "real_job"),
+            Duration::from_secs(40 * 24 * 60 * 60),
+        );
+        backdate(&subdir, Duration::from_secs(40 * 24 * 60 * 60));
+        backdate(&tmp, Duration::from_secs(40 * 24 * 60 * 60));
+
+        let removed = sweep_stale_carryovers(dir.path(), DEFAULT_CARRYOVER_RETENTION);
+        assert_eq!(removed, 1, "only the .json file should be removed");
+        assert!(subdir.is_dir(), "intruder dir must survive");
+        assert!(tmp.exists(), "crash-leftover .tmp must survive");
+    }
+
+    #[test]
+    fn sweep_with_zero_cutoff_removes_every_file() {
+        let dir = TempDir::new().unwrap();
+        let rec = CarryOver::new("x", "y");
+        write_at(dir.path(), "a", &rec).unwrap();
+        write_at(dir.path(), "b", &rec).unwrap();
+        write_at(dir.path(), "c", &rec).unwrap();
+        let removed = sweep_stale_carryovers(dir.path(), Duration::ZERO);
+        assert_eq!(removed, 3);
+    }
+
+    #[test]
+    fn write_resets_mtime_so_resaved_file_survives_sweep() {
+        // The whole point of mtime-based retention: a job that keeps
+        // re-saving its partial every firing should stay fresh forever.
+        let dir = TempDir::new().unwrap();
+        let rec = CarryOver::new("x", "y");
+        write_at(dir.path(), "active_job", &rec).unwrap();
+        // Pretend the original write was 60 days ago.
+        backdate(
+            &carryover_path_at(dir.path(), "active_job"),
+            Duration::from_secs(60 * 24 * 60 * 60),
+        );
+        // A subsequent firing writes a fresh partial — mtime resets.
+        write_at(dir.path(), "active_job", &rec).unwrap();
+        let removed = sweep_stale_carryovers(dir.path(), DEFAULT_CARRYOVER_RETENTION);
+        assert_eq!(removed, 0);
+        assert!(read_at(dir.path(), "active_job").unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_global_sweeper_is_idempotent() {
+        // First call inside a tokio runtime should install (return
+        // true). The OnceLock claim is process-wide and persists across
+        // tests; the contract we care about is: never spawn two
+        // sweepers. We only assert the second call is a no-op, since
+        // an earlier test may have already claimed the lock.
+        let first = bootstrap_global_carryover_sweeper();
+        let second = bootstrap_global_carryover_sweeper();
+        assert!(!second, "second bootstrap must be a no-op");
+        // If `first` was true, the spawned task is fire-and-forget; the
+        // tokio runtime will tear it down when the test exits. If
+        // `first` was false, an earlier test installed it.
+        let _ = first;
     }
 }

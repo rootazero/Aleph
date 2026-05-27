@@ -89,6 +89,12 @@ impl CronService {
         let store = Arc::new(tokio::sync::Mutex::new(store));
         let state = Arc::new(ServiceState::new(store, clock, config));
 
+        // Spawn the per-process carry-over sweeper exactly once.
+        // Guarded by `OnceLock` inside the helper so repeated
+        // construction (tests, hot-reload) never double-spawns.
+        // No-op when called outside a Tokio runtime.
+        carryover::bootstrap_global_carryover_sweeper();
+
         Ok(Self {
             state,
             event_bus: None,
