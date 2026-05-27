@@ -631,7 +631,8 @@ impl AppState {
             | AgentTraceEvent::WorktreeCleanedUp { .. }
             | AgentTraceEvent::McpScopeAttached { .. }
             | AgentTraceEvent::McpScopeCleaned { .. }
-            | AgentTraceEvent::ProviderUsage { .. } => {}
+            | AgentTraceEvent::ProviderUsage { .. }
+            | AgentTraceEvent::ReactiveCompactionAttempted { .. } => {}
         }
     }
 

@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::output;
+use crate::output::{self, icon, theme};
 use aleph_client::{AlephClient, CliResult};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -21,11 +21,22 @@ struct BootstrapIssueResult {
 /// URL in the system browser. With `--json` only prints the URL +
 /// expiry; otherwise also shells out to the platform `open` command.
 pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    let issued: BootstrapIssueResult = client
-        .call("gateway.bootstrap.issue", None::<()>)
-        .await?;
-    client.close().await?;
+    let issued: BootstrapIssueResult = {
+        let _spin = (!json).then(|| output::Spinner::start("Requesting bootstrap nonce"));
+        let result = async {
+            let (client, _events) = AlephClient::connect(server_url).await?;
+            let issued: BootstrapIssueResult = client
+                .call("gateway.bootstrap.issue", None::<()>)
+                .await?;
+            client.close().await?;
+            Ok::<BootstrapIssueResult, aleph_client::CliError>(issued)
+        }
+        .await;
+        if let Some(s) = _spin {
+            s.stop().await;
+        }
+        result?
+    };
 
     if json {
         output::print_json(&serde_json::json!({
@@ -36,13 +47,25 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
     }
 
     println!(
-        "Opening {} (valid for {}s)",
-        issued.url, issued.expires_in_secs
+        "{} Opening {} {}",
+        theme::paint(theme::Style::Info, icon::arrow()),
+        theme::paint(theme::Style::Bold, &issued.url),
+        theme::paint(
+            theme::Style::Muted,
+            &format!("(valid for {}s)", issued.expires_in_secs)
+        )
     );
     if let Err(e) = open_url(&issued.url) {
         // Don't fail hard — print the URL so the user can copy/paste.
-        eprintln!("Could not launch system browser: {e}");
-        eprintln!("Open this URL manually: {}", issued.url);
+        eprintln!(
+            "{} Could not launch system browser: {e}",
+            theme::paint(theme::Style::Warning, icon::warn())
+        );
+        eprintln!(
+            "{} Open this URL manually: {}",
+            theme::paint(theme::Style::Info, icon::info()),
+            issued.url
+        );
     }
     Ok(())
 }
