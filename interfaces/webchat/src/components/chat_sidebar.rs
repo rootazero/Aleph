@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
 use crate::i18n::*;
+use crate::state::sessions::SessionMap;
 use crate::views::chat::state::ChatState;
 
 use web_sys::HtmlInputElement;
@@ -45,6 +46,7 @@ struct AgentEntry {
 pub fn ChatSidebar() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let session_map = expect_context::<SessionMap>();
     let i18n = use_i18n();
 
     let agents = RwSignal::new(Vec::<AgentEntry>::new());
@@ -70,7 +72,9 @@ pub fn ChatSidebar() -> impl IntoView {
                 Ok(result) => {
                     if let Some(arr) = result.get("agents") {
                         if let Ok(list) = serde_json::from_value::<Vec<AgentEntry>>(arr.clone()) {
-                            // Auto-select default agent if none selected
+                            // Auto-select default agent if none selected.
+                            // Routing through SessionMap.activate opens the
+                            // first tab — Cmd+1 will focus it.
                             if selected_agent.get_untracked().is_none() {
                                 let default_id = list
                                     .iter()
@@ -79,7 +83,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                     .map(|a| a.id.clone());
                                 if let Some(id) = default_id {
                                     selected_agent.set(Some(id.clone()));
-                                    chat.agent_id.set(Some(id));
+                                    session_map.activate(chat, &id);
                                 }
                             }
                             agents.set(list);
@@ -161,8 +165,11 @@ pub fn ChatSidebar() -> impl IntoView {
         if current.as_deref() == Some(&key) {
             return;
         }
+        // Switch tabs first (snapshots outgoing, restores agent's tab),
+        // then clear that tab's session so the upcoming history load
+        // overwrites cleanly without leaking the previous topic.
+        session_map.activate(chat, &agent_id);
         chat.clear_session();
-        chat.agent_id.set(Some(agent_id.clone()));
         selected_agent.set(Some(agent_id));
         chat.session_key.set(Some(key.clone()));
 
@@ -192,13 +199,15 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     };
 
-    // Handle agent dropdown change
+    // Handle agent dropdown change — opens or focuses that agent's tab.
+    // Don't clear session here: SessionMap.activate restores the tab's
+    // snapshot (including its session_key), so the user picks up where
+    // they left off in that agent's conversation.
     let on_agent_change = move |ev: web_sys::Event| {
         let val = event_target_value(&ev);
         if !val.is_empty() {
             selected_agent.set(Some(val.clone()));
-            chat.agent_id.set(Some(val));
-            // Don't clear session — user might just be browsing agents
+            session_map.activate(chat, &val);
         }
     };
 

@@ -8,6 +8,7 @@ use super::composer::InputArea;
 use super::events::subscribe_run_events;
 use super::messages::MessageList;
 use super::state::{ChatState, PendingAttachment};
+use crate::components::session_tabs::SessionTabs;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::state::layout::WorkspaceState;
@@ -104,6 +105,8 @@ pub fn ChatView() -> impl IntoView {
         >
             // Chat surface — collapses to 33% when workspace pane is open.
             <div class="flex flex-col flex-1 min-w-0 h-full">
+                // Session tab strip — renders only when ≥1 agent is open.
+                <SessionTabs />
                 // Message list (scrollable) — or the welcome hero when empty
                 <MessageList />
                 // Input area (pinned to bottom)

@@ -30,6 +30,7 @@ use crate::context::{DashboardContext, DashboardState};
 use crate::state::hotkey::{self as hotkey, HotkeyState};
 use crate::state::layout::WorkspaceState;
 use crate::state::notifications::NotificationsState;
+use crate::state::sessions::SessionMap;
 use crate::views::chat::ChatState;
 
 #[component]
@@ -54,6 +55,11 @@ fn AppContent() -> impl IntoView {
     // Chat state lives above both the chat sidebar (left column) and the
     // chat view (main area) so they share one session / agent selection.
     provide_context(ChatState::new());
+
+    // Multi-tab session registry (per-agent). Empty at boot; the chat
+    // sidebar's auto-select-default-agent path is what opens the first
+    // tab. Cmd+1..9 / Cmd+W hotkeys are installed lazily by SessionTabs.
+    provide_context(SessionMap::new());
 
     // Workspace pane state — UI-TARS-parity. ChatOnly is the default so
     // legacy users see zero UI change; the LayoutToggle in the composer

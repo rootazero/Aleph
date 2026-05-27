@@ -134,8 +134,9 @@ pub struct ToolCallEntry {
 }
 
 /// Top-level Chat UI phase.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ChatPhase {
+    #[default]
     Idle,
     Thinking,
     Streaming,
@@ -439,4 +440,67 @@ impl ChatState {
         self.send_error.set(None);
         // agent_id is intentionally preserved
     }
+
+    /// Capture a serializable, owned copy of all per-session signals.
+    /// Used by `SessionMap` to swap tabs without remounting the chat tree:
+    /// the outgoing tab's state is snapshotted here, the incoming tab's
+    /// snapshot is then restored via [`Self::restore_from`].
+    ///
+    /// `is_dragging_files` and `retry_pulse` are intentionally excluded —
+    /// the former is ephemeral DOM-hover state, the latter a one-shot
+    /// pulse that shouldn't replay on restore.
+    pub fn capture_snapshot(&self) -> SessionSnapshot {
+        SessionSnapshot {
+            messages: self.messages.get_untracked(),
+            phase: self.phase.get_untracked(),
+            active_run_id: self.active_run_id.get_untracked(),
+            session_key: self.session_key.get_untracked(),
+            agent_id: self.agent_id.get_untracked(),
+            reasoning_text: self.reasoning_text.get_untracked(),
+            error_message: self.error_message.get_untracked(),
+            send_error: self.send_error.get_untracked(),
+            pending_attachments: self.pending_attachments.get_untracked(),
+            active_project_root: self.active_project_root.get_untracked(),
+            active_project_name: self.active_project_name.get_untracked(),
+            selected_model: self.selected_model.get_untracked(),
+            next_msg_id: self.next_msg_id.get_untracked(),
+        }
+    }
+
+    /// Restore a previously captured snapshot. Always sets every field so
+    /// stale values from the outgoing tab never leak across.
+    pub fn restore_from(&self, snap: SessionSnapshot) {
+        self.messages.set(snap.messages);
+        self.phase.set(snap.phase);
+        self.active_run_id.set(snap.active_run_id);
+        self.session_key.set(snap.session_key);
+        self.agent_id.set(snap.agent_id);
+        self.reasoning_text.set(snap.reasoning_text);
+        self.error_message.set(snap.error_message);
+        self.send_error.set(snap.send_error);
+        self.pending_attachments.set(snap.pending_attachments);
+        self.active_project_root.set(snap.active_project_root);
+        self.active_project_name.set(snap.active_project_name);
+        self.selected_model.set(snap.selected_model);
+        self.next_msg_id.set(snap.next_msg_id);
+    }
+}
+
+/// Owned snapshot of every per-session signal in [`ChatState`]. Cheap to
+/// stash in a `HashMap` (every field is `Clone`).
+#[derive(Debug, Clone, Default)]
+pub struct SessionSnapshot {
+    pub messages: Vec<ChatMessage>,
+    pub phase: ChatPhase,
+    pub active_run_id: Option<String>,
+    pub session_key: Option<String>,
+    pub agent_id: Option<String>,
+    pub reasoning_text: String,
+    pub error_message: Option<String>,
+    pub send_error: Option<ChatSendError>,
+    pub pending_attachments: Vec<PendingAttachment>,
+    pub active_project_root: Option<String>,
+    pub active_project_name: Option<String>,
+    pub selected_model: Option<crate::api::providers::ModelOverride>,
+    pub next_msg_id: u64,
 }
