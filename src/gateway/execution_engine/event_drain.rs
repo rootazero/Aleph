@@ -271,6 +271,18 @@ pub(crate) fn build_run_summary(outcome: &FlowOutcome) -> RunSummary {
         None => (None, None),
     };
 
+    // The umbrella `BudgetExhaustedPartialResult` variant collapses to
+    // the static token `"budget_exhausted_partial_result"`. Surface the
+    // inner cap label separately so cron carry-over + dashboards can
+    // show which budget actually fired without re-deserialising the enum.
+    let terminate_detail = match &outcome.terminate_reason {
+        crate::orchestrator::dispatch::TerminateReason::BudgetExhaustedPartialResult {
+            reason,
+            ..
+        } => Some(reason.clone()),
+        _ => None,
+    };
+
     RunSummary {
         total_tokens: u64::from(outcome.total_tokens),
         tool_calls: outcome.tool_calls_made,
@@ -286,6 +298,7 @@ pub(crate) fn build_run_summary(outcome: &FlowOutcome) -> RunSummary {
             Some(outcome.duration_ms)
         },
         terminate_reason: Some(outcome.terminate_reason.as_static_str().to_string()),
+        terminate_detail,
         token_breakdown,
         estimated_cost_usd,
         cost_status,
@@ -575,5 +588,72 @@ mod tests {
         assert!(summary.tool_summaries.is_empty());
         assert!(summary.errors.is_empty());
         assert_eq!(summary.terminate_reason.as_deref(), Some("completed"));
+        // The granular detail field is `None` for every non-umbrella
+        // terminate reason (here: clean Completed).
+        assert_eq!(
+            summary.terminate_detail, None,
+            "terminate_detail is None unless variant is BudgetExhaustedPartialResult",
+        );
+    }
+
+    /// Granular cap label exposed via `terminate_detail` when the
+    /// harness escalates a bare budget cap to
+    /// `BudgetExhaustedPartialResult`. The outer `terminate_reason`
+    /// keeps the umbrella label for dashboard back-compat; the inner
+    /// `terminate_detail` carries the underlying cap so cron carry-over
+    /// can record *which* budget fired.
+    #[test]
+    fn build_run_summary_exposes_granular_detail_for_partial_result() {
+        use crate::orchestrator::dispatch::TerminateReason;
+
+        let outcome = FlowOutcome {
+            final_text: "I gathered 2 of 5 sources".into(),
+            iterations: 40,
+            terminate_reason: TerminateReason::BudgetExhaustedPartialResult {
+                reason: "hit_max_iterations".into(),
+                partial_summary: "I gathered 2 of 5 sources".into(),
+            },
+            ..Default::default()
+        };
+        let summary = super::build_run_summary(&outcome);
+        assert_eq!(
+            summary.terminate_reason.as_deref(),
+            Some("budget_exhausted_partial_result"),
+            "umbrella label preserved for dashboards",
+        );
+        assert_eq!(
+            summary.terminate_detail.as_deref(),
+            Some("hit_max_iterations"),
+            "granular cap label exposed for cron carry-over",
+        );
+    }
+
+    /// Non-budget terminate reasons leave `terminate_detail` empty —
+    /// the field exists solely to unwrap the umbrella variant.
+    #[test]
+    fn build_run_summary_omits_detail_for_non_budget_reasons() {
+        use crate::orchestrator::dispatch::TerminateReason;
+
+        let cases = [
+            TerminateReason::Completed,
+            TerminateReason::Cancelled,
+            TerminateReason::HitMaxIterations { used: 5 },
+            TerminateReason::ContextBudgetExhausted,
+            TerminateReason::MaxOutputTokensExhausted,
+            TerminateReason::StallTimeout { elapsed_ms: 100 },
+            TerminateReason::VerifierVeto { vetos: 3 },
+        ];
+        for reason in cases {
+            let label = reason.as_static_str().to_string();
+            let outcome = FlowOutcome {
+                terminate_reason: reason,
+                ..Default::default()
+            };
+            let summary = super::build_run_summary(&outcome);
+            assert_eq!(
+                summary.terminate_detail, None,
+                "terminate_detail must be None for {label}",
+            );
+        }
     }
 }

@@ -191,19 +191,21 @@ async fn execute_cron_job(
             // typed enum because cron only sees the gateway-side wire
             // form. The label is single-source from
             // `TerminateReason::as_static_str()`.
-            if let Some(label) = extract_terminate_reason(&collector).await {
+            if let Some((label, detail)) = extract_terminate_reason(&collector).await {
                 if label
                     == crate::orchestrator::dispatch::BUDGET_PARTIAL_RESULT_LABEL
                 {
                     if let Some(ref text) = final_response {
+                        // Prefer the granular cap label exposed via
+                        // `terminate_detail` (`"hit_max_iterations"` /
+                        // `"context_budget_exhausted"` /
+                        // `"max_output_tokens_exhausted"`); fall back to
+                        // the umbrella token when an older binary on the
+                        // emitter side did not populate the detail field.
+                        let reason = detail.unwrap_or_else(|| label.clone());
                         let record = crate::tasks::cron::carryover::CarryOver::new(
                             text.clone(),
-                            // The granular cap (max_iterations / context_budget /
-                            // max_output_tokens) is not exposed via RunSummary
-                            // today; store the umbrella label so the next run
-                            // gets a faithful tag even if the underlying cap
-                            // changes between firings.
-                            label.clone(),
+                            reason,
                         );
                         if let Err(e) =
                             crate::tasks::cron::carryover::write(&snapshot.id, &record)
@@ -406,16 +408,28 @@ fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
 /// tags, etc.) and falls back to concatenated `ResponseChunk` deltas when the
 /// `RunSummary.final_response` is empty after sanitization (e.g. when the last
 /// LLM turn was purely a completion-protocol confirmation).
-/// Extract the harness's `terminate_reason` static label from the
-/// collected events, if any `RunComplete` event was observed. Used by
-/// the P3 carry-over write path to distinguish a `BudgetExhausted` exit
-/// from a clean `Completed` run.
-async fn extract_terminate_reason(collector: &CollectingEventEmitter) -> Option<String> {
+/// Extract the harness's terminate label + granular detail from the
+/// collected events.
+///
+/// Returns `(label, detail)` where:
+/// - `label` is `RunSummary.terminate_reason` — the umbrella static
+///   token (`"completed"`, `"budget_exhausted_partial_result"`, ...).
+///   Used to gate the carry-over write path.
+/// - `detail` is `RunSummary.terminate_detail` — populated only when
+///   the umbrella variant collapses a granular cap label. For
+///   `BudgetExhaustedPartialResult` this is e.g. `"hit_max_iterations"`
+///   so the carry-over file records *which* budget fired, not just
+///   "some budget".
+///
+/// `None` when no `RunComplete` event was observed.
+async fn extract_terminate_reason(
+    collector: &CollectingEventEmitter,
+) -> Option<(String, Option<String>)> {
     let events = collector.events().await;
     for event in events.iter().rev() {
         if let StreamEvent::RunComplete { ref summary, .. } = event {
             if let Some(ref label) = summary.terminate_reason {
-                return Some(label.clone());
+                return Some((label.clone(), summary.terminate_detail.clone()));
             }
         }
     }

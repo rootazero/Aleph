@@ -333,6 +333,11 @@ pub struct RunSummary {
     pub duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminate_reason: Option<String>,
+    /// Granular cap label when `terminate_reason` is the umbrella
+    /// `"budget_exhausted_partial_result"`. See the protocol-side
+    /// `aleph_protocol::RunSummary::terminate_detail` for full rationale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminate_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_breakdown: Option<aleph_protocol::TokenBreakdownView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

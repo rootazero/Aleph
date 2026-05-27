@@ -500,6 +500,18 @@ pub struct RunSummary {
     /// formatting reconstruct the enum on the alephcore side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminate_reason: Option<String>,
+    /// Granular cap label that lives inside an umbrella variant.
+    ///
+    /// `terminate_reason` carries the static enum tag, which collapses
+    /// every escalated budget exit into the single umbrella token
+    /// `"budget_exhausted_partial_result"`. This field carries the
+    /// underlying cap label (`"hit_max_iterations"` /
+    /// `"context_budget_exhausted"` / `"max_output_tokens_exhausted"`)
+    /// so cron carry-over / dashboards can show *which* budget was hit
+    /// rather than just "some budget". `None` for every terminate
+    /// reason where the static label is already granular.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminate_detail: Option<String>,
     /// Per-component provider token usage. Granular complement to
     /// `total_tokens`; surfaces cache hit ratio + reasoning spend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
