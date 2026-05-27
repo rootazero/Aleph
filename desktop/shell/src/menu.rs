@@ -7,15 +7,23 @@
 //! their chromeless look with no menu.
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Wry};
+use tauri::{AppHandle, Manager, Wry};
 
 const ID_SHOW: &str = "menu_show";
 const ID_OPEN_BROWSER: &str = "menu_open_browser";
 const ID_CHECK_UPDATE: &str = "menu_check_update";
 const ID_QUIT: &str = "menu_quit";
 const ID_QUIT_STOP: &str = "menu_quit_stop";
+const ID_RELOAD_PANEL: &str = "menu_reload_panel";
+const ID_OPEN_DEVTOOLS: &str = "menu_open_devtools";
+const ID_VISIT_REPO: &str = "menu_visit_repo";
+const ID_REPORT_ISSUE: &str = "menu_report_issue";
 
-/// Build the macOS app menu: Aleph / Edit / Window.
+/// GitHub repository — the project's source of truth. Used by Help menu.
+const REPO_URL: &str = "https://github.com/rootazero/Aleph";
+const ISSUES_URL: &str = "https://github.com/rootazero/Aleph/issues/new";
+
+/// Build the macOS app menu: Aleph / Edit / View / Window / Help.
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let app_menu = Submenu::with_items(
         app,
@@ -73,6 +81,35 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         ],
     )?;
 
+    // View — Panel-level actions exposed via menu so they're discoverable
+    // without dropping to the tray. DevTools only ships in debug builds:
+    // production users never need it, and a release menu item that
+    // dead-ends would confuse them.
+    let view_menu = {
+        let reload = MenuItem::with_id(
+            app,
+            ID_RELOAD_PANEL,
+            "Reload Panel",
+            true,
+            Some("Cmd+R"),
+        )?;
+        #[cfg(debug_assertions)]
+        {
+            let devtools = MenuItem::with_id(
+                app,
+                ID_OPEN_DEVTOOLS,
+                "Open DevTools",
+                true,
+                Some("Cmd+Alt+I"),
+            )?;
+            Submenu::with_items(app, "View", true, &[&reload, &devtools])?
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            Submenu::with_items(app, "View", true, &[&reload])?
+        }
+    };
+
     let window_menu = Submenu::with_items(
         app,
         "Window",
@@ -85,7 +122,22 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         ],
     )?;
 
-    Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu])
+    // Help — external resources. Opens via the system browser (no in-app
+    // navigation away from the Panel), reusing daemon::open_url_in_browser.
+    let help_menu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[
+            &MenuItem::with_id(app, ID_VISIT_REPO, "Visit GitHub Repository", true, None::<&str>)?,
+            &MenuItem::with_id(app, ID_REPORT_ISSUE, "Report an Issue…", true, None::<&str>)?,
+        ],
+    )?;
+
+    Menu::with_items(
+        app,
+        &[&app_menu, &edit_menu, &view_menu, &window_menu, &help_menu],
+    )
 }
 
 /// Route a macOS menu click to its action. Ids the shell does not own
@@ -104,6 +156,33 @@ pub fn on_event(app: &AppHandle, id: &str) {
             crate::daemon::stop_daemon();
             app.exit(0);
         }
+        ID_RELOAD_PANEL => reload_panel(app),
+        #[cfg(debug_assertions)]
+        ID_OPEN_DEVTOOLS => open_devtools(app),
+        ID_VISIT_REPO => crate::daemon::open_url_in_browser(REPO_URL),
+        ID_REPORT_ISSUE => crate::daemon::open_url_in_browser(ISSUES_URL),
         _ => {}
     }
+}
+
+/// Re-fetch the Panel in the current main window. The Panel keeps its
+/// `aleph_session` cookie across this reload — no fresh bootstrap nonce
+/// is needed.
+fn reload_panel(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Err(e) = window.eval("window.location.reload()") {
+        tracing::warn!("could not reload Panel: {e}");
+    }
+}
+
+/// Open Tauri's WebView devtools for the main window. Only wired in
+/// debug builds — the menu item itself is hidden in release.
+#[cfg(debug_assertions)]
+fn open_devtools(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    window.open_devtools();
 }

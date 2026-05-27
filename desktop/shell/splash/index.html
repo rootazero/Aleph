@@ -6,26 +6,32 @@
     <title>Aleph</title>
     <style>
       /* Native-feeling splash shown while the aleph-server daemon boots.
-         It is replaced by the live Panel as soon as the daemon is ready. */
+         Replaced by the live Panel as soon as the daemon is ready.
+
+         Visual: monochrome wordmark over the window's vibrancy material —
+         iOS 18 lock-screen idiom, no spinner, a subtle breathing bar for
+         liveness. Keep transparent so the vibrancy backing layer shows. */
       :root {
-        --bg: #f4f3f7;
-        --fg: #2a2533;
-        --sub: #6b6577;
-        --accent: #7a52c8;
+        --fg: rgba(0, 0, 0, 0.86);
+        --sub: rgba(0, 0, 0, 0.42);
+        --bar-base: rgba(0, 0, 0, 0.14);
+        --bar-peak: rgba(0, 0, 0, 0.42);
+        --err: #c14a4a;
       }
       @media (prefers-color-scheme: dark) {
         :root {
-          --bg: #1a1622;
-          --fg: #ece9f2;
-          --sub: #9a93a8;
-          --accent: #a98fe0;
+          --fg: rgba(255, 255, 255, 0.92);
+          --sub: rgba(255, 255, 255, 0.46);
+          --bar-base: rgba(255, 255, 255, 0.14);
+          --bar-peak: rgba(255, 255, 255, 0.5);
+          --err: #ef7878;
         }
       }
       html,
       body {
         margin: 0;
         height: 100%;
-        background: var(--bg);
+        background: transparent;
         color: var(--fg);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
           sans-serif;
@@ -38,57 +44,101 @@
         justify-content: center;
       }
       .wrap {
-        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        /* Lift slightly above true centre — feels more deliberate than dead-centre. */
+        transform: translateY(-12px);
       }
-      .ring {
-        width: 46px;
-        height: 46px;
-        margin: 0 auto 20px;
-        border: 3px solid color-mix(in srgb, var(--accent) 22%, transparent);
-        border-top-color: var(--accent);
-        border-radius: 50%;
-        animation: spin 0.9s linear infinite;
+      .wordmark {
+        font-size: 30px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        line-height: 1;
+        /* Subtle fade-in on first paint so the splash doesn't feel static. */
+        animation: settle 700ms ease-out both;
       }
-      @keyframes spin {
+      @keyframes settle {
+        from {
+          opacity: 0;
+          transform: translateY(2px);
+        }
         to {
-          transform: rotate(360deg);
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .sub {
+        margin-top: 10px;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+        color: var(--sub);
+        text-transform: lowercase;
+      }
+      /* Breathing progress bar — replaces the spinner. 80×2px, opacity-pulses
+         so it reads as "alive" without grabbing attention. */
+      .bar {
+        margin-top: 24px;
+        width: 80px;
+        height: 2px;
+        border-radius: 1px;
+        background: var(--bar-base);
+        position: relative;
+        overflow: hidden;
+      }
+      .bar::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: var(--bar-peak);
+        border-radius: 1px;
+        animation: breathe 1.8s ease-in-out infinite;
+      }
+      @keyframes breathe {
+        0%,
+        100% {
+          opacity: 0.2;
+          transform: scaleX(0.4);
+        }
+        50% {
+          opacity: 1;
+          transform: scaleX(1);
         }
       }
       @media (prefers-reduced-motion: reduce) {
-        .ring {
-          animation-duration: 2.4s;
+        .wordmark {
+          animation: none;
+        }
+        .bar::after {
+          animation-duration: 4s;
         }
       }
-      .title {
-        font-size: 15px;
-        font-weight: 600;
-        letter-spacing: 0.01em;
+      /* Error state — replaces the bar with a static line, recolours the
+         wordmark to muted red so the message reads as a hard stop. */
+      .err .wordmark {
+        color: var(--err);
       }
-      .sub {
-        margin-top: 6px;
-        font-size: 12px;
-        color: var(--sub);
-      }
-      .err .title {
-        color: #d05a5a;
+      .err .bar::after {
+        animation: none;
+        opacity: 0.4;
+        transform: scaleX(1);
       }
     </style>
   </head>
   <body>
     <div class="wrap" id="wrap">
-      <div class="ring" id="ring"></div>
-      <div class="title" id="title">Starting Aleph…</div>
-      <div class="sub" id="sub">Bringing up your local assistant</div>
+      <div class="wordmark" id="title">Aleph</div>
+      <div class="sub" id="sub">starting your local assistant</div>
+      <div class="bar" id="bar"><div></div></div>
     </div>
     <script>
       // The shell calls this via webview.eval() if the daemon fails to start.
       window.__alephError = function (msg) {
-        document.getElementById("ring").style.display = "none";
         document.getElementById("wrap").classList.add("err");
-        document.getElementById("title").textContent =
-          "Aleph could not start";
+        document.getElementById("title").textContent = "Aleph could not start";
         document.getElementById("sub").textContent =
-          msg || "The aleph-server daemon failed to start.";
+          msg || "the aleph-server daemon failed to start.";
       };
     </script>
   </body>

@@ -387,7 +387,7 @@ pub(crate) fn load_bootstrap_url() -> Option<String> {
 
 /// Cross-platform "open this URL in the default browser" — used by
 /// the menu handler and as the fallback path in `reveal_panel`.
-fn open_url_in_browser(url: &str) {
+pub(crate) fn open_url_in_browser(url: &str) {
     let result = if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(url).status()
     } else if cfg!(target_os = "linux") {
