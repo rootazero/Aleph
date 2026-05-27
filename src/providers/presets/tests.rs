@@ -388,6 +388,71 @@ fn aliases_resolve_via_get_preset_for_all_groups() {
     }
 }
 
+// =========================================================================
+// temperature_policy wiring (Phase 2.2)
+// =========================================================================
+
+#[test]
+fn apply_temperature_policy_pass_through_when_none() {
+    assert_eq!(apply_temperature_policy(None, Some(0.7)), Some(0.7));
+    assert_eq!(apply_temperature_policy(None, None), None);
+}
+
+#[test]
+fn apply_temperature_policy_omit_drops_value() {
+    assert_eq!(
+        apply_temperature_policy(Some(super::TemperaturePolicy::Omit), Some(0.7)),
+        None
+    );
+    assert_eq!(
+        apply_temperature_policy(Some(super::TemperaturePolicy::Omit), None),
+        None
+    );
+}
+
+#[test]
+fn apply_temperature_policy_force_overrides_caller() {
+    assert_eq!(
+        apply_temperature_policy(Some(super::TemperaturePolicy::Force(1.0)), Some(0.2)),
+        Some(1.0)
+    );
+    assert_eq!(
+        apply_temperature_policy(Some(super::TemperaturePolicy::Force(1.0)), None),
+        Some(1.0)
+    );
+}
+
+#[test]
+fn temperature_for_base_url_omits_for_kimi_for_coding() {
+    // Kimi-for-coding server manages temperature; even when the user sets
+    // one, the policy must strip it from the outgoing request.
+    let kimi = get_preset("kimi-for-coding").unwrap();
+    let resolved = temperature_for_base_url(Some(kimi.base_url), Some(0.7));
+    assert_eq!(resolved, None, "kimi-for-coding must omit temperature");
+}
+
+#[test]
+fn temperature_for_base_url_passes_through_for_normal_presets() {
+    // Standard providers (no policy) pass the caller's value through.
+    let openai = get_preset("openai").unwrap();
+    let resolved = temperature_for_base_url(Some(openai.base_url), Some(0.5));
+    assert_eq!(resolved, Some(0.5));
+}
+
+#[test]
+fn temperature_for_base_url_unknown_url_is_pass_through() {
+    // User has overridden base_url to something off-registry — preset
+    // policy doesn't apply; caller's value flows through.
+    let resolved = temperature_for_base_url(Some("https://my.custom.proxy/v1"), Some(0.9));
+    assert_eq!(resolved, Some(0.9));
+}
+
+#[test]
+fn temperature_for_base_url_none_base_url_is_pass_through() {
+    assert_eq!(temperature_for_base_url(None, Some(0.42)), Some(0.42));
+    assert_eq!(temperature_for_base_url(None, None), None);
+}
+
 #[test]
 fn test_get_merged_preset_new_provider_no_base_url() {
     let mut overrides = crate::config::presets_override::PresetsOverride::default();

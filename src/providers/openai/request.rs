@@ -3,6 +3,7 @@
 /// Functions for constructing chat completion requests.
 use crate::config::ProviderConfig;
 use crate::core::MediaAttachment;
+use crate::providers::presets::temperature_for_base_url;
 use crate::providers::shared::{
     build_document_context, combine_with_document_context, separate_attachments,
     should_use_prepend_mode,
@@ -10,6 +11,13 @@ use crate::providers::shared::{
 use crate::tool_metadata::DEFAULT_MAX_TOKENS;
 
 use super::types::{ChatCompletionRequest, ContentBlock, ImageUrl, Message, MessageContent};
+
+/// Resolve the request-body `temperature` given a config + its preset's
+/// `temperature_policy`. Centralised so the three request builders below
+/// stay in lock-step.
+fn resolve_temperature(config: &ProviderConfig) -> Option<f32> {
+    temperature_for_base_url(config.base_url.as_deref(), config.temperature)
+}
 
 /// Build text content for image/multimodal requests.
 /// Handles prepend mode for system prompts and provides default description for images.
@@ -80,7 +88,7 @@ pub fn build_request_with_mode(
         model: config.default_model().to_string(),
         messages,
         max_tokens: config.max_tokens,
-        temperature: config.temperature,
+        temperature: resolve_temperature(config),
         reasoning_effort: None, // Set via apply_thinking_config if needed
     }
 }
@@ -141,7 +149,7 @@ pub fn build_vision_request(
         model: "gpt-4o".to_string(), // Use gpt-4o which supports vision
         messages,
         max_tokens: Some(4096), // Vision responses can be longer
-        temperature: config.temperature,
+        temperature: resolve_temperature(config),
         reasoning_effort: None,
     }
 }
@@ -209,7 +217,42 @@ pub fn build_multimodal_request(
         model: config.default_model().to_string(),
         messages,
         max_tokens: Some(config.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
-        temperature: config.temperature,
+        temperature: resolve_temperature(config),
         reasoning_effort: None,
+    }
+}
+
+#[cfg(test)]
+mod temperature_policy_tests {
+    use super::*;
+
+    fn config_with(base_url: Option<&str>, temperature: Option<f32>) -> ProviderConfig {
+        let mut c = ProviderConfig::test_config("test-model");
+        c.base_url = base_url.map(String::from);
+        c.temperature = temperature;
+        c
+    }
+
+    #[test]
+    fn build_request_passes_temperature_through_for_standard_provider() {
+        let c = config_with(Some("https://api.openai.com/v1"), Some(0.7));
+        let req = build_request(&c, "hi", None);
+        assert_eq!(req.temperature, Some(0.7));
+    }
+
+    #[test]
+    fn build_request_omits_temperature_for_kimi_for_coding() {
+        // Even when the user/config sets a temperature, the preset's
+        // policy must strip it from the outgoing request.
+        let c = config_with(Some("https://api.kimi.com/coding/v1"), Some(0.7));
+        let req = build_request(&c, "hi", None);
+        assert_eq!(req.temperature, None);
+    }
+
+    #[test]
+    fn build_request_with_no_base_url_passes_temperature_through() {
+        let c = config_with(None, Some(0.42));
+        let req = build_request(&c, "hi", None);
+        assert_eq!(req.temperature, Some(0.42));
     }
 }

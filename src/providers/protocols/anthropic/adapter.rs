@@ -108,8 +108,14 @@ impl ProtocolAdapter for AnthropicProtocol {
             .or(config.max_tokens)
             .unwrap_or(DEFAULT_MAX_TOKENS);
 
-        // Apply temperature with config fallback
-        let temperature = payload.temperature.or(config.temperature);
+        // Apply temperature with config fallback, then route through the
+        // preset's temperature_policy (e.g. Kimi-for-coding server-managed
+        // endpoints require the field to be omitted entirely).
+        let raw_temperature = payload.temperature.or(config.temperature);
+        let temperature = crate::providers::presets::temperature_for_base_url(
+            config.base_url.as_deref(),
+            raw_temperature,
+        );
 
         // Build thinking config if enabled.
         //

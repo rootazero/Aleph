@@ -278,6 +278,45 @@ pub fn get_merged_preset(
     }
 }
 
+/// Apply a preset's temperature policy to a caller-supplied temperature.
+///
+/// Returns the temperature value the provider request body should carry:
+/// * `policy = None`             → `raw` unchanged (pass-through)
+/// * `policy = Some(Omit)`       → `None` (drop the field from the request)
+/// * `policy = Some(Force(f))`   → `Some(f)` (override caller's value)
+///
+/// Adapters look the policy up via [`temperature_for_base_url`] using
+/// `config.base_url`, which they already have on hand. Custom base_urls
+/// (user override) silently miss the lookup, which is the right default —
+/// users overriding base_url have opted out of preset assumptions.
+pub fn apply_temperature_policy(
+    policy: Option<TemperaturePolicy>,
+    raw: Option<f32>,
+) -> Option<f32> {
+    match policy {
+        None => raw,
+        Some(TemperaturePolicy::Omit) => None,
+        Some(TemperaturePolicy::Force(value)) => Some(value),
+    }
+}
+
+/// Resolve `temperature` for a request given the provider's `base_url`.
+///
+/// Convenience wrapper around [`apply_temperature_policy`] that does the
+/// preset reverse-lookup so adapters don't need to thread preset names
+/// through their plumbing. `base_url = None` and unknown URLs both fall
+/// through with `raw` unchanged.
+pub fn temperature_for_base_url(base_url: Option<&str>, raw: Option<f32>) -> Option<f32> {
+    let url = match base_url {
+        Some(u) => u,
+        None => return raw,
+    };
+    let policy = registry::PRESETS_BY_BASE_URL
+        .get(url)
+        .and_then(|p| p.temperature_policy);
+    apply_temperature_policy(policy, raw)
+}
+
 /// Resolve provider name from model name using known prefix patterns.
 pub fn resolve_provider_from_model(model: &str) -> Option<String> {
     let m = model.to_lowercase();

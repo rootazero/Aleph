@@ -610,6 +610,25 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
     m
 });
 
+/// Reverse index: `base_url` → preset.
+///
+/// `base_url`s in `PROFILES` are unique per canonical entry, so a single
+/// hashmap suffices. Used by `temperature_for_base_url()` so adapters can
+/// resolve a preset-level policy from `config.base_url` without threading
+/// a preset name through the request-building plumbing.
+///
+/// Users who override `base_url` on a configured provider will miss this
+/// lookup — that's intentional: overriding base_url opts out of preset
+/// assumptions like temperature_policy.
+pub(crate) static PRESETS_BY_BASE_URL: Lazy<HashMap<&'static str, &'static ProviderPreset>> =
+    Lazy::new(|| {
+        let mut m = HashMap::with_capacity(PROFILES.len());
+        for (_, preset) in PROFILES {
+            m.insert(preset.base_url, preset);
+        }
+        m
+    });
+
 /// Backwards-compatible `ProviderMetadata` view derived from `PROFILES`.
 ///
 /// Historically this lived in `metadata.rs` as a hand-maintained parallel
