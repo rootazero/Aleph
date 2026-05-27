@@ -269,6 +269,125 @@ fn test_presets_by_modality_image_currently_empty() {
     assert!(presets_by_modality(Modality::Video).is_empty());
 }
 
+// =========================================================================
+// hermes-parity field tests
+// =========================================================================
+
+#[test]
+fn alias_dedup_keeps_canonical_data() {
+    // moonshot is canonical; kimi is its alias and must resolve to the
+    // same data (no duplicate source-of-truth entry).
+    let moonshot = get_preset("moonshot").unwrap();
+    let kimi = get_preset("kimi").unwrap();
+    assert_eq!(moonshot.base_url, kimi.base_url);
+    assert_eq!(moonshot.default_model, kimi.default_model);
+    assert!(moonshot.aliases.contains(&"kimi"));
+}
+
+#[test]
+fn high_value_presets_have_signup_url() {
+    for name in ["openai", "claude", "deepseek", "moonshot", "gemini"] {
+        let p = get_preset(name).unwrap();
+        assert!(
+            p.signup_url.is_some(),
+            "{name} should declare a signup_url for the picker"
+        );
+    }
+}
+
+#[test]
+fn high_value_presets_have_fallback_models() {
+    for name in ["openai", "claude", "deepseek", "moonshot", "gemini", "qwen", "xai"] {
+        let p = get_preset(name).unwrap();
+        assert!(
+            !p.fallback_models.is_empty(),
+            "{name} should declare fallback_models for graceful discovery degradation"
+        );
+    }
+}
+
+#[test]
+fn aux_model_falls_back_to_default_model_when_unset() {
+    // Most providers don't declare a cheap aux model — aux_model() must
+    // gracefully fall back to default_model.
+    let cerebras = get_preset("cerebras").unwrap();
+    assert_eq!(cerebras.aux_model(), cerebras.default_model);
+
+    // OpenAI declares a dedicated cheap model.
+    let openai = get_preset("openai").unwrap();
+    assert_eq!(openai.aux_model(), "gpt-4o-mini");
+    assert_ne!(openai.aux_model(), openai.default_model);
+}
+
+#[test]
+fn resolve_models_url_uses_override_then_base_url() {
+    // Claude declares a custom models endpoint.
+    let claude = get_preset("claude").unwrap();
+    assert_eq!(claude.resolve_models_url(), "https://api.anthropic.com/v1/models");
+
+    // OpenAI uses the {base_url}/models default.
+    let openai = get_preset("openai").unwrap();
+    assert_eq!(openai.resolve_models_url(), "https://api.openai.com/v1/models");
+}
+
+#[test]
+fn kimi_for_coding_omits_temperature() {
+    // Kimi-for-coding server-manages temperature → policy = Omit so the
+    // chat builder strips it from outgoing requests.
+    let p = get_preset("kimi-for-coding").unwrap();
+    assert_eq!(p.temperature_policy, Some(super::TemperaturePolicy::Omit));
+}
+
+#[test]
+fn new_hermes_parity_presets_are_present() {
+    // Pulled in from hermes-agent plugins/model-providers.
+    for name in ["ai-gateway", "azure-foundry", "gmi", "nous", "zai", "ollama-cloud"] {
+        assert!(
+            PRESETS.contains_key(name),
+            "{name} should be in the registry after the hermes-parity import"
+        );
+    }
+}
+
+#[test]
+fn no_health_check_propagated_for_resource_placeholders() {
+    // Presets that ship with `YOUR-RESOURCE` / `ACCOUNT_ID` placeholders or
+    // OAuth-only endpoints must opt out of `/models` health probing.
+    for name in ["chatgpt", "azure-openai", "azure-foundry", "amazon-bedrock", "vertex-anthropic", "ai-gateway"] {
+        let p = get_preset(name).unwrap();
+        assert!(
+            !p.supports_health_check,
+            "{name} should set supports_health_check = false"
+        );
+    }
+}
+
+#[test]
+fn aliases_resolve_via_get_preset_for_all_groups() {
+    // Every alias declared on PROFILES must be reachable through PRESETS.
+    let alias_groups = [
+        ("moonshot", &["kimi"][..]),
+        ("kimi-for-coding", &["kimi-coding"]),
+        ("doubao", &["volcengine", "ark"]),
+        ("zhipu", &["glm"]),
+        ("xai", &["grok"]),
+        ("qwen", &["dashscope"]),
+        ("amazon-bedrock", &["bedrock"]),
+        ("cloudflare-ai", &["workers-ai"]),
+        ("github-copilot", &["copilot"]),
+        ("nvidia-nim", &["nvidia"]),
+        ("openrouter", &["or"]),
+    ];
+
+    for (canonical, aliases) in alias_groups {
+        let c = get_preset(canonical).expect(canonical);
+        for a in aliases {
+            let entry = get_preset(a).unwrap_or_else(|| panic!("{a} missing"));
+            assert_eq!(entry.base_url, c.base_url, "alias {a} should mirror {canonical}");
+        }
+    }
+}
+
 #[test]
 fn test_get_merged_preset_new_provider_no_base_url() {
     let mut overrides = crate::config::presets_override::PresetsOverride::default();

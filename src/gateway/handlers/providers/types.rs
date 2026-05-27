@@ -142,6 +142,25 @@ pub struct CatalogEntryView {
     pub homepage: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// Vendor signup / API-key creation URL (preset-level hint for the
+    /// "Get a key" CTA in the panel picker). Distinct from `homepage`,
+    /// which points at the vendor's docs/landing page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signup_url: Option<String>,
+    /// Curated fallback model IDs used by the picker when the user has
+    /// not yet customised `models` and `/models` discovery has not run.
+    /// Empty vec = no curated fallback (picker falls back to `default_model`).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub fallback_models: Vec<String>,
+    /// Cheap auxiliary model hint (e.g. for memory summarisation). `None`
+    /// means callers should reuse `default_model`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_aux_model: Option<String>,
+    /// Aliases the preset answers to (e.g. `moonshot` → `["kimi"]`).
+    /// Empty when the preset has no aliases. Surfaced so the panel picker
+    /// can show alternative names without re-fetching per alias.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub aliases: Vec<String>,
     pub modalities: Vec<String>,
     /// User-extended model list (from `config.providers[name].models`). May
     /// be empty when the provider is not yet configured — in that case fall

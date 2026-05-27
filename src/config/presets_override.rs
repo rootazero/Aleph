@@ -368,6 +368,7 @@ aliases = ["doubao", "ark"]
             protocol: "openai",
             color: "#111111",
             default_model: "model-v1",
+            ..Default::default()
         };
         let partial = PartialProviderPreset {
             base_url: Some("https://custom.example.com".to_string()),
@@ -391,6 +392,7 @@ aliases = ["doubao", "ark"]
             protocol: "openai",
             color: "#111111",
             default_model: "model-v1",
+            ..Default::default()
         };
         let partial = PartialProviderPreset::default();
 
@@ -408,6 +410,7 @@ aliases = ["doubao", "ark"]
             protocol: "openai",
             color: "#111111",
             default_model: "model-v1",
+            ..Default::default()
         };
         let partial = PartialProviderPreset {
             base_url: Some("https://custom.example.com".to_string()),

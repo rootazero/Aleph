@@ -1,608 +1,556 @@
 //! Static registry of built-in provider presets.
 //!
-//! Pure data — every entry maps a canonical name (and optional aliases)
-//! to the default base URL, wire protocol, brand color, and default model.
+//! Single source of truth is `PROFILES` — one entry per canonical provider,
+//! with hermes-style declarative aliases. `PRESETS` is lazily expanded so
+//! every alias also resolves through the same `HashMap` shape that older
+//! call sites already depend on (catalog, helpers, override merge, RPCs).
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
 use super::ProviderPreset;
 
-/// Registry of known provider presets
-pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
-    let mut m = HashMap::new();
-
-    // OpenAI official
-    m.insert(
+/// Canonical provider profiles. Each `aliases` entry will also be inserted
+/// into `PRESETS` at lazy init, so `get_preset("kimi")` returns the same
+/// data as `get_preset("moonshot")` without a second source-of-truth entry.
+const PROFILES: &[(&str, ProviderPreset)] = &[
+    // ─── OpenAI family ────────────────────────────────────────────────────────
+    (
         "openai",
-        ProviderPreset {
-            base_url: "https://api.openai.com/v1",
-            protocol: "openai",
-            color: "#10a37f",
-            default_model: "gpt-4o",
-        },
-    );
-
-    // ChatGPT subscription (via Codex Responses API, OAuth login)
-    m.insert(
+        ProviderPreset::new("https://api.openai.com/v1", "openai", "#10a37f", "gpt-4o")
+            .with_display("OpenAI")
+            .with_signup("https://platform.openai.com/api-keys")
+            .with_aux_model("gpt-4o-mini")
+            .with_fallback_models(&["gpt-4o", "gpt-4o-mini", "o3-mini", "o1-mini"]),
+    ),
+    (
         "chatgpt",
-        ProviderPreset {
-            base_url: "https://chatgpt.com",
-            protocol: "codex",
-            color: "#10a37f",
-            default_model: "gpt-5.4",
-        },
-    );
-
-    // DeepSeek
-    m.insert(
-        "deepseek",
-        ProviderPreset {
-            base_url: "https://api.deepseek.com",
-            protocol: "openai",
-            color: "#0066cc",
-            default_model: "deepseek-chat",
-        },
-    );
-
-    // Moonshot / Kimi — standard chat API (OpenAI-compatible)
-    m.insert(
-        "moonshot",
-        ProviderPreset {
-            base_url: "https://api.moonshot.ai/v1",
-            protocol: "openai",
-            color: "#6366f1",
-            default_model: "kimi-k2-0905-preview",
-        },
-    );
-    m.insert(
-        "kimi",
-        ProviderPreset {
-            base_url: "https://api.moonshot.ai/v1",
-            protocol: "openai",
-            color: "#6366f1",
-            default_model: "kimi-k2-0905-preview",
-        },
-    );
-
-    // Kimi for Coding — Anthropic-compatible endpoint optimized for IDE/agent
-    // tool use (Claude Code, Cline, Roo Code). Outputs tool-call JSON by design,
-    // not free-form chat. Use this only when wiring Aleph as a coding agent
-    // backend; for general conversation, use the `moonshot` preset above.
-    m.insert(
-        "kimi-for-coding",
-        ProviderPreset {
-            base_url: "https://api.kimi.com/coding/v1",
-            protocol: "anthropic",
-            color: "#6366f1",
-            default_model: "Kimi-K2.6",
-        },
-    );
-    m.insert(
-        "kimi-coding",
-        ProviderPreset {
-            base_url: "https://api.kimi.com/coding/v1",
-            protocol: "anthropic",
-            color: "#6366f1",
-            default_model: "Kimi-K2.6",
-        },
-    );
-
-    // Volcengine Doubao
-    m.insert(
-        "doubao",
-        ProviderPreset {
-            base_url: "https://ark.cn-beijing.volces.com/api/v3",
-            protocol: "openai",
-            color: "#ff6b35",
-            default_model: "doubao-1.5-pro-256k",
-        },
-    );
-    m.insert(
-        "volcengine",
-        ProviderPreset {
-            base_url: "https://ark.cn-beijing.volces.com/api/v3",
-            protocol: "openai",
-            color: "#ff6b35",
-            default_model: "doubao-1.5-pro-256k",
-        },
-    );
-    m.insert(
-        "ark",
-        ProviderPreset {
-            base_url: "https://ark.cn-beijing.volces.com/api/v3",
-            protocol: "openai",
-            color: "#ff6b35",
-            default_model: "doubao-1.5-pro-256k",
-        },
-    );
-
-    // SiliconFlow — Chinese AI cloud platform
-    m.insert(
-        "siliconflow",
-        ProviderPreset {
-            base_url: "https://api.siliconflow.cn/v1",
-            protocol: "openai",
-            color: "#6c5ce7",
-            default_model: "deepseek-ai/DeepSeek-V3",
-        },
-    );
-
-    // Zhipu GLM — Chinese AI research lab
-    m.insert(
-        "zhipu",
-        ProviderPreset {
-            base_url: "https://open.bigmodel.cn/api/paas/v4",
-            protocol: "openai",
-            color: "#3b5998",
-            default_model: "GLM-5",
-        },
-    );
-    m.insert(
-        "glm",
-        ProviderPreset {
-            base_url: "https://open.bigmodel.cn/api/paas/v4",
-            protocol: "openai",
-            color: "#3b5998",
-            default_model: "GLM-5",
-        },
-    );
-
-    // MiniMax — Chinese multimodal AI
-    m.insert(
-        "minimax",
-        ProviderPreset {
-            base_url: "https://api.minimax.io/v1",
-            protocol: "openai",
-            color: "#e84393",
-            default_model: "MiniMax-M2.5",
-        },
-    );
-
-    // T8Star
-    m.insert(
-        "t8star",
-        ProviderPreset {
-            base_url: "https://api.t8star.cn/v1",
-            protocol: "openai",
-            color: "#f59e0b",
-            default_model: "",
-        },
-    );
-
-    // Anthropic Claude
-    m.insert(
-        "claude",
-        ProviderPreset {
-            base_url: "https://api.anthropic.com",
-            protocol: "anthropic",
-            color: "#d97757",
-            default_model: "claude-sonnet-4-5-20250514",
-        },
-    );
-
-    // Google Gemini
-    m.insert(
-        "gemini",
-        ProviderPreset {
-            base_url: "https://generativelanguage.googleapis.com",
-            protocol: "gemini",
-            color: "#4285f4",
-            default_model: "gemini-2.5-flash",
-        },
-    );
-
-    // Groq - Ultra-fast inference
-    m.insert(
-        "groq",
-        ProviderPreset {
-            base_url: "https://api.groq.com/openai/v1",
-            protocol: "openai",
-            color: "#f55036",
-            default_model: "llama-3.3-70b-versatile",
-        },
-    );
-
-    // Together.ai - Open source models
-    m.insert(
-        "together",
-        ProviderPreset {
-            base_url: "https://api.together.xyz/v1",
-            protocol: "openai",
-            color: "#6366f1",
-            default_model: "",
-        },
-    );
-
-    // Perplexity - Search-augmented LLMs
-    m.insert(
-        "perplexity",
-        ProviderPreset {
-            base_url: "https://api.perplexity.ai",
-            protocol: "openai",
-            color: "#20808d",
-            default_model: "",
-        },
-    );
-
-    // Mistral AI - European AI leader
-    m.insert(
-        "mistral",
-        ProviderPreset {
-            base_url: "https://api.mistral.ai/v1",
-            protocol: "openai",
-            color: "#ff7000",
-            default_model: "",
-        },
-    );
-
-    // Cohere - Enterprise focus
-    m.insert(
-        "cohere",
-        ProviderPreset {
-            base_url: "https://api.cohere.ai/v1",
-            protocol: "openai",
-            color: "#39594d",
-            default_model: "",
-        },
-    );
-
-    // Fireworks.ai - Fast API
-    m.insert(
-        "fireworks",
-        ProviderPreset {
-            base_url: "https://api.fireworks.ai/inference/v1",
-            protocol: "openai",
-            color: "#ff6b35",
-            default_model: "",
-        },
-    );
-
-    // Anyscale - Ray ecosystem
-    m.insert(
-        "anyscale",
-        ProviderPreset {
-            base_url: "https://api.endpoints.anyscale.com/v1",
-            protocol: "openai",
-            color: "#00d4aa",
-            default_model: "",
-        },
-    );
-
-    // Replicate - OSS model hosting
-    m.insert(
-        "replicate",
-        ProviderPreset {
-            base_url: "https://api.replicate.com/v1",
-            protocol: "openai",
-            color: "#0c0c0d",
-            default_model: "",
-        },
-    );
-
-    // OpenRouter - Multi-model router (uses Responses API)
-    m.insert(
-        "openrouter",
-        ProviderPreset {
-            base_url: "https://openrouter.ai/api",
-            protocol: "openai-responses",
-            color: "#6467f2",
-            default_model: "openai/gpt-4o",
-        },
-    );
-
-    // Lepton AI - Model deployment
-    m.insert(
-        "lepton",
-        ProviderPreset {
-            base_url: "https://api.lepton.ai/api/v1",
-            protocol: "openai",
-            color: "#4f46e5",
-            default_model: "",
-        },
-    );
-
-    // Hyperbolic - GPU marketplace
-    m.insert(
-        "hyperbolic",
-        ProviderPreset {
-            base_url: "https://api.hyperbolic.xyz/v1",
-            protocol: "openai",
-            color: "#8b5cf6",
-            default_model: "",
-        },
-    );
-
-    // -------------------------------------------------------------------------
-    // Phase B (openclaw parity) — additional chat presets. All map onto an
-    // existing protocol adapter; no new protocol code required.
-    // -------------------------------------------------------------------------
-
-    // Cerebras — ultra-fast Llama inference, OpenAI-compatible
-    m.insert(
-        "cerebras",
-        ProviderPreset {
-            base_url: "https://api.cerebras.ai/v1",
-            protocol: "openai",
-            color: "#f97316",
-            default_model: "llama-3.3-70b",
-        },
-    );
-
-    // Stepfun — Chinese multimodal LLM, OpenAI-compatible
-    m.insert(
-        "stepfun",
-        ProviderPreset {
-            base_url: "https://api.stepfun.com/v1",
-            protocol: "openai",
-            color: "#0ea5e9",
-            default_model: "step-1-8k",
-        },
-    );
-
-    // HuggingFace Router — OpenAI-compatible front for HF Inference API
-    m.insert(
-        "huggingface",
-        ProviderPreset {
-            base_url: "https://router.huggingface.co/v1",
-            protocol: "openai",
-            color: "#ffd21e",
-            default_model: "meta-llama/Llama-3.3-70B-Instruct",
-        },
-    );
-
-    // Vertex AI (Anthropic on GCP) — uses Anthropic protocol, region-specific URL
-    // Default region is us-east5; users can override via base_url for other regions.
-    m.insert(
-        "vertex-anthropic",
-        ProviderPreset {
-            base_url: "https://us-east5-aiplatform.googleapis.com/v1",
-            protocol: "anthropic",
-            color: "#4285f4",
-            default_model: "claude-sonnet-4@20250514",
-        },
-    );
-
-    // Azure OpenAI — OpenAI-compatible, but users must override base_url with
-    // their resource endpoint (https://<resource>.openai.azure.com). The
-    // placeholder is intentional so misconfiguration is obvious.
-    m.insert(
+        ProviderPreset::new("https://chatgpt.com", "codex", "#10a37f", "gpt-5.4")
+            .with_display("ChatGPT (Codex Login)")
+            .with_signup("https://chatgpt.com")
+            .with_description("OAuth login, Codex Responses protocol")
+            .no_health_check(),
+    ),
+    (
         "azure-openai",
-        ProviderPreset {
-            base_url: "https://YOUR-RESOURCE.openai.azure.com",
-            protocol: "openai",
-            color: "#0078d4",
-            default_model: "gpt-4o",
-        },
-    );
-
-    // xAI Grok — OpenAI-compatible
-    m.insert(
-        "xai",
-        ProviderPreset {
-            base_url: "https://api.x.ai/v1",
-            protocol: "openai",
-            color: "#000000",
-            default_model: "grok-4-0709",
-        },
-    );
-    m.insert(
-        "grok",
-        ProviderPreset {
-            base_url: "https://api.x.ai/v1",
-            protocol: "openai",
-            color: "#000000",
-            default_model: "grok-4-0709",
-        },
-    );
-
-    // Qwen / DashScope — Alibaba 通义, OpenAI-compatible endpoint
-    m.insert(
-        "qwen",
-        ProviderPreset {
-            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            protocol: "openai",
-            color: "#615ced",
-            default_model: "qwen-max-2025-01-25",
-        },
-    );
-    m.insert(
-        "dashscope",
-        ProviderPreset {
-            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            protocol: "openai",
-            color: "#615ced",
-            default_model: "qwen-max-2025-01-25",
-        },
-    );
-
-    // Baichuan 百川 — OpenAI-compatible
-    m.insert(
-        "baichuan",
-        ProviderPreset {
-            base_url: "https://api.baichuan-ai.com/v1",
-            protocol: "openai",
-            color: "#e11d48",
-            default_model: "Baichuan4",
-        },
-    );
-
-    // Hunyuan 腾讯混元 — OpenAI-compatible
-    m.insert(
-        "hunyuan",
-        ProviderPreset {
-            base_url: "https://api.hunyuan.cloud.tencent.com/v1",
-            protocol: "openai",
-            color: "#1e40af",
-            default_model: "hunyuan-pro",
-        },
-    );
-
-    // Spark 讯飞星火 — V4 Ultra OpenAI-compatible endpoint
-    m.insert(
-        "spark",
-        ProviderPreset {
-            base_url: "https://spark-api-open.xf-yun.com/v1",
-            protocol: "openai",
-            color: "#ff4d4f",
-            default_model: "4.0Ultra",
-        },
-    );
-
-    // =========================================================================
-    // Phase R2 chat additions — extend coverage to cloud LLM gateways, local
-    // OpenAI-compatible servers, and remaining commercial vendors. Most are
-    // straight OpenAI-protocol entries; Bedrock defaults to anthropic-on-AWS.
-    // =========================================================================
-
-    // Amazon Bedrock — Anthropic protocol via AWS sign-v4 proxy. Override
-    // `base_url` per region (e.g. `https://bedrock-runtime.us-east-1.amazonaws.com`).
-    m.insert(
+        ProviderPreset::new(
+            "https://YOUR-RESOURCE.openai.azure.com",
+            "openai",
+            "#0078d4",
+            "gpt-4o",
+        )
+        .with_display("Azure OpenAI")
+        .with_signup("https://portal.azure.com")
+        .with_description("Override base_url with your Azure resource")
+        .no_health_check(),
+    ),
+    // ─── Anthropic family ─────────────────────────────────────────────────────
+    (
+        "claude",
+        ProviderPreset::new(
+            "https://api.anthropic.com",
+            "anthropic",
+            "#d97757",
+            "claude-sonnet-4-5-20250514",
+        )
+        .with_display("Anthropic Claude")
+        .with_signup("https://console.anthropic.com/settings/keys")
+        .with_aux_model("claude-haiku-4-5-20251001")
+        .with_models_url("https://api.anthropic.com/v1/models")
+        .with_fallback_models(&[
+            "claude-sonnet-4-5-20250514",
+            "claude-opus-4-5-20250514",
+            "claude-haiku-4-5-20251001",
+        ]),
+    ),
+    (
         "amazon-bedrock",
-        ProviderPreset {
-            base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-            protocol: "anthropic",
-            color: "#ff9900",
-            default_model: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-        },
-    );
-    m.insert(
-        "bedrock",
-        ProviderPreset {
-            base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-            protocol: "anthropic",
-            color: "#ff9900",
-            default_model: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-        },
-    );
-
-    // Cloudflare Workers AI — OpenAI-compatible gateway. Override base_url with
-    // your account id: `https://api.cloudflare.com/client/v4/accounts/{id}/ai/v1`.
-    m.insert(
+        ProviderPreset::new(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "anthropic",
+            "#ff9900",
+            "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        )
+        .with_aliases(&["bedrock"])
+        .with_display("Amazon Bedrock")
+        .with_signup("https://console.aws.amazon.com/bedrock")
+        .with_description("Anthropic protocol; override base_url per region")
+        .no_health_check(),
+    ),
+    (
+        "vertex-anthropic",
+        ProviderPreset::new(
+            "https://us-east5-aiplatform.googleapis.com/v1",
+            "anthropic",
+            "#4285f4",
+            "claude-sonnet-4@20250514",
+        )
+        .with_display("Vertex AI — Anthropic")
+        .with_signup("https://console.cloud.google.com")
+        .with_description("Claude via GCP Vertex; region-specific base URL")
+        .no_health_check(),
+    ),
+    // ─── Google ───────────────────────────────────────────────────────────────
+    (
+        "gemini",
+        ProviderPreset::new(
+            "https://generativelanguage.googleapis.com",
+            "gemini",
+            "#4285f4",
+            "gemini-2.5-flash",
+        )
+        .with_display("Google Gemini")
+        .with_signup("https://aistudio.google.com/app/apikey")
+        .with_aux_model("gemini-2.5-flash-lite")
+        .with_fallback_models(&[
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+        ]),
+    ),
+    // ─── DeepSeek / Moonshot ──────────────────────────────────────────────────
+    (
+        "deepseek",
+        ProviderPreset::new("https://api.deepseek.com", "openai", "#0066cc", "deepseek-chat")
+            .with_display("DeepSeek")
+            .with_signup("https://platform.deepseek.com/api_keys")
+            .with_aux_model("deepseek-chat")
+            .with_fallback_models(&["deepseek-chat", "deepseek-reasoner"]),
+    ),
+    (
+        "moonshot",
+        ProviderPreset::new(
+            "https://api.moonshot.ai/v1",
+            "openai",
+            "#6366f1",
+            "kimi-k2-0905-preview",
+        )
+        .with_aliases(&["kimi"])
+        .with_display("Moonshot / Kimi")
+        .with_signup("https://platform.moonshot.ai/console/api-keys")
+        .with_fallback_models(&["kimi-k2-0905-preview", "moonshot-v1-128k", "moonshot-v1-32k"]),
+    ),
+    (
+        "kimi-for-coding",
+        ProviderPreset::new(
+            "https://api.kimi.com/coding/v1",
+            "anthropic",
+            "#6366f1",
+            "Kimi-K2.6",
+        )
+        .with_aliases(&["kimi-coding"])
+        .with_display("Kimi for Coding")
+        .with_signup("https://platform.moonshot.ai")
+        .with_description("Anthropic-protocol endpoint for IDE agents")
+        // Server manages temperature — sending one returns a fixed-value error.
+        .with_temperature_policy(super::TemperaturePolicy::Omit),
+    ),
+    // ─── Chinese commercial LLMs ──────────────────────────────────────────────
+    (
+        "doubao",
+        ProviderPreset::new(
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "openai",
+            "#ff6b35",
+            "doubao-1.5-pro-256k",
+        )
+        .with_aliases(&["volcengine", "ark"])
+        .with_display("Volcengine Doubao")
+        .with_signup("https://console.volcengine.com/ark"),
+    ),
+    (
+        "siliconflow",
+        ProviderPreset::new(
+            "https://api.siliconflow.cn/v1",
+            "openai",
+            "#6c5ce7",
+            "deepseek-ai/DeepSeek-V3",
+        )
+        .with_display("SiliconFlow")
+        .with_signup("https://cloud.siliconflow.cn/account/ak"),
+    ),
+    (
+        "zhipu",
+        ProviderPreset::new(
+            "https://open.bigmodel.cn/api/paas/v4",
+            "openai",
+            "#3b5998",
+            "GLM-5",
+        )
+        .with_aliases(&["glm"])
+        .with_display("Zhipu GLM")
+        .with_signup("https://bigmodel.cn/usercenter/apikeys"),
+    ),
+    (
+        "minimax",
+        ProviderPreset::new(
+            "https://api.minimax.io/v1",
+            "openai",
+            "#e84393",
+            "MiniMax-M2.5",
+        )
+        .with_display("MiniMax")
+        .with_signup("https://www.minimax.io"),
+    ),
+    (
+        "qwen",
+        ProviderPreset::new(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "openai",
+            "#615ced",
+            "qwen-max-2025-01-25",
+        )
+        .with_aliases(&["dashscope"])
+        .with_display("Qwen / 通义")
+        .with_signup("https://bailian.console.aliyun.com")
+        .with_description("Alibaba DashScope OpenAI-compatible endpoint")
+        .with_fallback_models(&["qwen-max-2025-01-25", "qwen-plus", "qwen-turbo"]),
+    ),
+    (
+        "baichuan",
+        ProviderPreset::new(
+            "https://api.baichuan-ai.com/v1",
+            "openai",
+            "#e11d48",
+            "Baichuan4",
+        )
+        .with_display("Baichuan / 百川")
+        .with_signup("https://platform.baichuan-ai.com"),
+    ),
+    (
+        "hunyuan",
+        ProviderPreset::new(
+            "https://api.hunyuan.cloud.tencent.com/v1",
+            "openai",
+            "#1e40af",
+            "hunyuan-pro",
+        )
+        .with_display("Hunyuan / 腾讯混元")
+        .with_signup("https://cloud.tencent.com/product/hunyuan"),
+    ),
+    (
+        "spark",
+        ProviderPreset::new(
+            "https://spark-api-open.xf-yun.com/v1",
+            "openai",
+            "#ff4d4f",
+            "4.0Ultra",
+        )
+        .with_display("Spark / 讯飞星火")
+        .with_description("V4 Ultra OpenAI-compatible endpoint"),
+    ),
+    (
+        "stepfun",
+        ProviderPreset::new("https://api.stepfun.com/v1", "openai", "#0ea5e9", "step-1-8k")
+            .with_display("Stepfun")
+            .with_signup("https://platform.stepfun.com"),
+    ),
+    (
+        "t8star",
+        ProviderPreset::new("https://api.t8star.cn/v1", "openai", "#f59e0b", "")
+            .with_display("T8Star")
+            .with_description("OpenAI-compatible aggregator"),
+    ),
+    // ─── Western specialty / inference ────────────────────────────────────────
+    (
+        "groq",
+        ProviderPreset::new(
+            "https://api.groq.com/openai/v1",
+            "openai",
+            "#f55036",
+            "llama-3.3-70b-versatile",
+        )
+        .with_display("Groq")
+        .with_signup("https://console.groq.com/keys")
+        .with_description("Ultra-fast LPU inference")
+        .with_fallback_models(&["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]),
+    ),
+    (
+        "cerebras",
+        ProviderPreset::new("https://api.cerebras.ai/v1", "openai", "#f97316", "llama-3.3-70b")
+            .with_display("Cerebras")
+            .with_signup("https://cloud.cerebras.ai")
+            .with_description("Ultra-fast Llama inference"),
+    ),
+    (
+        "together",
+        ProviderPreset::new("https://api.together.xyz/v1", "openai", "#6366f1", "")
+            .with_display("Together.ai")
+            .with_signup("https://api.together.xyz/settings/api-keys"),
+    ),
+    (
+        "perplexity",
+        ProviderPreset::new("https://api.perplexity.ai", "openai", "#20808d", "")
+            .with_display("Perplexity")
+            .with_signup("https://www.perplexity.ai/settings/api")
+            .with_description("Search-augmented LLMs"),
+    ),
+    (
+        "mistral",
+        ProviderPreset::new("https://api.mistral.ai/v1", "openai", "#ff7000", "")
+            .with_display("Mistral AI")
+            .with_signup("https://console.mistral.ai/api-keys"),
+    ),
+    (
+        "cohere",
+        ProviderPreset::new("https://api.cohere.ai/v1", "openai", "#39594d", "")
+            .with_display("Cohere")
+            .with_signup("https://dashboard.cohere.com/api-keys"),
+    ),
+    (
+        "fireworks",
+        ProviderPreset::new("https://api.fireworks.ai/inference/v1", "openai", "#ff6b35", "")
+            .with_display("Fireworks.ai")
+            .with_signup("https://fireworks.ai/account/api-keys"),
+    ),
+    (
+        "anyscale",
+        ProviderPreset::new("https://api.endpoints.anyscale.com/v1", "openai", "#00d4aa", "")
+            .with_display("Anyscale"),
+    ),
+    (
+        "replicate",
+        ProviderPreset::new("https://api.replicate.com/v1", "openai", "#0c0c0d", "")
+            .with_display("Replicate")
+            .with_signup("https://replicate.com/account/api-tokens")
+            .with_description("Hosting; image/video via generation layer"),
+    ),
+    (
+        "openrouter",
+        ProviderPreset::new(
+            "https://openrouter.ai/api",
+            "openai-responses",
+            "#6467f2",
+            "openai/gpt-4o",
+        )
+        .with_aliases(&["or"])
+        .with_display("OpenRouter")
+        .with_signup("https://openrouter.ai/keys")
+        .with_description("Multi-model router")
+        .with_fallback_models(&[
+            "openai/gpt-4o",
+            "anthropic/claude-sonnet-4",
+            "google/gemini-2.5-flash",
+        ]),
+    ),
+    (
+        "lepton",
+        ProviderPreset::new("https://api.lepton.ai/api/v1", "openai", "#4f46e5", "")
+            .with_display("Lepton AI"),
+    ),
+    (
+        "hyperbolic",
+        ProviderPreset::new("https://api.hyperbolic.xyz/v1", "openai", "#8b5cf6", "")
+            .with_display("Hyperbolic"),
+    ),
+    (
+        "huggingface",
+        ProviderPreset::new(
+            "https://router.huggingface.co/v1",
+            "openai",
+            "#ffd21e",
+            "meta-llama/Llama-3.3-70B-Instruct",
+        )
+        .with_display("HuggingFace Inference")
+        .with_signup("https://huggingface.co/settings/tokens")
+        .with_description("Routes to community-hosted open models"),
+    ),
+    // ─── xAI ──────────────────────────────────────────────────────────────────
+    (
+        "xai",
+        ProviderPreset::new("https://api.x.ai/v1", "openai", "#000000", "grok-4-0709")
+            .with_aliases(&["grok"])
+            .with_display("xAI Grok")
+            .with_signup("https://console.x.ai")
+            .with_fallback_models(&["grok-4-0709", "grok-3-mini"]),
+    ),
+    // ─── Cloud / gateway / local ──────────────────────────────────────────────
+    (
         "cloudflare-ai",
-        ProviderPreset {
-            base_url: "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1",
-            protocol: "openai",
-            color: "#f6821f",
-            default_model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-        },
-    );
-    m.insert(
-        "workers-ai",
-        ProviderPreset {
-            base_url: "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1",
-            protocol: "openai",
-            color: "#f6821f",
-            default_model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-        },
-    );
-
-    // DeepInfra — open-model inference, OpenAI-compatible.
-    m.insert(
+        ProviderPreset::new(
+            "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1",
+            "openai",
+            "#f6821f",
+            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        )
+        .with_aliases(&["workers-ai"])
+        .with_display("Cloudflare Workers AI")
+        .with_signup("https://dash.cloudflare.com/?to=/:account/ai")
+        .with_description("Set account id in base_url"),
+    ),
+    (
         "deepinfra",
-        ProviderPreset {
-            base_url: "https://api.deepinfra.com/v1/openai",
-            protocol: "openai",
-            color: "#5b8def",
-            default_model: "meta-llama/Llama-3.3-70B-Instruct",
-        },
-    );
-
-    // GitHub Copilot Chat — OpenAI-compatible via Copilot API proxy.
-    m.insert(
+        ProviderPreset::new(
+            "https://api.deepinfra.com/v1/openai",
+            "openai",
+            "#5b8def",
+            "meta-llama/Llama-3.3-70B-Instruct",
+        )
+        .with_display("DeepInfra")
+        .with_signup("https://deepinfra.com/dash/api_keys")
+        .with_description("Open-model inference, OpenAI-compatible"),
+    ),
+    (
         "github-copilot",
-        ProviderPreset {
-            base_url: "https://api.githubcopilot.com",
-            protocol: "openai",
-            color: "#24292f",
-            default_model: "gpt-4o-2025-04-09",
-        },
-    );
-    m.insert(
-        "copilot",
-        ProviderPreset {
-            base_url: "https://api.githubcopilot.com",
-            protocol: "openai",
-            color: "#24292f",
-            default_model: "gpt-4o-2025-04-09",
-        },
-    );
-
-    // LM Studio — local OpenAI-compatible server (default port 1234).
-    m.insert(
+        ProviderPreset::new(
+            "https://api.githubcopilot.com",
+            "openai",
+            "#24292f",
+            "gpt-4o-2025-04-09",
+        )
+        .with_aliases(&["copilot"])
+        .with_display("GitHub Copilot")
+        .with_signup("https://github.com/settings/copilot")
+        .with_description("Requires Copilot subscription token"),
+    ),
+    (
         "lmstudio",
-        ProviderPreset {
-            base_url: "http://localhost:1234/v1",
-            protocol: "openai",
-            color: "#7c3aed",
-            default_model: "local-model",
-        },
-    );
-
-    // LiteLLM proxy — drop-in OpenAI-compatible router for any backend
-    // (Bedrock, Vertex, Azure, etc.). Default assumes localhost:4000.
-    m.insert(
+        ProviderPreset::new("http://localhost:1234/v1", "openai", "#7c3aed", "local-model")
+            .with_display("LM Studio (Local)")
+            .with_signup("https://lmstudio.ai")
+            .with_description("Local OpenAI-compatible server (default :1234)"),
+    ),
+    (
         "litellm",
-        ProviderPreset {
-            base_url: "http://localhost:4000",
-            protocol: "openai",
-            color: "#22c55e",
-            default_model: "gpt-4o",
-        },
-    );
-
-    // NVIDIA NIM — OpenAI-compatible inference catalog (NGC API key).
-    m.insert(
+        ProviderPreset::new("http://localhost:4000", "openai", "#22c55e", "gpt-4o")
+            .with_display("LiteLLM Proxy")
+            .with_signup("https://docs.litellm.ai")
+            .with_description("Drop-in proxy for any LLM backend"),
+    ),
+    (
         "nvidia-nim",
-        ProviderPreset {
-            base_url: "https://integrate.api.nvidia.com/v1",
-            protocol: "openai",
-            color: "#76b900",
-            default_model: "meta/llama-3.3-70b-instruct",
-        },
-    );
-    m.insert(
-        "nvidia",
-        ProviderPreset {
-            base_url: "https://integrate.api.nvidia.com/v1",
-            protocol: "openai",
-            color: "#76b900",
-            default_model: "meta/llama-3.3-70b-instruct",
-        },
-    );
-
-    // Inflection AI — Pi-3.5+, OpenAI-compatible.
-    m.insert(
+        ProviderPreset::new(
+            "https://integrate.api.nvidia.com/v1",
+            "openai",
+            "#76b900",
+            "meta/llama-3.3-70b-instruct",
+        )
+        .with_aliases(&["nvidia"])
+        .with_display("NVIDIA NIM")
+        .with_signup("https://build.nvidia.com")
+        .with_description("NGC-hosted inference catalog"),
+    ),
+    (
         "inflection",
-        ProviderPreset {
-            base_url: "https://api.inflection.ai/external/api/inference/openai/v1",
-            protocol: "openai",
-            color: "#f59e0b",
-            default_model: "inflection_3_pi",
-        },
-    );
-
-    // Novita AI — open-model serverless inference, OpenAI-compatible.
-    m.insert(
+        ProviderPreset::new(
+            "https://api.inflection.ai/external/api/inference/openai/v1",
+            "openai",
+            "#f59e0b",
+            "inflection_3_pi",
+        )
+        .with_display("Inflection AI (Pi)")
+        .with_signup("https://developers.inflection.ai"),
+    ),
+    (
         "novita",
-        ProviderPreset {
-            base_url: "https://api.novita.ai/v3/openai",
-            protocol: "openai",
-            color: "#0ea5e9",
-            default_model: "meta-llama/llama-3.3-70b-instruct",
-        },
-    );
-
-    // Chutes — Bittensor-backed open inference, OpenAI-compatible.
-    m.insert(
+        ProviderPreset::new(
+            "https://api.novita.ai/v3/openai",
+            "openai",
+            "#0ea5e9",
+            "meta-llama/llama-3.3-70b-instruct",
+        )
+        .with_display("Novita AI")
+        .with_signup("https://novita.ai/settings/key-management")
+        .with_description("Serverless open-model inference"),
+    ),
+    (
         "chutes",
-        ProviderPreset {
-            base_url: "https://llm.chutes.ai/v1",
-            protocol: "openai",
-            color: "#a855f7",
-            default_model: "deepseek-ai/DeepSeek-V3-0324",
-        },
-    );
+        ProviderPreset::new(
+            "https://llm.chutes.ai/v1",
+            "openai",
+            "#a855f7",
+            "deepseek-ai/DeepSeek-V3-0324",
+        )
+        .with_display("Chutes")
+        .with_signup("https://chutes.ai")
+        .with_description("Bittensor-backed open inference"),
+    ),
+    // ─── New presets brought over from hermes-agent plugins/model-providers ───
+    (
+        "ai-gateway",
+        ProviderPreset::new(
+            "https://gateway.ai.cloudflare.com/v1/ACCOUNT_ID/aleph/openai",
+            "openai",
+            "#f6821f",
+            "gpt-4o",
+        )
+        .with_display("Cloudflare AI Gateway")
+        .with_signup("https://dash.cloudflare.com/?to=/:account/ai/ai-gateway")
+        .with_description("OpenAI-compatible AI gateway with cache + analytics")
+        .no_health_check(),
+    ),
+    (
+        "azure-foundry",
+        ProviderPreset::new(
+            "https://YOUR-PROJECT.services.ai.azure.com/models",
+            "openai",
+            "#0078d4",
+            "gpt-4o",
+        )
+        .with_display("Azure AI Foundry")
+        .with_signup("https://ai.azure.com")
+        .with_description("Azure AI Foundry inference (models endpoint)")
+        .no_health_check(),
+    ),
+    (
+        "gmi",
+        ProviderPreset::new(
+            "https://api.gmi-serving.com/v1",
+            "openai",
+            "#0ea5e9",
+            "deepseek-ai/DeepSeek-V3",
+        )
+        .with_display("GMI Cloud")
+        .with_signup("https://www.gmicloud.ai")
+        .with_description("Multi-model direct API"),
+    ),
+    (
+        "nous",
+        ProviderPreset::new(
+            "https://inference-api.nousresearch.com/v1",
+            "openai",
+            "#8b5cf6",
+            "Hermes-3-Llama-3.1-70B",
+        )
+        .with_display("Nous Research")
+        .with_signup("https://portal.nousresearch.com")
+        .with_description("Hermes models from Nous Research"),
+    ),
+    (
+        "zai",
+        ProviderPreset::new(
+            "https://api.z.ai/api/paas/v4",
+            "openai",
+            "#3b82f6",
+            "glm-4.6",
+        )
+        .with_display("Z.ai (Zhipu international)")
+        .with_signup("https://z.ai")
+        .with_description("International gateway for Zhipu / GLM models"),
+    ),
+    (
+        "ollama-cloud",
+        ProviderPreset::new(
+            "https://ollama.com/api/v1",
+            "openai",
+            "#0c0c0d",
+            "llama3.3:70b",
+        )
+        .with_display("Ollama Cloud")
+        .with_signup("https://ollama.com")
+        .with_description("Cloud-hosted Ollama (vs. local default)"),
+    ),
+];
 
+/// Registry of known provider presets — expanded from `PROFILES` so both
+/// canonical names and aliases resolve to the same `ProviderPreset` data.
+pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
+    let mut m = HashMap::with_capacity(PROFILES.len() * 2);
+    for (name, preset) in PROFILES {
+        m.insert(*name, *preset);
+        for alias in preset.aliases {
+            m.insert(*alias, *preset);
+        }
+    }
     m
 });

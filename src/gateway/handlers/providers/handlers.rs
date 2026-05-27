@@ -740,17 +740,36 @@ pub async fn handle_catalog(
             let enabled = cfg.map(|c| c.enabled).unwrap_or(false);
             let models = cfg.map(|c| c.models.clone()).unwrap_or_default();
 
+            // Prefer preset-level display_name (hermes-parity field) over
+            // legacy PRESET_METADATA so newly-added presets work without
+            // having to maintain a parallel metadata entry.
+            let display_name = preset
+                .display_name
+                .map(String::from)
+                .or_else(|| meta.map(|m| m.display_name.to_string()))
+                .unwrap_or_else(|| entry.name.to_string());
+            let notes = preset
+                .description
+                .map(String::from)
+                .or_else(|| meta.and_then(|m| m.notes.map(String::from)));
+
             Some(CatalogEntryView {
                 id: entry.name.to_string(),
-                display_name: meta
-                    .map(|m| m.display_name.to_string())
-                    .unwrap_or_else(|| entry.name.to_string()),
+                display_name,
                 default_model: preset.default_model.to_string(),
                 base_url: preset.base_url.to_string(),
                 protocol: preset.protocol.to_string(),
                 color: preset.color.to_string(),
                 homepage: meta.and_then(|m| m.homepage.map(String::from)),
-                notes: meta.and_then(|m| m.notes.map(String::from)),
+                notes,
+                signup_url: preset.signup_url.map(String::from),
+                fallback_models: preset
+                    .fallback_models
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                default_aux_model: preset.default_aux_model.map(String::from),
+                aliases: preset.aliases.iter().map(|s| s.to_string()).collect(),
                 modalities: meta
                     .map(|m| m.modalities.iter().map(|x| x.as_str().to_string()).collect())
                     .unwrap_or_else(|| vec!["chat".to_string()]),

@@ -1,6 +1,12 @@
 //! Provider presets registry
 //!
 //! Contains default configurations for known AI providers.
+//!
+//! The `ProviderPreset` struct mirrors hermes-agent's `ProviderProfile`
+//! dataclass — a single declarative source of truth per provider that
+//! collapses what used to be split across `PRESETS` and `PRESET_METADATA`.
+//! Existing entries keep their 4-field shape; new fields default safely and
+//! are opt-in via the `with_*` const builders.
 
 use crate::providers::metadata::{Modality, ProviderMetadata};
 
@@ -13,9 +19,28 @@ mod tests;
 pub use metadata::PRESET_METADATA;
 pub use registry::PRESETS;
 
+/// Temperature handling for providers with non-standard expectations.
+///
+/// Examples:
+///   - Kimi-for-coding server-manages temperature → `TemperaturePolicy::Omit`
+///   - GPT-5 family forbids non-default temperature → `Force(1.0)`
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TemperaturePolicy {
+    /// Strip the `temperature` field from the outgoing request entirely.
+    Omit,
+    /// Override caller's value with this fixed temperature.
+    Force(f32),
+}
+
 /// Provider preset configuration
-#[derive(Debug, Clone)]
+///
+/// Declarative profile for a built-in provider. The first four fields are
+/// required (preserved for backwards compatibility with `merge_provider_preset`
+/// and pre-hermes-parity call sites); the remaining fields are zero-cost
+/// extensions that opt in via the `with_*` const builders.
+#[derive(Debug, Clone, Copy)]
 pub struct ProviderPreset {
+    // ── Required identity / routing ──────────────────────────────────────────
     /// Default base URL for the provider
     pub base_url: &'static str,
     /// Protocol to use (e.g., "openai", "anthropic")
@@ -24,6 +49,135 @@ pub struct ProviderPreset {
     pub color: &'static str,
     /// Default model for the provider
     pub default_model: &'static str,
+
+    // ── hermes-parity extensions (all opt-in, zero-cost defaults) ────────────
+    /// Alternative names this preset answers to (case-insensitive).
+    /// Eliminates duplicate `m.insert()` calls per name variant.
+    pub aliases: &'static [&'static str],
+    /// Curated fallback model IDs used when dynamic `/models` discovery fails.
+    /// First entry is the recommended fallback.
+    pub fallback_models: &'static [&'static str],
+    /// Cheap auxiliary model for memory summarization, vision, classification.
+    /// `None` → callers should fall back to `default_model`.
+    pub default_aux_model: Option<&'static str>,
+    /// Override for the `/models` discovery endpoint.
+    /// `None` → use `{base_url}/models` (or protocol-specific default).
+    pub models_url: Option<&'static str>,
+    /// Vendor signup / API-key page (panel picker links to this).
+    pub signup_url: Option<&'static str>,
+    /// Human-friendly display name; falls back to canonical name when None.
+    pub display_name: Option<&'static str>,
+    /// One-line description shown under display_name.
+    pub description: Option<&'static str>,
+    /// Non-standard temperature handling (Kimi server-managed, GPT-5 fixed, …).
+    /// `None` → pass caller's temperature through unchanged.
+    pub temperature_policy: Option<TemperaturePolicy>,
+    /// Whether `/models` probing is safe (some providers 404 or rate-limit).
+    pub supports_health_check: bool,
+}
+
+impl Default for ProviderPreset {
+    fn default() -> Self {
+        Self {
+            base_url: "",
+            protocol: "openai",
+            color: "#888888",
+            default_model: "",
+            aliases: &[],
+            fallback_models: &[],
+            default_aux_model: None,
+            models_url: None,
+            signup_url: None,
+            display_name: None,
+            description: None,
+            temperature_policy: None,
+            supports_health_check: true,
+        }
+    }
+}
+
+impl ProviderPreset {
+    /// Const factory for the required four-tuple; extensions stay defaulted.
+    pub const fn new(
+        base_url: &'static str,
+        protocol: &'static str,
+        color: &'static str,
+        default_model: &'static str,
+    ) -> Self {
+        Self {
+            base_url,
+            protocol,
+            color,
+            default_model,
+            aliases: &[],
+            fallback_models: &[],
+            default_aux_model: None,
+            models_url: None,
+            signup_url: None,
+            display_name: None,
+            description: None,
+            temperature_policy: None,
+            supports_health_check: true,
+        }
+    }
+
+    pub const fn with_aliases(mut self, aliases: &'static [&'static str]) -> Self {
+        self.aliases = aliases;
+        self
+    }
+
+    pub const fn with_fallback_models(mut self, models: &'static [&'static str]) -> Self {
+        self.fallback_models = models;
+        self
+    }
+
+    pub const fn with_aux_model(mut self, model: &'static str) -> Self {
+        self.default_aux_model = Some(model);
+        self
+    }
+
+    pub const fn with_signup(mut self, url: &'static str) -> Self {
+        self.signup_url = Some(url);
+        self
+    }
+
+    pub const fn with_display(mut self, name: &'static str) -> Self {
+        self.display_name = Some(name);
+        self
+    }
+
+    pub const fn with_description(mut self, desc: &'static str) -> Self {
+        self.description = Some(desc);
+        self
+    }
+
+    pub const fn with_models_url(mut self, url: &'static str) -> Self {
+        self.models_url = Some(url);
+        self
+    }
+
+    pub const fn with_temperature_policy(mut self, p: TemperaturePolicy) -> Self {
+        self.temperature_policy = Some(p);
+        self
+    }
+
+    pub const fn no_health_check(mut self) -> Self {
+        self.supports_health_check = false;
+        self
+    }
+
+    /// Resolve aux model, falling back to `default_model` when unset.
+    pub fn aux_model(&self) -> &'static str {
+        self.default_aux_model.unwrap_or(self.default_model)
+    }
+
+    /// Resolve `/models` discovery URL, falling back to `{base_url}/models`.
+    pub fn resolve_models_url(&self) -> String {
+        match self.models_url {
+            Some(u) => u.to_string(),
+            None => format!("{}/models", self.base_url.trim_end_matches('/')),
+        }
+    }
 }
 
 /// Look up rich metadata for a preset by name (case-insensitive).
@@ -53,9 +207,10 @@ pub fn presets_by_modality(modality: Modality) -> Vec<&'static str> {
     out
 }
 
-/// Get a preset by name (case-insensitive)
+/// Get a preset by name (case-insensitive). Walks aliases on miss.
 pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
-    PRESETS.get(name.to_lowercase().as_str())
+    let lower = name.to_lowercase();
+    PRESETS.get(lower.as_str())
 }
 
 /// Get a preset with override support.
