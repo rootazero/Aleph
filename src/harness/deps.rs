@@ -61,6 +61,18 @@ pub struct HarnessDeps {
     /// System prompt injected into every RequestPayload. Subagent path builds
     /// this via PromptBuilder at spawn time; Gateway passes None for now.
     pub system_prompt: Option<String>,
+    /// Stable/dynamic split of the system prompt for cache-first providers.
+    ///
+    /// When present, the harness threads these through to
+    /// `RequestPayload::system_blocks`; the Anthropic adapter uses the split
+    /// to place the prompt-cache breakpoint at the stable/dynamic boundary,
+    /// so per-turn dynamic content (RuntimeContext.current_time,
+    /// tool_runtime_state, etc.) no longer busts the prefix hash. `None`
+    /// keeps the legacy "single-string system" path. Setting this WITHOUT
+    /// setting `system_prompt` is supported; the harness will concatenate
+    /// the parts into a string for the legacy field too (so adapters that
+    /// only read `system_prompt` still see the full prompt).
+    pub system_prompt_parts: Option<Vec<crate::thinker::prompt_builder::SystemPromptPart>>,
     /// Position of this harness instance in the subagent call chain.
     /// Stage 4 seam (#11). Defaults to a fresh root chain (depth=0). The
     /// subagent spawner overrides this with `parent.chain.child()` so each

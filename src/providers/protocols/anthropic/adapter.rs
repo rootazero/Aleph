@@ -15,6 +15,7 @@ use crate::providers::anthropic::types::{Metadata, OutputConfig};
 use crate::providers::anthropic::{AnthropicTool, MessagesRequest, SystemBlock, ThinkingBlock};
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::{CacheControl, EphemeralTtl};
+use crate::thinker::prompt_builder::SystemPromptPart;
 use crate::tool_metadata::DEFAULT_MAX_TOKENS;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -24,8 +25,58 @@ use tracing::{debug, warn};
 mod cache;
 use cache::{
     effective_cache_retention, inject_cache_control_into_recent_messages,
-    inject_cache_control_into_system_array, MAX_CACHE_BREAKPOINTS,
+    inject_cache_control_into_system_array, promote_system_marker_ttl, MAX_CACHE_BREAKPOINTS,
 };
+
+/// Collapse a `SystemPromptPart` slice into Anthropic `SystemBlock`s,
+/// placing the cache breakpoint at the stable/dynamic boundary.
+///
+/// Returns `(Some(blocks), pre_placed)` where `pre_placed` is `true`
+/// when a `cache_control` marker was already attached to the stable
+/// tail (so the caller subtracts one from the breakpoint budget and
+/// skips the legacy `inject_cache_control_into_system_array` call).
+///
+/// Falls back to the legacy single-block shape when `blocks` is `None`,
+/// keeping every pre-existing caller wire-compatible.
+fn split_system_blocks_for_cache(
+    blocks: Option<&[SystemPromptPart]>,
+    legacy: Option<&str>,
+) -> (Option<Vec<SystemBlock>>, bool) {
+    // Legacy path: identical to the pre-wiring behaviour.
+    let Some(parts) = blocks else {
+        let sys = legacy.map(|s| vec![SystemBlock::text(s)]);
+        return (sys, false);
+    };
+
+    // Collapse consecutive parts into two strings — `stable` then `dynamic`.
+    // Reasonix's ImmutablePrefix model: the boundary is data-driven by the
+    // layer's `stability()`, not by string-shape heuristics.
+    let mut stable = String::new();
+    let mut dynamic = String::new();
+    for part in parts {
+        if part.cache {
+            stable.push_str(&part.content);
+        } else {
+            dynamic.push_str(&part.content);
+        }
+    }
+
+    let mut out = Vec::with_capacity(2);
+    let mut pre_placed = false;
+    if !stable.is_empty() {
+        out.push(SystemBlock::cached_text(stable));
+        pre_placed = true;
+    }
+    if !dynamic.is_empty() {
+        out.push(SystemBlock::text(dynamic));
+    }
+    // All-empty corner case — also covers the situation where every layer
+    // returned empty content. Treat as "no system prompt at all".
+    if out.is_empty() {
+        return (None, false);
+    }
+    (Some(out), pre_placed)
+}
 
 /// Parse a comma-separated stop-sequences string into a Vec<String>.
 /// Splits on `,`, trims each element, and filters out empties.
@@ -214,9 +265,24 @@ impl ProtocolAdapter for AnthropicProtocol {
             out
         });
 
-        // Build system block without cache_control; injection is gated on
-        // policy.capabilities.supports_cache_control below.
-        let system = payload.system_prompt.map(|s| vec![SystemBlock::text(s)]);
+        // Build system block(s). Two shapes are supported:
+        //
+        // 1. Cache-first split (preferred): caller supplied `system_blocks`
+        //    via `PromptBuilder::build_system_prompt_cached()`. We collapse
+        //    the contiguous `cache:true` parts into a SINGLE stable block
+        //    carrying the cache breakpoint, and the remaining `cache:false`
+        //    parts into a SINGLE dynamic tail block with no marker. Per
+        //    Anthropic semantics everything UP TO AND INCLUDING the marker
+        //    is the cacheable prefix; the dynamic tail therefore does NOT
+        //    break the prefix hash when its content changes turn-to-turn
+        //    (e.g. RuntimeContext.current_time, tool_runtime_state).
+        //
+        // 2. Legacy single-string: caller used `system_prompt`. Wrapped as
+        //    one block; `inject_cache_control_into_system_array` then puts
+        //    the marker on it later (the whole assembly becomes the cache
+        //    prefix — strictly worse, kept for unmigrated callers).
+        let (system, pre_placed_system_breakpoint) =
+            split_system_blocks_for_cache(payload.system_blocks, payload.system_prompt);
 
         // Cycle 4: wire sampling fields from config
         let top_p = config.top_p;
@@ -328,7 +394,25 @@ impl ProtocolAdapter for AnthropicProtocol {
                 };
                 // System block takes one breakpoint; the rest go to the most
                 // recent messages so multi-turn conversations cache-hit.
-                let system_used = inject_cache_control_into_system_array(&mut body, cc);
+                //
+                // Cache-first path: `split_system_blocks_for_cache` already
+                // placed the marker on the stable tail, so don't double-inject
+                // — just charge one breakpoint to the budget. Legacy path:
+                // marker not yet placed, so run the injector which targets
+                // the last text block of the (single-element) system array.
+                let system_used = if pre_placed_system_breakpoint {
+                    // Stable-tail breakpoint already set on the cached_text
+                    // block via `SystemBlock::cached_text()`. If the active
+                    // retention is `Long`, overwrite the (short, no-TTL)
+                    // marker with the 1h ephemeral variant so the user's
+                    // cache_retention setting is honoured on the split path.
+                    if ext {
+                        promote_system_marker_ttl(&mut body, cc);
+                    }
+                    true
+                } else {
+                    inject_cache_control_into_system_array(&mut body, cc)
+                };
                 let message_budget = MAX_CACHE_BREAKPOINTS - usize::from(system_used);
                 inject_cache_control_into_recent_messages(&mut body, cc, message_budget);
             }

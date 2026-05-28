@@ -391,6 +391,7 @@ impl AiProvider for FailoverProvider {
                         let inner = RequestPayload {
                             messages: &messages,
                             system_prompt: system_prompt.as_deref(),
+                            system_blocks: None,
                             tools: tools.as_deref(),
                             think_level,
                             temperature,

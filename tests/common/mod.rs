@@ -191,6 +191,7 @@ impl OrchestratorFixture {
             turn_budget: None,
             result_store: None,
             session_epoch_registrar: None,
+            cheap_provider: None,
         });
 
         let orchestrator = Orchestrator::new(

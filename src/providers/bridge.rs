@@ -100,6 +100,7 @@ impl LoopProvider for AiProviderBridge {
         let payload = RequestPayload {
             messages: &cleaned,
             system_prompt: Some(system_prompt),
+            system_blocks: None,
             tools: if metadata_tools.is_empty() {
                 None
             } else {

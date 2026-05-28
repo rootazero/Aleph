@@ -325,6 +325,7 @@ fn build_deps(
         preflight_pipeline: None,
         trace_sink: None,
         system_prompt: None,
+        system_prompt_parts: None,
         chain_context: crate::harness::chain_context::ChainContext::default(),
         guardrails: None,
         max_iterations: None,

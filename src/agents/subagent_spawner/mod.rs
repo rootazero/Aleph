@@ -323,6 +323,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             // Stage A (P1) — was None; now inherited from parent SpawnerBase.
             trace_sink: base.trace_sink.clone(),
             system_prompt: Some(system_prompt),
+            system_prompt_parts: None,
             // Stage 4 (#11): stamp the descended child chain on the inner harness
             // so its `chain_context()` accessor reports the correct depth/chain_id
             // instead of falling back to a fresh root.

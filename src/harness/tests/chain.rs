@@ -88,6 +88,7 @@ mod stubs {
             preflight_pipeline: None,
             trace_sink: None,
             system_prompt: None,
+            system_prompt_parts: None,
             chain_context: chain,
             guardrails: None,
             max_iterations: None,

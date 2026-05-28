@@ -402,6 +402,7 @@ where
                             let payload = RequestPayload {
                                 messages: &messages,
                                 system_prompt: Some("You are a title generator. Output ONLY the title, nothing else."),
+                                system_blocks: None,
                                 tools: None,
                                 think_level: None,
                                 temperature: Some(0.3),

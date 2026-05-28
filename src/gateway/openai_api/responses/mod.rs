@@ -104,6 +104,7 @@ pub async fn handle(
     let payload = RequestPayload {
         messages: &unified_messages,
         system_prompt: system_prompt.as_deref(),
+        system_blocks: None,
         tools: tool_defs.as_deref(),
         think_level: None,
         temperature: req.temperature.map(|t| t as f32),

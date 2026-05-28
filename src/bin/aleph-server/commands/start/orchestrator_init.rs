@@ -214,6 +214,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         memory_backend,
         tool_catalog,
         session_epoch_registrar,
+        cheap_provider: None,
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.

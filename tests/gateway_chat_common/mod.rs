@@ -206,6 +206,7 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         turn_budget: None,
         result_store: None,
         session_epoch_registrar: None,
+        cheap_provider: None,
     };
 
     Arc::new(Orchestrator::new(

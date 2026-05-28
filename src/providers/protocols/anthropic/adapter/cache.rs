@@ -44,6 +44,28 @@ pub(super) fn effective_cache_retention(config: &ProviderConfig, endpoint: &str)
 /// Maximum prompt-cache breakpoints Anthropic accepts in a single request.
 pub(super) const MAX_CACHE_BREAKPOINTS: usize = 4;
 
+/// Overwrite the `cache_control` marker on the first text block of the
+/// `system` array — used by the cache-first split path when the request's
+/// effective retention escalates to `Long`. Cycle 4 placed the original
+/// `SystemBlock::cached_text` marker at "ephemeral, no TTL"; this lets the
+/// 1h ephemeral variant take over without re-walking the entire system array.
+pub(super) fn promote_system_marker_ttl(payload: &mut serde_json::Value, cc: CacheControl) {
+    let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
+    let Some(arr) = payload.get_mut("system").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    for block in arr.iter_mut() {
+        if block.get("type").and_then(|v| v.as_str()) == Some("text")
+            && block.get("cache_control").is_some()
+        {
+            if let Some(obj) = block.as_object_mut() {
+                obj.insert("cache_control".to_string(), cc_json);
+            }
+            return;
+        }
+    }
+}
+
 /// Inject `cache_control` into the last text block of the `system` array.
 ///
 /// Handles three input shapes for `payload["system"]`:

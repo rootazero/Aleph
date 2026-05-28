@@ -111,6 +111,7 @@ impl FsProfileSynthesizer {
         let req = RequestPayload {
             messages: &messages,
             system_prompt: Some(system),
+            system_blocks: None,
             ..Default::default()
         };
         let resp = self.provider.process(req).await?;

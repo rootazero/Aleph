@@ -81,6 +81,13 @@ pub struct ContextCompactor {
     /// summaries written by `SessionCompactor` (zero API cost) before falling
     /// back to a side-channel LLM call.
     summary_reuse: Option<SummaryReuse>,
+    /// Cheap-tier provider override (Reasonix parity — `summaryModel = "deepseek-v4-flash"`).
+    /// When set, summarization calls go to this provider instead of `provider`.
+    /// `None` (default) preserves legacy behavior of reusing the main LLM.
+    /// Summarization is read-and-condense work where the strongest model is
+    /// almost never required; routing it to a flash-tier provider yields a
+    /// 10–20× per-token cost reduction without measurable quality regression.
+    cheap_provider: Option<Arc<dyn AiProvider>>,
 }
 
 impl ContextCompactor {
@@ -90,6 +97,7 @@ impl ContextCompactor {
             provider,
             config,
             summary_reuse: None,
+            cheap_provider: None,
         }
     }
 
@@ -105,6 +113,19 @@ impl ContextCompactor {
             agent_id: agent_id.into(),
         });
         self
+    }
+
+    /// Route summarization calls to a cheap-tier provider (Reasonix parity —
+    /// `summaryModel = "deepseek-v4-flash"`). `None` clears the override.
+    pub fn with_cheap_provider(mut self, cheap: Option<Arc<dyn AiProvider>>) -> Self {
+        self.cheap_provider = cheap;
+        self
+    }
+
+    /// Provider used for summarization — cheap-tier override if set, otherwise
+    /// the main provider passed to `new()`. Internal accessor.
+    fn summarizer(&self) -> &Arc<dyn AiProvider> {
+        self.cheap_provider.as_ref().unwrap_or(&self.provider)
     }
 
     /// Compact older messages in the conversation history.
@@ -354,13 +375,15 @@ impl ContextCompactor {
         }
     }
 
-    /// Side-channel LLM call for summarization.
+    /// Side-channel LLM call for summarization. Routes to the cheap-tier
+    /// provider when one is configured (Reasonix parity), otherwise reuses
+    /// the main provider.
     async fn call_llm(&self, prompt: &str) -> anyhow::Result<String> {
         let msgs = [UnifiedMessage::user(prompt)];
         let system =
             "You are a precise conversation summarizer. Output the analysis block followed by the summary block. No other text.";
         let payload = RequestPayload::new(&msgs).with_system(Some(system));
-        let response: ProviderResponse = self.provider.process(payload).await?;
+        let response: ProviderResponse = self.summarizer().process(payload).await?;
         Ok(response.text.unwrap_or_default())
     }
 }

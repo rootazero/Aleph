@@ -112,6 +112,7 @@ impl HttpProvider {
         let final_payload = RequestPayload {
             messages: &filtered_messages,
             system_prompt: payload.system_prompt,
+            system_blocks: None,
             tools: payload.tools,
             think_level: payload.think_level,
             temperature: payload.temperature,
@@ -228,6 +229,7 @@ impl HttpProvider {
         let final_payload = RequestPayload {
             messages: &filtered_messages,
             system_prompt: payload.system_prompt,
+            system_blocks: None,
             tools: payload.tools,
             think_level: payload.think_level,
             temperature: payload.temperature,

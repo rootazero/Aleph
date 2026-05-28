@@ -973,6 +973,7 @@ fn chat_response_format_json_schema_emits_strict_for_openai() {
     let payload = RequestPayload {
         messages: &[],
         system_prompt: None,
+        system_blocks: None,
         max_tokens: None,
         temperature: None,
         think_level: None,
@@ -1011,6 +1012,7 @@ fn chat_response_format_json_object() {
     let payload = RequestPayload {
         messages: &[],
         system_prompt: None,
+        system_blocks: None,
         max_tokens: None,
         temperature: None,
         think_level: None,
@@ -1042,6 +1044,7 @@ fn chat_response_format_stripped_for_third_party_endpoint() {
     let payload = RequestPayload {
         messages: &[],
         system_prompt: None,
+        system_blocks: None,
         max_tokens: None,
         temperature: None,
         think_level: None,
@@ -1072,6 +1075,7 @@ fn chat_response_format_none_omits_field() {
     let payload = RequestPayload {
         messages: &[],
         system_prompt: None,
+        system_blocks: None,
         max_tokens: None,
         temperature: None,
         think_level: None,
@@ -1101,6 +1105,7 @@ fn chat_parallel_tool_calls_some_true() {
     let payload = RequestPayload {
         messages: &[],
         system_prompt: None,
+        system_blocks: None,
         max_tokens: None,
         temperature: None,
         think_level: None,
@@ -1128,6 +1133,7 @@ fn chat_parallel_tool_calls_some_false() {
     let payload = RequestPayload {
         messages: &[],
         system_prompt: None,
+        system_blocks: None,
         max_tokens: None,
         temperature: None,
         think_level: None,
@@ -1155,6 +1161,7 @@ fn chat_parallel_tool_calls_none_omits_field() {
     let payload = RequestPayload {
         messages: &[],
         system_prompt: None,
+        system_blocks: None,
         max_tokens: None,
         temperature: None,
         think_level: None,

@@ -165,6 +165,15 @@ pub struct AgentHarnessRunner {
     /// the split budget directive falls back to `FinalReply` (see `HarnessDeps`).
     pub session_epoch_registrar:
         Option<Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>>,
+
+    /// Cheap-tier provider for side-channel summarization (Reasonix parity).
+    ///
+    /// When set, `ContextCompactor::call_llm` routes its summarization call
+    /// to this provider instead of the main LLM. Recommended target: a
+    /// flash-tier alias of the same provider family (e.g. Haiku for Claude,
+    /// `deepseek-v4-flash` for DeepSeek). `None` preserves the legacy
+    /// behaviour of reusing the main LLM for summarization.
+    pub cheap_provider: Option<Arc<dyn AiProvider>>,
 }
 
 #[async_trait]
@@ -245,7 +254,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // prompt from per-agent curated memory + hybrid retrieval before the
         // harness loop starts. Failures are warned and degraded to `None` so
         // memory issues never block a turn.
-        let system_prompt = self
+        let (system_prompt, system_prompt_parts) = match self
             .build_system_prompt(
                 &spec.agent,
                 &session_id,
@@ -255,7 +264,11 @@ impl HarnessRunner for AgentHarnessRunner {
                 interaction_manifest.as_ref(),
                 sandbox.as_ref(),
             )
-            .await;
+            .await
+        {
+            Some((s, parts)) => (Some(s), Some(parts)),
+            None => (None, None),
+        };
 
         // Step 6: assemble HarnessDeps and run the inner Think→Act loop.
         // Apply per-request tool_service override; fall back to the runner's
@@ -289,6 +302,14 @@ impl HarnessRunner for AgentHarnessRunner {
                     compactor_inner =
                         compactor_inner.with_summary_reuse(backend, spec.agent.to_string());
                 }
+                // Cheap-tier summarization (Reasonix parity).
+                // When the bridge was built with `with_cheap_provider(...)`
+                // — typically a flash-tier alias of the main provider —
+                // route the side-channel summarization call through it
+                // instead of the main LLM. None preserves legacy behavior.
+                if let Some(cheap) = self.cheap_provider.clone() {
+                    compactor_inner = compactor_inner.with_cheap_provider(Some(cheap));
+                }
                 let compactor = Arc::new(compactor_inner);
                 // Cheap-pass preflight: runs unconditionally before the budget
                 // check so token savings happen even when the compactor's LLM
@@ -319,6 +340,7 @@ impl HarnessRunner for AgentHarnessRunner {
             preflight_pipeline,
             trace_sink: trace_sink.clone(),
             system_prompt,
+            system_prompt_parts,
             chain_context: crate::harness::chain_context::ChainContext::default(),
             guardrails: self.guardrails.clone(),
             // H1: the Think→Act loop is always capped. Per-flow override wins;
@@ -651,7 +673,10 @@ impl AgentHarnessRunner {
         iteration_cap: usize,
         channel_manifest: Option<&crate::thinker::InteractionManifest>,
         sandbox: &dyn Sandbox,
-    ) -> Option<String> {
+    ) -> Option<(
+        String,
+        Vec<crate::thinker::prompt_builder::SystemPromptPart>,
+    )> {
         use crate::providers::message::UnifiedMessage;
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
@@ -853,10 +878,24 @@ impl AgentHarnessRunner {
         // unset case silent.
         let cap_for_prompt = u32::try_from(iteration_cap).unwrap_or(u32::MAX);
         builder = builder.with_iteration_cap(cap_for_prompt);
-        let prompt = builder.build_system_prompt(&[]);
+        // Cache-first wiring: build the stable/dynamic split AND the
+        // legacy flat string. The split lights up `RequestPayload::
+        // system_blocks` (consumed by the Anthropic adapter to place the
+        // prompt-cache breakpoint at the stable/dynamic boundary). The
+        // flat string remains the source of truth for adapters that do
+        // not consume `system_blocks` (everything except Anthropic today)
+        // and for callsites that read `HarnessDeps::system_prompt`.
+        let parts = builder.build_system_prompt_cached(&[]);
+        let prompt: String = parts.iter().map(|p| p.content.as_str()).collect();
         // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
         // Logs character counts (not contents) so prompts are observable
         // without leaking memory content to disk-side telemetry.
+        let stable_chars: usize = parts.iter().filter(|p| p.cache).map(|p| p.content.len()).sum();
+        let dynamic_chars: usize = parts
+            .iter()
+            .filter(|p| !p.cache)
+            .map(|p| p.content.len())
+            .sum();
         tracing::info!(
             target: "alephcore::orchestrator::prompt",
             agent_id,
@@ -866,9 +905,11 @@ impl AgentHarnessRunner {
             identity_chars,
             role_present,
             prompt_chars = prompt.len(),
+            cache_stable_chars = stable_chars,
+            cache_dynamic_chars = dynamic_chars,
             "system prompt assembled"
         );
-        Some(prompt)
+        Some((prompt, parts))
     }
 }
 

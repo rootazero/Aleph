@@ -6,6 +6,7 @@
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::error::Result;
+use crate::thinker::prompt_builder::SystemPromptPart;
 use crate::tool_metadata::ToolDefinition;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -36,8 +37,22 @@ pub enum ToolChoice {
 pub struct RequestPayload<'a> {
     /// Structured message list
     pub messages: &'a [UnifiedMessage],
-    /// System prompt (handled differently per provider)
+    /// System prompt (handled differently per provider).
+    ///
+    /// Single-string form: kept for back-compat with every callsite that
+    /// existed before cache-first wiring. When `system_blocks` is also set,
+    /// adapters MUST prefer `system_blocks` (Anthropic prompt-cache splits
+    /// the system into stable + dynamic so the breakpoint marker sits on
+    /// the stable tail instead of the whole assembly).
     pub system_prompt: Option<&'a str>,
+    /// Stable/dynamic split of the system prompt for cache-first providers.
+    ///
+    /// `None` (the default) preserves legacy behaviour — adapters fall back
+    /// to `system_prompt`. When set, the first contiguous run of parts with
+    /// `cache: true` forms the cacheable prefix; the rest is the per-turn
+    /// dynamic tail. Currently consumed by the Anthropic adapter; other
+    /// adapters concatenate transparently.
+    pub system_blocks: Option<&'a [SystemPromptPart]>,
     /// Tool definitions for native tool_use
     pub tools: Option<&'a [ToolDefinition]>,
     /// Thinking/reasoning level
@@ -60,6 +75,7 @@ impl<'a> Default for RequestPayload<'a> {
         Self {
             messages: &[],
             system_prompt: None,
+            system_blocks: None,
             tools: None,
             think_level: None,
             temperature: None,
@@ -80,9 +96,15 @@ impl<'a> RequestPayload<'a> {
         }
     }
 
-    /// Add system prompt
+    /// Add system prompt (single-string form, legacy).
     pub fn with_system(mut self, prompt: Option<&'a str>) -> Self {
         self.system_prompt = prompt;
+        self
+    }
+
+    /// Attach the stable/dynamic split. Cache-first providers prefer this.
+    pub fn with_system_blocks(mut self, blocks: Option<&'a [SystemPromptPart]>) -> Self {
+        self.system_blocks = blocks;
         self
     }
 

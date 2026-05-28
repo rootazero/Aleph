@@ -127,6 +127,24 @@ impl Default for CacheMonitor {
 }
 
 // =============================================================================
+// Process-wide singleton
+// =============================================================================
+//
+// The cache monitor is wired into the metering provider — every LLM call
+// reports its `cache_read_tokens` to the singleton. Aggregate hit-rate is
+// observable without threading the monitor through every layer.
+//
+// Same `OnceLock` shape as `pricing` / `tool_result_store`: lazy install on
+// first read, `&'static` reads on the hot path.
+
+static GLOBAL_CACHE_MONITOR: std::sync::OnceLock<CacheMonitor> = std::sync::OnceLock::new();
+
+/// Return the process-wide `CacheMonitor`, lazily creating it on first use.
+pub fn global_cache_monitor() -> &'static CacheMonitor {
+    GLOBAL_CACHE_MONITOR.get_or_init(CacheMonitor::new)
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
