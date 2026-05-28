@@ -11,7 +11,7 @@ use super::state::{ChatState, PendingAttachment};
 use crate::components::session_tabs::SessionTabs;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
-use crate::state::layout::{LayoutMode, WorkspaceState};
+use crate::state::layout::WorkspaceState;
 use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -113,41 +113,14 @@ pub fn ChatView() -> impl IntoView {
             // chat-surface shrinks and the toggle naturally shifts left
             // toward the workspace pane edge.
             <div class="relative flex flex-col flex-1 min-w-0 h-full">
-                // Drag strip — transparent band at the top of the chat
-                // surface. Yields window-drag on macOS Overlay-titlebar
-                // windows; harmless on web / Win / Linux (native chrome
-                // owns drag there). Lives BELOW the chrome buttons via
-                // z-index so it only catches clicks on empty real estate;
-                // the buttons opt out via `-webkit-app-region: no-drag`.
-                <div
-                    class="aleph-chat-drag-strip aleph-chrome-row-h"
-                    data-tauri-drag-region=""
-                />
+                // No chat-local drag strip or LayoutToggle here: the
+                // global `aleph-main-drag-band` at the top of `<main>`
+                // (see `app.rs` → `ChatBandChrome`) hosts the workspace
+                // toggle on the traffic-light row and reserves the
+                // macOS overlay-titlebar space uniformly across tabs.
+                // On web / Win / Linux native chrome owns window drag.
                 // Session tab strip — renders only when ≥2 agents are open.
                 <SessionTabs />
-                // Workspace toggle — anchored to the chat-surface top-right.
-                //   ChatOnly: `right-[44px]` parks 4 px to the left of the
-                //     NotificationCenter bell (fixed at window right-3,
-                //     28 px wide → bell occupies window-right [12, 40] px).
-                //   Split: `right-2` snugs the toggle against the chat /
-                //     workspace boundary. The bell is still at window
-                //     right-3 but now hovers over the workspace pane area
-                //     and no longer competes for that gutter.
-                // `aleph-chrome-top` y-aligns with the traffic lights on
-                // macOS / brand logo elsewhere.
-                <div
-                    class=move || {
-                        let base = "absolute aleph-chrome-top z-[45]";
-                        if workspace.mode.get() == LayoutMode::Split {
-                            format!("{base} right-2")
-                        } else {
-                            format!("{base} right-[44px]")
-                        }
-                    }
-                    data-tauri-drag-region="false"
-                >
-                    <crate::components::layout_toggle::LayoutToggle />
-                </div>
                 // Message list (scrollable) — or the welcome hero when empty
                 <MessageList />
                 // Input area (pinned to bottom)

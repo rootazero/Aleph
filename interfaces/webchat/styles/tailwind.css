@@ -846,14 +846,23 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
        tile is 28 × 28 inside `.aleph-sidebar-head` whose top padding
        is 0.85 rem = 13.6 px → logo center ≈ 27.6 px; rounded to 28 px.
 
+   `--aleph-band-h` is the height of the global `<main>` drag band
+   that reserves space for the macOS overlay-titlebar chrome row.
+   Web + Tauri Win/Linux already have system-level top chrome (browser
+   tab bar / native title bar) so the band is 0 there — only macOS
+   needs to carve out room inside the panel itself.
+
    `.aleph-chrome-top` positions a 28 × 28 button so its center lands
-   on the chrome row. `.aleph-chrome-row-h` produces a flex row whose
+   on the chrome row (when used by fixed-positioned chrome anchored
+   to the window). `.aleph-chrome-row-h` produces a flex row whose
    center (with `items-center`) also lands on the chrome row. */
 :root {
     --aleph-chrome-y: 28px;
+    --aleph-band-h: 0px;
 }
 html[data-platform="macos"] {
     --aleph-chrome-y: 15px;
+    --aleph-band-h: 30px;
 }
 .aleph-chrome-top {
     top: calc(var(--aleph-chrome-y) - 14px);
@@ -872,24 +881,26 @@ html[data-platform="macos"] {
     -webkit-app-region: no-drag;
 }
 
-/* Drag strip parked at the very top of the chat surface. Only meaningful
+/* Global drag band parked at the very top of `<main>`. Only meaningful
    on macOS (Overlay title-bar style, no OS-drawn titlebar to grab); on
-   Win/Linux/web the native chrome handles window-drag. `aleph-chrome-row-h`
-   sizes it to the same band the buttons occupy. The strip sits BELOW
-   the chrome buttons (z 1 vs z 45/50) so the buttons stay clickable;
-   `-webkit-app-region: drag` makes empty real-estate within the band
-   move the window. */
-.aleph-chat-drag-strip {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 1;
-    -webkit-app-region: drag;
+   Win/Linux/web the native chrome (or browser) handles window-drag, so
+   the band collapses to height 0 and stays out of the layout.
+
+   In-flow (not absolute): the band reserves vertical space via flex,
+   which pushes every tab's content down by `--aleph-band-h` on macOS
+   so user content never overlaps the overlay traffic lights. Chrome
+   buttons (sidebar toggle / workspace toggle / notification bell) all
+   use `aleph-chrome-top` (fixed) or `aleph-chrome-top-content`
+   (absolute, band-aware) to remain anchored on the same window-y
+   baseline as the traffic lights. */
+.aleph-main-drag-band {
+    flex-shrink: 0;
+    height: var(--aleph-band-h);
     pointer-events: none;
 }
-html[data-platform="macos"] .aleph-chat-drag-strip {
+html[data-platform="macos"] .aleph-main-drag-band {
     pointer-events: auto;
+    -webkit-app-region: drag;
 }
 
 /* Fixed top-left sidebar toggle — pinned to the window, not the sidebar,

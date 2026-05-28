@@ -21,6 +21,13 @@ use crate::views::chat::state::{ChatState, ToolCallEntry};
 use leptos::prelude::*;
 
 /// Workspace pane root. Renders nothing when [`LayoutMode::ChatOnly`].
+///
+/// The "WORKSPACE · idle / tool / notes" title row that used to live in
+/// a local `WorkspaceHeader` has moved up into the global
+/// `aleph-main-drag-band` (see `app.rs` → `ChatBandChrome`) so the label
+/// sits on the same y-baseline as the macOS traffic lights and the
+/// other chrome glyphs. The pane itself now starts directly with the
+/// scrollable body.
 #[component]
 pub fn WorkspacePanel() -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
@@ -30,50 +37,11 @@ pub fn WorkspacePanel() -> impl IntoView {
             <aside class="aleph-workspace-pane flex flex-col h-full
                            border-l border-border bg-surface-base/40
                            min-w-[280px] basis-[66%] shrink overflow-hidden">
-                <WorkspaceHeader />
                 <div class="flex-1 overflow-y-auto px-4 py-3">
                     <WorkspaceBody />
                 </div>
             </aside>
         </Show>
-    }
-}
-
-/// Sticky header — text-only title chip ("WORKSPACE · idle"). No border,
-/// no icon, no close button:
-/// * the divider line was removed to mirror the chat surface (which has
-///   no top bar) — the macOS titlebar drag strip covers this row anyway,
-///   so the area still drags the window;
-/// * the leading SVG was decorative-only and added visual noise without
-///   carrying a function;
-/// * the close affordance lives in the chat surface's top-right
-///   (`views/chat/view.rs`) and follows the chat / workspace boundary.
-#[component]
-fn WorkspaceHeader() -> impl IntoView {
-    let i18n = use_i18n();
-    let workspace = expect_context::<WorkspaceState>();
-    view! {
-        // `aleph-chrome-row-h` sizes the row so its vertical center lands
-        // on the shared chrome y-baseline (traffic lights on macOS, brand
-        // logo on web/Win/Linux). `data-tauri-drag-region=""` makes the
-        // empty header area drag the window on macOS — matching the
-        // chat-surface drag strip on the other side of the boundary.
-        <div
-            class="aleph-chrome-row-h flex items-center gap-2 px-4
-                   text-xs uppercase tracking-wider text-text-tertiary"
-            data-tauri-drag-region=""
-        >
-            <span>{t!(i18n, common.workspace_title)}</span>
-            <span class="text-text-tertiary/60">
-                {move || {
-                    match workspace.content.get() {
-                        WorkspaceContent::Empty => t_string!(i18n, common.workspace_state_idle).to_string(),
-                        WorkspaceContent::ToolDetail { .. } => t_string!(i18n, common.workspace_state_tool).to_string(),
-                        WorkspaceContent::Notes(_) => t_string!(i18n, common.workspace_state_notes).to_string(),
-                    }
-                }}
-            </span>
-        </div>
     }
 }
 
