@@ -10,17 +10,18 @@
 
 use crate::api::acp::{AcpApi, AcpSessionSnapshot};
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 #[component]
 pub fn WorkersView() -> impl IntoView {
+    let i18n = use_i18n();
     let dash = expect_context::<DashboardState>();
     let sessions: RwSignal<Vec<AcpSessionSnapshot>> = RwSignal::new(Vec::new());
     let loading = RwSignal::new(true);
     let error: RwSignal<Option<String>> = RwSignal::new(None);
 
-    // Manual refresh trigger.
     let refresh = move || {
         spawn_local(async move {
             loading.set(true);
@@ -37,7 +38,6 @@ pub fn WorkersView() -> impl IntoView {
         });
     };
 
-    // Initial fetch when connected.
     Effect::new(move |_| {
         if dash.is_connected.get() {
             refresh();
@@ -46,7 +46,6 @@ pub fn WorkersView() -> impl IntoView {
         }
     });
 
-    // Ask the gateway to push `acp.sessions.changed` on every pool mutation.
     Effect::new(move |_| {
         if !dash.is_connected.get() {
             return;
@@ -57,8 +56,6 @@ pub fn WorkersView() -> impl IntoView {
         });
     });
 
-    // Re-fetch on push. Frame is payload-free on purpose; the list RPC is
-    // the single source of truth so we never reconcile partial state.
     let sub_id = dash.subscribe_events(move |evt| {
         if evt.topic == "acp.sessions.changed" {
             refresh();
@@ -70,9 +67,9 @@ pub fn WorkersView() -> impl IntoView {
         <div class="flex-1 flex flex-col h-full overflow-hidden">
             <div class="flex items-center justify-between px-6 py-4 border-b border-border">
                 <div>
-                    <h1 class="text-lg font-semibold text-text-primary">"ACP Workers"</h1>
+                    <h1 class="text-lg font-semibold text-text-primary">{t!(i18n, teams.workers_title)}</h1>
                     <p class="text-xs text-text-tertiary">
-                        "Live session pool: external coding agents currently running."
+                        {t!(i18n, teams.workers_desc)}
                     </p>
                 </div>
                 <button
@@ -80,16 +77,21 @@ pub fn WorkersView() -> impl IntoView {
                     on:click=move |_| refresh()
                     disabled=move || loading.get()
                 >
-                    {move || if loading.get() { "Refreshing…" } else { "Refresh" }}
+                    {move || if loading.get() {
+                        t_string!(i18n, teams.workers_refreshing).to_string()
+                    } else {
+                        t_string!(i18n, teams.workers_refresh).to_string()
+                    }}
                 </button>
             </div>
 
             <div class="flex-1 overflow-y-auto p-6 space-y-3">
                 {move || {
                     if let Some(err) = error.get() {
+                        let prefix = t_string!(i18n, teams.workers_load_failed).to_string();
                         return view! {
                             <div class="bg-red-50 border border-red-200 text-red-800 text-sm p-3 rounded-md">
-                                {format!("Failed to load ACP sessions: {err}")}
+                                {format!("{prefix} {err}")}
                             </div>
                         }.into_any();
                     }
@@ -98,9 +100,9 @@ pub fn WorkersView() -> impl IntoView {
                         return view! {
                             <div class="bg-surface-raised border border-border rounded-xl p-8 text-center">
                                 <p class="text-text-secondary text-sm">
-                                    "No ACP sessions are currently active. Delegate a task via "
+                                    {t!(i18n, teams.workers_no_sessions_prefix)}
                                     <code class="bg-surface px-1.5 py-0.5 rounded text-xs">"acp_delegate"</code>
-                                    " or via Aleph chat to start one."
+                                    {t!(i18n, teams.workers_no_sessions_suffix)}
                                 </p>
                             </div>
                         }.into_any();
@@ -118,6 +120,7 @@ pub fn WorkersView() -> impl IntoView {
 
 #[component]
 fn SessionCard(snapshot: AcpSessionSnapshot) -> impl IntoView {
+    let i18n = use_i18n();
     let dash = expect_context::<DashboardState>();
     let busy = RwSignal::new(false);
     let action_error: RwSignal<Option<String>> = RwSignal::new(None);
@@ -129,7 +132,6 @@ fn SessionCard(snapshot: AcpSessionSnapshot) -> impl IntoView {
     let alive = snapshot.alive;
     let state = snapshot.state.clone();
 
-    // Pre-clone for each closure.
     let (h_cancel, c_cancel, n_cancel) = (harness.clone(), cwd.clone(), session_name.clone());
     let on_cancel = move |_| {
         if busy.get_untracked() {
@@ -170,10 +172,12 @@ fn SessionCard(snapshot: AcpSessionSnapshot) -> impl IntoView {
         "error" => "bg-red-50 text-red-700 border border-red-200",
         _ => "bg-gray-50 text-gray-700 border border-gray-200",
     };
+    let alive_label = t_string!(i18n, teams.workers_state_alive).to_string();
+    let dead_label = t_string!(i18n, teams.workers_state_dead).to_string();
     let liveness_chip = if alive {
-        ("alive", "bg-green-50 text-green-700 border border-green-200")
+        (alive_label, "bg-green-50 text-green-700 border border-green-200")
     } else {
-        ("dead", "bg-red-50 text-red-700 border border-red-200")
+        (dead_label, "bg-red-50 text-red-700 border border-red-200")
     };
 
     view! {
@@ -209,14 +213,14 @@ fn SessionCard(snapshot: AcpSessionSnapshot) -> impl IntoView {
                         on:click=on_cancel
                         disabled=move || busy.get()
                     >
-                        "Cancel"
+                        {t!(i18n, teams.workers_cancel)}
                     </button>
                     <button
                         class="px-3 py-1 text-xs rounded-md border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-50"
                         on:click=on_shutdown
                         disabled=move || busy.get()
                     >
-                        "Shutdown"
+                        {t!(i18n, teams.workers_shutdown)}
                     </button>
                 </div>
             </div>

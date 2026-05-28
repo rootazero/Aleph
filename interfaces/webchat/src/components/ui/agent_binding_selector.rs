@@ -8,12 +8,14 @@ use std::collections::HashMap;
 use crate::api::agents::AgentsApi;
 use crate::api::WorkspaceApi;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[component]
 pub fn AgentBindingSelector(
     /// The channel ID this selector manages (e.g., "discord-default", "telegram-main")
     channel_id: String,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let channel_id = StoredValue::new(channel_id);
 
@@ -86,7 +88,7 @@ pub fn AgentBindingSelector(
                         b.insert(value, ch_id.clone());
                     }
                     bindings.set(b);
-                    status_msg.set(Some((true, "Binding updated".to_string())));
+                    status_msg.set(Some((true, t_string!(i18n, common.binding_updated).to_string())));
                 }
                 Err(e) => {
                     status_msg.set(Some((false, e)));
@@ -102,14 +104,14 @@ pub fn AgentBindingSelector(
 
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-2">"Agent Binding"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-2">{t!(i18n, common.agent_binding_title)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Select which agent handles messages for this channel"
+                {t!(i18n, common.select_agent_hint)}
             </p>
             {move || {
                 if is_loading.get() {
                     return view! {
-                        <div class="text-text-secondary text-sm">"Loading..."</div>
+                        <div class="text-text-secondary text-sm">{t!(i18n, common.loading)}</div>
                     }
                     .into_any();
                 }
@@ -125,7 +127,7 @@ pub fn AgentBindingSelector(
                             class="w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm text-text-primary focus:outline-none focus:border-primary"
                         >
                             <option value="" selected=current_selected.is_empty()>
-                                {"\u{2014} \u{672A}\u{7ED1}\u{5B9A} \u{2014}"}
+                                {t!(i18n, common.unbound_option)}
                             </option>
                             {agents
                                 .get()
@@ -137,9 +139,11 @@ pub fn AgentBindingSelector(
                                         .as_ref()
                                         .is_some_and(|ch| ch != &ch_id);
                                     let label = if is_bound_elsewhere {
+                                        let bound_prefix = t_string!(i18n, common.bound_to_prefix).to_string();
                                         format!(
-                                            "{} (bound to {})",
+                                            "{} ({} {})",
                                             name,
+                                            bound_prefix,
                                             bound_to.unwrap_or_default()
                                         )
                                     } else {

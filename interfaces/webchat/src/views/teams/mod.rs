@@ -116,17 +116,17 @@ pub fn TeamsSidebar() -> impl IntoView {
                     target=TeamsSubTab::Kanban
                 />
                 <SubTabButton
-                    label=Signal::derive(|| "Plan".to_string())
+                    label=Signal::derive(move || t_string!(i18n, teams.subtab.plan).to_string())
                     current=tab_state.sub_tab
                     target=TeamsSubTab::Plan
                 />
                 <SubTabButton
-                    label=Signal::derive(|| "Replay".to_string())
+                    label=Signal::derive(move || t_string!(i18n, teams.subtab.replay).to_string())
                     current=tab_state.sub_tab
                     target=TeamsSubTab::Replay
                 />
                 <SubTabButton
-                    label=Signal::derive(|| "ACP Workers".to_string())
+                    label=Signal::derive(move || t_string!(i18n, teams.subtab.workers).to_string())
                     current=tab_state.sub_tab
                     target=TeamsSubTab::Workers
                 />

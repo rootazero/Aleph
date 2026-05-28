@@ -9,6 +9,7 @@ use super::validate_regex;
 
 #[component]
 pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
+    let i18n = use_i18n();
     let pattern_errors = RwSignal::new(Vec::<(usize, String, String)>::new());
 
     let validate_all_patterns = move || {
@@ -101,10 +102,10 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
             <h2 class="text-lg font-semibold text-text-primary mb-4">
-                "Shell Command Security"
+                {t!(i18n, settings.security.shell_title)}
             </h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Configure custom risk patterns for shell command execution."
+                {t!(i18n, settings.security.shell_desc)}
             </p>
 
             <div class="space-y-4">
@@ -127,17 +128,17 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                     />
                     <div>
                         <div class="font-medium text-text-primary">
-                            "Enable Custom Risk Patterns"
+                            {t!(i18n, settings.security.shell_enable_custom)}
                         </div>
                         <div class="text-xs text-text-tertiary">
-                            "When enabled, custom patterns supplement built-in security rules"
+                            {t!(i18n, settings.security.shell_enable_custom_desc)}
                         </div>
                     </div>
                 </label>
 
                 <div class="mt-4">
                     <h3 class="text-sm font-semibold text-text-secondary mb-2">
-                        "Blocked Patterns (execution denied)"
+                        {t!(i18n, settings.security.shell_blocked_title)}
                     </h3>
                     <div class="space-y-2">
                         {move || {
@@ -164,7 +165,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                             event_target_value(&ev),
                                                         )
                                                     }
-                                                    placeholder="Regex pattern..."
+                                                    placeholder=move || t_string!(i18n, settings.security.shell_regex_placeholder).to_string()
                                                     class=move || {
                                                         format!(
                                                             "w-full px-3 py-1 bg-surface-sunken border rounded text-sm text-text-primary {}",
@@ -187,7 +188,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                             event_target_value(&ev),
                                                         )
                                                     }
-                                                    placeholder="Reason (optional)..."
+                                                    placeholder=move || t_string!(i18n, settings.security.shell_reason_placeholder).to_string()
                                                     class="w-full px-3 py-1 bg-surface-sunken border border-border rounded text-sm text-text-primary"
                                                 />
                                             </div>
@@ -195,7 +196,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                 on:click=move |_| remove_pattern("blocked", i)
                                                 class="px-2 py-1 text-danger hover:bg-danger/10 rounded text-sm"
                                             >
-                                                "Remove"
+                                                {t!(i18n, settings.security.shell_remove)}
                                             </button>
                                         </div>
                                     }
@@ -207,13 +208,13 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                         on:click=move |_| add_pattern("blocked")
                         class="mt-2 px-3 py-1 text-sm text-primary hover:bg-primary/10 rounded"
                     >
-                        "+ Add Blocked Pattern"
+                        {t!(i18n, settings.security.shell_add_blocked)}
                     </button>
                 </div>
 
                 <div class="mt-4">
                     <h3 class="text-sm font-semibold text-text-secondary mb-2">
-                        "Danger Patterns (require approval)"
+                        {t!(i18n, settings.security.shell_danger_title)}
                     </h3>
                     <div class="space-y-2">
                         {move || {
@@ -240,7 +241,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                             event_target_value(&ev),
                                                         )
                                                     }
-                                                    placeholder="Regex pattern..."
+                                                    placeholder=move || t_string!(i18n, settings.security.shell_regex_placeholder).to_string()
                                                     class=move || {
                                                         format!(
                                                             "w-full px-3 py-1 bg-surface-sunken border rounded text-sm text-text-primary {}",
@@ -263,7 +264,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                             event_target_value(&ev),
                                                         )
                                                     }
-                                                    placeholder="Reason (optional)..."
+                                                    placeholder=move || t_string!(i18n, settings.security.shell_reason_placeholder).to_string()
                                                     class="w-full px-3 py-1 bg-surface-sunken border border-border rounded text-sm text-text-primary"
                                                 />
                                             </div>
@@ -271,7 +272,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                 on:click=move |_| remove_pattern("danger", i)
                                                 class="px-2 py-1 text-danger hover:bg-danger/10 rounded text-sm"
                                             >
-                                                "Remove"
+                                                {t!(i18n, settings.security.shell_remove)}
                                             </button>
                                         </div>
                                     }
@@ -283,13 +284,13 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                         on:click=move |_| add_pattern("danger")
                         class="mt-2 px-3 py-1 text-sm text-primary hover:bg-primary/10 rounded"
                     >
-                        "+ Add Danger Pattern"
+                        {t!(i18n, settings.security.shell_add_danger)}
                     </button>
                 </div>
 
                 <div class="mt-4">
                     <h3 class="text-sm font-semibold text-text-secondary mb-2">
-                        "Safe Patterns (auto-approved)"
+                        {t!(i18n, settings.security.shell_safe_title)}
                     </h3>
                     <div class="space-y-2">
                         {move || {
@@ -316,7 +317,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                             event_target_value(&ev),
                                                         )
                                                     }
-                                                    placeholder="Regex pattern..."
+                                                    placeholder=move || t_string!(i18n, settings.security.shell_regex_placeholder).to_string()
                                                     class=move || {
                                                         format!(
                                                             "w-full px-3 py-1 bg-surface-sunken border rounded text-sm text-text-primary {}",
@@ -339,7 +340,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                             event_target_value(&ev),
                                                         )
                                                     }
-                                                    placeholder="Reason (optional)..."
+                                                    placeholder=move || t_string!(i18n, settings.security.shell_reason_placeholder).to_string()
                                                     class="w-full px-3 py-1 bg-surface-sunken border border-border rounded text-sm text-text-primary"
                                                 />
                                             </div>
@@ -347,7 +348,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                 on:click=move |_| remove_pattern("safe", i)
                                                 class="px-2 py-1 text-danger hover:bg-danger/10 rounded text-sm"
                                             >
-                                                "Remove"
+                                                {t!(i18n, settings.security.shell_remove)}
                                             </button>
                                         </div>
                                     }
@@ -359,7 +360,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                         on:click=move |_| add_pattern("safe")
                         class="mt-2 px-3 py-1 text-sm text-primary hover:bg-primary/10 rounded"
                     >
-                        "+ Add Safe Pattern"
+                        {t!(i18n, settings.security.shell_add_safe)}
                     </button>
                 </div>
 
@@ -368,7 +369,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                     if !errors.is_empty() {
                         Some(view! {
                             <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
-                                <div class="font-semibold mb-1">"Invalid regex patterns:"</div>
+                                <div class="font-semibold mb-1">{t!(i18n, settings.security.shell_invalid_regex)}</div>
                                 <ul class="list-disc list-inside">
                                     {errors.iter().map(|(i, cat, err)| view! {
                                         <li>{format!("{} #{}: {}", cat, i + 1, err)}</li>

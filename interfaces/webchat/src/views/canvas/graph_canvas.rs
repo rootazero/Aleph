@@ -8,6 +8,7 @@ use wasm_bindgen::JsCast;
 
 use leptos::callback::Callback;
 
+use crate::i18n::*;
 use crate::canvas_engine::drag::{DragState, ReleaseOutcome};
 use crate::canvas_engine::edge_curve::{bezier_point, bezier_tangent, edge_control_point,
     DEFAULT_SAG};
@@ -110,6 +111,7 @@ pub fn GraphCanvas(
     #[prop(optional)]
     excerpt_by_id: Option<RwSignal<HashMap<String, String>>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
     let raf_handle: Rc<RefCell<Option<i32>>> = Rc::new(RefCell::new(None));
     let raf_closure: RafClosure = Rc::new(RefCell::new(None));
@@ -528,10 +530,12 @@ pub fn GraphCanvas(
                         );
                     }
                     NavState::Loading { .. } => {
-                        draw_placeholder(&ctx, &viewport, "Loading…");
+                        let loading = t_string!(i18n, memory.canvas_loading).to_string();
+                        draw_placeholder(&ctx, &viewport, &loading);
                     }
                     NavState::Error { ref reason, .. } => {
-                        let msg = format!("Error: {reason}");
+                        let prefix = t_string!(i18n, memory.canvas_error_prefix).to_string();
+                        let msg = format!("{prefix}: {reason}");
                         draw_placeholder(&ctx, &viewport, &msg);
                     }
                     NavState::Idle => {

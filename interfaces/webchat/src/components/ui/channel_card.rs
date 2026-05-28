@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use leptos_router::components::A;
 
+use crate::i18n::*;
 use super::channel_status::{ChannelStatus, ChannelStatusPill};
 
 /// Card component for the Channels Overview page grid.
@@ -19,12 +20,11 @@ pub fn ChannelCard(
     #[prop(optional)]
     count: Option<Signal<usize>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let href = format!("/settings/channels/{}", id);
 
     // Build the icon container background with 15% opacity hex suffix
     let icon_bg = format!("background-color: {}15", brand_color);
-
-    let action_label = "Configure";
 
     view! {
         <A
@@ -80,7 +80,7 @@ pub fn ChannelCard(
 
             // Action label
             <span class="text-xs font-medium text-primary">
-                {action_label}
+                {t!(i18n, common.configure)}
                 <span class="inline-block ml-1 group-hover:translate-x-0.5 transition-transform">
                     "→"
                 </span>

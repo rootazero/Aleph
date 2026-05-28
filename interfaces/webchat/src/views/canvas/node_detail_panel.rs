@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use crate::canvas_engine::category_color::category_color;
 use crate::canvas_engine::markdown_excerpt::render_excerpt;
+use crate::i18n::*;
 use crate::state::memory::MemoryState;
 
 /// Pre-fetched body excerpt for a single node.
@@ -81,21 +82,23 @@ fn DetailFor(excerpt: NodeExcerpt) -> impl IntoView {
 
 #[component]
 fn DetailLoading(id: String) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div style="color:var(--text-meta);font-size:11px;font-style:italic">
-            "Loading " {id} " …"
+            {t!(i18n, memory.loading_node)} " " {id} " …"
         </div>
     }
 }
 
 #[component]
 fn RecentVisitedList() -> impl IntoView {
+    let i18n = use_i18n();
     let mem = expect_context::<MemoryState>();
 
     view! {
         <div>
             <div style="text-transform:uppercase;font-size:9.5px;color:var(--text-meta);letter-spacing:0.05em;margin-bottom:6px">
-                "Recently visited"
+                {t!(i18n, memory.recently_visited)}
             </div>
             {move || {
                 mem.recent_visited.with(|q| {
@@ -103,7 +106,7 @@ fn RecentVisitedList() -> impl IntoView {
                     if top.is_empty() {
                         view! {
                             <p style="color:var(--text-meta);font-size:11px;font-style:italic">
-                                "Click a node to inspect it. Recently visited memories will appear here."
+                                {t!(i18n, memory.click_node_hint)}
                             </p>
                         }.into_any()
                     } else {

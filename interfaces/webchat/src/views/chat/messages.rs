@@ -14,6 +14,7 @@ use leptos::prelude::*;
 /// A breathing ℵ orb above a shimmering greeting, with a staggered reveal.
 #[component]
 pub(super) fn ChatHero() -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="h-full flex flex-col items-center justify-center px-6 pb-10 text-center select-none">
             <div class="aleph-rise mb-7" style="animation-delay: 0s">
@@ -30,14 +31,14 @@ pub(super) fn ChatHero() -> impl IntoView {
             </div>
             <div class="aleph-rise" style="animation-delay: 0.09s">
                 <h2 class="aleph-hero-title text-[2rem] leading-tight font-semibold tracking-tight">
-                    "我们从哪里开始？"
+                    {t!(i18n, chat.hero_title)}
                 </h2>
             </div>
             <p
                 class="aleph-rise mt-3 text-sm text-text-tertiary max-w-sm leading-relaxed"
                 style="animation-delay: 0.18s"
             >
-                "直接输入消息，或输入 / 调用命令与技能。"
+                {t!(i18n, chat.hero_subtitle)}
             </p>
         </div>
     }
@@ -144,7 +145,7 @@ pub(super) fn MessageList() -> impl IntoView {
                     on:click=on_jump
                 >
                     <span>"\u{2193}"</span>
-                    <span>"New messages"</span>
+                    <span>{t!(i18n, chat.new_messages)}</span>
                 </button>
             </Show>
         </div>
@@ -154,6 +155,7 @@ pub(super) fn MessageList() -> impl IntoView {
 /// Inline banner for the most recent `ChatSendError`. Empty when none.
 #[component]
 fn SendErrorBanner() -> impl IntoView {
+    let i18n = use_i18n();
     let chat = expect_context::<ChatState>();
     view! {
         <Show when=move || chat.send_error.get().is_some()>
@@ -175,7 +177,7 @@ fn SendErrorBanner() -> impl IntoView {
                                 <span class="flex-1">{e.message}</span>
                                 <button
                                     class="opacity-60 hover:opacity-100 shrink-0"
-                                    title="Dismiss"
+                                    title=move || t_string!(i18n, chat.dismiss).to_string()
                                     on:click=move |_| {
                                         chat.send_error.set(None);
                                         chat.error_message.set(None);
@@ -206,6 +208,7 @@ fn run_id_from_message_id(message_id: &str) -> String {
 /// Single message bubble.
 #[component]
 fn MessageBubble(message: ChatMessage) -> impl IntoView {
+    let i18n = use_i18n();
     let is_user = message.role == "user";
     let has_error = message.error.is_some();
     let has_tools = !message.tool_calls.is_empty();
@@ -273,7 +276,7 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
                             class=chip_class
                             on:click=on_click
                             role=move || if clickable { "button" } else { "" }
-                            title=move || if clickable { "Inspect in workspace" } else { "" }
+                            title=move || if clickable { t_string!(i18n, chat.inspect_in_workspace).to_string() } else { String::new() }
                         >
                             <span class=status_color>
                                 {status_icon}
@@ -398,7 +401,7 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
                     class="px-1.5 h-6 rounded-md bg-surface-raised border border-border
                            text-[11px] text-text-tertiary hover:text-text-primary hover:bg-surface-sunken
                            shadow-sm transition-colors flex items-center gap-1"
-                    title="Copy message"
+                    title=move || t_string!(i18n, chat.copy_message).to_string()
                     on:click=on_copy
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24"
@@ -407,7 +410,7 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
                         <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                         <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                     </svg>
-                    <span>"Copy"</span>
+                    <span>{t!(i18n, chat.copy)}</span>
                 </button>
                 {if show_retry {
                     Some(view! {
@@ -415,7 +418,7 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
                             class="px-1.5 h-6 rounded-md bg-surface-raised border border-border
                                    text-[11px] text-text-tertiary hover:text-text-primary hover:bg-surface-sunken
                                    shadow-sm transition-colors flex items-center gap-1"
-                            title="Retry last prompt"
+                            title=move || t_string!(i18n, chat.retry_last_prompt).to_string()
                             on:click=on_retry
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24"
@@ -424,7 +427,7 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
                                 <polyline points="23 4 23 10 17 10"></polyline>
                                 <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
                             </svg>
-                            <span>"Retry"</span>
+                            <span>{t!(i18n, chat.retry)}</span>
                         </button>
                     })
                 } else {

@@ -9,6 +9,7 @@ use leptos::task::spawn_local;
 
 use crate::api::trace::TraceApi;
 use crate::context::{DashboardState, GatewayEvent};
+use crate::i18n::*;
 use crate::models::{TraceNode, TraceStatus};
 use crate::views::agent_trace_model::{
     trace_node_from_event, trace_nodes_from_replay, TraceLabels,
@@ -32,6 +33,7 @@ const REPLAY_BASE_INTERVAL_MS: u32 = 600;
 /// - **Replay**: loads a persisted trace by task ID.
 #[component]
 pub fn AgentTrace() -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
 
     // Signals
@@ -163,7 +165,7 @@ pub fn AgentTrace() -> impl IntoView {
     // --- Render --------------------------------------------------------------
     view! {
         <div class="p-6 max-w-4xl mx-auto space-y-4">
-            <h1 class="text-2xl font-bold text-text-primary">"Agent Trace"</h1>
+            <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, trace.title)}</h1>
 
             // Mode toggle + replay loader
             <div class="flex items-center gap-3 flex-wrap">
@@ -174,12 +176,12 @@ pub fn AgentTrace() -> impl IntoView {
                     class:bg-surface-secondary=move || mode.get() != TraceMode::Live
                     on:click=clear_live
                 >
-                    "Live"
+                    {t!(i18n, trace.live)}
                 </button>
 
                 <input
                     type="text"
-                    placeholder="Task ID for replay..."
+                    placeholder=move || t_string!(i18n, trace.task_id_placeholder).to_string()
                     class="px-3 py-1.5 rounded border border-border bg-surface text-sm text-text-primary w-64"
                     prop:value=move || task_id_input.get()
                     on:input=move |ev| {
@@ -192,7 +194,11 @@ pub fn AgentTrace() -> impl IntoView {
                     prop:disabled=move || is_loading.get()
                     on:click=load_replay
                 >
-                    {move || if is_loading.get() { "Loading..." } else { "Replay" }}
+                    {move || if is_loading.get() {
+                        t_string!(i18n, trace.loading).to_string()
+                    } else {
+                        t_string!(i18n, trace.replay).to_string()
+                    }}
                 </button>
             </div>
 
@@ -221,8 +227,8 @@ pub fn AgentTrace() -> impl IntoView {
                         view! {
                             <p class="text-text-secondary text-sm italic py-8 text-center">
                                 {move || match mode.get() {
-                                    TraceMode::Live => "Waiting for trace events...",
-                                    TraceMode::Replay => "No trace data loaded.",
+                                    TraceMode::Live => t_string!(i18n, trace.waiting_for_events).to_string(),
+                                    TraceMode::Replay => t_string!(i18n, trace.no_data_loaded).to_string(),
                                 }}
                             </p>
                         }.into_any()
@@ -261,6 +267,7 @@ fn ReplayScrubber(
     is_playing: RwSignal<bool>,
     playback_speed: RwSignal<f32>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let on_play_pause = move |_: web_sys::MouseEvent| {
         let total = nodes.get_untracked().len();
         let cur = current_step.get_untracked();
@@ -300,7 +307,11 @@ fn ReplayScrubber(
             <button
                 class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center
                        hover:bg-primary-hover transition-colors shrink-0"
-                title=move || if is_playing.get() { "Pause" } else { "Play" }
+                title=move || if is_playing.get() {
+                    t_string!(i18n, trace.pause).to_string()
+                } else {
+                    t_string!(i18n, trace.play).to_string()
+                }
                 on:click=on_play_pause
             >
                 {move || if is_playing.get() {
@@ -325,13 +336,13 @@ fn ReplayScrubber(
             <button
                 class="w-7 h-7 rounded-md bg-surface-raised hover:bg-surface-sunken
                        text-text-secondary hover:text-text-primary transition-colors shrink-0"
-                title="Previous step"
+                title=move || t_string!(i18n, trace.prev_step).to_string()
                 on:click=on_step_back
             >"\u{25C0}"</button>
             <button
                 class="w-7 h-7 rounded-md bg-surface-raised hover:bg-surface-sunken
                        text-text-secondary hover:text-text-primary transition-colors shrink-0"
-                title="Next step"
+                title=move || t_string!(i18n, trace.next_step).to_string()
                 on:click=on_step_forward
             >"\u{25B6}"</button>
 

@@ -9,6 +9,7 @@
 use super::TeamsTabState;
 use crate::api::teams::{CoordTaskDto, TaskExitJournalDto, TaskFilter, TeamsApi};
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::Value;
@@ -136,12 +137,13 @@ fn TaskListPane(
     selected: RwSignal<Option<String>>,
     team_picked: Signal<bool>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="w-72 border-r border-border flex flex-col">
             <div class="px-4 py-3 border-b border-border">
-                <h2 class="text-sm font-semibold text-text-primary">"Replay — tasks"</h2>
+                <h2 class="text-sm font-semibold text-text-primary">{t!(i18n, teams.replay_title)}</h2>
                 <p class="text-xs text-text-tertiary mt-0.5">
-                    "Pick a task to see its merged audit timeline."
+                    {t!(i18n, teams.replay_subtitle)}
                 </p>
             </div>
             <div class="flex-1 overflow-y-auto py-1">
@@ -149,7 +151,7 @@ fn TaskListPane(
                     if !team_picked.get() {
                         return view! {
                             <div class="px-4 py-6 text-xs text-text-tertiary">
-                                "Pick a team from the sidebar."
+                                {t!(i18n, teams.replay_pick_team)}
                             </div>
                         }.into_any();
                     }
@@ -157,7 +159,7 @@ fn TaskListPane(
                     if list.is_empty() {
                         return view! {
                             <div class="px-4 py-6 text-xs text-text-tertiary">
-                                "No tasks yet for this team."
+                                {t!(i18n, teams.replay_no_tasks)}
                             </div>
                         }.into_any();
                     }
@@ -192,10 +194,11 @@ fn TaskListPane(
                                     <StatusDot status=status />
                                     <span class="text-sm text-text-primary truncate flex-1">{subject}</span>
                                     {if has_journal {
+                                        let title = t_string!(i18n, teams.replay_journal_recorded).to_string();
                                         view! {
                                             <span
                                                 class="text-xs px-1.5 rounded bg-info/10 text-info"
-                                                title="exit journal recorded"
+                                                title=title
                                             >"J"</span>
                                         }.into_any()
                                     } else {
@@ -224,13 +227,14 @@ fn TracePane(
     error: RwSignal<Option<String>>,
     on_refresh: Callback<()>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="flex-1 flex flex-col overflow-hidden">
             <div class="px-6 py-4 border-b border-border flex items-center justify-between">
                 <div>
-                    <h1 class="text-lg font-semibold text-text-primary">"Audit Trail"</h1>
+                    <h1 class="text-lg font-semibold text-text-primary">{t!(i18n, teams.replay_audit_title)}</h1>
                     <p class="text-xs text-text-tertiary">
-                        "Merged runs · comments · events · artifacts in chronological order."
+                        {t!(i18n, teams.replay_audit_desc)}
                     </p>
                 </div>
                 <button
@@ -238,28 +242,33 @@ fn TracePane(
                     disabled=move || loading.get() || selected.get().is_none()
                     on:click=move |_| on_refresh.run(())
                 >
-                    {move || if loading.get() { "Refreshing…" } else { "Refresh" }}
+                    {move || if loading.get() {
+                        t_string!(i18n, teams.replay_refreshing).to_string()
+                    } else {
+                        t_string!(i18n, teams.replay_refresh).to_string()
+                    }}
                 </button>
             </div>
             <div class="flex-1 overflow-y-auto p-6 space-y-4">
                 {move || {
                     if let Some(err) = error.get() {
+                        let prefix = t_string!(i18n, teams.replay_load_failed).to_string();
                         return view! {
                             <div class="bg-red-50 border border-red-200 text-red-800 text-sm p-3 rounded-md">
-                                {format!("Failed to load trace: {err}")}
+                                {format!("{prefix} {err}")}
                             </div>
                         }.into_any();
                     }
                     if selected.get().is_none() {
                         return view! {
                             <div class="text-text-tertiary text-sm">
-                                "Select a task on the left to begin."
+                                {t!(i18n, teams.replay_select_task)}
                             </div>
                         }.into_any();
                     }
                     let Some(v) = trace.get() else {
                         return view! {
-                            <div class="text-text-tertiary text-sm">"Loading…"</div>
+                            <div class="text-text-tertiary text-sm">{t!(i18n, teams.replay_loading)}</div>
                         }.into_any();
                     };
                     let journal = v.get("journal")
@@ -271,7 +280,7 @@ fn TracePane(
                         {if rows.is_empty() {
                             view! {
                                 <div class="text-text-tertiary text-sm">
-                                    "No activity recorded yet."
+                                    {t!(i18n, teams.replay_no_activity)}
                                 </div>
                             }.into_any()
                         } else {
@@ -311,6 +320,7 @@ fn StatusDot(status: String) -> impl IntoView {
 
 #[component]
 fn JournalChip(j: TaskExitJournalDto) -> impl IntoView {
+    let i18n = use_i18n();
     let agent = j.agent_id.clone();
     let summary = j.summary.clone();
     let decisions = j.decisions.clone();
@@ -318,25 +328,29 @@ fn JournalChip(j: TaskExitJournalDto) -> impl IntoView {
     let artifacts = j.artifacts_ref.clone();
     let confidence = j.confidence;
     let ts_label = format_timestamp(j.created_at as i64);
+    let by_label = t_string!(i18n, teams.replay_journal_by).to_string();
     view! {
         <div class="bg-surface-raised border border-border rounded-lg p-4">
             <div class="flex items-center gap-2 mb-2 flex-wrap">
                 <span class="text-xs font-semibold uppercase tracking-wider text-info">
-                    "Exit Journal"
+                    {t!(i18n, teams.replay_journal_chip)}
                 </span>
                 <span class="text-xs text-text-tertiary">
-                    {format!("by {agent} · {ts_label}")}
+                    {format!("{by_label} {agent} · {ts_label}")}
                 </span>
-                {confidence.map(|c| view! {
-                    <span class="ml-auto text-xs px-2 py-0.5 rounded bg-info/10 text-info">
-                        {format!("confidence {c}%")}
-                    </span>
+                {confidence.map(|c| {
+                    let conf_label = t_string!(i18n, teams.replay_journal_confidence).to_string();
+                    view! {
+                        <span class="ml-auto text-xs px-2 py-0.5 rounded bg-info/10 text-info">
+                            {format!("{conf_label} {c}%")}
+                        </span>
+                    }
                 })}
             </div>
             <p class="text-sm text-text-primary mb-3 whitespace-pre-wrap">{summary}</p>
             {(!decisions.is_empty()).then(|| view! {
                 <div class="mb-2">
-                    <div class="text-xs font-medium text-text-secondary mb-1">"Decisions"</div>
+                    <div class="text-xs font-medium text-text-secondary mb-1">{t!(i18n, teams.replay_journal_decisions)}</div>
                     <ul class="list-disc list-inside text-xs text-text-secondary space-y-0.5">
                         {decisions.into_iter()
                             .map(|d| view! { <li>{d}</li> }.into_any())
@@ -346,7 +360,7 @@ fn JournalChip(j: TaskExitJournalDto) -> impl IntoView {
             })}
             {(!next_steps.is_empty()).then(|| view! {
                 <div class="mb-2">
-                    <div class="text-xs font-medium text-text-secondary mb-1">"Next steps"</div>
+                    <div class="text-xs font-medium text-text-secondary mb-1">{t!(i18n, teams.replay_journal_next_steps)}</div>
                     <ul class="list-disc list-inside text-xs text-text-secondary space-y-0.5">
                         {next_steps.into_iter()
                             .map(|d| view! { <li>{d}</li> }.into_any())
@@ -356,7 +370,7 @@ fn JournalChip(j: TaskExitJournalDto) -> impl IntoView {
             })}
             {(!artifacts.is_empty()).then(|| view! {
                 <div>
-                    <div class="text-xs font-medium text-text-secondary mb-1">"Artifacts"</div>
+                    <div class="text-xs font-medium text-text-secondary mb-1">{t!(i18n, teams.replay_journal_artifacts)}</div>
                     <div class="flex flex-wrap gap-1">
                         {artifacts.into_iter()
                             .map(|a| view! {

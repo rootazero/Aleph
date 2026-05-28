@@ -27,6 +27,7 @@
 
 use crate::api::fs::{AllowedRoot, DirEntry, FsApi, ListDirResult};
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -50,6 +51,7 @@ pub fn DirectoryBrowser(
     #[prop(into)]
     confirm_label: Signal<String>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();
 
     // `current_path = None` means "show the list of configured roots."
@@ -331,7 +333,7 @@ pub fn DirectoryBrowser(
                     <button
                         type="button"
                         class="p-1 rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface-sunken"
-                        title="关闭"
+                        title=move || t_string!(i18n, common.browser_close).to_string()
                         on:click=cancel
                     >
                         "×"
@@ -344,10 +346,10 @@ pub fn DirectoryBrowser(
                         type="button"
                         class="px-2 py-1 rounded hover:bg-surface-sunken disabled:opacity-30 disabled:cursor-not-allowed"
                         disabled=move || current_path.get().is_none() && roots.get().len() <= 1
-                        title="上一级"
+                        title=move || t_string!(i18n, common.browser_go_up).to_string()
                         on:click=go_up
                     >
-                        "← 上一级"
+                        {t!(i18n, common.browser_go_up_label)}
                     </button>
                     <span class="flex-1 truncate text-text-secondary font-mono">
                         {header_path_label}
@@ -361,19 +363,19 @@ pub fn DirectoryBrowser(
                                 if active { "bg-primary/15 text-primary" } else { "hover:bg-surface-sunken text-text-secondary" }
                             )
                         }
-                        title="显示隐藏文件 (以点开头)"
+                        title=move || t_string!(i18n, common.browser_show_hidden).to_string()
                         on:click=toggle_hidden
                     >
-                        "隐藏文件"
+                        {t!(i18n, common.browser_hidden_files)}
                     </button>
                     <button
                         type="button"
                         class="px-2 py-1 rounded hover:bg-surface-sunken disabled:opacity-30 disabled:cursor-not-allowed text-text-secondary"
                         disabled=move || current_path.get().is_none()
-                        title="在当前目录新建子目录"
+                        title=move || t_string!(i18n, common.browser_new_subdir).to_string()
                         on:click=move |_| begin_create()
                     >
-                        "+ 新建子目录"
+                        {t!(i18n, common.browser_new_subdir_label)}
                     </button>
                 </div>
 
@@ -385,11 +387,11 @@ pub fn DirectoryBrowser(
                 // Button + Button blew the trait-bound recursion).
                 <Show when=move || create_name.get().is_some()>
                     <div class="flex items-center gap-2 px-4 py-2 border-b border-border-subtle bg-surface-sunken/50">
-                        <span class="text-xs text-text-tertiary shrink-0">"新目录名:"</span>
+                        <span class="text-xs text-text-tertiary shrink-0">{t!(i18n, common.browser_new_name)}</span>
                         <input
                             type="text"
                             autofocus
-                            placeholder="my-project"
+                            placeholder=move || t_string!(i18n, common.browser_new_name_placeholder).to_string()
                             class="flex-1 px-2 py-1 text-sm bg-surface-base border border-border rounded outline-none focus:border-primary"
                             prop:value=move || create_name.get().unwrap_or_default()
                             on:input=move |ev| {
@@ -406,14 +408,14 @@ pub fn DirectoryBrowser(
                                 class="px-3 py-1 text-xs rounded bg-primary text-white hover:bg-primary-hover"
                                 on:click=move |_| submit_create()
                             >
-                                "创建"
+                                {t!(i18n, common.browser_create)}
                             </button>
                             <button
                                 type="button"
                                 class="px-2 py-1 text-xs rounded hover:bg-surface-sunken text-text-secondary"
                                 on:click=move |_| cancel_create()
                             >
-                                "取消"
+                                {t!(i18n, common.browser_cancel)}
                             </button>
                         </div>
                     </div>
@@ -427,7 +429,7 @@ pub fn DirectoryBrowser(
                         </div>
                     </Show>
                     <Show when=move || busy.get()>
-                        <div class="px-4 py-2 text-xs text-text-tertiary">"加载中…"</div>
+                        <div class="px-4 py-2 text-xs text-text-tertiary">{t!(i18n, common.browser_loading)}</div>
                     </Show>
                     {move || {
                         if current_path.get().is_none() {
@@ -445,7 +447,7 @@ pub fn DirectoryBrowser(
                         class="px-3 py-1.5 text-sm rounded-lg hover:bg-surface-sunken text-text-secondary"
                         on:click=cancel
                     >
-                        "取消"
+                        {t!(i18n, common.browser_cancel)}
                     </button>
                     <button
                         type="button"

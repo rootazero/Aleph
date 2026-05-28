@@ -12,6 +12,7 @@ use crate::components::session_tabs::SessionTabs;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::DashboardState;
 use crate::state::layout::{LayoutMode, WorkspaceState};
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
@@ -19,6 +20,7 @@ use wasm_bindgen::prelude::*;
 /// Top-level Chat view component.
 #[component]
 pub fn ChatView() -> impl IntoView {
+    let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();
     // ChatState is provided once at the app root so the chat sidebar
     // (left column) and this view share one session / agent selection.
@@ -166,7 +168,7 @@ pub fn ChatView() -> impl IntoView {
                             <polyline points="17 8 12 3 7 8"/>
                             <line x1="12" y1="3" x2="12" y2="15"/>
                         </svg>
-                        <span class="text-sm">"Drop to attach"</span>
+                        <span class="text-sm">{t!(i18n, chat.drop_to_attach)}</span>
                     </div>
                 </div>
             </Show>

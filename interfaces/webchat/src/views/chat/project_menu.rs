@@ -17,6 +17,7 @@ use crate::api::fs::FsApi;
 use crate::api::projects::{ProjectInfo, ProjectsApi};
 use crate::components::directory_browser::DirectoryBrowser;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 use super::state::ChatState;
 
@@ -32,6 +33,7 @@ enum BrowserPurpose {
 /// trigger pill that opens the picker dropdown.
 #[component]
 pub fn ProjectMenu() -> impl IntoView {
+    let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
 
@@ -83,11 +85,9 @@ pub fn ProjectMenu() -> impl IntoView {
                     Err(e) => last_error.set(Some(e)),
                 },
                 BrowserPurpose::NewBlank => {
-                    // For "new blank", the user picked the *parent*. Ask
-                    // for the project name, then mkdir via fs.create_dir
-                    // (the server validates scope + name shape) and
-                    // register the result.
-                    let name = match prompt_for_project_name() {
+                    let prompt_msg = t_string!(i18n, chat.project_prompt_name).to_string();
+                    let prompt_default = t_string!(i18n, chat.project_prompt_default).to_string();
+                    let name = match prompt_for_project_name(&prompt_msg, &prompt_default) {
                         Some(n) if !n.trim().is_empty() => n.trim().to_string(),
                         _ => return,
                     };
@@ -126,12 +126,12 @@ pub fn ProjectMenu() -> impl IntoView {
                     class="font-medium text-text-primary truncate max-w-[160px]"
                     title=move || chat.active_project_root.get().unwrap_or_default()
                 >
-                    {move || chat.active_project_name.get().unwrap_or_else(|| "project".to_string())}
+                    {move || chat.active_project_name.get().unwrap_or_else(|| t_string!(i18n, chat.project_default_name).to_string())}
                 </span>
                 <button
                     type="button"
                     class="text-text-tertiary hover:text-text-primary px-1"
-                    title="退出项目"
+                    title=move || t_string!(i18n, chat.project_exit).to_string()
                     on:click=on_exit_project
                 >
                     "×"
@@ -151,7 +151,7 @@ pub fn ProjectMenu() -> impl IntoView {
                     <path d="M2 5a1.5 1.5 0 0 1 1.5-1.5h2.379a1.5 1.5 0 0 1 1.06.44L8.5 5h4A1.5 1.5 0 0 1 14 6.5v5A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5v-6.5z" />
                     <path d="M10.5 8.5v3M9 10h3" stroke-linecap="round" />
                 </svg>
-                <span>"进入项目工作"</span>
+                <span>{t!(i18n, chat.project_enter)}</span>
                 <span class="text-text-tertiary">"▾"</span>
             </button>
         }
@@ -165,12 +165,12 @@ pub fn ProjectMenu() -> impl IntoView {
     };
 
     let modal_title = move || match purpose.get() {
-        BrowserPurpose::PickExisting => "使用现有文件夹".to_string(),
-        BrowserPurpose::NewBlank => "新建空白项目 — 选择父目录".to_string(),
+        BrowserPurpose::PickExisting => t_string!(i18n, chat.project_modal_pick_existing).to_string(),
+        BrowserPurpose::NewBlank => t_string!(i18n, chat.project_modal_new_blank).to_string(),
     };
     let modal_confirm = move || match purpose.get() {
-        BrowserPurpose::PickExisting => "选择此目录".to_string(),
-        BrowserPurpose::NewBlank => "在此处新建".to_string(),
+        BrowserPurpose::PickExisting => t_string!(i18n, chat.project_confirm_pick).to_string(),
+        BrowserPurpose::NewBlank => t_string!(i18n, chat.project_confirm_new_here).to_string(),
     };
 
     view! {
@@ -197,7 +197,7 @@ pub fn ProjectMenu() -> impl IntoView {
                         on:click=move |_| open_browser(BrowserPurpose::NewBlank)
                     >
                         <span class="text-text-tertiary">"+"</span>
-                        <span>"新建空白项目"</span>
+                        <span>{t!(i18n, chat.project_new_blank)}</span>
                     </button>
                     <button
                         type="button"
@@ -205,12 +205,12 @@ pub fn ProjectMenu() -> impl IntoView {
                         on:click=move |_| open_browser(BrowserPurpose::PickExisting)
                     >
                         <span class="text-text-tertiary">"\u{1F4C2}"</span>
-                        <span>"使用现有文件夹"</span>
+                        <span>{t!(i18n, chat.project_use_existing)}</span>
                     </button>
                     <Show when=move || !recents.get().is_empty()>
                         <div class="border-t border-border-subtle my-1"></div>
                         <div class="px-3 py-1 text-[10px] uppercase tracking-wide text-text-tertiary">
-                            "最近项目"
+                            {t!(i18n, chat.project_recent_title)}
                         </div>
                         <For
                             each=recent_items
@@ -269,9 +269,9 @@ pub fn ProjectMenu() -> impl IntoView {
 /// Native `window.prompt` for the project name. We deliberately keep
 /// this as the only browser-native dialog — it's a single short string,
 /// and writing a Leptos modal for it would be 60 lines for a 1-line UX.
-fn prompt_for_project_name() -> Option<String> {
+fn prompt_for_project_name(message: &str, default: &str) -> Option<String> {
     web_sys::window()?
-        .prompt_with_message_and_default("New project name:", "untitled")
+        .prompt_with_message_and_default(message, default)
         .ok()
         .flatten()
 }

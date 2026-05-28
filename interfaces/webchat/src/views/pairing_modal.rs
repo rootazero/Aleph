@@ -11,6 +11,7 @@
 //!   7. set_pairing_token saves to localStorage; reconnect() re-authenticates
 
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -33,6 +34,7 @@ pub fn PairingModal() -> impl IntoView {
 /// Inner modal rendered while pairing is in progress.
 #[component]
 fn PairingModalInner() -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
 
     // Wizard state signals (local to this modal instance)
@@ -138,7 +140,7 @@ fn PairingModalInner() -> impl IntoView {
         let sid_val = match &sid {
             Some(s) if !s.is_empty() => s.clone(),
             _ => {
-                error_msg.set(Some("No active wizard session".to_string()));
+                error_msg.set(Some(t_string!(i18n, pairing.no_session).to_string()));
                 return;
             }
         };
@@ -163,7 +165,8 @@ fn PairingModalInner() -> impl IntoView {
                 .await
             {
                 Err(e) => {
-                    error_msg.set(Some(format!("Approval failed: {e}")));
+                    let prefix = t_string!(i18n, pairing.approval_failed).to_string();
+                    error_msg.set(Some(format!("{prefix} {e}")));
                     approving.set(false);
                 }
                 Ok(resp) => {
@@ -190,16 +193,17 @@ fn PairingModalInner() -> impl IntoView {
                             state.set_pairing_token(token_owned);
                         } else {
                             // Done but no token — show error
+                            let fallback = t_string!(i18n, pairing.no_token).to_string();
                             let err = resp
                                 .get("error")
                                 .and_then(|e| e.as_str())
-                                .unwrap_or("Pairing completed but no token was returned")
-                                .to_string();
+                                .map(String::from)
+                                .unwrap_or(fallback);
                             error_msg.set(Some(err));
                             approving.set(false);
                         }
                     } else {
-                        error_msg.set(Some("Unexpected: wizard not done after approval".to_string()));
+                        error_msg.set(Some(t_string!(i18n, pairing.unexpected).to_string()));
                         approving.set(false);
                     }
                 }
@@ -240,8 +244,8 @@ fn PairingModalInner() -> impl IntoView {
                         </svg>
                     </div>
                     <div>
-                        <h2 class="text-lg font-semibold text-text-primary">"Device Pairing Required"</h2>
-                        <p class="text-sm text-text-tertiary">"Approve this device to access Aleph"</p>
+                        <h2 class="text-lg font-semibold text-text-primary">{t!(i18n, pairing.title)}</h2>
+                        <p class="text-sm text-text-tertiary">{t!(i18n, pairing.subtitle)}</p>
                     </div>
                 </div>
 
@@ -251,7 +255,7 @@ fn PairingModalInner() -> impl IntoView {
                         view! {
                             <div class="flex items-center gap-3 py-6 text-text-secondary">
                                 <div class="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                                <span class="text-sm">"Starting pairing wizard…"</span>
+                                <span class="text-sm">{t!(i18n, pairing.starting)}</span>
                             </div>
                         }.into_any()
                     } else {
@@ -259,7 +263,7 @@ fn PairingModalInner() -> impl IntoView {
                             <div class="space-y-5">
                                 // Pairing code display
                                 <div class="bg-surface-sunken rounded-lg p-5 text-center border border-border">
-                                    <p class="text-xs text-text-tertiary mb-2 uppercase tracking-widest">"Pairing Code"</p>
+                                    <p class="text-xs text-text-tertiary mb-2 uppercase tracking-widest">{t!(i18n, pairing.code_label)}</p>
                                     {move || {
                                         match pairing_code.get() {
                                             Some(code) => view! {
@@ -268,7 +272,7 @@ fn PairingModalInner() -> impl IntoView {
                                                 </span>
                                             }.into_any(),
                                             None => view! {
-                                                <span class="text-text-tertiary text-sm">"Fetching code…"</span>
+                                                <span class="text-text-tertiary text-sm">{t!(i18n, pairing.fetching_code)}</span>
                                             }.into_any(),
                                         }
                                     }}
@@ -276,9 +280,9 @@ fn PairingModalInner() -> impl IntoView {
 
                                 // Instructions
                                 <p class="text-sm text-text-secondary">
-                                    "Confirm the code above matches the one shown here, then click "
-                                    <strong class="text-text-primary">"Approve"</strong>
-                                    " to authorise this device."
+                                    {t!(i18n, pairing.instructions_prefix)}
+                                    <strong class="text-text-primary">{t!(i18n, pairing.approve)}</strong>
+                                    {t!(i18n, pairing.instructions_suffix)}
                                 </p>
 
                                 // Error message
@@ -295,7 +299,7 @@ fn PairingModalInner() -> impl IntoView {
                                         on:click=on_cancel
                                         disabled=move || approving.get()
                                     >
-                                        "Cancel"
+                                        {t!(i18n, pairing.cancel)}
                                     </button>
                                     <button
                                         class="flex-1 py-2.5 px-4 rounded-lg bg-primary hover:bg-primary/90 text-white font-medium transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
@@ -306,11 +310,11 @@ fn PairingModalInner() -> impl IntoView {
                                             view! {
                                                 <span class="flex items-center justify-center gap-2">
                                                     <span class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                                    "Approving…"
+                                                    {t!(i18n, pairing.approving)}
                                                 </span>
                                             }.into_any()
                                         } else {
-                                            view! { <span>"Approve"</span> }.into_any()
+                                            view! { <span>{t!(i18n, pairing.approve)}</span> }.into_any()
                                         }}
                                     </button>
                                 </div>

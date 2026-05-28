@@ -9,6 +9,7 @@ use super::validate_regex;
 
 #[component]
 pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
+    let i18n = use_i18n();
     let leak_pattern_errors = RwSignal::new(Vec::<(usize, String)>::new());
 
     let validate_leak_patterns = move || {
@@ -97,15 +98,15 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
             <h2 class="text-lg font-semibold text-text-primary mb-4">
-                "Secret Protection"
+                {t!(i18n, settings.security.secrets_title)}
             </h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Configure virtual key aliases and custom leak detection patterns."
+                {t!(i18n, settings.security.secrets_desc)}
             </p>
 
             <div class="space-y-6">
                 <div>
-                    <h3 class="text-sm font-semibold text-text-secondary mb-2">"Virtual Key Aliases"</h3>
+                    <h3 class="text-sm font-semibold text-text-secondary mb-2">{t!(i18n, settings.security.secrets_virtual_keys_title)}</h3>
                     <div class="space-y-2">
                         {move || {
                             let keys = config.get().map(|c| c.secrets_protection.virtual_keys.clone()).unwrap_or_default();
@@ -116,7 +117,7 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                                             type="text"
                                             prop:value=entry.alias.clone()
                                             on:input=move |ev| update_virtual_key(i, "alias", event_target_value(&ev))
-                                            placeholder="Alias (e.g., openai)"
+                                            placeholder=move || t_string!(i18n, settings.security.secrets_alias_placeholder).to_string()
                                             class="flex-1 px-3 py-1 bg-surface-sunken border border-border rounded text-sm text-text-primary"
                                         />
                                         <span class="text-text-tertiary">"→"</span>
@@ -124,14 +125,14 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                                             type="text"
                                             prop:value=entry.secret_name.clone()
                                             on:input=move |ev| update_virtual_key(i, "secret_name", event_target_value(&ev))
-                                            placeholder="Secret name (e.g., OPENAI_API_KEY)"
+                                            placeholder=move || t_string!(i18n, settings.security.secrets_secret_name_placeholder).to_string()
                                             class="flex-1 px-3 py-1 bg-surface-sunken border border-border rounded text-sm text-text-primary"
                                         />
                                         <button
                                             on:click=move |_| remove_virtual_key(i)
                                             class="px-2 py-1 text-danger hover:bg-danger/10 rounded text-sm"
                                         >
-                                            "Remove"
+                                            {t!(i18n, settings.security.secrets_remove)}
                                         </button>
                                     </div>
                                 }
@@ -142,12 +143,12 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                         on:click=move |_| add_virtual_key()
                         class="mt-2 px-3 py-1 text-sm text-primary hover:bg-primary/10 rounded"
                     >
-                        "+ Add Virtual Key"
+                        {t!(i18n, settings.security.secrets_add_virtual_key)}
                     </button>
                 </div>
 
                 <div class="pt-4 border-t border-border">
-                    <h3 class="text-sm font-semibold text-text-secondary mb-2">"Custom Leak Detection Patterns"</h3>
+                    <h3 class="text-sm font-semibold text-text-secondary mb-2">{t!(i18n, settings.security.secrets_leak_patterns_title)}</h3>
                     <div class="space-y-2">
                         {move || {
                             let patterns = config.get().map(|c| c.secrets_protection.custom_leak_patterns.clone()).unwrap_or_default();
@@ -160,14 +161,14 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                                                 type="text"
                                                 prop:value=p.name.clone()
                                                 on:input=move |ev| update_leak_pattern(i, "name", event_target_value(&ev))
-                                                placeholder="Pattern name..."
+                                                placeholder=move || t_string!(i18n, settings.security.secrets_pattern_name_placeholder).to_string()
                                                 class="w-full px-3 py-1 bg-surface-sunken border border-border rounded text-sm text-text-primary"
                                             />
                                             <input
                                                 type="text"
                                                 prop:value=p.pattern.clone()
                                                 on:input=move |ev| update_leak_pattern(i, "pattern", event_target_value(&ev))
-                                                placeholder="Regex pattern..."
+                                                placeholder=move || t_string!(i18n, settings.security.secrets_regex_placeholder).to_string()
                                                 class=move || format!("w-full px-3 py-1 bg-surface-sunken border rounded text-sm text-text-primary {}",
                                                     if has_err { "border-danger" } else { "border-border" })
                                             />
@@ -176,7 +177,7 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                                             on:click=move |_| remove_leak_pattern(i)
                                             class="px-2 py-1 text-danger hover:bg-danger/10 rounded text-sm"
                                         >
-                                            "Remove"
+                                            {t!(i18n, settings.security.secrets_remove)}
                                         </button>
                                     </div>
                                 }
@@ -187,7 +188,7 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                         on:click=move |_| add_leak_pattern()
                         class="mt-2 px-3 py-1 text-sm text-primary hover:bg-primary/10 rounded"
                     >
-                        "+ Add Leak Pattern"
+                        {t!(i18n, settings.security.secrets_add_leak_pattern)}
                     </button>
 
                     {move || {
@@ -195,10 +196,10 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                         if !errors.is_empty() {
                             Some(view! {
                                 <div class="mt-2 p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
-                                    <div class="font-semibold mb-1">"Invalid regex patterns:"</div>
+                                    <div class="font-semibold mb-1">{t!(i18n, settings.security.secrets_invalid_regex)}</div>
                                     <ul class="list-disc list-inside">
                                         {errors.iter().map(|(i, err)| view! {
-                                            <li>{format!("Pattern #{}: {}", i + 1, err)}</li>
+                                            <li>{format!("#{}: {}", i + 1, err)}</li>
                                         }).collect::<Vec<_>>()}
                                     </ul>
                                 </div>

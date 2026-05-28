@@ -2,17 +2,18 @@
 
 use crate::api::runtimes::{RuntimeInfo, RuntimeStatus, RuntimesApi};
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 #[component]
 pub fn RuntimesView() -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let runtimes = RwSignal::new(Vec::<RuntimeInfo>::new());
     let loading = RwSignal::new(true);
     let error_msg = RwSignal::new(Option::<String>::None);
 
-    // Initial load on mount.
     {
         let state = state;
         spawn_local(async move {
@@ -49,17 +50,16 @@ pub fn RuntimesView() -> impl IntoView {
         <div class="p-6 space-y-4">
             <div class="flex items-center justify-between">
                 <div>
-                    <h1 class="text-2xl font-bold text-text-primary">"Runtimes"</h1>
+                    <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, runtimes.title)}</h1>
                     <p class="text-sm text-text-tertiary mt-1">
-                        "Language runtimes and CLI tools available to Aleph. \
-                         Read-only; click \"Install\" on missing components."
+                        {t!(i18n, runtimes.description)}
                     </p>
                 </div>
                 <button
                     on:click=refresh
                     class="px-4 py-2 border border-border rounded-lg text-text-primary text-sm font-medium"
                 >
-                    "Refresh"
+                    {t!(i18n, runtimes.refresh)}
                 </button>
             </div>
 
@@ -71,7 +71,7 @@ pub fn RuntimesView() -> impl IntoView {
 
             {move || {
                 if loading.get() {
-                    view! { <div class="text-text-tertiary text-sm py-8">"Loading..."</div> }.into_any()
+                    view! { <div class="text-text-tertiary text-sm py-8">{t!(i18n, common.loading)}</div> }.into_any()
                 } else {
                     view! {
                         <div class="space-y-3">
@@ -90,6 +90,7 @@ pub fn RuntimesView() -> impl IntoView {
 
 #[component]
 fn RuntimeCard(info: RuntimeInfo) -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let installing = RwSignal::new(false);
     let name = info.name.clone();
@@ -139,7 +140,7 @@ fn RuntimeCard(info: RuntimeInfo) -> impl IntoView {
                         })}
                         {(!info.deps.is_empty()).then(|| view! {
                             <div class="text-xs text-text-tertiary mt-1">
-                                "deps: " {info.deps.join(", ")}
+                                {t!(i18n, runtimes.deps_prefix)} " " {info.deps.join(", ")}
                             </div>
                         })}
                     </div>
@@ -150,12 +151,16 @@ fn RuntimeCard(info: RuntimeInfo) -> impl IntoView {
                         disabled=move || installing.get()
                         class="px-3 py-1.5 bg-primary text-white rounded text-sm font-medium disabled:opacity-50"
                     >
-                        {move || if installing.get() { "Installing..." } else { "Install" }}
+                        {move || if installing.get() {
+                            t_string!(i18n, runtimes.installing).to_string()
+                        } else {
+                            t_string!(i18n, runtimes.install).to_string()
+                        }}
                     </button>
                 })}
                 {(!info.supported_on_current_os
                     && matches!(info.status, RuntimeStatus::Missing)).then(|| view! {
-                    <span class="text-xs text-text-tertiary italic">"install manually"</span>
+                    <span class="text-xs text-text-tertiary italic">{t!(i18n, runtimes.install_manually)}</span>
                 })}
             </div>
         </div>

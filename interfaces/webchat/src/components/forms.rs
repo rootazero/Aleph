@@ -3,6 +3,7 @@
 //! This module provides a set of composable form components that follow
 //! a consistent design system across all settings pages.
 
+use crate::i18n::*;
 use leptos::prelude::*;
 
 // ============================================================================
@@ -314,7 +315,8 @@ pub fn SaveButton(
     #[prop(optional)]
     text: Option<&'static str>,
 ) -> impl IntoView {
-    let text = text.unwrap_or("Save");
+    let i18n = use_i18n();
+    let custom = text;
 
     view! {
         <button
@@ -323,9 +325,11 @@ pub fn SaveButton(
             class="px-4 py-2 bg-primary text-text-inverse rounded-lg hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
             {move || if loading.get() {
-                "Saving..."
+                t_string!(i18n, common.saving).to_string()
+            } else if let Some(t) = custom {
+                t.to_string()
             } else {
-                text
+                t_string!(i18n, common.save).to_string()
             }}
         </button>
     }

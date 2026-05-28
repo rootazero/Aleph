@@ -12,6 +12,7 @@ pub(super) fn CustomPiiRulesSubsection(
     rules: RwSignal<Vec<CustomPiiRule>>,
     pattern_errors: RwSignal<Vec<(usize, String)>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let validate_all = move || {
         let mut errors = Vec::new();
         for (i, rule) in rules.get().iter().enumerate() {
@@ -77,7 +78,7 @@ pub(super) fn CustomPiiRulesSubsection(
     view! {
         <div class="mt-6 pt-6 border-t border-border">
             <h3 class="text-sm font-semibold text-text-secondary mb-3">
-                "Custom PII Rules"
+                {t!(i18n, settings.security.pii_rules_title)}
             </h3>
 
             <div class="space-y-3">
@@ -92,21 +93,21 @@ pub(super) fn CustomPiiRulesSubsection(
                                         type="text"
                                         prop:value=rule.name.clone()
                                         on:input=move |ev| update_rule(i, "name", event_target_value(&ev))
-                                        placeholder="Rule name..."
+                                        placeholder=move || t_string!(i18n, settings.security.pii_rules_name_placeholder).to_string()
                                         class="flex-1 px-3 py-1 bg-surface-raised border border-border rounded text-sm text-text-primary"
                                     />
                                     <button
                                         on:click=move |_| remove_rule(i)
                                         class="px-2 py-1 text-danger hover:bg-danger/10 rounded text-sm"
                                     >
-                                        "Remove"
+                                        {t!(i18n, settings.security.pii_rules_remove)}
                                     </button>
                                 </div>
                                 <input
                                     type="text"
                                     prop:value=rule.pattern.clone()
                                     on:input=move |ev| update_rule(i, "pattern", event_target_value(&ev))
-                                    placeholder="Regex pattern..."
+                                    placeholder=move || t_string!(i18n, settings.security.pii_rules_regex_placeholder).to_string()
                                     class=move || format!("w-full px-3 py-1 bg-surface-raised border rounded text-sm text-text-primary {}",
                                         if has_err { "border-danger" } else { "border-border" })
                                 />
@@ -115,7 +116,7 @@ pub(super) fn CustomPiiRulesSubsection(
                                         type="text"
                                         prop:value=rule.placeholder.clone()
                                         on:input=move |ev| update_rule(i, "placeholder", event_target_value(&ev))
-                                        placeholder="Placeholder..."
+                                        placeholder=move || t_string!(i18n, settings.security.pii_rules_placeholder_placeholder).to_string()
                                         class="flex-1 px-3 py-1 bg-surface-raised border border-border rounded text-sm text-text-primary"
                                     />
                                     <select
@@ -128,10 +129,10 @@ pub(super) fn CustomPiiRulesSubsection(
                                         on:change=move |ev| update_rule(i, "severity", event_target_value(&ev))
                                         class="px-2 py-1 bg-surface-raised border border-border rounded text-sm text-text-primary"
                                     >
-                                        <option value="low">"Low"</option>
-                                        <option value="medium">"Medium"</option>
-                                        <option value="high">"High"</option>
-                                        <option value="critical">"Critical"</option>
+                                        <option value="low">{t!(i18n, settings.security.pii_rules_severity_low)}</option>
+                                        <option value="medium">{t!(i18n, settings.security.pii_rules_severity_medium)}</option>
+                                        <option value="high">{t!(i18n, settings.security.pii_rules_severity_high)}</option>
+                                        <option value="critical">{t!(i18n, settings.security.pii_rules_severity_critical)}</option>
                                     </select>
                                     <select
                                         prop:value=move || match rule.action {
@@ -142,9 +143,9 @@ pub(super) fn CustomPiiRulesSubsection(
                                         on:change=move |ev| update_rule(i, "action", event_target_value(&ev))
                                         class="px-2 py-1 bg-surface-raised border border-border rounded text-sm text-text-primary"
                                     >
-                                        <option value="block">"Block"</option>
-                                        <option value="warn">"Warn"</option>
-                                        <option value="off">"Off"</option>
+                                        <option value="block">{t!(i18n, settings.security.pii_rules_action_block)}</option>
+                                        <option value="warn">{t!(i18n, settings.security.pii_rules_action_warn)}</option>
+                                        <option value="off">{t!(i18n, settings.security.pii_rules_action_off)}</option>
                                     </select>
                                 </div>
                             </div>
@@ -157,7 +158,7 @@ pub(super) fn CustomPiiRulesSubsection(
                 on:click=move |_| add_rule()
                 class="mt-3 px-3 py-1 text-sm text-primary hover:bg-primary/10 rounded"
             >
-                "+ Add Custom Rule"
+                {t!(i18n, settings.security.pii_rules_add)}
             </button>
 
             {move || {
@@ -165,10 +166,10 @@ pub(super) fn CustomPiiRulesSubsection(
                 if !errors.is_empty() {
                     Some(view! {
                         <div class="mt-2 p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
-                            <div class="font-semibold mb-1">"Invalid regex patterns:"</div>
+                            <div class="font-semibold mb-1">{t!(i18n, settings.security.pii_rules_invalid_regex)}</div>
                             <ul class="list-disc list-inside">
                                 {errors.iter().map(|(i, err)| view! {
-                                    <li>{format!("Rule #{}: {}", i + 1, err)}</li>
+                                    <li>{format!("#{}: {}", i + 1, err)}</li>
                                 }).collect::<Vec<_>>()}
                             </ul>
                         </div>
@@ -183,6 +184,7 @@ pub(super) fn CustomPiiRulesSubsection(
 
 #[component]
 pub(super) fn CustomPiiRulesSection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
+    let i18n = use_i18n();
     let custom_rules = RwSignal::new(
         config
             .get()
@@ -202,16 +204,16 @@ pub(super) fn CustomPiiRulesSection(config: RwSignal<Option<SecurityConfig>>) ->
         <div class="bg-surface-raised rounded-lg border border-border p-6">
             <div class="flex justify-between items-start mb-4">
                 <div>
-                    <h2 class="text-lg font-semibold text-text-primary">"Custom PII Rules"</h2>
+                    <h2 class="text-lg font-semibold text-text-primary">{t!(i18n, settings.security.pii_rules_title)}</h2>
                     <p class="text-sm text-text-tertiary mt-1">
-                        "Define custom PII patterns with severity and action settings."
+                        {t!(i18n, settings.security.pii_rules_desc)}
                     </p>
                 </div>
                 <button
                     on:click=save
                     class="px-4 py-1.5 text-sm bg-info text-white rounded hover:bg-primary-hover"
                 >
-                    "Apply"
+                    {t!(i18n, settings.security.pii_rules_apply)}
                 </button>
             </div>
             <CustomPiiRulesSubsection rules=custom_rules pattern_errors=pattern_errors />

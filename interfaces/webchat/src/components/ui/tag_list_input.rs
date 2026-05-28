@@ -3,6 +3,7 @@
 //! Provides a tag input with add/remove functionality, duplicate prevention,
 //! and Enter key support. Tags render as colored chips with remove buttons.
 
+use crate::i18n::*;
 use leptos::prelude::*;
 
 /// A chip-based tag list editor with add/remove functionality.
@@ -37,6 +38,7 @@ pub fn TagListInput(
     #[prop(optional)]
     hint: Option<&'static str>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let input_value = RwSignal::new(String::new());
 
     let add_tag = move || {
@@ -70,7 +72,7 @@ pub fn TagListInput(
                     let current_tags = tags.get();
                     if current_tags.is_empty() {
                         view! {
-                            <span class="text-sm text-text-tertiary italic">"No items added"</span>
+                            <span class="text-sm text-text-tertiary italic">{t!(i18n, common.no_items)}</span>
                         }.into_any()
                     } else {
                         current_tags
@@ -84,7 +86,7 @@ pub fn TagListInput(
                                             type="button"
                                             on:click=move |_| remove_tag(i)
                                             class="text-primary hover:text-danger transition-colors cursor-pointer"
-                                            aria-label="Remove tag"
+                                            aria-label=move || t_string!(i18n, common.remove_tag).to_string()
                                         >
                                             <svg
                                                 xmlns="http://www.w3.org/2000/svg"
@@ -130,7 +132,7 @@ pub fn TagListInput(
                     on:click=move |_| add_tag()
                     class="px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-secondary hover:text-text-primary hover:bg-surface-raised text-sm transition-colors cursor-pointer"
                 >
-                    "Add"
+                    {t!(i18n, common.add)}
                 </button>
             </div>
 

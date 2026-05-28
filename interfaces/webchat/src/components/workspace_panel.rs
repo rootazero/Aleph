@@ -15,6 +15,7 @@
 use crate::components::json_viewer::JsonViewer;
 use crate::components::markdown::MarkdownRenderer;
 use crate::components::tool_renderer::ToolRendererRegistry;
+use crate::i18n::*;
 use crate::state::layout::{LayoutMode, ToolPayload, WorkspaceContent, WorkspaceState};
 use crate::views::chat::state::{ChatState, ToolCallEntry};
 use leptos::prelude::*;
@@ -49,6 +50,7 @@ pub fn WorkspacePanel() -> impl IntoView {
 ///   (`views/chat/view.rs`) and follows the chat / workspace boundary.
 #[component]
 fn WorkspaceHeader() -> impl IntoView {
+    let i18n = use_i18n();
     let workspace = expect_context::<WorkspaceState>();
     view! {
         // `aleph-chrome-row-h` sizes the row so its vertical center lands
@@ -61,19 +63,17 @@ fn WorkspaceHeader() -> impl IntoView {
                    text-xs uppercase tracking-wider text-text-tertiary"
             data-tauri-drag-region=""
         >
-            <span>"Workspace"</span>
+            <span>{t!(i18n, common.workspace_title)}</span>
             <span class="text-text-tertiary/60">
-                {move || workspace_content_label(&workspace.content.get())}
+                {move || {
+                    match workspace.content.get() {
+                        WorkspaceContent::Empty => t_string!(i18n, common.workspace_state_idle).to_string(),
+                        WorkspaceContent::ToolDetail { .. } => t_string!(i18n, common.workspace_state_tool).to_string(),
+                        WorkspaceContent::Notes(_) => t_string!(i18n, common.workspace_state_notes).to_string(),
+                    }
+                }}
             </span>
         </div>
-    }
-}
-
-fn workspace_content_label(content: &WorkspaceContent) -> &'static str {
-    match content {
-        WorkspaceContent::Empty => "· idle",
-        WorkspaceContent::ToolDetail { .. } => "· tool detail",
-        WorkspaceContent::Notes(_) => "· notes",
     }
 }
 
@@ -98,6 +98,7 @@ fn WorkspaceBody() -> impl IntoView {
 /// Idle placeholder — invites the user to click a tool chip.
 #[component]
 fn WorkspaceEmptyHero() -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="h-full flex flex-col items-center justify-center
                     text-center text-text-tertiary gap-3 py-12 px-6">
@@ -110,10 +111,9 @@ fn WorkspaceEmptyHero() -> impl IntoView {
                 <path d="M14 12h4"/>
                 <path d="M14 16h4"/>
             </svg>
-            <p class="text-sm font-medium text-text-secondary">"Workspace pane"</p>
+            <p class="text-sm font-medium text-text-secondary">{t!(i18n, common.workspace_pane)}</p>
             <p class="text-xs max-w-[24ch] leading-relaxed">
-                "Click any tool chip in the chat to inspect its call here. "
-                "Switch back to single-column with the toggle in the composer."
+                {t!(i18n, common.workspace_hint)}
             </p>
         </div>
     }
@@ -124,6 +124,7 @@ fn WorkspaceEmptyHero() -> impl IntoView {
 /// referenced run / tool_id has been evicted (e.g. user cleared chat).
 #[component]
 fn ToolDetailView(run_id: String, tool_id: String) -> impl IntoView {
+    let i18n = use_i18n();
     let chat = expect_context::<ChatState>();
     let workspace = expect_context::<WorkspaceState>();
     let registry = expect_context::<ToolRendererRegistry>();
@@ -151,7 +152,7 @@ fn ToolDetailView(run_id: String, tool_id: String) -> impl IntoView {
         .into_any(),
         None => view! {
             <div class="flex flex-col gap-2 text-sm text-text-tertiary">
-                <p>"Tool call no longer in session memory."</p>
+                <p>{t!(i18n, common.workspace_tool_evicted)}</p>
                 <p class="text-xs">
                     "run: " <code class="font-mono">{run_id_for_missing.clone()}</code>
                 </p>
@@ -241,19 +242,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn workspace_content_label_uses_stable_tokens() {
-        assert_eq!(workspace_content_label(&WorkspaceContent::Empty), "· idle");
-        assert_eq!(
-            workspace_content_label(&WorkspaceContent::ToolDetail {
-                run_id: "r".into(),
-                tool_id: "t".into()
-            }),
-            "· tool detail"
-        );
-        assert_eq!(
-            workspace_content_label(&WorkspaceContent::Notes("hi".into())),
-            "· notes"
-        );
-    }
 }

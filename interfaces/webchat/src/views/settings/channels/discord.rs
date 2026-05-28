@@ -10,6 +10,7 @@ use crate::api::DiscordApi;
 use crate::components::forms::ErrorMessageDynamic;
 use crate::components::ui::AgentBindingSelector;
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::A;
@@ -78,6 +79,7 @@ enum OverallHealth {
 
 #[component]
 pub fn DiscordChannelView() -> impl IntoView {
+    let i18n = use_i18n();
     let _state = expect_context::<DashboardState>();
 
     // Shared signals
@@ -109,7 +111,7 @@ pub fn DiscordChannelView() -> impl IntoView {
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="15 18 9 12 15 6"/>
                     </svg>
-                    "Back to Channels"
+                    {t!(i18n, settings.channels.back_to_channels)}
                 </A>
 
                 // Header — matches config_template.rs structure
@@ -136,7 +138,7 @@ pub fn DiscordChannelView() -> impl IntoView {
                         </div>
                     </div>
                     <p class="text-sm text-text-secondary mt-1">
-                        "Configure your Discord bot connection, manage guilds and channels, and audit permissions."
+                        {t!(i18n, settings.channels.discord_subtitle)}
                     </p>
                 </div>
 
@@ -190,7 +192,7 @@ pub fn DiscordChannelView() -> impl IntoView {
                         rel="noopener noreferrer"
                         class="text-sm text-text-tertiary hover:text-primary transition-colors inline-flex items-center gap-1"
                     >
-                        "Documentation"
+                        {t!(i18n, settings.channels.documentation)}
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                             <polyline points="15 3 21 3 21 9"/>

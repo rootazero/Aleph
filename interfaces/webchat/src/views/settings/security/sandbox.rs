@@ -7,6 +7,7 @@ use crate::i18n::*;
 
 #[component]
 pub(super) fn SandboxRateLimitSection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
+    let i18n = use_i18n();
     let get_rl = move || {
         config
             .get()
@@ -32,9 +33,9 @@ pub(super) fn SandboxRateLimitSection(config: RwSignal<Option<SecurityConfig>>) 
         <div class="bg-surface-raised rounded-lg border border-border p-6">
             <div class="flex items-center justify-between mb-4">
                 <div>
-                    <h2 class="text-lg font-semibold text-text-primary">"Sandbox Rate Limiting"</h2>
+                    <h2 class="text-lg font-semibold text-text-primary">{t!(i18n, settings.security.sandbox_title)}</h2>
                     <p class="text-sm text-text-tertiary mt-1">
-                        "Limit tool execution frequency per session and category."
+                        {t!(i18n, settings.security.sandbox_desc)}
                     </p>
                 </div>
                 <label class="flex items-center space-x-3 cursor-pointer">
@@ -44,7 +45,7 @@ pub(super) fn SandboxRateLimitSection(config: RwSignal<Option<SecurityConfig>>) 
                         on:change=move |ev| set_enabled(event_target_checked(&ev))
                         class="w-4 h-4 text-primary focus:ring-primary/30 rounded"
                     />
-                    <span class="text-sm font-medium text-text-primary">"Enabled"</span>
+                    <span class="text-sm font-medium text-text-primary">{t!(i18n, settings.security.sandbox_enabled)}</span>
                 </label>
             </div>
 
@@ -58,36 +59,16 @@ pub(super) fn SandboxRateLimitSection(config: RwSignal<Option<SecurityConfig>>) 
                         class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                     />
                     <div>
-                        <div class="text-sm font-medium text-text-primary">"Exempt loopback"</div>
-                        <div class="text-xs text-text-tertiary">"Skip rate limiting for localhost/tool requests"</div>
+                        <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.security.sandbox_exempt_loopback)}</div>
+                        <div class="text-xs text-text-tertiary">{t!(i18n, settings.security.sandbox_exempt_loopback_desc)}</div>
                     </div>
                 </label>
 
                 <div class="grid grid-cols-2 gap-4">
-                    <RateLimitBucketCard
-                        config=config
-                        category="read"
-                        label="Read Tools"
-                        desc="Files, search, memory operations"
-                    />
-                    <RateLimitBucketCard
-                        config=config
-                        category="write"
-                        label="Write Tools"
-                        desc="Code generation, file writes, git operations"
-                    />
-                    <RateLimitBucketCard
-                        config=config
-                        category="dangerous"
-                        label="Dangerous Tools"
-                        desc="Shell execution, system commands"
-                    />
-                    <RateLimitBucketCard
-                        config=config
-                        category="admin"
-                        label="Admin Tools"
-                        desc="Gateway config, device management"
-                    />
+                    <RateLimitBucketCard config=config category="read" />
+                    <RateLimitBucketCard config=config category="write" />
+                    <RateLimitBucketCard config=config category="dangerous" />
+                    <RateLimitBucketCard config=config category="admin" />
                 </div>
             </div>
         </div>
@@ -98,9 +79,8 @@ pub(super) fn SandboxRateLimitSection(config: RwSignal<Option<SecurityConfig>>) 
 pub(super) fn RateLimitBucketCard(
     config: RwSignal<Option<SecurityConfig>>,
     category: &'static str,
-    label: &'static str,
-    desc: &'static str,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let get_window = move || {
         config
             .get()
@@ -121,15 +101,30 @@ pub(super) fn RateLimitBucketCard(
             .unwrap_or(false)
     };
 
+    let label_view = move || match category {
+        "read" => t_string!(i18n, settings.security.sandbox_tool_read).to_string(),
+        "write" => t_string!(i18n, settings.security.sandbox_tool_write).to_string(),
+        "dangerous" => t_string!(i18n, settings.security.sandbox_tool_dangerous).to_string(),
+        "admin" => t_string!(i18n, settings.security.sandbox_tool_admin).to_string(),
+        _ => String::new(),
+    };
+    let desc_view = move || match category {
+        "read" => t_string!(i18n, settings.security.sandbox_tool_read_desc).to_string(),
+        "write" => t_string!(i18n, settings.security.sandbox_tool_write_desc).to_string(),
+        "dangerous" => t_string!(i18n, settings.security.sandbox_tool_dangerous_desc).to_string(),
+        "admin" => t_string!(i18n, settings.security.sandbox_tool_admin_desc).to_string(),
+        _ => String::new(),
+    };
+
     view! {
         <div class="p-3 bg-surface-sunken rounded border border-border">
             <div class="mb-2">
-                <div class="text-sm font-semibold text-text-primary">{label}</div>
-                <div class="text-xs text-text-tertiary">{desc}</div>
+                <div class="text-sm font-semibold text-text-primary">{label_view}</div>
+                <div class="text-xs text-text-tertiary">{desc_view}</div>
             </div>
             <div class="grid grid-cols-3 gap-2 text-xs">
                 <div>
-                    <label class="text-text-tertiary">"Max/min"</label>
+                    <label class="text-text-tertiary">{t!(i18n, settings.security.sandbox_max_per_min)}</label>
                     <input
                         type="number"
                         min="1"
@@ -152,7 +147,7 @@ pub(super) fn RateLimitBucketCard(
                     />
                 </div>
                 <div>
-                    <label class="text-text-tertiary">"Window(s)"</label>
+                    <label class="text-text-tertiary">{t!(i18n, settings.security.sandbox_window_secs)}</label>
                     <input
                         type="number"
                         min="1"
@@ -175,7 +170,7 @@ pub(super) fn RateLimitBucketCard(
                     />
                 </div>
                 <div>
-                    <label class="text-text-tertiary">"Burst"</label>
+                    <label class="text-text-tertiary">{t!(i18n, settings.security.sandbox_burst)}</label>
                     <input
                         type="number"
                         min="0"

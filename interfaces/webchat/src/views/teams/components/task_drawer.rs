@@ -324,16 +324,17 @@ fn run_status_class(status: &str) -> &'static str {
 
 #[component]
 fn RunsSection(runs: RwSignal<Vec<TaskRunDto>>) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div>
             <div class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-1">
-                "Runs (" {move || runs.get().len()} ")"
+                {t!(i18n, teams.drawer_runs)} " (" {move || runs.get().len()} ")"
             </div>
             {move || {
                 let rs = runs.get();
                 if rs.is_empty() {
                     view! {
-                        <div class="text-text-tertiary text-xs italic">"No execution attempts recorded yet."</div>
+                        <div class="text-text-tertiary text-xs italic">{t!(i18n, teams.drawer_no_runs)}</div>
                     }.into_any()
                 } else {
                     let items = rs.into_iter().map(|r| {
@@ -372,16 +373,17 @@ fn CommentsSection(
     busy: RwSignal<bool>,
     submit: Callback<web_sys::MouseEvent>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div>
             <div class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-1">
-                "Comments (" {move || comments.get().len()} ")"
+                {t!(i18n, teams.drawer_comments)} " (" {move || comments.get().len()} ")"
             </div>
             {move || {
                 let cs = comments.get();
                 if cs.is_empty() {
                     view! {
-                        <div class="text-text-tertiary text-xs italic">"No comments yet."</div>
+                        <div class="text-text-tertiary text-xs italic">{t!(i18n, teams.drawer_no_comments)}</div>
                     }.into_any()
                 } else {
                     let items = cs.into_iter().map(|c| view! {
@@ -399,7 +401,7 @@ fn CommentsSection(
             <div class="mt-2 flex gap-1.5 items-start">
                 <textarea
                     class="flex-1 text-xs p-1.5 rounded border border-border bg-surface-sunken resize-y min-h-[2.5rem]"
-                    placeholder="Add a comment…"
+                    placeholder=move || t_string!(i18n, teams.drawer_add_comment_placeholder).to_string()
                     prop:value=move || new_comment.get()
                     on:input=move |ev| new_comment.set(event_target_value(&ev))
                 />
@@ -412,7 +414,7 @@ fn CommentsSection(
                     disabled=move || busy.get() || new_comment.get().trim().is_empty()
                     on:click=move |ev| submit.run(ev)
                 >
-                    "Post"
+                    {t!(i18n, teams.drawer_post)}
                 </button>
             </div>
         </div>
@@ -421,16 +423,17 @@ fn CommentsSection(
 
 #[component]
 fn EventsSection(events: RwSignal<Vec<TaskEventDto>>) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div>
             <div class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-1">
-                "Event timeline (" {move || events.get().len()} ")"
+                {t!(i18n, teams.drawer_events)} " (" {move || events.get().len()} ")"
             </div>
             {move || {
                 let es = events.get();
                 if es.is_empty() {
                     view! {
-                        <div class="text-text-tertiary text-xs italic">"No events yet."</div>
+                        <div class="text-text-tertiary text-xs italic">{t!(i18n, teams.drawer_no_events)}</div>
                     }.into_any()
                 } else {
                     let items = es.into_iter().rev().take(20).collect::<Vec<_>>().into_iter().map(|e| view! {

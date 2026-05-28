@@ -3,6 +3,7 @@
 //! A password/secret input field with an eye/eye-off toggle button
 //! that switches between masked and plaintext display.
 
+use crate::i18n::*;
 use leptos::prelude::*;
 
 /// A styled secret input field with show/hide toggle
@@ -35,6 +36,7 @@ pub fn SecretInput(
     #[prop(optional)]
     monospace: bool,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let visible = RwSignal::new(false);
     let font_class = if monospace { "font-mono" } else { "" };
 
@@ -54,7 +56,11 @@ pub fn SecretInput(
                 type="button"
                 on:click=move |_| visible.update(|v| *v = !*v)
                 class="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-text-tertiary hover:text-text-secondary transition-colors"
-                aria-label=move || if visible.get() { "Hide secret" } else { "Show secret" }
+                aria-label=move || if visible.get() {
+                    t_string!(i18n, common.secret_hide).to_string()
+                } else {
+                    t_string!(i18n, common.secret_show).to_string()
+                }
             >
                 {move || if visible.get() {
                     // Eye-off icon (secret is visible, click to hide)

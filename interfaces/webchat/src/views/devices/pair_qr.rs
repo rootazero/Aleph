@@ -8,6 +8,7 @@
 //! Same-LAN only. For remote access (Tailscale, reverse proxy) the
 //! displayed URL also doubles as plain text the user can copy and edit.
 
+use crate::i18n::*;
 use leptos::prelude::*;
 
 /// Derive the gateway's same-origin base URL the QR points at. Reads
@@ -52,23 +53,22 @@ pub(crate) fn generate_qr_svg(url: &str) -> String {
 
 #[component]
 pub fn PairQr() -> impl IntoView {
+    let i18n = use_i18n();
     let url = format!("{}/pair", discover_self_host());
     let svg = generate_qr_svg(&url);
     let url_display = url.clone();
     view! {
         <div class="flex flex-col items-center gap-4 p-6">
-            <h2 class="text-lg font-semibold text-text-primary">"Add browser or mobile"</h2>
+            <h2 class="text-lg font-semibold text-text-primary">{t!(i18n, devices.add_title)}</h2>
             <p class="text-sm text-text-secondary text-center max-w-md">
-                "Scan this QR code from another device on the same network. \
-                 You'll see a 6-digit code; approve it from the notification bell."
+                {t!(i18n, devices.scan_qr)}
             </p>
             <div inner_html=svg class="bg-surface-sunken p-4 rounded-xl border border-border"></div>
             <div class="text-xs font-mono text-text-secondary break-all max-w-md text-center">
                 {url_display}
             </div>
             <p class="text-xs text-text-tertiary text-center max-w-md">
-                "Same-network only. For remote access, use your Tailscale URL or your \
-                 reverse-proxy URL — replace the host portion above before scanning."
+                {t!(i18n, devices.remote_hint)}
             </p>
         </div>
     }
