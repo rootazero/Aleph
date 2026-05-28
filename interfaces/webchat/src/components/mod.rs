@@ -17,6 +17,7 @@ pub mod mode_sidebar;
 pub mod model_picker;
 pub mod nav_menu;
 pub mod notification_center;
+pub mod provider_row_card;
 pub mod service_blocking_gate;
 pub mod session_tabs;
 pub mod settings_sidebar;
