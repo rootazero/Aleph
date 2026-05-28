@@ -9,6 +9,7 @@ use axum::{
         ws::{CloseFrame, Message as WsMessage, WebSocket, WebSocketUpgrade},
         ConnectInfo, State,
     },
+    http::{header, HeaderMap},
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -77,6 +78,148 @@ struct ConnectionContext {
     /// MUST carry an `idempotency_key` or it is rejected before lane
     /// dispatch with [`IDEMPOTENCY_KEY_REQUIRED`].
     require_idempotency_key: bool,
+    /// Locally-stored shared token to auto-inject into the first `connect`
+    /// when the peer is loopback AND presented a valid `aleph_session`
+    /// cookie at WS handshake. `Some` ⇒ the panel WebSocket inherits the
+    /// same trust as the cookie that loaded the panel HTML, so the user
+    /// is not prompted to approve a pairing code on a fresh app start.
+    /// `None` ⇒ existing flow (Case 0/1/2/3 in `connect.rs`) runs
+    /// untouched — non-loopback peers, dev wiring, and clients that
+    /// already carry their own token / shared_token / invitation_token
+    /// land here.
+    bootstrap_shared_token: Option<String>,
+}
+
+/// Extract the `aleph_session` cookie value from a request's `Cookie` header.
+///
+/// Returns `None` when the header is missing, malformed, or does not
+/// contain an `aleph_session=…` pair. Mirrors the helper in
+/// [`crate::gateway::auth_middleware`] — duplicated here to avoid
+/// re-exporting a private item across modules.
+fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies
+                .split(';')
+                .filter_map(|c| {
+                    let (name, value) = c.trim().split_once('=')?;
+                    if name == "aleph_session" {
+                        Some(value.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .next()
+        })
+}
+
+/// Bridge an `aleph_session` cookie into a WS-level shared-token bootstrap.
+///
+/// Returns `Some(shared_token)` only when ALL hold:
+///   1. peer is on a loopback interface,
+///   2. shared state has both `session_mgr` and `shared_token_mgr` plumbed
+///      (production wiring; dev/auth-none/legacy wiring leaves them `None`),
+///   3. the `aleph_session` cookie is present and validates against the
+///      session store.
+///
+/// Anything short of all three yields `None`, and the connection falls
+/// through to the existing token / shared_token / pairing flow. Refusing
+/// non-loopback peers is what keeps a LAN attacker who somehow obtains a
+/// session cookie from short-circuiting auth — `/auth/bootstrap` is
+/// already loopback-gated upstream, but defence-in-depth costs nothing.
+fn resolve_bootstrap_shared_token(
+    state: &Arc<GatewaySharedState>,
+    peer_addr: &SocketAddr,
+    headers: &HeaderMap,
+) -> Option<String> {
+    if !peer_addr.ip().is_loopback() {
+        return None;
+    }
+    let session_mgr = state.session_mgr.as_ref()?;
+    let shared_token_mgr = state.shared_token_mgr.as_ref()?;
+    let session_id = extract_session_cookie(headers)?;
+    match session_mgr.validate_session(&session_id) {
+        Ok(true) => {}
+        Ok(false) => return None,
+        Err(e) => {
+            warn!(
+                error = %e,
+                "ws upgrade: session_mgr.validate_session failed; falling back to pairing"
+            );
+            return None;
+        }
+    }
+    // Prefer the in-memory cache populated at boot; fall through to a DB
+    // read if this process has not loaded the token yet (e.g. in tests
+    // that construct a fresh manager). Both paths are O(1) on the hot
+    // upgrade path, so the cost is negligible.
+    shared_token_mgr
+        .get_current_token()
+        .or_else(|| shared_token_mgr.try_load_token_from_db())
+}
+
+/// Rewrite the first `connect` JSON-RPC frame to carry the locally-known
+/// shared token, so a cookie-bootstrapped Panel rides Case 0 in
+/// `connect.rs` instead of falling into the device-pairing branch.
+///
+/// Returns the original `text` unchanged when ANY of these hold:
+///   * no bootstrap token is available (Cookie absent / invalid / non-loopback),
+///   * the method is not exactly `connect` (e.g. `connect.challenge`
+///     never carries credentials),
+///   * the client already supplied an explicit `token`, `shared_token`,
+///     or `invitation_token` (we never overwrite client intent),
+///   * the JSON cannot be re-parsed as an object with an object `params`
+///     (defensive — the upstream `serde_json::from_str` already succeeded
+///     into a typed `JsonRpcRequest`, but a `params: null` payload is
+///     legal in JSON-RPC and there is nowhere to insert the field).
+///
+/// The injection is purely additive (one extra string field), so the
+/// re-serialised frame remains a valid JSON-RPC 2.0 request.
+fn maybe_inject_bootstrap_shared_token(
+    text: &str,
+    req: &JsonRpcRequest,
+    bootstrap_shared_token: Option<&str>,
+) -> String {
+    let Some(token) = bootstrap_shared_token else {
+        return text.to_string();
+    };
+    if req.method != "connect" {
+        return text.to_string();
+    }
+    // Sniff the parsed params for any already-set credential field. We
+    // intentionally read the typed `req.params` rather than the raw JSON
+    // — `JsonRpcRequest::params` is `Option<Value>` so this stays a
+    // single allocation-free pointer-deref.
+    if let Some(params) = req.params.as_ref().and_then(|v| v.as_object()) {
+        if params.contains_key("token")
+            || params.contains_key("shared_token")
+            || params.contains_key("invitation_token")
+        {
+            return text.to_string();
+        }
+    }
+
+    // Re-serialise the frame with `params.shared_token` injected.
+    let Ok(mut envelope) = serde_json::from_str::<serde_json::Value>(text) else {
+        return text.to_string();
+    };
+    // Insert into `params` (creating it if `params` is null / missing).
+    let params_slot = envelope
+        .as_object_mut()
+        .map(|m| m.entry("params").or_insert_with(|| serde_json::json!({})));
+    let Some(params) = params_slot else {
+        return text.to_string();
+    };
+    let Some(params_obj) = params.as_object_mut() else {
+        return text.to_string();
+    };
+    params_obj.insert(
+        "shared_token".to_string(),
+        serde_json::Value::String(token.to_string()),
+    );
+    serde_json::to_string(&envelope).unwrap_or_else(|_| text.to_string())
 }
 
 /// axum handler: upgrade HTTP connection to WebSocket at `/ws`
@@ -84,6 +227,7 @@ pub(super) async fn ws_upgrade_handler(
     ws: WebSocketUpgrade,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<GatewaySharedState>>,
+    headers: HeaderMap,
 ) -> axum::response::Response {
     // Check connection limit before upgrading
     let current = state.connections.read().await.len();
@@ -107,6 +251,15 @@ pub(super) async fn ws_upgrade_handler(
         ChannelClass::Bot
     };
 
+    let bootstrap_shared_token = resolve_bootstrap_shared_token(&state, &peer_addr, &headers);
+    if bootstrap_shared_token.is_some() {
+        debug!(
+            "ws upgrade: loopback peer {} presented a valid aleph_session cookie; \
+             shared token will be auto-injected into the first connect",
+            peer_addr
+        );
+    }
+
     ws.on_upgrade(move |socket| async move {
         let ctx = ConnectionContext {
             handlers: state.handlers.clone(),
@@ -129,6 +282,7 @@ pub(super) async fn ws_upgrade_handler(
             ping_interval_secs: state.ping_interval_secs,
             idle_timeout_secs: state.idle_timeout_secs,
             require_idempotency_key: state.require_idempotency_key,
+            bootstrap_shared_token,
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -260,8 +414,26 @@ async fn handle_connection(
                                         ))
                                         .unwrap_or_default()
                                     } else {
+                                        // Cookie-bootstrap injection: a loopback peer that
+                                        // presented a valid `aleph_session` cookie at WS
+                                        // handshake (validated in `ws_upgrade_handler`)
+                                        // should not be asked to pair again — the cookie
+                                        // and the shared token are the same trust class.
+                                        // We rewrite the first `connect` to carry
+                                        // `shared_token=<local>` so it rides Case 0 in
+                                        // `connect.rs` and skips the device-pairing
+                                        // branch. We never overwrite an explicit
+                                        // `token` / `shared_token` / `invitation_token`
+                                        // — the client may legitimately want a different
+                                        // identity than the local desktop session.
+                                        let text_for_dispatch = maybe_inject_bootstrap_shared_token(
+                                            &text,
+                                            req,
+                                            ctx.bootstrap_shared_token.as_deref(),
+                                        );
+
                                         // Handle connect request
-                                        let response = process_request(&text, &ctx.middleware_chain).await;
+                                        let response = process_request(&text_for_dispatch, &ctx.middleware_chain).await;
 
                                         // If connect succeeded, mark as authenticated
                                         if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
@@ -982,5 +1154,106 @@ mod tests {
         assert!(!allow_unauth_browser_pairing("pairing.list"));
         assert!(!allow_unauth_browser_pairing("memory.search"));
         assert!(!allow_unauth_browser_pairing(""));
+    }
+
+    fn headers_with_cookie(raw: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(header::COOKIE, raw.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn extract_session_cookie_picks_aleph_session_value() {
+        let h = headers_with_cookie("foo=bar; aleph_session=abc-123; baz=qux");
+        assert_eq!(extract_session_cookie(&h), Some("abc-123".to_string()));
+    }
+
+    #[test]
+    fn extract_session_cookie_handles_no_aleph_session() {
+        let h = headers_with_cookie("foo=bar; other=val");
+        assert_eq!(extract_session_cookie(&h), None);
+    }
+
+    #[test]
+    fn extract_session_cookie_is_none_when_header_missing() {
+        let h = HeaderMap::new();
+        assert_eq!(extract_session_cookie(&h), None);
+    }
+
+    fn parse_req(text: &str) -> JsonRpcRequest {
+        serde_json::from_str(text).expect("text must be a valid JsonRpcRequest")
+    }
+
+    #[test]
+    fn inject_skips_when_no_bootstrap_token() {
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"device_name":"Web Panel"}}"#;
+        let req = parse_req(text);
+        let out = maybe_inject_bootstrap_shared_token(text, &req, None);
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn inject_skips_non_connect_methods() {
+        // `connect.challenge` is in the connect family but never carries
+        // credentials. We must not inject into it.
+        let text =
+            r#"{"jsonrpc":"2.0","id":1,"method":"connect.challenge","params":{"device_id":"d"}}"#;
+        let req = parse_req(text);
+        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn inject_skips_when_client_already_carries_token() {
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"token":"existing:sig","device_name":"Web Panel"}}"#;
+        let req = parse_req(text);
+        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn inject_skips_when_client_already_carries_shared_token() {
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"shared_token":"client-supplied","device_name":"Web Panel"}}"#;
+        let req = parse_req(text);
+        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn inject_skips_when_client_already_carries_invitation_token() {
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"invitation_token":"guest-tok","device_name":"Web Panel"}}"#;
+        let req = parse_req(text);
+        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn inject_adds_shared_token_to_anonymous_connect() {
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"device_name":"Web Panel"}}"#;
+        let req = parse_req(text);
+        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            v["params"]["shared_token"].as_str(),
+            Some("tok-XYZ"),
+            "shared_token must be injected verbatim"
+        );
+        assert_eq!(
+            v["params"]["device_name"].as_str(),
+            Some("Web Panel"),
+            "existing params fields must be preserved"
+        );
+        assert_eq!(v["method"].as_str(), Some("connect"));
+        assert_eq!(v["id"].as_i64(), Some(1));
+    }
+
+    #[test]
+    fn inject_creates_params_when_missing() {
+        // A `connect` with no params at all should still be upgraded.
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect"}"#;
+        let req = parse_req(text);
+        let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["params"]["shared_token"].as_str(), Some("tok-XYZ"));
     }
 }

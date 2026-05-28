@@ -405,6 +405,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         server.set_auth_routes(auth_routes(auth_state));
     }
 
+    // Plumb the same HttpSessionManager + SharedTokenManager into the WS
+    // upgrade path. When a loopback peer (e.g. the Tauri Panel running on
+    // the desktop shell) presents a valid `aleph_session` cookie, the
+    // upgrade handler trusts it and auto-injects the local shared token
+    // into the first `connect` — same trust class as the cookie itself.
+    // This closes the gap where the cookie protected HTML serving but
+    // the WS handshake fell through to device-pairing on every restart.
+    server.set_session_manager(auth_bundle.session_mgr.clone());
+    server.set_shared_token_manager(auth_bundle.auth_ctx.shared_token_mgr.clone());
+
     // Wizard session manager — constructs real PairingFlow + OnboardingFlow factory
     // and replaces the phase-1 service_unavailable stubs installed in HandlerRegistry::new.
     {

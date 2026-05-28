@@ -25,6 +25,8 @@ use super::handlers::HandlerRegistry;
 use super::lane::{LaneConfig, LaneManager};
 use super::presence::PresenceTracker;
 use super::rate_limiter::{RateLimitConfig, RateLimiter};
+use super::security::SharedTokenManager;
+use super::session::HttpSessionManager;
 use super::state_version::StateVersionTracker;
 use crate::providers::protocols::ProtocolLoader;
 use crate::security::headers::SecurityHeadersLayer;
@@ -113,6 +115,18 @@ pub struct GatewaySharedState {
     /// Hard-require an `idempotency_key` on mutating RPCs. See
     /// `GatewayConfig::require_idempotency_key`.
     pub require_idempotency_key: bool,
+    /// HTTP session manager used to validate the `aleph_session` cookie
+    /// during WebSocket upgrade. When `Some` AND the peer is loopback,
+    /// a valid cookie short-circuits the device-pairing flow by
+    /// auto-injecting the locally-stored shared token into the first
+    /// `connect` request — same trust class as the desktop shell's
+    /// `aleph-server bootstrap-url` handoff. `None` in auth-disabled or
+    /// legacy wiring; existing flow then runs untouched.
+    pub session_mgr: Option<Arc<HttpSessionManager>>,
+    /// Shared token manager. Read once per cookie-bootstrapped connection
+    /// to obtain the token string injected into the first `connect`.
+    /// `None` ⇒ cookie bootstrap is disabled even if `session_mgr` is set.
+    pub shared_token_mgr: Option<Arc<SharedTokenManager>>,
 }
 
 /// Configuration for the Gateway server
@@ -245,6 +259,14 @@ pub struct GatewayServer {
     /// browser-pairing flow are reachable from the browser. The legacy
     /// `/login` + `/auth/login` token-paste form was removed in Phase 4.
     auth_routes: Option<Router>,
+    /// HTTP session manager. When set together with `shared_token_mgr`,
+    /// `ws_upgrade_handler` validates the `aleph_session` cookie on
+    /// loopback peers and auto-injects the shared token into the first
+    /// `connect` so the Tauri Panel does not have to prompt for pairing.
+    session_mgr: Option<Arc<HttpSessionManager>>,
+    /// Shared token manager. See `session_mgr` doc for the bootstrap
+    /// flow these two cooperate to enable.
+    shared_token_mgr: Option<Arc<SharedTokenManager>>,
 }
 
 impl GatewayServer {
@@ -291,6 +313,8 @@ impl GatewayServer {
             openai_api_token: None,
             admin_router: None,
             auth_routes: None,
+            session_mgr: None,
+            shared_token_mgr: None,
         }
     }
 
@@ -338,6 +362,8 @@ impl GatewayServer {
             openai_api_token: None,
             admin_router: None,
             auth_routes: None,
+            session_mgr: None,
+            shared_token_mgr: None,
         }
     }
 
@@ -394,6 +420,21 @@ impl GatewayServer {
         self.auth_routes = Some(router);
     }
 
+    /// Install the `HttpSessionManager` whose cookies the `/ws` upgrade
+    /// handler may trust on loopback peers. Must be paired with
+    /// [`set_shared_token_manager`] for the bootstrap auto-inject to fire.
+    pub fn set_session_manager(&mut self, manager: Arc<HttpSessionManager>) {
+        self.session_mgr = Some(manager);
+    }
+
+    /// Install the `SharedTokenManager`. Required alongside
+    /// [`set_session_manager`] so the cookie-validated WS upgrade can
+    /// auto-inject the locally-stored shared token into the first
+    /// `connect` request.
+    pub fn set_shared_token_manager(&mut self, manager: Arc<SharedTokenManager>) {
+        self.shared_token_mgr = Some(manager);
+    }
+
     /// Get the current number of active connections
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()
@@ -423,6 +464,8 @@ impl GatewayServer {
             ping_interval_secs: self.config.ping_interval_secs,
             idle_timeout_secs: self.config.idle_timeout_secs,
             require_idempotency_key: self.config.require_idempotency_key,
+            session_mgr: self.session_mgr.clone(),
+            shared_token_mgr: self.shared_token_mgr.clone(),
         });
 
         let control_plane = create_control_plane_router();

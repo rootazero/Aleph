@@ -92,6 +92,8 @@ mod tests {
             ping_interval_secs: 30,
             idle_timeout_secs: 90,
             require_idempotency_key: false,
+            session_mgr: None,
+            shared_token_mgr: None,
         })
     }
 
