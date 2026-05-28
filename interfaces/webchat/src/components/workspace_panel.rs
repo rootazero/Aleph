@@ -38,37 +38,33 @@ pub fn WorkspacePanel() -> impl IntoView {
     }
 }
 
-/// Sticky header — title chip + close button (collapses Split → ChatOnly).
+/// Sticky header — text-only title chip ("WORKSPACE · idle"). No border,
+/// no icon, no close button:
+/// * the divider line was removed to mirror the chat surface (which has
+///   no top bar) — the macOS titlebar drag strip covers this row anyway,
+///   so the area still drags the window;
+/// * the leading SVG was decorative-only and added visual noise without
+///   carrying a function;
+/// * the close affordance lives in the chat surface's top-right
+///   (`views/chat/view.rs`) and follows the chat / workspace boundary.
 #[component]
 fn WorkspaceHeader() -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
     view! {
-        <div class="flex items-center justify-between gap-2 px-4 py-2
-                    border-b border-border/60">
-            <div class="flex items-center gap-2 text-xs uppercase
-                        tracking-wider text-text-tertiary">
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5"
-                     viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2"/>
-                    <line x1="9" y1="3" x2="9" y2="21"/>
-                </svg>
-                <span>"Workspace"</span>
-                <span class="text-text-tertiary/60">
-                    {move || workspace_content_label(&workspace.content.get())}
-                </span>
-            </div>
-            <button
-                class="p-1 rounded-md text-text-tertiary hover:text-text-primary
-                       hover:bg-surface-sunken transition-colors"
-                title="Close workspace pane"
-                on:click=move |_| workspace.set_layout(LayoutMode::ChatOnly)
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5"
-                     viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
-                </svg>
-            </button>
+        // `aleph-chrome-row-h` sizes the row so its vertical center lands
+        // on the shared chrome y-baseline (traffic lights on macOS, brand
+        // logo on web/Win/Linux). `data-tauri-drag-region=""` makes the
+        // empty header area drag the window on macOS — matching the
+        // chat-surface drag strip on the other side of the boundary.
+        <div
+            class="aleph-chrome-row-h flex items-center gap-2 px-4
+                   text-xs uppercase tracking-wider text-text-tertiary"
+            data-tauri-drag-region=""
+        >
+            <span>"Workspace"</span>
+            <span class="text-text-tertiary/60">
+                {move || workspace_content_label(&workspace.content.get())}
+            </span>
         </div>
     }
 }

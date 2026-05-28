@@ -86,22 +86,37 @@ pub fn ModeSidebar() -> impl IntoView {
 fn SidebarBrand() -> impl IntoView {
     let mem = expect_context::<MemoryState>();
     view! {
-        <div class="aleph-sidebar-head flex items-center justify-between px-3.5 pb-2.5">
-            <div class="flex items-center gap-2.5">
+        // Brand row carries `data-tauri-drag-region=""` so the empty
+        // space between the logo and the inline buttons drags the
+        // window on macOS Overlay-titlebar windows. Each interactive
+        // child (Aleph mark area, ThemeToggle, inline collapse button)
+        // marks itself as no-drag so the buttons stay clickable.
+        <div
+            class="aleph-sidebar-head flex items-center justify-between px-3.5 pb-2.5"
+            data-tauri-drag-region=""
+        >
+            <div
+                class="aleph-no-drag flex items-center gap-2.5"
+                data-tauri-drag-region="false"
+            >
                 <div class="aleph-mark w-7 h-7 rounded-xl flex items-center justify-center
                             text-text-inverse">
                     <span class="text-base font-semibold leading-none">"\u{2135}"</span>
                 </div>
                 <span class="text-[15px] font-semibold tracking-tight">"Aleph"</span>
             </div>
-            <div class="flex items-center gap-1">
+            <div
+                class="aleph-no-drag flex items-center gap-1"
+                data-tauri-drag-region="false"
+            >
                 <ThemeToggle />
                 // Inline collapse button — visible on web + Tauri Win/Linux.
                 // Hidden on macOS via CSS (the fixed top-left toggle next to
                 // the overlay traffic lights covers it).
                 <button
                     type="button"
-                    class="aleph-sidebar-inline-toggle"
+                    class="aleph-sidebar-inline-toggle aleph-no-drag"
+                    data-tauri-drag-region="false"
                     on:click=move |_| {
                         let s = &mem.sidebar_collapsed;
                         s.set(!s.get());

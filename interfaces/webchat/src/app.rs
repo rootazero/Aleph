@@ -137,12 +137,15 @@ fn AppContent() -> impl IntoView {
             class="aleph-shell flex h-screen text-text-primary font-sans selection:bg-primary/30"
             class:sidebar-collapsed=move || mem_for_shell.sidebar_collapsed.get()
         >
-            // Title-bar drag strip — macOS only (Win/Linux get a native
-            // titlebar). 32 px tall, full-width, transparent. `data-tauri-
-            // drag-region` makes Tauri start a window drag on mousedown.
-            // CSS hides this on non-macOS so the native titlebar isn't
-            // shadowed by a second drag zone.
-            <div class="aleph-titlebar-drag" data-tauri-drag-region=""></div>
+            // No global title-bar drag strip — the macOS Overlay title bar
+            // is now carved out from the chrome buttons by attaching
+            // `data-tauri-drag-region=""` to the structural elements that
+            // SHOULD drag (sidebar brand row, workspace pane header,
+            // chat-surface top strip). Each chrome button explicitly opts
+            // out via `-webkit-app-region: no-drag` (utility class
+            // `aleph-no-drag` or via the button's own CSS rules), so the
+            // drag surface yields to the buttons rather than the other
+            // way around.
 
             // Fixed top-left collapse button — anchored to the window so it
             // stays clickable when the sidebar slides off-screen. Visibility
@@ -169,7 +172,7 @@ fn AppContent() -> impl IntoView {
                 aria-label="Toggle sidebar"
             >
                 <svg
-                    width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    width="16" height="16" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="1.8"
                     stroke-linecap="round" stroke-linejoin="round"
                 >
