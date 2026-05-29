@@ -104,6 +104,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) config_guide_tool: crate::builtin_tools::ReadConfigGuideTool,
     /// Ctx-search tool instance (BM25 retrieval over offloaded tool output)
     pub(crate) ctx_search_tool: crate::builtin_tools::CtxSearchTool,
+    /// Recall-events tool instance (BM25 retrieval over this session's event log)
+    pub(crate) recall_events_tool: crate::builtin_tools::RecallEventsTool,
     /// Self-management tool instance (LLM-triggered entry point)
     pub(crate) self_manage_tool: crate::builtin_tools::SelfManageTool,
     /// Self-config tool instance (identity files + config.toml access)
@@ -650,6 +652,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "ctx_search" => {
                 Box::pin(async move { self.ctx_search_tool.call_json(arguments).await })
+            }
+            "recall_events" => {
+                Box::pin(async move { self.recall_events_tool.call_json(arguments).await })
             }
             "self_manage" => {
                 Box::pin(async move { self.self_manage_tool.call_json(arguments).await })

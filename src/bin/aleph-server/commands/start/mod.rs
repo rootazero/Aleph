@@ -338,6 +338,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let session_event_store_for_resume = session_service_and_store
         .as_ref()
         .map(|(_svc, store)| store.clone());
+    // Install the session event store process-wide so the `recall_events`
+    // builtin tool can BM25-search this session's event log to restore
+    // continuity after compaction evicts old turns from the context window.
+    if let Some(store) = session_event_store_for_resume.clone() {
+        alephcore::session::store::set_global_session_event_store(store);
+    }
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
         let mut sm = sm
             .with_raw_memory_writer(

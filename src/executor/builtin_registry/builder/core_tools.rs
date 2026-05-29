@@ -6,7 +6,7 @@ use crate::builtin_tools::skill_reader::{
 use crate::builtin_tools::{
     AutomationTool, CodeExecTool, CtxSearchTool, DesktopTool, FileEditTool, FileReadTool,
     FileWriteTool, MediaTool, PdfGenerateTool, PermissionTool, PimTool, ReadConfigGuideTool,
-    ScratchpadTool, SearchTool, SelfManageTool, SystemTool,
+    RecallEventsTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool,
 };
 use crate::tool_metadata::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
@@ -131,6 +131,13 @@ impl BuiltinToolRegistry {
             "ctx_search",
             CtxSearchTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::ctx_search::CtxSearchArgs))
+                .unwrap_or_default(),
+        );
+        reg(
+            tools,
+            "recall_events",
+            RecallEventsTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::recall_events::RecallEventsArgs))
                 .unwrap_or_default(),
         );
         reg(

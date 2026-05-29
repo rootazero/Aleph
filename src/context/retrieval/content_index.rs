@@ -244,7 +244,10 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// each in double quotes, and join them with `OR` so any term can match.
 ///
 /// Returns `None` when the query has no indexable tokens.
-fn sanitize_fts_query(query: &str) -> Option<String> {
+///
+/// `pub(crate)` so the session-event FTS index (`session::store`) reuses the
+/// same hardening instead of duplicating it (rule of three).
+pub(crate) fn sanitize_fts_query(query: &str) -> Option<String> {
     let terms: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())

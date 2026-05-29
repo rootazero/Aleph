@@ -105,6 +105,9 @@ impl BuiltinToolRegistry {
         // Ctx-search tool (BM25 retrieval over offloaded tool output)
         let ctx_search_tool = crate::builtin_tools::CtxSearchTool::new();
 
+        // Recall-events tool (BM25 retrieval over this session's event log)
+        let recall_events_tool = crate::builtin_tools::RecallEventsTool::new();
+
         // Self-management tool (LLM-triggered entry point)
         let self_manage_tool = SelfManageTool::default();
 
@@ -1389,6 +1392,7 @@ impl BuiltinToolRegistry {
             read_skill_tool,
             config_guide_tool,
             ctx_search_tool,
+            recall_events_tool,
             self_manage_tool,
             self_config_tool,
             vault_store_tool,

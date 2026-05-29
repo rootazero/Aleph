@@ -23,7 +23,7 @@
 //! `session_events` queries are short and use prepared statements, so the
 //! mutex-hold time is bounded.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -68,6 +68,41 @@ pub trait SessionEventStore: Send + Sync + 'static {
     async fn load_run_markers(
         &self,
     ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError>;
+
+    /// BM25 search over this session's content-bearing events (messages, tool
+    /// calls / results / errors). Returns up to `limit` hits, most relevant
+    /// first.
+    ///
+    /// This is the session-continuity counterpart to `ctx_search`: after
+    /// compaction evicts old turns from the context window, the events survive
+    /// on disk and stay queryable here, so the model can recover "where it
+    /// left off" by retrieving only the relevant slices instead of
+    /// re-importing the whole history.
+    ///
+    /// The default returns no hits, so mock / alternative stores remain valid
+    /// without implementing search.
+    async fn search_events(
+        &self,
+        session_id: &SessionId,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionEventHit>, SessionError> {
+        let _ = (session_id, query, limit);
+        Ok(Vec::new())
+    }
+}
+
+/// One BM25 hit from [`SessionEventStore::search_events`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionEventHit {
+    /// Sequence number of the matching event within its session.
+    pub seq: EventSeq,
+    /// Stable event-type tag (e.g. `tool_result`, `user_message`).
+    pub event_type: String,
+    /// Wall-clock the event was recorded (unix ms).
+    pub created_at_ms: i64,
+    /// Excerpt of the event body around the match.
+    pub snippet: String,
 }
 
 /// Create the `session_events` table and its indexes if missing.
@@ -117,6 +152,33 @@ pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
     Ok(())
 }
 
+/// Create the `session_events_fts` FTS5 mirror table if missing.
+///
+/// This is the BM25-searchable companion to `session_events`: every
+/// content-bearing event is mirrored here on append (see
+/// [`SqliteEventStore::append`]) so that, after compaction evicts old turns
+/// from the context window, the model can retrieve the relevant slices via the
+/// `session_search` tool instead of re-importing the whole history.
+///
+/// Idempotent. Requires SQLite built with FTS5, which `rusqlite`'s `bundled`
+/// feature provides — the same prerequisite already relied on by
+/// [`crate::context::retrieval::ContentIndex`], so no new dependency. The body
+/// is the only indexed column; the rest are `UNINDEXED` storage used for
+/// session filtering and result shaping.
+pub fn migrate_add_session_events_fts(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS session_events_fts USING fts5(
+             body,
+             session_id UNINDEXED,
+             seq UNINDEXED,
+             event_type UNINDEXED,
+             created_at UNINDEXED,
+             tokenize = 'porter unicode61'
+         );",
+    )
+    .map_err(|e| AlephError::config(format!("Failed to create session_events_fts table: {e}")))
+}
+
 // ---------------------------------------------------------------------------
 // SqliteEventStore — rusqlite-backed `SessionEventStore`
 // ---------------------------------------------------------------------------
@@ -132,8 +194,13 @@ pub struct SqliteEventStore {
 
 impl SqliteEventStore {
     /// Wrap an already-migrated `Connection`. Callers must invoke
-    /// [`migrate_add_session_events`] on the connection before use.
+    /// [`migrate_add_session_events`] on the connection before use; the
+    /// `session_events_fts` BM25 mirror is ensured here automatically so every
+    /// construction site (prod + tests) gets searchable events without extra
+    /// wiring. Best-effort — if FTS5 is somehow unavailable, indexing simply
+    /// degrades and `search_events` returns no hits.
     pub fn new(conn: Connection) -> Self {
+        let _ = migrate_add_session_events_fts(&conn);
         Self {
             conn: Arc::new(Mutex::new(conn)),
         }
@@ -177,6 +244,24 @@ impl SessionEventStore for SqliteEventStore {
             ],
         )
         .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+        // Mirror content-bearing events into the FTS index so prior turns stay
+        // BM25-searchable after compaction evicts them from context. Strictly
+        // best-effort: an indexing failure must never block the authoritative
+        // append above (continuity of the log outranks searchability).
+        if let Some(body) = render_event_text(event) {
+            if let Err(e) = conn.execute(
+                "INSERT INTO session_events_fts
+                 (body, session_id, seq, event_type, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![body, session_key, seq_i64, event_type, created_at_ms],
+            ) {
+                tracing::debug!(
+                    error = %e,
+                    "session_events_fts index insert failed; session_search degraded"
+                );
+            }
+        }
 
         Ok(())
     }
@@ -303,6 +388,57 @@ impl SessionEventStore for SqliteEventStore {
         }
         Ok(grouped)
     }
+
+    async fn search_events(
+        &self,
+        session_id: &SessionId,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionEventHit>, SessionError> {
+        // Reuse the same FTS5 query hardening as the offloaded-output index.
+        let Some(match_expr) = crate::context::retrieval::sanitize_fts_query(query) else {
+            return Ok(Vec::new());
+        };
+        let session_key = session_id_to_string(session_id)?;
+        let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
+
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT seq, event_type, created_at,
+                        snippet(session_events_fts, 0, '', '', ' … ', 14) AS snip
+                 FROM session_events_fts
+                 WHERE session_events_fts MATCH ?1 AND session_id = ?2
+                 ORDER BY bm25(session_events_fts)
+                 LIMIT ?3",
+            )
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![match_expr, session_key, limit_i64], |row| {
+                let seq: i64 = row.get(0)?;
+                let event_type: String = row.get(1)?;
+                let created_at: i64 = row.get(2)?;
+                let snippet: String = row.get(3)?;
+                Ok((seq, event_type, created_at, snippet))
+            })
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+        let mut hits = Vec::new();
+        for row in rows {
+            let (seq, event_type, created_at, snippet) =
+                row.map_err(|e| SessionError::Storage(e.to_string()))?;
+            let seq = u64::try_from(seq)
+                .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
+            hits.push(SessionEventHit {
+                seq,
+                event_type,
+                created_at_ms: created_at,
+                snippet,
+            });
+        }
+        Ok(hits)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +515,81 @@ fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::SessionForked { .. } => "session_forked",
         SessionEvent::Error { .. } => "error",
     }
+}
+
+// ---------------------------------------------------------------------------
+// FTS body extraction
+// ---------------------------------------------------------------------------
+
+/// Max characters mirrored into the FTS body for a single event. Tool results
+/// can be large; capping keeps the index lean while preserving enough text for
+/// a meaningful BM25 match and snippet.
+const MAX_FTS_BODY_CHARS: usize = 8_000;
+
+/// Extract the searchable text for an event, or `None` for pure control events
+/// (turn / run / session / llm markers, approvals, budget ticks) that carry no
+/// content worth indexing.
+///
+/// This is mechanical field extraction — not semantic classification — so it
+/// stays on the right side of R7 (LLM sovereignty): the model decides what is
+/// relevant via its query; we only surface the raw text it can match against.
+fn render_event_text(event: &SessionEvent) -> Option<String> {
+    let raw = match event {
+        SessionEvent::UserMessage { content, .. } => content.text.clone(),
+        SessionEvent::AssistantMessage { content, .. } => content.text.clone(),
+        SessionEvent::SystemMessage { content, .. } => content.clone(),
+        SessionEvent::ToolCallRequested { name, input, .. } => format!("{name} {input}"),
+        SessionEvent::ToolResult { output, .. } => render_json(&output.value),
+        SessionEvent::ToolError { error, .. } => error.clone(),
+        SessionEvent::ToolCallDenied { reason, .. } => reason.clone(),
+        SessionEvent::SubagentReturned { summary, .. } => summary.clone(),
+        SessionEvent::Error { message, .. } => message.clone(),
+        _ => return None,
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(cap_chars(trimmed, MAX_FTS_BODY_CHARS))
+    }
+}
+
+/// Render a tool-output JSON value to searchable plain text: bare strings pass
+/// through unquoted (the common case — most tool outputs are strings); other
+/// shapes fall back to compact JSON so their tokens are still matchable.
+fn render_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// UTF-8-safe truncation to at most `max` characters (project rule P7).
+fn cap_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((byte_idx, _)) => s[..byte_idx].to_string(),
+        None => s.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Process-wide accessor
+// ---------------------------------------------------------------------------
+
+static GLOBAL_EVENT_STORE: OnceLock<Arc<dyn SessionEventStore>> = OnceLock::new();
+
+/// Install the process-wide session event store. Called once at daemon boot
+/// (`aleph-server start`) so the `session_search` builtin tool can reach the
+/// event log without threading dependencies through the `AlephTool` trait.
+/// Mirrors [`crate::tools::result_store::set_global_tool_result_store`].
+/// Idempotent: a second call is ignored.
+pub fn set_global_session_event_store(store: Arc<dyn SessionEventStore>) {
+    let _ = GLOBAL_EVENT_STORE.set(store);
+}
+
+/// Fetch the process-wide session event store, if one has been installed.
+pub fn global_session_event_store() -> Option<Arc<dyn SessionEventStore>> {
+    GLOBAL_EVENT_STORE.get().cloned()
 }
 
 #[cfg(test)]
@@ -640,5 +851,162 @@ mod tests {
             .unwrap();
         let markers = store.load_run_markers().await.unwrap();
         assert_eq!(markers.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // FTS5 event search (search_events)
+    // -----------------------------------------------------------------------
+
+    fn user_message(tid: uuid::Uuid, text: &str, at: i64) -> SessionEvent {
+        SessionEvent::UserMessage {
+            turn_id: tid,
+            content: MessageContent {
+                text: text.to_string(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at,
+            synthetic: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn indexes_and_searches_user_message() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(
+                &sid,
+                1,
+                &user_message(tid, "please refactor the payment refund handler", at),
+                at,
+            )
+            .await
+            .unwrap();
+
+        let hits = store
+            .search_events(&sid, "payment refund", 5)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "should find the user message");
+        assert_eq!(hits[0].seq, 1);
+        assert_eq!(hits[0].event_type, "user_message");
+        assert!(hits[0].snippet.to_lowercase().contains("payment"));
+    }
+
+    #[tokio::test]
+    async fn indexes_tool_result_and_error() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(
+                &sid,
+                1,
+                &SessionEvent::ToolResult {
+                    turn_id: tid,
+                    call_id: "c1".into(),
+                    output: crate::session::events::ToolOutput {
+                        value: serde_json::json!("compiled crate alephcore successfully"),
+                        metadata: Default::default(),
+                    },
+                    at,
+                },
+                at,
+            )
+            .await
+            .unwrap();
+        store
+            .append(
+                &sid,
+                2,
+                &SessionEvent::ToolError {
+                    turn_id: tid,
+                    call_id: "c2".into(),
+                    error: "linker failed: undefined symbol".into(),
+                    at,
+                },
+                at,
+            )
+            .await
+            .unwrap();
+
+        let err_hits = store
+            .search_events(&sid, "linker undefined symbol", 5)
+            .await
+            .unwrap();
+        assert!(
+            err_hits.iter().any(|h| h.event_type == "tool_error"),
+            "tool error should be searchable, got {err_hits:?}"
+        );
+
+        let ok_hits = store
+            .search_events(&sid, "compiled successfully", 5)
+            .await
+            .unwrap();
+        assert!(
+            ok_hits.iter().any(|h| h.event_type == "tool_result"),
+            "tool result body should be searchable, got {ok_hits:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn control_events_are_not_indexed() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        // A turn-started marker carries no content worth indexing.
+        store
+            .append(&sid, 1, &turn_started(tid, at), at)
+            .await
+            .unwrap();
+        let hits = store
+            .search_events(&sid, "started trigger turn user message", 5)
+            .await
+            .unwrap();
+        assert!(
+            hits.is_empty(),
+            "control events must not be indexed, got {hits:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_is_scoped_to_session() {
+        let store = make_store();
+        let sid_a = SessionKey::ephemeral("scope-a");
+        let sid_b = SessionKey::ephemeral("scope-b");
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid_a, 1, &user_message(tid, "alpha kangaroo note", at), at)
+            .await
+            .unwrap();
+        store
+            .append(&sid_b, 1, &user_message(tid, "beta kangaroo note", at), at)
+            .await
+            .unwrap();
+
+        let hits = store.search_events(&sid_a, "kangaroo", 5).await.unwrap();
+        assert_eq!(hits.len(), 1, "must only see session A's event");
+        assert!(hits[0].snippet.to_lowercase().contains("alpha"));
+    }
+
+    #[tokio::test]
+    async fn punctuation_only_query_is_empty_not_error() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 1, &user_message(tid, "hello world", at), at)
+            .await
+            .unwrap();
+        let hits = store.search_events(&sid, "()[]{}!!!", 5).await.unwrap();
+        assert!(hits.is_empty());
     }
 }

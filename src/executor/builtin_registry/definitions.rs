@@ -33,7 +33,7 @@ use crate::builtin_tools::{
     DesktopGuiLocate, DesktopTool, FileEditTool,
     FileOpsTool,
     FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool,
-    SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
+    RecallEventsTool, SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -114,6 +114,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "ctx_search",
         description: "BM25-search large tool outputs that were offloaded out of the context window; retrieve only the relevant sections instead of re-reading whole files",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "recall_events",
+        description: "BM25-search this session's own event timeline (tool calls, results, errors, messages) that compaction dropped from context; restore continuity by retrieving only the relevant past events",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -723,6 +728,7 @@ pub fn create_tool_boxed(
         "bash" => Some(Box::new(BashExecTool::new())),
         "code_exec" => Some(Box::new(CodeExecTool::new())),
         "ctx_search" => Some(Box::new(CtxSearchTool::new())),
+        "recall_events" => Some(Box::new(RecallEventsTool::new())),
         "pdf_generate" => Some(Box::new(PdfGenerateTool::new())),
         "image_generate" => {
             if let Some(cfg) = config {

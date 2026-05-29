@@ -12,3 +12,4 @@
 mod content_index;
 
 pub use content_index::{ContentIndex, IndexError, IndexOutcome, SearchHit};
+pub(crate) use content_index::sanitize_fts_query;
