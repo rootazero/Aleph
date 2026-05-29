@@ -213,7 +213,11 @@
     "recently_visited": "最近访问",
     "click_node_hint": "点击节点查看详情。最近访问的记忆会在此显示。",
     "canvas_loading": "加载中……",
-    "canvas_error_prefix": "错误"
+    "canvas_error_prefix": "错误",
+    "edit": "编辑",
+    "save": "保存",
+    "saving": "保存中……",
+    "cancel": "取消"
   },
   "logs": {
     "title": "服务器日志",

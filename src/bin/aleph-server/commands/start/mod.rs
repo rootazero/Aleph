@@ -1172,19 +1172,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
-    // Graph visualization handlers (wired with MemoryBackend + default agent)
-    register_graph_handlers(&mut server, &memory_db, &default_agent_id);
+    // NoteIndexer — the canonical write+reindex path. Built once and shared
+    // between graph.update_note (panel node editor) and the startup full_rebuild
+    // below, so we never construct two indexers over the same memory dir.
+    let note_indexer = Arc::new(
+        alephcore::memory::notes::NoteIndexer::new(note_memory_dir.clone(), memory_db.clone())
+            .with_orientation(wiki.clone()),
+    );
+
+    // Graph visualization handlers (wired with MemoryBackend + default agent +
+    // the shared NoteIndexer for the write path)
+    register_graph_handlers(
+        &mut server,
+        &memory_db,
+        &default_agent_id,
+        Some(&note_indexer),
+    );
 
     // Rebuild note index at startup (scans ~/.aleph/memory/note/{agent_id}/)
     {
-        let db = memory_db.clone();
+        let indexer = note_indexer.clone();
         let agent_id = default_agent_id.clone();
-        let wiki_for_indexer = wiki.clone();
-        let note_dir_for_indexer = note_memory_dir.clone();
         tokio::spawn(async move {
-            tracing::info!(dir = %note_dir_for_indexer.display(), agent = %agent_id, "Rebuilding note index");
-            let indexer = alephcore::memory::notes::NoteIndexer::new(note_dir_for_indexer, db)
-                .with_orientation(wiki_for_indexer);
+            tracing::info!(agent = %agent_id, "Rebuilding note index");
             match indexer.full_rebuild(&agent_id).await {
                 Ok(stats) => {
                     tracing::info!(

@@ -367,6 +367,11 @@ pub(in crate::commands::start) fn register_graph_handlers(
     server: &mut GatewayServer,
     memory_db: &MemoryBackend,
     _default_agent_id: &str,
+    indexer: Option<
+        &::std::sync::Arc<
+            alephcore::memory::notes::NoteIndexer<alephcore::memory::store::sqlite::SqliteMemoryBackend>,
+        >,
+    >,
 ) {
     use alephcore::gateway::handlers::graph;
 
@@ -404,5 +409,17 @@ pub(in crate::commands::start) fn register_graph_handlers(
             let db = ::std::sync::Arc::clone(&db);
             async move { graph::handle_search_impl(req, db).await }
         });
+    }
+
+    // graph.update_note needs the NoteIndexer (write path). Only registered when
+    // the indexer is available; otherwise the read-only stub stays in place.
+    if let Some(indexer) = indexer {
+        let indexer = ::std::sync::Arc::clone(indexer);
+        server
+            .handlers_mut()
+            .register("graph.update_note", move |req| {
+                let indexer = ::std::sync::Arc::clone(&indexer);
+                async move { graph::handle_update_note_impl(req, indexer).await }
+            });
     }
 }

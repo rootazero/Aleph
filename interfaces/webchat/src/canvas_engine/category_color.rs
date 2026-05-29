@@ -10,6 +10,7 @@ pub fn category_color(category: &str) -> String {
         "project"   => "var(--cat-project)".to_string(),
         "reference" => "var(--cat-reference)".to_string(),
         "user"      => "var(--cat-user)".to_string(),
+        "error" | "broken" | "contradiction" => "var(--cat-error)".to_string(),
         other => {
             let hue = fnv1a_32(other.as_bytes()) % 360;
             format!("hsl({hue}, 55%, 65%)")
@@ -27,6 +28,8 @@ mod tests {
         assert_eq!(category_color("project"),   "var(--cat-project)");
         assert_eq!(category_color("reference"), "var(--cat-reference)");
         assert_eq!(category_color("user"),      "var(--cat-user)");
+        assert_eq!(category_color("error"),     "var(--cat-error)");
+        assert_eq!(category_color("broken"),    "var(--cat-error)");
     }
 
     #[test]

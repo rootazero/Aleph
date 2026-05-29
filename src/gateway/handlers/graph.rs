@@ -6,11 +6,14 @@
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::graph_types::{
     GraphNeighborsParams, GraphNeighborsResponse, GraphNodeDetailParams, GraphQueryParams,
-    GraphQueryResponse, GraphSearchParams, GraphSearchResponse, NoteDetailResponse, NoteLinkDto,
-    NoteNodeDto, SearchResultDto,
+    GraphQueryResponse, GraphSearchParams, GraphSearchResponse, GraphUpdateNoteParams,
+    NoteDetailResponse, NoteLinkDto, NoteNodeDto, SearchResultDto,
 };
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
+use crate::memory::notes::NoteIndexer;
+use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::store::MemoryBackend;
+use std::sync::Arc;
 
 /// Convert a NoteIndexEntry into a NoteNodeDto.
 fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
@@ -75,6 +78,17 @@ pub async fn handle_search(req: JsonRpcRequest) -> JsonRpcResponse {
         req.id,
         INTERNAL_ERROR,
         "graph.search requires NoteStore — wire in Gateway startup".to_string(),
+    )
+}
+
+/// Handle graph.update_note — persist an edited note body.
+///
+/// Requires a `NoteIndexer` wired at Gateway startup.
+pub async fn handle_update_note(req: JsonRpcRequest) -> JsonRpcResponse {
+    JsonRpcResponse::error(
+        req.id,
+        INTERNAL_ERROR,
+        "graph.update_note requires NoteIndexer — wire in Gateway startup".to_string(),
     )
 }
 
@@ -282,6 +296,63 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
     }
 }
 
+/// Real implementation of graph.update_note.
+///
+/// Persists the edited markdown for a single note verbatim (via
+/// `NoteIndexer::write_note_raw`, which writes byte-for-byte and re-indexes),
+/// so hand-edited prose / headings / code blocks survive — unlike the lossy
+/// `KnowledgeNote::to_markdown` reconstruction. Last-write-wins.
+pub async fn handle_update_note_impl(
+    req: JsonRpcRequest,
+    indexer: Arc<NoteIndexer<SqliteMemoryBackend>>,
+) -> JsonRpcResponse {
+    let params: GraphUpdateNoteParams = match req
+        .params
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+    {
+        Some(p) => p,
+        None => {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_PARAMS,
+                "Missing required params: node_id, content".to_string(),
+            )
+        }
+    };
+
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+
+    // node_id is the note path `"category/title"`. Split on the first '/' —
+    // categories are flat (see CATEGORY_DIRS) and titles never contain '/'.
+    let Some((category, title)) = params.node_id.split_once('/') else {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            format!(
+                "Invalid node_id (expected \"category/title\"): {}",
+                params.node_id
+            ),
+        );
+    };
+
+    match indexer
+        .write_note_raw(agent_id, category, title, &params.content)
+        .await
+    {
+        Ok(_path) => JsonRpcResponse::success(
+            req.id,
+            serde_json::json!({ "node_id": params.node_id, "saved": true }),
+        ),
+        Err(e) => {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("update_note failed: {e}"))
+        }
+    }
+}
+
 /// Returns the hop distance from `center_id` to `target_id` for the radial
 /// navigation view. Output is clamped to `{0, 1, 2}`:
 ///   - `0` if `target_id == center_id`
@@ -395,6 +466,59 @@ mod tests {
             content_hash: format!("hash_{title}"),
             ..Default::default()
         }
+    }
+
+    fn update_note_request(node_id: &str, content: &str, agent_id: Option<&str>) -> JsonRpcRequest {
+        let mut params = serde_json::json!({ "node_id": node_id, "content": content });
+        if let Some(id) = agent_id {
+            params["agent_id"] = serde_json::Value::String(id.to_string());
+        }
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "graph.update_note".to_string(),
+            params: Some(params),
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    /// update_note persists the body VERBATIM — prose / headings that are not
+    /// bullet facts must survive (proving we write raw, not via the lossy
+    /// `KnowledgeNote::to_markdown` reconstruction that only re-emits bullets).
+    #[tokio::test]
+    async fn update_note_persists_content_verbatim() {
+        let memory_dir =
+            std::env::temp_dir().join(format!("update_note_test_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
+
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        let content = "---\ncategory: reference\ntags: []\ncreated: \"2024-01-01\"\nupdated: \"2024-01-01\"\n---\n\n# A Heading\n\nProse that is not a bullet fact.\n\n- a bullet fact\n";
+
+        let req = update_note_request("reference/MyNote", content, Some(agent));
+        let resp = handle_update_note_impl(req, indexer).await;
+        assert!(resp.error.is_none(), "update_note failed: {:?}", resp.error);
+
+        // File written verbatim — the heading + prose survive (to_markdown drops them).
+        let path = memory_dir.join(agent).join("reference").join("MyNote.md");
+        let written = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(written, content, "content must round-trip byte-for-byte");
+
+        // And it is indexed so the graph reflects the edit without a full rebuild.
+        let entry = db.get_note_index("reference/MyNote", agent).await.unwrap();
+        assert!(entry.is_some(), "note must be indexed after update_note");
+    }
+
+    /// A node_id without a `category/` prefix is rejected with an error.
+    #[tokio::test]
+    async fn update_note_rejects_node_id_without_category() {
+        let memory_dir =
+            std::env::temp_dir().join(format!("update_note_test_{}", Uuid::new_v4()));
+        let db = make_db();
+        let indexer = Arc::new(NoteIndexer::new(memory_dir, db));
+
+        let req = update_note_request("NoCategory", "body", Some("default"));
+        let resp = handle_update_note_impl(req, indexer).await;
+        assert!(resp.error.is_some(), "expected error for category-less node_id");
     }
 
     fn neighbors_request(node_id: &str, depth: u8, limit: usize) -> JsonRpcRequest {

@@ -741,6 +741,7 @@ impl HandlerRegistry {
         registry.register("graph.neighbors", graph::handle_neighbors);
         registry.register("graph.node_detail", graph::handle_node_detail);
         registry.register("graph.search", graph::handle_search);
+        registry.register("graph.update_note", graph::handle_update_note);
 
         // Tools visibility handlers — phase-1 placeholders; agent_init.rs overrides at boot.
         registry.register("tools.catalog", |req| async move {

@@ -38,6 +38,17 @@ pub struct GraphNodeDetailParams {
     pub agent_id: Option<String>,
 }
 
+// === graph.update_note ===
+#[derive(Debug, Deserialize)]
+pub struct GraphUpdateNoteParams {
+    /// Note path `"category/title"` (same id used by `graph.node_detail`).
+    pub node_id: String,
+    /// Full raw markdown (frontmatter + body) to persist verbatim.
+    pub content: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
 // === graph.search ===
 #[derive(Debug, Deserialize)]
 pub struct GraphSearchParams {
@@ -74,9 +85,10 @@ pub struct NoteLinkDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Semantic relation kind, e.g. `"refers"` / `"derives"` / `"follows"` /
-    /// `"related"`. Only members of `DIRECTIONAL_KINDS` (see panel-side
-    /// `edge_curve.rs`) render arrow heads. `None` until the writer pipeline
-    /// extracts kind hints from note bodies.
+    /// `"related"`. Directional kinds export as arrow-headed edges in the
+    /// panel's JSON Canvas export; the on-canvas renderer draws all edges as
+    /// plain strokes. `None` until the writer pipeline extracts kind hints
+    /// from note bodies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
 }
