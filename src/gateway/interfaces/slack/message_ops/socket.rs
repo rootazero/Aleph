@@ -138,7 +138,27 @@ impl SlackMessageOps {
                                     _ => None,
                                 };
 
-                                if let Some(inbound) = inbound {
+                                if let Some(mut inbound) = inbound {
+                                    // Extract + download file attachments. Slack
+                                    // `url_private` needs the bot token in an auth
+                                    // header, which the generic media pipeline
+                                    // cannot supply, so the limb fetches its own
+                                    // files here (see `files` module).
+                                    if config.media_max_mb > 0 {
+                                        let slack_files = super::files::parse_files(event);
+                                        if !slack_files.is_empty() {
+                                            let max_bytes =
+                                                config.media_max_mb.saturating_mul(1024 * 1024);
+                                            inbound.attachments = super::files::fetch_attachments(
+                                                &client,
+                                                &config.bot_token,
+                                                slack_files,
+                                                max_bytes,
+                                            )
+                                            .await;
+                                        }
+                                    }
+
                                     let resolved_inbound = if config.resolve_user_names {
                                         if let Some(ref dir) = user_directory {
                                             if let Some(name) =

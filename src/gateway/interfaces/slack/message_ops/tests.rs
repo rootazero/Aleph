@@ -209,6 +209,52 @@ fn test_convert_empty_text() {
 }
 
 #[test]
+fn test_convert_empty_text_with_file_passes() {
+    // A file-only message (no caption) must NOT be filtered as empty — the
+    // socket loop injects the downloaded attachment after conversion.
+    let event = serde_json::json!({
+        "type": "message",
+        "user": "U456",
+        "channel": "C789",
+        "text": "",
+        "ts": "1700000000.000100",
+        "files": [{
+            "id": "F123",
+            "name": "shot.png",
+            "mimetype": "image/png",
+            "size": 1024,
+            "url_private": "https://files.slack.com/F123"
+        }]
+    });
+
+    let channel_id = ChannelId::new("slack");
+    let config = SlackConfig::default();
+    let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config)
+        .expect("file-only message should pass conversion");
+    assert_eq!(msg.text, "");
+    // Attachments are populated by the socket loop, not the converter.
+    assert!(msg.attachments.is_empty());
+}
+
+#[test]
+fn test_convert_app_mention_empty_text_with_file_passes() {
+    let event = serde_json::json!({
+        "type": "app_mention",
+        "user": "U456",
+        "channel": "C789",
+        "text": "",
+        "ts": "1700000000.000100",
+        "files": [{ "id": "F9", "name": "a.pdf", "mimetype": "application/pdf", "size": 10 }]
+    });
+
+    let channel_id = ChannelId::new("slack");
+    let config = SlackConfig::default();
+    let msg = SlackMessageOps::convert_app_mention_to_inbound(&event, &channel_id, "B123", &config)
+        .expect("file-only mention should pass conversion");
+    assert!(msg.attachments.is_empty());
+}
+
+#[test]
 fn test_convert_dm_message() {
     let event = serde_json::json!({
         "type": "message",

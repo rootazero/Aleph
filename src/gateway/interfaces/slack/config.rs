@@ -62,6 +62,19 @@ pub struct SlackConfig {
     /// Directory cache TTL in seconds (default: 3600)
     #[serde(default = "default_directory_ttl")]
     pub directory_ttl_secs: u64,
+
+    /// Maximum inbound file attachment size to download, in megabytes.
+    ///
+    /// Slack `url_private` files are downloaded by the channel (the generic
+    /// media pipeline cannot supply the required bot-token auth header) and
+    /// passed downstream as inline bytes. Files above this cap degrade to
+    /// metadata-only attachments. Set to 0 to disable inbound file downloads.
+    #[serde(default = "default_media_max_mb")]
+    pub media_max_mb: u64,
+}
+
+fn default_media_max_mb() -> u64 {
+    20
 }
 
 impl Default for SlackConfig {
@@ -79,6 +92,7 @@ impl Default for SlackConfig {
             user_allowlist: Vec::new(),
             resolve_user_names: false,
             directory_ttl_secs: 3600,
+            media_max_mb: 20,
         }
     }
 }
@@ -258,6 +272,7 @@ mod tests {
             user_allowlist: vec!["U123".to_string(), "U456".to_string()],
             resolve_user_names: true,
             directory_ttl_secs: 7200,
+            media_max_mb: 50,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -275,6 +290,7 @@ mod tests {
         assert_eq!(deserialized.user_allowlist, config.user_allowlist);
         assert_eq!(deserialized.resolve_user_names, config.resolve_user_names);
         assert_eq!(deserialized.directory_ttl_secs, config.directory_ttl_secs);
+        assert_eq!(deserialized.media_max_mb, config.media_max_mb);
     }
 
     #[test]
@@ -292,5 +308,6 @@ mod tests {
         assert!(config.user_allowlist.is_empty());
         assert!(!config.resolve_user_names);
         assert_eq!(config.directory_ttl_secs, 3600);
+        assert_eq!(config.media_max_mb, 20);
     }
 }

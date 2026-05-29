@@ -26,7 +26,8 @@ impl SlackMessageOps {
         }
 
         let text = event["text"].as_str().unwrap_or("");
-        if text.is_empty() {
+        // A mention carrying only a file (no caption) is still actionable.
+        if text.is_empty() && !super::files::has_files(event) {
             return None;
         }
 
@@ -116,7 +117,9 @@ impl SlackMessageOps {
         }
 
         let text = msg_data["text"].as_str().unwrap_or("");
-        if text.is_empty() {
+        // An image/file-only message (no caption) is still actionable; let it
+        // through so the socket loop can attach the downloaded file.
+        if text.is_empty() && !super::files::has_files(event) {
             return None;
         }
 
@@ -153,7 +156,9 @@ impl SlackMessageOps {
             sender_id: UserId::new(user_id.to_string()),
             sender_name: Some(user_id.to_string()), // Slack user IDs as display name
             text: normalized_text,
-            attachments: Vec::new(), // TODO: extract Slack file attachments
+            // File attachments are injected by the socket loop after conversion,
+            // where the bot token for the authenticated download is available.
+            attachments: Vec::new(),
             timestamp,
             reply_to,
             is_group: !is_dm,
