@@ -6,12 +6,7 @@ pub mod api;
 pub mod auth;
 pub mod config;
 pub mod graph;
-pub mod health;
-pub mod history;
-pub mod pairing;
-pub mod policy;
-pub mod rsc;
-pub mod sharepoint;
+pub mod mention;
 pub mod streaming;
 pub mod token;
 pub mod types;
@@ -19,12 +14,6 @@ pub mod types;
 pub use auth::{AuthFlow, FederatedCredential};
 pub use config::MsTeamsConfig;
 pub use graph::{GraphClient, GraphMessage};
-pub use health::{ChannelHealthMonitor, HealthStatus, HealthyChannel};
-pub use history::HistoryFetcher;
-pub use pairing::{DirectLine, PairingInfo, PairingManager, PairingState};
-pub use policy::TeamPolicy;
-pub use rsc::{RscPermissionManager, RscPermissions};
-pub use sharepoint::{ShareLink, SharePointClient};
 pub use token::GraphTokenManager;
 
 use std::collections::HashMap;
@@ -202,6 +191,17 @@ impl MsTeamsChannel {
     async fn get_service_url(&self, conversation_id: &str) -> Option<String> {
         let refs = self.conversation_refs.read().await;
         refs.get(conversation_id).map(|r| r.service_url.clone())
+    }
+
+    /// True if `reply_to_id` references a message this bot previously sent.
+    ///
+    /// Used by mention-gating: replying to the bot's own message counts as
+    /// addressing the bot even without an explicit `@mention`.
+    async fn is_reply_to_bot(&self, reply_to_id: Option<&str>) -> bool {
+        match reply_to_id {
+            Some(id) if !id.is_empty() => self.sent_messages.read().await.contains_key(id),
+            _ => false,
+        }
     }
 
     // ── Directory / Graph API ───────────────────────────────────────────────
@@ -623,6 +623,32 @@ impl MsTeamsChannel {
             Some("groupChat") | Some("channel")
         );
 
+        // Mention gating: Teams delivers every group/channel message to the bot.
+        // Honour `require_mention` so the bot only answers when actually addressed
+        // (R5 — don't reply to every group message). 1:1 personal chats always pass.
+        if is_group {
+            let team_id = mention::team_id_from_channel_data(&activity);
+            if self.config.effective_require_mention(team_id.as_deref()) {
+                let bot_id = activity
+                    .recipient
+                    .as_ref()
+                    .map(|r| r.id.as_str())
+                    .unwrap_or_default();
+                let bot_name = activity.recipient.as_ref().and_then(|r| r.name.as_deref());
+                let addressed = mention::was_bot_addressed(&activity, bot_id, bot_name)
+                    || self
+                        .is_reply_to_bot(activity.reply_to_id.as_deref())
+                        .await;
+                if !addressed {
+                    debug!(
+                        conversation_id = %conversation.id,
+                        "Dropping group message: bot not addressed and require_mention is on"
+                    );
+                    return Ok(vec![]);
+                }
+            }
+        }
+
         // Extract quoted reply info from Teams HTML blockquotes
         let metadata = activity
             .attachments
@@ -982,5 +1008,95 @@ mod tests {
         // Verify conversation ref was cached
         let url = channel.get_service_url("19:conv@thread.v2").await;
         assert!(url.is_some());
+    }
+
+    /// Build a channel (group) message activity with the given text/entities.
+    fn group_activity(text: &str, entities: Option<serde_json::Value>) -> Activity {
+        Activity {
+            activity_type: "message".into(),
+            id: Some("msg-grp".into()),
+            text: Some(text.into()),
+            entities: entities.and_then(|e| e.as_array().cloned()),
+            service_url: Some("https://smba.trafficmanager.net/amer/".into()),
+            from: Some(ChannelAccount {
+                id: "user-1".into(),
+                name: Some("Test User".into()),
+                aad_object_id: Some("aad-123".into()),
+            }),
+            conversation: Some(ConversationAccount {
+                id: "19:channel@thread.tacv2".into(),
+                name: None,
+                conversation_type: Some("channel".into()),
+                tenant_id: None,
+                is_group: Some(true),
+            }),
+            recipient: Some(ChannelAccount {
+                id: "28:bot-app-id".into(),
+                name: Some("Aleph".into()),
+                aad_object_id: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_group_message_without_mention_dropped() {
+        // require_mention defaults to true → unaddressed group message is dropped.
+        let config = MsTeamsConfig {
+            app_id: "app".into(),
+            app_password: "pass".into(),
+            ..Default::default()
+        };
+        let channel = MsTeamsChannel::new("teams-1", config);
+        let activity = group_activity("hello team, just chatting", None);
+        let result = channel.handle_message(activity).await.unwrap();
+        assert!(result.is_empty(), "unaddressed group message should be dropped");
+    }
+
+    #[tokio::test]
+    async fn test_group_message_with_at_tag_passes() {
+        let config = MsTeamsConfig {
+            app_id: "app".into(),
+            app_password: "pass".into(),
+            ..Default::default()
+        };
+        let channel = MsTeamsChannel::new("teams-1", config);
+        let activity = group_activity("<at>Aleph</at> do the thing", None);
+        let result = channel.handle_message(activity).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text, "do the thing");
+        assert!(result[0].is_group);
+    }
+
+    #[tokio::test]
+    async fn test_group_message_with_mention_entity_passes() {
+        let config = MsTeamsConfig {
+            app_id: "app".into(),
+            app_password: "pass".into(),
+            ..Default::default()
+        };
+        let channel = MsTeamsChannel::new("teams-1", config);
+        let entities = serde_json::json!([{
+            "type": "mention",
+            "mentioned": { "id": "28:bot-app-id", "name": "Aleph" }
+        }]);
+        let activity = group_activity("<at>Aleph</at> status?", Some(entities));
+        let result = channel.handle_message(activity).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text, "status?");
+    }
+
+    #[tokio::test]
+    async fn test_group_message_require_mention_disabled_passes() {
+        let config = MsTeamsConfig {
+            app_id: "app".into(),
+            app_password: "pass".into(),
+            require_mention: false,
+            ..Default::default()
+        };
+        let channel = MsTeamsChannel::new("teams-1", config);
+        let activity = group_activity("no mention but should still pass", None);
+        let result = channel.handle_message(activity).await.unwrap();
+        assert_eq!(result.len(), 1, "require_mention=false should let plain group messages through");
     }
 }
