@@ -387,8 +387,18 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
          transition-opacity"
     );
 
+    // One-shot rise+fade as the bubble mounts. Gated to non-streaming: the
+    // keyed <For> recreates a streaming bubble on every token, so applying
+    // the entrance there would replay it per chunk. User + finalized
+    // assistant bubbles mount once, so it plays exactly once.
+    let wrapper_class = if is_streaming {
+        format!("{bubble_align} group relative")
+    } else {
+        format!("{bubble_align} group relative aleph-msg-in")
+    };
+
     view! {
-        <div class=format!("{bubble_align} group relative")>
+        <div class=wrapper_class>
             <div class=bubble_class>
                 {tool_calls_view}
 

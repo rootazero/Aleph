@@ -99,12 +99,18 @@
   --shadow-xs: 0 1px 2px oklch(0.20 0.02 310 / 0.05);
   --shadow-sm: 0 1px 2px oklch(0.20 0.02 310 / 0.05),
                0 1px 3px oklch(0.20 0.02 310 / 0.06);
-  --shadow-md: 0 2px 4px oklch(0.20 0.02 310 / 0.05),
-               0 6px 16px oklch(0.20 0.02 310 / 0.09);
-  --shadow-lg: 0 4px 8px oklch(0.20 0.02 310 / 0.06),
-               0 16px 36px oklch(0.20 0.02 310 / 0.13);
-  --shadow-xl: 0 8px 16px oklch(0.20 0.02 310 / 0.08),
-               0 28px 60px oklch(0.20 0.02 310 / 0.18);
+  /* md/lg/xl carry a tight contact layer + a mid layer + a soft ambient
+     layer. Three stops read as genuine elevation (a single blur reads flat);
+     all hues are mauve-tinted so the depth belongs to the palette. */
+  --shadow-md: 0 1px 2px oklch(0.20 0.02 310 / 0.06),
+               0 3px 6px oklch(0.20 0.02 310 / 0.08),
+               0 8px 20px oklch(0.20 0.02 310 / 0.11);
+  --shadow-lg: 0 2px 4px oklch(0.20 0.02 310 / 0.07),
+               0 6px 12px oklch(0.20 0.02 310 / 0.10),
+               0 18px 40px oklch(0.20 0.02 310 / 0.16);
+  --shadow-xl: 0 4px 8px oklch(0.20 0.02 310 / 0.09),
+               0 12px 24px oklch(0.20 0.02 310 / 0.12),
+               0 32px 68px oklch(0.20 0.02 310 / 0.22);
   --shadow-glow: 0 0 0 1px color-mix(in oklch, var(--color-primary) 28%, transparent),
                  0 0 20px color-mix(in oklch, var(--color-primary) 22%, transparent);
 
@@ -161,6 +167,9 @@ body {
   font-feature-settings: "cv11", "ss01", "ss03";  /* Inter alternate forms */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Avoid ugly single-word last lines in flowing copy (graceful no-op on
+     engines that don't support it yet). */
+  text-wrap: pretty;
 }
 
 /* Numeric surfaces (metrics, counters, timestamps) — opt-in via the
@@ -177,9 +186,12 @@ body {
   body { font-size: 0.9375rem; }   /* 15px */
 }
 
-/* Headings get a slightly tighter tracking — Inter renders crisper at -0.02em. */
+/* Headings get a slightly tighter tracking — Inter renders crisper at -0.02em.
+   `text-wrap: balance` evens out multi-line headings so no orphan word is
+   left dangling on the last line. */
 h1, h2, h3, h4, h5, h6 {
   letter-spacing: -0.02em;
+  text-wrap: balance;
 }
 
 /* Accent-tinted text selection — calibrated low so highlights don't shout.
@@ -635,26 +647,31 @@ html.theme-switching::view-transition-new(root) {
 /* --- Atmosphere tokens — light (the default look) --- */
 :root {
   --aleph-canvas-base: oklch(0.988 0.004 295);
-  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 17%, transparent);
-  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 11%, transparent);
-  --aleph-glow-top: color-mix(in oklch, var(--color-primary)  6%, transparent);
+  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 20%, transparent);
+  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 13%, transparent);
+  --aleph-glow-top: color-mix(in oklch, var(--color-primary)  7%, transparent);
+  /* Cool counter-hue — a second light source in a different hue turns the
+     flat single-colour wash into a subtle mesh-gradient field. */
+  --aleph-glow-c:   color-mix(in oklch, oklch(0.62 0.13 250) 10%, transparent);
   --aleph-sheen:    oklch(1 0 0 / 0.72);
 }
 
 /* --- Atmosphere tokens — dark --- */
 .dark {
   --aleph-canvas-base: oklch(0.155 0.022 300);
-  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 26%, transparent);
-  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 17%, transparent);
-  --aleph-glow-top: color-mix(in oklch, var(--color-primary)  9%, transparent);
+  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 30%, transparent);
+  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 19%, transparent);
+  --aleph-glow-top: color-mix(in oklch, var(--color-primary) 10%, transparent);
+  --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 16%, transparent);
   --aleph-sheen:    oklch(1 0 0 / 0.05);
 }
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
     --aleph-canvas-base: oklch(0.155 0.022 300);
-    --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 26%, transparent);
-    --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 17%, transparent);
-    --aleph-glow-top: color-mix(in oklch, var(--color-primary)  9%, transparent);
+    --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 30%, transparent);
+    --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 19%, transparent);
+    --aleph-glow-top: color-mix(in oklch, var(--color-primary) 10%, transparent);
+    --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 16%, transparent);
     --aleph-sheen:    oklch(1 0 0 / 0.05);
   }
 }
@@ -676,6 +693,7 @@ html.translucent { --aleph-canvas-base: transparent; }
   background-image:
     radial-gradient(ellipse 56% 46% at 14% 114%, var(--aleph-glow-a),   transparent 66%),
     radial-gradient(ellipse 50% 42% at 94% 118%, var(--aleph-glow-b),   transparent 64%),
+    radial-gradient(ellipse 46% 40% at 88% -8%,  var(--aleph-glow-c),   transparent 62%),
     radial-gradient(ellipse 82% 50% at 50% -14%, var(--aleph-glow-top), transparent 72%);
   /* `aleph-drift` infinite alternate was here. Removed: at 60 Hz it
    * paid an 8-13% CPU/GPU tax (KeyframeInterpolation + per-frame
@@ -706,13 +724,41 @@ html.translucent { --aleph-canvas-base: transparent; }
 .aleph-sidebar-head { padding-top: 0.85rem; }
 html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 
-/* The ℵ wordmark tile. */
+/* The ℵ wordmark tile. A diagonal sheen sweeps across on hover — the
+   animation only exists during :hover, so it costs nothing at rest. */
 .aleph-mark {
+  position: relative;
+  overflow: hidden;
   background-image: linear-gradient(145deg,
     var(--color-primary),
     color-mix(in oklch, var(--color-primary) 55%, oklch(0.58 0.13 250)));
   box-shadow: 0 2px 9px color-mix(in oklch, var(--color-primary) 42%, transparent),
               inset 0 1px 0 oklch(1 0 0 / 0.45);
+  transition: transform var(--duration-normal) var(--ease-spring),
+              box-shadow var(--duration-normal) var(--ease-spring);
+}
+.aleph-mark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg,
+    transparent 30%,
+    oklch(1 0 0 / 0.42) 50%,
+    transparent 70%);
+  background-size: 220% 100%;
+  background-position: 140% 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.aleph-mark:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 16px color-mix(in oklch, var(--color-primary) 48%, transparent),
+              inset 0 1px 0 oklch(1 0 0 / 0.5);
+}
+.aleph-mark:hover::after {
+  opacity: 1;
+  background-position: -40% 0;
+  transition: background-position 0.6s var(--ease-out), opacity 0.2s linear;
 }
 
 /* --- The Codex-style composer card --- */
@@ -723,7 +769,15 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
   border-radius: var(--radius-2xl);
   box-shadow: var(--shadow-md), inset 0 1px 0 var(--aleph-sheen);
   transition: box-shadow var(--duration-normal) var(--ease-spring),
-              border-color var(--duration-normal) var(--ease-spring);
+              border-color var(--duration-normal) var(--ease-spring),
+              transform var(--duration-normal) var(--ease-spring);
+}
+/* Resting hover lift — only when the composer is NOT focused (the
+   focus-within ring below owns the focused look). */
+.aleph-composer:hover:not(:focus-within) {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--aleph-sheen);
+  transform: translateY(-1px);
 }
 .aleph-composer:focus-within {
   border-color: var(--color-primary);
@@ -749,7 +803,15 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
   box-shadow: 0 12px 36px color-mix(in oklch, var(--color-primary) 42%, transparent),
               inset 0 1px 2px oklch(1 0 0 / 0.55);
   /* `aleph-breathe` infinite alternate dropped — same 60 Hz keyframe
-   * cost as `aleph-drift`. Orb still renders, just doesn't bob. */
+   * cost as `aleph-drift`. Orb still renders, just doesn't bob.
+   * A spring lift + intensified glow on hover is interaction-only, so it
+   * reintroduces life without the idle GPU tax. */
+  transition: transform 0.4s var(--ease-spring), box-shadow 0.4s var(--ease-spring);
+}
+.aleph-hero-orb:hover {
+  transform: translateY(-3px) scale(1.04);
+  box-shadow: 0 18px 48px color-mix(in oklch, var(--color-primary) 52%, transparent),
+              inset 0 1px 2px oklch(1 0 0 / 0.6);
 }
 .aleph-hero-title {
   background-image: linear-gradient(110deg,
@@ -757,13 +819,20 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     var(--color-primary)      54%,
     var(--color-text-primary) 76%);
   background-size: 220% auto;
+  background-position: 0 0;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  /* `aleph-shimmer` infinite dropped — 220 % background-position
-   * scroll forced per-frame text re-paint. Title keeps its gradient,
-   * just doesn't shimmer.
-   */
+  /* `aleph-shimmer` infinite dropped to avoid idle per-frame text repaint.
+   * Instead the gradient sweeps once on hover — a single finite animation,
+   * zero cost at rest. */
+}
+.aleph-hero-title:hover {
+  animation: aleph-title-sweep 0.9s var(--ease-out);
+}
+@keyframes aleph-title-sweep {
+  from { background-position: 150% 0; }
+  to   { background-position: 0 0;    }
 }
 
 /* Staggered entrance for the hero. */
@@ -1121,3 +1190,42 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
     background: color-mix(in oklch, var(--color-primary) 55%, transparent);
 }
 *::-webkit-scrollbar-corner   { background: transparent; }
+
+/* ════════════════════════════════════════════════════════════
+   Grain — a fixed, ultra-faint fractal-noise overlay behind the
+   shell. Pure flat vector surfaces read as sterile; a whisper of
+   grain breaks the digital flatness and gives the light-field a
+   filmic, physical quality. It paints once and never animates, so
+   (like the static light-field above) it carries zero idle cost.
+   Sits on top of `::before` (the gradient) but below all content.
+   ════════════════════════════════════════════════════════════ */
+.aleph-shell::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.dark .aleph-shell::after,
+:root:not(.light) .aleph-shell::after { opacity: 0.05; }
+/* The translucent (OS-vibrancy) theme already carries the material's own
+   texture — adding grain on top muddies it, so suppress it there. */
+html.translucent .aleph-shell::after { display: none; }
+
+/* ════════════════════════════════════════════════════════════
+   Chat message entrance — a one-shot rise+fade as each bubble
+   mounts. Wired in `messages.rs` ONLY on non-streaming bubbles:
+   the keyed <For> recreates a streaming bubble on every token, so
+   animating those would replay the entrance per chunk. Finalized
+   and user bubbles mount once, so the animation plays once. The
+   global reduced-motion cap already neutralises this.
+   ════════════════════════════════════════════════════════════ */
+@keyframes aleph-msg-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.992); }
+  to   { opacity: 1; transform: none; }
+}
+.aleph-msg-in {
+  animation: aleph-msg-in 0.34s var(--ease-out) both;
+}
