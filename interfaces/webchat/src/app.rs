@@ -187,36 +187,32 @@ fn AppContent() -> impl IntoView {
                 // Left column — context-aware sidebar, full window height
                 <ModeSidebar />
 
-                // Main content area — flex column so the global drag band
-                // at the top can reserve space (`flex-shrink:0`) on macOS
-                // while the inner scroll container takes the remaining
-                // height. Transparent, so the light-field shows through.
-                <main class="flex-1 relative flex flex-col min-h-0">
-                    // Window-drag band — reserves room for macOS overlay
-                    // traffic lights across every tab, height 0 on
-                    // web / Win / Linux. Chrome buttons that need to
-                    // sit on the traffic-light row (chat LayoutToggle,
-                    // workspace label) render INSIDE this band and opt
-                    // out of the drag region via `aleph-no-drag` /
-                    // `data-tauri-drag-region="false"` — the empty
-                    // space around them still drags the window.
+                // Main content area — `relative` is the positioning
+                // ancestor for the absolutely-floating drag band below.
+                // Transparent, so the light-field shows through.
+                <main class="flex-1 relative min-h-0 overflow-y-auto">
+                    // Window-drag band — floats over the top of `<main>`
+                    // WITHOUT taking layout space (CSS `position:
+                    // absolute`, `background: transparent`). On macOS
+                    // it occupies the overlay traffic-light strip
+                    // (height `--aleph-band-h` = 30px) as a window-
+                    // drag handle; on web / Win / Linux it collapses
+                    // to height 0. Because the band is out of flow,
+                    // tab content fills the full `<main>` height —
+                    // no awkward downward shift and no visible white
+                    // strip on tabs with contrasting backgrounds
+                    // (e.g. the memory canvas).
                     //
-                    // `z-50` lifts the band's stacking context above
-                    // the sibling content area so chrome children
-                    // remain visible on web / Win / Linux where the
-                    // band itself has `height: 0` and the absolutely-
-                    // positioned button extends down into the content
-                    // area's painting region.
+                    // `z-50` keeps the band's chrome chips above
+                    // tab content; the band itself is transparent
+                    // so any text scrolling beneath is fine.
                     <div
-                        class="aleph-main-drag-band relative z-50"
+                        class="aleph-main-drag-band z-50"
                         data-tauri-drag-region=""
                     >
                         <ChatBandChrome />
                     </div>
-                    // Scrollable content host — each tab renders here.
-                    <div class="flex-1 overflow-y-auto relative min-h-0">
-                        <MainContent />
-                    </div>
+                    <MainContent />
                 </main>
 
                 // ⌘K / Ctrl+K command palette overlay. Mounted inside <Router>

@@ -884,19 +884,30 @@ html[data-platform="macos"] {
 /* Global drag band parked at the very top of `<main>`. Only meaningful
    on macOS (Overlay title-bar style, no OS-drawn titlebar to grab); on
    Win/Linux/web the native chrome (or browser) handles window-drag, so
-   the band collapses to height 0 and stays out of the layout.
+   the band collapses to height 0 and stays out of the way.
 
-   In-flow (not absolute): the band reserves vertical space via flex,
-   which pushes every tab's content down by `--aleph-band-h` on macOS
-   so user content never overlaps the overlay traffic lights. Chrome
-   buttons (sidebar toggle / workspace toggle / notification bell) all
-   use `aleph-chrome-top` (fixed) or `aleph-chrome-top-content`
-   (absolute, band-aware) to remain anchored on the same window-y
-   baseline as the traffic lights. */
+   Absolutely positioned (NOT in flex flow): the band floats over the
+   top `--aleph-band-h` strip of `<main>` without reserving layout
+   space. Every tab's content fills the full `<main>` height — so the
+   memory canvas, agent grid, settings panes, etc. render flush with
+   the window top instead of leaving a visible carve-out strip (which
+   used to expose the shell's light-field as an ugly "white bar" on
+   tabs with contrasting backgrounds like the dark memory canvas).
+
+   The band is fully transparent — if content text or graphics scroll
+   underneath, that's fine; the band only intercepts pointer drag, it
+   does not paint. On macOS the band is `pointer-events: auto +
+   -webkit-app-region: drag` so the strip remains a window-drag
+   handle; chrome chips (LayoutToggle, workspace label, notification
+   bell) opt back in with `aleph-no-drag` + `pointer-events: auto`. */
 .aleph-main-drag-band {
-    flex-shrink: 0;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
     height: var(--aleph-band-h);
     pointer-events: none;
+    background: transparent;
 }
 html[data-platform="macos"] .aleph-main-drag-band {
     pointer-events: auto;
