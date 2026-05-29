@@ -13,9 +13,12 @@
 //!   root materialised lazily by `WorkspaceSandbox`
 //! - macOS seatbelt profile + per-command timeout + output truncation
 //!
-//! Dangerous command blocking is the responsibility of the sandbox layer
-//! (`WorkspaceSandbox` + seatbelt profile); this tool is a thin adapter from
-//! `CodeExecArgs` to `SandboxCommand`.
+//! Dangerous command handling is the responsibility of the sandbox layer, in
+//! two complementary stages: a content-level hard-filter
+//! (`sandbox::command_policy`, a `SandboxBeforeHook` that refuses catastrophic
+//! command patterns up front) and OS-level enforcement (`WorkspaceSandbox` +
+//! seatbelt/bwrap/job-object). This tool is a thin adapter from `CodeExecArgs`
+//! to `SandboxCommand`.
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;

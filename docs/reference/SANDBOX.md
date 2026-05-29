@@ -279,6 +279,7 @@ returns `NoopSandbox`.
 |------|------|
 | `src/sandbox/mod.rs` | `Sandbox` trait + re-exports + `MockSandbox` test helper |
 | `src/sandbox/command.rs` | `SandboxCommand`, `SandboxOutput`, `SandboxError` |
+| `src/sandbox/command_policy/` | content-level command hard-filter (`CommandPolicy` + `CommandPolicyHook` + default ruleset + TOML config) |
 | `src/sandbox/capabilities.rs` | `SandboxCapabilities` + `NetworkPolicy` + `is_within` |
 | `src/sandbox/workspace.rs` | `WorkspaceSandbox` + six-step pipeline |
 | `src/sandbox/driver.rs` | `OsSandboxDriverTrait` + `OsSandboxProfile` |
@@ -781,6 +782,48 @@ Cycle 4), and `cargo test windows_init` runs all 14 `windows_init` unit
 tests — including the three new `classify_protected_metadata` tests —
 green natively, since the classifier is cross-platform `std`. The Win32
 ACE / stub-create / stub-remove wiring only runs on a Windows host.
+
+## Cycle 7 hardening — command-policy hard-filter (2026-05-29)
+
+Before this cycle the only command-*content* defence was the byte-level
+secret scrub on **output** (`src/sandbox/scrub.rs`); the command string
+itself reached the OS sandbox uninspected, so catastrophic shapes
+(`:(){ :|:& };:`, `dd of=/dev/sda`, `curl … | sh`) relied entirely on the
+seatbelt/bwrap/job-object to deny the resulting syscalls — which usually
+surfaces as an opaque runtime failure rather than a clear, fast refusal.
+
+`src/sandbox/command_policy/` adds a content-level **hard-filter** in front
+of the OS sandbox, modelled on clawshell's DLP `[[patterns]]` engine but
+specialised for shell commands and evaluated in a single pass via
+`regex::RegexSet` (Aho-Corasick-backed) instead of a sequential `Vec<Regex>`
+scan. It is a CLAUDE.md R7-sanctioned hard-filter, **not** an intent
+classifier: it refuses a small curated set of never-legitimate patterns and
+audits a slightly larger suspicious set; it never reasons about model intent.
+
+- **Wiring:** implemented as a `SandboxBeforeHook` (sibling of
+  `RateLimitHook`) and installed by `build_sandbox` *first* in the hook
+  chain, so a blocked command is refused before consuming rate-limit budget
+  or reaching the driver. **Zero changes to the `execute` pipeline** — it
+  reuses the existing `hooks.run_before()` → `Deny` path, which the
+  workspace already maps to `SandboxError::Other`.
+- **Ruleset** (`rules.rs`): `Block` = fork bomb, `rm --no-preserve-root`,
+  `dd of=/dev/<disk>`, `mkfs /dev/…`, redirect-to-block-device. `Warn`
+  (audit-only) = `rm -rf` of an absolute system path, `curl|wget … | sh`,
+  `chmod 777` of a system path, writes to `/etc/{passwd,shadow,sudoers}`,
+  `/dev/tcp/` reverse shells.
+- **Config** (`[sandbox.command_policy]`): `enabled`, `enforcement`
+  (`block` / `warn` — global observe mode that downgrades every block to an
+  audit / `off`), `use_default_rules`, and `custom_rules[]` (`{name, regex,
+  action, description}`, the clawshell `[[patterns]]` analogue). A malformed
+  custom regex fails **safe** — boot logs the offending rule by name and
+  falls back to the curated defaults rather than running with no filter.
+- **Scan target:** `program` + space-joined `args` + any UTF-8 `stdin`
+  payload (the `bash -s` large-script path), bounded to 256 KiB.
+- **Audit:** matches log to the `command_policy` tracing target (parallel to
+  `capability_ledger` / `sandbox_rate_limit`).
+- **Non-breaking:** defaults block only patterns with essentially no
+  legitimate workspace use; relative-path `rm -rf build/` and ordinary
+  commands are unaffected. The OS sandbox remains the real enforcer.
 
 ## References
 

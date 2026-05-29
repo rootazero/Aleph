@@ -10,6 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
+use crate::sandbox::command_policy::CommandPolicyHook;
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::sandbox::exec_approval::gate::ApprovalGate;
@@ -36,7 +37,33 @@ pub fn build_sandbox(
         return Arc::new(NoopSandbox);
     }
     let rate_limiter = Arc::new(SandboxRateLimiter::new(rate_limit_config));
-    let hooks = SandboxHooks::new().with_before(Arc::new(RateLimitHook::new(rate_limiter)));
+    let mut hooks = SandboxHooks::new();
+
+    // Command-policy hard-filter runs FIRST so a catastrophic command is
+    // refused before it consumes rate-limit budget or reaches the OS driver.
+    // A malformed custom-rule regex fails *safe*: we log and fall back to the
+    // curated defaults rather than booting with no content filter.
+    match cfg.command_policy.clone().into_policy() {
+        Ok(Some(policy)) => {
+            hooks = hooks.with_before(Arc::new(CommandPolicyHook::new(policy)));
+        }
+        Ok(None) => {
+            tracing::info!(target: "command_policy", "command policy disabled by config");
+        }
+        Err(e) => {
+            tracing::error!(
+                target: "command_policy",
+                error = %e,
+                "command policy config invalid — falling back to default ruleset"
+            );
+            let policy = crate::sandbox::command_policy::CommandPolicy::defaults(
+                cfg.command_policy.enforcement,
+            );
+            hooks = hooks.with_before(Arc::new(CommandPolicyHook::new(policy)));
+        }
+    }
+
+    let hooks = hooks.with_before(Arc::new(RateLimitHook::new(rate_limiter)));
     let ws = WorkspaceSandbox::new(cfg.workspace_root.clone(), driver, approval, hooks)
         .with_timeout(Duration::from_secs(cfg.default_timeout_seconds))
         .with_max_output_bytes(cfg.max_output_bytes);
@@ -142,6 +169,7 @@ mod tests {
             linux: Default::default(),
             windows: Default::default(),
             rate_limit: Default::default(),
+            command_policy: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(UnusedDriver);
         let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxRateLimitConfig::default());
@@ -186,6 +214,7 @@ mod tests {
             linux: Default::default(),
             windows: Default::default(),
             rate_limit: Default::default(),
+            command_policy: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
         let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxRateLimitConfig::default());
@@ -215,6 +244,45 @@ mod tests {
         assert_eq!(
             after, 1,
             "WorkspaceSandbox must create exactly one session dir on first execute"
+        );
+    }
+
+    /// Wiring check: with the default config the command-policy hook is
+    /// installed via `build_sandbox`, so a catastrophic command is refused
+    /// before it reaches the OS driver.
+    #[tokio::test]
+    async fn build_sandbox_installs_command_policy_hook() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = SandboxConfig {
+            workspace_root: tmp.path().to_path_buf(),
+            enabled: true,
+            default_timeout_seconds: 60,
+            max_output_bytes: 1024,
+            linux: Default::default(),
+            windows: Default::default(),
+            rate_limit: Default::default(),
+            command_policy: Default::default(),
+        };
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
+        let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxRateLimitConfig::default());
+
+        let err = sandbox
+            .execute(SandboxCommand {
+                session_id: make_sid(),
+                program: "bash".into(),
+                args: vec!["-c".into(), ":(){ :|:& };:".into()],
+                env: HashMap::new(),
+                stdin: None,
+                cwd: None,
+                capabilities: SandboxCapabilities::strict(),
+                timeout: None,
+            })
+            .await
+            .expect_err("fork bomb must be refused by the command policy hook");
+        // WorkspaceSandbox maps a hook denial to SandboxError::Other.
+        assert!(
+            matches!(err, SandboxError::Other(ref m) if m.contains("command policy")),
+            "unexpected error: {err}"
         );
     }
 

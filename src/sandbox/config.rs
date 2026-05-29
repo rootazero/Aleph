@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::sandbox::command_policy::CommandPolicyConfigSchema;
 use crate::sandbox::rate_limit::{SandboxRateLimitConfig, ToolCategory, WindowConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -301,6 +302,12 @@ pub struct SandboxConfig {
 
     #[serde(default)]
     pub rate_limit: SandboxRateLimitConfigSchema,
+
+    /// Content-level command hard-filter (`[sandbox.command_policy]`).
+    /// Defence-in-depth in front of the OS sandbox; see
+    /// [`crate::sandbox::command_policy`].
+    #[serde(default)]
+    pub command_policy: CommandPolicyConfigSchema,
 }
 
 fn default_workspace_root() -> PathBuf {
@@ -342,6 +349,7 @@ impl Default for SandboxConfig {
                 dangerous: default_rate_limit_dangerous(),
                 admin: default_rate_limit_admin(),
             },
+            command_policy: CommandPolicyConfigSchema::default(),
         }
     }
 }
