@@ -316,10 +316,17 @@ impl HarnessRunner for AgentHarnessRunner {
                 // call fails. Same gating as the compactor (config-presence).
                 let pipeline = {
                     use crate::context::budget::cheap_passes::{
-                        HistoricalImageStrippingStage, ToolResultPruningStage,
+                        FileOpSupersedeStage, HistoricalImageStrippingStage,
+                        ToolResultPruningStage,
                     };
                     use crate::context::budget::preflight::{PreflightPipeline, PreflightStage};
+                    // FileOpSupersedeStage runs first so its stubs shrink the
+                    // tool_result bodies before ToolResultPruningStage and the
+                    // image stripper see them. The three stages are commutative
+                    // for correctness (none of them touches the others' targets);
+                    // ordering here is for log-readability and minor cache wins.
                     let stages: Vec<Box<dyn PreflightStage>> = vec![
+                        Box::new(FileOpSupersedeStage::default()),
                         Box::new(ToolResultPruningStage::default()),
                         Box::new(HistoricalImageStrippingStage),
                     ];

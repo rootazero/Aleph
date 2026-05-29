@@ -9,8 +9,10 @@
 //! historical image stripping are cheap deterministic transforms that
 //! deliver consistent savings without LLM cost.
 
+pub mod file_op_supersede;
 pub mod image_stripping;
 pub mod tool_result_pruning;
 
+pub use file_op_supersede::FileOpSupersedeStage;
 pub use image_stripping::HistoricalImageStrippingStage;
 pub use tool_result_pruning::ToolResultPruningStage;
