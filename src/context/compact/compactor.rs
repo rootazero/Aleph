@@ -259,13 +259,26 @@ impl ContextCompactor {
              ---TRANSCRIPT---\n{transcript}\n---END---"
         );
 
-        // Step 5–7: attempt LLM call with timeout
+        // Step 5–7: attempt LLM call with timeout. The emptiness check runs on
+        // the *stripped* output, not the raw LLM text: a model (especially the
+        // flash-tier cheap provider) can emit only an <analysis> scratchpad with
+        // no <summary> block, leaving an empty string after stripping. Checking
+        // the raw text would treat that as a successful summary and drain the
+        // entire window into an empty "[Context Summary]" — permanent context
+        // loss reported as a successful LlmSummary. Stripping first routes the
+        // degenerate case to the deterministic-truncation fallback below.
         let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
+        let summary = match llm_result {
+            Ok(Ok(raw)) => {
+                let stripped = strip_analysis_block(&raw);
+                (!stripped.trim().is_empty()).then_some(stripped)
+            }
+            Ok(Err(_)) | Err(_) => None,
+        };
 
-        match llm_result {
-            Ok(Ok(summary)) if !summary.trim().is_empty() => {
-                // Success: strip analysis scratchpad, then drain old window and insert summary
-                let summary = strip_analysis_block(&summary);
+        match summary {
+            Some(summary) => {
+                // Success: drain old window and insert the stripped summary.
                 let summary_msg = UnifiedMessage::user(format!("[Context Summary]\n{}", summary));
                 let tokens_after = estimate_tokens(&summary);
 
@@ -279,8 +292,8 @@ impl ContextCompactor {
                     strategy_used: CompactStrategy::LlmSummary,
                 })
             }
-            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
-                // LLM failed or returned empty — try fallback
+            None => {
+                // LLM failed or produced no usable summary — try fallback
                 if self.config.fallback_to_truncation {
                     let truncated = deterministic_truncation(window);
                     let tokens_after = estimate_tokens(&truncated);
@@ -364,15 +377,17 @@ impl ContextCompactor {
 
         let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
 
-        match llm_result {
-            Ok(Ok(summary)) if !summary.trim().is_empty() => {
-                Ok(strip_analysis_block(&summary).to_string())
+        // Strip before the emptiness check: an analysis-only response (no
+        // <summary> block) strips to an empty string, which must fall back to
+        // deterministic truncation rather than seed a child session with "".
+        let stripped = match llm_result {
+            Ok(Ok(raw)) => {
+                let s = strip_analysis_block(&raw);
+                (!s.trim().is_empty()).then_some(s)
             }
-            _ => {
-                // Fall back to deterministic truncation.
-                Ok(deterministic_truncation(messages))
-            }
-        }
+            _ => None,
+        };
+        Ok(stripped.unwrap_or_else(|| deterministic_truncation(messages)))
     }
 
     /// Side-channel LLM call for summarization. Routes to the cheap-tier
@@ -609,5 +624,59 @@ mod tests {
             CompactStrategy::Skipped { reason } if reason.contains("already compacted")
         ));
         assert_eq!(messages.len(), original_len);
+    }
+
+    #[tokio::test]
+    async fn recovers_when_summary_is_only_analysis_block() {
+        // A weak/flash-tier model emits the <analysis> scratchpad but omits the
+        // <summary> block. After stripping, the summary is empty — the window
+        // must NOT be drained into an empty "[Context Summary]". Instead, fall
+        // back to deterministic truncation so the context is preserved in
+        // condensed form (regression for the "recover empty compaction" bug).
+        let provider = Arc::new(MockProvider::new(
+            "<analysis>\nlots of reasoning but no summary block\n</analysis>",
+        ));
+        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+
+        let mut messages = make_messages(12);
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+
+        // Must recover via truncation, not report a phantom LlmSummary success.
+        assert_eq!(
+            result.strategy_used,
+            CompactStrategy::DeterministicTruncation
+        );
+        assert_eq!(messages.len(), 7);
+
+        // The inserted summary must carry the truncated window, never be empty.
+        let first_text = first_message_text(&messages[0]).unwrap();
+        assert!(first_text.starts_with("[Context Summary]"));
+        assert!(
+            !first_text
+                .trim_start_matches("[Context Summary]")
+                .trim()
+                .is_empty(),
+            "summary body must not be empty after analysis-only output"
+        );
+    }
+
+    #[tokio::test]
+    async fn summarize_slice_recovers_on_analysis_only_output() {
+        // Same degenerate case for the session-split seed path: an analysis-only
+        // response strips to "" and must fall back to deterministic truncation
+        // rather than seed a child session with an empty string.
+        let provider = Arc::new(MockProvider::new(
+            "<analysis>\nreasoning only, no summary\n</analysis>",
+        ));
+        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+
+        let messages = make_messages(6);
+        let seed = compactor.summarize_slice(&messages).await.unwrap();
+
+        assert!(
+            !seed.trim().is_empty(),
+            "seed must not be empty after analysis-only output"
+        );
+        assert!(seed.contains("User message 0"));
     }
 }
