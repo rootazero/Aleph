@@ -7,30 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.5.30]
+
 ### Added
 
-- **Gateway hello snapshot** — `connect` response now carries a `hello`
-  field with server identity, uptime, presence roster, connection limits,
-  capabilities, and active workspace. Lets clients render the panel
-  without follow-up RPCs immediately after authentication.
-- **Gateway `connect.challenge` RPC** — server issues a single-use HMAC
-  nonce; clients echo `{nonce, signature}` on `connect` for replay
-  hardening of token / shared_token auth. Opt-in via
-  `[gateway] require_challenge = true`; recommended for LAN / Tailnet
-  bind modes. Guest invitations exempt.
-- **Idempotency-key enforcement** — opt-in via
-  `[gateway] require_idempotency_key = true`; mutating RPCs (Execute /
-  Mutate / System lanes) without an `idempotency_key` are rejected with
-  the new `IDEMPOTENCY_KEY_REQUIRED` (-32030) error before lane dispatch.
-- **Field-level event subscription filters** — `events.subscribe` accepts
-  the richer `{topic, where: [{field, equals}]}` shape alongside plain
-  pattern strings; dot-paths resolve nested data (`device.role`). Lets a
-  subscriber narrow a noisy fan-out topic like `tools.changed` to its own
-  `scope`.
-- **Gateway `gateway.metrics.lanes` RPC** — live per-lane occupancy gauge
-  (desktop/shared totals + currently-available permits in Query / Execute
-  / Mutate / System order). Panel UIs can detect saturation before it
-  manifests as user-visible timeouts.
+- **Passwordless auth UX** — first daemon start auto-provisions the token; the
+  desktop app does a silent keychain bootstrap, same-machine browsers open via
+  `aleph open`, and remote/mobile devices pair with a 6-digit code or QR
+  approved from the desktop NotificationCenter. The legacy `/login` token-paste
+  form and `?token=` URL fallback are gone.
+- **Proactive multi-channel push** — the new `channel_message` tool lets the
+  assistant reach you on its own (send / react / edit / typing) across any
+  connected channel, so help arrives in the channel you already use.
+- **New and hardened channels** — native WhatsApp channel; Slack inbound
+  file/image attachments; Feishu encrypted-webhook decryption; iMessage
+  allow-list gating, attachment paths, and offline catch-up; opt-in group
+  `@mention` gating for Telegram and Microsoft Teams.
+- **`google_meet` tool** — join / create / leave / speak / status, relayed to
+  an out-of-core meeting bridge.
+- **Workflow templates + `.workflow.js` interop** — save named, re-runnable
+  declarative workflows that compile to a coordinated task DAG, with lossless
+  bidirectional import/export of the Claude-Code-compatible `.workflow.js`
+  format.
+- **Multi-agent teams** — team templates, snapshots (capture / restore / list),
+  zombie-task detection, per-team token-usage aggregation, task-level control,
+  a merged replay timeline, `@mention` parsing, ACP-backed members, and
+  step-level workflow review.
+- **Smarter retrieval** — new `ctx_search` (BM25 over offloaded tool output)
+  and `recall_events` (BM25 over the session event log) tools, plus hybrid
+  lexical memory recall (porter + trigram, RRF-fused).
+- **Search & web reach** — Jina and DuckDuckGo search providers, a SERP-scrape
+  fallback when every provider fails, an LRU URL cache for `web_fetch`, and
+  language / region / date-range / safe-search wiring.
+- **More model providers** — many new chat, TTS, STT, and image presets
+  (Deepgram, Azure Speech, Cartesia, MiniMax, Suno, BFL FLUX, Fal.ai),
+  per-family thinking-budget profiles, model-id normalization, discovery
+  fallbacks, and DeepSeek cache-hit metrics.
+- **Computer use** — `gui_locate` (natural-language → screen coordinate),
+  `wait_visual` screen-settle detection, a browser-operator strategy, the
+  UI-TARS coordinate contract, and ready-made recipes (book a flight / hotel,
+  draw).
+- **Panel** — ⌘K command palette, NotificationCenter, a workspace pane with
+  per-tool renderers, a trace replay scrubber, a collapsible reasoning panel
+  for streamed model reasoning, a multi-tab SessionMap, a plan/DAG view, and a
+  rebuilt memory canvas with editable note cards (`graph.update_note`).
+- **24/7 scheduling** — per-job timeouts with failure alerts, transient-error
+  retry classification, a raised iteration cap (40 → 200) and wall-clock budget
+  for long-running jobs, carry-over resume of interrupted runs, heartbeat
+  active-hours, and periodic run-history reaping.
+- **Gateway connect & observability** — the `connect` response now carries a
+  `hello` snapshot (identity, uptime, presence, limits, capabilities, active
+  workspace); a `connect.challenge` HMAC-nonce flow for replay hardening
+  (`require_challenge`); optional idempotency-key enforcement
+  (`require_idempotency_key`); field-level `events.subscribe` filters
+  (`{topic, where:[{field, equals}]}`); and a `gateway.metrics.lanes`
+  occupancy gauge.
+- **Sandbox** — command-policy hard-filter for shell execution and a managed
+  in-process proxy for allow-listed hosts.
+
+### Fixed
+
+- **Browser SSRF hardening** — content-read tools now re-validate the active
+  tab's current URL against the SSRF policy (defeats redirect / JS / history
+  reaching an internal origin), and hostname allow/deny checks normalize
+  trailing dots.
+- **Prompt-injection defenses** — untrusted channel/sender labels are sanitized
+  before entering the system prompt, and injected memory recall is fenced as a
+  non-authoritative reference with echoed fences stripped from the stream.
+- **Auth brute-force & token leaks** — per-source-IP rate limiting on failed
+  `connect` auth, live WebSocket disconnect on device-token revocation, and
+  removal of the stderr token banner that leaked the token into logs and
+  screencasts.
+- **Provider error handling** — fixed Anthropic OAuth identity and the legacy
+  thinking-budget `max_tokens` guard; Anthropic 429 overloads and
+  OpenAI/xAI usage/quota-limit errors are now classified correctly; Ollama
+  honors configured `top_p` / `top_k` and normalizes greedy decoding.
+- **MCP tool quarantine** — MCP tools whose parameter schema is structurally
+  unusable are now skipped with a warning instead of 400-ing every provider
+  request while that server is connected.
+- **Context compaction** — empty compaction is recovered when the model emits
+  an analysis-only reply, so the context summary is never silently blanked.
+- **Reply-storm protection** — a bot↔bot pair-loop guard plus group channels
+  that respond only on `@mention` or reply-to-bot.
+- **Gateway resilience** — a bounded rate-limiter (caps memory growth), unified
+  jitter-free channel restart backoff, and an hourly health monitor that
+  auto-restarts wedged channels.
+- **Harness recovery** — reactive compaction rescue on `prompt_too_long` and
+  structured tool-error hints with a fallback ladder.
 
 ## [26.5.24]
 
