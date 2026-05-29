@@ -59,4 +59,17 @@ impl GraphApi {
         let result = state.rpc_call("graph.search", params).await?;
         serde_json::from_value(result).map_err(|e| format!("Failed to parse graph.search: {}", e))
     }
+
+    /// Persist an edited note body. `content` is the full raw markdown
+    /// (frontmatter + body); the server writes it verbatim and re-indexes.
+    pub async fn update_note(
+        state: &DashboardState,
+        agent_id: &str,
+        node_id: &str,
+        content: &str,
+    ) -> Result<(), String> {
+        let params = json!({ "agent_id": agent_id, "node_id": node_id, "content": content });
+        state.rpc_call("graph.update_note", params).await?;
+        Ok(())
+    }
 }

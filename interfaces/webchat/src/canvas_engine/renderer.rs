@@ -169,7 +169,9 @@ fn draw_orphan_ring(
         );
         let cx = n.position.x + off.0 as f64 + drift.x;
         let cy = n.position.y + off.1 as f64 + drift.y;
-        let r = n.radius;
+        // Demote orphans visually: 70% of their link-count radius so the
+        // disconnected "ghost" ring reads as secondary to the live graph.
+        let r = n.radius * 0.7;
 
         let is_selected = selected.map(|s| s == n.id).unwrap_or(false);
         let is_hovered = hovered.map(|h| h == n.id).unwrap_or(false);

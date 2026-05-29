@@ -214,7 +214,11 @@
     "recently_visited": "Recently visited",
     "click_node_hint": "Click a node to inspect it. Recently visited memories will appear here.",
     "canvas_loading": "Loading…",
-    "canvas_error_prefix": "Error"
+    "canvas_error_prefix": "Error",
+    "edit": "Edit",
+    "save": "Save",
+    "saving": "Saving…",
+    "cancel": "Cancel"
   },
   "logs": {
     "title": "Server Logs",

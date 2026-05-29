@@ -855,6 +855,7 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     --cat-project:       #34d399;
     --cat-reference:     #60a5fa;
     --cat-user:          #fbbf24;
+    --cat-error:         #f44336;
 
     --shadow-base:       0 8px 32px rgba(0, 0, 0, 0.6);
     --glow-hover:        0 0 24px rgba(167, 139, 250, 0.27);
@@ -862,17 +863,12 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     --glow-active:       0 0 32px rgba(252, 211, 77, 0.67);
 }
 
-@keyframes node-card-breath {
-    0%, 100% { filter: brightness(1.0); }
-    50%      { filter: brightness(1.15); }
-}
-
 .node-card-full {
     position: absolute;
     width: 280px;
     background: var(--node-bg);
     border: 1px solid var(--node-border);
-    border-radius: 10px;
+    border-radius: 6px;
     box-shadow: var(--shadow-base);
     overflow: hidden;
     transition: box-shadow 120ms ease-out;
@@ -882,7 +878,7 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 }
 .node-card-full:hover               { box-shadow: var(--shadow-base), var(--glow-hover); }
 .node-card-full[data-selected]      { box-shadow: var(--shadow-base), var(--glow-selected); }
-.node-card-full[data-active]        { box-shadow: var(--shadow-base), var(--glow-active); animation: node-card-breath 2.5s ease-in-out infinite; }
+.node-card-full[data-active]        { box-shadow: var(--shadow-base), var(--glow-active); }
 
 .node-card-full__title {
     color: var(--text-title);
@@ -903,9 +899,24 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 .node-card-full__excerpt code,
 .node-card-full__excerpt pre {
     color: var(--text-code);
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.1);
     border-radius: 3px;
-    padding: 0 3px;
+    padding: 1px 4px;
+    font-family: "Cascadia Code", "Fira Code", ui-monospace, monospace;
+}
+.node-card-full__excerpt pre {
+    overflow-x: auto;
+    padding: 6px 8px;
+}
+.node-card-full__excerpt blockquote {
+    border-left: 3px solid var(--cat-reference);
+    padding: 2px 8px;
+    margin: 4px 0;
+    color: var(--text-meta);
+}
+.node-card-full__excerpt input[type="checkbox"] {
+    accent-color: #4db8a4;
+    margin-right: 4px;
 }
 .node-card-full__excerpt a {
     color: var(--cat-reference);
@@ -945,7 +956,7 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 }
 .node-card-mini:hover               { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-hover); }
 .node-card-mini[data-selected]      { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-selected); }
-.node-card-mini[data-active]        { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-active); animation: node-card-breath 2.5s ease-in-out infinite; }
+.node-card-mini[data-active]        { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), var(--glow-active); }
 
 .node-card-dot {
     position: absolute;
@@ -958,6 +969,44 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     will-change: transform;
 }
 .node-card-dot:hover { width: 14px; height: 14px; box-shadow: 0 0 18px currentColor; }
+
+/* ── Sidebar node markdown editor ─────────────────────────────────── */
+.node-detail-editor {
+    width: 100%;
+    min-height: 180px;
+    resize: vertical;
+    background: #14142a;
+    border: 1px solid var(--node-border);
+    border-radius: 6px;
+    padding: 8px;
+    color: var(--text-body);
+    font-family: "Cascadia Code", "Fira Code", ui-monospace, monospace;
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+.node-detail-editor:focus {
+    outline: none;
+    border-color: var(--cat-feedback);
+}
+.node-detail-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--node-border);
+    border-radius: 5px;
+    color: var(--text-body);
+    font-size: 11px;
+    padding: 3px 12px;
+    cursor: pointer;
+    transition: background 120ms ease-out;
+}
+.node-detail-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+.node-detail-btn:disabled            { opacity: 0.5; cursor: default; }
+.node-detail-btn--save {
+    background: var(--cat-feedback);
+    border-color: var(--cat-feedback);
+    color: #14142a;
+    font-weight: 600;
+}
+.node-detail-btn--save:hover:not(:disabled) { filter: brightness(1.1); background: var(--cat-feedback); }
 
 /* ── Collapsible aleph-sidebar ───────────────────────────────────── */
 .aleph-sidebar {

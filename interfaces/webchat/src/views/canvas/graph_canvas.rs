@@ -350,28 +350,26 @@ pub fn GraphCanvas(
                     selected_id_sig_inner.set(selected.clone());
                 }
 
-                // Flatten all visible nodes for the overlay list and publish screen positions.
-                // We do this for Active and Animating states (same neighborhood source).
-                let flat_nodes: Vec<CanvasNode> = match &nav_state {
-                    NavState::Active { neighborhood, .. } => {
-                        std::iter::once(neighborhood.center.clone())
-                            .chain(neighborhood.one_hop.iter().cloned())
-                            .chain(neighborhood.two_hop.iter().cloned())
-                            .chain(neighborhood.orphans.iter().cloned())
-                            .collect()
-                    }
-                    NavState::Animating { to_neighborhood, .. } => {
-                        std::iter::once(to_neighborhood.center.clone())
-                            .chain(to_neighborhood.one_hop.iter().cloned())
-                            .chain(to_neighborhood.two_hop.iter().cloned())
-                            .chain(to_neighborhood.orphans.iter().cloned())
-                            .collect()
-                    }
-                    _ => Vec::new(),
+                // Visible nodes for the overlay list (center + 1-hop + 2-hop + orphans),
+                // borrowed from the already-cloned nav_state. Iterating by reference
+                // avoids re-cloning every CanvasNode each frame — the owned Vec is only
+                // materialized when the visible set actually changes (below).
+                let visible_layers: Option<&Neighborhood> = match &nav_state {
+                    NavState::Active { neighborhood, .. } => Some(neighborhood),
+                    NavState::Animating { to_neighborhood, .. } => Some(to_neighborhood),
+                    _ => None,
+                };
+                let visible_iter = || {
+                    visible_layers.into_iter().flat_map(|n| {
+                        std::iter::once(&n.center)
+                            .chain(n.one_hop.iter())
+                            .chain(n.two_hop.iter())
+                            .chain(n.orphans.iter())
+                    })
                 };
 
                 // Publish per-node screen positions (get-or-create inner signal per node).
-                for n in &flat_nodes {
+                for n in visible_iter() {
                     let screen = viewport.world_to_screen(n.position);
                     let sx = screen.x as f32;
                     let sy = screen.y as f32;
@@ -388,13 +386,20 @@ pub fn GraphCanvas(
                 }
 
                 // Update overlay_nodes when the set of visible nodes changes.
-                // Compare by length+id to avoid spurious re-renders.
+                // Compare by length+id to avoid spurious re-renders; only clone
+                // into an owned Vec when an update is actually needed.
+                let visible_count = visible_iter().count();
                 let needs_update = overlay_nodes_inner.with(|prev| {
-                    prev.len() != flat_nodes.len()
-                        || prev.iter().zip(flat_nodes.iter()).any(|(a, b)| a.id != b.id)
+                    prev.len() != visible_count
+                        || prev.iter().zip(visible_iter()).any(|(a, b)| a.id != b.id)
                 });
                 if needs_update {
-                    overlay_nodes_inner.set(flat_nodes);
+                    overlay_nodes_inner.set(visible_iter().cloned().collect());
+                    // Purge stale edge-label signals from the previous graph so the
+                    // map can't grow unbounded across navigations (and labels for
+                    // edges that no longer exist don't linger). The edge-label pass
+                    // below repopulates it for the current edges in this same frame.
+                    edge_label_state_inner.update(|m| m.clear());
                 }
 
                 // ---------------------------------------------------------------

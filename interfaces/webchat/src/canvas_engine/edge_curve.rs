@@ -6,10 +6,11 @@ use crate::canvas_engine::types::Vec2;
 /// `0.0` = straight line; `0.12` is the default the spec calls for.
 pub(crate) const DEFAULT_SAG: f64 = 0.12;
 
-/// Edge kinds that are *directional* and therefore render an arrow head.
-/// Everything else (including `None`, `"related"`, any unknown string) is
-/// drawn as a plain stroke.
-#[allow(dead_code)] // reserved for future arrow-head rendering (spec §7 phase 2)
+/// Edge kinds that are *directional*. Consumed by the JSON Canvas export
+/// (`json_canvas::convert::edge_to_canvas`), which sets `to_end: Arrow` for
+/// these kinds; everything else (`None`, `"related"`, any unknown string)
+/// exports as a plain edge. The on-canvas 2D renderer currently draws all
+/// edges as plain Béziers — arrow heads live only in the export.
 pub(crate) const DIRECTIONAL_KINDS: &[&str] = &["refers", "derives", "follows"];
 
 /// Quadratic-Bézier control point: midpoint, shoved perpendicular to
@@ -59,15 +60,10 @@ pub(crate) enum HopLayer { One, Two }
 /// `(max_alpha, line_width)` tuple per layer.
 pub(crate) fn hop_style(layer: HopLayer) -> (f64, f64) {
     match layer {
-        HopLayer::One => (0.85, 1.8),
+        // 1-hop stroke at 2.0px matches the code-call-graph-editor edge weight.
+        HopLayer::One => (0.85, 2.0),
         HopLayer::Two => (0.55, 1.2),
     }
-}
-
-/// Does this edge get an arrow head?
-#[allow(dead_code)] // paired with DIRECTIONAL_KINDS — reserved for arrow-head feature
-pub(crate) fn is_directional(kind: Option<&str>) -> bool {
-    kind.is_some_and(|k| DIRECTIONAL_KINDS.contains(&k))
 }
 
 #[cfg(test)]
@@ -113,15 +109,5 @@ mod tests {
         let (a2, w2) = hop_style(HopLayer::Two);
         assert!(a1 > a2);
         assert!(w1 > w2);
-    }
-
-    #[test]
-    fn is_directional_only_for_recognized_kinds() {
-        assert!(is_directional(Some("refers")));
-        assert!(is_directional(Some("derives")));
-        assert!(is_directional(Some("follows")));
-        assert!(!is_directional(Some("related")));
-        assert!(!is_directional(Some("xyz")));
-        assert!(!is_directional(None));
     }
 }

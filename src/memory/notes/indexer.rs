@@ -325,6 +325,56 @@ impl<S: NoteStore> NoteIndexer<S> {
         Ok(path)
     }
 
+    /// Write RAW markdown content to a note file verbatim, then sync the index.
+    ///
+    /// Unlike [`write_note`], this does NOT reconstruct the file from a
+    /// `KnowledgeNote` (which is lossy — `to_markdown` only re-emits frontmatter
+    /// plus bullet facts plus a `Related:` line, dropping prose / headings /
+    /// code blocks). The caller-supplied `content` is the full markdown
+    /// (frontmatter + arbitrary body) and is written byte-for-byte, so
+    /// hand-edited content survives a round-trip. Backs the panel node editor's
+    /// `graph.update_note` RPC.
+    ///
+    /// `title` is sanitized to prevent path traversal. Returns the written path.
+    pub async fn write_note_raw(
+        &self,
+        agent_id: &str,
+        category: &str,
+        title: &str,
+        content: &str,
+    ) -> Result<PathBuf, AlephError> {
+        let safe_title = sanitize_title(title)?;
+        let path = self
+            .memory_dir
+            .join(agent_id)
+            .join(category)
+            .join(format!("{safe_title}.md"));
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| AlephError::ConfigError {
+                    message: format!(
+                        "Failed to create parent directory {}: {e}",
+                        parent.display()
+                    ),
+                    suggestion: None,
+                })?;
+        }
+
+        atomic_write_file(&path, content).await?;
+
+        // Sync to SQLite immediately so the graph reflects the edit without
+        // waiting for the next full_rebuild. Index under the path `category`
+        // (the file's physical location), mirroring `write_note`.
+        let reparsed = KnowledgeNote::from_markdown(&safe_title, content)
+            .map_err(|e| AlephError::other(format!("reparse after raw write: {e}")))?;
+        self.store.index_note(&reparsed, agent_id, category).await?;
+
+        self.notify_orientation(agent_id, category, &safe_title);
+        Ok(path)
+    }
+
     /// Append facts and links to an existing note, or create a new one.
     ///
     /// `note_path` is `"category/filename"` (e.g. `"preference/Editor Preferences"`).
