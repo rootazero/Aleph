@@ -316,6 +316,9 @@ pub struct BuiltinToolRegistry {
     pub(crate) session_collaborate_tool: Option<crate::builtin_tools::team::SessionCollaborateTool>,
     pub(crate) session_turn_tool: Option<crate::builtin_tools::team::SessionTurnTool>,
     pub(crate) session_read_tool: Option<crate::builtin_tools::team::SessionReadTool>,
+    /// Google Meet tool — always available; holds an optional out-of-core
+    /// transport bridge and reports "not configured" when absent.
+    pub(crate) google_meet_tool: crate::builtin_tools::google_meet::GoogleMeetTool,
     /// Skill management tools — always available (SkillSystem is always initialized)
     pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
     pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,
@@ -1323,6 +1326,13 @@ impl ToolRegistry for BuiltinToolRegistry {
                     crate::builtin_tools::channel_message::ChannelMessageTool::new(Arc::clone(cr));
                 tool.call_json(arguments).await
             }),
+
+            // Google Meet tool — forwards the action to the configured
+            // out-of-core transport bridge over JSON-RPC.
+            "google_meet" => {
+                let tool = self.google_meet_tool.clone();
+                Box::pin(async move { tool.call_json(arguments).await })
+            }
 
             // ask_user clarification tool (deferred — ChannelRegistry +
             // ClarificationManager injected after construction)

@@ -506,6 +506,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // allowed_hosts bridge) silently dead. Plumb it through so
             // user-facing SSRF config actually reaches web_fetch.
             config: Some(app_config_arc.clone()),
+            // Google Meet transport bridge — opt-in via env (the bridge is an
+            // out-of-core plugin process; core only relays JSON-RPC to it).
+            google_meet_bridge: alephcore::builtin_tools::google_meet::GoogleMeetBridge::from_env()
+                .map(std::sync::Arc::new),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;

@@ -49,6 +49,7 @@ pub mod file_ops;
 pub mod flag_user_correction;
 pub mod gateway_route;
 pub mod generation;
+pub mod google_meet;
 pub mod heartbeat_manage;
 pub mod invalid;
 pub mod mcp_prompt;
@@ -143,6 +144,10 @@ pub use flag_user_correction::{
 pub use gateway_route::{GatewayRouteArgs, GatewayRouteOutput, GatewayRouteTool};
 pub use generation::{
     ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool,
+};
+pub use google_meet::{
+    GoogleMeetAction, GoogleMeetArgs, GoogleMeetBridge, GoogleMeetMode, GoogleMeetOutput,
+    GoogleMeetTool, GoogleMeetTransport,
 };
 pub use heartbeat_manage::{
     HeartbeatCreateArgs, HeartbeatCreateOutput, HeartbeatCreateTool, HeartbeatDeleteArgs,

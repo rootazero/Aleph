@@ -292,6 +292,7 @@ for the full trust-transfer model.
 | WHATSAPP_ARCHITECTURE_DESIGN.md | [docs/reference/WHATSAPP_ARCHITECTURE_DESIGN.md](docs/reference/WHATSAPP_ARCHITECTURE_DESIGN.md) |
 | DESKTOP_BRIDGE.md | [docs/reference/DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) |
 | DESKTOP_SHELL.md | [docs/reference/DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) |
+| GOOGLE_MEET_BRIDGE.md | [docs/reference/GOOGLE_MEET_BRIDGE.md](docs/reference/GOOGLE_MEET_BRIDGE.md) — `google_meet` 薄工具契约 + 外部 transport bridge JSON-RPC 协议 |
 
 ---
 

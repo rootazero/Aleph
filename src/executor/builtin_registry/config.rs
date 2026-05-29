@@ -132,4 +132,9 @@ pub struct BuiltinToolConfig {
     /// Sandbox for exec-class tools (code_exec, bash_exec).
     /// `None` → tools return a structured "sandbox not configured" error.
     pub sandbox: Option<Arc<dyn crate::sandbox::Sandbox>>,
+
+    /// External Google Meet transport bridge for the `google_meet` tool.
+    /// `None` → the tool reports "bridge not configured" (Chrome/Twilio/audio
+    /// automation lives out-of-core per R1/R3; core only relays JSON-RPC).
+    pub google_meet_bridge: Option<Arc<crate::builtin_tools::google_meet::GoogleMeetBridge>>,
 }

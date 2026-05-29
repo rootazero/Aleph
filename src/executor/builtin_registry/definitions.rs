@@ -635,6 +635,13 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Manage channel pairing codes — generate new codes or list active ones for Telegram/other channels",
         requires_config: true, // Requires ChannelRegistry (deferred injection)
     },
+    // Google Meet — thin contract over an out-of-core transport bridge.
+    // Always available; reports "bridge not configured" when no bridge is set.
+    BuiltinToolDefinition {
+        name: "google_meet",
+        description: "Join, create, leave, speak into, or query a Google Meet call via the configured transport bridge",
+        requires_config: false, // bridge optional; tool degrades gracefully
+    },
     // Media send tool — no dependencies, just passes URLs through to ReplyEmitter
     BuiltinToolDefinition {
         name: "media_send",
@@ -725,6 +732,11 @@ pub fn create_tool_boxed(
             Some(Box::new(tool))
         }
         "web_fetch" => Some(Box::new(WebFetchTool::new())),
+        "google_meet" => Some(Box::new(
+            crate::builtin_tools::google_meet::GoogleMeetTool::new(
+                config.and_then(|c| c.google_meet_bridge.clone()),
+            ),
+        )),
         "file_ops" => Some(Box::new(FileOpsTool::new())),
         "file_read" => Some(Box::new(FileReadTool::new())),
         "file_write" => Some(Box::new(FileWriteTool::new())),

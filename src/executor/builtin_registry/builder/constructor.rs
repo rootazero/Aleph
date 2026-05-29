@@ -1234,6 +1234,11 @@ impl BuiltinToolRegistry {
         // Skill management tools — always available
         // Phase 2: use the process-wide shared SkillSystem instead of a
         // throwaway empty instance; skill_status previously always reported 0.
+        // Google Meet tool — wraps the optional out-of-core transport bridge.
+        let google_meet_tool = crate::builtin_tools::google_meet::GoogleMeetTool::new(
+            config.google_meet_bridge.clone(),
+        );
+
         let skill_system = crate::skill::shared_skill_system().clone();
         let skill_status_tool =
             crate::builtin_tools::skill_status::SkillStatusTool::new(skill_system.clone());
@@ -1575,6 +1580,7 @@ impl BuiltinToolRegistry {
             session_collaborate_tool,
             session_turn_tool,
             session_read_tool,
+            google_meet_tool,
             skill_status_tool,
             skill_install_tool,
             skill_manage_tool,
