@@ -1,12 +1,6 @@
-//! Shared context data sources for prompt building.
+//! Context-window engineering: budget sensing, compaction, and retrieval of
+//! offloaded tool output.
 
 pub mod budget;
 pub mod compact;
-pub mod environment;
-pub mod memory_context;
 pub mod retrieval;
-pub mod session_info;
-
-pub use environment::EnvironmentInfo;
-pub use memory_context::{ConversationSnippet, MemoryContext, MemoryFact};
-pub use session_info::SessionInfo;
