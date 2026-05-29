@@ -27,6 +27,7 @@ pub mod delivery;
 pub mod error_cooldown;
 pub mod group_chat;
 pub mod handlers;
+pub mod mention;
 pub mod offset;
 pub mod poll;
 mod polling;
@@ -269,9 +270,17 @@ impl Channel for TelegramChannel {
 
             let mut instance = BotInstance::new(account, self.callback_tx.clone(), resolved_config);
 
+            // Group mention gate: only respond to addressed group messages when
+            // the account opts in. The bot's live `@username` (authoritative,
+            // from `get_me` below) is what the gate matches against.
+            let require_mention = account.require_mention.unwrap_or(false);
+            let bot_username_resolved: Option<String>;
+
             // Verify bot token by getting bot info
             match instance.bot.get_me().await {
                 Ok(me) => {
+                    // Capture the live handle for the mention gate.
+                    bot_username_resolved = Some(me.username().to_string());
                     tracing::info!(
                         account_id = %account.id,
                         username = %me.username(),
@@ -431,17 +440,49 @@ impl Channel for TelegramChannel {
 
             let state_db_for_sticker = self.state_db.clone();
 
+            // Captured by the per-update message handler for group mention gating.
+            let mention_username_cap = bot_username_resolved.clone();
+            let require_mention_cap = require_mention;
+
             let message_handler = Update::filter_message().endpoint(
                 move |bot: Bot, msg: teloxide::types::Message| {
                     let inbound_tx = inbound_tx.clone();
                     let channel_id = channel_id.clone();
                     let access = access_clone.clone();
+                    let mention_username = mention_username_cap.clone();
+                    let require_mention = require_mention_cap;
                     let sticker_pipeline =
                         sticker::StickerPipeline::new(state_db_for_sticker.clone());
                     async move {
                         let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
                         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
                         let chat_id = msg.chat.id.0;
+
+                        // Group mention gate (pure, deterministic I/O filter — R4).
+                        // Drops ambient group chatter that does not address the
+                        // bot when `require_mention` is enabled. DMs bypass this.
+                        if is_group && require_mention {
+                            let bot_uname = mention_username.as_deref();
+                            let reply_to_bot = msg
+                                .reply_to_message()
+                                .and_then(|r| r.from.as_ref())
+                                .map_or(false, |u| {
+                                    u.is_bot
+                                        && match (bot_uname, u.username.as_deref()) {
+                                            (Some(b), Some(ru)) => b.eq_ignore_ascii_case(ru),
+                                            _ => false,
+                                        }
+                                });
+                            let text = msg.text().or_else(|| msg.caption());
+                            if !mention::group_message_addresses_bot(text, reply_to_bot, bot_uname) {
+                                tracing::debug!(
+                                    channel = "telegram",
+                                    chat_id = %chat_id,
+                                    "group message not addressed to bot — skipped (require_mention)"
+                                );
+                                return Ok::<(), std::convert::Infallible>(());
+                            }
+                        }
 
                         match access.check_message(user_id, chat_id, is_group).await {
                             AccessDecision::Allowed => {

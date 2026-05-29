@@ -194,6 +194,12 @@ pub struct TelegramAccountConfig {
     pub dm_policy: Option<DmPolicy>,
     pub group_policy: Option<GroupPolicy>,
     pub send_typing: Option<bool>,
+    /// Only respond to group messages that address the bot — an `@username`
+    /// mention, a `/cmd@username` command, or a reply to one of the bot's own
+    /// messages. Defaults to `false` so existing deployments keep responding to
+    /// every group message; enable it for privacy-mode-disabled bots that
+    /// should stay quiet unless actually addressed. DMs are never gated.
+    pub require_mention: Option<bool>,
     pub allowed_users: Option<Vec<i64>>,
     pub allowed_groups: Option<Vec<i64>>,
     pub streaming: Option<StreamingOptions>,

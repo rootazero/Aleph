@@ -243,6 +243,8 @@ impl TelegramConfig {
                 dm_policy: Some(self.dm_policy.clone()),
                 group_policy: Some(self.group_policy.clone()),
                 send_typing: Some(self.send_typing),
+                // Legacy flat config has no mention gate — inherit the default.
+                require_mention: None,
                 allowed_users: if self.allowed_users.is_empty() {
                     None
                 } else {
