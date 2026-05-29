@@ -221,29 +221,7 @@ impl AlephTool for WorkflowTool {
                 let manifest = WorkflowManifest::from_def(&def);
                 let rendered = workflow::render_workflow_js(&manifest);
                 let message = if write_file {
-                    let dir = workflow::store::workflow_dir();
-                    let path = dir.join(format!("{}.workflow.js", crate::canvas_io::sanitise_name(&name)));
-                    std::fs::create_dir_all(&dir).map_err(|e| {
-                        crate::error::AlephError::config(format!(
-                            "create workflows dir {} failed: {e}",
-                            dir.display()
-                        ))
-                    })?;
-                    let tmp = path.with_extension("js.tmp");
-                    std::fs::write(&tmp, &rendered).map_err(|e| {
-                        crate::error::AlephError::config(format!(
-                            "write {} failed: {e}",
-                            tmp.display()
-                        ))
-                    })?;
-                    std::fs::rename(&tmp, &path).map_err(|e| {
-                        let _ = std::fs::remove_file(&tmp);
-                        crate::error::AlephError::config(format!(
-                            "rename {} → {} failed: {e}",
-                            tmp.display(),
-                            path.display()
-                        ))
-                    })?;
+                    let path = workflow::store::write_text(&name, "workflow.js", &rendered)?;
                     format!("exported workflow '{name}' → {}", path.display())
                 } else {
                     format!("rendered workflow '{name}' ({} bytes)", rendered.len())
@@ -597,49 +575,57 @@ mod tests {
         let store = setup_store().await;
         let t = tool(store, None);
 
-        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::var_os("ALEPH_HOME");
-        // SAFETY: guarded single mutator; restored below.
-        unsafe {
-            std::env::set_var("ALEPH_HOME", tmp.path());
-        }
+        // Capture both call results under the env guard, restore ALEPH_HOME,
+        // then assert — so a failing assertion can't panic before restore and
+        // leak a dead-TempDir env into the next guarded test.
+        let (exported, imported) = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
 
-        workflow::store::save(&linear_def()).expect("save template");
+            workflow::store::save(&linear_def()).expect("save template");
 
-        // export (no write_file) populates `rendered`, not task_ids/definition.
-        let exported = t
-            .call(WorkflowArgs::Export {
-                name: "pipeline".into(),
-                write_file: false,
-            })
-            .await
-            .expect("export");
+            // export (no write_file) populates `rendered`, not task_ids/definition.
+            let exported = t
+                .call(WorkflowArgs::Export {
+                    name: "pipeline".into(),
+                    write_file: false,
+                })
+                .await
+                .expect("export");
+            // import the rendered text back (no save) → definition equals the
+            // core, dropped is empty for the lossless embedded path.
+            let js = exported.rendered.clone().expect("export populates rendered");
+            let imported = t
+                .call(WorkflowArgs::Import {
+                    source: js,
+                    save: false,
+                })
+                .await
+                .expect("import");
+
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            (exported, imported)
+        };
+
         assert_eq!(exported.action, "export");
         let js = exported.rendered.as_ref().expect("export populates rendered");
         assert!(js.contains("export const meta = {"));
         assert!(exported.task_ids.is_none() && exported.definition.is_none());
 
-        // import the rendered text back (no save) → definition equals the core,
-        // dropped is empty for the lossless embedded path.
-        let imported = t
-            .call(WorkflowArgs::Import {
-                source: js.clone(),
-                save: false,
-            })
-            .await
-            .expect("import");
         assert_eq!(imported.action, "import");
         let def = imported.definition.as_ref().expect("import populates definition");
         assert_eq!(def, &linear_def());
         assert_eq!(imported.dropped.as_deref(), Some(&[][..]));
-
-        // SAFETY: same guarded invariant; restore prior value.
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("ALEPH_HOME", v),
-                None => std::env::remove_var("ALEPH_HOME"),
-            }
-        }
     }
 
     #[tokio::test]
@@ -648,33 +634,38 @@ mod tests {
         let store = setup_store().await;
         let t = tool(store, None);
 
-        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::var_os("ALEPH_HOME");
-        // SAFETY: guarded single mutator; restored below.
-        unsafe {
-            std::env::set_var("ALEPH_HOME", tmp.path());
-        }
-
-        let source = "export const meta = { name: 'scanned' }\nawait agent('do the thing')";
-        let imported = t
-            .call(WorkflowArgs::Import {
-                source: source.into(),
-                save: true,
-            })
-            .await
-            .expect("import + save");
-        assert!(imported.message.contains("imported"));
-
-        let listed = t.call(WorkflowArgs::List {}).await.expect("list");
-        assert_eq!(listed.names.as_deref(), Some(&["scanned".to_string()][..]));
-
-        // SAFETY: same guarded invariant; restore prior value.
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("ALEPH_HOME", v),
-                None => std::env::remove_var("ALEPH_HOME"),
+        // Capture both call results under the env guard, restore ALEPH_HOME,
+        // then assert (see sibling roundtrip test for rationale).
+        let (imported, listed) = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
             }
-        }
+
+            let source = "export const meta = { name: 'scanned' }\nawait agent('do the thing')";
+            let imported = t
+                .call(WorkflowArgs::Import {
+                    source: source.into(),
+                    save: true,
+                })
+                .await
+                .expect("import + save");
+            let listed = t.call(WorkflowArgs::List {}).await.expect("list");
+
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            (imported, listed)
+        };
+
+        assert!(imported.message.contains("imported"));
+        assert_eq!(listed.names.as_deref(), Some(&["scanned".to_string()][..]));
     }
 
     #[tokio::test]

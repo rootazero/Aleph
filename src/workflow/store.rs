@@ -79,6 +79,30 @@ pub fn save(def: &WorkflowDef) -> Result<PathBuf> {
     save_at(&workflow_dir(), def)
 }
 
+/// Write rendered text (e.g. an exported `.workflow.js`) into `dir` under
+/// `{sanitised name}.{ext}`, atomically (temp + rename). Returns the path.
+pub fn write_text_at(dir: &Path, name: &str, ext: &str, body: &str) -> Result<PathBuf> {
+    ensure_dir_at(dir)?;
+    let final_path = dir.join(format!("{}.{ext}", sanitise_name(name)));
+    let tmp_path = final_path.with_extension(format!("{ext}.tmp"));
+    fs::write(&tmp_path, body)
+        .map_err(|e| AlephError::config(format!("write {} failed: {e}", tmp_path.display())))?;
+    fs::rename(&tmp_path, &final_path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        AlephError::config(format!(
+            "rename {} → {} failed: {e}",
+            tmp_path.display(),
+            final_path.display()
+        ))
+    })?;
+    Ok(final_path)
+}
+
+/// Convenience: [`write_text_at`] anchored to [`workflow_dir`].
+pub fn write_text(name: &str, ext: &str, body: &str) -> Result<PathBuf> {
+    write_text_at(&workflow_dir(), name, ext, body)
+}
+
 /// Load a workflow by `name` from `dir`. Errors if missing or parse fails.
 pub fn load_at(dir: &Path, name: &str) -> Result<WorkflowDef> {
     let path = resolve_path_at(dir, name);
@@ -224,6 +248,25 @@ mod tests {
         let mut d = sample("../escape");
         d.name = "../escape".into();
         let path = save_at(tmp.path(), &d).unwrap();
+        // Stored file stays a direct child of tmp dir.
+        assert_eq!(path.parent().unwrap(), tmp.path());
+    }
+
+    #[test]
+    fn write_text_at_writes_body_to_expected_path() {
+        let tmp = TempDir::new().unwrap();
+        let path = write_text_at(tmp.path(), "report", "workflow.js", "// body").unwrap();
+        assert_eq!(path, tmp.path().join("report.workflow.js"));
+        assert!(path.exists());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "// body");
+        // No stray temp file left behind.
+        assert!(!tmp.path().join("report.workflow.js.tmp").exists());
+    }
+
+    #[test]
+    fn write_text_at_sanitises_name_against_traversal() {
+        let tmp = TempDir::new().unwrap();
+        let path = write_text_at(tmp.path(), "../escape", "workflow.js", "x").unwrap();
         // Stored file stays a direct child of tmp dir.
         assert_eq!(path.parent().unwrap(), tmp.path());
     }
