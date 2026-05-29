@@ -236,6 +236,20 @@ memory_search(query)
 - Max facts: 10 (configurable via FactRetrievalConfig)
 - Max raw fallback: 10 (configurable via FactRetrievalConfig)
 
+#### Retrieval tools — three stores, no overlap
+
+Aleph exposes three complementary BM25/hybrid retrieval tools. Each searches a
+**different store**, so their descriptions stay sharp to avoid tool-choice confusion:
+
+| Tool | Store | Use when |
+|------|-------|----------|
+| `ctx_search` | Offloaded tool **output** (FTS5 content index) | A tool result shows `[Full output persisted: … Indexed N sections …]` and you need only the relevant slice instead of re-reading the whole build log / big grep / web fetch. |
+| `recall_events` | **This session's** event timeline (`session_events`, BM25) | An earlier tool action, result, or error in *this* session was dropped from context by compaction and you need to recover what already happened. |
+| `session_search` | **Past conversations across sessions** (memory summaries + transcripts) | You need facts or decisions from *other* sessions (long-term memory), not the current run. |
+
+Rule of thumb: `ctx_search` = "what did that tool print?", `recall_events` =
+"what did I already do this session?", `session_search` = "what happened in past sessions?".
+
 ### Meta Tools
 
 | Tool | Description | Args |
