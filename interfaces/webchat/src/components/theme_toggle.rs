@@ -9,6 +9,8 @@
 // boot by `init_theme()` in lib.rs.
 //
 use leptos::prelude::*;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::{JsCast, JsValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ThemeMode {
@@ -138,6 +140,68 @@ fn apply_accent(id: &str) {
     }
 }
 
+/// Convert a click position within the viewport into the CSS percentage
+/// origin (`x%`, `y%`) for the circular theme reveal. Clamped to [0, 100];
+/// a non-positive viewport span degrades to the centre (50%).
+fn reveal_origin(client_x: f64, client_y: f64, vw: f64, vh: f64) -> (String, String) {
+    let pct = |v: f64, span: f64| {
+        if span <= 0.0 {
+            50.0
+        } else {
+            (v / span * 100.0).clamp(0.0, 100.0)
+        }
+    };
+    (
+        format!("{:.2}%", pct(client_x, vw)),
+        format!("{:.2}%", pct(client_y, vh)),
+    )
+}
+
+/// Apply a theme change, animating it with a circular reveal via the
+/// View Transition API when the browser supports it. `client_x/_y` are the
+/// pointer coordinates of the originating click (the reveal origin). When
+/// the API is unavailable the change is applied instantly (the `:root`
+/// colour transition still cross-fades it).
+fn animated_apply(client_x: f64, client_y: f64, apply: impl FnOnce() + 'static) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Some(document) = window.document() else {
+        apply();
+        return;
+    };
+
+    // Feature-detect document.startViewTransition (Safari < 18, Firefox).
+    let start_fn = js_sys::Reflect::get(document.as_ref(), &JsValue::from_str("startViewTransition"))
+        .ok()
+        .filter(JsValue::is_function)
+        .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
+
+    let Some(start_fn) = start_fn else {
+        apply();
+        return;
+    };
+
+    // Mark the click origin + opt this <html> into the scoped reveal CSS.
+    if let Some(html) = document
+        .document_element()
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let vw = window.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let vh = window.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let (x, y) = reveal_origin(client_x, client_y, vw, vh);
+        let style = html.style();
+        let _ = style.set_property("--theme-x", &x);
+        let _ = style.set_property("--theme-y", &y);
+        let _ = html.class_list().add_1("theme-switching");
+    }
+
+    // startViewTransition(cb) snapshots the old DOM, runs cb synchronously to
+    // mutate the theme, then animates from old → new snapshot.
+    let cb = Closure::once_into_js(move || apply());
+    let _ = start_fn.call1(document.as_ref(), &cb);
+}
+
 #[component]
 pub fn ThemeToggle() -> impl IntoView {
     let mode = RwSignal::new(read_mode());
@@ -201,7 +265,12 @@ pub fn ThemeToggle() -> impl IntoView {
                                     let is_active = move || mode.get() == m;
                                     view! {
                                         <button
-                                            on:click=move |_| { apply_mode(m); mode.set(m); }
+                                            on:click=move |ev: web_sys::MouseEvent| {
+                                                let x = ev.client_x() as f64;
+                                                let y = ev.client_y() as f64;
+                                                animated_apply(x, y, move || apply_mode(m));
+                                                mode.set(m);
+                                            }
                                             class=move || {
                                                 let base = "px-2 py-1.5 rounded-lg text-xs font-medium transition-colors";
                                                 if is_active() {
@@ -235,8 +304,11 @@ pub fn ThemeToggle() -> impl IntoView {
                                 };
                                 view! {
                                     <button
-                                        on:click=move |_| {
-                                            apply_accent(&id_for_click);
+                                        on:click=move |ev: web_sys::MouseEvent| {
+                                            let id = id_for_click.clone();
+                                            let x = ev.client_x() as f64;
+                                            let y = ev.client_y() as f64;
+                                            animated_apply(x, y, move || apply_accent(&id));
                                             accent.set(id_for_click.clone());
                                         }
                                         title=*label
@@ -261,5 +333,31 @@ pub fn ThemeToggle() -> impl IntoView {
                 </div>
             </Show>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reveal_origin;
+
+    #[test]
+    fn maps_click_to_viewport_percentage() {
+        let (x, y) = reveal_origin(480.0, 300.0, 1920.0, 1200.0);
+        assert_eq!(x, "25.00%");
+        assert_eq!(y, "25.00%");
+    }
+
+    #[test]
+    fn clamps_out_of_bounds_clicks() {
+        let (x, y) = reveal_origin(-50.0, 5000.0, 1000.0, 1000.0);
+        assert_eq!(x, "0.00%");
+        assert_eq!(y, "100.00%");
+    }
+
+    #[test]
+    fn degrades_to_centre_when_viewport_unknown() {
+        let (x, y) = reveal_origin(123.0, 456.0, 0.0, 0.0);
+        assert_eq!(x, "50.00%");
+        assert_eq!(y, "50.00%");
     }
 }

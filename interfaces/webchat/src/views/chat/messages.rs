@@ -128,7 +128,7 @@ pub(super) fn MessageList() -> impl IntoView {
                             // Thinking indicator
                             <Show when=move || chat.phase.get() == ChatPhase::Thinking>
                                 <div class="flex items-center gap-2 text-text-secondary text-sm px-3 py-2">
-                                    <span class="inline-block w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+                                    <span class="reading-dots"><span></span><span></span><span></span></span>
                                     {move || t_string!(i18n, chat.thinking).to_string()}
                                 </div>
                             </Show>
@@ -231,6 +231,13 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
     } else {
         "max-w-[80%] rounded-2xl px-4 py-3 bg-surface-raised text-text-primary"
     };
+    // While an assistant turn is still streaming, breathe a soft accent ring
+    // around its bubble (box-shadow keeps the layout stable on finalize).
+    let bubble_class = if message.is_streaming && !is_user {
+        format!("{bubble_style} streaming-bubble")
+    } else {
+        bubble_style.to_string()
+    };
 
     // Tool chips are clickable when WorkspaceState is provided: clicking
     // any chip opens the workspace pane in Split mode and dispatches the
@@ -269,11 +276,23 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
                         }
                     };
                     let clickable = workspace.is_some();
+                    // Failed calls get a subtle danger tint so errors read at a
+                    // glance without opening the workspace pane.
+                    let is_failed = tc.status.as_str() == "failed";
                     let chip_class = if clickable {
-                        "flex items-center gap-2 text-xs font-mono cursor-pointer
-                         hover:bg-surface-sunken/60 rounded px-1 py-0.5 transition-colors"
+                        let base = "flex items-center gap-2 text-xs font-mono cursor-pointer \
+                                    hover:bg-surface-sunken/60 rounded px-1 py-0.5 transition-colors";
+                        if is_failed {
+                            format!("{base} bg-danger-subtle border border-danger/20")
+                        } else {
+                            base.to_string()
+                        }
+                    } else if is_failed {
+                        "flex items-center gap-2 text-xs font-mono bg-danger-subtle \
+                         border border-danger/20 rounded px-1 py-0.5"
+                            .to_string()
                     } else {
-                        "flex items-center gap-2 text-xs font-mono"
+                        "flex items-center gap-2 text-xs font-mono".to_string()
                     };
                     view! {
                         <div
@@ -370,7 +389,7 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
 
     view! {
         <div class=format!("{bubble_align} group relative")>
-            <div class=bubble_style>
+            <div class=bubble_class>
                 {tool_calls_view}
 
                 // Message content — Markdown for assistant, plain text for user

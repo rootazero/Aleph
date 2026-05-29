@@ -35,6 +35,8 @@ web-sys = { version = "0.3", features = [
     "DragEvent", "DataTransfer", "Navigator", "Clipboard",
     # graph_canvas rAF visibility pause (async, no forced layout)
     "IntersectionObserver", "IntersectionObserverEntry",
+    # theme_toggle View Transition reveal — set --theme-x/--theme-y origin
+    "CssStyleDeclaration",
 ] }
 console_error_panic_hook = "0.1"
 

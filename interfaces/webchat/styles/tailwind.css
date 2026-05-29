@@ -485,6 +485,71 @@ html.translucent .glass-surface {
 }
 
 /* ============================================================
+   Chat liveness — reading indicator + streaming bubble pulse.
+   Token-driven (accent-aware); the global reduced-motion cap above
+   already neutralises these animations.
+   ============================================================ */
+
+/* Three-dot "reading / thinking" indicator with a staggered bounce. */
+.reading-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.reading-dots > span {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  opacity: 0.5;
+  animation: aleph-reading-dot 1.2s ease-in-out infinite;
+}
+.reading-dots > span:nth-child(2) { animation-delay: 0.15s; }
+.reading-dots > span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes aleph-reading-dot {
+  0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+  40%           { opacity: 1;    transform: translateY(-3px); }
+}
+
+/* Streaming assistant bubble — a soft accent ring breathes while tokens
+   are still arriving. Uses box-shadow (not border) so it never reflows
+   the bubble when the stream finalises. Pairs with the inline caret. */
+.streaming-bubble {
+  animation: aleph-stream-pulse 1.6s ease-in-out infinite;
+}
+@keyframes aleph-stream-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-primary) 0%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px  color-mix(in oklch, var(--color-primary) 40%, transparent),
+      0 0 12px   color-mix(in oklch, var(--color-primary) 18%, transparent);
+  }
+}
+
+/* ============================================================
+   Theme switch — circular reveal via the View Transition API.
+   `theme_toggle.rs` adds `.theme-switching` to <html> and sets
+   --theme-x / --theme-y to the click origin before calling
+   document.startViewTransition(). Browsers without the API fall back
+   to the instant cross-fade (the :root color transition above).
+   ============================================================ */
+html.theme-switching::view-transition-old(root) { animation: none; }
+html.theme-switching::view-transition-new(root) {
+  animation: aleph-theme-reveal 0.42s var(--ease-spring) forwards;
+}
+@keyframes aleph-theme-reveal {
+  from { clip-path: circle(0%   at var(--theme-x, 50%) var(--theme-y, 50%)); }
+  to   { clip-path: circle(150% at var(--theme-x, 50%) var(--theme-y, 50%)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  html.theme-switching::view-transition-new(root),
+  html.theme-switching::view-transition-old(root) { animation: none !important; }
+}
+
+/* ============================================================
    Skeleton primitives — token-driven, accent-neutral.
    Use any of the four utilities to mark a loading placeholder. The
    shimmer animation respects `prefers-reduced-motion` automatically
