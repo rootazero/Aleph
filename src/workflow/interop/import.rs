@@ -61,6 +61,11 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
     let description = scan_meta_field(src, "description").unwrap_or_default();
     let when_to_use = scan_meta_field(src, "whenToUse").unwrap_or_default();
 
+    // Imperative-construct detection must ignore string-literal *contents* so a
+    // prompt like `agent('search for files if (any) exist')` does not
+    // false-positive as a `for` loop / `if` conditional. Scan only the code
+    // skeleton with every string body blanked out (delimiters preserved).
+    let skeleton = strip_string_literals(src);
     let mut dropped = Vec::new();
     for (needle, label) in [
         ("pipeline(", "pipeline(...) — runtime item list not statically known"),
@@ -71,11 +76,11 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
         ("if (", "if conditional"),
         ("if(", "if conditional"),
     ] {
-        if src.contains(needle) {
+        if skeleton.contains(needle) {
             dropped.push(label.to_string());
         }
     }
-    if src.contains("parallel(") {
+    if skeleton.contains("parallel(") {
         dropped.push("parallel(...) grouping approximated as a sequential chain".to_string());
     }
 
@@ -143,6 +148,38 @@ fn read_first_string_literal(s: &str) -> Option<String> {
         out.push(c);
     }
     None
+}
+
+/// Blank out the contents of every string literal (`'`, `"`, `` ` ``) so a
+/// downstream keyword scan sees only the code skeleton, never prompt text.
+/// Quote delimiters and surrounding code are preserved; an escaped quote
+/// inside a literal does not terminate it. UTF-8 safe (iterates `chars`);
+/// an unterminated literal degrades to dropping the trailing bytes.
+fn strip_string_literals(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' | '`' => {
+                out.push(c);
+                while let Some(d) = chars.next() {
+                    if d == '\\' {
+                        // Skip the escaped char so e.g. \" does not close early;
+                        // its body is irrelevant to the skeleton, so drop it.
+                        chars.next();
+                        continue;
+                    }
+                    if d == c {
+                        out.push(d); // keep the closing delimiter
+                        break;
+                    }
+                    // literal body intentionally dropped
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Collect the first string-literal argument of each `agent(` call, in order.
@@ -295,6 +332,42 @@ const r = await pipeline(items, s1, s2)
         let outcome = parse_workflow_js(&js).expect("parse js with */ in prompt");
         assert_eq!(outcome.manifest, original, "embed block stays lossless");
         assert!(outcome.dropped.is_empty());
+    }
+
+    #[test]
+    fn imperative_needles_ignore_prompt_text() {
+        // A prompt that merely *mentions* loop/conditional keywords (and even a
+        // literal `pipeline(`) must NOT be reported as a dropped construct — the
+        // needles only apply to the code skeleton, not string contents.
+        let src = "export const meta = { name: 'wf' }\n\
+                   await agent('search for files if (any) exist; run pipeline(x) while waiting')";
+        let outcome = parse_workflow_js(src).expect("scan bare js");
+        assert!(
+            outcome.dropped.is_empty(),
+            "prompt text must not trip imperative needles, got: {:?}",
+            outcome.dropped
+        );
+        assert_eq!(outcome.manifest.steps.len(), 1);
+    }
+
+    #[test]
+    fn strip_string_literals_blanks_bodies_keeps_skeleton() {
+        // Bodies gone, delimiters + code kept; escaped quote does not close early.
+        assert_eq!(strip_string_literals("for (x) agent('a b')"), "for (x) agent('')");
+        assert_eq!(strip_string_literals(r#"f("a \" b")"#), r#"f("")"#);
+        assert_eq!(strip_string_literals("agent(`tpl text`)"), "agent(``)");
+    }
+
+    #[test]
+    fn real_imperative_constructs_still_detected_after_strip() {
+        // Regression guard: stripping bodies must not blind the skeleton scan to
+        // genuine code-level constructs.
+        let src = "export const meta = { name: 'loopy' }\n\
+                   for (const x of items) { await agent('do thing') }\n\
+                   const r = await pipeline(items, s1, s2)";
+        let outcome = parse_workflow_js(src).expect("scan");
+        assert!(outcome.dropped.iter().any(|d| d.contains("for loop")));
+        assert!(outcome.dropped.iter().any(|d| d.contains("pipeline")));
     }
 
     #[test]

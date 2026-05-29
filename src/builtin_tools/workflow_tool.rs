@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::agents::swarm::tasks::CoordTaskStore;
-use crate::error::Result;
+use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 use crate::workflow::{self, WorkflowDef, WorkflowManifest};
@@ -240,7 +240,20 @@ impl AlephTool for WorkflowTool {
                 debug!(save, "workflow: import");
                 let outcome = workflow::parse_workflow_js(&source)?;
                 let def = outcome.manifest.to_def();
-                def.validate()?;
+                // On validation failure, fold the best-effort scan's `dropped`
+                // diagnostics into the error so the user keeps the context that
+                // the import was lossy (imperative constructs were skipped) —
+                // otherwise `?` would discard `outcome.dropped` silently.
+                if let Err(e) = def.validate() {
+                    if outcome.dropped.is_empty() {
+                        return Err(e);
+                    }
+                    return Err(AlephError::invalid_input(format!(
+                        "{e}; note: import dropped {} imperative construct(s): {}",
+                        outcome.dropped.len(),
+                        outcome.dropped.join("; ")
+                    )));
+                }
                 let message = if save {
                     let path = workflow::store::save(&def)?;
                     format!(
@@ -666,6 +679,30 @@ mod tests {
 
         assert!(imported.message.contains("imported"));
         assert_eq!(listed.names.as_deref(), Some(&["scanned".to_string()][..]));
+    }
+
+    #[tokio::test]
+    async fn import_validate_failure_preserves_dropped_diagnostics() {
+        // A bare scan can yield a structurally-invalid def (here: a whitespace
+        // meta.name) while ALSO dropping imperative constructs. The error must
+        // carry BOTH — the validation cause and the dropped note — so the lossy
+        // import context isn't silently discarded by `?`. Pure parse/validate,
+        // no store or ALEPH_HOME touched (save=false).
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let source = "export const meta = { name: '  ' }\n\
+                      for (const x of items) { await agent('do thing') }";
+        let err = t
+            .call(WorkflowArgs::Import {
+                source: source.into(),
+                save: false,
+            })
+            .await
+            .expect_err("whitespace name must fail validation");
+        let msg = err.to_string();
+        assert!(msg.contains("name must not be empty"), "validation cause: {msg}");
+        assert!(msg.contains("dropped"), "dropped diagnostics preserved: {msg}");
+        assert!(msg.contains("for loop"), "specific dropped construct named: {msg}");
     }
 
     #[tokio::test]
