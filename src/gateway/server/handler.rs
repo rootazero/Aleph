@@ -40,6 +40,7 @@ use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
 use super::{ConnectionState, GatewaySharedState, MAX_AUTH_ATTEMPTS};
+use crate::gateway::security::TokenManager;
 
 /// Shared context for handling a WebSocket connection.
 struct ConnectionContext {
@@ -87,6 +88,11 @@ struct ConnectionContext {
     /// already carry their own token / shared_token / invitation_token
     /// land here.
     bootstrap_shared_token: Option<String>,
+    /// Device-token manager for the per-dispatch revocation re-check. `None`
+    /// disables the check (auth-disabled / legacy wiring). Only consulted for
+    /// connections that authenticated via a device token (i.e. whose
+    /// `ConnectionState.device_token_hash` is `Some`).
+    token_manager: Option<Arc<TokenManager>>,
 }
 
 /// Extract the `aleph_session` cookie value from a request's `Cookie` header.
@@ -307,6 +313,7 @@ pub(super) async fn ws_upgrade_handler(
             idle_timeout_secs: state.idle_timeout_secs,
             require_idempotency_key: state.require_idempotency_key,
             bootstrap_shared_token,
+            token_manager: state.token_manager.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -375,14 +382,50 @@ async fn handle_connection(
                         let response = match request {
                             Ok(ref req) => {
                                 // Check authentication requirement
-                                let (is_first, is_authenticated) = {
+                                let (is_first, is_authenticated, device_token_hash) = {
                                     let conns = ctx.connections.read().await;
                                     let state = conns.get(&conn_id);
                                     (
                                         state.is_none_or(|s| s.first_message),
                                         state.is_some_and(|s| s.authenticated),
+                                        state.and_then(|s| s.device_token_hash.clone()),
                                     )
                                 };
+
+                                // Per-dispatch device-token revocation re-check.
+                                // A connection that authenticated with a device
+                                // token (Case 1) carries its token hash; if that
+                                // token has since been revoked (token rotation or
+                                // device removal), close the connection instead of
+                                // serving further requests. Connections that
+                                // authenticated by any other means carry no hash
+                                // and are exempt, so the local panel
+                                // (shared-token/loopback) is never affected.
+                                // (openclaw #70707)
+                                if is_authenticated {
+                                    if let (Some(tm), Some(hash)) =
+                                        (ctx.token_manager.as_ref(), device_token_hash.as_ref())
+                                    {
+                                        if tm.is_token_hash_revoked(hash) {
+                                            warn!(
+                                                "Connection {} device token revoked, disconnecting",
+                                                conn_id
+                                            );
+                                            let response_str = serde_json::to_string(
+                                                &JsonRpcResponse::error(
+                                                    req.id.clone(),
+                                                    AUTH_REQUIRED,
+                                                    "Device token revoked; please re-authenticate",
+                                                ),
+                                            )
+                                            .unwrap_or_default();
+                                            let _ = write
+                                                .send(WsMessage::Text(response_str.into()))
+                                                .await;
+                                            break;
+                                        }
+                                    }
+                                }
 
                                 // Pairing wizard bootstrap exception:
                                 // a same-machine panel that just got a
@@ -505,6 +548,27 @@ async fn handle_connection(
                                                     state.authenticate(device_id.clone(), permissions);
                                                     state.guest_session_id = guest_session_id.clone();
                                                     state.first_message = false;
+                                                    // Capture the device-token hash ONLY when this
+                                                    // connect authenticated via an existing device
+                                                    // token (Case 1: `params.token` present). Every
+                                                    // other path (shared-token bootstrap, guest,
+                                                    // approved-device issuance) leaves it None and is
+                                                    // exempt from the dispatch-time revocation re-check.
+                                                    // Guest connections never carry a revocable device
+                                                    // token, so skip them explicitly.
+                                                    state.device_token_hash = if guest_session_id.is_some()
+                                                    {
+                                                        None
+                                                    } else {
+                                                        ctx.token_manager.as_ref().and_then(|tm| {
+                                                            req.params
+                                                                .as_ref()
+                                                                .and_then(|p| p.get("token"))
+                                                                .and_then(|t| t.as_str())
+                                                                .and_then(|tok| tok.split_once(':'))
+                                                                .map(|(token, _sig)| tm.token_hash(token))
+                                                        })
+                                                    };
                                                     if let Some(ref session_id) = guest_session_id {
                                                         info!("Connection {} authenticated as guest (session: {})", conn_id, session_id);
                                                     } else {

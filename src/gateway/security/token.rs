@@ -237,6 +237,33 @@ impl TokenManager {
     pub fn secret(&self) -> &[u8; 32] {
         &self.secret
     }
+
+    /// HMAC hash of a raw token, in the same form stored in the token table.
+    ///
+    /// Lets a caller that only holds the raw bearer (e.g. the WebSocket
+    /// dispatch loop, which captures the token at `connect` time) derive the
+    /// lookup key for [`is_token_hash_revoked`] without re-running full
+    /// signature validation on every request.
+    pub fn token_hash(&self, token: &str) -> String {
+        hmac_sign(&self.secret, token)
+    }
+
+    /// Whether the token identified by `token_hash` is no longer valid —
+    /// revoked, or its row removed (e.g. the device was revoked, which also
+    /// revokes its tokens).
+    ///
+    /// `get_token_by_hash` already filters `revoked_at IS NULL`, so `Ok(None)`
+    /// means revoked-or-gone. Returns `false` on a transient store error so a
+    /// DB blip never disconnects a legitimate client — the next dispatch
+    /// re-checks. Expiry is intentionally NOT treated as revocation here
+    /// (mid-session expiry is a separate concern).
+    pub fn is_token_hash_revoked(&self, token_hash: &str) -> bool {
+        match self.store.get_token_by_hash(token_hash) {
+            Ok(Some(_)) => false,
+            Ok(None) => true,
+            Err(_) => false,
+        }
+    }
 }
 
 fn current_timestamp_ms() -> i64 {
@@ -392,5 +419,57 @@ mod tests {
             }
             other => panic!("Unexpected result: {:?}", other),
         }
+    }
+
+    #[test]
+    fn token_hash_then_revocation_check_roundtrip() {
+        let manager = create_test_manager();
+        let signed = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec!["*".into()])
+            .unwrap();
+
+        let hash = manager.token_hash(&signed.token);
+        // Freshly issued → not revoked.
+        assert!(!manager.is_token_hash_revoked(&hash));
+
+        // After revoking this token → revoked.
+        manager.revoke_token(&signed.token_id).unwrap();
+        assert!(manager.is_token_hash_revoked(&hash));
+    }
+
+    #[test]
+    fn revocation_check_true_for_device_token_revocation() {
+        let manager = create_test_manager();
+        let signed = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec![])
+            .unwrap();
+        let hash = manager.token_hash(&signed.token);
+        assert!(!manager.is_token_hash_revoked(&hash));
+
+        // Revoking all the device's tokens (the path taken on device removal)
+        // also flips the hash to revoked.
+        manager.revoke_device_tokens("dev-1").unwrap();
+        assert!(manager.is_token_hash_revoked(&hash));
+    }
+
+    #[test]
+    fn revocation_check_true_for_unknown_hash() {
+        let manager = create_test_manager();
+        assert!(manager.is_token_hash_revoked("deadbeef_not_a_real_hash"));
+    }
+
+    #[test]
+    fn token_hash_is_stable_and_distinct() {
+        let manager = create_test_manager();
+        let a = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec![])
+            .unwrap();
+        // Stable: same token hashes the same.
+        assert_eq!(manager.token_hash(&a.token), manager.token_hash(&a.token));
+        // Distinct tokens hash differently.
+        let b = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec![])
+            .unwrap();
+        assert_ne!(manager.token_hash(&a.token), manager.token_hash(&b.token));
     }
 }

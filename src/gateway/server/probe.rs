@@ -94,6 +94,7 @@ mod tests {
             require_idempotency_key: false,
             session_mgr: None,
             shared_token_mgr: None,
+            token_manager: None,
         })
     }
 
