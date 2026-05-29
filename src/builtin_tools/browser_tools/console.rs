@@ -44,7 +44,7 @@ impl AlephTool for BrowserConsoleTool {
     type Output = BrowserConsoleOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+        match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.console_messages(&tab_id).await {
                 Ok(messages) => {
                     let line_count = messages.lines().count();

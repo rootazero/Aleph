@@ -65,7 +65,7 @@ impl AlephTool for BrowserSnapshotTool {
         // `interactive_only` / `compact` are no-ops now since the CLI controls snapshot shape.
         let max_chars = args.max_chars.unwrap_or(30_000);
 
-        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+        match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.snapshot(&tab_id).await {
                 Ok(snap) => {
                     let raw = snap.snapshot_text;

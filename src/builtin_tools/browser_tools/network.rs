@@ -47,7 +47,7 @@ impl AlephTool for BrowserNetworkTool {
     type Output = BrowserNetworkOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+        match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.network_log(&tab_id).await {
                 Ok(requests) => {
                     let line_count = requests.lines().count();

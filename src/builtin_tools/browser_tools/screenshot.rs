@@ -49,7 +49,7 @@ impl AlephTool for BrowserScreenshotTool {
     type Output = BrowserScreenshotOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+        match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => {
                 let opts = ScreenshotOpts {
                     full_page: args.full_page,

@@ -47,7 +47,7 @@ impl AlephTool for BrowserEvaluateTool {
     type Output = BrowserEvaluateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+        match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.evaluate(&tab_id, &args.script).await {
                 Ok(value) => {
                     // evaluate() returns String; try to parse as JSON, else wrap as JSON string.
