@@ -13,7 +13,7 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{params, Connection, Result as SqliteResult};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{debug, trace};
 
 use crate::gateway::channel::{
@@ -31,6 +31,18 @@ fn apple_timestamp_to_datetime(apple_ts: i64) -> DateTime<Utc> {
         chrono::LocalResult::Single(dt) => dt,
         _ => Utc::now(),
     }
+}
+
+/// Resolve a raw `attachment.filename` value (an absolute path, often with a
+/// literal `~`) to an existing on-disk path. Returns `None` if the file is
+/// missing or the home directory can't be resolved.
+fn resolve_attachment_path(raw: &str) -> Option<PathBuf> {
+    let path = if let Some(stripped) = raw.strip_prefix("~/") {
+        dirs::home_dir()?.join(stripped)
+    } else {
+        PathBuf::from(raw)
+    };
+    path.exists().then_some(path)
 }
 
 /// Raw message data from the database
@@ -78,6 +90,12 @@ pub struct AttachmentInfo {
 pub struct MessagesDb {
     conn: Connection,
     last_message_rowid: i64,
+    /// Whether inbound attachments should be resolved to on-disk paths.
+    include_attachments: bool,
+    /// Maximum attachment size in bytes to resolve a local path for
+    /// (0 = unlimited). Oversized attachments keep their metadata but omit
+    /// the local path so the agent is not forced to load a huge file.
+    max_attachment_size: u64,
 }
 
 impl MessagesDb {
@@ -102,7 +120,28 @@ impl MessagesDb {
         Ok(Self {
             conn,
             last_message_rowid: last_rowid,
+            include_attachments: true,
+            max_attachment_size: 0,
         })
+    }
+
+    /// Configure attachment handling (from `IMessageConfig`).
+    pub fn set_attachment_policy(&mut self, include_attachments: bool, max_attachment_size: u64) {
+        self.include_attachments = include_attachments;
+        self.max_attachment_size = max_attachment_size;
+    }
+
+    /// Override the polling watermark so the next `poll_new_messages` resumes
+    /// from messages with `ROWID > rowid`. Used to recover messages received
+    /// while the daemon was offline (catch-up), restoring from a persisted
+    /// cursor instead of skipping straight to the newest message.
+    pub fn resume_from_rowid(&mut self, rowid: i64) {
+        self.last_message_rowid = rowid;
+    }
+
+    /// The highest message ROWID processed so far (the catch-up watermark).
+    pub fn last_rowid(&self) -> i64 {
+        self.last_message_rowid
     }
 
     /// Poll for new messages since the last poll
@@ -163,8 +202,8 @@ impl MessagesDb {
                 None
             };
 
-            // Get attachments if present
-            let attachments = if raw.cache_has_attachments {
+            // Get attachments if present (and enabled)
+            let attachments = if raw.cache_has_attachments && self.include_attachments {
                 self.get_message_attachments(raw.rowid)?
             } else {
                 vec![]
@@ -189,16 +228,37 @@ impl MessagesDb {
                 text: raw.text.unwrap_or_default(),
                 attachments: attachments
                     .into_iter()
-                    .map(|a| Attachment {
-                        id: a.guid,
-                        mime_type: a
-                            .mime_type
-                            .unwrap_or_else(|| "application/octet-stream".to_string()),
-                        filename: a.filename.or(a.transfer_name),
-                        size: Some(a.total_bytes as u64),
-                        url: None,
-                        path: None, // Would need to construct from filename
-                        data: None,
+                    .map(|a| {
+                        // chat.db stores the absolute on-disk path (often with a
+                        // literal `~`) in `attachment.filename`; `transfer_name`
+                        // is the user-facing basename. Resolve the real path so
+                        // the agent can actually read the file, honoring the
+                        // configured size cap (0 = unlimited).
+                        let within_size = self.max_attachment_size == 0
+                            || (a.total_bytes as u64) <= self.max_attachment_size;
+                        let resolved_path = if within_size {
+                            a.filename.as_deref().and_then(resolve_attachment_path)
+                        } else {
+                            None
+                        };
+                        let display_name = a.transfer_name.clone().or_else(|| {
+                            a.filename.as_ref().and_then(|f| {
+                                Path::new(f)
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                            })
+                        });
+                        Attachment {
+                            id: a.guid,
+                            mime_type: a
+                                .mime_type
+                                .unwrap_or_else(|| "application/octet-stream".to_string()),
+                            filename: display_name,
+                            size: Some(a.total_bytes as u64),
+                            url: None,
+                            path: resolved_path.map(|p| p.to_string_lossy().into_owned()),
+                            data: None,
+                        }
                     })
                     .collect(),
                 timestamp: apple_timestamp_to_datetime(raw.date),
@@ -355,5 +415,37 @@ mod tests {
     fn test_apple_epoch_offset() {
         // 2001-01-01 00:00:00 UTC = 978307200 Unix timestamp
         assert_eq!(APPLE_EPOCH_OFFSET, 978307200);
+    }
+
+    #[test]
+    fn test_resolve_attachment_path_existing() {
+        // An existing file resolves to its absolute path.
+        let mut file = std::env::temp_dir();
+        file.push(format!("aleph_imsg_test_{}.bin", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+
+        let resolved = resolve_attachment_path(&file.to_string_lossy());
+        assert_eq!(resolved.as_deref(), Some(file.as_path()));
+
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn test_resolve_attachment_path_missing() {
+        // A non-existent path resolves to None (don't hand the agent a dead path).
+        assert!(resolve_attachment_path("/nonexistent/aleph/imsg/attachment.heic").is_none());
+    }
+
+    #[test]
+    fn test_resolve_attachment_path_tilde_expands() {
+        // `~/` is expanded to the home dir; missing file still yields None but
+        // the prefix must not survive verbatim.
+        let resolved = resolve_attachment_path("~/this_should_not_exist_aleph_imsg");
+        assert!(resolved.is_none());
+        if let Some(home) = dirs::home_dir() {
+            // Sanity: a path that does exist under home resolves.
+            let resolved_home = resolve_attachment_path(&home.to_string_lossy());
+            assert_eq!(resolved_home.as_deref(), Some(home.as_path()));
+        }
     }
 }

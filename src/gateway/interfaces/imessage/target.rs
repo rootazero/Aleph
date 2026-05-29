@@ -201,21 +201,6 @@ pub fn normalize_phone(phone: &str) -> String {
     }
 }
 
-/// Check if a sender is in the allowlist
-pub fn is_allowed_sender(sender: &str, allowlist: &[String]) -> bool {
-    let normalized = normalize_phone(sender);
-
-    allowlist.iter().any(|allowed| {
-        let allowed_normalized = normalize_phone(allowed);
-        // Check both original and normalized forms
-        sender == allowed
-            || sender.to_lowercase() == allowed.to_lowercase()
-            || (!normalized.is_empty()
-                && !allowed_normalized.is_empty()
-                && normalized == allowed_normalized)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,16 +270,5 @@ mod tests {
         assert_eq!(normalize_phone("(555) 123-4567"), "+15551234567");
         assert_eq!(normalize_phone("1-555-123-4567"), "+15551234567");
         assert_eq!(normalize_phone("+44 20 7946 0958"), "+442079460958");
-    }
-
-    #[test]
-    fn test_is_allowed_sender() {
-        let allowlist = vec!["+15551234567".to_string(), "user@example.com".to_string()];
-
-        assert!(is_allowed_sender("+15551234567", &allowlist));
-        assert!(is_allowed_sender("5551234567", &allowlist)); // Normalized match
-        assert!(is_allowed_sender("user@example.com", &allowlist));
-        assert!(is_allowed_sender("USER@EXAMPLE.COM", &allowlist)); // Case insensitive
-        assert!(!is_allowed_sender("+19998887777", &allowlist));
     }
 }

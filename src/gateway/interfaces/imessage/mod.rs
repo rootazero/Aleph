@@ -42,6 +42,9 @@ use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
 };
+// Reuse the gateway-shared, SQLite-backed monotonic cursor (currently homed in
+// the telegram module) to persist the catch-up watermark across restarts.
+use crate::gateway::interfaces::telegram::offset::OffsetTracker;
 
 /// iMessage channel implementation
 pub struct IMessageChannel {
@@ -52,6 +55,11 @@ pub struct IMessageChannel {
     poll_handle: Option<tokio::task::JoinHandle<()>>,
     channel_state: ChannelState,
     test_mode: bool,
+    /// Persistent catch-up cursor (last processed message ROWID). When wired,
+    /// the daemon resumes from the last persisted ROWID after a restart instead
+    /// of skipping straight to the newest message, recovering messages that
+    /// arrived while it was offline.
+    offset_tracker: Option<Arc<OffsetTracker>>,
 }
 
 impl IMessageChannel {
@@ -92,6 +100,7 @@ impl IMessageChannel {
             poll_handle: None,
             channel_state: ChannelState::new(100),
             test_mode,
+            offset_tracker: None,
         }
     }
 
@@ -99,14 +108,39 @@ impl IMessageChannel {
         Self::with_mode(config, true)
     }
 
+    /// Wire a persistent catch-up cursor so the channel resumes from the last
+    /// processed message ROWID after a restart (recovering offline messages)
+    /// instead of skipping to the newest message.
+    pub fn set_offset_tracker(&mut self, tracker: Arc<OffsetTracker>) {
+        self.offset_tracker = Some(tracker);
+    }
+
     /// Start the message polling loop
     async fn start_polling(&mut self) -> ChannelResult<()> {
         let db_path = self.config.db_path();
 
         // Open database
-        let db = MessagesDb::open(&db_path).map_err(|e| {
+        let mut db = MessagesDb::open(&db_path).map_err(|e| {
             ChannelError::ConfigError(format!("Failed to open Messages database: {}", e))
         })?;
+
+        // Apply attachment handling policy from config.
+        db.set_attachment_policy(
+            self.config.include_attachments,
+            self.config.max_attachment_size,
+        );
+
+        // Catch-up: if a watermark was persisted from a previous run, resume
+        // from it so messages received while offline are recovered. On first
+        // run (no persisted cursor) keep the default of skipping to the newest
+        // message to avoid replaying the entire history.
+        if let Some(ref tracker) = self.offset_tracker {
+            let persisted = tracker.load();
+            if persisted > 0 {
+                info!(rowid = persisted, "iMessage resuming from persisted cursor");
+                db.resume_from_rowid(persisted);
+            }
+        }
 
         {
             let mut db_lock = self.db.lock().await;
@@ -120,24 +154,25 @@ impl IMessageChannel {
         let tx = self.channel_state.sender();
         let running = self.running.clone();
         let poll_interval = Duration::from_millis(self.config.poll_interval_ms);
+        let offset_tracker = self.offset_tracker.clone();
 
         let handle = tokio::spawn(async move {
             info!("iMessage polling started");
 
             while running.load(Ordering::SeqCst) {
-                // Poll for new messages
-                let messages = {
+                // Poll for new messages, capturing the watermark to persist.
+                let (messages, watermark) = {
                     let mut db_lock = db.lock().await;
                     if let Some(ref mut db) = *db_lock {
                         match db.poll_new_messages() {
-                            Ok(msgs) => msgs,
+                            Ok(msgs) => (msgs, db.last_rowid()),
                             Err(e) => {
                                 error!("Failed to poll messages: {}", e);
-                                vec![]
+                                (vec![], db.last_rowid())
                             }
                         }
                     } else {
-                        vec![]
+                        (vec![], 0)
                     }
                 };
 
@@ -147,6 +182,14 @@ impl IMessageChannel {
                     if tx.send(msg).is_err() {
                         warn!("Failed to send message to channel receiver");
                         break;
+                    }
+                }
+
+                // Persist the catch-up watermark so a restart resumes here.
+                // `advance` is monotonic, so a stale value is a no-op.
+                if let Some(ref tracker) = offset_tracker {
+                    if watermark > 0 {
+                        tracker.advance(watermark, "imessage");
                     }
                 }
 

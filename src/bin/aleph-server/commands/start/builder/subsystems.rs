@@ -314,7 +314,13 @@ pub(in crate::commands::start) async fn initialize_channels(
         if inst.channel_type == "imessage" {
             match serde_json::from_value::<IMessageConfig>(inst.config.clone()) {
                 Ok(imessage_config) => {
-                    let imessage_channel = IMessageChannel::new(imessage_config);
+                    let mut imessage_channel = IMessageChannel::new(imessage_config);
+                    // Wire persistent catch-up cursor so a restart recovers
+                    // messages received while the daemon was offline.
+                    if let Some(ref db) = state_db {
+                        let tracker = OffsetTracker::new(db.clone(), inst.id.clone());
+                        imessage_channel.set_offset_tracker(Arc::new(tracker));
+                    }
                     let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
                     if !daemon {
                         println!("Registered channel: {} (iMessage)", channel_id);
@@ -520,6 +526,43 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_coalescer(coalescing_config);
         if !daemon {
             println!("  Inbound router: message coalescing enabled");
+        }
+    }
+
+    // Wire iMessage gating config into the central permission layer.
+    //
+    // The `From<&IMessageConfig> for ChannelConfig` conversion already exists
+    // but was never connected: `register_channel_config` had zero callers, so
+    // `channel_configs` stayed empty and `permission.rs` fell back to allow-all
+    // — silently ignoring the operator's dm_policy / group_policy / allowlist /
+    // require_mention / slash-command admin configuration. This connects it.
+    //
+    // Inbound iMessage messages carry channel_id "imessage" (see imessage/db.rs),
+    // so the gating config is registered under that key.
+    #[cfg(target_os = "macos")]
+    if let Some(ref cfg_arc) = app_config {
+        let cfg = cfg_arc.read().await;
+        for inst in cfg.resolved_channels() {
+            if inst.channel_type != "imessage" {
+                continue;
+            }
+            match serde_json::from_value::<IMessageConfig>(inst.config.clone()) {
+                Ok(imessage_config) => {
+                    let channel_config =
+                        alephcore::gateway::inbound_router::ChannelConfig::from(&imessage_config);
+                    inbound_router.register_channel_config("imessage", channel_config);
+                    if !daemon {
+                        println!("  Inbound router: iMessage gating config registered");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse imessage config '{}' for gating: {}",
+                        inst.id,
+                        e
+                    );
+                }
+            }
         }
     }
 
