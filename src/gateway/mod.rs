@@ -96,6 +96,7 @@ pub mod lane;
 pub mod media;
 pub mod openai_api;
 pub mod rate_limiter;
+pub mod restart_backoff;
 pub mod resume_coordinator;
 pub mod run_event_bus;
 pub mod session_scheduler;

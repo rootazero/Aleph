@@ -12,12 +12,9 @@ use crate::gateway::channel::{
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use chrono::Utc;
-use std::time::Duration;
 
 use super::config::IrcConfig;
-
-const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
-const MAX_BACKOFF: Duration = Duration::from_secs(60);
+use crate::gateway::restart_backoff::RestartBackoff;
 
 /// Maximum length for a single PRIVMSG payload, accounting for the
 /// `:nick!user@host PRIVMSG #channel :` prefix overhead (~80 chars conservative).
@@ -205,7 +202,7 @@ impl IrcMessageOps {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         use tokio::net::TcpStream;
 
-        let mut backoff = INITIAL_BACKOFF;
+        let mut backoff = RestartBackoff::with_defaults();
         let addr = config.addr();
 
         loop {
@@ -218,14 +215,15 @@ impl IrcMessageOps {
             let stream = match TcpStream::connect(&addr).await {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::warn!("IRC connection failed: {e}, retrying in {backoff:?}");
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                    if let Some(delay) = backoff.next_delay() {
+                        tracing::warn!("IRC connection failed: {e}, retrying in {delay:?}");
+                        tokio::time::sleep(delay).await;
+                    }
                     continue;
                 }
             };
 
-            backoff = INITIAL_BACKOFF;
+            backoff.reset();
             tracing::info!("IRC connected to {addr}");
 
             let (reader, mut writer) = stream.into_split();
@@ -240,9 +238,10 @@ impl IrcMessageOps {
             ));
 
             if let Err(e) = writer.write_all(registration.as_bytes()).await {
-                tracing::warn!("IRC registration send failed: {e}");
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(MAX_BACKOFF);
+                if let Some(delay) = backoff.next_delay() {
+                    tracing::warn!("IRC registration send failed: {e}, retrying in {delay:?}");
+                    tokio::time::sleep(delay).await;
+                }
                 continue;
             }
 
@@ -393,9 +392,10 @@ impl IrcMessageOps {
                 break;
             }
 
-            tracing::warn!("IRC: reconnecting in {backoff:?}");
-            tokio::time::sleep(backoff).await;
-            backoff = (backoff * 2).min(MAX_BACKOFF);
+            if let Some(delay) = backoff.next_delay() {
+                tracing::warn!("IRC: reconnecting in {delay:?}");
+                tokio::time::sleep(delay).await;
+            }
         }
 
         tracing::info!("IRC connection loop stopped");

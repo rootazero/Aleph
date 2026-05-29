@@ -94,7 +94,18 @@ pub struct RateLimitConfig {
     pub rpc_heavy: WindowConfig,
     /// If `true`, requests from loopback addresses bypass all limits.
     pub exempt_loopback: bool,
+    /// Hard cap on the number of distinct `(identity, scope)` entries held in
+    /// memory. Bounds heap growth against a flood of unique identities
+    /// (CWE-400 / uncontrolled resource consumption) in between the periodic
+    /// [`prune_stale`](RateLimiter::prune_stale) sweeps. `0` disables the cap.
+    /// See [`RateLimiter::check_and_record`] for the eviction behaviour.
+    pub max_entries: usize,
 }
+
+/// Default ceiling on distinct rate-limit entries (mirrors openclaw's
+/// `CONTROL_PLANE_BUCKET_MAX_ENTRIES`). 10k keys is far above any legitimate
+/// fan-out yet small enough to keep memory bounded under an identity flood.
+pub const DEFAULT_MAX_ENTRIES: usize = 10_000;
 
 impl RateLimitConfig {}
 
@@ -122,6 +133,7 @@ impl Default for RateLimitConfig {
                 lockout_secs: None,
             },
             exempt_loopback: true,
+            max_entries: DEFAULT_MAX_ENTRIES,
         }
     }
 }
@@ -271,6 +283,23 @@ impl RateLimiter {
         let window_dur = Duration::from_secs(wc.window_secs);
         let max = wc.max_requests;
         let now = Instant::now();
+
+        // Bound distinct-key growth (CWE-400). Existing keys are always served;
+        // only a *new* key is gated once the map is full. Before rejecting,
+        // opportunistically reclaim entries idle beyond one window — a flood of
+        // throwaway identities self-heals while legitimate callers persist.
+        if self.config.max_entries > 0
+            && self.windows.len() >= self.config.max_entries
+            && !self.windows.contains_key(key)
+        {
+            self.prune_stale(window_dur);
+            if self.windows.len() >= self.config.max_entries {
+                return Err(RateLimitError::Exceeded {
+                    scope: key.scope.clone(),
+                    retry_after_ms: wc.window_secs * 1000,
+                });
+            }
+        }
 
         let mut entry = self
             .windows
@@ -423,6 +452,7 @@ mod tests {
                 lockout_secs: None,
             },
             exempt_loopback: true,
+            max_entries: DEFAULT_MAX_ENTRIES,
         }
     }
 
@@ -576,6 +606,54 @@ mod tests {
         limiter.prune_stale(Duration::ZERO);
         // The entry should have been removed — next request starts fresh
         assert!(limiter.windows.is_empty(), "stale entries should be pruned");
+    }
+
+    #[test]
+    fn test_max_entries_caps_distinct_keys() {
+        // Cap of 3 distinct entries; non-loopback so the limiter actually tracks.
+        let config = RateLimitConfig {
+            max_entries: 3,
+            ..test_config()
+        };
+        let limiter = RateLimiter::new(config);
+
+        // First 3 unique identities each create an entry and are served.
+        for i in 0..3 {
+            let key = RateLimitKey::new(&format!("10.0.0.{i}"), RateLimitScope::RpcDefault);
+            assert!(limiter.check_and_record(&key).is_ok(), "entry {i} should fit");
+        }
+        assert_eq!(limiter.windows.len(), 3);
+
+        // A 4th *new* identity is rejected (entries are fresh, prune reclaims none).
+        let overflow = RateLimitKey::new("10.0.0.99", RateLimitScope::RpcDefault);
+        assert!(
+            matches!(
+                limiter.check_and_record(&overflow),
+                Err(RateLimitError::Exceeded { .. })
+            ),
+            "new key beyond cap must be rejected"
+        );
+
+        // An *existing* identity is still served even though the map is full.
+        let existing = RateLimitKey::new("10.0.0.0", RateLimitScope::RpcDefault);
+        assert!(
+            limiter.check_and_record(&existing).is_ok(),
+            "existing key must not be gated by the cap"
+        );
+    }
+
+    #[test]
+    fn test_max_entries_zero_disables_cap() {
+        let config = RateLimitConfig {
+            max_entries: 0,
+            ..test_config()
+        };
+        let limiter = RateLimiter::new(config);
+        for i in 0..50 {
+            let key = RateLimitKey::new(&format!("10.1.0.{i}"), RateLimitScope::RpcDefault);
+            assert!(limiter.check_and_record(&key).is_ok());
+        }
+        assert_eq!(limiter.windows.len(), 50);
     }
 
     #[test]

@@ -11,6 +11,7 @@ use crate::gateway::interfaces::feishu::feishu_inbound::{
     map_event_to_inbound, InboundPolicy, MessageDedup, UserProfileCache,
 };
 use crate::gateway::interfaces::feishu::feishu_runtime::state::{AtomicRuntimeState, RuntimeState};
+use crate::gateway::restart_backoff::RestartBackoff;
 
 pub struct WsLoopContext {
     pub initial_ws_url: String,
@@ -28,7 +29,7 @@ pub async fn run_ws_loop(ctx: WsLoopContext) {
     let dedup = Arc::new(StdMutex::new(MessageDedup::new()));
     let policy = InboundPolicy::new(ctx.config.clone(), ctx.bot_open_id.clone());
     let mut shutdown_rx = ctx.shutdown_rx;
-    let mut backoff_secs: u64 = 1;
+    let mut backoff = RestartBackoff::with_defaults();
     let mut current_url = ctx.initial_ws_url;
 
     loop {
@@ -43,7 +44,7 @@ pub async fn run_ws_loop(ctx: WsLoopContext) {
 
         match tokio_tungstenite::connect_async(&current_url).await {
             Ok((ws_stream, _)) => {
-                backoff_secs = 1;
+                backoff.reset();
                 ctx.state.set(RuntimeState::Connected);
                 tracing::info!("Feishu WebSocket connected");
 
@@ -107,14 +108,15 @@ pub async fn run_ws_loop(ctx: WsLoopContext) {
         }
 
         ctx.state.set(RuntimeState::Error);
-        tokio::select! {
-            _ = tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)) => {}
-            _ = shutdown_rx.changed() => {
-                tracing::info!("Feishu WS shutdown during backoff");
-                return;
+        if let Some(delay) = backoff.next_delay() {
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {}
+                _ = shutdown_rx.changed() => {
+                    tracing::info!("Feishu WS shutdown during backoff");
+                    return;
+                }
             }
         }
-        backoff_secs = (backoff_secs * 2).min(60);
 
         if let Ok(new_url) = ctx.api.get_ws_endpoint().await {
             current_url = new_url;
