@@ -4,6 +4,7 @@
 //! stays a thin mount + drop-zone shell. All components here are private to
 //! the chat module (`pub(super)`).
 
+use super::reasoning::ReasoningPanel;
 use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState};
 use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
 use crate::i18n::*;
@@ -121,6 +122,9 @@ pub(super) fn MessageList() -> impl IntoView {
                                     view! { <MessageBubble message=msg /> }
                                 }
                             />
+                            // Reasoning transcript — collapsible chain-of-thought
+                            // for the active/last turn (renders only when present).
+                            <ReasoningPanel />
                             // Thinking indicator
                             <Show when=move || chat.phase.get() == ChatPhase::Thinking>
                                 <div class="flex items-center gap-2 text-text-secondary text-sm px-3 py-2">
