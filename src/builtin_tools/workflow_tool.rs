@@ -19,7 +19,7 @@ use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
-use crate::workflow::{self, WorkflowDef};
+use crate::workflow::{self, WorkflowDef, WorkflowManifest};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "action")]
@@ -44,6 +44,22 @@ pub enum WorkflowArgs {
         #[serde(default)]
         input: String,
     },
+    /// Render a saved template into a Claude-Code-compatible `.workflow.js`.
+    Export {
+        /// Name of the saved template to render.
+        name: String,
+        /// Also write it to `$ALEPH_HOME/workflows/<name>.workflow.js`.
+        #[serde(default)]
+        write_file: bool,
+    },
+    /// Parse a `.workflow.js` (or AWI manifest JSON) into a WorkflowDef.
+    Import {
+        /// Raw `.workflow.js` text or AWI manifest JSON.
+        source: String,
+        /// Also persist the parsed template via the store.
+        #[serde(default)]
+        save: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +75,12 @@ pub struct WorkflowToolOutput {
     /// Populated by `run` — the created coordination-task ids.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_ids: Option<Vec<String>>,
+    /// Populated by `export` — the rendered `.workflow.js` text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rendered: Option<String>,
+    /// Populated by `import` — imperative constructs that could not be mapped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dropped: Option<Vec<String>>,
 }
 
 impl WorkflowToolOutput {
@@ -69,6 +91,8 @@ impl WorkflowToolOutput {
             names: None,
             definition: None,
             task_ids: None,
+            rendered: None,
+            dropped: None,
         }
     }
 }
@@ -102,7 +126,9 @@ impl AlephTool for WorkflowTool {
          declarative multi-step pipeline (each step = one agent + a prompt + \
          dependencies); running it compiles the steps into a coordination-task \
          DAG that executes concurrently where dependencies allow. \
-         Actions: save / list / describe / delete / run. For `run`, create a \
+         Actions: save / list / describe / delete / run / export / import. \
+         `export` renders a template to a Claude-Code-compatible .workflow.js; \
+         `import` parses one back into a template. For `run`, create a \
          team first so each step's agent resolves to a member.";
 
     type Args = WorkflowArgs;
@@ -115,6 +141,8 @@ impl AlephTool for WorkflowTool {
             "workflow(action='describe', name='research-report')".into(),
             "workflow(action='run', name='research-report', team_id='team-42', input='quantum error correction')".into(),
             "workflow(action='delete', name='research-report')".into(),
+            "workflow(action='export', name='research-report')".into(),
+            r#"workflow(action='import', source='export const meta = { name: \"x\" }\nawait agent(\"do it\")', save=true)"#.into(),
         ])
     }
 
@@ -137,6 +165,8 @@ impl AlephTool for WorkflowTool {
                     names: Some(names),
                     definition: None,
                     task_ids: None,
+                    rendered: None,
+                    dropped: None,
                 })
             }
             WorkflowArgs::Describe { name } => {
@@ -147,6 +177,8 @@ impl AlephTool for WorkflowTool {
                     names: None,
                     definition: Some(def),
                     task_ids: None,
+                    rendered: None,
+                    dropped: None,
                 })
             }
             WorkflowArgs::Delete { name } => {
@@ -179,6 +211,81 @@ impl AlephTool for WorkflowTool {
                     names: None,
                     definition: None,
                     task_ids: Some(mat.task_ids),
+                    rendered: None,
+                    dropped: None,
+                })
+            }
+            WorkflowArgs::Export { name, write_file } => {
+                debug!(name = %name, write_file, "workflow: export");
+                let def = workflow::store::load(&name)?;
+                let manifest = WorkflowManifest::from_def(&def);
+                let rendered = workflow::render_workflow_js(&manifest);
+                let message = if write_file {
+                    let dir = workflow::store::workflow_dir();
+                    let path = dir.join(format!("{}.workflow.js", crate::canvas_io::sanitise_name(&name)));
+                    std::fs::create_dir_all(&dir).map_err(|e| {
+                        crate::error::AlephError::config(format!(
+                            "create workflows dir {} failed: {e}",
+                            dir.display()
+                        ))
+                    })?;
+                    let tmp = path.with_extension("js.tmp");
+                    std::fs::write(&tmp, &rendered).map_err(|e| {
+                        crate::error::AlephError::config(format!(
+                            "write {} failed: {e}",
+                            tmp.display()
+                        ))
+                    })?;
+                    std::fs::rename(&tmp, &path).map_err(|e| {
+                        let _ = std::fs::remove_file(&tmp);
+                        crate::error::AlephError::config(format!(
+                            "rename {} → {} failed: {e}",
+                            tmp.display(),
+                            path.display()
+                        ))
+                    })?;
+                    format!("exported workflow '{name}' → {}", path.display())
+                } else {
+                    format!("rendered workflow '{name}' ({} bytes)", rendered.len())
+                };
+                Ok(WorkflowToolOutput {
+                    action: "export".into(),
+                    message,
+                    names: None,
+                    definition: None,
+                    task_ids: None,
+                    rendered: Some(rendered),
+                    dropped: None,
+                })
+            }
+            WorkflowArgs::Import { source, save } => {
+                debug!(save, "workflow: import");
+                let outcome = workflow::parse_workflow_js(&source)?;
+                let def = outcome.manifest.to_def();
+                def.validate()?;
+                let message = if save {
+                    let path = workflow::store::save(&def)?;
+                    format!(
+                        "imported workflow '{}' ({} step(s)) → {}",
+                        def.name,
+                        def.steps.len(),
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "parsed workflow '{}' ({} step(s); not saved)",
+                        def.name,
+                        def.steps.len()
+                    )
+                };
+                Ok(WorkflowToolOutput {
+                    action: "import".into(),
+                    message,
+                    names: None,
+                    definition: Some(def),
+                    task_ids: None,
+                    rendered: None,
+                    dropped: Some(outcome.dropped),
                 })
             }
         }
@@ -452,6 +559,150 @@ mod tests {
             }
         }
         assert!(res.is_err(), "loading a missing template surfaces an error");
+    }
+
+    // --- export / import actions ---
+
+    #[test]
+    fn deserialize_export_defaults_write_file_false() {
+        let args: WorkflowArgs =
+            serde_json::from_value(serde_json::json!({"action":"export","name":"p"}))
+                .expect("deserialise export");
+        match args {
+            WorkflowArgs::Export { name, write_file } => {
+                assert_eq!(name, "p");
+                assert!(!write_file, "write_file defaults to false");
+            }
+            other => panic!("expected Export, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_import_defaults_save_false() {
+        let args: WorkflowArgs =
+            serde_json::from_value(serde_json::json!({"action":"import","source":"x"}))
+                .expect("deserialise import");
+        match args {
+            WorkflowArgs::Import { source, save } => {
+                assert_eq!(source, "x");
+                assert!(!save, "save defaults to false");
+            }
+            other => panic!("expected Import, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn export_renders_without_writing_then_import_roundtrips() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("ALEPH_HOME");
+        // SAFETY: guarded single mutator; restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", tmp.path());
+        }
+
+        workflow::store::save(&linear_def()).expect("save template");
+
+        // export (no write_file) populates `rendered`, not task_ids/definition.
+        let exported = t
+            .call(WorkflowArgs::Export {
+                name: "pipeline".into(),
+                write_file: false,
+            })
+            .await
+            .expect("export");
+        assert_eq!(exported.action, "export");
+        let js = exported.rendered.as_ref().expect("export populates rendered");
+        assert!(js.contains("export const meta = {"));
+        assert!(exported.task_ids.is_none() && exported.definition.is_none());
+
+        // import the rendered text back (no save) → definition equals the core,
+        // dropped is empty for the lossless embedded path.
+        let imported = t
+            .call(WorkflowArgs::Import {
+                source: js.clone(),
+                save: false,
+            })
+            .await
+            .expect("import");
+        assert_eq!(imported.action, "import");
+        let def = imported.definition.as_ref().expect("import populates definition");
+        assert_eq!(def, &linear_def());
+        assert_eq!(imported.dropped.as_deref(), Some(&[][..]));
+
+        // SAFETY: same guarded invariant; restore prior value.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ALEPH_HOME", v),
+                None => std::env::remove_var("ALEPH_HOME"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn import_with_save_persists_template() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("ALEPH_HOME");
+        // SAFETY: guarded single mutator; restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", tmp.path());
+        }
+
+        let source = "export const meta = { name: 'scanned' }\nawait agent('do the thing')";
+        let imported = t
+            .call(WorkflowArgs::Import {
+                source: source.into(),
+                save: true,
+            })
+            .await
+            .expect("import + save");
+        assert!(imported.message.contains("imported"));
+
+        let listed = t.call(WorkflowArgs::List {}).await.expect("list");
+        assert_eq!(listed.names.as_deref(), Some(&["scanned".to_string()][..]));
+
+        // SAFETY: same guarded invariant; restore prior value.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ALEPH_HOME", v),
+                None => std::env::remove_var("ALEPH_HOME"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn export_missing_template_errors() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("ALEPH_HOME");
+        // SAFETY: guarded single mutator; restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", tmp.path());
+        }
+        let res = t
+            .call(WorkflowArgs::Export {
+                name: "ghost".into(),
+                write_file: false,
+            })
+            .await;
+        // SAFETY: same guarded invariant; restore prior value.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ALEPH_HOME", v),
+                None => std::env::remove_var("ALEPH_HOME"),
+            }
+        }
+        assert!(res.is_err(), "exporting a missing template errors");
     }
 
     // --- file-backed lifecycle: save → list → describe → delete ---
