@@ -1,18 +1,18 @@
 use crate::sync_primitives::{Arc, Mutex as StdMutex};
 
-use axum::{body::Bytes, extract::State, http::StatusCode, response::Json, routing::post, Router};
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use axum::{
+    body::Bytes, extract::State, http::HeaderMap, http::StatusCode, response::Json, routing::post,
+    Router,
+};
 
 use crate::gateway::channel::{ChannelId, InboundMessageSender};
 use crate::gateway::interfaces::feishu::api::FeishuApi;
 use crate::gateway::interfaces::feishu::config::FeishuConfig;
+use crate::gateway::interfaces::feishu::feishu_inbound::crypto;
 use crate::gateway::interfaces::feishu::feishu_inbound::events::parse_ws_frame;
 use crate::gateway::interfaces::feishu::feishu_inbound::{
     map_event_to_inbound, InboundPolicy, MessageDedup, UserProfileCache,
 };
-
-type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone)]
 pub struct WebhookState {
@@ -42,28 +42,23 @@ pub async fn run_webhook_server(state: WebhookState) {
 
 async fn handle_webhook(
     State(state): State<WebhookState>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let body_str = String::from_utf8_lossy(&body);
 
-    if let Ok(challenge_json) = serde_json::from_str::<serde_json::Value>(&body_str) {
+    // Resolve the real event payload: when an Encrypt Key is configured Feishu
+    // AES-encrypts the body and signs it, so we must verify + decrypt before parsing.
+    let payload = resolve_payload(&state, &headers, &body_str)?;
+
+    // URL-verification handshake — the challenge may live inside the decrypted payload.
+    if let Ok(challenge_json) = serde_json::from_str::<serde_json::Value>(&payload) {
         if let Some(challenge) = challenge_json.get("challenge").and_then(|v| v.as_str()) {
             return Ok(Json(serde_json::json!({ "challenge": challenge })));
         }
     }
 
-    if let (Some(token), Some(key)) = (
-        state.config.verification_token.as_ref(),
-        state.config.encrypt_key.as_ref(),
-    ) {
-        let sign_payload = format!("{}{}", key, body_str);
-        let mut mac = HmacSha256::new_from_slice(token.as_bytes())
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        mac.update(sign_payload.as_bytes());
-        let _expected = hex::encode(mac.finalize().into_bytes());
-    }
-
-    match parse_ws_frame(&body_str) {
+    match parse_ws_frame(&payload) {
         Ok(Some(event)) => {
             if let Some(inbound) = map_event_to_inbound(
                 &event,
@@ -92,6 +87,52 @@ async fn handle_webhook(
     }
 
     Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+/// Resolve the effective event payload string from a raw webhook body.
+///
+/// If an Encrypt Key is configured and the body carries an `encrypt` field, the
+/// signature (when the signing headers are present) is verified and the payload is
+/// AES-decrypted. Otherwise the raw body is returned unchanged (plaintext mode).
+fn resolve_payload(
+    state: &WebhookState,
+    headers: &HeaderMap,
+    body_str: &str,
+) -> Result<String, StatusCode> {
+    let encrypt_field = serde_json::from_str::<serde_json::Value>(body_str)
+        .ok()
+        .and_then(|v| {
+            v.get("encrypt")
+                .and_then(|e| e.as_str())
+                .map(str::to_string)
+        });
+
+    match (state.config.encrypt_key.as_ref(), encrypt_field) {
+        (Some(key), Some(encrypted)) => {
+            if let (Some(ts), Some(nonce), Some(sig)) = (
+                header_str(headers, "x-lark-request-timestamp"),
+                header_str(headers, "x-lark-request-nonce"),
+                header_str(headers, "x-lark-signature"),
+            ) {
+                if !crypto::verify_signature(key, &ts, &nonce, body_str, &sig) {
+                    tracing::warn!("Feishu webhook signature mismatch; rejecting request");
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+            }
+            crypto::decrypt_event(key, &encrypted).map_err(|e| {
+                tracing::warn!("Feishu webhook decrypt failed: {e}");
+                StatusCode::BAD_REQUEST
+            })
+        }
+        _ => Ok(body_str.to_string()),
+    }
+}
+
+fn header_str(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
 }
 
 #[cfg(test)]

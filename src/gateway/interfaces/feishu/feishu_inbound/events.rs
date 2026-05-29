@@ -490,6 +490,145 @@ pub fn mark_bot_mentions(mentions: &mut [Mention], bot_open_id: &str) {
     }
 }
 
+/// Flatten a Feishu `post` (rich-text) message body into readable plain text.
+///
+/// Handles both the direct `{title, content}` shape and locale-wrapped shapes
+/// (`{post:{...}}` or `{zh_cn:{...}, en_us:{...}}`). Falls back to a placeholder
+/// when the payload is not a recognizable post.
+pub fn parse_post_content(content: &str) -> String {
+    const FALLBACK: &str = "[Rich text message]";
+    let parsed: serde_json::Value = match serde_json::from_str(content) {
+        Ok(v) => v,
+        Err(_) => return FALLBACK.to_string(),
+    };
+    let Some((title, paragraphs)) = resolve_post_payload(&parsed) else {
+        return FALLBACK.to_string();
+    };
+
+    let mut blocks: Vec<String> = Vec::new();
+    let title = title.trim();
+    if !title.is_empty() {
+        blocks.push(title.to_string());
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    for paragraph in paragraphs {
+        if let Some(elements) = paragraph.as_array() {
+            let mut line = String::new();
+            for element in elements {
+                line.push_str(&render_post_element(element));
+            }
+            lines.push(line);
+        }
+    }
+    let body = lines.join("\n");
+    let body = body.trim();
+    if !body.is_empty() {
+        blocks.push(body.to_string());
+    }
+
+    let out = blocks.join("\n\n").trim().to_string();
+    if out.is_empty() {
+        FALLBACK.to_string()
+    } else {
+        out
+    }
+}
+
+/// Resolve a post payload `(title, content_paragraphs)` from any supported shape.
+fn resolve_post_payload(v: &serde_json::Value) -> Option<(String, &Vec<serde_json::Value>)> {
+    if let Some(content) = v.get("content").and_then(|c| c.as_array()) {
+        let title = v
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
+        return Some((title, content));
+    }
+    if let Some(post) = v.get("post") {
+        if let Some(found) = resolve_post_payload(post) {
+            return Some(found);
+        }
+    }
+    if let Some(obj) = v.as_object() {
+        for val in obj.values() {
+            if let Some(content) = val.get("content").and_then(|c| c.as_array()) {
+                let title = val
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                return Some((title, content));
+            }
+        }
+    }
+    None
+}
+
+/// Render a single post element node into plain text.
+fn render_post_element(element: &serde_json::Value) -> String {
+    let tag = element.get("tag").and_then(|t| t.as_str()).unwrap_or("");
+    let field = |key: &str| element.get(key).and_then(|v| v.as_str()).unwrap_or("");
+    match tag {
+        "text" | "md" | "lark_md" => field("text").to_string(),
+        "a" => {
+            let text = field("text");
+            let href = field("href");
+            match (text.is_empty(), href.is_empty()) {
+                (false, false) => format!("{text} ({href})"),
+                (true, false) => href.to_string(),
+                _ => text.to_string(),
+            }
+        }
+        "at" => {
+            let name = [field("user_name"), field("user_id"), field("open_id")]
+                .into_iter()
+                .find(|s| !s.is_empty())
+                .unwrap_or("");
+            if name.is_empty() {
+                String::new()
+            } else {
+                format!("@{name}")
+            }
+        }
+        "img" => "[image]".to_string(),
+        "media" => "[media]".to_string(),
+        "emotion" => field("emoji").to_string(),
+        "code_block" | "pre" => field("text").to_string(),
+        "hr" => "---".to_string(),
+        _ => field("text").to_string(),
+    }
+}
+
+#[cfg(test)]
+mod post_content_tests {
+    use super::parse_post_content;
+
+    #[test]
+    fn direct_post_with_title() {
+        let c = r#"{"title":"Daily","content":[[{"tag":"text","text":"line one"}],[{"tag":"text","text":"line two"}]]}"#;
+        assert_eq!(parse_post_content(c), "Daily\n\nline one\nline two");
+    }
+
+    #[test]
+    fn locale_wrapped_post() {
+        let c = r#"{"zh_cn":{"title":"标题","content":[[{"tag":"text","text":"正文"}]]}}"#;
+        assert_eq!(parse_post_content(c), "标题\n\n正文");
+    }
+
+    #[test]
+    fn renders_links_and_mentions() {
+        let c = r#"{"title":"","content":[[{"tag":"text","text":"see "},{"tag":"a","text":"docs","href":"https://x"},{"tag":"text","text":" and "},{"tag":"at","user_name":"Bob"}]]}"#;
+        assert_eq!(parse_post_content(c), "see docs (https://x) and @Bob");
+    }
+
+    #[test]
+    fn fallback_on_invalid() {
+        assert_eq!(parse_post_content("not json"), "[Rich text message]");
+        assert_eq!(parse_post_content("{}"), "[Rich text message]");
+    }
+}
+
 pub fn parse_merge_forward_content(content: &str) -> String {
     #[derive(Debug, Deserialize)]
     struct MergeForwardItem {
