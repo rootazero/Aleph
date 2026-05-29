@@ -17,8 +17,17 @@
 //!   * `pinned` — opt-out from any future auto lifecycle transitions
 //!
 //! The lifecycle fields are *telemetry only* in this layer. No code here
-//! auto-transitions states; that decision belongs to a future curator
-//! dream stage where an LLM (not a rule engine) makes the call.
+//! auto-transitions states. The transitions are owned by the dream
+//! pipeline and split along the R7 (LLM Sovereignty) boundary:
+//!
+//!   * `Active → Stale`  — deterministic age-driven (system signal
+//!     aggregation, no reasoning). Implemented in
+//!     [`crate::memory::dreaming::stages::SkillLifecycleStage`].
+//!   * `Stale → Archived` / consolidation / merge — reserved for a
+//!     future LLM-driven curator stage that can weigh prefix clusters,
+//!     usage trends, and consolidation candidates.
+//!
+//! Pinned skills (`pinned == true`) are exempt from *both* transitions.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,9 +38,11 @@ use crate::utils::atomic_io::{with_file_lock, write_atomic};
 
 /// Lifecycle state for a skill, mirroring hermes's three-state model.
 ///
-/// `active` is the default for any skill we've seen. `stale` and `archived`
-/// are reserved for a future curator stage; nothing in this module sets them
-/// automatically — they only flip when an LLM-driven stage decides so.
+/// `active` is the default for any skill we've seen. `stale` is set by
+/// the rule-driven [`crate::memory::dreaming::stages::SkillLifecycleStage`]
+/// when usage age crosses `DreamingConfig::skill_stale_after_days`.
+/// `archived` is set only by a future LLM-driven curator stage; nothing
+/// in this module or the lifecycle stage flips a skill to archived.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillState {

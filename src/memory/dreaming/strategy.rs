@@ -28,6 +28,7 @@ impl DreamStrategy {
                 "note_drift",
                 "index_refresher",
                 "note_decay",
+                "skill_lifecycle",
             ],
             Self::Synthesize => vec![
                 "note_lint",
@@ -67,7 +68,8 @@ mod tests {
                 "note_consolidate",
                 "note_drift",
                 "index_refresher",
-                "note_decay"
+                "note_decay",
+                "skill_lifecycle",
             ]
         );
     }

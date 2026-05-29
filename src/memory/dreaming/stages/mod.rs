@@ -10,6 +10,7 @@ pub mod note_lint;
 pub mod note_review;
 pub mod note_synthesis;
 pub mod skill_distill;
+pub mod skill_lifecycle;
 pub mod types;
 
 pub use daily_digest::DailyDigestStage;
@@ -22,6 +23,7 @@ pub use note_lint::NoteLintStage;
 pub use note_review::NoteReviewStage;
 pub use note_synthesis::NoteSynthesisStage;
 pub use skill_distill::SkillDistillStage;
+pub use skill_lifecycle::SkillLifecycleStage;
 
 use async_trait::async_trait;
 

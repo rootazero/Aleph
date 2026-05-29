@@ -118,6 +118,13 @@ pub fn default_skill_distill_max_per_cycle() -> usize {
     3
 }
 
+/// Days of inactivity before a skill auto-transitions from
+/// `SkillState::Active` to `SkillState::Stale`. Mirrors hermes-agent's
+/// `DEFAULT_STALE_AFTER_DAYS = 30` in `agent/curator.py`.
+pub fn default_skill_stale_after_days() -> u32 {
+    30
+}
+
 pub fn default_feedback_distill_max_per_cycle() -> usize {
     3
 }

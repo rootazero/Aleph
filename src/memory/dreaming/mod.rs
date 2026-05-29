@@ -160,6 +160,13 @@ impl DreamPipeline {
                 Box::new(stages::NoteDriftStage),
                 Box::new(stages::IndexRefresherStage),
                 Box::new(stages::NoteDecayStage),
+                // System-level skill aging (rule-based Active→Stale at
+                // `skill_stale_after_days`). The Stale→Archived / merge
+                // decisions live in a future LLM-driven curator stage —
+                // see `SkillLifecycleStage` for the R7 boundary.
+                Box::new(stages::SkillLifecycleStage {
+                    stale_after_days: dreaming_cfg.skill_stale_after_days,
+                }),
             ],
             DreamStrategy::Synthesize => vec![
                 Box::new(stages::NoteLintStage),
@@ -986,7 +993,8 @@ mod tests {
                 "note_consolidate",
                 "note_drift",
                 "index_refresher",
-                "note_decay"
+                "note_decay",
+                "skill_lifecycle",
             ]
         );
     }

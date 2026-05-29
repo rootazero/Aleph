@@ -25,6 +25,13 @@ pub struct DreamingConfig {
     pub synthesis_max_insights: usize,
     #[serde(default = "super::defaults::default_skill_distill_max_per_cycle")]
     pub skill_distill_max_per_cycle: usize,
+    /// Days of inactivity before a skill is mechanically aged from
+    /// `Active` to `Stale` by `SkillLifecycleStage`. Pinned skills are
+    /// exempt. The `Stale → Archived` decision is reserved for a future
+    /// LLM-driven curator stage; this knob only governs the deterministic
+    /// side. Mirrors hermes-agent's `DEFAULT_STALE_AFTER_DAYS = 30`.
+    #[serde(default = "super::defaults::default_skill_stale_after_days")]
+    pub skill_stale_after_days: u32,
     #[serde(default = "super::defaults::default_feedback_distill_max_per_cycle")]
     pub feedback_distill_max_per_cycle: usize,
     #[serde(default = "super::defaults::default_feedback_distill_min_candidates")]
@@ -47,6 +54,7 @@ impl Default for DreamingConfig {
             synthesis_min_cluster_size: super::defaults::default_synthesis_min_cluster_size(),
             synthesis_max_insights: super::defaults::default_synthesis_max_insights(),
             skill_distill_max_per_cycle: super::defaults::default_skill_distill_max_per_cycle(),
+            skill_stale_after_days: super::defaults::default_skill_stale_after_days(),
             feedback_distill_max_per_cycle: super::defaults::default_feedback_distill_max_per_cycle(
             ),
             feedback_distill_min_candidates:

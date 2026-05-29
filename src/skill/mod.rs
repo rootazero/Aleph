@@ -42,7 +42,7 @@ pub use registry::SkillRegistry;
 pub use shared::shared_skill_system;
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
-pub use usage::{UsageStats, UsageStore};
+pub use usage::{SkillState, UsageStats, UsageStore};
 
 use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};
