@@ -24,11 +24,13 @@ use leptos::task::spawn_local;
 
 use crate::api::providers::{CatalogEntry, CatalogView, ModelOverride, ProvidersApi};
 use crate::context::DashboardState;
+use crate::i18n::*;
 use crate::views::chat::state::ChatState;
 
 /// Pill + dropdown for selecting the per-turn chat model.
 #[component]
 pub fn ModelPicker() -> impl IntoView {
+    let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
     let open = RwSignal::new(false);
@@ -89,7 +91,7 @@ pub fn ModelPicker() -> impl IntoView {
                 class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-mono
                        text-text-secondary border border-border
                        hover:bg-surface-sunken hover:text-text-primary transition-colors"
-                title="Pick model for this turn"
+                title=move || t_string!(i18n, model_picker.pick_model_title).to_string()
             >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
                      stroke="currentColor" stroke-width="2"
@@ -137,7 +139,7 @@ pub fn ModelPicker() -> impl IntoView {
                         if loading.get() {
                             view! {
                                 <div class="px-2.5 py-3 text-xs text-text-tertiary text-center">
-                                    "loading catalog…"
+                                    {t!(i18n, model_picker.loading_catalog)}
                                 </div>
                             }.into_any()
                         } else if let Some(err) = load_error.get() {
@@ -149,7 +151,7 @@ pub fn ModelPicker() -> impl IntoView {
                         } else if entries.get().is_empty() {
                             view! {
                                 <div class="px-2.5 py-3 text-xs text-text-tertiary text-center">
-                                    "no configured providers. Add a key in Settings → Providers."
+                                    {t!(i18n, model_picker.no_providers)}
                                 </div>
                             }.into_any()
                         } else {

@@ -12,6 +12,7 @@ use crate::api::system::{LaneOccupancy, SystemApi};
 use crate::api::teams::{TeamSummary, TeamUsageDto, TeamsApi};
 use crate::components::ui::*;
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 
 fn format_thousands(n: u64) -> String {
@@ -33,6 +34,7 @@ fn format_thousands(n: u64) -> String {
 #[component]
 pub fn UsageView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // Lane gauge state — `None` until the first poll completes.
     let lanes = RwSignal::new(None::<Vec<LaneOccupancy>>);
@@ -95,27 +97,27 @@ pub fn UsageView() -> impl IntoView {
     view! {
         <div class="p-8 max-w-7xl mx-auto space-y-10">
             <header>
-                <h2 class="text-3xl font-bold tracking-tight mb-2">"Usage & Saturation"</h2>
+                <h2 class="text-3xl font-bold tracking-tight mb-2">{t!(i18n, usage.header_title)}</h2>
                 <p class="text-text-secondary">
-                    "Live gateway lane occupancy and per-team token usage. Data is read-only — derived from execution traces and lane semaphores."
+                    {t!(i18n, usage.header_description)}
                 </p>
             </header>
 
             // ── Lane gauge ────────────────────────────────────────────────────
             <section class="space-y-4">
-                <h3 class="text-xl font-semibold text-text-secondary px-1">"Gateway Lane Saturation"</h3>
+                <h3 class="text-xl font-semibold text-text-secondary px-1">{t!(i18n, usage.lane_saturation)}</h3>
                 {move || {
                     if !state.is_connected.get() {
                         view! {
                             <Card class="p-6">
-                                <p class="text-sm text-text-tertiary">"Connect to view lane gauges."</p>
+                                <p class="text-sm text-text-tertiary">{t!(i18n, usage.connect_to_view_lanes)}</p>
                             </Card>
                         }.into_any()
                     } else if let Some(rows) = lanes.get() {
                         if rows.is_empty() {
                             view! {
                                 <Card class="p-6">
-                                    <p class="text-sm text-text-tertiary">"No lane data."</p>
+                                    <p class="text-sm text-text-tertiary">{t!(i18n, usage.no_lane_data)}</p>
                                 </Card>
                             }.into_any()
                         } else {
@@ -128,7 +130,7 @@ pub fn UsageView() -> impl IntoView {
                     } else {
                         view! {
                             <Card class="p-6">
-                                <p class="text-sm text-text-tertiary">"Loading lane metrics…"</p>
+                                <p class="text-sm text-text-tertiary">{t!(i18n, usage.loading_lane_metrics)}</p>
                             </Card>
                         }.into_any()
                     }
@@ -139,8 +141,8 @@ pub fn UsageView() -> impl IntoView {
             <section class="space-y-4">
                 <div class="flex items-end justify-between gap-4 flex-wrap">
                     <div>
-                        <h3 class="text-xl font-semibold text-text-secondary px-1">"Per-Team Token Usage"</h3>
-                        <p class="text-xs text-text-tertiary px-1 mt-1">"Aggregated from execution traces. Cost intentionally not computed — multiply by your provider rate card."</p>
+                        <h3 class="text-xl font-semibold text-text-secondary px-1">{t!(i18n, usage.per_team_token_usage)}</h3>
+                        <p class="text-xs text-text-tertiary px-1 mt-1">{t!(i18n, usage.per_team_hint)}</p>
                     </div>
                     <select
                         class="bg-surface-raised border border-border rounded-lg px-3 py-2 text-sm"
@@ -150,7 +152,7 @@ pub fn UsageView() -> impl IntoView {
                         }
                         prop:value=move || selected_team.get().unwrap_or_default()
                     >
-                        <option value="" disabled=true>"Select a team…"</option>
+                        <option value="" disabled=true>{t!(i18n, usage.select_a_team)}</option>
                         {move || teams.get().into_iter().map(|t| {
                             view! {
                                 <option value=t.id.clone()>{t.name}</option>
@@ -161,19 +163,19 @@ pub fn UsageView() -> impl IntoView {
 
                 {move || {
                     if !state.is_connected.get() {
-                        view! { <Card class="p-6"><p class="text-sm text-text-tertiary">"Connect to view usage."</p></Card> }.into_any()
+                        view! { <Card class="p-6"><p class="text-sm text-text-tertiary">{t!(i18n, usage.connect_to_view_usage)}</p></Card> }.into_any()
                     } else if let Some(err) = usage_error.get() {
                         view! {
                             <Card class="p-6">
-                                <p class="text-sm text-danger">{format!("Error: {}", err)}</p>
+                                <p class="text-sm text-danger">{format!("{}{}", t_string!(i18n, usage.error_prefix).to_string(), err)}</p>
                             </Card>
                         }.into_any()
                     } else if let Some(usage) = team_usage.get() {
                         view! { <UsagePanel usage=usage /> }.into_any()
                     } else if selected_team.get().is_some() {
-                        view! { <Card class="p-6"><p class="text-sm text-text-tertiary">"Loading…"</p></Card> }.into_any()
+                        view! { <Card class="p-6"><p class="text-sm text-text-tertiary">{t!(i18n, usage.loading)}</p></Card> }.into_any()
                     } else {
-                        view! { <Card class="p-6"><p class="text-sm text-text-tertiary">"Pick a team to see its token rollup."</p></Card> }.into_any()
+                        view! { <Card class="p-6"><p class="text-sm text-text-tertiary">{t!(i18n, usage.pick_a_team)}</p></Card> }.into_any()
                     }
                 }}
             </section>
@@ -183,6 +185,7 @@ pub fn UsageView() -> impl IntoView {
 
 #[component]
 fn LaneCard(row: LaneOccupancy) -> impl IntoView {
+    let i18n = use_i18n();
     let shared_used = row.shared_total.saturating_sub(row.shared_available);
     let shared_pct = if row.shared_total > 0 {
         (shared_used * 100 / row.shared_total).min(100)
@@ -212,7 +215,7 @@ fn LaneCard(row: LaneOccupancy) -> impl IntoView {
             {move || match desktop_split {
                 Some((dtotal, dused)) => view! {
                     <div class="text-[10px] text-text-tertiary uppercase font-bold tracking-wider mt-2">
-                        {format!("desktop reserve {}/{}", dused, dtotal)}
+                        {format!("{} {}/{}", t_string!(i18n, usage.desktop_reserve).to_string(), dused, dtotal)}
                     </div>
                 }.into_any(),
                 None => view! { <div></div> }.into_any(),
@@ -223,6 +226,7 @@ fn LaneCard(row: LaneOccupancy) -> impl IntoView {
 
 #[component]
 fn UsagePanel(usage: TeamUsageDto) -> impl IntoView {
+    let i18n = use_i18n();
     let total = usage.total.clone();
     let per_agent = usage.per_agent.clone();
     let member_count = usage.member_count;
@@ -237,44 +241,44 @@ fn UsagePanel(usage: TeamUsageDto) -> impl IntoView {
         <Card class="p-6 space-y-6">
             // Top stat row
             <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
-                <StatTile label="Calls" value={format_thousands(total.call_count)} />
-                <StatTile label="Input Tokens" value={format_thousands(total.input_tokens)} />
-                <StatTile label="Output Tokens" value={format_thousands(total.output_tokens)} />
-                <StatTile label="Members" value={format_thousands(member_count)} />
+                <StatTile label={t_string!(i18n, usage.stat_calls).to_string()} value={format_thousands(total.call_count)} />
+                <StatTile label={t_string!(i18n, usage.stat_input_tokens).to_string()} value={format_thousands(total.input_tokens)} />
+                <StatTile label={t_string!(i18n, usage.stat_output_tokens).to_string()} value={format_thousands(total.output_tokens)} />
+                <StatTile label={t_string!(i18n, usage.stat_members).to_string()} value={format_thousands(member_count)} />
             </div>
 
             // Detail breakdown
             <div class="space-y-3">
-                <h4 class="text-sm font-medium text-text-secondary">"Token Breakdown"</h4>
-                <UsageBar label="Input" value=total.input_tokens whole=grand_total color="bg-primary" />
-                <UsageBar label="Output" value=total.output_tokens whole=grand_total color="bg-success" />
-                <UsageBar label="Cache Read" value=total.cache_read_tokens whole=grand_total color="bg-info" />
-                <UsageBar label="Cache Creation" value=total.cache_creation_tokens whole=grand_total color="bg-warning" />
-                <UsageBar label="Reasoning" value=total.reasoning_tokens whole=grand_total color="bg-primary/60" />
+                <h4 class="text-sm font-medium text-text-secondary">{t!(i18n, usage.token_breakdown)}</h4>
+                <UsageBar label={t_string!(i18n, usage.bar_input).to_string()} value=total.input_tokens whole=grand_total color="bg-primary" />
+                <UsageBar label={t_string!(i18n, usage.bar_output).to_string()} value=total.output_tokens whole=grand_total color="bg-success" />
+                <UsageBar label={t_string!(i18n, usage.bar_cache_read).to_string()} value=total.cache_read_tokens whole=grand_total color="bg-info" />
+                <UsageBar label={t_string!(i18n, usage.bar_cache_creation).to_string()} value=total.cache_creation_tokens whole=grand_total color="bg-warning" />
+                <UsageBar label={t_string!(i18n, usage.bar_reasoning).to_string()} value=total.reasoning_tokens whole=grand_total color="bg-primary/60" />
             </div>
 
             // Per-agent rows
             {if per_agent.is_empty() {
                 view! {
                     <div class="text-sm text-text-tertiary border-t border-border pt-4">
-                        "No per-agent rows — team has no recorded provider traces yet."
+                        {t!(i18n, usage.no_per_agent_rows)}
                     </div>
                 }.into_any()
             } else {
                 view! {
                     <div class="border-t border-border pt-4">
-                        <h4 class="text-sm font-medium text-text-secondary mb-3">"Per-Agent Breakdown"</h4>
+                        <h4 class="text-sm font-medium text-text-secondary mb-3">{t!(i18n, usage.per_agent_breakdown)}</h4>
                         <div class="overflow-x-auto">
                             <table class="w-full text-sm">
                                 <thead class="text-[10px] uppercase tracking-wider text-text-tertiary border-b border-border">
                                     <tr>
-                                        <th class="text-left py-2 px-2 font-medium">"Agent"</th>
-                                        <th class="text-right py-2 px-2 font-medium">"Calls"</th>
-                                        <th class="text-right py-2 px-2 font-medium">"In"</th>
-                                        <th class="text-right py-2 px-2 font-medium">"Out"</th>
-                                        <th class="text-right py-2 px-2 font-medium">"Cache R"</th>
-                                        <th class="text-right py-2 px-2 font-medium">"Cache W"</th>
-                                        <th class="text-right py-2 px-2 font-medium">"Reasoning"</th>
+                                        <th class="text-left py-2 px-2 font-medium">{t!(i18n, usage.th_agent)}</th>
+                                        <th class="text-right py-2 px-2 font-medium">{t!(i18n, usage.th_calls)}</th>
+                                        <th class="text-right py-2 px-2 font-medium">{t!(i18n, usage.th_in)}</th>
+                                        <th class="text-right py-2 px-2 font-medium">{t!(i18n, usage.th_out)}</th>
+                                        <th class="text-right py-2 px-2 font-medium">{t!(i18n, usage.th_cache_r)}</th>
+                                        <th class="text-right py-2 px-2 font-medium">{t!(i18n, usage.th_cache_w)}</th>
+                                        <th class="text-right py-2 px-2 font-medium">{t!(i18n, usage.th_reasoning)}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -300,7 +304,7 @@ fn UsagePanel(usage: TeamUsageDto) -> impl IntoView {
 }
 
 #[component]
-fn StatTile(label: &'static str, value: String) -> impl IntoView {
+fn StatTile(label: String, value: String) -> impl IntoView {
     view! {
         <div>
             <div class="text-[10px] uppercase tracking-widest text-text-tertiary font-bold mb-1">{label}</div>
@@ -310,7 +314,7 @@ fn StatTile(label: &'static str, value: String) -> impl IntoView {
 }
 
 #[component]
-fn UsageBar(label: &'static str, value: u64, whole: u64, color: &'static str) -> impl IntoView {
+fn UsageBar(label: String, value: u64, whole: u64, color: &'static str) -> impl IntoView {
     let pct = if whole > 0 {
         ((value as f64 / whole as f64) * 100.0).round() as u32
     } else {

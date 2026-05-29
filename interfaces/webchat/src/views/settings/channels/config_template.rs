@@ -19,6 +19,7 @@ use crate::components::ui::AgentBindingSelector;
 use crate::components::ui::SecretInput;
 use crate::components::ui::TagListInput;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 use super::definitions::{ChannelDefinition, FieldDef, FieldKind};
 
@@ -38,6 +39,7 @@ pub fn ChannelConfigTemplate(
     #[prop(optional)] on_deleted: Option<Callback<()>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // ---- state signals ----
     let field_values = RwSignal::new(serde_json::Map::new());
@@ -148,10 +150,10 @@ pub fn ChannelConfigTemplate(
 
             match state.rpc_call("config.patch", params).await {
                 Ok(_) => {
-                    success.set(Some("Configuration saved successfully.".to_string()));
+                    success.set(Some(t_string!(i18n, channel_config.toast_saved).to_string()));
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to save configuration: {}", e)));
+                    error.set(Some(format!("{}{}", t_string!(i18n, channel_config.toast_save_failed).to_string(), e)));
                 }
             }
             saving.set(false);
@@ -179,11 +181,11 @@ pub fn ChannelConfigTemplate(
             {
                 Ok(_) => {
                     channel_status.set(ChannelStatus::Connected);
-                    success.set(Some("Channel connected.".to_string()));
+                    success.set(Some(t_string!(i18n, channel_config.toast_connected).to_string()));
                 }
                 Err(e) => {
                     channel_status.set(ChannelStatus::Error);
-                    error.set(Some(format!("Failed to connect: {}", e)));
+                    error.set(Some(format!("{}{}", t_string!(i18n, channel_config.toast_connect_failed).to_string(), e)));
                 }
             }
             connecting.set(false);
@@ -206,10 +208,10 @@ pub fn ChannelConfigTemplate(
             {
                 Ok(_) => {
                     channel_status.set(ChannelStatus::Disconnected);
-                    success.set(Some("Channel disconnected.".to_string()));
+                    success.set(Some(t_string!(i18n, channel_config.toast_disconnected).to_string()));
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to disconnect: {}", e)));
+                    error.set(Some(format!("{}{}", t_string!(i18n, channel_config.toast_disconnect_failed).to_string(), e)));
                 }
             }
         });
@@ -233,7 +235,7 @@ pub fn ChannelConfigTemplate(
                     }
                 }
                 Err(e) => {
-                    error.set(Some(format!("Failed to delete instance: {}", e)));
+                    error.set(Some(format!("{}{}", t_string!(i18n, channel_config.toast_delete_failed).to_string(), e)));
                     deleting.set(false);
                 }
             }
@@ -275,7 +277,7 @@ pub fn ChannelConfigTemplate(
                             />
                         </div>
                         <div>
-                            <div class="text-sm font-medium text-text-primary">"Connection Status"</div>
+                            <div class="text-sm font-medium text-text-primary">{t!(i18n, channel_config.connection_status)}</div>
                             <ChannelStatusBadge status=channel_status.into() />
                         </div>
                     </div>
@@ -289,7 +291,7 @@ pub fn ChannelConfigTemplate(
                                             on:click=move |_| on_disconnect()
                                             class="px-3 py-1.5 text-sm border border-danger/30 text-danger rounded-lg hover:bg-danger-subtle transition-colors"
                                         >
-                                            "Disconnect"
+                                            {t!(i18n, channel_config.disconnect)}
                                         </button>
                                     }.into_any()
                                 }
@@ -300,7 +302,7 @@ pub fn ChannelConfigTemplate(
                                             disabled=move || connecting.get()
                                             class="px-3 py-1.5 text-sm bg-primary text-text-inverse rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
                                         >
-                                            {move || if connecting.get() { "Connecting..." } else { "Connect" }}
+                                            {move || if connecting.get() { t_string!(i18n, channel_config.connecting).to_string() } else { t_string!(i18n, channel_config.connect).to_string() }}
                                         </button>
                                     }.into_any()
                                 }
@@ -326,18 +328,18 @@ pub fn ChannelConfigTemplate(
                 if loading.get() {
                     view! {
                         <div class="flex items-center justify-center py-12">
-                            <div class="text-text-tertiary">"Loading configuration..."</div>
+                            <div class="text-text-tertiary">{t!(i18n, channel_config.loading)}</div>
                         </div>
                     }.into_any()
                 } else if fields.is_empty() {
                     view! {
                         <div class="p-4 bg-primary-subtle border border-primary/20 rounded-xl text-sm text-info">
-                            "This channel uses a custom configuration page."
+                            {t!(i18n, channel_config.custom_config_page)}
                         </div>
                     }.into_any()
                 } else {
                     view! {
-                        <SettingsSection title="Configuration".to_string() description=None>
+                        <SettingsSection title=t_string!(i18n, channel_config.config_title).to_string() description=None>
                             {fields
                                 .iter()
                                 .map(|field| render_field(field, field_values))
@@ -356,14 +358,13 @@ pub fn ChannelConfigTemplate(
                     <SaveButton
                         on_click=move || on_save()
                         loading=saving.into()
-                        text="Save Configuration"
                     />
                     <button
                         on:click=move |_| on_delete()
                         disabled=move || deleting.get()
                         class="px-4 py-2 text-sm border border-danger/30 text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors"
                     >
-                        {move || if deleting.get() { "Deleting..." } else { "Delete Instance" }}
+                        {move || if deleting.get() { t_string!(i18n, channel_config.deleting).to_string() } else { t_string!(i18n, channel_config.delete_instance).to_string() }}
                     </button>
                 </div>
                 <a
@@ -372,7 +373,7 @@ pub fn ChannelConfigTemplate(
                     rel="noopener noreferrer"
                     class="text-sm text-text-tertiary hover:text-primary transition-colors inline-flex items-center gap-1"
                 >
-                    "Documentation"
+                    {t!(i18n, channel_config.documentation)}
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                         <polyline points="15 3 21 3 21 9"/>
@@ -606,6 +607,7 @@ fn render_field(
 #[component]
 fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let pairing_code_input = RwSignal::new(String::new());
     let approving = RwSignal::new(false);
@@ -651,7 +653,7 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
     let on_approve = move || {
         let code = pairing_code_input.get().trim().to_uppercase();
         if code.is_empty() {
-            pairing_error.set(Some("Please enter a pairing code.".to_string()));
+            pairing_error.set(Some(t_string!(i18n, channel_config.pairing_enter_code).to_string()));
             return;
         }
         approving.set(true);
@@ -668,12 +670,12 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                 .await
             {
                 Ok(_) => {
-                    pairing_success.set(Some("Sender approved successfully.".to_string()));
+                    pairing_success.set(Some(t_string!(i18n, channel_config.pairing_approved).to_string()));
                     pairing_code_input.set(String::new());
                     refresh_approved.update(|n| *n += 1);
                 }
                 Err(e) => {
-                    pairing_error.set(Some(format!("Failed to approve: {}", e)));
+                    pairing_error.set(Some(format!("{}{}", t_string!(i18n, channel_config.pairing_approve_failed).to_string(), e)));
                 }
             }
             approving.set(false);
@@ -681,16 +683,16 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
     };
 
     view! {
-        <SettingsSection title="Channel Pairing".to_string() description=None>
+        <SettingsSection title=t_string!(i18n, channel_config.pairing_title).to_string() description=None>
             // Approve pairing code input
             <div class="space-y-3">
                 <p class="text-sm text-text-secondary">
-                    "Enter a pairing code to approve a new sender for this channel."
+                    {t!(i18n, channel_config.pairing_intro)}
                 </p>
                 <div class="flex items-center gap-2">
                     <input
                         type="text"
-                        placeholder="e.g. XPL3A7"
+                        placeholder=move || t_string!(i18n, channel_config.pairing_placeholder).to_string()
                         class="flex-1 px-3 py-2 text-sm font-mono tracking-widest bg-surface border border-border rounded-lg focus:outline-none focus:border-primary text-text-primary uppercase"
                         prop:value=move || pairing_code_input.get()
                         on:input=move |ev| pairing_code_input.set(event_target_value(&ev))
@@ -705,7 +707,7 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                         disabled=move || approving.get()
                         class="px-4 py-2 text-sm bg-primary text-text-inverse rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors whitespace-nowrap"
                     >
-                        {move || if approving.get() { "Approving..." } else { "Approve" }}
+                        {move || if approving.get() { t_string!(i18n, channel_config.approving).to_string() } else { t_string!(i18n, channel_config.approve).to_string() }}
                     </button>
                 </div>
 
@@ -724,14 +726,14 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                 if senders.is_empty() {
                     view! {
                         <div class="text-sm text-text-tertiary mt-3">
-                            "No approved senders yet."
+                            {t!(i18n, channel_config.no_approved_senders)}
                         </div>
                     }.into_any()
                 } else {
                     view! {
                         <div class="mt-3 space-y-1">
                             <div class="text-xs text-text-tertiary font-medium uppercase tracking-wider mb-2">
-                                "Approved Senders"
+                                {t!(i18n, channel_config.approved_senders)}
                             </div>
                             {senders.into_iter().map(|s| {
                                 let sender_id = s.sender_id.clone();
@@ -757,7 +759,7 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                                             }
                                             class="text-xs text-danger hover:text-danger-hover transition-colors"
                                         >
-                                            "Revoke"
+                                            {t!(i18n, channel_config.revoke)}
                                         </button>
                                     </div>
                                 }

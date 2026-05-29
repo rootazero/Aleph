@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 // ---------------------------------------------------------------------------
 // Local types matching the JSON shape from `skills.status` RPC
@@ -127,6 +128,7 @@ fn load_skills(
 
 #[component]
 pub fn SkillsView() -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let skills = RwSignal::new(Vec::<SkillStatusEntry>::new());
     let loading = RwSignal::new(true);
@@ -194,7 +196,7 @@ pub fn SkillsView() -> impl IntoView {
                     <div>
                         <h1 class="text-2xl font-semibold text-text-primary mb-1">"Skills"</h1>
                         <p class="text-sm text-text-secondary">
-                            "Manage AI skills and their requirements"
+                            {t!(i18n, skills_page.header_desc)}
                         </p>
                     </div>
                     <div class="flex items-center gap-2">
@@ -202,13 +204,13 @@ pub fn SkillsView() -> impl IntoView {
                             class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                             on:click=move |_| load_skills(state, skills, loading, error)
                         >
-                            "Refresh"
+                            {t!(i18n, skills_page.refresh)}
                         </button>
                         <button
                             class="px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-hover text-sm"
                             on:click=move |_| show_add_dialog.set(true)
                         >
-                            "Add Skill"
+                            {t!(i18n, skills_page.add_skill)}
                         </button>
                     </div>
                 </div>
@@ -444,7 +446,13 @@ fn SkillCard(
     on_select: Callback<String>,
     on_toggle: Callback<(String, bool)>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let status = skill_status(&skill).to_string();
+    let status_label = match status.as_str() {
+        "Ready" => t_string!(i18n, skills_page.status_ready).to_string(),
+        "Needs Setup" => t_string!(i18n, skills_page.status_needs_setup).to_string(),
+        _ => t_string!(i18n, skills_page.status_disabled).to_string(),
+    };
     let enabled = !skill.disabled;
     let skill_id = StoredValue::new(skill.id.clone());
     let skill_id2 = StoredValue::new(skill.id.clone());
@@ -483,7 +491,7 @@ fn SkillCard(
 
             // Status badge
             <span class=badge_class>
-                {status}
+                {status_label}
             </span>
 
             // Toggle switch
@@ -514,6 +522,7 @@ fn SkillDetailDialog(
     on_close: impl Fn() + 'static + Copy + Send,
     on_refresh: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
 
     let skill_id = StoredValue::new(skill.id.clone());
@@ -572,19 +581,19 @@ fn SkillDetailDialog(
                                 {if skill_for_header.disabled {
                                     view! {
                                         <span class="px-2 py-0.5 rounded-full text-xs bg-surface-sunken text-text-tertiary">
-                                            "Disabled"
+                                            {t!(i18n, skills_page.status_disabled)}
                                         </span>
                                     }.into_any()
                                 } else if skill_for_header.eligible {
                                     view! {
                                         <span class="px-2 py-0.5 rounded-full text-xs bg-success-subtle text-success">
-                                            "Eligible"
+                                            {t!(i18n, skills_page.eligible)}
                                         </span>
                                     }.into_any()
                                 } else {
                                     view! {
                                         <span class="px-2 py-0.5 rounded-full text-xs bg-warning-subtle text-warning">
-                                            "Not Eligible"
+                                            {t!(i18n, skills_page.not_eligible)}
                                         </span>
                                     }.into_any()
                                 }}
@@ -614,7 +623,7 @@ fn SkillDetailDialog(
                         view! {
                             <div class="space-y-2">
                                 <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">
-                                    "Requirements"
+                                    {t!(i18n, skills_page.requirements)}
                                 </h3>
                                 {if has_missing {
                                     view! {
@@ -670,7 +679,7 @@ fn SkillDetailDialog(
                                                                     >
                                                                         {move || {
                                                                             if installing_dep.get().is_some() {
-                                                                                "Installing...".to_string()
+                                                                                t_string!(i18n, skills_page.installing).to_string()
                                                                             } else {
                                                                                 opt_label.clone()
                                                                             }
@@ -742,7 +751,7 @@ fn SkillDetailDialog(
                             view! {
                                 <div class="space-y-2">
                                     <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">
-                                        "API Key"
+                                        {t!(i18n, skills_page.api_key)}
                                     </h3>
                                     <div class="space-y-2">
                                         <div class="flex items-center gap-2">
@@ -752,7 +761,7 @@ fn SkillDetailDialog(
                                             {if api_key_set {
                                                 view! {
                                                     <span class="px-2 py-0.5 rounded-full text-xs bg-success-subtle text-success">
-                                                        "Key set"
+                                                        {t!(i18n, skills_page.key_set)}
                                                     </span>
                                                 }.into_any()
                                             } else {
@@ -763,7 +772,7 @@ fn SkillDetailDialog(
                                             <input
                                                 type="password"
                                                 class="flex-1 px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
-                                                placeholder="Enter API key..."
+                                                placeholder=move || t_string!(i18n, skills_page.api_key_placeholder).to_string()
                                                 prop:value=move || api_key_input.get()
                                                 on:input=move |ev| api_key_input.set(event_target_value(&ev))
                                             />
@@ -809,7 +818,7 @@ fn SkillDetailDialog(
                                                     target="_blank"
                                                     class="text-xs text-primary hover:underline"
                                                 >
-                                                    "Get API key →"
+                                                    {t!(i18n, skills_page.get_api_key)}
                                                 </a>
                                             }.into_any()
                                         } else {
@@ -826,7 +835,7 @@ fn SkillDetailDialog(
                     // Settings section
                     <div class="space-y-3">
                         <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">
-                            "Settings"
+                            {t!(i18n, skills_page.settings)}
                         </h3>
 
                         // Enabled toggle
@@ -913,7 +922,7 @@ fn SkillDetailDialog(
                                     <div class="flex items-center gap-2">
                                         <span class="text-text-tertiary w-16">"Homepage"</span>
                                         <a href=hp target="_blank" class="text-primary hover:underline">
-                                            "Open →"
+                                            {t!(i18n, skills_page.open)}
                                         </a>
                                     </div>
                                 }.into_any()
@@ -947,7 +956,7 @@ fn SkillDetailDialog(
                                         });
                                     }
                                 >
-                                    "Remove Skill"
+                                    {t!(i18n, skills_page.remove_skill)}
                                 </button>
                             </div>
                         }.into_any()
@@ -969,6 +978,7 @@ fn AddSkillDialog(
     on_close: impl Fn() + 'static + Copy + Send,
     on_success: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let url = RwSignal::new(String::new());
     let adding = RwSignal::new(false);
@@ -1002,9 +1012,9 @@ fn AddSkillDialog(
     view! {
         <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div class="bg-surface border border-border rounded-lg p-6 max-w-md w-full mx-4">
-                <h2 class="text-lg font-semibold text-text-primary mb-2">"Add Skill"</h2>
+                <h2 class="text-lg font-semibold text-text-primary mb-2">{t!(i18n, skills_page.add_skill)}</h2>
                 <p class="text-sm text-text-secondary mb-4">
-                    "Enter the URL of a skill repository to add it."
+                    {t!(i18n, skills_page.add_skill_help)}
                 </p>
 
                 <div class="space-y-4">
@@ -1013,7 +1023,7 @@ fn AddSkillDialog(
                         <input
                             type="text"
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
-                            placeholder="https://github.com/user/skill"
+                            placeholder=move || t_string!(i18n, skills_page.url_placeholder).to_string()
                             prop:value=move || url.get()
                             on:input=move |ev| url.set(event_target_value(&ev))
                         />
@@ -1031,7 +1041,7 @@ fn AddSkillDialog(
                         class="flex-1 px-4 py-2 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                         on:click=move |_| on_close()
                     >
-                        "Cancel"
+                        {t!(i18n, skills_page.cancel)}
                     </button>
                     <button
                         class="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover text-sm disabled:opacity-50"

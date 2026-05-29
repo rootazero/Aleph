@@ -5,6 +5,7 @@
 
 use crate::api::{BrowserConfig, BrowserConfigApi};
 use crate::context::DashboardState;
+use crate::i18n::*;
 use crate::views::settings::browser_runtime_banner::RuntimeSummaryBanner;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -53,6 +54,7 @@ macro_rules! section_save {
 #[component]
 pub fn BrowserView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let config = RwSignal::new(BrowserConfig {
         default_driver: "managed".to_string(),
@@ -85,9 +87,9 @@ pub fn BrowserView() -> impl IntoView {
     view! {
         <div class="p-6 space-y-6">
             <div>
-                <h1 class="text-2xl font-bold text-text-primary">"Browser"</h1>
+                <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, browser_settings.title)}</h1>
                 <p class="mt-1 text-sm text-text-tertiary">
-                    "Configure browser automation for web browsing tools."
+                    {t!(i18n, browser_settings.description)}
                 </p>
             </div>
 
@@ -97,7 +99,7 @@ pub fn BrowserView() -> impl IntoView {
                 if loading.get() {
                     view! {
                         <div class="flex items-center justify-center py-12">
-                            <div class="text-text-tertiary">"Loading..."</div>
+                            <div class="text-text-tertiary">{t!(i18n, browser_settings.loading)}</div>
                         </div>
                     }.into_any()
                 } else {
@@ -113,7 +115,7 @@ pub fn BrowserView() -> impl IntoView {
                                                     <line x1="12" y1="16" x2="12" y2="12"/>
                                                     <line x1="12" y1="8" x2="12.01" y2="8"/>
                                                 </svg>
-                                                "Gateway unavailable. Settings will load when connected."
+                                                {t!(i18n, browser_settings.gateway_unavailable)}
                                             </div>
                                         }.into_any())
                                     }
@@ -145,13 +147,14 @@ pub fn BrowserView() -> impl IntoView {
 
 #[component]
 fn DefaultModeSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
+    let i18n = use_i18n();
     let (saving, save_error, save_success, save_fn) = section_save!(config);
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-1">"Default Browser Mode"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-1">{t!(i18n, browser_settings.default_mode_title)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Choose the default browser backend when AI tools need web access."
+                {t!(i18n, browser_settings.default_mode_description)}
             </p>
 
             <div class="space-y-3">
@@ -174,8 +177,8 @@ fn DefaultModeSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                         class="mt-1 w-4 h-4 text-primary focus:ring-primary/30"
                     />
                     <div>
-                        <div class="font-medium text-text-primary">"Playwright CLI (Headless)"</div>
-                        <div class="text-sm text-text-tertiary">"Fast, invisible browser powered by @playwright/cli. Best for automated tasks like web scraping and screenshots."</div>
+                        <div class="font-medium text-text-primary">{t!(i18n, browser_settings.mode_playwright_label)}</div>
+                        <div class="text-sm text-text-tertiary">{t!(i18n, browser_settings.mode_playwright_desc)}</div>
                     </div>
                 </label>
 
@@ -198,8 +201,8 @@ fn DefaultModeSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                         class="mt-1 w-4 h-4 text-primary focus:ring-primary/30"
                     />
                     <div>
-                        <div class="font-medium text-text-primary">"Chrome DevTools (Visible)"</div>
-                        <div class="text-sm text-text-tertiary">"Connects to your running Chrome via DevTools Protocol. Access logged-in sessions and cookies."</div>
+                        <div class="font-medium text-text-primary">{t!(i18n, browser_settings.mode_devtools_label)}</div>
+                        <div class="text-sm text-text-tertiary">{t!(i18n, browser_settings.mode_devtools_desc)}</div>
                     </div>
                 </label>
 
@@ -215,19 +218,20 @@ fn DefaultModeSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
 
 #[component]
 fn EngineSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
+    let i18n = use_i18n();
     let (saving, save_error, save_success, save_fn) = section_save!(config);
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-1">"Playwright CLI Settings"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-1">{t!(i18n, browser_settings.engine_title)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Configure playwright-cli behavior (headless, timeouts, session persistence)."
+                {t!(i18n, browser_settings.engine_description)}
             </p>
 
             <div class="space-y-5">
                 // Browser engine dropdown
                 <div>
-                    <label class="block text-sm font-medium text-text-primary mb-2">"Browser Engine"</label>
+                    <label class="block text-sm font-medium text-text-primary mb-2">{t!(i18n, browser_settings.engine_label)}</label>
                     <select
                         on:change=move |ev| {
                             let val = event_target_value(&ev);
@@ -237,19 +241,19 @@ fn EngineSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                         prop:value=move || config.get().browser_engine
                         class="block w-full max-w-xs px-3 py-2 bg-surface border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                     >
-                        <option value="chromium" selected=move || config.get().browser_engine == "chromium">"Chromium (default)"</option>
+                        <option value="chromium" selected=move || config.get().browser_engine == "chromium">{t!(i18n, browser_settings.engine_chromium)}</option>
                         <option value="chrome" selected=move || config.get().browser_engine == "chrome">"Google Chrome"</option>
                         <option value="edge" selected=move || config.get().browser_engine == "edge">"Microsoft Edge"</option>
                         <option value="brave" selected=move || config.get().browser_engine == "brave">"Brave"</option>
                     </select>
-                    <p class="mt-1 text-xs text-text-tertiary">"The browser engine used for headless automation. Chromium is bundled with Playwright."</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, browser_settings.engine_help)}</p>
                 </div>
 
                 // Headless toggle
                 <div class="flex items-center justify-between">
                     <div>
-                        <div class="font-medium text-text-primary">"Headless Mode"</div>
-                        <div class="text-sm text-text-tertiary">"Run without a visible window. Disable to watch browser actions in real time."</div>
+                        <div class="font-medium text-text-primary">{t!(i18n, browser_settings.headless_label)}</div>
+                        <div class="text-sm text-text-tertiary">{t!(i18n, browser_settings.headless_desc)}</div>
                     </div>
                     <button
                         on:click=move |_| {
@@ -278,7 +282,7 @@ fn EngineSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
 
                 // Navigation timeout
                 <div>
-                    <label class="block text-sm font-medium text-text-primary mb-2">"Navigation Timeout (seconds)"</label>
+                    <label class="block text-sm font-medium text-text-primary mb-2">{t!(i18n, browser_settings.nav_timeout_label)}</label>
                     <input
                         type="number"
                         min="5" max="300"
@@ -294,7 +298,7 @@ fn EngineSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
 
                 // Action timeout
                 <div>
-                    <label class="block text-sm font-medium text-text-primary mb-2">"Action Timeout (seconds)"</label>
+                    <label class="block text-sm font-medium text-text-primary mb-2">{t!(i18n, browser_settings.action_timeout_label)}</label>
                     <input
                         type="number"
                         min="1" max="60"
@@ -311,8 +315,8 @@ fn EngineSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                 // Persistent sessions toggle
                 <div class="flex items-center justify-between">
                     <div>
-                        <div class="font-medium text-text-primary">"Persistent Sessions"</div>
-                        <div class="text-sm text-text-tertiary">"Save browser session state to disk (--persistent flag). Preserves cookies and storage across browser restarts."</div>
+                        <div class="font-medium text-text-primary">{t!(i18n, browser_settings.persistent_label)}</div>
+                        <div class="text-sm text-text-tertiary">{t!(i18n, browser_settings.persistent_desc)}</div>
                     </div>
                     <button
                         on:click=move |_| {
@@ -349,13 +353,14 @@ fn EngineSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
 
 #[component]
 fn DevToolsSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
+    let i18n = use_i18n();
     let (saving, save_error, save_success, save_fn) = section_save!(config);
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-1">"Chrome DevTools Settings"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-1">{t!(i18n, browser_settings.devtools_title)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Configure how Chrome DevTools mode connects to a browser."
+                {t!(i18n, browser_settings.devtools_description)}
             </p>
 
             <div class="space-y-3">
@@ -378,8 +383,8 @@ fn DevToolsSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                         class="mt-1 w-4 h-4 text-primary focus:ring-primary/30"
                     />
                     <div>
-                        <div class="font-medium text-text-primary">"Your Chrome"</div>
-                        <div class="text-sm text-text-tertiary">"Connect to your personal Chrome browser. Access all logged-in sessions, cookies, and extensions."</div>
+                        <div class="font-medium text-text-primary">{t!(i18n, browser_settings.profile_user_label)}</div>
+                        <div class="text-sm text-text-tertiary">{t!(i18n, browser_settings.profile_user_desc)}</div>
                     </div>
                 </label>
 
@@ -402,8 +407,8 @@ fn DevToolsSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                         class="mt-1 w-4 h-4 text-primary focus:ring-primary/30"
                     />
                     <div>
-                        <div class="font-medium text-text-primary">"Isolated Instance"</div>
-                        <div class="text-sm text-text-tertiary">"Launch a clean Chrome instance managed by Aleph. No pre-existing sessions or cookies."</div>
+                        <div class="font-medium text-text-primary">{t!(i18n, browser_settings.profile_managed_label)}</div>
+                        <div class="text-sm text-text-tertiary">{t!(i18n, browser_settings.profile_managed_desc)}</div>
                     </div>
                 </label>
 
@@ -419,20 +424,21 @@ fn DevToolsSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
 
 #[component]
 fn SecuritySection(config: RwSignal<BrowserConfig>) -> impl IntoView {
+    let i18n = use_i18n();
     let (saving, save_error, save_success, save_fn) = section_save!(config);
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-1">"Security"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-1">{t!(i18n, browser_settings.security_title)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Network security settings for all browser modes."
+                {t!(i18n, browser_settings.security_description)}
             </p>
 
             <div class="space-y-4">
                 <div class="flex items-center justify-between">
                     <div>
-                        <div class="font-medium text-text-primary">"Block Private Networks"</div>
-                        <div class="text-sm text-text-tertiary">"Prevent access to private/internal addresses (127.0.0.1, 10.x, 192.168.x, etc.)."</div>
+                        <div class="font-medium text-text-primary">{t!(i18n, browser_settings.block_private_label)}</div>
+                        <div class="text-sm text-text-tertiary">{t!(i18n, browser_settings.block_private_desc)}</div>
                     </div>
                     <button
                         on:click=move |_| {
@@ -475,11 +481,12 @@ fn SaveFeedback(
     save_error: RwSignal<Option<String>>,
     save_success: RwSignal<bool>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         {move || {
             if saving.get() {
                 Some(view! {
-                    <div class="text-sm text-text-tertiary">"Saving..."</div>
+                    <div class="text-sm text-text-tertiary">{t!(i18n, browser_settings.saving)}</div>
                 }.into_any())
             } else if let Some(e) = save_error.get() {
                 Some(view! {
@@ -490,7 +497,7 @@ fn SaveFeedback(
             } else if save_success.get() {
                 Some(view! {
                     <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
-                        "Saved."
+                        {t!(i18n, browser_settings.saved)}
                     </div>
                 }.into_any())
             } else {

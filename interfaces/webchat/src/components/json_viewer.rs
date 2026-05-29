@@ -27,6 +27,8 @@ use serde_json::Value;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
+use crate::i18n::*;
+
 /// Max characters of a string preview before the "expand" toggle appears.
 /// 160 keeps a single line readable on a 340 px panel without wrap.
 const STRING_PREVIEW_LIMIT: usize = 160;
@@ -256,6 +258,7 @@ fn PrimitiveString(text: String) -> impl IntoView {
 /// security context revoked permission). No `expect_throw`.
 #[component]
 fn CopyButton(text: String) -> impl IntoView {
+    let i18n = use_i18n();
     let copied = RwSignal::new(false);
     let to_copy = text;
     let on_click = move |ev: web_sys::MouseEvent| {
@@ -284,7 +287,7 @@ fn CopyButton(text: String) -> impl IntoView {
         <button
             on:click=on_click
             class="opacity-0 group-hover/json:opacity-60 hover:opacity-100 text-text-tertiary hover:text-text-primary text-[10px] transition-opacity ml-1"
-            title="Copy"
+            title=move || t_string!(i18n, json_viewer.copy).to_string()
         >
             {move || if copied.get() { "✓" } else { "⎘" }}
         </button>

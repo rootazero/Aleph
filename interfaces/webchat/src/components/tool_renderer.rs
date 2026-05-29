@@ -9,6 +9,7 @@
 //! New renderers register at app boot. The registry is provided via
 //! Leptos context so any future view can dispatch the same way.
 
+use crate::i18n::*;
 use crate::views::chat::state::ToolCallEntry;
 use leptos::prelude::*;
 
@@ -70,9 +71,10 @@ impl ToolRendererRegistry {
         // Defense in depth — registry is built with a fallback, but if a
         // caller built one without it, surface an explicit empty state
         // instead of panicking.
+        let i18n = use_i18n();
         view! {
             <div class="text-xs text-text-tertiary italic">
-                "No renderer matched (tool: " {entry.tool_name.clone()} ")"
+                {t!(i18n, tool_renderer.no_renderer_prefix)} {entry.tool_name.clone()} ")"
             </div>
         }
         .into_any()

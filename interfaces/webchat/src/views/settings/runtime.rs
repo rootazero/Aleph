@@ -2,12 +2,14 @@
 
 use crate::api::runtimes::{RuntimeInfo, RuntimeStatus, RuntimesApi};
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 #[component]
 pub fn RuntimeView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let runtimes = RwSignal::new(Vec::<RuntimeInfo>::new());
     let loading = RwSignal::new(true);
     let error_msg = RwSignal::new(Option::<String>::None);
@@ -88,10 +90,9 @@ pub fn RuntimeView() -> impl IntoView {
     view! {
         <div class="p-6 space-y-6">
             <div>
-                <h1 class="text-2xl font-bold text-text-primary">"Runtime"</h1>
+                <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, runtime_deps.title)}</h1>
                 <p class="mt-1 text-sm text-text-tertiary">
-                    "Bootstrap runtime dependencies that power browser automation, \
-                     Python execution, and skills."
+                    {t!(i18n, runtime_deps.description)}
                 </p>
             </div>
 
@@ -100,7 +101,7 @@ pub fn RuntimeView() -> impl IntoView {
                 if is_unavailable {
                     view! {
                         <div class="p-3 bg-info-subtle border border-info/20 rounded-lg text-info text-sm">
-                            "Gateway unavailable. Runtimes will load when connected."
+                            {t!(i18n, runtime_deps.gateway_unavailable)}
                         </div>
                     }.into_any()
                 } else {
@@ -116,7 +117,7 @@ pub fn RuntimeView() -> impl IntoView {
                 if loading.get() {
                     view! {
                         <div class="flex items-center justify-center py-12">
-                            <div class="text-text-tertiary">"Loading..."</div>
+                            <div class="text-text-tertiary">{t!(i18n, runtime_deps.loading)}</div>
                         </div>
                     }.into_any()
                 } else {
@@ -137,7 +138,7 @@ pub fn RuntimeView() -> impl IntoView {
                                            font-medium disabled:opacity-50 hover:bg-primary/90 \
                                            transition-colors"
                                 >
-                                    "Install missing"
+                                    {t!(i18n, runtime_deps.install_missing)}
                                 </button>
                                 <button
                                     on:click=do_refresh.clone()
@@ -147,7 +148,7 @@ pub fn RuntimeView() -> impl IntoView {
                                            disabled:opacity-50 hover:bg-surface-hover \
                                            transition-colors"
                                 >
-                                    "Refresh"
+                                    {t!(i18n, runtime_deps.refresh)}
                                 </button>
                             </div>
                         </div>
@@ -156,7 +157,7 @@ pub fn RuntimeView() -> impl IntoView {
             }}
 
             <div class="bg-surface-raised rounded-lg border border-border p-4">
-                <h2 class="text-sm font-semibold text-text-primary mb-2">"Install log"</h2>
+                <h2 class="text-sm font-semibold text-text-primary mb-2">{t!(i18n, runtime_deps.install_log)}</h2>
                 <pre class="text-xs text-text-secondary whitespace-pre-wrap max-h-48 \
                             overflow-y-auto font-mono">
                     {move || {

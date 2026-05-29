@@ -3,11 +3,14 @@
 //! pair reads as a single chrome cluster; placement is owned by
 //! `views/chat/view.rs` (this component just renders the affordance).
 
+use crate::i18n::*;
 use crate::state::layout::{LayoutMode, WorkspaceState};
 use leptos::prelude::*;
 
 #[component]
 pub fn LayoutToggle() -> impl IntoView {
+    let i18n = use_i18n();
+
     // Allow the toggle to render gracefully when WorkspaceState was not
     // provided (e.g. in storybook-style component tests).
     let Some(workspace) = use_context::<WorkspaceState>() else {
@@ -15,8 +18,8 @@ pub fn LayoutToggle() -> impl IntoView {
     };
 
     let label = move || match workspace.mode.get() {
-        LayoutMode::ChatOnly => "Open workspace pane",
-        LayoutMode::Split => "Close workspace pane",
+        LayoutMode::ChatOnly => t_string!(i18n, layout_toggle.open_pane).to_string(),
+        LayoutMode::Split => t_string!(i18n, layout_toggle.close_pane).to_string(),
     };
     let icon_class = move || match workspace.mode.get() {
         LayoutMode::ChatOnly => "",

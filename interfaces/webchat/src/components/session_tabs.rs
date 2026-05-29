@@ -20,6 +20,7 @@
 use leptos::ev::keydown;
 use leptos::prelude::*;
 
+use crate::i18n::*;
 use crate::state::sessions::SessionMap;
 use crate::views::chat::state::ChatState;
 
@@ -47,6 +48,7 @@ pub fn SessionTabs() -> impl IntoView {
 /// Single tab pill — label + close button.
 #[component]
 fn Tab(agent_id: String) -> impl IntoView {
+    let i18n = use_i18n();
     let sessions = expect_context::<SessionMap>();
     let chat = expect_context::<ChatState>();
 
@@ -85,7 +87,7 @@ fn Tab(agent_id: String) -> impl IntoView {
                 type="button"
                 class="opacity-50 hover:opacity-100 px-1 rounded
                        hover:bg-danger/20 hover:text-danger leading-none"
-                title="Close tab (⌘W)"
+                title=move || t_string!(i18n, session_tabs.close_tab).to_string()
                 on:click={
                     let aid = aid_for_close.clone();
                     move |ev: web_sys::MouseEvent| {

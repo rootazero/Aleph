@@ -5,6 +5,7 @@
 
 use crate::api::cron::{CronApi, CronJobInfo, JobRunInfo};
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use std::collections::HashMap;
 
@@ -15,6 +16,7 @@ const MAX_VISIBLE_JOBS: usize = 8;
 /// success/fail history sparkline (newest on the right).
 #[component]
 pub fn CronSparklines() -> impl IntoView {
+    let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let jobs = RwSignal::new(Vec::<CronJobInfo>::new());
     let runs_by_job: RwSignal<HashMap<String, Vec<JobRunInfo>>> = RwSignal::new(HashMap::new());
@@ -66,7 +68,7 @@ pub fn CronSparklines() -> impl IntoView {
                     if !state.is_connected.get() {
                         return view! {
                             <p class="text-text-tertiary text-sm py-4 text-center">
-                                "Gateway disconnected"
+                                {t!(i18n, dashboard_cron.gateway_disconnected)}
                             </p>
                         }.into_any();
                     }
@@ -84,7 +86,7 @@ pub fn CronSparklines() -> impl IntoView {
                     if list.is_empty() {
                         return view! {
                             <p class="text-text-tertiary text-sm py-4 text-center">
-                                "No scheduled jobs configured. Create one in Dashboard \u{2192} Scheduled Tasks."
+                                {t!(i18n, dashboard_cron.no_jobs)}
                             </p>
                         }.into_any();
                     }
@@ -104,6 +106,7 @@ pub fn CronSparklines() -> impl IntoView {
 
 #[component]
 fn SparklineRow(job: CronJobInfo, runs: Vec<JobRunInfo>) -> impl IntoView {
+    let i18n = use_i18n();
     // Newest at the right edge. `runs` is newest-first from cron.runs.
     let mut cells: Vec<Option<JobRunInfo>> = vec![None; SPARK_CELLS];
     for (idx, run) in runs.into_iter().enumerate().take(SPARK_CELLS) {
@@ -131,7 +134,7 @@ fn SparklineRow(job: CronJobInfo, runs: Vec<JobRunInfo>) -> impl IntoView {
                 {cells.into_iter().map(render_cell).collect_view()}
             </div>
             {(consec_errs > 0).then(|| view! {
-                <span class="text-[10px] font-mono text-danger flex-shrink-0" title="Consecutive failures">
+                <span class="text-[10px] font-mono text-danger flex-shrink-0" title=move || t_string!(i18n, dashboard_cron.consecutive_failures).to_string()>
                     {format!("\u{00d7} {}", consec_errs)}
                 </span>
             })}

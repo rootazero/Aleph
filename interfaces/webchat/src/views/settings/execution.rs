@@ -1,6 +1,7 @@
 //! Execution engine settings page
 
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,7 @@ fn format_duration(secs: u64) -> String {
 #[component]
 pub fn ExecutionView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let config = RwSignal::new(ExecutionConfig::default());
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
@@ -94,20 +96,19 @@ pub fn ExecutionView() -> impl IntoView {
 
     view! {
         <div class="p-8 max-w-5xl mx-auto">
-            <h1 class="text-2xl font-bold mb-6 text-text-primary">"Execution"</h1>
+            <h1 class="text-2xl font-bold mb-6 text-text-primary">{t!(i18n, execution_settings.title)}</h1>
 
             <Show when=move || loading.get()>
-                <p class="text-text-secondary">"Loading..."</p>
+                <p class="text-text-secondary">{t!(i18n, execution_settings.loading)}</p>
             </Show>
 
             <Show when=move || !loading.get()>
                 <div class="space-y-6">
                     // Default Timeout
                     <div class="bg-surface-raised rounded-lg border border-border p-6">
-                        <h2 class="text-lg font-semibold text-text-primary mb-1">"Default Agent Timeout"</h2>
+                        <h2 class="text-lg font-semibold text-text-primary mb-1">{t!(i18n, execution_settings.default_timeout_title)}</h2>
                         <p class="text-sm text-text-secondary mb-4">
-                            "Maximum time an agent run can execute before being terminated. "
-                            "Individual agents can override this value."
+                            {t!(i18n, execution_settings.default_timeout_description)}
                         </p>
                         <div class="flex items-center gap-4">
                             <input
@@ -122,7 +123,7 @@ pub fn ExecutionView() -> impl IntoView {
                                 }
                             />
                             <span class="text-sm text-text-secondary">
-                                "seconds ("
+                                {t!(i18n, execution_settings.seconds_prefix)}
                                 {move || format_duration(config.get().default_timeout_secs)}
                                 ")"
                             </span>
@@ -131,9 +132,9 @@ pub fn ExecutionView() -> impl IntoView {
 
                     // Max Iterations
                     <div class="bg-surface-raised rounded-lg border border-border p-6">
-                        <h2 class="text-lg font-semibold text-text-primary mb-1">"Max Iterations"</h2>
+                        <h2 class="text-lg font-semibold text-text-primary mb-1">{t!(i18n, execution_settings.max_iterations_title)}</h2>
                         <p class="text-sm text-text-secondary mb-4">
-                            "Maximum number of think-act loop iterations per agent run."
+                            {t!(i18n, execution_settings.max_iterations_description)}
                         </p>
                         <input
                             type="number"
@@ -161,7 +162,11 @@ pub fn ExecutionView() -> impl IntoView {
                         disabled=move || saving.get()
                         on:click=save
                     >
-                        {move || if saving.get() { "Saving..." } else { "Save" }}
+                        {move || if saving.get() {
+                            t_string!(i18n, execution_settings.saving).to_string()
+                        } else {
+                            t_string!(i18n, execution_settings.save).to_string()
+                        }}
                     </button>
                 </div>
             </Show>
