@@ -4,13 +4,23 @@ use std::collections::HashMap;
 
 use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
-use crate::providers::anthropic::{ContentBlock, ImageSource, Message, MessageContent};
+use crate::providers::anthropic::{
+    ContentBlock, ImageSource, Message, MessageContent, SystemBlock, ThinkingBlock,
+};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::protocols::anthropic::provider_policy::AnthropicCapabilities;
 use crate::sync_primitives::{Arc, RwLock};
 use reqwest::Client;
 
-use super::{sanitize_anthropic_tool_name, AnthropicProtocol};
+use super::{sanitize_anthropic_tool_name, AnthropicProtocol, CLAUDE_CODE_IDENTITY};
+
+/// Minimum output budget reserved when extended thinking is enabled.
+///
+/// Anthropic rejects (HTTP 400) any request where `max_tokens <=
+/// thinking.budget_tokens` — the budget is carved *out of* `max_tokens`, so at
+/// least some room must remain for the visible answer. Mirrors openclaw
+/// `adjustMaxTokensForThinking` (`minOutputTokens = 1024`).
+const MIN_OUTPUT_TOKENS_WITH_THINKING: u32 = 1024;
 impl AnthropicProtocol {
     /// Create a new Anthropic protocol adapter
     pub fn new(client: Client) -> Self {
@@ -426,6 +436,55 @@ impl AnthropicProtocol {
                     Some("max")
                 }
             }
+        }
+    }
+
+    /// Prepend the mandatory Claude Code identity block to an OAuth request's
+    /// `system` array.
+    ///
+    /// Anthropic OAuth requests must lead with [`CLAUDE_CODE_IDENTITY`] as the
+    /// first `system` block or the API rejects them (401/403). The identity is
+    /// inserted *before* any caller-supplied blocks (including the cache-first
+    /// stable block), so it joins the cacheable prefix without disturbing the
+    /// existing `cache_control` marker placement: the breakpoint stays on the
+    /// stable block, and everything before that marker — the identity included
+    /// — is cached by Anthropic's prefix semantics.
+    ///
+    /// `None` (no caller system prompt) collapses to a single-element array
+    /// carrying only the identity, which is exactly what bare OAuth requests
+    /// need.
+    pub(super) fn prepend_claude_code_identity(
+        system: Option<Vec<SystemBlock>>,
+    ) -> Vec<SystemBlock> {
+        let mut blocks = Vec::with_capacity(system.as_ref().map_or(1, |s| s.len() + 1));
+        blocks.push(SystemBlock::text(CLAUDE_CODE_IDENTITY));
+        if let Some(existing) = system {
+            blocks.extend(existing);
+        }
+        blocks
+    }
+
+    /// Guarantee `max_tokens > thinking.budget_tokens` for legacy (non-adaptive)
+    /// extended thinking.
+    ///
+    /// The legacy `{type: "enabled", budget_tokens: N}` thinking config carves
+    /// its budget out of `max_tokens`; Anthropic 400s when the budget meets or
+    /// exceeds `max_tokens`. With the default 16k cap this bites every
+    /// `High` (20k) / `XHigh` (50k) legacy-thinking turn. Mirror openclaw
+    /// `adjustMaxTokensForThinking`: raise `max_tokens` to `budget +
+    /// MIN_OUTPUT_TOKENS_WITH_THINKING` so a visible answer still fits.
+    ///
+    /// Adaptive thinking (4.6/4.7) carries `budget_tokens: None` and is left
+    /// untouched — those models size their own budget per turn.
+    pub(super) fn adjust_max_tokens_for_thinking_budget(
+        max_tokens: u32,
+        thinking: Option<&ThinkingBlock>,
+    ) -> u32 {
+        match thinking.and_then(|t| t.budget_tokens) {
+            Some(budget) if budget >= max_tokens => {
+                budget.saturating_add(MIN_OUTPUT_TOKENS_WITH_THINKING)
+            }
+            _ => max_tokens,
         }
     }
 }

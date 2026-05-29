@@ -18,6 +18,17 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// hermes-agent uses when it can't detect a locally installed CLI version.
 const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.74";
 
+/// Mandatory first system block for Anthropic OAuth requests.
+///
+/// Anthropic's OAuth infrastructure (the `oauth-2025-04-20` + `claude-code`
+/// beta stack) validates that the request identifies as Claude Code: the very
+/// first `system` block must be exactly this string. Omitting it makes
+/// otherwise well-formed OAuth requests fail with 401/403, so it is injected
+/// transport-side whenever an OAuth token is detected — never surfaced to the
+/// caller's persona/system-prompt layer. Mirrors openclaw
+/// `anthropic-transport-stream.ts` and hermes-agent's OAuth payload builder.
+const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
 /// Sanitize a tool name to satisfy Anthropic's regex `^[a-zA-Z][a-zA-Z0-9_-]{0,127}$`.
 ///
 /// Replaces any disallowed character with `_`, prefixes a letter when the

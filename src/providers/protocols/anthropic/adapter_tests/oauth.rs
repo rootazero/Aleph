@@ -4,7 +4,7 @@ use super::super::AnthropicProtocol;
 use crate::config::ProviderConfig;
 use crate::providers::adapter::RequestPayload;
 
-use super::helpers::build_http;
+use super::helpers::{build_body, build_http};
 
 #[test]
 fn is_oauth_token_recognises_anthropic_setup_tokens() {
@@ -150,4 +150,83 @@ fn build_request_non_oauth_beta_header_omits_oauth_stack() {
     assert!(!beta.contains("claude-code-20250219"));
     assert!(!beta.contains("oauth-2025-04-20"));
     assert!(!beta.contains("token-restricted"));
+}
+
+// ── Claude Code identity system block (Gap C) ───────────────────────────────
+
+const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+#[test]
+fn prepend_claude_code_identity_with_existing_system_leads_with_identity() {
+    use crate::providers::anthropic::SystemBlock;
+    let existing = vec![SystemBlock::cached_text("Stable persona")];
+    let out = AnthropicProtocol::prepend_claude_code_identity(Some(existing));
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].text, CLAUDE_CODE_IDENTITY);
+    assert!(
+        out[0].cache_control.is_none(),
+        "identity block stays uncached; breakpoint remains on the stable block"
+    );
+    assert_eq!(out[1].text, "Stable persona");
+    assert!(out[1].cache_control.is_some(), "stable block keeps its marker");
+}
+
+#[test]
+fn prepend_claude_code_identity_without_system_yields_identity_only() {
+    let out = AnthropicProtocol::prepend_claude_code_identity(None);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].text, CLAUDE_CODE_IDENTITY);
+}
+
+#[test]
+fn build_request_oauth_injects_identity_as_first_system_block() {
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    let payload = RequestPayload::new(&msgs).with_system(Some("You are a poet."));
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("sk-ant-oat01-token".to_string());
+
+    let body = build_body(&payload, &config);
+    let system = body["system"].as_array().expect("system must be an array");
+    assert_eq!(
+        system[0]["text"], CLAUDE_CODE_IDENTITY,
+        "OAuth requests must lead with the Claude Code identity"
+    );
+    // The caller's persona is preserved after the identity.
+    assert!(
+        system.iter().any(|b| b["text"] == "You are a poet."),
+        "caller system prompt must survive identity injection: {:?}",
+        system
+    );
+}
+
+#[test]
+fn build_request_oauth_injects_identity_even_without_system_prompt() {
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    let payload = RequestPayload::new(&msgs); // no system prompt
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("sk-ant-oat01-token".to_string());
+
+    let body = build_body(&payload, &config);
+    let system = body["system"].as_array().expect("OAuth must synthesize a system array");
+    assert_eq!(system[0]["text"], CLAUDE_CODE_IDENTITY);
+}
+
+#[test]
+fn build_request_console_key_omits_claude_code_identity() {
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    let payload = RequestPayload::new(&msgs).with_system(Some("You are a poet."));
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("sk-ant-api03-console".to_string());
+
+    let body = build_body(&payload, &config);
+    // Console keys must never see the OAuth-only identity block.
+    if let Some(system) = body["system"].as_array() {
+        assert!(
+            !system.iter().any(|b| b["text"] == CLAUDE_CODE_IDENTITY),
+            "console requests must NOT carry the Claude Code identity"
+        );
+    }
 }

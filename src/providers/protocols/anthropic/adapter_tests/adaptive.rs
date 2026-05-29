@@ -177,3 +177,105 @@ fn build_request_xhigh_on_4_6_downgrades_to_max_in_effort() {
         "4.6 rejects xhigh — effort must be downgraded to max"
     );
 }
+
+// ── max_tokens vs legacy thinking budget guard (Gap B) ──────────────────────
+
+#[test]
+fn adjust_max_tokens_raises_cap_above_legacy_budget() {
+    use crate::providers::anthropic::ThinkingBlock;
+    let thinking = ThinkingBlock {
+        thinking_type: "enabled".to_string(),
+        budget_tokens: Some(20_000),
+        display: None,
+    };
+    // 16k default cap <= 20k budget → bumped to budget + 1024 reserve.
+    let adjusted =
+        AnthropicProtocol::adjust_max_tokens_for_thinking_budget(16_384, Some(&thinking));
+    assert_eq!(adjusted, 21_024);
+}
+
+#[test]
+fn adjust_max_tokens_keeps_cap_when_already_above_budget() {
+    use crate::providers::anthropic::ThinkingBlock;
+    let thinking = ThinkingBlock {
+        thinking_type: "enabled".to_string(),
+        budget_tokens: Some(10_000),
+        display: None,
+    };
+    let adjusted =
+        AnthropicProtocol::adjust_max_tokens_for_thinking_budget(16_384, Some(&thinking));
+    assert_eq!(adjusted, 16_384, "no thinking budget overflow → cap untouched");
+}
+
+#[test]
+fn adjust_max_tokens_ignores_adaptive_and_absent_thinking() {
+    use crate::providers::anthropic::ThinkingBlock;
+    // Adaptive thinking: budget_tokens None → never adjusts.
+    let adaptive = ThinkingBlock {
+        thinking_type: "adaptive".to_string(),
+        budget_tokens: None,
+        display: Some("summarized".to_string()),
+    };
+    assert_eq!(
+        AnthropicProtocol::adjust_max_tokens_for_thinking_budget(8_192, Some(&adaptive)),
+        8_192
+    );
+    // No thinking at all → unchanged.
+    assert_eq!(
+        AnthropicProtocol::adjust_max_tokens_for_thinking_budget(8_192, None),
+        8_192
+    );
+}
+
+#[test]
+fn build_request_raises_max_tokens_for_high_legacy_thinking() {
+    use crate::agents::thinking::ThinkLevel;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    // High → budget 20000 on a pre-4.6 (legacy) model with the default 16k cap.
+    let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::High));
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("sk-ant-api-test".to_string());
+
+    let body = build_body(&payload, &config);
+    assert_eq!(body["thinking"]["budget_tokens"], 20_000);
+    assert_eq!(
+        body["max_tokens"], 21_024,
+        "max_tokens must exceed budget_tokens or Anthropic 400s"
+    );
+}
+
+#[test]
+fn build_request_legacy_thinking_under_cap_keeps_max_tokens() {
+    use crate::agents::thinking::ThinkLevel;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    // Medium → budget 10000, well under the explicit 16k cap.
+    let payload = RequestPayload::new(&msgs)
+        .with_think_level(Some(ThinkLevel::Medium))
+        .with_max_tokens(Some(16_384));
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("sk-ant-api-test".to_string());
+
+    let body = build_body(&payload, &config);
+    assert_eq!(body["max_tokens"], 16_384);
+}
+
+#[test]
+fn build_request_adaptive_thinking_does_not_inflate_max_tokens() {
+    use crate::agents::thinking::ThinkLevel;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    // XHigh on an adaptive model uses output_config.effort, no budget_tokens.
+    let payload = RequestPayload::new(&msgs)
+        .with_think_level(Some(ThinkLevel::XHigh))
+        .with_max_tokens(Some(8_192));
+    let mut config = ProviderConfig::test_config("claude-opus-4-7");
+    config.api_key = Some("sk-ant-api-test".to_string());
+
+    let body = build_body(&payload, &config);
+    assert_eq!(
+        body["max_tokens"], 8_192,
+        "adaptive thinking must not trigger the legacy-budget bump"
+    );
+}

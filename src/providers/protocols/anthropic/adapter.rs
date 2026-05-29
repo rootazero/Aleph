@@ -146,6 +146,14 @@ impl ProtocolAdapter for AnthropicProtocol {
             crate::providers::protocols::anthropic::provider_policy::build_anthropic_policy(
                 config.base_url.as_deref(),
             );
+        // OAuth tokens take a different auth header AND require the Claude Code
+        // identity system block (see `prepend_claude_code_identity`). Resolve
+        // the bit once here so both the system-block and auth-header paths agree.
+        let is_oauth = config
+            .api_key
+            .as_deref()
+            .map(Self::is_oauth_token)
+            .unwrap_or(false);
         let raw_model = payload
             .model
             .as_deref()
@@ -206,6 +214,13 @@ impl ProtocolAdapter for AnthropicProtocol {
                 ),
                 None => (None, None),
             };
+
+        // Legacy thinking carves `budget_tokens` out of `max_tokens`; Anthropic
+        // 400s when the budget meets/exceeds the cap. Raise the cap to keep a
+        // visible answer's worth of output above the budget. No-op for adaptive
+        // thinking (budget_tokens: None) and for non-thinking turns.
+        let max_tokens =
+            Self::adjust_max_tokens_for_thinking_budget(max_tokens, thinking.as_ref());
 
         // Convert tool definitions to Anthropic format. Tool names must satisfy
         // Anthropic's regex `^[a-zA-Z][a-zA-Z0-9_-]{0,127}$`; we sanitize on
@@ -285,6 +300,16 @@ impl ProtocolAdapter for AnthropicProtocol {
         //    prefix — strictly worse, kept for unmigrated callers).
         let (system, pre_placed_system_breakpoint) =
             split_system_blocks_for_cache(payload.system_blocks, payload.system_prompt);
+
+        // OAuth requests must lead with the Claude Code identity block, or
+        // Anthropic rejects them (401/403). Prepend it ahead of any caller
+        // blocks — it joins the cacheable prefix without moving the existing
+        // breakpoint, which stays on the stable block (see helper docs).
+        let system = if is_oauth {
+            Some(Self::prepend_claude_code_identity(system))
+        } else {
+            system
+        };
 
         // Cycle 4: wire sampling fields from config
         let top_p = config.top_p;
@@ -444,7 +469,9 @@ impl ProtocolAdapter for AnthropicProtocol {
         // OAuth tokens authenticate via `Authorization: Bearer` and require
         // Claude Code identity headers; regular console API keys use
         // `x-api-key`. Mis-routing either way produces 401/403 from Anthropic.
-        if Self::is_oauth_token(api_key) {
+        // `is_oauth` was resolved up-front so the system-block and auth paths
+        // never disagree.
+        if is_oauth {
             req = req
                 .bearer_auth(api_key)
                 .header("User-Agent", CLAUDE_CODE_USER_AGENT)
