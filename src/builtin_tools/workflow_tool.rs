@@ -184,3 +184,369 @@ impl AlephTool for WorkflowTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::swarm::tasks::{store::SqliteCoordTaskStore, CoordTaskStatus};
+    use crate::workflow::def::WorkflowStepDef;
+    use rusqlite::Connection;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    // `ALEPH_HOME` is process-global; the file-backed actions (save/list/
+    // describe/delete/run-load) resolve their directory from it via
+    // `workflow::store::*`. Serialise every test that touches it through this
+    // guard so parallel `cargo test` threads can't read/write each other's
+    // workflows dir. Pure serde/notify tests below need no env and skip it.
+    static ENV_GUARD: Mutex<()> = Mutex::new(());
+
+    async fn setup_store() -> SqliteCoordTaskStore {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let store = SqliteCoordTaskStore::new(conn);
+        store.migrate().await.expect("migrate");
+        store
+    }
+
+    fn linear_def() -> WorkflowDef {
+        WorkflowDef {
+            name: "pipeline".into(),
+            description: "research then write".into(),
+            steps: vec![
+                WorkflowStepDef {
+                    id: "gather".into(),
+                    agent: "researcher".into(),
+                    prompt: "research {input}".into(),
+                    depends_on: vec![],
+                },
+                WorkflowStepDef {
+                    id: "write".into(),
+                    agent: "writer".into(),
+                    prompt: "write a report".into(),
+                    depends_on: vec!["gather".into()],
+                },
+            ],
+        }
+    }
+
+    fn tool(store: SqliteCoordTaskStore, signal: Option<Arc<tokio::sync::Notify>>) -> WorkflowTool {
+        WorkflowTool::new(Arc::new(store), signal)
+    }
+
+    // --- serde discriminator: the exact shape the agent loop deserialises ---
+
+    #[test]
+    fn deserialize_run_defaults_input() {
+        // `input` omitted relies on #[serde(default)] → empty string.
+        let args: WorkflowArgs =
+            serde_json::from_value(serde_json::json!({"action":"run","name":"p","team_id":"t"}))
+                .expect("deserialise run without input");
+        match args {
+            WorkflowArgs::Run { name, team_id, input } => {
+                assert_eq!(name, "p");
+                assert_eq!(team_id, "t");
+                assert_eq!(input, "", "missing input defaults to empty string");
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_save_nested_definition() {
+        let args: WorkflowArgs = serde_json::from_value(serde_json::json!({
+            "action": "save",
+            "definition": {
+                "name": "research-report",
+                "steps": [
+                    {"id": "gather", "agent": "researcher", "prompt": "research {input}"},
+                    {"id": "write", "agent": "writer", "prompt": "write", "depends_on": ["gather"]}
+                ]
+            }
+        }))
+        .expect("deserialise save with nested definition");
+        match args {
+            WorkflowArgs::Save { definition } => {
+                assert_eq!(definition.name, "research-report");
+                assert_eq!(definition.steps.len(), 2);
+                assert_eq!(definition.steps[1].depends_on, vec!["gather".to_string()]);
+            }
+            other => panic!("expected Save, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_list_unit_variant() {
+        let args: WorkflowArgs = serde_json::from_value(serde_json::json!({"action":"list"}))
+            .expect("deserialise list");
+        assert!(matches!(args, WorkflowArgs::List {}));
+    }
+
+    #[test]
+    fn deserialize_rejects_unknown_action() {
+        let err = serde_json::from_value::<WorkflowArgs>(serde_json::json!({"action":"frobnicate"}));
+        assert!(err.is_err(), "unknown action must not deserialise");
+    }
+
+    // --- output shaping: which Option fields each action populates ---
+
+    #[test]
+    fn output_msg_helper_leaves_optionals_none() {
+        let out = WorkflowToolOutput::msg("save", "ok");
+        assert_eq!(out.action, "save");
+        assert!(out.names.is_none());
+        assert!(out.definition.is_none());
+        assert!(out.task_ids.is_none());
+    }
+
+    // --- run action (fully injectable: no real team/dispatcher needed) ---
+
+    #[tokio::test]
+    async fn run_materializes_tasks_and_returns_ids() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        // `save` then `run` both resolve their dir from ALEPH_HOME; hold the
+        // guard across both so the env stays hermetic for the whole sequence.
+        let run_out = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored after the await completes.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            workflow::store::save(&linear_def()).expect("save under temp ALEPH_HOME");
+            let r = t
+                .call(WorkflowArgs::Run {
+                    name: "pipeline".into(),
+                    team_id: "team-7".into(),
+                    input: "quantum".into(),
+                })
+                .await;
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            r
+        }
+        .expect("run materialises");
+
+        assert_eq!(run_out.action, "run");
+        let ids = run_out.task_ids.as_ref().expect("run populates task_ids");
+        assert_eq!(ids.len(), 2, "one task per step");
+        // run shapes only task_ids — never names/definition.
+        assert!(run_out.names.is_none());
+        assert!(run_out.definition.is_none());
+
+        // The returned ids correspond to actually-created, correctly-wired
+        // coord_tasks: gather is Pending (no deps), write is Blocked on it.
+        let cstore = t.coord_store.clone();
+        let gather = cstore.get_task(&ids[0]).await.unwrap().unwrap();
+        let write = cstore.get_task(&ids[1]).await.unwrap().unwrap();
+        assert_eq!(gather.subject, "pipeline:gather");
+        assert_eq!(gather.description, "research quantum", "{{input}} substituted");
+        assert_eq!(gather.status, CoordTaskStatus::Pending);
+        assert_eq!(write.subject, "pipeline:write");
+        assert_eq!(write.status, CoordTaskStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn run_notifies_dispatcher_when_signal_present() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let signal = Arc::new(tokio::sync::Notify::new());
+        let t = tool(store, Some(signal.clone()));
+
+        // Register a waiter BEFORE run so notify_one delivers a persistent
+        // permit even if it fires before we await.
+        let notified = signal.notified();
+
+        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("ALEPH_HOME");
+        // SAFETY: guarded single mutator; restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", tmp.path());
+        }
+        workflow::store::save(&linear_def()).expect("save");
+        let run = t
+            .call(WorkflowArgs::Run {
+                name: "pipeline".into(),
+                team_id: "team-7".into(),
+                input: "x".into(),
+            })
+            .await;
+        // SAFETY: same guarded invariant; restore prior value.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ALEPH_HOME", v),
+                None => std::env::remove_var("ALEPH_HOME"),
+            }
+        }
+        run.expect("run");
+
+        // The waiter must resolve promptly; a generous timeout keeps the test
+        // from hanging if the notify is ever dropped.
+        tokio::time::timeout(std::time::Duration::from_secs(2), notified)
+            .await
+            .expect("dispatcher was signalled");
+    }
+
+    #[tokio::test]
+    async fn run_without_signal_still_returns_ids() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("ALEPH_HOME");
+        // SAFETY: guarded single mutator; restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", tmp.path());
+        }
+        workflow::store::save(&linear_def()).expect("save");
+        let out = t
+            .call(WorkflowArgs::Run {
+                name: "pipeline".into(),
+                team_id: "team-7".into(),
+                input: String::new(),
+            })
+            .await;
+        // SAFETY: same guarded invariant; restore prior value.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ALEPH_HOME", v),
+                None => std::env::remove_var("ALEPH_HOME"),
+            }
+        }
+        let out = out.expect("run without signal must not panic");
+        assert_eq!(out.task_ids.as_ref().map(|v| v.len()), Some(2));
+    }
+
+    #[tokio::test]
+    async fn run_errors_on_missing_template() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("ALEPH_HOME");
+        // SAFETY: guarded single mutator; restored below.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", tmp.path());
+        }
+        let res = t
+            .call(WorkflowArgs::Run {
+                name: "does-not-exist".into(),
+                team_id: "team-7".into(),
+                input: String::new(),
+            })
+            .await;
+        // SAFETY: same guarded invariant; restore prior value.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ALEPH_HOME", v),
+                None => std::env::remove_var("ALEPH_HOME"),
+            }
+        }
+        assert!(res.is_err(), "loading a missing template surfaces an error");
+    }
+
+    // --- file-backed lifecycle: save → list → describe → delete ---
+    //
+    // One combined #[tokio::test] keeps every ALEPH_HOME-touching assertion in
+    // a single env scope, so there is no cross-test race on the process-global
+    // var and the round-trip ordering is deterministic.
+    #[tokio::test]
+    async fn file_actions_lifecycle_and_output_shapes() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("ALEPH_HOME");
+        // SAFETY: guarded single mutator; restored at end of the test.
+        unsafe {
+            std::env::set_var("ALEPH_HOME", tmp.path());
+        }
+
+        // describe of an absent template errors.
+        let missing = t
+            .call(WorkflowArgs::Describe {
+                name: "ghost".into(),
+            })
+            .await;
+        assert!(missing.is_err(), "describe of missing template errors");
+
+        // empty list before any save.
+        let empty = t.call(WorkflowArgs::List {}).await.expect("list");
+        assert_eq!(empty.action, "list");
+        assert_eq!(empty.names.as_deref(), Some(&[][..]));
+        assert!(empty.definition.is_none() && empty.task_ids.is_none());
+
+        // save → only the message is shaped (no optionals).
+        let saved = t
+            .call(WorkflowArgs::Save {
+                definition: linear_def(),
+            })
+            .await
+            .expect("save");
+        assert_eq!(saved.action, "save");
+        assert!(saved.message.contains("pipeline"));
+        assert!(saved.names.is_none() && saved.definition.is_none() && saved.task_ids.is_none());
+
+        // list reflects the saved template — only names populated.
+        let listed = t.call(WorkflowArgs::List {}).await.expect("list");
+        assert_eq!(listed.names.as_deref(), Some(&["pipeline".to_string()][..]));
+        assert!(listed.definition.is_none() && listed.task_ids.is_none());
+
+        // describe round-trips the definition — only definition populated.
+        let described = t
+            .call(WorkflowArgs::Describe {
+                name: "pipeline".into(),
+            })
+            .await
+            .expect("describe");
+        assert_eq!(described.action, "describe");
+        let def = described.definition.as_ref().expect("describe populates definition");
+        assert_eq!(def, &linear_def());
+        assert!(described.message.contains("2 step"));
+        assert!(described.names.is_none() && described.task_ids.is_none());
+
+        // serde wire shape: describe omits the None fields entirely.
+        let wire = serde_json::to_value(&described).unwrap();
+        assert!(wire.get("definition").is_some());
+        assert!(wire.get("names").is_none(), "skip_serializing_if drops None names");
+        assert!(wire.get("task_ids").is_none());
+
+        // delete present → "deleted" message; delete again → idempotent branch.
+        let del1 = t
+            .call(WorkflowArgs::Delete {
+                name: "pipeline".into(),
+            })
+            .await
+            .expect("delete present");
+        assert!(del1.message.contains("deleted"));
+        let del2 = t
+            .call(WorkflowArgs::Delete {
+                name: "pipeline".into(),
+            })
+            .await
+            .expect("delete absent");
+        assert!(del2.message.contains("did not exist"), "idempotent delete branch");
+
+        // after delete the list is empty again.
+        let after = t.call(WorkflowArgs::List {}).await.expect("list");
+        assert_eq!(after.names.as_deref(), Some(&[][..]));
+
+        // SAFETY: guarded single mutator; restore prior value.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ALEPH_HOME", v),
+                None => std::env::remove_var("ALEPH_HOME"),
+            }
+        }
+    }
+}
