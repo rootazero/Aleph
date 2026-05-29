@@ -68,6 +68,14 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 `meta.{name,description,whenToUse}` + 各 `agent()` 的首个字符串字面量为步骤(线性链),
 并把识别到的命令式构造写入 `dropped`。
 
+裸扫描的两点保真处理:
+
+- **命令式 needle 只扫代码骨架**:检测 `for`/`if`/`pipeline(`/`parallel(` 等构造前,
+  先剥离所有字符串字面量内容(保留引号定界符),因此 prompt 文本里的
+  "search **for** files" 不会误报成 `for` 循环。
+- **导入校验失败保留 `dropped` 诊断**:若扫描结果丢弃了命令式构造且随后 `validate()`
+  失败,错误信息会并入被丢弃的构造清单,而非静默吞掉——用户能看到导入是有损的。
+
 ## 工具用法(R8)
 
 ```
