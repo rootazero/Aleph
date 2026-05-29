@@ -5,6 +5,13 @@
 //! - Hard boundaries (\n\n, sentence endings, code fences) → flush immediately
 //! - Soft boundary (single \n) → flush after 30ms
 //! - No boundary → flush after 50ms
+//!
+//! Defensive scrubbing: every text delta is first passed through a
+//! [`StreamingContextScrubber`] keyed to the `<memory-context>` fence (see
+//! [`wrap_memory_context`](crate::memory::assembler::context_block::wrap_memory_context)).
+//! If the model echoes the recalled-memory framing back into its answer, the
+//! fenced span is stripped before it reaches the user — closing the leak the
+//! scrubber was built for.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
@@ -13,6 +20,8 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use crate::gateway::event_emitter::EventEmitter;
+use crate::memory::assembler::context_block::{MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
+use crate::memory::StreamingContextScrubber;
 use crate::providers::adapter::StopReason;
 use crate::providers::delta::{DeltaSink, ProviderDelta};
 use crate::sync_primitives::Arc;
@@ -67,6 +76,10 @@ pub struct StreamingDeltaSink {
     /// Accumulated full text within the current iteration.
     /// Reset on intermediate boundaries (Done(ToolUse)).
     accumulated: Mutex<String>,
+    /// Strips any `<memory-context>` framing the model echoes back from the
+    /// injected recalled-memory block. Holds back partial-tag tails across
+    /// deltas; reset between iterations.
+    scrubber: Mutex<StreamingContextScrubber>,
 }
 
 impl StreamingDeltaSink {
@@ -89,6 +102,10 @@ impl StreamingDeltaSink {
             buffer: Mutex::new(String::new()),
             last_emit: Mutex::new(Instant::now()),
             accumulated: Mutex::new(String::new()),
+            scrubber: Mutex::new(StreamingContextScrubber::with_tags(
+                MEMORY_CONTEXT_OPEN,
+                MEMORY_CONTEXT_CLOSE,
+            )),
         }
     }
 }
@@ -98,8 +115,17 @@ impl DeltaSink for StreamingDeltaSink {
     async fn on_delta(&self, delta: &ProviderDelta) {
         match delta {
             ProviderDelta::TextDelta(text) => {
+                // Strip any echoed `<memory-context>` framing before it lands
+                // in the user-visible buffer. A partial tag at the chunk tail
+                // is held inside the scrubber and surfaces on the next delta
+                // (or on Done via flush), so nothing is lost.
+                let visible = self.scrubber.lock().await.feed(text);
+                if visible.is_empty() {
+                    return;
+                }
+
                 let mut buf = self.buffer.lock().await;
-                buf.push_str(text);
+                buf.push_str(&visible);
 
                 let last = self.last_emit.lock().await;
                 let elapsed = last.elapsed().as_millis() as u64;
@@ -138,9 +164,18 @@ impl DeltaSink for StreamingDeltaSink {
             ProviderDelta::Done(stop_reason) => {
                 let is_intermediate = matches!(stop_reason, StopReason::ToolUse);
 
+                // Drain the scrubber: emit any held-back partial-tag tail (a
+                // false-positive that turned out not to be a fence), or discard
+                // an unterminated span. Resets scrubber state for the next
+                // iteration in either case.
+                let scrub_tail = self.scrubber.lock().await.flush();
+
                 // Drain any remaining buffered text — semantic-boundary flushes
                 // may leave a tail when the LLM stops mid-sentence.
                 let mut buf = self.buffer.lock().await;
+                if !scrub_tail.is_empty() {
+                    buf.push_str(&scrub_tail);
+                }
                 let remaining = std::mem::take(&mut *buf);
                 drop(buf);
 
@@ -507,5 +542,81 @@ mod tests {
                 "full_text should contain earlier text"
             );
         }
+    }
+
+    /// Concatenate the visible content of every emitted ResponseChunk.
+    async fn emitted_text(emitter: &Arc<CollectingEventEmitter>) -> String {
+        emitter
+            .events()
+            .await
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ResponseChunk { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A model that echoes the injected `<memory-context>` framing in one delta
+    /// must have the fenced span stripped before it reaches the user.
+    #[tokio::test]
+    async fn test_echoed_memory_context_fence_is_stripped() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let (sink, emitter) = make_sink("run-fence", flag.clone());
+
+        let echo = "Sure. <memory-context>\n[System note: ...]\n\nSECRET RECALL\n</memory-context>\n Done.";
+        sink.on_delta(&ProviderDelta::TextDelta(echo.to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))
+            .await;
+
+        let text = emitted_text(&emitter).await;
+        assert!(
+            !text.contains("SECRET RECALL"),
+            "fenced recall body must not leak; got: {text:?}"
+        );
+        assert!(!text.contains("memory-context"), "fence tag must not leak");
+        assert!(text.contains("Sure."));
+        assert!(text.contains("Done."));
+    }
+
+    /// The fence may be split across deltas (open in one, close in a later one);
+    /// the scrubber's cross-delta state machine must still strip the whole span.
+    #[tokio::test]
+    async fn test_echoed_fence_split_across_deltas_is_stripped() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let (sink, emitter) = make_sink("run-fence-split", flag.clone());
+
+        sink.on_delta(&ProviderDelta::TextDelta("answer <memory-".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::TextDelta("context>leaky body</memory-".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::TextDelta("context> tail".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))
+            .await;
+
+        let text = emitted_text(&emitter).await;
+        assert!(
+            !text.contains("leaky body"),
+            "split fence body must not leak; got: {text:?}"
+        );
+        assert!(text.contains("answer"));
+        assert!(text.contains("tail"));
+    }
+
+    /// Ordinary text containing no fence must pass through untouched.
+    #[tokio::test]
+    async fn test_plain_text_passes_through_scrubber_unchanged() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let (sink, emitter) = make_sink("run-plain", flag.clone());
+
+        sink.on_delta(&ProviderDelta::TextDelta("Hello world. ".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))
+            .await;
+
+        let text = emitted_text(&emitter).await;
+        assert_eq!(text, "Hello world. ");
     }
 }

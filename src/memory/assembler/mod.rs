@@ -1,6 +1,7 @@
 //! Working Memory Assembler — produces a portable [`MemoryEnvelope`] before
 //! each LLM call. See `docs/superpowers/specs/2026-04-13-memory-evolution-spec1-assembler-design.md`.
 
+pub mod context_block;
 pub mod envelope;
 pub(crate) mod error;
 pub(crate) mod fallback;
@@ -22,6 +23,7 @@ pub use profile::UserProfileLoader;
 pub use envelope::{
     EnvelopeItem, EnvelopeMeta, EnvelopeSlot, ItemSource, MemoryEnvelope, SlotKind, SCHEMA_VERSION,
 };
+pub use context_block::{wrap_memory_context, MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
 pub use render::{render_envelope, render_with, RenderStyle};
 
 use crate::error::AlephError;

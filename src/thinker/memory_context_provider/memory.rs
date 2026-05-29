@@ -1,5 +1,6 @@
 use super::MemoryContextProvider;
 use crate::config::types::memory::MemoryInjectionMode;
+use crate::memory::assembler::context_block::wrap_memory_context;
 use crate::memory::assembler::render::{render_with, RenderStyle};
 use crate::memory::assembler::AssemblyBudget;
 use crate::providers::message::UnifiedMessage;
@@ -8,8 +9,10 @@ impl MemoryContextProvider {
     /// Build a memory user-message for injection into the prompt.
     ///
     /// Returns `Ok(None)` when injection is disabled (`Tools` mode) or when
-    /// the assembler returned an empty envelope. Otherwise returns
-    /// `Ok(Some(UnifiedMessage::user(render_with(&env, RenderStyle::Xml))))`.
+    /// the assembler returned an empty envelope. Otherwise returns the rendered
+    /// envelope wrapped by [`wrap_memory_context`] in a guarded
+    /// `<memory-context>` fence carrying a "reference data, not user input"
+    /// system note.
     pub async fn build_memory_user_message(
         &self,
         agent_id: &str,
@@ -60,7 +63,11 @@ impl MemoryContextProvider {
         if rendered.trim().is_empty() {
             return Ok(None);
         }
-        Ok(Some(UnifiedMessage::user(rendered)))
+        // Wrap recalled memory in the guarded `<memory-context>` fence + system
+        // note so the model treats it as reference data, not new user input
+        // (hermes-parity prompt-injection hardening). The same fence tags are
+        // stripped from streamed output by StreamingDeltaSink's scrubber.
+        Ok(Some(UnifiedMessage::user(wrap_memory_context(&rendered))))
     }
 }
 
