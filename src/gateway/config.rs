@@ -147,6 +147,11 @@ pub struct GatewayServerConfig {
     /// [`crate::gateway::runtime_footer`].
     #[serde(default)]
     pub runtime_footer: crate::gateway::runtime_footer::RuntimeFooterConfig,
+    /// Channel health monitor — periodically auto-restarts wedged channels
+    /// (status=Error + stale past threshold). `check_secs = 0` disables. See
+    /// [`crate::gateway::channel_health_monitor`].
+    #[serde(default)]
+    pub channel_health: crate::gateway::channel_health_monitor::ChannelHealthConfig,
     /// One-shot bootstrap-nonce knobs for the loopback cookie-handoff
     /// endpoint (`GET /auth/bootstrap?nonce=…`). Used by the desktop
     /// shell's "Open in Browser" menu item and `aleph open` CLI.
@@ -205,6 +210,7 @@ impl Default for GatewayServerConfig {
             require_challenge: false,
             memory_monitor_secs: default_memory_monitor_secs(),
             runtime_footer: crate::gateway::runtime_footer::RuntimeFooterConfig::default(),
+            channel_health: crate::gateway::channel_health_monitor::ChannelHealthConfig::default(),
             bootstrap: BootstrapConfig::default(),
         }
     }

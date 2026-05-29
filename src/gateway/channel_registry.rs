@@ -31,7 +31,8 @@ use tracing::{error, info, warn};
 
 use super::channel::{
     Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory, ChannelId,
-    ChannelInfo, ChannelResult, ChannelStatus, ConversationId, HealthStatus, InboundMessage,
+    ChannelHealth, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, HealthStatus,
+    InboundMessage,
     InboundMessageSender, OutboundMessage, SendResult,
 };
 use super::voice::VoiceState;
@@ -372,9 +373,13 @@ impl ChannelRegistry {
         let inbound_tx = self.inbound_tx.clone();
 
         tokio::spawn(async move {
-            let receiver = {
+            // Capture the health handle once up-front so each forwarded message
+            // can stamp `last_event_at` without re-locking the channel. Every
+            // inbound message is transport-liveness proof; this is the signal
+            // the registry-level `ChannelHealthMonitor` reads via `is_stale`.
+            let (receiver, health) = {
                 let channel = channel_arc.read().await;
-                channel.inbound_subscribe()
+                (channel.inbound_subscribe(), channel.state().health_handle())
             };
 
             info!(
@@ -383,6 +388,9 @@ impl ChannelRegistry {
             );
             let mut rx = receiver;
             while let Ok(message) = rx.recv().await {
+                // Record liveness before forwarding: a channel that is
+                // delivering messages is healthy regardless of subscribers.
+                health.write().await.record_event();
                 info!(
                     "[Forwarder] Forwarding message from channel {} (text: {:?})",
                     channel_id,
@@ -497,6 +505,42 @@ impl ChannelRegistry {
         }
 
         summary
+    }
+
+    /// Per-channel `(id, status, health)` snapshot read by the
+    /// [`crate::gateway::channel_health_monitor::ChannelHealthMonitor`] to pick
+    /// restart candidates. Pure data access — restart policy lives in the
+    /// monitor, not here.
+    pub async fn health_states(&self) -> Vec<(ChannelId, ChannelStatus, ChannelHealth)> {
+        let channels = self.channels.read().await;
+        let mut out = Vec::with_capacity(channels.len());
+        for (id, channel_arc) in channels.iter() {
+            let channel = channel_arc.read().await;
+            out.push((id.clone(), channel.status(), channel.health().await));
+        }
+        out
+    }
+
+    /// Restart a channel **in place**: stop then start the underlying
+    /// connection without spawning a second message forwarder.
+    ///
+    /// `start_channel` always spawns a forwarder, but a channel's inbound
+    /// broadcast lives in its persistent `ChannelState` and survives
+    /// stop/start. The forwarder created by the original `start_channel`
+    /// keeps draining that broadcast, so reusing it here avoids the
+    /// duplicate-delivery that a second `start_channel` would cause. This is
+    /// the recovery primitive used by the health monitor for wedged channels.
+    pub async fn restart_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
+        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
+            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+        })?;
+
+        let mut channel = channel_arc.write().await;
+        channel.stop().await?;
+        channel.start().await?;
+
+        info!("Restarted channel in place: {}", channel_id);
+        Ok(())
     }
 }
 

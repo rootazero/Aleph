@@ -2027,6 +2027,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         alephcore::approval::callback_sink::ManagerCallbackSink::new(exec_approval_manager.clone()),
     ));
 
+    // Channel health monitor — safety net that auto-restarts wedged channels
+    // (status=Error + silent past the staleness threshold). Each channel still
+    // owns its own reconnect backoff for detected drops; this catches the
+    // undetected "zombie socket" case. Started before `channel_registry` is
+    // moved into the inbound router; bound to graceful shutdown alongside the
+    // memory monitor below. `check_secs = 0` disables it.
+    let mut channel_health_monitor =
+        alephcore::gateway::channel_health_monitor::ChannelHealthMonitor::start(
+            channel_registry.clone(),
+            full_config.gateway.channel_health.clone(),
+        );
+
     initialize_inbound_router(
         channel_registry,
         agent_result.execution_adapter,
@@ -2122,6 +2134,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
     memory_monitor.shutdown().await;
+    channel_health_monitor.shutdown().await;
     // Spec C: cleanup endpoint discovery file regardless of outcome.
     // NOTE: SIGTERM path (setup_graceful_shutdown) calls std::process::exit
     // and bypasses this cleanup; stale file is overwritten on next start.

@@ -65,6 +65,7 @@ pub mod bind_mode;
 pub mod channel;
 pub mod channel_approval;
 pub mod channel_chunking;
+pub mod channel_health_monitor;
 pub mod channel_policy;
 pub mod channel_registry;
 pub mod coalescer;
