@@ -597,6 +597,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Approve / reject / retry / skip a single workflow step. Lead-agent step control between dependent tasks (openteams parity).",
         requires_config: true,
     },
+    BuiltinToolDefinition {
+        name: "workflow",
+        description: "Manage and run reusable workflow templates: save / list / describe / delete / run. Running compiles a template's steps into a coordination-task DAG executed by the team dispatcher.",
+        requires_config: true,
+    },
     // Task artifact tools — require ArtifactStore
     BuiltinToolDefinition {
         name: "task_submit",
@@ -827,6 +832,7 @@ pub fn create_tool_boxed(
         | "team_acp_member"
         | "team_workflow_canvas"
         | "workflow_step_review"
+        | "workflow"
         | "message_send"
         | "inbox_read"
         | "plan_submit"

@@ -89,6 +89,7 @@ pub mod vault_store;
 pub mod vision;
 pub mod voice_tools;
 pub mod web_fetch;
+pub mod workflow_tool;
 
 pub use a2a_tools::{
     new_a2a_tool_handle, A2AAgentsArgs, A2AAgentsOutput, A2AAgentsTool, A2ADelegateArgs,

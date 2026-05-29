@@ -869,6 +869,30 @@ impl BuiltinToolRegistry {
             None
         };
 
+        // Build the workflow-template tool when CoordTaskStore is present.
+        // `run` materialises a saved template into the coord-task DAG; the
+        // dispatch signal wakes the team dispatcher so it starts promptly.
+        let workflow_tool = if let Some(ref coord_store) = config.coord_task_store {
+            use crate::builtin_tools::workflow_tool::WorkflowTool;
+            let tool = WorkflowTool::new(Arc::clone(coord_store), config.dispatch_signal.clone());
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered workflow template tool");
+            Some(tool)
+        } else {
+            None
+        };
+
         // Build team_task_control when CoordTaskStore is present. Admin-
         // context complement of workflow_step_review (pause/resume/retry/skip
         // without requiring a finished run). R3 — ClawTeam task-control parity.
@@ -1538,6 +1562,7 @@ impl BuiltinToolRegistry {
             team_acp_member_tool,
             team_workflow_canvas_tool,
             workflow_step_review_tool,
+            workflow_tool,
             team_task_control_tool,
             task_exit_journal_tool,
             message_send_tool,

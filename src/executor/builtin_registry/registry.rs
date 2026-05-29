@@ -281,6 +281,9 @@ pub struct BuiltinToolRegistry {
     /// because it requires a CoordTaskStore.
     pub(crate) workflow_step_review_tool:
         Option<crate::builtin_tools::team::WorkflowStepReviewTool>,
+    /// Workflow-template tool (save/list/describe/delete/run). Optional —
+    /// `run` requires a CoordTaskStore to materialise steps into the DAG.
+    pub(crate) workflow_tool: Option<crate::builtin_tools::workflow_tool::WorkflowTool>,
     /// Admin-context task control (R3 — ClawTeam parity). Pause/resume/
     /// retry/skip without going through reviewer flow. Optional —
     /// requires a CoordTaskStore.
@@ -1100,6 +1103,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                     AlephError::tool(
                         "workflow_step_review not available: no CoordTaskStore configured",
                     )
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "workflow" => Box::pin(async move {
+                let tool = self.workflow_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("workflow not available: no CoordTaskStore configured")
                 })?;
                 tool.call_json(arguments).await
             }),

@@ -88,6 +88,7 @@ pub mod utils;
 pub mod verification;
 pub mod vision;
 pub mod wizard;
+pub mod workflow;
 
 pub mod resilience;
 pub mod secrets;

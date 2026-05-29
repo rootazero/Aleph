@@ -161,6 +161,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "task_comment",
             "team_acp_member",
             "workflow_step_review",
+            "workflow",
             "team_task_control",
             "task_exit_journal",
             "task_submit",
