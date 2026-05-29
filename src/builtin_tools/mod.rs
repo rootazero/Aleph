@@ -36,6 +36,7 @@ pub mod bash_exec;
 // pub mod browser; — deleted; Task 13 recreates with text-first design
 pub mod browser_tools;
 pub mod channel_manage;
+pub mod channel_message;
 pub mod clawhub;
 pub mod code_exec;
 pub mod command_canonicalize;
@@ -113,6 +114,9 @@ pub use bash_exec::{BashExecArgs, BashExecTool};
 // pub use browser::*; — removed; Task 13 will re-export new types
 pub use channel_manage::{
     ChannelPairingArgs, ChannelPairingOutput, ChannelPairingTool, PairingAction,
+};
+pub use channel_message::{
+    ChannelMessageAction, ChannelMessageArgs, ChannelMessageOutput, ChannelMessageTool,
 };
 pub use clawhub::{ClawHubAction, ClawHubArgs, ClawHubOutput, ClawHubTool};
 pub use code_exec::{CodeExecArgs, CodeExecTool};

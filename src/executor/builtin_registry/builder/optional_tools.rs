@@ -378,6 +378,22 @@ impl BuiltinToolRegistry {
             info!("Registered channel_pairing tool in BuiltinToolRegistry");
         }
 
+        // Channel message tool — always register metadata (ChannelRegistry injected later).
+        // Deferred OnceCell injection, same pattern as channel_pairing.
+        {
+            use crate::builtin_tools::channel_message::ChannelMessageTool;
+            reg(
+                tools,
+                "channel_message",
+                ChannelMessageTool::DESCRIPTION,
+                serde_json::to_value(schemars::schema_for!(
+                    crate::builtin_tools::channel_message::ChannelMessageArgs
+                ))
+                .unwrap_or_default(),
+            );
+            info!("Registered channel_message tool in BuiltinToolRegistry");
+        }
+
         // ask_user clarification tool — always register metadata
         // (ChannelRegistry + ClarificationManager injected later via deferred
         // OnceCell wiring). Execution checks both cells at call time.

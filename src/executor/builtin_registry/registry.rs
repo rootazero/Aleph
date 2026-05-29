@@ -1312,6 +1312,18 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
+            // Channel message tool (deferred — ChannelRegistry injected after construction)
+            "channel_message" => Box::pin(async move {
+                let cr = self.channel_registry_cell.get().ok_or_else(|| {
+                    AlephError::tool(
+                        "channel_message not available: ChannelRegistry not yet injected",
+                    )
+                })?;
+                let tool =
+                    crate::builtin_tools::channel_message::ChannelMessageTool::new(Arc::clone(cr));
+                tool.call_json(arguments).await
+            }),
+
             // ask_user clarification tool (deferred — ChannelRegistry +
             // ClarificationManager injected after construction)
             "ask_user" => Box::pin(async move {
