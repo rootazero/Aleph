@@ -155,27 +155,12 @@ impl IMessageConfig {
         expand_path(&self.db_path)
     }
 
-    /// Check if a sender is allowed based on DM policy
-    pub fn is_dm_allowed(&self, sender: &str) -> bool {
-        match self.dm_policy {
-            DmPolicy::Open => true,
-            DmPolicy::Disabled => false,
-            DmPolicy::Pairing => true, // Will prompt for pairing
-            DmPolicy::Allowlist => crate::gateway::interfaces::imessage::target::is_allowed_sender(
-                sender,
-                &self.allow_from,
-            ),
-        }
-    }
-
-    /// Check if a group is allowed based on group policy
-    pub fn is_group_allowed(&self, chat_id: &str) -> bool {
-        match self.group_policy {
-            GroupPolicy::Open => true,
-            GroupPolicy::Disabled => false,
-            GroupPolicy::Allowlist => self.group_allow_from.iter().any(|a| a == chat_id),
-        }
-    }
+    // NOTE: DM/group/allowlist gating is enforced centrally by the inbound
+    // router's permission layer (see inbound_router::permission). The config is
+    // converted to a `ChannelConfig` via `From<&IMessageConfig>` and registered
+    // at startup. The previous `is_dm_allowed`/`is_group_allowed` helpers
+    // duplicated that logic, were never called, and were removed to keep a
+    // single source of truth.
 }
 
 /// Expand ~ to home directory
@@ -224,20 +209,5 @@ mod tests {
         assert_eq!(config.poll_interval_ms, 2000);
         assert_eq!(config.dm_policy, DmPolicy::Allowlist);
         assert_eq!(config.allow_from.len(), 2);
-    }
-
-    #[test]
-    fn test_is_dm_allowed() {
-        let mut config = IMessageConfig {
-            dm_policy: DmPolicy::Allowlist,
-            allow_from: vec!["+15551234567".to_string()],
-            ..IMessageConfig::default()
-        };
-
-        assert!(config.is_dm_allowed("+15551234567"));
-        assert!(!config.is_dm_allowed("+19998887777"));
-
-        config.dm_policy = DmPolicy::Open;
-        assert!(config.is_dm_allowed("+19998887777"));
     }
 }
