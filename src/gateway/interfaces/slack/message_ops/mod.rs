@@ -25,6 +25,7 @@ pub(crate) const SLACK_MSG_LIMIT: usize = 3000;
 mod api;
 mod converter;
 mod debouncer;
+mod files;
 mod socket;
 
 #[cfg(test)]

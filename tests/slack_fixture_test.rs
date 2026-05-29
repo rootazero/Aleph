@@ -1,4 +1,4 @@
-use alephcore::gateway::channel::ChannelId;
+use alephcore::gateway::channel::{ChannelId, MessageMeta};
 use alephcore::gateway::interfaces::slack::{SlackConfig, SlackMessageOps};
 
 fn test_slack_config() -> SlackConfig {
@@ -15,6 +15,7 @@ fn test_slack_config() -> SlackConfig {
         user_allowlist: vec![],
         resolve_user_names: false,
         directory_ttl_secs: 3600,
+        media_max_mb: 20,
     }
 }
 
@@ -71,7 +72,11 @@ fn test_slack_event_to_inbound_conversion() {
 }
 
 #[test]
-fn test_slack_event_filters_bot_messages() {
+fn test_slack_foreign_bot_messages_carry_botauthored_marker() {
+    // A foreign bot (bot_id present, author != our bot) is no longer hard-
+    // filtered at conversion: since commit 0a8e40389 it flows through tagged
+    // with `MessageMeta::BotAuthored` so the gateway pair-loop-guard can
+    // suppress sustained bot↔bot storms. (Self-loops are still hard-filtered.)
     let event = serde_json::json!({
         "type": "message",
         "text": "Hello",
@@ -85,9 +90,15 @@ fn test_slack_event_filters_bot_messages() {
     let config = test_slack_config();
 
     let inbound =
-        SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B999999", &config);
-
-    assert!(inbound.is_none(), "Bot messages should be filtered out");
+        SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B999999", &config)
+            .expect("foreign bot message should pass conversion");
+    assert!(
+        inbound
+            .metadata
+            .iter()
+            .any(|m| matches!(m, MessageMeta::BotAuthored)),
+        "foreign bot message must carry the BotAuthored marker"
+    );
 }
 
 #[test]

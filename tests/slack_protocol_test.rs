@@ -19,6 +19,7 @@ fn test_slack_config() -> SlackConfig {
         user_allowlist: vec![],
         resolve_user_names: false,
         directory_ttl_secs: 3600,
+        media_max_mb: 20,
     }
 }
 
