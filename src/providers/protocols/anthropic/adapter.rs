@@ -146,10 +146,12 @@ impl ProtocolAdapter for AnthropicProtocol {
             crate::providers::protocols::anthropic::provider_policy::build_anthropic_policy(
                 config.base_url.as_deref(),
             );
-        let actual_model = payload
+        let raw_model = payload
             .model
             .as_deref()
             .unwrap_or_else(|| config.default_model());
+        let normalized_model = self.normalize_model_id(raw_model);
+        let actual_model = normalized_model.as_ref();
         let endpoint = Self::build_endpoint(config);
         let messages = Self::convert_messages(payload.messages);
 
@@ -623,5 +625,92 @@ impl ProtocolAdapter for AnthropicProtocol {
 
     fn name(&self) -> &'static str {
         "anthropic"
+    }
+
+    /// Forgive dotted variants of Claude model ids.
+    ///
+    /// Users commonly write `claude-3.5-sonnet` (matching the marketing name)
+    /// but the API expects `claude-3-5-sonnet`. Only the segment after
+    /// `claude-` is rewritten so dates/families with legit dots are untouched.
+    fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {
+        let trimmed = model_id.trim();
+        let core = trimmed.strip_prefix("anthropic/").unwrap_or(trimmed);
+        if let Some(suffix) = core.strip_prefix("claude-") {
+            // Replace dot-separated version segments (e.g. `3.5`) with dashes,
+            // but only when both sides are digits — protects ISO dates.
+            let mut out = String::with_capacity(core.len() + 8);
+            out.push_str("claude-");
+            let mut chars = suffix.chars().peekable();
+            let mut prev_was_digit = false;
+            while let Some(c) = chars.next() {
+                if c == '.' && prev_was_digit && chars.peek().is_some_and(|n| n.is_ascii_digit()) {
+                    out.push('-');
+                    prev_was_digit = false;
+                    continue;
+                }
+                prev_was_digit = c.is_ascii_digit();
+                out.push(c);
+            }
+            if out != model_id {
+                return std::borrow::Cow::Owned(out);
+            }
+        }
+        if core.len() != trimmed.len() {
+            return std::borrow::Cow::Owned(core.to_string());
+        }
+        std::borrow::Cow::Borrowed(model_id)
+    }
+}
+
+#[cfg(test)]
+mod normalize_model_id_tests {
+    use super::super::AnthropicProtocol;
+    use crate::providers::adapter::ProtocolAdapter;
+
+    fn p() -> AnthropicProtocol {
+        AnthropicProtocol::new(reqwest::Client::new())
+    }
+
+    #[test]
+    fn rewrites_dotted_version_in_claude_family() {
+        let a = p();
+        assert_eq!(
+            a.normalize_model_id("claude-3.5-sonnet"),
+            "claude-3-5-sonnet"
+        );
+        assert_eq!(
+            a.normalize_model_id("claude-3.7-sonnet-latest"),
+            "claude-3-7-sonnet-latest"
+        );
+    }
+
+    #[test]
+    fn strips_anthropic_vendor_prefix() {
+        let a = p();
+        assert_eq!(
+            a.normalize_model_id("anthropic/claude-3-5-sonnet"),
+            "claude-3-5-sonnet"
+        );
+    }
+
+    #[test]
+    fn iso_dated_models_unchanged() {
+        let a = p();
+        // ISO-style dated suffixes contain digits-then-letter, no dots — never matches.
+        assert_eq!(
+            a.normalize_model_id("claude-sonnet-4-5-20250514"),
+            "claude-sonnet-4-5-20250514"
+        );
+        assert_eq!(
+            a.normalize_model_id("claude-haiku-4-5-20251001"),
+            "claude-haiku-4-5-20251001"
+        );
+    }
+
+    #[test]
+    fn non_claude_models_pass_through_borrowed() {
+        let a = p();
+        let got = a.normalize_model_id("kimi-k2-0905-preview");
+        assert!(matches!(got, std::borrow::Cow::Borrowed(_)));
     }
 }

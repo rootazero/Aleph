@@ -468,3 +468,69 @@ fn test_get_merged_preset_new_provider_no_base_url() {
 
     assert!(get_merged_preset("incomplete-provider", &overrides).is_none());
 }
+
+// =========================================================================
+// thinking_profile wiring (openclaw-parity)
+// =========================================================================
+
+#[test]
+fn thinking_profile_present_for_6_families() {
+    use super::thinking::{lookup_thinking_profile, ThinkingLevel};
+
+    // Canonical preset names — must each carry a profile.
+    for name in ["openai", "claude", "gemini", "deepseek", "moonshot", "doubao"] {
+        let profile = lookup_thinking_profile(name)
+            .unwrap_or_else(|| panic!("preset `{name}` should declare a thinking_profile"));
+        assert!(
+            profile.levels.contains(&ThinkingLevel::Off),
+            "every family must include Off"
+        );
+        assert!(
+            !profile.param_key.is_empty(),
+            "param_key must be non-empty for `{name}`"
+        );
+    }
+}
+
+#[test]
+fn thinking_profile_propagates_through_preset_aliases() {
+    use super::thinking::lookup_thinking_profile;
+
+    // `kimi` resolves via PRESETS alias to the moonshot preset, so it
+    // inherits MOONSHOT_THINKING.
+    let kimi = lookup_thinking_profile("kimi").expect("kimi alias should resolve");
+    assert_eq!(kimi.param_key, "use_thinking");
+
+    // `volcengine` / `ark` aliases for doubao.
+    for alias in ["volcengine", "ark"] {
+        let p = lookup_thinking_profile(alias)
+            .unwrap_or_else(|| panic!("alias `{alias}` should resolve to doubao"));
+        assert_eq!(p.param_key, "enable_reasoning");
+    }
+}
+
+#[test]
+fn thinking_profile_protocol_alias_fallback_for_anthropic_and_google() {
+    use super::thinking::lookup_thinking_profile;
+
+    // These are protocol names, not preset names — `test_technical_aliases_removed`
+    // asserts they remain absent from PRESETS. The resolver must still surface
+    // their profile via the protocol-alias fallback.
+    let an = lookup_thinking_profile("anthropic").expect("anthropic protocol alias");
+    assert_eq!(an.param_key, "thinking");
+    let go = lookup_thinking_profile("google").expect("google protocol alias");
+    assert_eq!(go.param_key, "thinking_config");
+}
+
+#[test]
+fn thinking_profile_absent_for_chat_only_providers() {
+    use super::thinking::lookup_thinking_profile;
+
+    // Aggregators / open-model hosts that ship no reasoning controls.
+    for name in ["groq", "together", "perplexity", "ollama-cloud", "siliconflow"] {
+        assert!(
+            lookup_thinking_profile(name).is_none(),
+            "preset `{name}` should NOT declare a thinking_profile",
+        );
+    }
+}

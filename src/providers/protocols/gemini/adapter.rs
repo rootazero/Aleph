@@ -27,20 +27,20 @@ impl ProtocolAdapter for GeminiProtocol {
             crate::providers::protocols::stream_idle::effective_idle_secs(config),
             std::sync::atomic::Ordering::Relaxed,
         );
-        let endpoint = Self::build_endpoint(config, payload.model.as_deref());
+        let raw_model = payload
+            .model
+            .as_deref()
+            .unwrap_or_else(|| config.default_model());
+        let normalized_model = self.normalize_model_id(raw_model);
+        let endpoint = Self::build_endpoint(config, Some(normalized_model.as_ref()));
         let contents = Self::convert_messages(payload.messages);
         let system_instruction = Self::build_system_instruction(payload.system_prompt);
 
         // Build generation config
-        let thinking_config = payload.think_level.as_ref().and_then(|level| {
-            Self::map_think_level(
-                level,
-                payload
-                    .model
-                    .as_deref()
-                    .unwrap_or_else(|| config.default_model()),
-            )
-        });
+        let thinking_config = payload
+            .think_level
+            .as_ref()
+            .and_then(|level| Self::map_think_level(level, normalized_model.as_ref()));
 
         // Stop sequences: parse the comma-separated provider-config value
         // (same convention as the OpenAI-chat adapter).
@@ -326,5 +326,96 @@ impl ProtocolAdapter for GeminiProtocol {
 
     fn name(&self) -> &'static str {
         "gemini"
+    }
+
+    /// Forgive common Gemini model-id variants.
+    ///
+    /// * Drops the `models/` API-path prefix that callers sometimes leak.
+    /// * Drops the `google/` vendor prefix used by aggregators.
+    /// * Rewrites the legacy `gemini-pro-1.5` ordering to `gemini-1.5-pro`
+    ///   (same for `gemini-flash-1.5`, etc.) — Google flipped the family /
+    ///   version order in late 2024 and SDKs sometimes lag.
+    fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {
+        let trimmed = model_id.trim();
+        let stripped = trimmed
+            .strip_prefix("models/")
+            .or_else(|| trimmed.strip_prefix("google/"))
+            .unwrap_or(trimmed);
+
+        // Pattern: gemini-<family>-<version>  ⇒  gemini-<version>-<family>
+        // where family ∈ {pro, flash, ultra} and version is "1.5"/"2.5" etc.
+        if let Some(rest) = stripped.strip_prefix("gemini-") {
+            let mut parts = rest.splitn(3, '-');
+            if let (Some(a), Some(b)) = (parts.next(), parts.next()) {
+                let is_family = matches!(a, "pro" | "flash" | "ultra");
+                let is_version = b.contains('.') && b.chars().next().is_some_and(|c| c.is_ascii_digit());
+                if is_family && is_version {
+                    let tail = parts.next();
+                    let canonical = match tail {
+                        Some(t) => format!("gemini-{}-{}-{}", b, a, t),
+                        None => format!("gemini-{}-{}", b, a),
+                    };
+                    return std::borrow::Cow::Owned(canonical);
+                }
+            }
+        }
+
+        if stripped.len() != trimmed.len() {
+            return std::borrow::Cow::Owned(stripped.to_string());
+        }
+        std::borrow::Cow::Borrowed(model_id)
+    }
+}
+
+#[cfg(test)]
+mod normalize_model_id_tests {
+    use super::super::GeminiProtocol;
+    use crate::providers::adapter::ProtocolAdapter;
+
+    fn p() -> GeminiProtocol {
+        GeminiProtocol::new(reqwest::Client::new())
+    }
+
+    #[test]
+    fn strips_models_and_google_prefix() {
+        let a = p();
+        assert_eq!(
+            a.normalize_model_id("models/gemini-2.5-flash"),
+            "gemini-2.5-flash"
+        );
+        assert_eq!(
+            a.normalize_model_id("google/gemini-2.5-pro"),
+            "gemini-2.5-pro"
+        );
+    }
+
+    #[test]
+    fn flips_legacy_family_first_ordering() {
+        let a = p();
+        assert_eq!(
+            a.normalize_model_id("gemini-pro-1.5"),
+            "gemini-1.5-pro"
+        );
+        assert_eq!(
+            a.normalize_model_id("gemini-flash-1.5"),
+            "gemini-1.5-flash"
+        );
+    }
+
+    #[test]
+    fn canonical_form_passes_through() {
+        let a = p();
+        let got = a.normalize_model_id("gemini-2.5-flash");
+        assert!(matches!(got, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn dated_or_unknown_unchanged() {
+        let a = p();
+        assert_eq!(
+            a.normalize_model_id("gemini-2.5-flash-lite"),
+            "gemini-2.5-flash-lite"
+        );
+        assert_eq!(a.normalize_model_id("text-bison-001"), "text-bison-001");
     }
 }

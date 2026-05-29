@@ -236,11 +236,6 @@ pub trait AiProvider: Send + Sync {
         false
     }
 
-    /// Whether this provider supports extended thinking
-    fn supports_thinking(&self) -> bool {
-        false
-    }
-
     /// Protocol name for model behavior resolution.
     ///
     /// Returns the protocol identifier (e.g., "openai", "anthropic", "gemini", "ollama")

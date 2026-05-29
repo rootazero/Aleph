@@ -11,11 +11,13 @@
 use crate::providers::metadata::{Modality, ProviderMetadata};
 
 mod registry;
+pub mod thinking;
 
 #[cfg(test)]
 mod tests;
 
 pub use registry::{PRESETS, PRESET_METADATA};
+pub use thinking::{ThinkingLevel, ThinkingProfile};
 
 /// Temperature handling for providers with non-standard expectations.
 ///
@@ -80,6 +82,14 @@ pub struct ProviderPreset {
     /// Vendor docs / landing page URL. Distinct from `signup_url` which
     /// points at the API-key creation flow.
     pub homepage: Option<&'static str>,
+    /// Declarative reasoning ladder for this family.
+    ///
+    /// `None` → provider exposes no reasoning toggle (Ollama, plain GPT-4o,
+    /// most aggregators). `Some(profile)` → `ThinkingAdapter` can dispatch
+    /// to the profile's `param_key` and validated `levels`. Replaces the
+    /// hardcoded `supports_thinking_control` / `get_thinking_param_key`
+    /// chains formerly in `agents/thinking_adapter.rs`.
+    pub thinking_profile: Option<ThinkingProfile>,
 }
 
 /// Default modality for chat-side presets — used when no override is set.
@@ -104,6 +114,7 @@ impl Default for ProviderPreset {
             supports_health_check: true,
             modalities: DEFAULT_CHAT_MODALITIES,
             homepage: None,
+            thinking_profile: None,
         }
     }
 }
@@ -132,6 +143,7 @@ impl ProviderPreset {
             supports_health_check: true,
             modalities: DEFAULT_CHAT_MODALITIES,
             homepage: None,
+            thinking_profile: None,
         }
     }
 
@@ -187,6 +199,12 @@ impl ProviderPreset {
 
     pub const fn with_modalities(mut self, modalities: &'static [Modality]) -> Self {
         self.modalities = modalities;
+        self
+    }
+
+    /// Attach a declarative reasoning ladder. See [`ThinkingProfile`].
+    pub const fn with_thinking_profile(mut self, profile: ThinkingProfile) -> Self {
+        self.thinking_profile = Some(profile);
         self
     }
 

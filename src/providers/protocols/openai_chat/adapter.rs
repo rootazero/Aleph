@@ -34,11 +34,11 @@ impl ProtocolAdapter for OpenAiProtocol {
         );
         let endpoint = Self::build_endpoint(config);
         let messages = Self::convert_messages(payload.messages, payload.system_prompt);
-        let model_name = payload
+        let raw_model = payload
             .model
             .as_deref()
-            .unwrap_or_else(|| config.default_model())
-            .to_string();
+            .unwrap_or_else(|| config.default_model());
+        let model_name = self.normalize_model_id(raw_model).into_owned();
 
         // Build request body — always streaming (stream-first architecture).
         // `stream_options.include_usage` makes OpenAI emit a trailing chunk
@@ -385,5 +385,73 @@ impl ProtocolAdapter for OpenAiProtocol {
 
     fn name(&self) -> &'static str {
         "openai"
+    }
+
+    /// Forgive common OpenAI model-id typos that production users hit.
+    ///
+    /// Covers the no-dash variants returned by some routing aggregators
+    /// (`gpt4o` → `gpt-4o`, `gpt4omini` → `gpt-4o-mini`, `o3mini` → `o3-mini`)
+    /// and the legacy `openai/` prefix that OpenRouter-style callers leak in.
+    /// Anything else passes through unchanged.
+    fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {
+        let trimmed = model_id.trim();
+        // Strip vendor-routing prefix sometimes used by aggregators.
+        let core = trimmed.strip_prefix("openai/").unwrap_or(trimmed);
+        let lower = core.to_ascii_lowercase();
+        let canonical = match lower.as_str() {
+            "gpt4o" => Some("gpt-4o"),
+            "gpt4omini" | "gpt-4omini" | "gpt4o-mini" => Some("gpt-4o-mini"),
+            "gpt4turbo" => Some("gpt-4-turbo"),
+            "o1mini" => Some("o1-mini"),
+            "o3mini" => Some("o3-mini"),
+            "o4mini" => Some("o4-mini"),
+            _ => None,
+        };
+        match canonical {
+            Some(c) => std::borrow::Cow::Owned(c.to_string()),
+            None if core.len() != trimmed.len() => std::borrow::Cow::Owned(core.to_string()),
+            None => std::borrow::Cow::Borrowed(model_id),
+        }
+    }
+}
+
+#[cfg(test)]
+mod normalize_model_id_tests {
+    use super::super::OpenAiProtocol;
+    use crate::providers::adapter::ProtocolAdapter;
+
+    fn p() -> OpenAiProtocol {
+        OpenAiProtocol::new(reqwest::Client::new())
+    }
+
+    #[test]
+    fn rewrites_no_dash_variants() {
+        let a = p();
+        assert_eq!(a.normalize_model_id("gpt4o"), "gpt-4o");
+        assert_eq!(a.normalize_model_id("o3mini"), "o3-mini");
+        assert_eq!(a.normalize_model_id("o4mini"), "o4-mini");
+    }
+
+    #[test]
+    fn strips_openai_vendor_prefix() {
+        let a = p();
+        assert_eq!(a.normalize_model_id("openai/gpt-4o"), "gpt-4o");
+        assert_eq!(a.normalize_model_id("openai/o3-mini"), "o3-mini");
+    }
+
+    #[test]
+    fn canonical_ids_pass_through_borrowed() {
+        let a = p();
+        // Borrowed pass-through (no allocation) for already-canonical inputs.
+        let got = a.normalize_model_id("gpt-4o");
+        assert!(matches!(got, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(got, "gpt-4o");
+    }
+
+    #[test]
+    fn unknown_models_unchanged() {
+        let a = p();
+        assert_eq!(a.normalize_model_id("deepseek-chat"), "deepseek-chat");
+        assert_eq!(a.normalize_model_id("llama-3.3-70b"), "llama-3.3-70b");
     }
 }

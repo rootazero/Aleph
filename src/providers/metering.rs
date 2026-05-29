@@ -94,10 +94,6 @@ impl AiProvider for MeteringProvider {
         self.inner.supports_native_tools()
     }
 
-    fn supports_thinking(&self) -> bool {
-        self.inner.supports_thinking()
-    }
-
     fn protocol(&self) -> &str {
         self.inner.protocol()
     }

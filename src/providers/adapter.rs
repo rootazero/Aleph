@@ -194,6 +194,16 @@ pub trait ProtocolAdapter: Send + Sync {
         false
     }
 
+    /// Canonicalise a user-supplied model id to the form this protocol expects.
+    ///
+    /// Mirrors openclaw's `ProviderPlugin.normalizeModelId` hook — lets each
+    /// protocol accept common alias forms (`gemini-pro-1.5` → `gemini-1.5-pro`,
+    /// `claude-3.5-sonnet` → `claude-3-5-sonnet`, `gpt4o` → `gpt-4o`) without
+    /// the caller knowing the canonical wire name. Default impl passes through.
+    fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {
+        std::borrow::Cow::Borrowed(model_id)
+    }
+
     /// Stream fine-grained delta events from an HTTP response.
     ///
     /// All adapters must implement this method directly — there is no default

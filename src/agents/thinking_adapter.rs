@@ -287,43 +287,25 @@ impl ThinkingAdapter {
         }
     }
 
-    /// Check if provider supports thinking level control
+    /// Check if provider supports thinking level control.
+    ///
+    /// Sourced from `ProviderPreset.thinking_profile` so that adding a new
+    /// reasoning-capable family is a single declarative edit in
+    /// `providers/presets/registry.rs` — no string ladder here. Falls back
+    /// to a small protocol-name table inside `presets::thinking` for the
+    /// `anthropic` / `google` transport identifiers that the project keeps
+    /// off the preset aliases list by design.
     pub fn supports_thinking_control(provider: &str) -> bool {
-        provider.eq_ignore_ascii_case("claude")
-            || provider.eq_ignore_ascii_case("anthropic")
-            || provider.eq_ignore_ascii_case("openai")
-            || provider.eq_ignore_ascii_case("gemini")
-            || provider.eq_ignore_ascii_case("google")
-            || provider.eq_ignore_ascii_case("deepseek")
-            || provider.eq_ignore_ascii_case("doubao")
-            || provider.eq_ignore_ascii_case("volcengine")
-            || provider.eq_ignore_ascii_case("ark")
-            || provider.eq_ignore_ascii_case("moonshot")
-            || provider.eq_ignore_ascii_case("kimi")
+        crate::providers::presets::thinking::lookup_thinking_profile(provider).is_some()
     }
 
-    /// Get the parameter key used by the provider for thinking control
+    /// Get the parameter key used by the provider for thinking control.
+    ///
+    /// Reads `ProviderPreset.thinking_profile.param_key` (e.g. `thinking` for
+    /// Claude, `reasoning_effort` for OpenAI). Returns `None` when the family
+    /// either has no profile or is unknown.
     pub fn get_thinking_param_key(provider: &str) -> Option<&'static str> {
-        match provider {
-            p if p.eq_ignore_ascii_case("claude") || p.eq_ignore_ascii_case("anthropic") => {
-                Some("thinking")
-            }
-            p if p.eq_ignore_ascii_case("openai") => Some("reasoning_effort"),
-            p if p.eq_ignore_ascii_case("gemini") || p.eq_ignore_ascii_case("google") => {
-                Some("thinking_config")
-            }
-            p if p.eq_ignore_ascii_case("deepseek") => Some("enable_thinking"),
-            p if p.eq_ignore_ascii_case("doubao")
-                || p.eq_ignore_ascii_case("volcengine")
-                || p.eq_ignore_ascii_case("ark") =>
-            {
-                Some("enable_reasoning")
-            }
-            p if p.eq_ignore_ascii_case("moonshot") || p.eq_ignore_ascii_case("kimi") => {
-                Some("use_thinking")
-            }
-            _ => None,
-        }
+        crate::providers::presets::thinking::lookup_thinking_profile(provider).map(|t| t.param_key)
     }
 }
 

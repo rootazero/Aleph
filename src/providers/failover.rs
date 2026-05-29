@@ -479,10 +479,6 @@ impl AiProvider for FailoverProvider {
     fn supports_native_tools(&self) -> bool {
         self.primary.current().supports_native_tools()
     }
-
-    fn supports_thinking(&self) -> bool {
-        self.primary.current().supports_thinking()
-    }
 }
 
 #[cfg(test)]
