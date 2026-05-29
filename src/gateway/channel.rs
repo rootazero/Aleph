@@ -241,6 +241,12 @@ pub enum MessageMeta {
         emojis: Vec<String>,
     },
     ThreadId(i64),
+    /// Sender of this inbound message is itself a bot.
+    ///
+    /// Channel adapters that can detect bot authorship (Telegram `User.is_bot`,
+    /// Slack `bot_id`, Discord `author.bot`, …) push this variant so the
+    /// gateway-level pair-loop guard can short-circuit bot↔bot reply storms.
+    BotAuthored,
 }
 
 /// Message received from a channel
@@ -296,6 +302,16 @@ impl InboundMessage {
             MessageMeta::Quote { sender, body } => Some((sender, body.as_str())),
             _ => None,
         })
+    }
+
+    /// Returns `true` if the channel adapter flagged the sender as a bot.
+    ///
+    /// Consumed by the pair-loop guard to gate bot↔bot reply storm protection.
+    /// Adapters opt in by pushing [`MessageMeta::BotAuthored`].
+    pub fn is_bot_authored(&self) -> bool {
+        self.metadata
+            .iter()
+            .any(|m| matches!(m, MessageMeta::BotAuthored))
     }
 }
 

@@ -48,7 +48,7 @@ pub use resolver::{
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
-    InboundMessageSender, MessageId, OutboundMessage, SendResult, UserId,
+    InboundMessageSender, MessageId, MessageMeta, OutboundMessage, SendResult, UserId,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -327,10 +327,15 @@ impl EventHandler for Handler {
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
-        // Ignore messages from bots (including self)
-        if msg.author.bot {
+        // Self-loop guard: never re-process our own bot's messages.
+        // Foreign bots fall through with `MessageMeta::BotAuthored` so the
+        // inbound router's pair-loop-guard can suppress sustained storms.
+        let bot_self_id = *self.bot_user_id.read().await;
+        let is_self = bot_self_id == Some(msg.author.id.get());
+        if msg.author.bot && is_self {
             return;
         }
+        let is_foreign_bot = msg.author.bot && !is_self;
 
         // Check if this is a DM
         let is_dm = msg.guild_id.is_none();
@@ -426,6 +431,11 @@ impl EventHandler for Handler {
             ConversationId::new(msg.channel_id.to_string())
         };
 
+        let mut metadata: Vec<MessageMeta> = Vec::new();
+        if is_foreign_bot {
+            metadata.push(MessageMeta::BotAuthored);
+        }
+
         // Create inbound message
         let inbound = InboundMessage {
             id: MessageId::new(msg.id.to_string()),
@@ -445,7 +455,7 @@ impl EventHandler for Handler {
                 "guild_id": msg.guild_id.map(|g| g.to_string()),
                 "channel_id": msg.channel_id.to_string(),
             })),
-            metadata: vec![],
+            metadata,
         };
 
         // Send to channel

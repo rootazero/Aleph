@@ -4,6 +4,7 @@
 //! messaging, with configurable policies and allowlists.
 
 use crate::gateway::channel::UserId;
+use crate::gateway::pair_loop_guard::PairLoopGuardConfig;
 use serde::{Deserialize, Serialize};
 
 /// E.164 formatted phone number
@@ -118,6 +119,12 @@ pub struct ChannelAccessConfig {
     /// Explicitly allowlisted group JIDs
     #[serde(default)]
     pub groups: Vec<String>,
+
+    /// Bot-to-bot loop protection (active when the channel admits bot-authored
+    /// inbound messages). Per-channel override; falls back to global defaults
+    /// via [`crate::gateway::pair_loop_guard::resolve_pair_loop_settings`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_loop_protection: Option<PairLoopGuardConfig>,
 }
 
 impl Default for ChannelAccessConfig {
@@ -128,6 +135,7 @@ impl Default for ChannelAccessConfig {
             group_policy: GroupPolicy::Allowlist,
             group_allow_from: Vec::new(),
             groups: Vec::new(),
+            bot_loop_protection: None,
         }
     }
 }
@@ -234,6 +242,7 @@ mod tests {
             group_policy: group,
             group_allow_from: vec!["+15551234567".to_string()],
             groups: vec!["group@g.us".to_string()],
+            bot_loop_protection: None,
         })
     }
 

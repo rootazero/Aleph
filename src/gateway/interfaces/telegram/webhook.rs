@@ -208,6 +208,12 @@ impl TelegramWebhookHandler {
         // Build metadata
         let mut metadata: Vec<MessageMeta> = Vec::new();
 
+        // Bot-authored: lets the inbound router's pair-loop-guard track
+        // bot↔bot traffic. Pre-filtering happens in the router, not here.
+        if msg.from.as_ref().is_some_and(|u| u.is_bot) {
+            metadata.push(MessageMeta::BotAuthored);
+        }
+
         // Media group ID
         if let Some(group_id) = msg.media_group_id {
             metadata.push(MessageMeta::MediaGroupId(group_id));
@@ -486,6 +492,10 @@ struct TelegramUser {
     id: teloxide::types::UserId,
     username: Option<String>,
     first_name: String,
+    /// Telegram marks bot accounts with `is_bot: true`. Older fixtures
+    /// without this field default to `false` (treated as a human).
+    #[serde(default)]
+    is_bot: bool,
 }
 
 /// Chat type
@@ -894,6 +904,7 @@ mod tests {
                 id: teloxide::types::UserId(123),
                 username: Some("testuser".to_string()),
                 first_name: "Test".to_string(),
+                is_bot: false,
             },
         };
         assert_eq!(user_origin.sender_name(), Some("testuser".to_string()));
@@ -1029,5 +1040,114 @@ mod tests {
         let msg = messages.first().unwrap();
         assert_eq!(msg.text, "Hello from webhook!");
         assert_eq!(msg.sender_id.as_str(), "111");
+        // is_bot:false in fixture → no BotAuthored marker.
+        assert!(!msg.is_bot_authored());
+    }
+
+    #[tokio::test]
+    async fn handle_update_marks_bot_authored_when_from_is_bot() {
+        use axum::http::HeaderMap;
+
+        let (inbound_tx, _inbound_rx) = mpsc::channel(100);
+        let access = Arc::new(AccessController::new(
+            crate::gateway::interfaces::telegram::config_resolver::ResolvedConfig {
+                account_id: "test".to_string(),
+                bot_token: "tok".to_string(),
+                bot_username: None,
+                default_agent: None,
+                dm_policy: Default::default(),
+                group_policy: Default::default(),
+                send_typing: true,
+                allowed_users: vec![],
+                allowed_groups: vec![],
+                streaming: Default::default(),
+                error_policy: Default::default(),
+                max_retries: 3,
+                html_fallback: true,
+            },
+        ));
+        let handler = TelegramWebhookHandler::new(
+            "bot_token".to_string(),
+            ChannelId::new("telegram"),
+            "/webhook/telegram".to_string(),
+            None,
+            inbound_tx,
+            access,
+        );
+
+        let update_json = serde_json::json!({
+            "update_id": 1,
+            "message": {
+                "message_id": 1,
+                "from": {
+                    "id": 222,
+                    "is_bot": true,
+                    "first_name": "OtherBot",
+                    "username": "other_bot"
+                },
+                "chat": { "id": 222, "type": "private" },
+                "date": 1234567890,
+                "text": "ping"
+            }
+        });
+
+        let messages = handler
+            .handle(&HeaderMap::new(), bytes::Bytes::from(serde_json::to_vec(&update_json).unwrap()))
+            .await
+            .expect("handle ok");
+        let msg = messages.first().expect("one inbound");
+        assert!(msg.is_bot_authored(), "is_bot:true → MessageMeta::BotAuthored");
+    }
+
+    #[tokio::test]
+    async fn handle_update_treats_missing_is_bot_as_human() {
+        use axum::http::HeaderMap;
+
+        let (inbound_tx, _inbound_rx) = mpsc::channel(100);
+        let access = Arc::new(AccessController::new(
+            crate::gateway::interfaces::telegram::config_resolver::ResolvedConfig {
+                account_id: "test".to_string(),
+                bot_token: "tok".to_string(),
+                bot_username: None,
+                default_agent: None,
+                dm_policy: Default::default(),
+                group_policy: Default::default(),
+                send_typing: true,
+                allowed_users: vec![],
+                allowed_groups: vec![],
+                streaming: Default::default(),
+                error_policy: Default::default(),
+                max_retries: 3,
+                html_fallback: true,
+            },
+        ));
+        let handler = TelegramWebhookHandler::new(
+            "bot_token".to_string(),
+            ChannelId::new("telegram"),
+            "/webhook/telegram".to_string(),
+            None,
+            inbound_tx,
+            access,
+        );
+
+        // Payload without `is_bot` — older or partial fixtures must not panic
+        // and must default to false (human), preserving backward compatibility.
+        let update_json = serde_json::json!({
+            "update_id": 2,
+            "message": {
+                "message_id": 1,
+                "from": { "id": 333, "first_name": "LegacyUser" },
+                "chat": { "id": 333, "type": "private" },
+                "date": 1234567890,
+                "text": "hi"
+            }
+        });
+
+        let messages = handler
+            .handle(&HeaderMap::new(), bytes::Bytes::from(serde_json::to_vec(&update_json).unwrap()))
+            .await
+            .expect("handle ok");
+        let msg = messages.first().expect("one inbound");
+        assert!(!msg.is_bot_authored(), "missing is_bot → defaults to human");
     }
 }

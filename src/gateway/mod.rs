@@ -69,6 +69,7 @@ pub mod channel_policy;
 pub mod channel_registry;
 pub mod coalescer;
 pub mod device_store;
+pub mod pair_loop_guard;
 pub mod hot_reload;
 pub mod http_server;
 pub mod inbound_context;

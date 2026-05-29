@@ -25,7 +25,10 @@ fn test_convert_basic_message() {
 }
 
 #[test]
-fn test_convert_filters_bot_messages() {
+fn test_convert_foreign_bot_passes_with_botauthored_marker() {
+    // Foreign-bot (bot_id present, user != self) now flows through with the
+    // BotAuthored marker so the inbound router's pair-loop-guard can
+    // throttle bot↔bot storms. Previously this was hard-filtered.
     let event = serde_json::json!({
         "type": "message",
         "user": "U456",
@@ -37,8 +40,57 @@ fn test_convert_filters_bot_messages() {
 
     let channel_id = ChannelId::new("slack");
     let config = SlackConfig::default();
-    let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
-    assert!(msg.is_none());
+    let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config)
+        .expect("foreign bot should pass through");
+    assert!(
+        msg.metadata
+            .iter()
+            .any(|m| matches!(m, MessageMeta::BotAuthored)),
+        "foreign bot must carry BotAuthored marker"
+    );
+}
+
+#[test]
+fn test_convert_self_bot_loop_still_hard_filtered_even_with_bot_id() {
+    // Self-loop (user_id == bot_user_id) must still be dropped regardless
+    // of bot_id — pair-loop-guard never sees own-bot messages.
+    let event = serde_json::json!({
+        "type": "message",
+        "user": "U456",
+        "channel": "C789",
+        "text": "Echo of my own message",
+        "ts": "1700000000.000100",
+        "bot_id": "B999"
+    });
+
+    let channel_id = ChannelId::new("slack");
+    let config = SlackConfig::default();
+    // bot_user_id == "U456" → self-loop
+    let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "U456", &config);
+    assert!(msg.is_none(), "self-loop must be hard-filtered");
+}
+
+#[test]
+fn test_convert_human_message_carries_no_botauthored() {
+    // Sanity: a normal human message gets no BotAuthored marker.
+    let event = serde_json::json!({
+        "type": "message",
+        "user": "U456",
+        "channel": "C789",
+        "text": "Hello",
+        "ts": "1700000000.000100"
+    });
+
+    let channel_id = ChannelId::new("slack");
+    let config = SlackConfig::default();
+    let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config)
+        .expect("human should pass");
+    assert!(
+        !msg.metadata
+            .iter()
+            .any(|m| matches!(m, MessageMeta::BotAuthored)),
+        "human must NOT carry BotAuthored"
+    );
 }
 
 #[test]

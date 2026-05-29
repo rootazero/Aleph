@@ -30,6 +30,7 @@ use super::handlers::group_chat::SharedOrchestrator;
 
 use super::agent_env::AgentEnvStore;
 use super::inbound_context::InboundContext;
+use super::pair_loop_guard::{PairLoopFacts, PairLoopGuard, PairLoopGuardConfig};
 use super::pairing_store::PairingStore;
 use super::routing_config::RoutingConfig;
 use crate::command::CommandParser;
@@ -88,6 +89,10 @@ pub struct InboundMessageRouter {
     pub(super) default_agent_id: String,
     /// Inbound message deduplication tracker
     dedup_tracker: Mutex<InboundDedupTracker>,
+    /// Bot↔bot pair-loop guard (kicks in when `is_bot_authored()` is true).
+    pair_loop_guard: Arc<PairLoopGuard>,
+    /// Effective pair-loop-guard config (channel-level overrides may layer on later).
+    pair_loop_config: PairLoopGuardConfig,
     /// Group chat orchestrator
     pub(super) group_chat_orch: Option<SharedOrchestrator>,
     /// Group chat executor
@@ -145,6 +150,8 @@ impl InboundMessageRouter {
             route_session_config: SessionConfig::default(),
             default_agent_id: "main".to_string(),
             dedup_tracker: Mutex::new(InboundDedupTracker::new()),
+            pair_loop_guard: Arc::new(PairLoopGuard::new()),
+            pair_loop_config: PairLoopGuardConfig::default(),
             group_chat_orch: None,
             group_chat_executor: None,
             active_group_sessions: Mutex::new(HashMap::new()),
@@ -278,6 +285,13 @@ impl InboundMessageRouter {
         self
     }
 
+    /// Tune the bot↔bot pair-loop guard. Defaults (20 events / 60s window /
+    /// 60s cooldown, enabled) are applied when this builder is not called.
+    pub fn with_bot_loop_protection(mut self, config: PairLoopGuardConfig) -> Self {
+        self.pair_loop_config = config;
+        self
+    }
+
     /// 注入审批回调汇，启用通道按钮 approve/deny 分发。
     pub fn with_approval_callback_sink(
         mut self,
@@ -322,6 +336,10 @@ impl InboundMessageRouter {
                             Ok(msg) => {
                                 // Deduplication check
                                 if !self.dedup_check(&msg).await {
+                                    continue;
+                                }
+                                // Bot↔bot pair-loop guard (no-op for human senders)
+                                if !self.pair_loop_check(&msg) {
                                     continue;
                                 }
 
@@ -378,6 +396,9 @@ impl InboundMessageRouter {
                 if !self.dedup_check(&msg).await {
                     continue;
                 }
+                if !self.pair_loop_check(&msg) {
+                    continue;
+                }
 
                 let router = self.clone();
                 tokio::spawn(async move {
@@ -389,6 +410,37 @@ impl InboundMessageRouter {
         }
 
         info!("InboundMessageRouter stopped");
+    }
+
+    /// Check pair-loop guard for bot-authored inbound messages.
+    /// Returns `true` when the message is allowed through, `false` when the
+    /// pair has been suppressed (drop silently to avoid feeding the loop).
+    /// Non-bot messages bypass the guard entirely.
+    fn pair_loop_check(&self, msg: &InboundMessage) -> bool {
+        if !msg.is_bot_authored() {
+            return true;
+        }
+        let facts = PairLoopFacts {
+            scope_id: msg.channel_id.as_str(),
+            conversation_id: msg.conversation_id.as_str(),
+            sender_id: msg.sender_id.as_str(),
+            receiver_id: msg.channel_id.as_str(),
+        };
+        let result = self
+            .pair_loop_guard
+            .record_and_check(&facts, &self.pair_loop_config);
+        if result.suppressed {
+            warn!(
+                channel_id = %msg.channel_id.as_str(),
+                conversation_id = %msg.conversation_id.as_str(),
+                sender_id = %msg.sender_id.as_str(),
+                retry_after_secs = result.retry_after.map(|d| d.as_secs()).unwrap_or(0),
+                reason = %result.reason.as_deref().unwrap_or(""),
+                "pair-loop guard suppressed bot-authored inbound message"
+            );
+            return false;
+        }
+        true
     }
 
     /// Check dedup tracker, returns `true` if message is new (not a duplicate).
@@ -1035,5 +1087,78 @@ mod tests {
             ),
             "zero-config group message must resolve to a Group key; got: {key:?}",
         );
+    }
+
+    fn bot_authored_msg(id: &str) -> InboundMessage {
+        use crate::gateway::channel::MessageMeta;
+        InboundMessage {
+            id: MessageId::new(id),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("conv-bot"),
+            sender_id: UserId::new("other-bot"),
+            sender_name: None,
+            text: "ping".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![MessageMeta::BotAuthored],
+        }
+    }
+
+    /// pair_loop_check: human-authored messages bypass the guard entirely
+    /// (no metadata → guard skipped, returns true).
+    #[test]
+    fn pair_loop_check_skips_human_messages() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        );
+        let human = InboundMessage {
+            id: MessageId::new("m-h"),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("conv-h"),
+            sender_id: UserId::new("human"),
+            sender_name: None,
+            text: "hi".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        };
+        for _ in 0..1_000 {
+            assert!(router.pair_loop_check(&human));
+        }
+    }
+
+    /// pair_loop_check: a bot-authored sender exceeding the configured budget
+    /// is suppressed; subsequent attempts during cooldown stay suppressed.
+    #[test]
+    fn pair_loop_check_suppresses_bot_storm() {
+        let cfg = PairLoopGuardConfig {
+            enabled: true,
+            max_events_per_window: 3,
+            window_seconds: 60,
+            cooldown_seconds: 30,
+        };
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_bot_loop_protection(cfg);
+
+        // First 3 events fit in the budget.
+        for i in 0..3 {
+            assert!(router.pair_loop_check(&bot_authored_msg(&format!("m{i}"))));
+        }
+        // 4th tips the pair into cooldown.
+        assert!(!router.pair_loop_check(&bot_authored_msg("m3")));
+        // Subsequent attempts during cooldown remain blocked.
+        assert!(!router.pair_loop_check(&bot_authored_msg("m4")));
     }
 }

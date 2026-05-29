@@ -82,16 +82,16 @@ impl SlackMessageOps {
             None => (event, false),
         };
 
-        // Filter out bot messages
-        if msg_data.get("bot_id").is_some() {
-            return None;
-        }
+        // Foreign-bot detection: surface for the inbound router's pair-loop-guard.
+        // Self-loops are still hard-filtered below; only third-party bots flow
+        // through so the guard can suppress sustained bot↔bot storms.
+        let is_foreign_bot = msg_data.get("bot_id").is_some();
 
         let user_id = msg_data["user"]
             .as_str()
             .or_else(|| event["user"].as_str())?;
 
-        // Filter out bot's own messages
+        // Filter out bot's own messages (self-loop — never let guard see)
         if user_id == bot_user_id {
             return None;
         }
@@ -141,6 +141,11 @@ impl SlackMessageOps {
             .as_str()
             .map(|ts| MessageId::new(ts.to_string()));
 
+        let mut metadata: Vec<MessageMeta> = Vec::new();
+        if is_foreign_bot {
+            metadata.push(MessageMeta::BotAuthored);
+        }
+
         Some(InboundMessage {
             id: MessageId::new(ts.to_string()),
             channel_id: channel_id.clone(),
@@ -153,7 +158,7 @@ impl SlackMessageOps {
             reply_to,
             is_group: !is_dm,
             raw: Some(event.clone()),
-            metadata: vec![],
+            metadata,
         })
     }
 }

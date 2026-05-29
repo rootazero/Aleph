@@ -104,6 +104,12 @@ pub(crate) async fn convert_message(
     // Extract platform-specific metadata
     let mut metadata: Vec<MessageMeta> = Vec::new();
 
+    // Bot-authored: surfaced for the inbound router's pair-loop-guard so it can
+    // track bot↔bot traffic. Filtering happens in the router, not here.
+    if msg.from.as_ref().is_some_and(|u| u.is_bot) {
+        metadata.push(MessageMeta::BotAuthored);
+    }
+
     // media_group_id — messages sharing this ID belong to one album
     if let Some(group_id) = msg.media_group_id() {
         metadata.push(MessageMeta::MediaGroupId(group_id.to_string()));
