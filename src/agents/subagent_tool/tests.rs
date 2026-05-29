@@ -330,6 +330,30 @@ async fn test_execute_with_agent_type() {
 }
 
 #[tokio::test]
+async fn test_execute_with_aliased_agent_type() {
+    // A model emitting Claude Code vocabulary ("Explore" capitalized) must
+    // resolve to the builtin `explore` agent instead of hard-erroring.
+    let tool = make_tool();
+    let result = tool
+        .execute(
+            json!({
+                "task": "explore the codebase",
+                "agent_type": "Explore"
+            }),
+            CancellationToken::new(),
+        )
+        .await;
+
+    match result {
+        ToolResult::Success { output } => {
+            assert!(output["result"].is_string());
+        }
+        ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
+        _ => panic!("expected ToolResult::Success"),
+    }
+}
+
+#[tokio::test]
 async fn test_execute_unknown_agent_type() {
     let tool = make_tool();
     let result = tool

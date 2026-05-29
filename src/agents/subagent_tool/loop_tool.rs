@@ -392,10 +392,7 @@ impl LoopTool for SubagentTool {
                     Vec::with_capacity(batch.len());
                 for (idx, batch_task) in batch.iter().enumerate() {
                     let agent_def = if let Some(ref agent_type) = batch_task.agent_type {
-                        match self
-                            .agent_registry
-                            .lookup_with_overlay(agent_type, project_root_ref)
-                        {
+                        match self.agent_registry.resolve(agent_type, project_root_ref) {
                             Some(def) => def,
                             None => {
                                 let available = self.agent_registry.list_ids().join(", ");
@@ -409,10 +406,7 @@ impl LoopTool for SubagentTool {
                             }
                         }
                     } else if let Some(ref agent_type) = args.agent_type {
-                        match self
-                            .agent_registry
-                            .lookup_with_overlay(agent_type, project_root_ref)
-                        {
+                        match self.agent_registry.resolve(agent_type, project_root_ref) {
                             Some(def) => def,
                             None => {
                                 let available = self.agent_registry.list_ids().join(", ");
@@ -550,10 +544,7 @@ impl LoopTool for SubagentTool {
         let project_root = crate::projects::current_project_root();
         let project_root_ref = project_root.as_deref();
         let agent_def = if let Some(ref agent_type) = args.agent_type {
-            match self
-                .agent_registry
-                .lookup_with_overlay(agent_type, project_root_ref)
-            {
+            match self.agent_registry.resolve(agent_type, project_root_ref) {
                 Some(def) => def,
                 None => {
                     let available = self.agent_registry.list_ids().join(", ");

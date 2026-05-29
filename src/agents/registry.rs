@@ -124,6 +124,39 @@ impl AgentRegistry {
         self.get(id)
     }
 
+    /// Resolve an `agent_type` selector to a definition, tolerating the
+    /// vocabulary variations a model naturally emits.
+    ///
+    /// Resolution is two-pass and strictly non-destructive:
+    ///   1. Exact match via [`Self::lookup_with_overlay`] — project overlays
+    ///      and custom file-defined ids always win and behave identically to
+    ///      before; case-sensitive, no aliasing.
+    ///   2. On miss, canonicalize the selector ([`normalize_agent_alias`]:
+    ///      trim + lowercase + alias table) and retry the lookup once.
+    ///
+    /// A genuinely unknown selector still returns `None`, so callers keep
+    /// surfacing their "Unknown agent_type. Available: …" error. This closes
+    /// the brittleness where a model picking `general-purpose`, `Explore`, or
+    /// `planner` (Claude Code conventions) hard-errored instead of resolving
+    /// to `default` / `explore` / `plan`. Mirrors the canonicalization the
+    /// project already applies in [`crate::agents::thinking::normalize_think_level`]
+    /// and `ProtocolAdapter::normalize_model_id` — boundary input normalization,
+    /// not LLM reasoning (R7-safe).
+    pub fn resolve(
+        &self,
+        id: &str,
+        project_root: Option<&std::path::Path>,
+    ) -> Option<AgentDef> {
+        if let Some(def) = self.lookup_with_overlay(id, project_root) {
+            return Some(def);
+        }
+        let canonical = normalize_agent_alias(id)?;
+        if canonical == id {
+            return None;
+        }
+        self.lookup_with_overlay(canonical, project_root)
+    }
+
     /// Remove an agent by ID
     pub fn unregister(&self, id: &str) -> Option<AgentDef> {
         let mut agents = self.agents.write().unwrap_or_else(|e| e.into_inner());
@@ -132,6 +165,28 @@ impl AgentRegistry {
 }
 
 /// Returns the built-in agent definitions
+/// Canonicalize a built-in `agent_type` selector, tolerating casing and the
+/// common synonyms a model trained on Claude Code conventions emits
+/// (`general-purpose`, `Explore`, `planner`, …). Returns the canonical
+/// built-in id, or `None` when the selector matches no known alias — in which
+/// case [`AgentRegistry::resolve`] reports it as genuinely unknown rather than
+/// masking a typo.
+///
+/// Only built-in ids are aliased; project/user-defined agents are matched
+/// exactly in the first resolution pass and never routed through this table.
+fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "default" | "general" | "general-purpose" | "general_purpose" | "gp" => Some("default"),
+        "explore" | "explorer" | "exploration" => Some("explore"),
+        "plan" | "planner" | "planning" => Some("plan"),
+        "verify" | "verifier" | "verification" => Some("verify"),
+        "research" | "researcher" => Some("researcher"),
+        "code" | "coder" | "coding" => Some("coder"),
+        "main" => Some("main"),
+        _ => None,
+    }
+}
+
 pub fn builtin_agents() -> Vec<AgentDef> {
     vec![
         // Main agent - full access. Explicit "flow_run" alongside "*" marks the
@@ -466,6 +521,60 @@ mod tests {
         assert_eq!(
             global.description,
             "Read-only codebase exploration specialist"
+        );
+    }
+
+    // --- resolve (forgiving agent_type canonicalization) -------------------
+
+    #[test]
+    fn resolve_exact_match_behaves_like_lookup() {
+        let registry = AgentRegistry::with_builtins();
+        // Exact, canonical ids resolve unchanged.
+        for id in ["explore", "plan", "verify", "researcher", "coder", "default"] {
+            assert_eq!(registry.resolve(id, None).unwrap().id, id, "exact {id}");
+        }
+    }
+
+    #[test]
+    fn resolve_is_case_insensitive_for_builtins() {
+        let registry = AgentRegistry::with_builtins();
+        assert_eq!(registry.resolve("Explore", None).unwrap().id, "explore");
+        assert_eq!(registry.resolve("PLAN", None).unwrap().id, "plan");
+        assert_eq!(registry.resolve("  Verify ", None).unwrap().id, "verify");
+    }
+
+    #[test]
+    fn resolve_maps_claude_code_aliases() {
+        let registry = AgentRegistry::with_builtins();
+        // The vocabulary a model trained on Claude Code naturally emits.
+        assert_eq!(registry.resolve("general-purpose", None).unwrap().id, "default");
+        assert_eq!(registry.resolve("general_purpose", None).unwrap().id, "default");
+        assert_eq!(registry.resolve("planner", None).unwrap().id, "plan");
+        assert_eq!(registry.resolve("verification", None).unwrap().id, "verify");
+        assert_eq!(registry.resolve("explorer", None).unwrap().id, "explore");
+        assert_eq!(registry.resolve("research", None).unwrap().id, "researcher");
+        assert_eq!(registry.resolve("coding", None).unwrap().id, "coder");
+    }
+
+    #[test]
+    fn resolve_genuinely_unknown_still_returns_none() {
+        // A real typo / unknown selector must NOT be silently coerced — the
+        // caller keeps surfacing the "Unknown agent_type. Available: …" error.
+        let registry = AgentRegistry::with_builtins();
+        assert!(registry.resolve("nonexistent_agent", None).is_none());
+        assert!(registry.resolve("explorez", None).is_none());
+    }
+
+    #[test]
+    fn resolve_exact_match_wins_over_alias_via_project_overlay() {
+        // A project-defined `explore` is matched exactly in pass 1 and must
+        // never be bypassed by the alias table.
+        let registry = AgentRegistry::with_builtins();
+        let project = tempfile::tempdir().unwrap();
+        write_project_agent(project.path(), "explore", "project-tuned explore");
+        assert_eq!(
+            registry.resolve("explore", Some(project.path())).unwrap().description,
+            "project-tuned explore"
         );
     }
 }
