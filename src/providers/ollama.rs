@@ -98,7 +98,7 @@ struct GenerateRequest {
     options: Option<GenerateOptions>,
 }
 
-/// Optional generation parameters
+/// Optional generation parameters (Ollama `options` object).
 #[derive(Debug, Serialize)]
 struct GenerateOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,6 +107,10 @@ struct GenerateOptions {
     num_predict: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     repeat_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_k: Option<u32>,
 }
 
 /// Response from Ollama /api/generate endpoint
@@ -201,20 +205,37 @@ impl OllamaProvider {
         })
     }
 
-    /// Build generate options from config
+    /// Build generate options from config.
+    ///
+    /// Forwards `top_p`/`top_k` (previously declared in `ProviderConfig` but
+    /// silently dropped here) into the Ollama `options` object.
+    ///
+    /// Greedy normalization: under greedy decoding (`temperature == 0`) Ollama
+    /// emits empty/malformed output when `top_p` is any non-unit value, so we
+    /// force `top_p = 1.0` in that case regardless of the configured value
+    /// (mirrors openclaw #87049 `normalizeOllamaGreedySamplingOptions`).
     fn build_options(&self) -> Option<GenerateOptions> {
-        if self.config.temperature.is_some()
-            || self.config.max_tokens.is_some()
-            || self.config.repeat_penalty.is_some()
+        let c = &self.config;
+        if c.temperature.is_none()
+            && c.max_tokens.is_none()
+            && c.repeat_penalty.is_none()
+            && c.top_p.is_none()
+            && c.top_k.is_none()
         {
-            Some(GenerateOptions {
-                temperature: self.config.temperature,
-                num_predict: self.config.max_tokens,
-                repeat_penalty: self.config.repeat_penalty,
-            })
-        } else {
-            None
+            return None;
         }
+
+        // temperature is non-negative by contract; `<= 0.0` == greedy decoding.
+        let greedy = matches!(c.temperature, Some(t) if t <= 0.0);
+        let top_p = if greedy { Some(1.0) } else { c.top_p };
+
+        Some(GenerateOptions {
+            temperature: c.temperature,
+            num_predict: c.max_tokens,
+            repeat_penalty: c.repeat_penalty,
+            top_p,
+            top_k: c.top_k,
+        })
     }
 
     /// Build request for text-only generation
@@ -467,6 +488,69 @@ mod tests {
         let opts = options.unwrap();
         assert_eq!(opts.temperature, Some(0.8));
         assert_eq!(opts.num_predict, Some(1000));
+    }
+
+    #[test]
+    fn build_options_forwards_top_p_and_top_k() {
+        let mut config = create_test_config();
+        config.temperature = Some(0.7); // non-greedy
+        config.top_p = Some(0.9);
+        config.top_k = Some(40);
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+
+        let opts = provider.build_options().unwrap();
+        assert_eq!(opts.top_p, Some(0.9), "configured top_p preserved when non-greedy");
+        assert_eq!(opts.top_k, Some(40), "configured top_k forwarded");
+    }
+
+    #[test]
+    fn build_options_normalizes_top_p_under_greedy_decoding() {
+        // temperature == 0 → Ollama needs top_p == 1; a configured 0.9 is overridden.
+        let mut config = create_test_config();
+        config.temperature = Some(0.0);
+        config.top_p = Some(0.9);
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+        assert_eq!(provider.build_options().unwrap().top_p, Some(1.0));
+
+        // Greedy with no configured top_p → still normalized to 1.
+        let mut config2 = create_test_config();
+        config2.temperature = Some(0.0);
+        let provider2 = OllamaProvider::new("ollama".to_string(), config2).unwrap();
+        assert_eq!(provider2.build_options().unwrap().top_p, Some(1.0));
+    }
+
+    #[test]
+    fn build_options_none_when_no_sampling_params() {
+        let config = create_test_config(); // test_config leaves sampling params unset
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+        assert!(provider.build_options().is_none());
+    }
+
+    #[test]
+    fn build_options_top_k_alone_triggers_options() {
+        let mut config = create_test_config();
+        config.top_k = Some(20);
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+        let opts = provider.build_options().unwrap();
+        assert_eq!(opts.top_k, Some(20));
+        assert!(opts.top_p.is_none());
+    }
+
+    #[test]
+    fn generate_options_serializes_top_p_top_k_and_omits_none() {
+        let opts = GenerateOptions {
+            temperature: Some(0.0),
+            num_predict: None,
+            repeat_penalty: None,
+            top_p: Some(1.0),
+            top_k: Some(40),
+        };
+        let json = serde_json::to_value(&opts).unwrap();
+        assert_eq!(json["top_p"], 1.0);
+        assert_eq!(json["top_k"], 40);
+        assert_eq!(json["temperature"], 0.0);
+        assert!(json.get("num_predict").is_none(), "None fields omitted");
+        assert!(json.get("repeat_penalty").is_none());
     }
 
     #[test]
