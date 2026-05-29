@@ -78,4 +78,5 @@ pub fn register_channel_plugins() {
     telegram::register_with_plugin();
     wechat::register_with_plugin();
     qq::register_with_plugin();
+    whatsapp::register_with_plugin();
 }
