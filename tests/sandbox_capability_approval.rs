@@ -164,6 +164,7 @@ fn build_test_sandbox(
         linux: Default::default(),
         windows: Default::default(),
         rate_limit: Default::default(),
+        command_policy: Default::default(),
     };
     let (driver, run_count, last_mem, last_net) = RecordingDriver::new();
     let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver;
