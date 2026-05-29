@@ -33,7 +33,9 @@ use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
     PARSE_ERROR, RATE_LIMITED,
 };
-use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
+use crate::gateway::rate_limiter::{
+    scope_for_method, RateLimitError, RateLimitKey, RateLimitScope, RateLimiter,
+};
 use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
@@ -126,6 +128,32 @@ fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
 /// non-loopback peers is what keeps a LAN attacker who somehow obtains a
 /// session cookie from short-circuiting auth — `/auth/bootstrap` is
 /// already loopback-gated upstream, but defence-in-depth costs nothing.
+/// Record a failed `connect` against the per-source-IP `Auth` rate-limit
+/// bucket and report whether the source is now locked out.
+///
+/// Loopback peers are exempt (same trust class as the local desktop shell,
+/// consistent with the rest of the dispatch path). Returns the retry/lockout
+/// hint in milliseconds when the source has exhausted its auth-failure budget,
+/// otherwise `None`. This is the cross-connection backstop to the
+/// per-connection `auth_attempts` counter (openclaw #87148).
+fn record_auth_failure_lockout(
+    rate_limiter: &RateLimiter,
+    peer_ip: std::net::IpAddr,
+) -> Option<u64> {
+    if peer_ip.is_loopback() {
+        return None;
+    }
+    let key = RateLimitKey::new(&peer_ip.to_string(), RateLimitScope::Auth);
+    match rate_limiter.check_and_record(&key) {
+        Ok(()) => None,
+        Err(RateLimitError::Exceeded { retry_after_ms, .. }) => Some(retry_after_ms),
+        Err(RateLimitError::LockedOut {
+            lockout_remaining_ms,
+            ..
+        }) => Some(lockout_remaining_ms),
+    }
+}
+
 fn resolve_bootstrap_shared_token(
     state: &Arc<GatewaySharedState>,
     peer_addr: &SocketAddr,
@@ -502,7 +530,7 @@ async fn handle_connection(
 
                                         // Mark first_message = false even if connect failed
                                         // Track failed auth attempts and disconnect if limit reached
-                                        {
+                                        let auth_failed = {
                                             let mut conns = ctx.connections.write().await;
                                             if let Some(state) = conns.get_mut(&conn_id) {
                                                 state.first_message = false;
@@ -522,7 +550,42 @@ async fn handle_connection(
                                                         let _ = write.send(WsMessage::Text(response_str.into())).await;
                                                         break;
                                                     }
+                                                    true
+                                                } else {
+                                                    false
                                                 }
+                                            } else {
+                                                false
+                                            }
+                                        };
+
+                                        // Per-source-IP auth-failure rate limit (loopback exempt).
+                                        // The per-connection `auth_attempts` counter above resets
+                                        // every time a remote peer reconnects (fresh ConnectionState),
+                                        // so on its own it does not bound a reconnect-driven
+                                        // brute-force of device tokens. Record failures against the
+                                        // `Auth` scope keyed by source IP so a flood of failed
+                                        // `connect`s from one remote address is locked out across
+                                        // connections. (openclaw #87148)
+                                        if auth_failed {
+                                            if let Some(retry_after_ms) =
+                                                record_auth_failure_lockout(&ctx.rate_limiter, peer_addr.ip())
+                                            {
+                                                warn!(
+                                                    "Connection {} auth-failure rate limited by source IP, disconnecting",
+                                                    conn_id
+                                                );
+                                                let response_str = serde_json::to_string(
+                                                    &JsonRpcResponse::error_with_data(
+                                                        req.id.clone(),
+                                                        RATE_LIMITED,
+                                                        "Too many failed authentication attempts",
+                                                        serde_json::json!({ "retry_after_ms": retry_after_ms }),
+                                                    ),
+                                                )
+                                                .unwrap_or_default();
+                                                let _ = write.send(WsMessage::Text(response_str.into())).await;
+                                                break;
                                             }
                                         }
 
@@ -1084,6 +1147,56 @@ mod tests {
 
     fn sa(ip: &str) -> SocketAddr {
         format!("{ip}:0").parse().unwrap()
+    }
+
+    #[test]
+    fn auth_failure_lockout_trips_after_budget_and_exempts_loopback() {
+        use crate::gateway::rate_limiter::{RateLimitConfig, WindowConfig};
+
+        let cfg = RateLimitConfig {
+            auth: WindowConfig {
+                max_requests: 2,
+                window_secs: 60,
+                lockout_secs: Some(300),
+            },
+            ..RateLimitConfig::default()
+        };
+        let rl = RateLimiter::new(cfg);
+        let ip = sa("203.0.113.7").ip(); // non-loopback (TEST-NET-3)
+
+        // Within budget: first two failures pass.
+        assert!(record_auth_failure_lockout(&rl, ip).is_none());
+        assert!(record_auth_failure_lockout(&rl, ip).is_none());
+        // Budget exhausted: subsequent failures are locked out.
+        assert!(record_auth_failure_lockout(&rl, ip).is_some());
+
+        // Loopback is always exempt regardless of prior failures.
+        let lo = sa("127.0.0.1").ip();
+        for _ in 0..5 {
+            assert!(record_auth_failure_lockout(&rl, lo).is_none());
+        }
+    }
+
+    #[test]
+    fn auth_failure_lockout_is_per_source_ip() {
+        use crate::gateway::rate_limiter::{RateLimitConfig, WindowConfig};
+
+        let cfg = RateLimitConfig {
+            auth: WindowConfig {
+                max_requests: 1,
+                window_secs: 60,
+                lockout_secs: Some(300),
+            },
+            ..RateLimitConfig::default()
+        };
+        let rl = RateLimiter::new(cfg);
+        let a = sa("198.51.100.1").ip();
+        let b = sa("198.51.100.2").ip();
+
+        assert!(record_auth_failure_lockout(&rl, a).is_none()); // a: 1 ok
+        assert!(record_auth_failure_lockout(&rl, a).is_some()); // a: locked
+        // A different source IP has its own independent budget.
+        assert!(record_auth_failure_lockout(&rl, b).is_none()); // b: 1 ok
     }
 
     #[test]
