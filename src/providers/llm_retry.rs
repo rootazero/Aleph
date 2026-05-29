@@ -243,12 +243,14 @@ pub fn classify_http_error(
             if account_patterns.iter().any(|p| msg.contains(p)) {
                 return RetryVerdict::Fatal;
             }
-            // D3: 429 with "overloaded" body (kimi-via-anthropic conflates
-            // overload with rate_limit_error) → Retry with backoff so we
-            // ride out a transient spike before giving up on the provider.
-            if msg.contains("overloaded") {
-                let delay =
-                    resolve_retry_delay(headers, 0, Duration::from_secs(2), MAX_DELAY);
+            // D3: 429 with a transient-overload body (kimi-via-anthropic
+            // conflates overload with rate_limit_error; Anthropic's own
+            // "We're receiving too many requests at the moment. Please wait a
+            // moment and try again." is the same server-side throttle) → Retry
+            // with backoff so we ride out a transient spike before giving up
+            // on the provider.
+            if is_transient_overload(&msg) {
+                let delay = resolve_retry_delay(headers, 0, Duration::from_secs(2), MAX_DELAY);
                 return RetryVerdict::Retry { delay };
             }
             let delay = resolve_retry_delay(headers, 0, Duration::from_millis(300), MAX_DELAY);
@@ -309,6 +311,27 @@ fn classify_rate_limit(raw: &str) -> RetryVerdict {
     RetryVerdict::Fallback { reason }
 }
 
+/// Whether a 429 body describes a *server-side* transient overload rather than
+/// an account/quota limit.
+///
+/// Anthropic (and several Anthropic-protocol providers) return HTTP 429 for
+/// transient capacity throttling with a body like
+/// `{"type":"rate_limit_error","message":"We're receiving too many requests at
+/// the moment. Please wait a moment and try again."}` — semantically the same
+/// as a 529 overload, not a per-account quota. The right move is a short
+/// backoff-and-retry on the SAME provider, not a failover: in single-provider
+/// setups a `Fallback` verdict has no sibling to switch to and degrades to an
+/// immediate hard failure with **zero** retries, even though the server
+/// explicitly asked the client to "try again" (the failure that crashed
+/// scheduled jobs on 2026-05-29). Callers must check `account_patterns` first
+/// so genuine quota limits stay Fatal.
+fn is_transient_overload(msg_lower: &str) -> bool {
+    msg_lower.contains("overloaded")
+        || msg_lower.contains("529")
+        || msg_lower.contains("please wait a moment")
+        || msg_lower.contains("receiving too many requests at the moment")
+}
+
 /// Inspect an `anyhow::Error` display string and decide whether to retry.
 pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
     classify(&err.to_string())
@@ -341,7 +364,7 @@ pub fn classify(raw: &str) -> RetryVerdict {
     let account_patterns = ["account", "organization", "billing", "quota exceeded"];
     let is_account_scoped = account_patterns.iter().any(|p| msg.contains(p));
 
-    if !is_account_scoped && (msg.contains("overloaded") || msg.contains("529")) {
+    if !is_account_scoped && is_transient_overload(&msg) {
         let delay = extract_retry_after_str(raw).unwrap_or(Duration::from_secs(2));
         return RetryVerdict::Retry { delay };
     }
@@ -477,6 +500,33 @@ mod tests {
     fn test_classify_rate_limit_org_fatal() {
         let err = anyhow::anyhow!("429 organization rate limit");
         assert_eq!(classify_error(&err), RetryVerdict::Fatal);
+    }
+
+    #[test]
+    fn test_anthropic_generic_transient_429_retries() {
+        // Anthropic's server-side overload 429 (distinct from account/quota
+        // limits) asks the client to wait and retry. It must classify as
+        // Retry — same as "overloaded"/529 — so single-provider setups ride
+        // out the spike with backoff instead of hard-failing with zero retries
+        // (the failure mode that crashed scheduled jobs on 2026-05-29).
+        let raw = r#"Rate limit error: Anthropic API rate limited (429): {"error":{"type":"rate_limit_error","message":"We're receiving too many requests at the moment. Please wait a moment and try again."},"type":"error"}"#;
+        assert!(
+            matches!(classify(raw), RetryVerdict::Retry { .. }),
+            "generic transient 429 should retry, got {:?}",
+            classify(raw)
+        );
+        assert!(matches!(
+            classify_http_error(429, &reqwest::header::HeaderMap::new(), raw),
+            RetryVerdict::Retry { .. }
+        ));
+    }
+
+    #[test]
+    fn test_anthropic_account_429_with_retry_hint_stays_fatal() {
+        // Even when the body carries a "please wait" hint, an account/quota
+        // limit must stay Fatal — retrying or switching providers won't help.
+        let raw = "429 account quota exceeded — please wait a moment and try again";
+        assert_eq!(classify(raw), RetryVerdict::Fatal);
     }
 
     #[test]
