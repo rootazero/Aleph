@@ -461,7 +461,15 @@ impl Channel for TelegramChannel {
                         // Group mention gate (pure, deterministic I/O filter — R4).
                         // Drops ambient group chatter that does not address the
                         // bot when `require_mention` is enabled. DMs bypass this.
-                        if is_group && require_mention {
+                        //
+                        // `group_addresses_bot` is computed for every group
+                        // message (not just under `require_mention`) because it
+                        // also drives the `AppMention` tag below: the limb has
+                        // the bot's real @username, reply-to-bot signal and
+                        // command syntax, so when it affirmatively recognises an
+                        // address we tag the message and the central router skips
+                        // its weaker substring check instead of re-dropping it.
+                        let group_addresses_bot = if is_group {
                             let bot_uname = mention_username.as_deref();
                             let reply_to_bot = msg
                                 .reply_to_message()
@@ -474,19 +482,22 @@ impl Channel for TelegramChannel {
                                         }
                                 });
                             let text = msg.text().or_else(|| msg.caption());
-                            if !mention::group_message_addresses_bot(text, reply_to_bot, bot_uname) {
-                                tracing::debug!(
-                                    channel = "telegram",
-                                    chat_id = %chat_id,
-                                    "group message not addressed to bot — skipped (require_mention)"
-                                );
-                                return Ok::<(), std::convert::Infallible>(());
-                            }
+                            mention::group_message_addresses_bot(text, reply_to_bot, bot_uname)
+                        } else {
+                            false
+                        };
+                        if is_group && require_mention && !group_addresses_bot {
+                            tracing::debug!(
+                                channel = "telegram",
+                                chat_id = %chat_id,
+                                "group message not addressed to bot — skipped (require_mention)"
+                            );
+                            return Ok::<(), std::convert::Infallible>(());
                         }
 
                         match access.check_message(user_id, chat_id, is_group).await {
                             AccessDecision::Allowed => {
-                                if let Some(inbound) = handlers::convert_message(
+                                if let Some(mut inbound) = handlers::convert_message(
                                     &msg,
                                     &bot,
                                     &channel_id,
@@ -494,6 +505,16 @@ impl Channel for TelegramChannel {
                                 )
                                 .await
                                 {
+                                    // Limb-validated address (real @username,
+                                    // /cmd@bot, or reply-to-bot): tag so the
+                                    // central inbound router bypasses its crude
+                                    // substring mention check, which would
+                                    // otherwise re-drop a reply-to-bot message or
+                                    // a mention of a bot not named "aleph".
+                                    if group_addresses_bot {
+                                        inbound.metadata.push(MessageMeta::AppMention);
+                                    }
+
                                     let tg_ctx =
                                         TelegramInboundContext::from_inbound(inbound.clone(), &msg);
                                     let access_level = AccessLevel::Member;

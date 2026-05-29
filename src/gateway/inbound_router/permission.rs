@@ -15,6 +15,21 @@ use crate::gateway::interfaces::imessage::normalize_phone;
 #[cfg(not(target_os = "macos"))]
 use super::normalize_phone;
 
+/// Whether the channel adapter already validated that this message addresses
+/// the bot (e.g. Telegram/Slack [`MessageMeta::AppMention`]).
+///
+/// Channels with richer signal than plain text (entities, reply-to-bot, the
+/// real `@username`) gate mentions in their own limb and tag the result; the
+/// router trusts that tag rather than re-running the weaker substring
+/// heuristic in [`InboundMessageRouter::check_mention`].
+fn message_pre_validated_mention(message: &crate::gateway::channel::InboundMessage) -> bool {
+    use crate::gateway::channel::MessageMeta;
+    message
+        .metadata
+        .iter()
+        .any(|m| matches!(m, MessageMeta::AppMention))
+}
+
 impl InboundMessageRouter {
     /// Check if message is permitted
     pub(super) async fn check_permission(
@@ -47,7 +62,15 @@ impl InboundMessageRouter {
                 GroupPolicy::Open => {
                     // Check mention requirement
                     if channel_config.require_mention {
-                        let mentioned = self.check_mention(&ctx.message.text, &channel_config);
+                        // A channel adapter that already validated the mention
+                        // with platform-native signals (real @username,
+                        // reply-to-bot, command targeting) tags the message with
+                        // `MessageMeta::AppMention`. Honor that instead of
+                        // re-running the weaker substring heuristic, which would
+                        // otherwise drop e.g. a reply to the bot carrying no
+                        // textual @-mention.
+                        let mentioned = message_pre_validated_mention(&ctx.message)
+                            || self.check_mention(&ctx.message.text, &channel_config);
                         if !mentioned {
                             return Err(RoutingError::PermissionDenied(
                                 "Mention required in group".to_string(),
@@ -196,5 +219,46 @@ impl InboundMessageRouter {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod pre_validated_mention_tests {
+    use super::message_pre_validated_mention;
+    use crate::gateway::channel::{
+        ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta, UserId,
+    };
+    use chrono::Utc;
+
+    fn group_msg(metadata: Vec<MessageMeta>) -> InboundMessage {
+        InboundMessage {
+            id: MessageId::new("1"),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("-100"),
+            sender_id: UserId::new("42"),
+            sender_name: None,
+            text: "yes please".to_string(),
+            attachments: vec![],
+            timestamp: Utc::now(),
+            reply_to: None,
+            is_group: true,
+            raw: None,
+            metadata,
+        }
+    }
+
+    #[test]
+    fn app_mention_is_pre_validated() {
+        assert!(message_pre_validated_mention(&group_msg(vec![
+            MessageMeta::AppMention
+        ])));
+    }
+
+    #[test]
+    fn absent_app_mention_is_not_pre_validated() {
+        assert!(!message_pre_validated_mention(&group_msg(vec![])));
+        assert!(!message_pre_validated_mention(&group_msg(vec![
+            MessageMeta::BotAuthored
+        ])));
     }
 }
