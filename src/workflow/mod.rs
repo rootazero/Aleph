@@ -23,5 +23,5 @@ pub mod store;
 
 pub use compile::{materialize, MaterializedWorkflow};
 pub use def::{render_prompt, WorkflowDef, WorkflowStepDef};
-pub use store::{WorkflowMeta, WORKFLOW_EXT};
 pub use interop::{parse_workflow_js, render_workflow_js, ImportOutcome, WorkflowManifest};
+pub use store::{WorkflowMeta, WORKFLOW_EXT};
